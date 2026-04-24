@@ -155,8 +155,8 @@ textarea {
 }
 
 .recordingsActions {
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 10px;
+  flex-wrap: nowrap;
 }
 
 .recordingsHeader {
@@ -177,19 +177,21 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .recordingsFilterGroup {
   display: flex;
   align-items: center;
   gap: 10px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .recordingsFilterSelect {
-  width: 240px;
-  min-width: 240px;
+  width: 190px;
+  min-width: 190px;
   min-height: 40px;
   padding: 8px 12px;
   border-radius: 12px;
@@ -197,7 +199,7 @@ textarea {
 }
 
 .recordingsFilterDate {
-  width: 170px;
+  width: 150px;
   min-height: 40px;
   padding: 8px 12px;
   border-radius: 12px;
@@ -206,6 +208,9 @@ textarea {
 
 .recordingsToolbarCompact {
   gap: 8px;
+  margin-left: auto;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
 }
 
 .recordingsActionButton {
@@ -215,6 +220,7 @@ textarea {
 
 .recordingsDangerMenu {
   position: relative;
+  flex: 0 0 auto;
 }
 
 .recordingsDangerTrigger {
@@ -299,6 +305,7 @@ textarea {
 .recordingsTable td {
   padding: 10px 12px;
   font-size: 14px;
+  white-space: nowrap;
 }
 
 .recordingsTable thead th {
@@ -360,13 +367,13 @@ textarea {
 
 .recordingsActions {
   justify-content: flex-end;
-  flex-wrap: nowrap;
+  align-items: center;
 }
 
 .recordingsIconButton {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
+  width: 36px;
+  min-width: 36px;
+  height: 36px;
   border: 1px solid #dbe3ef;
   border-radius: 10px;
   background: #f8fafc;
@@ -927,11 +934,13 @@ textarea {
   .recordingsFilterBar {
     flex-direction: column;
     align-items: stretch;
+    gap: 10px;
   }
 
   .recordingsFilterGroup,
   .recordingsToolbarCompact {
     width: 100%;
+    flex-wrap: wrap;
   }
 
   .recordingsFilterSelect,

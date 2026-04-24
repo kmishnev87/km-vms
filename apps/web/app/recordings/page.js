@@ -5,10 +5,53 @@ import Layout from "../../components/Layout";
 import { apiFetch, apiFetchBlob } from "../../lib/api";
 
 const PAGE_SIZE = 30;
+const TEXT = {
+  title: "\u0417\u0430\u043f\u0438\u0441\u0438",
+  subtitle: "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440, \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435 \u0438 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0430\u0440\u0445\u0438\u0432\u0430",
+  allCameras: "\u0412\u0441\u0435 \u043a\u0430\u043c\u0435\u0440\u044b",
+  date: "\u0414\u0430\u0442\u0430",
+  refresh: "\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c",
+  deleteSelected: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0435",
+  dangerActions: "\u041e\u043f\u0430\u0441\u043d\u044b\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044f",
+  deleteCamera: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u0441\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 \u043a\u0430\u043c\u0435\u0440\u044b",
+  deleteAll: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u0441\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
+  totalFiles: "\u0412\u0441\u0435\u0433\u043e \u0444\u0430\u0439\u043b\u043e\u0432",
+  totalSize: "\u041e\u0431\u0449\u0438\u0439 \u043e\u0431\u044a\u0451\u043c",
+  page: "\u0421\u0442\u0440\u0430\u043d\u0438\u0446\u0430",
+  selected: "\u0412\u044b\u0431\u0440\u0430\u043d\u043e",
+  camera: "\u041a\u0430\u043c\u0435\u0440\u0430",
+  file: "\u0424\u0430\u0439\u043b",
+  createdAt: "\u0414\u0430\u0442\u0430 \u0441\u043e\u0437\u0434\u0430\u043d\u0438\u044f",
+  size: "\u0420\u0430\u0437\u043c\u0435\u0440",
+  actions: "\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u044f",
+  watch: "\u0421\u043c\u043e\u0442\u0440\u0435\u0442\u044c",
+  download: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c",
+  remove: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c",
+  noRecords: "\u041d\u0435\u0442 \u0437\u0430\u043f\u0438\u0441\u0435\u0439",
+  pickAllPage: "\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0432\u0441\u0435 \u043d\u0430 \u0442\u0435\u043a\u0443\u0449\u0435\u0439 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0435",
+  openEmbeddedViewer: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0432\u0441\u0442\u0440\u043e\u0435\u043d\u043d\u044b\u0439 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
+  viewRecord: "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440 \u0437\u0430\u043f\u0438\u0441\u0438",
+  close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
+};
+
+const ICONS = {
+  more: "\u22ef",
+  watch: "\u25b6",
+  download: "\u2b07",
+  remove: "\u2715",
+  prev: "\u2190",
+  next: "\u2192",
+  up: "\u2191",
+  down: "\u2193",
+  sort: "\u2195",
+  gap: "\u2026",
+  close: "\u00d7",
+};
+
 const SORT_OPTIONS = {
-  created_at: { key: "created_at", label: "Дата" },
-  size_bytes: { key: "size_bytes", label: "Размер" },
-  camera: { key: "camera", label: "Камера" },
+  created_at: { key: "created_at", label: TEXT.createdAt },
+  size_bytes: { key: "size_bytes", label: TEXT.size },
+  camera: { key: "camera", label: TEXT.camera },
 };
 
 function formatSizeBytes(sizeBytes) {
@@ -315,7 +358,7 @@ export default function RecordingsPage() {
   }
 
   async function handleDeleteOne(item) {
-    if (!window.confirm(`РЈРґР°Р»РёС‚СЊ Р·Р°РїРёСЃСЊ "${item.filename}"?`)) return;
+    if (!window.confirm(`\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u044c "${item.filename}"?`)) return;
     try {
       setError("");
       setBusy(true);
@@ -332,7 +375,7 @@ export default function RecordingsPage() {
 
   async function handleDeleteSelected() {
     if (!selectedPaths.length) return;
-    if (!window.confirm(`РЈРґР°Р»РёС‚СЊ РІС‹Р±СЂР°РЅРЅС‹Рµ Р·Р°РїРёСЃРё: ${selectedPaths.length} С€С‚.?`)) return;
+    if (!window.confirm(`\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438: ${selectedPaths.length} \u0448\u0442.?`)) return;
 
     try {
       setError("");
@@ -352,7 +395,7 @@ export default function RecordingsPage() {
 
   async function handleDeleteByCamera() {
     if (!selectedCamera || selectedCamera === "__all__") return;
-    if (!window.confirm(`РЈРґР°Р»РёС‚СЊ РІСЃРµ Р·Р°РїРёСЃРё РєР°РјРµСЂС‹ "${selectedCamera}"?`)) return;
+    if (!window.confirm(`\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u0441\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 \u043a\u0430\u043c\u0435\u0440\u044b "${selectedCamera}"?`)) return;
 
     try {
       setDangerMenuOpen(false);
@@ -370,7 +413,7 @@ export default function RecordingsPage() {
   }
 
   async function handleDeleteAll() {
-    if (!window.confirm("РЈРґР°Р»РёС‚СЊ РІРѕРѕР±С‰Рµ РІСЃРµ Р·Р°РїРёСЃРё РІСЃРµС… РєР°РјРµСЂ?")) return;
+    if (!window.confirm("\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u043e\u043e\u0431\u0449\u0435 \u0432\u0441\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 \u0432\u0441\u0435\u0445 \u043a\u0430\u043c\u0435\u0440?")) return;
 
     try {
       setDangerMenuOpen(false);
@@ -389,8 +432,8 @@ export default function RecordingsPage() {
     <Layout>
       <div className="pageHeader recordingsHeader">
         <div>
-          <h1 className="pageTitle">Р—Р°РїРёСЃРё</h1>
-          <div className="pageSubtitle">РђСЂС…РёРІ РІРёРґРµРѕР·Р°РїРёСЃРµР№ РєР°РјРµСЂ</div>
+          <h1 className="pageTitle">{TEXT.title}</h1>
+          <div className="pageSubtitle">{TEXT.subtitle}</div>
         </div>
       </div>
 
@@ -408,7 +451,7 @@ export default function RecordingsPage() {
               value={selectedCamera}
               onChange={(e) => setSelectedCamera(e.target.value)}
             >
-              <option value="__all__">Р’СЃРµ РєР°РјРµСЂС‹</option>
+              <option value="__all__">{TEXT.allCameras}</option>
               {cameras.map((camera) => (
                 <option key={camera} value={camera}>
                   {camera}
@@ -421,12 +464,13 @@ export default function RecordingsPage() {
               className="input recordingsFilterDate"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
+              aria-label={TEXT.date}
             />
           </div>
 
           <div className="recordingsToolbar recordingsToolbarCompact">
             <button className="button secondary small recordingsActionButton" onClick={refresh}>
-              РћР±РЅРѕРІРёС‚СЊ
+              {TEXT.refresh}
             </button>
 
             <button
@@ -434,7 +478,7 @@ export default function RecordingsPage() {
               onClick={handleDeleteSelected}
               disabled={!selectedPaths.length || busy}
             >
-              РЈРґР°Р»РёС‚СЊ РІС‹Р±СЂР°РЅРЅС‹Рµ
+              {TEXT.deleteSelected}
             </button>
 
             <div className="recordingsDangerMenu" ref={dangerMenuRef}>
@@ -443,21 +487,21 @@ export default function RecordingsPage() {
                 onClick={() => setDangerMenuOpen((prev) => !prev)}
                 aria-haspopup="menu"
                 aria-expanded={dangerMenuOpen}
-                title="РћРїР°СЃРЅС‹Рµ РґРµР№СЃС‚РІРёСЏ"
+                title={TEXT.dangerActions}
               >
-                ⋯
+                {ICONS.more}
               </button>
 
               {dangerMenuOpen ? (
                 <div className="recordingsDangerDropdown" role="menu">
-                  <div className="recordingsDangerTitle">РћРїР°СЃРЅС‹Рµ РґРµР№СЃС‚РІРёСЏ</div>
+                  <div className="recordingsDangerTitle">{TEXT.dangerActions}</div>
                   <button
                     className="recordingsDangerItem"
                     onClick={handleDeleteByCamera}
                     disabled={selectedCamera === "__all__" || busy}
                     role="menuitem"
                   >
-                    РЈРґР°Р»РёС‚СЊ РІСЃРµ Р·Р°РїРёСЃРё РєР°РјРµСЂС‹
+                    {TEXT.deleteCamera}
                   </button>
                   <button
                     className="recordingsDangerItem recordingsDangerItemAlert"
@@ -465,7 +509,7 @@ export default function RecordingsPage() {
                     disabled={busy}
                     role="menuitem"
                   >
-                    РЈРґР°Р»РёС‚СЊ РІСЃРµ Р·Р°РїРёСЃРё
+                    {TEXT.deleteAll}
                   </button>
                 </div>
               ) : null}
@@ -475,11 +519,11 @@ export default function RecordingsPage() {
       </div>
 
       <div className="recordingsStatsRow">
-        <div className="badge">Р’СЃРµРіРѕ С„Р°Р№Р»РѕРІ: {visibleSummary.count}</div>
-        <div className="badge">РћР±С‰РёР№ РѕР±СЉС‘Рј: {visibleSummary.size_human}</div>
-        <div className="badge">РЎС‚СЂР°РЅРёС†Р°: {currentPage} / {pageCount}</div>
+        <div className="badge">{TEXT.totalFiles}: {visibleSummary.count}</div>
+        <div className="badge">{TEXT.totalSize}: {visibleSummary.size_human}</div>
+        <div className="badge">{TEXT.page}: {currentPage} / {pageCount}</div>
         {selectedPaths.length ? (
-          <div className="badge ok">Р’С‹Р±СЂР°РЅРѕ: {selectedPaths.length}</div>
+          <div className="badge ok">{TEXT.selected}: {selectedPaths.length}</div>
         ) : null}
       </div>
 
@@ -493,7 +537,7 @@ export default function RecordingsPage() {
                     type="checkbox"
                     checked={allVisibleSelected}
                     onChange={toggleSelectAll}
-                    aria-label="Р’С‹Р±СЂР°С‚СЊ РІСЃРµ РЅР° С‚РµРєСѓС‰РµР№ СЃС‚СЂР°РЅРёС†Рµ"
+                    aria-label={TEXT.pickAllPage}
                   />
                 </th>
                 <th>
@@ -501,18 +545,18 @@ export default function RecordingsPage() {
                     className={`recordingsSortButton ${sortBy === SORT_OPTIONS.camera.key ? "active" : ""}`}
                     onClick={() => handleSort(SORT_OPTIONS.camera.key)}
                   >
-                    РљР°РјРµСЂР°
-                    <span>{sortBy === SORT_OPTIONS.camera.key ? (sortDir === "asc" ? "↑" : "↓") : "↕"}</span>
+                    {TEXT.camera}
+                    <span>{sortBy === SORT_OPTIONS.camera.key ? (sortDir === "asc" ? ICONS.up : ICONS.down) : ICONS.sort}</span>
                   </button>
                 </th>
-                <th>Р¤Р°Р№Р»</th>
+                <th>{TEXT.file}</th>
                 <th>
                   <button
                     className={`recordingsSortButton ${sortBy === SORT_OPTIONS.created_at.key ? "active" : ""}`}
                     onClick={() => handleSort(SORT_OPTIONS.created_at.key)}
                   >
-                    Р”Р°С‚Р°
-                    <span>{sortBy === SORT_OPTIONS.created_at.key ? (sortDir === "asc" ? "↑" : "↓") : "↕"}</span>
+                    {TEXT.createdAt}
+                    <span>{sortBy === SORT_OPTIONS.created_at.key ? (sortDir === "asc" ? ICONS.up : ICONS.down) : ICONS.sort}</span>
                   </button>
                 </th>
                 <th>
@@ -520,11 +564,11 @@ export default function RecordingsPage() {
                     className={`recordingsSortButton ${sortBy === SORT_OPTIONS.size_bytes.key ? "active" : ""}`}
                     onClick={() => handleSort(SORT_OPTIONS.size_bytes.key)}
                   >
-                    Р Р°Р·РјРµСЂ
-                    <span>{sortBy === SORT_OPTIONS.size_bytes.key ? (sortDir === "asc" ? "↑" : "↓") : "↕"}</span>
+                    {TEXT.size}
+                    <span>{sortBy === SORT_OPTIONS.size_bytes.key ? (sortDir === "asc" ? ICONS.up : ICONS.down) : ICONS.sort}</span>
                   </button>
                 </th>
-                <th className="recordingsActionsHeader">Р”РµР№СЃС‚РІРёСЏ</th>
+                <th className="recordingsActionsHeader">{TEXT.actions}</th>
               </tr>
             </thead>
             <tbody>
@@ -535,7 +579,7 @@ export default function RecordingsPage() {
                       type="checkbox"
                       checked={selectedPaths.includes(item.path)}
                       onChange={() => toggleSelected(item.path)}
-                      aria-label={`Р’С‹Р±СЂР°С‚СЊ ${item.filename}`}
+                      aria-label={`\u0412\u044b\u0431\u0440\u0430\u0442\u044c ${item.filename}`}
                     />
                   </td>
                   <td className="recordingsCameraCell">{item.camera}</td>
@@ -543,7 +587,7 @@ export default function RecordingsPage() {
                     <button
                       className="linkButton recordingsFileLink"
                       onClick={() => handleWatch(item)}
-                      title="РћС‚РєСЂС‹С‚СЊ РІСЃС‚СЂРѕРµРЅРЅС‹Р№ РїСЂРѕСЃРјРѕС‚СЂ"
+                      title={TEXT.openEmbeddedViewer}
                     >
                       {item.filename}
                     </button>
@@ -555,27 +599,27 @@ export default function RecordingsPage() {
                       <button
                         className="recordingsIconButton"
                         onClick={() => handleWatch(item)}
-                        title="▶ РЎРјРѕС‚СЂРµС‚СЊ"
-                        aria-label="РЎРјРѕС‚СЂРµС‚СЊ"
+                        title={`${ICONS.watch} ${TEXT.watch}`}
+                        aria-label={TEXT.watch}
                       >
-                        ▶
+                        {ICONS.watch}
                       </button>
                       <button
                         className="recordingsIconButton"
                         onClick={() => handleDownload(item)}
-                        title="⬇ РЎРєР°С‡Р°С‚СЊ"
-                        aria-label="РЎРєР°С‡Р°С‚СЊ"
+                        title={`${ICONS.download} ${TEXT.download}`}
+                        aria-label={TEXT.download}
                       >
-                        ⬇
+                        {ICONS.download}
                       </button>
                       <button
                         className="recordingsIconButton danger"
                         onClick={() => handleDeleteOne(item)}
                         disabled={busy}
-                        title="✕ РЈРґР°Р»РёС‚СЊ"
-                        aria-label="РЈРґР°Р»РёС‚СЊ"
+                        title={`${ICONS.remove} ${TEXT.remove}`}
+                        aria-label={TEXT.remove}
                       >
-                        ✕
+                        {ICONS.remove}
                       </button>
                     </div>
                   </td>
@@ -585,7 +629,7 @@ export default function RecordingsPage() {
               {!paginatedItems.length ? (
                 <tr>
                   <td colSpan="6" className="recordingsEmptyCell">
-                    Р—Р°РїРёСЃРµР№ РґР»СЏ С‚РµРєСѓС‰РёС… С„РёР»СЊС‚СЂРѕРІ РЅРµС‚.
+                    {TEXT.noRecords}
                   </td>
                 </tr>
               ) : null}
@@ -599,13 +643,13 @@ export default function RecordingsPage() {
             onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
             disabled={currentPage === 1}
           >
-            ←
+            {ICONS.prev}
           </button>
 
           {paginationItems.map((item, index) =>
             item === "gap" ? (
               <span key={`gap-${index}`} className="recordingsPageGap">
-                …
+                {ICONS.gap}
               </span>
             ) : (
               <button
@@ -623,7 +667,7 @@ export default function RecordingsPage() {
             onClick={() => setCurrentPage((prev) => Math.min(prev + 1, pageCount))}
             disabled={currentPage === pageCount}
           >
-            →
+            {ICONS.next}
           </button>
         </div>
       </div>
@@ -632,13 +676,13 @@ export default function RecordingsPage() {
         <div className="modalBackdrop">
           <div className="modal modalWide" onClick={(e) => e.stopPropagation()}>
             <div className="modalHeader">
-              <h2 style={{ margin: 0 }}>РџСЂРѕСЃРјРѕС‚СЂ Р·Р°РїРёСЃРё</h2>
+              <h2 style={{ margin: 0 }}>{TEXT.viewRecord}</h2>
               <button
                 className="iconCloseButton"
                 onClick={closeViewer}
-                aria-label="Р—Р°РєСЂС‹С‚СЊ"
+                aria-label={TEXT.close}
               >
-                Г—
+                {ICONS.close}
               </button>
             </div>
 
@@ -655,7 +699,7 @@ export default function RecordingsPage() {
 
             <div className="actions">
               <button className="button secondary" onClick={closeViewer}>
-                Р—Р°РєСЂС‹С‚СЊ
+                {TEXT.close}
               </button>
             </div>
           </div>
