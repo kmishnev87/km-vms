@@ -37,10 +37,10 @@ const TEXT = {
 const ICONS = {
   more: "\u22ef",
   refresh: "\u21bb",
-  trash: "\u2715",
+  trash: "\ud83d\uddd1",
   watch: "\u25b6",
   download: "\u2b07",
-  remove: "\u2715",
+  remove: "\ud83d\uddd1",
   prev: "\u2190",
   next: "\u2192",
   up: "\u2191",
@@ -490,7 +490,7 @@ export default function RecordingsPage() {
               {ICONS.trash}
             </button>
 
-            <div className="recordingsDangerMenu" ref={dangerMenuRef}>
+            <div className="recordingsDangerMenu recordingsToolbarMenu" ref={dangerMenuRef}>
               <button
                 className="button secondary small recordingsDangerTrigger"
                 onClick={() => setDangerMenuOpen((prev) => !prev)}

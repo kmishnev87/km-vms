@@ -42,7 +42,7 @@ export default function Layout({ children }) {
           ))}
 
           <button className="navItem navButtonItem" onClick={logout} type="button">
-            <div className="navIcon">\u238b</div>
+            <div className="navIcon">{"\u238b"}</div>
             <div className="navLabel">\u0412\u044b\u0445\u043e\u0434</div>
           </button>
         </nav>
