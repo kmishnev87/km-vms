@@ -14,26 +14,32 @@ function pad(v) {
   return String(v).padStart(2, "0");
 }
 
-function formatTick(dt, zoomKey) {
-  const hour = dt.getHours();
-  const isMidnight = hour === 0 && dt.getMinutes() === 0;
+function buildTickLabel(dt, zoomKey) {
+  const dateLabel = `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}`;
+  const timeLabel = `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+  const isMidnight = dt.getHours() === 0 && dt.getMinutes() === 0;
 
   if (zoomKey === "24h") {
-    return `${pad(hour)}:${pad(dt.getMinutes())}`;
-  }
-
-  if (zoomKey === "3d") {
-    if (isMidnight) {
-      return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}`;
-    }
-    return `${pad(hour)}:${pad(dt.getMinutes())}`;
+    return {
+      primary: timeLabel,
+      secondary: "",
+      multiline: false,
+    };
   }
 
   if (isMidnight) {
-    return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}`;
+    return {
+      primary: dateLabel,
+      secondary: "",
+      multiline: false,
+    };
   }
 
-  return `${pad(hour)}:${pad(dt.getMinutes())}`;
+  return {
+    primary: dateLabel,
+    secondary: timeLabel,
+    multiline: true,
+  };
 }
 
 function parseNaiveDateTime(value) {
@@ -97,10 +103,12 @@ export default function ChronologyTimeline({
       if (ms < nextStartMs) continue;
 
       const isMajor = ms % majorStepMs === 0;
+      const tickLabel = isMajor ? buildTickLabel(new Date(ms), zoom.key) : null;
+
       marks.push({
         ms,
         isMajor,
-        label: isMajor ? formatTick(new Date(ms), zoom.key) : "",
+        tickLabel,
         leftPct: ((ms - nextStartMs) / (nextEndMs - nextStartMs)) * 100,
       });
     }
@@ -227,8 +235,11 @@ export default function ChronologyTimeline({
                   style={{ left: `${mark.leftPct}%` }}
                 >
                   <div className="chronologyTimelineAxisLine" />
-                  {mark.isMajor ? (
-                    <div className="chronologyTimelineAxisLabel">{mark.label}</div>
+                  {mark.isMajor && mark.tickLabel ? (
+                    <div className={`chronologyTimelineAxisLabel ${mark.tickLabel.multiline ? "multiline" : ""}`}>
+                      <span>{mark.tickLabel.primary}</span>
+                      {mark.tickLabel.secondary ? <span>{mark.tickLabel.secondary}</span> : null}
+                    </div>
                   ) : null}
                 </div>
               ))}

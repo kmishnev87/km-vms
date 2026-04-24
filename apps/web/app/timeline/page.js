@@ -154,6 +154,7 @@ export default function TimelinePage() {
   const [previewTs, setPreviewTs] = useState(null);
   const [isViewMode, setIsViewMode] = useState(false);
   const [viewControlsVisible, setViewControlsVisible] = useState(true);
+  const [focusedTileSlot, setFocusedTileSlot] = useState(null);
 
   const hydratedRef = useRef(false);
   const initializedCurrentTsRef = useRef(false);
@@ -582,12 +583,14 @@ export default function TimelinePage() {
   }
 
   async function handleEnterViewMode() {
+    setFocusedTileSlot(null);
     setIsViewMode(true);
     setViewControlsVisible(true);
   }
 
   async function handleExitViewMode() {
     clearViewHideTimer();
+    setFocusedTileSlot(null);
     setViewControlsVisible(true);
     setIsViewMode(false);
 
@@ -596,6 +599,11 @@ export default function TimelinePage() {
         await document.exitFullscreen();
       } catch {}
     }
+  }
+
+  function toggleFocusedTile(slot) {
+    setFocusedTileSlot((prev) => (prev === slot ? null : slot));
+    revealViewControls();
   }
 
   useEffect(() => {
@@ -629,6 +637,7 @@ export default function TimelinePage() {
       const hasFullscreen = Boolean(document.fullscreenElement);
       if (!hasFullscreen && browserFullscreenActiveRef.current) {
         browserFullscreenActiveRef.current = false;
+        setFocusedTileSlot(null);
         setIsViewMode(false);
         setViewControlsVisible(true);
         clearViewHideTimer();
@@ -636,7 +645,17 @@ export default function TimelinePage() {
     }
 
     function handleKeyDown(event) {
-      if (event.key === "Escape" && isViewMode && !document.fullscreenElement) {
+      if (event.key !== "Escape") return;
+
+      if (focusedTileSlot !== null) {
+        setFocusedTileSlot(null);
+        setViewControlsVisible(true);
+        clearViewHideTimer();
+        scheduleViewControlsHide();
+        return;
+      }
+
+      if (isViewMode && !document.fullscreenElement) {
         setIsViewMode(false);
         setViewControlsVisible(true);
         clearViewHideTimer();
@@ -650,11 +669,11 @@ export default function TimelinePage() {
       document.removeEventListener("fullscreenchange", handleFullscreenChange);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isViewMode]);
+  }, [focusedTileSlot, isViewMode]);
 
   function renderControlBar({ compact = false, inViewMode = false } = {}) {
     return (
-      <div className={`card chronologyTopCard ${compact ? "chronologyTopCardCompact" : ""}`} style={{ marginBottom: inViewMode ? 10 : 14 }}>
+      <div className={`card chronologyTopCard ${compact ? "chronologyTopCardCompact" : ""}`}>
         <div className="chronologyControlsRow chronologyControlsRowSpread">
           <div className="chronologyControlsLeft">
             <input
@@ -736,11 +755,23 @@ export default function TimelinePage() {
     );
   }
 
-  function renderWorkspace({ compact = false, fullscreen = false } = {}) {
+  function renderWorkspace({ fullscreen = false } = {}) {
+    const visibleTiles = fullscreen && focusedTileSlot !== null
+      ? tiles.filter((tile) => tile.slot === focusedTileSlot)
+      : tiles;
+
     return (
       <div className={`card chronologyWorkspaceCard ${fullscreen ? "chronologyWorkspaceCardFullscreen" : ""}`}>
-        <div className={`chronologyGrid chronologyGrid${gridCount} ${fullscreen ? "chronologyGridFullscreen" : ""} ${fullscreen && gridCount === 2 ? "chronologyGridFullscreen2" : ""}`}>
-          {tiles.map((tile, idx) => {
+        <div
+          className={[
+            "chronologyGrid",
+            `chronologyGrid${gridCount}`,
+            fullscreen ? "chronologyGridFullscreen" : "",
+            fullscreen && gridCount === 2 ? "chronologyGridFullscreen2" : "",
+            fullscreen && focusedTileSlot !== null ? "chronologyGridFocused" : "",
+          ].filter(Boolean).join(" ")}
+        >
+          {visibleTiles.map((tile) => {
             const camera = tile.cameraId ? cameraMap.get(String(tile.cameraId)) || null : null;
             const playback = playbackMap[tile.slot] || {
               hasVideo: false,
@@ -751,13 +782,21 @@ export default function TimelinePage() {
             };
 
             return (
-              <div className={`chronologyTile ${fullscreen ? "chronologyTileFullscreen" : ""}`} key={tile.slot}>
+              <div
+                className={[
+                  "chronologyTile",
+                  fullscreen ? "chronologyTileFullscreen chronologyTileInteractive" : "",
+                  fullscreen && focusedTileSlot !== null ? "chronologyTileFocused" : "",
+                ].filter(Boolean).join(" ")}
+                key={tile.slot}
+                onDoubleClick={fullscreen ? () => toggleFocusedTile(tile.slot) : undefined}
+              >
                 <div className={`chronologyTileBar ${fullscreen ? "chronologyTileBarCompact" : ""}`}>
                   <select
                     className={`select chronologyCameraSelect ${fullscreen ? "chronologyCameraSelectCompact" : ""}`}
                     value={tile.cameraId}
                     onChange={(e) => {
-                      patchTile(idx, {
+                      patchTile(tile.slot - 1, {
                         cameraId: e.target.value,
                       });
                     }}
@@ -800,7 +839,9 @@ export default function TimelinePage() {
         </div>
       ) : null}
 
-      {renderControlBar()}
+      <div style={{ marginBottom: 14 }}>
+        {renderControlBar()}
+      </div>
 
       <ChronologyTimeline
         currentTs={timelineTs}
@@ -826,23 +867,25 @@ export default function TimelinePage() {
           onMouseMove={revealViewControls}
         >
           <div className={`chronologyViewChrome ${viewControlsVisible ? "visible" : "hidden"}`}>
-            {renderControlBar({ compact: true, inViewMode: true })}
+            <div className="chronologyViewControlStack">
+              {renderControlBar({ compact: true, inViewMode: true })}
 
-            <ChronologyTimeline
-              currentTs={timelineTs}
-              zoomKey={zoomKey}
-              onZoomOut={handleZoomOut}
-              onZoomIn={handleZoomIn}
-              onPreviewTime={handleTimelinePreview}
-              onDragStart={handleTimelineDragStart}
-              onDragEnd={handleTimelineDragEnd}
-              onSelectTime={handleTimelineSelect}
-              rangesByCamera={rangesData}
-              selectedCameraIds={selectedCameraIds}
-              cameraNames={selectedCameraNames}
-              currentTimeLabel={timelineTs ? formatPlaybackDateTime(timelineTs) : "—"}
-              compact
-            />
+              <ChronologyTimeline
+                currentTs={timelineTs}
+                zoomKey={zoomKey}
+                onZoomOut={handleZoomOut}
+                onZoomIn={handleZoomIn}
+                onPreviewTime={handleTimelinePreview}
+                onDragStart={handleTimelineDragStart}
+                onDragEnd={handleTimelineDragEnd}
+                onSelectTime={handleTimelineSelect}
+                rangesByCamera={rangesData}
+                selectedCameraIds={selectedCameraIds}
+                cameraNames={selectedCameraNames}
+                currentTimeLabel={timelineTs ? formatPlaybackDateTime(timelineTs) : "—"}
+                compact
+              />
+            </div>
           </div>
 
           <div className="chronologyViewWorkspace">
