@@ -1557,8 +1557,9 @@ textarea {
 .chronologyTopCardCompact {
   padding: 8px 10px;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(8px);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(226, 232, 240, 0.28);
 }
 
 .chronologyControlsRow {
@@ -1882,8 +1883,9 @@ textarea {
   margin-bottom: 8px;
   padding: 8px 10px 10px;
   border-radius: 18px;
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(8px);
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(226, 232, 240, 0.28);
 }
 
 .chronologyTimelineHeader {
@@ -2167,24 +2169,21 @@ textarea {
   left: 10px;
   right: 10px;
   z-index: 20;
-  flex: 0 0 auto;
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-.chronologyViewChrome.hidden {
-  opacity: 0;
-  transform: translateY(-8px);
   pointer-events: none;
 }
 
-.chronologyViewChrome.visible {
-  opacity: 1;
-  transform: translateY(0);
+.chronologyViewControlStack {
+  width: min(100%, 100%);
+  max-width: 100%;
+  display: grid;
+  gap: 8px;
   pointer-events: auto;
 }
 
-.chronologyViewControlStack {
-  max-width: 100%;
+.chronologyViewToolbarActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .chronologyViewWorkspace {
@@ -2224,7 +2223,31 @@ textarea {
 }
 
 .chronologyTileInteractive {
+  cursor: zoom-in;
+}
+
+.chronologyGridFocused .chronologyTileInteractive {
+  cursor: zoom-out;
+}
+
+.chronologyViewHandle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 24;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid rgba(226, 232, 240, 0.28);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #f8fafc;
   cursor: pointer;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.24);
+}
+
+.chronologyViewHandle:hover {
+  background: rgba(15, 23, 42, 0.82);
 }
 
 @media (max-width: 1100px) {
@@ -2267,6 +2290,11 @@ textarea {
   .chronologyViewChrome {
     top: 8px;
     left: 8px;
+    right: 8px;
+  }
+
+  .chronologyViewHandle {
+    top: 8px;
     right: 8px;
   }
 

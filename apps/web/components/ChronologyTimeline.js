@@ -10,8 +10,8 @@ const ZOOM_OPTIONS = [
 
 const DRAG_THRESHOLD_PX = 4;
 
-function pad(v) {
-  return String(v).padStart(2, "0");
+function pad(value) {
+  return String(value).padStart(2, "0");
 }
 
 function buildTickLabel(dt, zoomKey) {
@@ -87,7 +87,7 @@ export default function ChronologyTimeline({
   const dragStateRef = useRef(null);
   const [dragging, setDragging] = useState(false);
 
-  const zoom = ZOOM_OPTIONS.find((x) => x.key === zoomKey) || ZOOM_OPTIONS[0];
+  const zoom = ZOOM_OPTIONS.find((item) => item.key === zoomKey) || ZOOM_OPTIONS[0];
 
   const { startMs, endMs, axisMarks } = useMemo(() => {
     const centerMs = currentTs ? currentTs.getTime() : Date.now();
@@ -126,9 +126,7 @@ export default function ChronologyTimeline({
       if (!state) return;
 
       const deltaX = event.clientX - state.startClientX;
-      const absDeltaX = Math.abs(deltaX);
-
-      if (!state.active && absDeltaX < DRAG_THRESHOLD_PX) {
+      if (!state.active && Math.abs(deltaX) < DRAG_THRESHOLD_PX) {
         return;
       }
 
@@ -138,10 +136,9 @@ export default function ChronologyTimeline({
         onDragStart?.();
       }
 
-      const rect = state.rect;
-      if (!rect.width) return;
+      if (!state.rect.width) return;
 
-      const msPerPx = state.spanMs / rect.width;
+      const msPerPx = state.spanMs / state.rect.width;
       const nextMs = state.startCenterMs - deltaX * msPerPx;
       onPreviewTime?.(new Date(nextMs));
     }
@@ -178,6 +175,8 @@ export default function ChronologyTimeline({
   }, [onDragEnd, onDragStart, onPreviewTime, onSelectTime]);
 
   function handlePointerDown(event) {
+    if (event.button !== 0) return;
+
     const rect = rootRef.current?.getBoundingClientRect();
     if (!rect) return;
 
@@ -261,7 +260,7 @@ export default function ChronologyTimeline({
                     <div className="chronologyTimelineTrackLabel">{cameraName}</div>
 
                     <div className="chronologyTimelineTrackLane">
-                      {ranges.map((range, idx) => {
+                      {ranges.map((range, index) => {
                         const rangeStart = parseNaiveDateTime(range.start);
                         const rangeEnd = parseNaiveDateTime(range.end);
 
@@ -275,13 +274,12 @@ export default function ChronologyTimeline({
 
                         const clippedStart = Math.max(rangeStart, startMs);
                         const clippedEnd = Math.min(rangeEnd, endMs);
-
                         const leftPct = ((clippedStart - startMs) / (endMs - startMs)) * 100;
                         const widthPct = ((clippedEnd - clippedStart) / (endMs - startMs)) * 100;
 
                         return (
                           <div
-                            key={idx}
+                            key={index}
                             className="chronologyTimelineRange"
                             style={{
                               left: `${leftPct}%`,
