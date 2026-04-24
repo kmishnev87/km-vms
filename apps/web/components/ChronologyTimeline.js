@@ -3,9 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 const ZOOM_OPTIONS = [
-  { key: "24h", label: "24ч", hours: 24, majorEveryHours: 3, minorEveryHours: 1 },
-  { key: "3d", label: "3д", hours: 72, majorEveryHours: 12, minorEveryHours: 6 },
-  { key: "7d", label: "7д", hours: 168, majorEveryHours: 24, minorEveryHours: 12 },
+  { key: "24h", label: "24ч", hours: 24, majorEveryMinutes: 120, minorEveryMinutes: 30 },
+  { key: "3d", label: "3д", hours: 72, majorEveryMinutes: 360, minorEveryMinutes: 120 },
+  { key: "7d", label: "7д", hours: 168, majorEveryMinutes: 720, minorEveryMinutes: 360 },
 ];
 
 const DRAG_THRESHOLD_PX = 4;
@@ -60,8 +60,8 @@ export default function ChronologyTimeline({
     const nextStartMs = centerMs - halfSpanMs;
     const nextEndMs = centerMs + halfSpanMs;
 
-    const majorStepMs = zoom.majorEveryHours * 3600 * 1000;
-    const minorStepMs = zoom.minorEveryHours * 3600 * 1000;
+    const majorStepMs = zoom.majorEveryMinutes * 60 * 1000;
+    const minorStepMs = zoom.minorEveryMinutes * 60 * 1000;
     const marks = [];
 
     for (let ms = alignMs(nextStartMs, minorStepMs); ms <= nextEndMs; ms += minorStepMs) {
@@ -177,9 +177,6 @@ export default function ChronologyTimeline({
           </button>
         </div>
 
-        <div className="chronologyTimelineCenterStamp">
-          {currentTimeLabel || "—"}
-        </div>
       </div>
 
       <div

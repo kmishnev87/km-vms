@@ -334,6 +334,10 @@ export default function TimelinePage() {
     syncFormDateTime(nextDate);
   }
 
+  function invalidateLoadedRangesWindow() {
+    loadedRangesWindowRef.current = null;
+  }
+
   function startSeekAction() {
     seekActionIdRef.current += 1;
     const action = {
@@ -430,6 +434,7 @@ export default function TimelinePage() {
     const targetDate = new Date(ts);
 
     setIsPlaying(false);
+    invalidateLoadedRangesWindow();
     commitCurrentTimestamp(targetDate);
     await resolvePlaybackForTimestamp(ts, true);
   }
@@ -459,6 +464,7 @@ export default function TimelinePage() {
 
     const action = startSeekAction();
     setIsPlaying(false);
+    invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
     const result = await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
@@ -470,6 +476,7 @@ export default function TimelinePage() {
   async function handleTimelineSelect(nextDate) {
     const action = startSeekAction();
     setIsPlaying(false);
+    invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
     const result = await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
@@ -506,6 +513,7 @@ export default function TimelinePage() {
     const action = activeSeekActionRef.current;
 
     isScrubbingRef.current = false;
+    invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
     const result = await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
