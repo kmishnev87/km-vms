@@ -1,26 +1,37 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const ZOOM_OPTIONS = [
-  { key: "24h", label: "24ч", hours: 24 },
-  { key: "3d", label: "3д", hours: 72 },
-  { key: "7d", label: "7д", hours: 168 },
+  { key: "24h", label: "24ч", hours: 24, majorEveryHours: 3, minorEveryHours: 1 },
+  { key: "3d", label: "3д", hours: 72, majorEveryHours: 12, minorEveryHours: 6 },
+  { key: "7d", label: "7д", hours: 168, majorEveryHours: 24, minorEveryHours: 12 },
 ];
+
+const DRAG_THRESHOLD_PX = 4;
 
 function pad(v) {
   return String(v).padStart(2, "0");
 }
 
-function formatTick(dt, hoursSpan) {
-  if (hoursSpan <= 24) {
+function formatTick(dt, zoomKey) {
+  if (zoomKey === "24h") {
     return `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
   }
-  return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+
+  if (zoomKey === "3d") {
+    return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+  }
+
+  return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}`;
 }
 
 function toMs(value) {
   return new Date(value).getTime();
+}
+
+function alignMs(ms, stepMs) {
+  return Math.floor(ms / stepMs) * stepMs;
 }
 
 export default function ChronologyTimeline({
@@ -28,46 +39,129 @@ export default function ChronologyTimeline({
   zoomKey,
   onZoomOut,
   onZoomIn,
+  onPreviewTime,
+  onDragStart,
+  onDragEnd,
   onSelectTime,
   rangesByCamera,
   selectedCameraIds,
   cameraNames,
+  currentTimeLabel,
 }) {
+  const rootRef = useRef(null);
+  const dragStateRef = useRef(null);
+  const [dragging, setDragging] = useState(false);
+
   const zoom = ZOOM_OPTIONS.find((x) => x.key === zoomKey) || ZOOM_OPTIONS[0];
 
-  const { startMs, endMs, ticks } = useMemo(() => {
+  const { startMs, endMs, axisMarks } = useMemo(() => {
     const centerMs = currentTs ? currentTs.getTime() : Date.now();
     const halfSpanMs = (zoom.hours * 3600 * 1000) / 2;
-    const startMs = centerMs - halfSpanMs;
-    const endMs = centerMs + halfSpanMs;
+    const nextStartMs = centerMs - halfSpanMs;
+    const nextEndMs = centerMs + halfSpanMs;
 
-    const tickCount = zoom.key === "24h" ? 8 : zoom.key === "3d" ? 9 : 8;
-    const ticks = [];
+    const majorStepMs = zoom.majorEveryHours * 3600 * 1000;
+    const minorStepMs = zoom.minorEveryHours * 3600 * 1000;
+    const marks = [];
 
-    for (let i = 0; i <= tickCount; i += 1) {
-      const ms = startMs + ((endMs - startMs) * i) / tickCount;
-      ticks.push(new Date(ms));
+    for (let ms = alignMs(nextStartMs, minorStepMs); ms <= nextEndMs; ms += minorStepMs) {
+      if (ms < nextStartMs) continue;
+      const isMajor = ms % majorStepMs === 0;
+      marks.push({
+        ms,
+        isMajor,
+        label: isMajor ? formatTick(new Date(ms), zoom.key) : "",
+        leftPct: ((ms - nextStartMs) / (nextEndMs - nextStartMs)) * 100,
+      });
     }
 
-    return { startMs, endMs, ticks };
+    return {
+      startMs: nextStartMs,
+      endMs: nextEndMs,
+      axisMarks: marks,
+    };
   }, [currentTs, zoom]);
 
-  function handleClick(event) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, x / rect.width));
-    const targetMs = startMs + (endMs - startMs) * ratio;
-    onSelectTime?.(new Date(targetMs));
+  useEffect(() => {
+    function handleMove(event) {
+      const state = dragStateRef.current;
+      if (!state) return;
+
+      const deltaX = event.clientX - state.startClientX;
+      const absDeltaX = Math.abs(deltaX);
+
+      if (!state.active && absDeltaX < DRAG_THRESHOLD_PX) {
+        return;
+      }
+
+      if (!state.active) {
+        state.active = true;
+        setDragging(true);
+        onDragStart?.();
+      }
+
+      const rect = state.rect;
+      if (!rect.width) return;
+
+      const msPerPx = state.spanMs / rect.width;
+      const nextMs = state.startCenterMs - deltaX * msPerPx;
+      onPreviewTime?.(new Date(nextMs));
+    }
+
+    function handleUp(event) {
+      const state = dragStateRef.current;
+      if (!state) return;
+
+      dragStateRef.current = null;
+
+      if (state.active) {
+        const deltaX = event.clientX - state.startClientX;
+        const msPerPx = state.spanMs / state.rect.width;
+        const nextMs = state.startCenterMs - deltaX * msPerPx;
+        setDragging(false);
+        onDragEnd?.(new Date(nextMs));
+        return;
+      }
+
+      setDragging(false);
+      const clickX = Math.max(0, Math.min(state.rect.width, event.clientX - state.rect.left));
+      const ratio = clickX / state.rect.width;
+      const targetMs = state.startMs + (state.endMs - state.startMs) * ratio;
+      onSelectTime?.(new Date(targetMs));
+    }
+
+    window.addEventListener("mousemove", handleMove);
+    window.addEventListener("mouseup", handleUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMove);
+      window.removeEventListener("mouseup", handleUp);
+    };
+  }, [onDragEnd, onDragStart, onPreviewTime, onSelectTime]);
+
+  function handlePointerDown(event) {
+    const rect = rootRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    dragStateRef.current = {
+      startClientX: event.clientX,
+      startCenterMs: currentTs ? currentTs.getTime() : Date.now(),
+      startMs,
+      endMs,
+      spanMs: endMs - startMs,
+      rect,
+      active: false,
+    };
   }
 
   return (
     <div className="chronologyTimelineCard">
-      <div className="chronologyTimelineTopBar">
+      <div className="chronologyTimelineHeader">
         <div className="chronologyTimelineZoomControls">
           <button
-            className="chronologyIconButton"
+            className="chronologyTimelineZoomButton"
             onClick={onZoomOut}
-            title="Уменьшить масштаб"
+            title="Уменьшить диапазон"
           >
             -
           </button>
@@ -75,25 +169,41 @@ export default function ChronologyTimeline({
           <div className="chronologyTimelineZoomLabel">{zoom.label}</div>
 
           <button
-            className="chronologyIconButton"
+            className="chronologyTimelineZoomButton"
             onClick={onZoomIn}
-            title="Увеличить масштаб"
+            title="Увеличить диапазон"
           >
             +
           </button>
         </div>
+
+        <div className="chronologyTimelineCenterStamp">
+          {currentTimeLabel || "—"}
+        </div>
       </div>
 
-      <div className="chronologyTimelineTicks">
-        {ticks.map((tick, idx) => (
-          <div className="chronologyTimelineTick" key={idx}>
-            {formatTick(tick, zoom.hours)}
-          </div>
-        ))}
-      </div>
+      <div
+        ref={rootRef}
+        className={`chronologyTimelineBody ${dragging ? "isDragging" : ""}`}
+        onMouseDown={handlePointerDown}
+      >
+        <div className="chronologyTimelineAxis">
+          {axisMarks.map((mark) => (
+            <div
+              key={`${mark.ms}-${mark.isMajor ? "major" : "minor"}`}
+              className={`chronologyTimelineAxisMark ${mark.isMajor ? "major" : "minor"}`}
+              style={{ left: `${mark.leftPct}%` }}
+            >
+              <div className="chronologyTimelineAxisLine" />
+              {mark.isMajor ? (
+                <div className="chronologyTimelineAxisLabel">{mark.label}</div>
+              ) : null}
+            </div>
+          ))}
+        </div>
 
-      <div className="chronologyTimelineBody" onClick={handleClick}>
         <div className="chronologyTimelineCenterLine" />
+        <div className="chronologyTimelineCenterLabel">{currentTimeLabel || "—"}</div>
 
         {selectedCameraIds.length ? (
           <div className="chronologyTimelineTracks">
@@ -128,7 +238,7 @@ export default function ChronologyTimeline({
                           className="chronologyTimelineRange"
                           style={{
                             left: `${leftPct}%`,
-                            width: `${Math.max(widthPct, 0.5)}%`,
+                            width: `${Math.max(widthPct, 0.35)}%`,
                           }}
                           title={`${range.start} — ${range.end}`}
                         />

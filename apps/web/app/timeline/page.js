@@ -150,12 +150,19 @@ export default function TimelinePage() {
   const [error, setError] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTs, setCurrentTs] = useState(null);
+  const [previewTs, setPreviewTs] = useState(null);
 
   const hydratedRef = useRef(false);
   const currentTsRef = useRef(null);
   const playbackMapRef = useRef({});
   const tilesRef = useRef([]);
   const seekInFlightRef = useRef(false);
+  const playbackRequestIdRef = useRef(0);
+  const rangesRequestIdRef = useRef(0);
+  const isScrubbingRef = useRef(false);
+  const seekActionIdRef = useRef(0);
+  const activeSeekActionRef = useRef(null);
+  const loadedRangesWindowRef = useRef(null);
 
   async function loadCameras() {
     try {
@@ -214,6 +221,12 @@ export default function TimelinePage() {
     return () => clearInterval(timer);
   }, [isPlaying, speed]);
 
+  useEffect(() => {
+    if (!isScrubbingRef.current) {
+      setPreviewTs(currentTs);
+    }
+  }, [currentTs]);
+
   const cameraMap = useMemo(() => {
     const map = new Map();
     cameras.forEach((camera) => map.set(String(camera.id), camera));
@@ -236,31 +249,72 @@ export default function TimelinePage() {
     return result;
   }, [selectedCameraIds, cameraMap]);
 
+  const selectedCameraKey = selectedCameraIds.join(",");
+
+  function normalizeTargetTs() {
+    const normalizedDate = date || getNowDefaults().date;
+    const normalizedTime = time && time.trim() ? time.trim() : "00:00:00";
+    const finalTime = normalizedTime.length === 5 ? `${normalizedTime}:00` : normalizedTime;
+    return `${normalizedDate}T${finalTime}`;
+  }
+
+  const timelineTs = previewTs || currentTs || new Date(normalizeTargetTs());
+
   useEffect(() => {
+    const requestId = ++rangesRequestIdRef.current;
+
     async function loadRanges() {
-      if (!currentTs || !selectedCameraIds.length) {
+      if (!currentTs || !selectedCameraIds.length || isScrubbingRef.current) {
         setRangesData({});
+        loadedRangesWindowRef.current = null;
         return;
       }
 
       const hours = ZOOM_HOURS[zoomKey] || 24;
+      const spanMs = hours * 3600 * 1000;
+      const halfMs = spanMs / 2;
       const centerMs = currentTs.getTime();
-      const halfMs = (hours * 3600 * 1000) / 2;
-      const from = new Date(centerMs - halfMs);
-      const to = new Date(centerMs + halfMs);
+      const fromMs = centerMs - halfMs;
+      const toMs = centerMs + halfMs;
+
+      const loaded = loadedRangesWindowRef.current;
+      const needsReload =
+        !loaded ||
+        loaded.zoomKey !== zoomKey ||
+        loaded.cameraKey !== selectedCameraKey ||
+        fromMs < loaded.fromMs ||
+        toMs > loaded.toMs ||
+        Math.abs(centerMs - loaded.centerMs) > spanMs * 0.25;
+
+      if (!needsReload) {
+        return;
+      }
+
+      const from = new Date(fromMs);
+      const to = new Date(toMs);
 
       try {
         const response = await apiFetch(
-          `/chronology/ranges?camera_ids=${selectedCameraIds.join(",")}&from=${encodeURIComponent(formatLocalNaiveTs(from))}&to=${encodeURIComponent(formatLocalNaiveTs(to))}`
+          `/chronology/ranges?camera_ids=${selectedCameraKey}&from=${encodeURIComponent(formatLocalNaiveTs(from))}&to=${encodeURIComponent(formatLocalNaiveTs(to))}`
         );
+        if (requestId !== rangesRequestIdRef.current) return;
+
         setRangesData(response?.items || {});
+        loadedRangesWindowRef.current = {
+          fromMs,
+          toMs,
+          centerMs,
+          zoomKey,
+          cameraKey: selectedCameraKey,
+        };
       } catch (_) {
+        if (requestId !== rangesRequestIdRef.current) return;
         setRangesData({});
       }
     }
 
     loadRanges();
-  }, [currentTs, zoomKey, selectedCameraIds.join(",")]);
+  }, [currentTs, zoomKey, selectedCameraKey]);
 
   function patchTile(slotIndex, patch) {
     setTiles((prev) =>
@@ -268,11 +322,31 @@ export default function TimelinePage() {
     );
   }
 
-  function normalizeTargetTs() {
-    const normalizedDate = date || getNowDefaults().date;
-    const normalizedTime = time && time.trim() ? time.trim() : "00:00:00";
-    const finalTime = normalizedTime.length === 5 ? `${normalizedTime}:00` : normalizedTime;
-    return `${normalizedDate}T${finalTime}`;
+  function syncFormDateTime(nextDate) {
+    const { date: nextDateStr, time: nextTimeStr } = dateTimeFromDate(nextDate);
+    setDate(nextDateStr);
+    setTime(nextTimeStr);
+  }
+
+  function commitCurrentTimestamp(nextDate) {
+    setCurrentTs(nextDate);
+    setPreviewTs(nextDate);
+    syncFormDateTime(nextDate);
+  }
+
+  function startSeekAction() {
+    seekActionIdRef.current += 1;
+    const action = {
+      id: seekActionIdRef.current,
+      shouldResume: isPlaying,
+    };
+    activeSeekActionRef.current = action;
+    return action;
+  }
+
+  function invalidateSeekActions() {
+    seekActionIdRef.current += 1;
+    activeSeekActionRef.current = null;
   }
 
   async function fetchPlaybackForTile(tile, ts, forceReload = false) {
@@ -329,6 +403,7 @@ export default function TimelinePage() {
   }
 
   async function resolvePlaybackForTimestamp(ts, forceReload = false) {
+    const requestId = ++playbackRequestIdRef.current;
     const results = await Promise.all(
       tilesRef.current.map(async (tile) => {
         const value = await fetchPlaybackForTile(tile, ts, forceReload);
@@ -336,33 +411,41 @@ export default function TimelinePage() {
       })
     );
 
+    if (requestId !== playbackRequestIdRef.current) {
+      return { applied: false };
+    }
+
     const nextMap = {};
     results.forEach(([slot, value]) => {
       nextMap[slot] = value;
     });
 
     setPlaybackMap(nextMap);
+    return { applied: true };
   }
 
   async function handleFind() {
+    invalidateSeekActions();
     const ts = normalizeTargetTs();
     const targetDate = new Date(ts);
 
     setIsPlaying(false);
-    setCurrentTs(targetDate);
-
+    commitCurrentTimestamp(targetDate);
     await resolvePlaybackForTimestamp(ts, true);
   }
 
   function handlePlay() {
+    invalidateSeekActions();
     if (!currentTsRef.current) {
       const ts = normalizeTargetTs();
-      setCurrentTs(new Date(ts));
+      const nextDate = new Date(ts);
+      commitCurrentTimestamp(nextDate);
     }
     setIsPlaying(true);
   }
 
   function handlePause() {
+    invalidateSeekActions();
     setIsPlaying(false);
   }
 
@@ -374,39 +457,71 @@ export default function TimelinePage() {
       nextDate = new Date(nextDate.getTime() - 10000);
     }
 
+    const action = startSeekAction();
     setIsPlaying(false);
-    setCurrentTs(nextDate);
+    commitCurrentTimestamp(nextDate);
 
-    const { date: nextDateStr, time: nextTimeStr } = dateTimeFromDate(nextDate);
-    setDate(nextDateStr);
-    setTime(nextTimeStr);
-
-    await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
+    const result = await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
+    if (result.applied && action.shouldResume && seekActionIdRef.current === action.id) {
+      setIsPlaying(true);
+    }
   }
 
   async function handleTimelineSelect(nextDate) {
+    const action = startSeekAction();
     setIsPlaying(false);
-    setCurrentTs(nextDate);
+    commitCurrentTimestamp(nextDate);
 
-    const { date: nextDateStr, time: nextTimeStr } = dateTimeFromDate(nextDate);
-    setDate(nextDateStr);
-    setTime(nextTimeStr);
-
-    await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
+    const result = await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
+    if (result.applied && action.shouldResume && seekActionIdRef.current === action.id) {
+      setIsPlaying(true);
+    }
   }
 
   function handleZoomOut() {
     const currentIndex = ZOOM_KEYS.indexOf(zoomKey);
-    setZoomKey(ZOOM_KEYS[Math.min(currentIndex + 1, ZOOM_KEYS.length - 1)]);
+    setZoomKey(ZOOM_KEYS[Math.max(currentIndex - 1, 0)]);
   }
 
   function handleZoomIn() {
     const currentIndex = ZOOM_KEYS.indexOf(zoomKey);
-    setZoomKey(ZOOM_KEYS[Math.max(currentIndex - 1, 0)]);
+    setZoomKey(ZOOM_KEYS[Math.min(currentIndex + 1, ZOOM_KEYS.length - 1)]);
+  }
+
+  function handleTimelinePreview(nextDate) {
+    setPreviewTs(nextDate);
+    syncFormDateTime(nextDate);
+  }
+
+  function handleTimelineDragStart() {
+    const action = startSeekAction();
+    isScrubbingRef.current = true;
+    setPreviewTs(currentTsRef.current || new Date(normalizeTargetTs()));
+    if (action.shouldResume) {
+      setIsPlaying(false);
+    }
+  }
+
+  async function handleTimelineDragEnd(nextDate) {
+    const action = activeSeekActionRef.current;
+
+    isScrubbingRef.current = false;
+    commitCurrentTimestamp(nextDate);
+
+    const result = await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
+    if (
+      action &&
+      result.applied &&
+      action.shouldResume &&
+      seekActionIdRef.current === action.id
+    ) {
+      setIsPlaying(true);
+    }
   }
 
   useEffect(() => {
     if (!isPlaying || !currentTs) return;
+    if (isScrubbingRef.current) return;
     if (seekInFlightRef.current) return;
 
     seekInFlightRef.current = true;
@@ -487,20 +602,24 @@ export default function TimelinePage() {
           </div>
 
           <div className="chronologyCurrentTimeBox">
-            {currentTs ? formatPlaybackDateTime(currentTs) : "—"}
+            {timelineTs ? formatPlaybackDateTime(timelineTs) : "—"}
           </div>
         </div>
       </div>
 
       <ChronologyTimeline
-        currentTs={currentTs || new Date(normalizeTargetTs())}
+        currentTs={timelineTs}
         zoomKey={zoomKey}
         onZoomOut={handleZoomOut}
         onZoomIn={handleZoomIn}
+        onPreviewTime={handleTimelinePreview}
+        onDragStart={handleTimelineDragStart}
+        onDragEnd={handleTimelineDragEnd}
         onSelectTime={handleTimelineSelect}
         rangesByCamera={rangesData}
         selectedCameraIds={selectedCameraIds}
         cameraNames={selectedCameraNames}
+        currentTimeLabel={timelineTs ? formatPlaybackDateTime(timelineTs) : "—"}
       />
 
       <div className="card chronologyWorkspaceCard">
