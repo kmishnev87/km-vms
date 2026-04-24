@@ -4,10 +4,10 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
 const items = [
-  { href: "/live", label: "Онлайн", icon: "📺" },
-  { href: "/recordings", label: "Записи", icon: "🎞️" },
-  { href: "/cameras", label: "Камеры", icon: "📷" },
-  { href: "/timeline", label: "Хронология", icon: "🕒" },
+  { href: "/live", label: "\u041e\u043d\u043b\u0430\u0439\u043d", icon: "\ud83d\udcfa" },
+  { href: "/recordings", label: "\u0417\u0430\u043f\u0438\u0441\u0438", icon: "\ud83c\udf9e\ufe0f" },
+  { href: "/cameras", label: "\u041a\u0430\u043c\u0435\u0440\u044b", icon: "\ud83d\udcf7" },
+  { href: "/timeline", label: "\u0425\u0440\u043e\u043d\u043e\u043b\u043e\u0433\u0438\u044f", icon: "\ud83d\udd52" },
 ];
 
 export default function Layout({ children }) {
@@ -40,13 +40,12 @@ export default function Layout({ children }) {
               <div className="navLabel">{item.label}</div>
             </Link>
           ))}
+
+          <button className="navItem navButtonItem" onClick={logout} type="button">
+            <div className="navIcon">\u238b</div>
+            <div className="navLabel">\u0412\u044b\u0445\u043e\u0434</div>
+          </button>
         </nav>
-
-        <div className="sidebarSpacer" />
-
-        <button className="button secondary logoutButton" onClick={logout}>
-          Выход
-        </button>
       </aside>
 
       <main className="mainContent">{children}</main>

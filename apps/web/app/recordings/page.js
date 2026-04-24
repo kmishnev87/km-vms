@@ -36,6 +36,8 @@ const TEXT = {
 
 const ICONS = {
   more: "\u22ef",
+  refresh: "\u21bb",
+  trash: "\u2715",
   watch: "\u25b6",
   download: "\u2b07",
   remove: "\u2715",
@@ -469,16 +471,23 @@ export default function RecordingsPage() {
           </div>
 
           <div className="recordingsToolbar recordingsToolbarCompact">
-            <button className="button secondary small recordingsActionButton" onClick={refresh}>
-              {TEXT.refresh}
+            <button
+              className="button secondary small recordingsActionButton recordingsToolbarIconButton"
+              onClick={refresh}
+              title={TEXT.refresh}
+              aria-label={TEXT.refresh}
+            >
+              {ICONS.refresh}
             </button>
 
             <button
-              className="button secondary small recordingsActionButton"
+              className="button secondary small recordingsActionButton recordingsToolbarIconButton"
               onClick={handleDeleteSelected}
               disabled={!selectedPaths.length || busy}
+              title={TEXT.deleteSelected}
+              aria-label={TEXT.deleteSelected}
             >
-              {TEXT.deleteSelected}
+              {ICONS.trash}
             </button>
 
             <div className="recordingsDangerMenu" ref={dangerMenuRef}>

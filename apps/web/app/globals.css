@@ -66,6 +66,7 @@ textarea {
 .navItem {
   width: 78px;
   min-height: 78px;
+  border: 0;
   border-radius: 20px;
   padding: 10px 8px;
   display: flex;
@@ -75,6 +76,12 @@ textarea {
   gap: 8px;
   color: #334155;
   transition: background 0.15s ease, color 0.15s ease;
+}
+
+.navButtonItem {
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
 }
 
 .navItem:hover {
@@ -95,18 +102,6 @@ textarea {
   font-size: 13px;
   line-height: 1.1;
   text-align: center;
-}
-
-.sidebarSpacer {
-  flex: 1;
-}
-
-.logoutButton {
-  width: 78px;
-  min-height: 48px;
-  padding: 10px 8px;
-  border-radius: 18px;
-  font-size: 15px;
 }
 
 .mainContent {
@@ -155,7 +150,7 @@ textarea {
 }
 
 .recordingsActions {
-  gap: 10px;
+  gap: 8px;
   flex-wrap: nowrap;
 }
 
@@ -211,11 +206,24 @@ textarea {
   margin-left: auto;
   flex: 0 0 auto;
   flex-wrap: nowrap;
+  align-items: center;
 }
 
 .recordingsActionButton {
+  min-width: 40px;
+  width: 40px;
+  height: 40px;
   min-height: 40px;
-  padding: 8px 12px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.recordingsToolbarIconButton {
+  font-size: 18px;
+  line-height: 1;
 }
 
 .recordingsDangerMenu {
@@ -225,8 +233,10 @@ textarea {
 
 .recordingsDangerTrigger {
   min-width: 40px;
+  width: 40px;
+  height: 40px;
   min-height: 40px;
-  padding: 8px 12px;
+  padding: 0;
   font-size: 22px;
   line-height: 1;
 }
@@ -889,11 +899,6 @@ textarea {
     display: none;
   }
 
-  .logoutButton {
-    width: auto;
-    min-width: 90px;
-  }
-
   .mainContent {
     padding: 18px 14px 28px;
   }
@@ -950,11 +955,11 @@ textarea {
   }
 
   .recordingsToolbarCompact {
-    justify-content: space-between;
+    justify-content: flex-start;
   }
 
   .recordingsActionButton {
-    flex: 1 1 0;
+    flex: 0 0 auto;
   }
 
   .recordingsDangerMenu {
