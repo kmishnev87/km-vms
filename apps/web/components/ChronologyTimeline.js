@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 const ZOOM_OPTIONS = [
   { key: "24h", label: "24ч", hours: 24, majorEveryMinutes: 60, minorEveryMinutes: 30 },
-  { key: "3d", label: "3д", hours: 72, majorEveryMinutes: 360, minorEveryMinutes: 120 },
+  { key: "3d", label: "3д", hours: 72, majorEveryMinutes: 360, minorEveryMinutes: 180 },
   { key: "7d", label: "7д", hours: 168, majorEveryMinutes: 720, minorEveryMinutes: 360 },
 ];
 
@@ -15,15 +15,25 @@ function pad(v) {
 }
 
 function formatTick(dt, zoomKey) {
+  const hour = dt.getHours();
+  const isMidnight = hour === 0 && dt.getMinutes() === 0;
+
   if (zoomKey === "24h") {
-    return `${pad(dt.getHours())}:00`;
+    return `${pad(hour)}:${pad(dt.getMinutes())}`;
   }
 
   if (zoomKey === "3d") {
-    return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+    if (isMidnight) {
+      return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}`;
+    }
+    return `${pad(hour)}:${pad(dt.getMinutes())}`;
   }
 
-  return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}`;
+  if (isMidnight) {
+    return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}`;
+  }
+
+  return `${pad(hour)}:${pad(dt.getMinutes())}`;
 }
 
 function parseNaiveDateTime(value) {
@@ -65,6 +75,7 @@ export default function ChronologyTimeline({
   selectedCameraIds,
   cameraNames,
   currentTimeLabel,
+  compact = false,
 }) {
   const rootRef = useRef(null);
   const dragStateRef = useRef(null);
@@ -174,7 +185,7 @@ export default function ChronologyTimeline({
   }
 
   return (
-    <div className="chronologyTimelineCard">
+    <div className={`chronologyTimelineCard ${compact ? "compact" : ""}`}>
       <div className="chronologyTimelineFrame">
         <div className="chronologyTimelineHeader">
           <div className="chronologyTimelineZoomControls">
@@ -197,7 +208,9 @@ export default function ChronologyTimeline({
             </button>
           </div>
 
-          <div className="chronologyTimelineCenterLabel">{currentTimeLabel || "—"}</div>
+          <div className="chronologyTimelineHeaderCenter">
+            <div className="chronologyTimelineCenterLabel">{currentTimeLabel || "—"}</div>
+          </div>
         </div>
 
         <div

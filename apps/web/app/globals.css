@@ -1554,6 +1554,13 @@ textarea {
   padding: 10px 12px;
 }
 
+.chronologyTopCardCompact {
+  padding: 8px 10px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
+}
+
 .chronologyControlsRow {
   display: flex;
   align-items: center;
@@ -1576,12 +1583,27 @@ textarea {
   font-size: 14px;
 }
 
+.chronologyApplyButtonCompact {
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
 .chronologyGridSelect {
   width: 110px;
   min-height: 40px;
   padding: 8px 12px;
   border-radius: 12px;
   font-size: 14px;
+}
+
+.chronologyGridSelectCompact,
+.chronologyInputCompact {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 13px;
 }
 
 .chronologySpeedGroup {
@@ -1612,6 +1634,15 @@ textarea {
   padding: 10px;
 }
 
+.chronologyWorkspaceCardFullscreen {
+  height: 100%;
+  min-height: 0;
+  padding: 8px;
+  border-radius: 20px;
+  background: rgba(15, 23, 42, 0.38);
+  box-shadow: none;
+}
+
 .chronologyGrid {
   display: grid;
   gap: 16px;
@@ -1632,11 +1663,19 @@ textarea {
   border: 1px solid #16204f;
 }
 
+.chronologyTileFullscreen {
+  min-height: 0;
+}
+
 .chronologyTileBar {
   display: flex;
   gap: 10px;
   padding: 10px;
   background: #11193f;
+}
+
+.chronologyTileBarCompact {
+  padding: 8px;
 }
 
 .chronologyCameraSelect {
@@ -1647,9 +1686,21 @@ textarea {
   font-size: 14px;
 }
 
+.chronologyCameraSelectCompact {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
 .chronologyTileBody {
   min-height: 320px;
   background: #020b3a;
+}
+
+.chronologyTileBodyFullscreen {
+  height: 100%;
+  min-height: 0;
 }
 
 .chronologyPlaceholder {
@@ -1722,6 +1773,14 @@ textarea {
   font-size: 16px;
 }
 
+.chronologyIconButtonCompact {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
 .chronologyIconButton:hover {
   background: #e2e8f0;
 }
@@ -1749,6 +1808,13 @@ textarea {
   align-items: center;
   justify-content: center;
   white-space: nowrap;
+}
+
+.chronologyCurrentTimeBoxCompact {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 12px;
 }
 
 @media (max-width: 1200px) {
@@ -1809,6 +1875,14 @@ textarea {
   padding: 10px 12px 12px;
   box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
   margin-bottom: 14px;
+}
+
+.chronologyTimelineCard.compact {
+  margin-bottom: 10px;
+  padding: 8px 10px 10px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(8px);
 }
 
 .chronologyTimelineHeader {
@@ -1877,7 +1951,16 @@ textarea {
   bottom: 0;
   left: 188px;
   right: 10px;
-  z-index: 1;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.chronologyTimelineHeaderCenter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 188px;
+  right: 10px;
   pointer-events: none;
 }
 
@@ -1931,15 +2014,15 @@ textarea {
   width: 2px;
   margin-left: -1px;
   background: #2563eb;
-  z-index: 5;
+  z-index: 8;
 }
 
 .chronologyTimelineCenterLabel {
   position: absolute;
-  top: 0;
+  top: 2px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 6;
+  z-index: 9;
   min-height: 22px;
   padding: 2px 8px;
   border-radius: 999px;
@@ -2050,8 +2133,64 @@ textarea {
   border-color: #0f172a;
 }
 
+.chronologySpeedButtonCompact {
+  width: 50px;
+  min-width: 50px;
+  height: 32px;
+  font-size: 12px;
+}
+
+.chronologyViewOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  background: #020617;
+}
+
+.chronologyViewChrome {
+  flex: 0 0 auto;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.chronologyViewChrome.hidden {
+  opacity: 0.12;
+}
+
+.chronologyViewChrome.visible {
+  opacity: 1;
+}
+
+.chronologyViewWorkspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.chronologyGridFullscreen {
+  height: 100%;
+  min-height: 0;
+}
+
+.chronologyGridFullscreen.chronologyGrid2,
+.chronologyGridFullscreen.chronologyGrid4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.chronologyGridFullscreen2 {
+  grid-template-rows: 1fr;
+}
+
 @media (max-width: 1100px) {
   .chronologyTimelineTimeLayer {
+    left: 10px;
+  }
+
+  .chronologyTimelineHeaderCenter {
     left: 10px;
   }
 
@@ -2077,5 +2216,16 @@ textarea {
     max-width: calc(100% - 20px);
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .chronologyViewOverlay {
+    padding: 8px;
+  }
+
+  .chronologyGridFullscreen.chronologyGrid2,
+  .chronologyGridFullscreen.chronologyGrid4,
+  .chronologyGridFullscreen2 {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
   }
 }

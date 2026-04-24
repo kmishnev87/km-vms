@@ -29,6 +29,7 @@ const ZOOM_HOURS = {
 };
 
 const CHRONOLOGY_PREFS_KEY = "vms_chronology_prefs_v3";
+const VIEW_CONTROLS_IDLE_MS = 4000;
 
 function getNowDefaults() {
   const now = new Date();
@@ -151,8 +152,11 @@ export default function TimelinePage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTs, setCurrentTs] = useState(null);
   const [previewTs, setPreviewTs] = useState(null);
+  const [isViewMode, setIsViewMode] = useState(false);
+  const [viewControlsVisible, setViewControlsVisible] = useState(true);
 
   const hydratedRef = useRef(false);
+  const initializedCurrentTsRef = useRef(false);
   const currentTsRef = useRef(null);
   const playbackMapRef = useRef({});
   const tilesRef = useRef([]);
@@ -163,6 +167,9 @@ export default function TimelinePage() {
   const seekActionIdRef = useRef(0);
   const activeSeekActionRef = useRef(null);
   const loadedRangesWindowRef = useRef(null);
+  const viewOverlayRef = useRef(null);
+  const viewHideTimerRef = useRef(null);
+  const browserFullscreenActiveRef = useRef(false);
 
   async function loadCameras() {
     try {
@@ -261,12 +268,24 @@ export default function TimelinePage() {
   const timelineTs = previewTs || currentTs || new Date(normalizeTargetTs());
 
   useEffect(() => {
+    if (initializedCurrentTsRef.current) return;
+    if (!hydratedRef.current) return;
+
+    initializedCurrentTsRef.current = true;
+    const initialTs = new Date(normalizeTargetTs());
+    setCurrentTs(initialTs);
+    setPreviewTs(initialTs);
+  }, [date, time]);
+
+  useEffect(() => {
     const requestId = ++rangesRequestIdRef.current;
 
     async function loadRanges() {
       if (!currentTs || !selectedCameraIds.length || isScrubbingRef.current) {
-        setRangesData({});
-        loadedRangesWindowRef.current = null;
+        if (!selectedCameraIds.length) {
+          setRangesData({});
+          loadedRangesWindowRef.current = null;
+        }
         return;
       }
 
@@ -541,20 +560,106 @@ export default function TimelinePage() {
       });
   }, [currentTs, isPlaying]);
 
-  return (
-    <Layout>
-      {error ? (
-        <div className="badge err" style={{ marginBottom: 12 }}>
-          {error}
-        </div>
-      ) : null}
+  function clearViewHideTimer() {
+    if (viewHideTimerRef.current) {
+      clearTimeout(viewHideTimerRef.current);
+      viewHideTimerRef.current = null;
+    }
+  }
 
-      <div className="card chronologyTopCard" style={{ marginBottom: 14 }}>
+  function scheduleViewControlsHide() {
+    clearViewHideTimer();
+    viewHideTimerRef.current = setTimeout(() => {
+      setViewControlsVisible(false);
+    }, VIEW_CONTROLS_IDLE_MS);
+  }
+
+  function revealViewControls() {
+    setViewControlsVisible(true);
+    if (isViewMode) {
+      scheduleViewControlsHide();
+    }
+  }
+
+  async function handleEnterViewMode() {
+    setIsViewMode(true);
+    setViewControlsVisible(true);
+  }
+
+  async function handleExitViewMode() {
+    clearViewHideTimer();
+    setViewControlsVisible(true);
+    setIsViewMode(false);
+
+    if (document.fullscreenElement && viewOverlayRef.current && browserFullscreenActiveRef.current) {
+      try {
+        await document.exitFullscreen();
+      } catch {}
+    }
+  }
+
+  useEffect(() => {
+    if (!isViewMode) {
+      clearViewHideTimer();
+      browserFullscreenActiveRef.current = false;
+      return;
+    }
+
+    setViewControlsVisible(true);
+    scheduleViewControlsHide();
+
+    const node = viewOverlayRef.current;
+    if (node?.requestFullscreen) {
+      node.requestFullscreen()
+        .then(() => {
+          browserFullscreenActiveRef.current = true;
+        })
+        .catch(() => {
+          browserFullscreenActiveRef.current = false;
+        });
+    }
+
+    return () => {
+      clearViewHideTimer();
+    };
+  }, [isViewMode]);
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      const hasFullscreen = Boolean(document.fullscreenElement);
+      if (!hasFullscreen && browserFullscreenActiveRef.current) {
+        browserFullscreenActiveRef.current = false;
+        setIsViewMode(false);
+        setViewControlsVisible(true);
+        clearViewHideTimer();
+      }
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === "Escape" && isViewMode && !document.fullscreenElement) {
+        setIsViewMode(false);
+        setViewControlsVisible(true);
+        clearViewHideTimer();
+      }
+    }
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isViewMode]);
+
+  function renderControlBar({ compact = false, inViewMode = false } = {}) {
+    return (
+      <div className={`card chronologyTopCard ${compact ? "chronologyTopCardCompact" : ""}`} style={{ marginBottom: inViewMode ? 10 : 14 }}>
         <div className="chronologyControlsRow chronologyControlsRowSpread">
           <div className="chronologyControlsLeft">
             <input
               type="date"
-              className="input chronologyDateInput"
+              className={`input chronologyDateInput ${compact ? "chronologyInputCompact" : ""}`}
               value={date}
               onChange={(e) => setDate(e.target.value)}
             />
@@ -562,37 +667,39 @@ export default function TimelinePage() {
             <input
               type="time"
               step="1"
-              className="input chronologyTimeInput"
+              className={`input chronologyTimeInput ${compact ? "chronologyInputCompact" : ""}`}
               value={time}
               onChange={(e) => setTime(e.target.value)}
               placeholder="00:00:00"
             />
 
-            <button className="button chronologyApplyButton" onClick={handleFind}>
+            <button className={`button chronologyApplyButton ${compact ? "chronologyApplyButtonCompact" : ""}`} onClick={handleFind}>
               Найти
             </button>
 
-            <select
-              className="select chronologyGridSelect"
-              value={gridCount}
-              onChange={(e) => setGridCount(Number(e.target.value))}
-            >
-              {GRID_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            {!inViewMode ? (
+              <select
+                className={`select chronologyGridSelect ${compact ? "chronologyGridSelectCompact" : ""}`}
+                value={gridCount}
+                onChange={(e) => setGridCount(Number(e.target.value))}
+              >
+                {GRID_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            ) : null}
 
-            <button className="chronologyIconButton" onClick={handlePlay} title="Play">
+            <button className={`chronologyIconButton ${compact ? "chronologyIconButtonCompact" : ""}`} onClick={handlePlay} title="Play">
               ▶
             </button>
 
-            <button className="chronologyIconButton" onClick={handlePause} title="Pause">
+            <button className={`chronologyIconButton ${compact ? "chronologyIconButtonCompact" : ""}`} onClick={handlePause} title="Pause">
               ❚❚
             </button>
 
-            <button className="chronologyIconButton" onClick={handleStepBack10} title="-10">
+            <button className={`chronologyIconButton ${compact ? "chronologyIconButtonCompact" : ""}`} onClick={handleStepBack10} title="-10">
               -10
             </button>
 
@@ -600,38 +707,39 @@ export default function TimelinePage() {
               {SPEED_OPTIONS.map((item) => (
                 <button
                   key={item.value}
-                  className={`chronologySpeedButton ${speed === item.value ? "active" : ""}`}
+                  className={`chronologySpeedButton ${speed === item.value ? "active" : ""} ${compact ? "chronologySpeedButtonCompact" : ""}`}
                   onClick={() => setSpeed(item.value)}
                 >
                   {item.label}
                 </button>
               ))}
             </div>
+
+            {!inViewMode ? (
+              <button className={`chronologyIconButton ${compact ? "chronologyIconButtonCompact" : ""}`} onClick={handleEnterViewMode} title="Просмотр">
+                ⛶
+              </button>
+            ) : null}
           </div>
 
-          <div className="chronologyCurrentTimeBox">
+          <div className={`chronologyCurrentTimeBox ${compact ? "chronologyCurrentTimeBoxCompact" : ""}`}>
             {timelineTs ? formatPlaybackDateTime(timelineTs) : "—"}
           </div>
+
+          {inViewMode ? (
+            <button className={`chronologyIconButton ${compact ? "chronologyIconButtonCompact" : ""}`} onClick={handleExitViewMode} title="Выйти">
+              ✕
+            </button>
+          ) : null}
         </div>
       </div>
+    );
+  }
 
-      <ChronologyTimeline
-        currentTs={timelineTs}
-        zoomKey={zoomKey}
-        onZoomOut={handleZoomOut}
-        onZoomIn={handleZoomIn}
-        onPreviewTime={handleTimelinePreview}
-        onDragStart={handleTimelineDragStart}
-        onDragEnd={handleTimelineDragEnd}
-        onSelectTime={handleTimelineSelect}
-        rangesByCamera={rangesData}
-        selectedCameraIds={selectedCameraIds}
-        cameraNames={selectedCameraNames}
-        currentTimeLabel={timelineTs ? formatPlaybackDateTime(timelineTs) : "—"}
-      />
-
-      <div className="card chronologyWorkspaceCard">
-        <div className={`chronologyGrid chronologyGrid${gridCount}`}>
+  function renderWorkspace({ compact = false, fullscreen = false } = {}) {
+    return (
+      <div className={`card chronologyWorkspaceCard ${fullscreen ? "chronologyWorkspaceCardFullscreen" : ""}`}>
+        <div className={`chronologyGrid chronologyGrid${gridCount} ${fullscreen ? "chronologyGridFullscreen" : ""} ${fullscreen && gridCount === 2 ? "chronologyGridFullscreen2" : ""}`}>
           {tiles.map((tile, idx) => {
             const camera = tile.cameraId ? cameraMap.get(String(tile.cameraId)) || null : null;
             const playback = playbackMap[tile.slot] || {
@@ -643,10 +751,10 @@ export default function TimelinePage() {
             };
 
             return (
-              <div className="chronologyTile" key={tile.slot}>
-                <div className="chronologyTileBar">
+              <div className={`chronologyTile ${fullscreen ? "chronologyTileFullscreen" : ""}`} key={tile.slot}>
+                <div className={`chronologyTileBar ${fullscreen ? "chronologyTileBarCompact" : ""}`}>
                   <select
-                    className="select chronologyCameraSelect"
+                    className={`select chronologyCameraSelect ${fullscreen ? "chronologyCameraSelectCompact" : ""}`}
                     value={tile.cameraId}
                     onChange={(e) => {
                       patchTile(idx, {
@@ -663,7 +771,7 @@ export default function TimelinePage() {
                   </select>
                 </div>
 
-                <div className="chronologyTileBody">
+                <div className={`chronologyTileBody ${fullscreen ? "chronologyTileBodyFullscreen" : ""}`}>
                   {camera ? (
                     <ArchiveTilePlayer
                       playback={playback}
@@ -681,6 +789,67 @@ export default function TimelinePage() {
           })}
         </div>
       </div>
+    );
+  }
+
+  return (
+    <Layout>
+      {error ? (
+        <div className="badge err" style={{ marginBottom: 12 }}>
+          {error}
+        </div>
+      ) : null}
+
+      {renderControlBar()}
+
+      <ChronologyTimeline
+        currentTs={timelineTs}
+        zoomKey={zoomKey}
+        onZoomOut={handleZoomOut}
+        onZoomIn={handleZoomIn}
+        onPreviewTime={handleTimelinePreview}
+        onDragStart={handleTimelineDragStart}
+        onDragEnd={handleTimelineDragEnd}
+        onSelectTime={handleTimelineSelect}
+        rangesByCamera={rangesData}
+        selectedCameraIds={selectedCameraIds}
+        cameraNames={selectedCameraNames}
+        currentTimeLabel={timelineTs ? formatPlaybackDateTime(timelineTs) : "—"}
+      />
+
+      {renderWorkspace()}
+
+      {isViewMode ? (
+        <div
+          ref={viewOverlayRef}
+          className="chronologyViewOverlay"
+          onMouseMove={revealViewControls}
+        >
+          <div className={`chronologyViewChrome ${viewControlsVisible ? "visible" : "hidden"}`}>
+            {renderControlBar({ compact: true, inViewMode: true })}
+
+            <ChronologyTimeline
+              currentTs={timelineTs}
+              zoomKey={zoomKey}
+              onZoomOut={handleZoomOut}
+              onZoomIn={handleZoomIn}
+              onPreviewTime={handleTimelinePreview}
+              onDragStart={handleTimelineDragStart}
+              onDragEnd={handleTimelineDragEnd}
+              onSelectTime={handleTimelineSelect}
+              rangesByCamera={rangesData}
+              selectedCameraIds={selectedCameraIds}
+              cameraNames={selectedCameraNames}
+              currentTimeLabel={timelineTs ? formatPlaybackDateTime(timelineTs) : "—"}
+              compact
+            />
+          </div>
+
+          <div className="chronologyViewWorkspace">
+            {renderWorkspace({ fullscreen: true })}
+          </div>
+        </div>
+      ) : null}
     </Layout>
   );
 }
