@@ -1,0 +1,1976 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #eef3f8;
+  color: #0f172a;
+  font-family: Arial, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.layoutShell {
+  min-height: 100vh;
+  display: flex;
+  background: #eef3f8;
+}
+
+.sidebar {
+  width: 106px;
+  min-width: 106px;
+  background: #ffffff;
+  border-right: 1px solid #e5e7eb;
+  padding: 18px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand {
+  width: 72px;
+  height: 72px;
+  border-radius: 22px;
+  background: #0f172a;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+}
+
+.sidebarNav {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: center;
+}
+
+.navItem {
+  width: 78px;
+  min-height: 78px;
+  border-radius: 20px;
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: #334155;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.navItem:hover {
+  background: #f1f5f9;
+}
+
+.navItem.active {
+  background: #e9eefc;
+  color: #0f172a;
+}
+
+.navIcon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.navLabel {
+  font-size: 13px;
+  line-height: 1.1;
+  text-align: center;
+}
+
+.sidebarSpacer {
+  flex: 1;
+}
+
+.logoutButton {
+  width: 78px;
+  min-height: 48px;
+  padding: 10px 8px;
+  border-radius: 18px;
+  font-size: 15px;
+}
+
+.mainContent {
+  flex: 1;
+  min-width: 0;
+  padding: 26px 28px 40px;
+}
+
+.pageHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.pageTitle {
+  margin: 0;
+  font-size: 32px;
+  line-height: 1.15;
+  font-weight: 800;
+}
+
+.pageSubtitle {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 16px;
+}
+
+.card {
+  background: #fff;
+  border-radius: 24px;
+  padding: 22px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.recordingsToolbar {
+  gap: 10px;
+}
+
+.recordingsActions {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.badge.ok {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.badge.warn {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.badge.err {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.button {
+  min-height: 46px;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 16px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.button.secondary {
+  background: #e5e7eb;
+  color: #0f172a;
+}
+
+.button.small {
+  min-height: 38px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.input,
+.select {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 14px;
+  background: #fff;
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.formLabel {
+  margin-bottom: 8px;
+  color: #475569;
+  font-size: 15px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.formGrid .full {
+  grid-column: 1 / -1;
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  padding: 16px 12px;
+  border-bottom: 1px solid #e5e7eb;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.table th {
+  font-size: 16px;
+  font-weight: 800;
+}
+
+.linkButton {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #0f172a;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.linkButton:hover {
+  text-decoration: underline;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(15, 23, 42, 0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.modal {
+  width: min(980px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  background: #fff;
+  border-radius: 28px;
+  padding: 26px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
+}
+
+.modalWide {
+  width: min(1200px, 100%);
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.iconCloseButton {
+  width: 48px;
+  height: 48px;
+  border: 1px solid #d7dee8;
+  background: #f1f5f9;
+  color: #0f172a;
+  border-radius: 14px;
+  cursor: pointer;
+  font-size: 30px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.iconCloseButton:hover {
+  background: #e2e8f0;
+}
+
+.recordingVideo {
+  width: 100%;
+  max-height: 72vh;
+  border-radius: 20px;
+  background: #000;
+  display: block;
+}
+
+/* Камеры — оставляем текущий удачный вид */
+.cameraCards {
+  display: grid;
+  gap: 16px;
+}
+
+.cameraCard {
+  padding: 18px 22px;
+}
+
+.cameraCardGrid {
+  display: grid;
+  grid-template-columns: 2.2fr 1fr 1.8fr repeat(4, minmax(90px, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+
+.cameraFieldLabel {
+  font-size: 13px;
+  color: #64748b;
+  margin-bottom: 8px;
+}
+
+.cameraPrimary {
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.cameraSecondary {
+  margin-top: 10px;
+  font-size: 14px;
+  line-height: 1.35;
+  color: #64748b;
+}
+
+.cameraActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+}
+
+/* Онлайн / Хронология — возвращаем дружелюбный каркас */
+.liveLayout,
+.timelineLayout,
+.livePage,
+.timelinePage {
+  display: grid;
+  gap: 18px;
+}
+
+.liveTopBar,
+.timelineTopBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.liveColumns,
+.timelineColumns {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.sidePanel {
+  background: #fff;
+  border-radius: 24px;
+  padding: 16px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
+}
+
+.workPanel {
+  background: #fff;
+  border-radius: 24px;
+  padding: 16px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
+}
+
+.panelTitle {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.cameraList {
+  display: grid;
+  gap: 12px;
+}
+
+.cameraListItem {
+  border: 1px solid #e5e7eb;
+  border-radius: 18px;
+  padding: 12px;
+  background: #fff;
+}
+
+.videoGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.videoTile {
+  min-height: 220px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #0b1028;
+  color: #cbd5e1;
+  border: 1px solid #dbe3ef;
+  display: flex;
+  flex-direction: column;
+}
+
+.videoTileHeader {
+  min-height: 34px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.videoTileBody {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+  color: #94a3b8;
+}
+
+.timelineControls {
+  display: grid;
+  gap: 14px;
+}
+
+.timelineControlRow {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.timelineGrid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.timelineTile {
+  min-height: 220px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #dbe3ef;
+  display: flex;
+  flex-direction: column;
+}
+
+.timelineTileHeader {
+  min-height: 34px;
+  padding: 8px 10px;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.timelineTileBody {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+  color: #64748b;
+}
+
+@media (max-width: 1200px) {
+  .cameraCardGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .liveColumns,
+  .timelineColumns {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .pageHeader {
+    flex-direction: column;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .cameraCardGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .recordingsTable th,
+  .recordingsTable td {
+    padding: 12px 8px;
+    font-size: 14px;
+  }
+
+  .videoGrid,
+  .timelineGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .layoutShell {
+    flex-direction: column;
+  }
+
+  .sidebar {
+    width: 100%;
+    min-width: 0;
+    border-right: 0;
+    border-bottom: 1px solid #e5e7eb;
+    flex-direction: row;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 12px;
+    padding: 12px;
+    overflow-x: auto;
+  }
+
+  .brand {
+    width: 56px;
+    height: 56px;
+    min-width: 56px;
+    border-radius: 18px;
+    font-size: 18px;
+  }
+
+  .sidebarNav {
+    width: auto;
+    flex-direction: row;
+    gap: 10px;
+  }
+
+  .navItem {
+    width: auto;
+    min-width: 78px;
+    min-height: 64px;
+    padding: 8px 10px;
+  }
+
+  .sidebarSpacer {
+    display: none;
+  }
+
+  .logoutButton {
+    width: auto;
+    min-width: 90px;
+  }
+
+  .mainContent {
+    padding: 18px 14px 28px;
+  }
+
+  .card {
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .pageTitle {
+    font-size: 26px;
+  }
+
+  .cameraCardGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .button,
+  .button.small,
+  .button.secondary {
+    width: 100%;
+  }
+
+  .recordingsActions .button {
+    width: auto;
+  }
+}
+
+.liveWorkspace {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 18px;
+}
+
+.cameraListName {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.cameraListAddr {
+  margin-top: 4px;
+  font-size: 14px;
+  color: #475569;
+}
+
+.cameraListEmpty {
+  color: #64748b;
+  font-size: 14px;
+  padding: 8px 2px;
+}
+
+.liveGrid {
+  display: grid;
+  gap: 14px;
+}
+
+.liveGrid1 {
+  grid-template-columns: 1fr;
+}
+
+.liveGrid4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.liveGrid6 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.liveGrid9 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.liveTile {
+  min-height: 250px;
+  border-radius: 20px;
+  overflow: hidden;
+  border: 1px solid #dbe3ef;
+  background: #0b1028;
+  display: flex;
+  flex-direction: column;
+}
+
+.liveTileHeader {
+  min-height: 42px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.liveTileHeaderRight {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.liveTileTitle {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.liveTileControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 130px;
+  gap: 10px;
+  padding: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.liveSelect {
+  min-height: 40px;
+}
+
+.liveStreamSelect {
+  min-width: 0;
+}
+
+.liveTileBody {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+  color: #cbd5e1;
+}
+
+.liveTilePlaceholder {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+}
+
+.liveTileCameraName {
+  font-size: 22px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.liveTileMeta {
+  font-size: 14px;
+  color: #cbd5e1;
+}
+
+.liveTileHint {
+  margin-top: 6px;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+@media (max-width: 1200px) {
+  .liveWorkspace {
+    grid-template-columns: 1fr;
+  }
+
+  .liveGrid6,
+  .liveGrid9 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .liveGrid4,
+  .liveGrid6,
+  .liveGrid9 {
+    grid-template-columns: 1fr;
+  }
+
+  .liveTileControls {
+    grid-template-columns: 1fr;
+  }
+}
+
+.liveTileCompactBar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 110px;
+  gap: 8px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.liveSelectCompact {
+  min-height: 32px;
+  height: 32px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(203, 213, 225, 0.45);
+  background: rgba(241, 245, 249, 0.96);
+  color: #0f172a;
+  font-size: 14px;
+}
+
+.liveCameraSelect {
+  font-size: 13px;
+}
+
+.liveStreamSelect {
+  font-size: 13px;
+}
+
+.liveTile {
+  min-height: 235px;
+}
+
+.liveTileCameraName {
+  font-size: 20px;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+@media (max-width: 720px) {
+  .liveTileCompactBar {
+    grid-template-columns: 1fr;
+  }
+}
+
+.liveTileVideoBody {
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.liveVideoWrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 210px;
+  background: #000;
+}
+
+.liveVideo {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #000;
+}
+
+.liveOverlay {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  z-index: 3;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.52);
+  color: #fff;
+  backdrop-filter: blur(4px);
+}
+
+.liveOverlayTitle {
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.liveOverlayMeta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #dbeafe;
+}
+
+.liveCenterHint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+  color: #cbd5e1;
+  background: rgba(2, 6, 23, 0.35);
+}
+
+.liveCenterHintError {
+  color: #fecaca;
+}
+
+.liveTopPanelCard {
+  padding-top: 18px;
+  padding-bottom: 18px;
+}
+
+.liveTopToolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.liveSearchInput {
+  flex: 1 1 360px;
+  min-width: 260px;
+}
+
+.liveGridSelect {
+  width: 180px;
+  flex: 0 0 180px;
+}
+
+.liveCameraStrip {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.liveCameraStrip::-webkit-scrollbar {
+  height: 10px;
+}
+
+.liveCameraStrip::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 999px;
+}
+
+.liveCameraChip {
+  min-width: 240px;
+  max-width: 280px;
+  padding: 14px;
+  border: 1px solid #dbe3ee;
+  border-radius: 18px;
+  background: #f8fbff;
+  flex: 0 0 auto;
+}
+
+.liveCameraChipTitle {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.liveCameraChipAddr {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.liveCameraChipBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.liveCameraStripEmpty {
+  color: #64748b;
+  padding: 6px 2px;
+}
+
+.liveGrid {
+  display: grid;
+  gap: 16px;
+}
+
+.liveGrid1 {
+  grid-template-columns: 1fr;
+}
+
+.liveGrid4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.liveGrid6 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.liveGrid9 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.liveTile {
+  border-radius: 22px;
+  overflow: hidden;
+  background: #020b3a;
+  border: 1px solid #16204f;
+}
+
+.liveTileCompactBar {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  background: #11193f;
+}
+
+.liveSelectCompact {
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.liveCameraSelect {
+  flex: 1 1 auto;
+}
+
+.liveStreamSelect {
+  width: 120px;
+  flex: 0 0 120px;
+}
+
+.liveTileBody {
+  min-height: 260px;
+  background: #020b3a;
+}
+
+.liveTileVideoBody {
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.liveTilePlaceholder {
+  min-height: 260px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #cbd5e1;
+  background: #020b3a;
+}
+
+.liveTileHint {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.liveVideoWrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 260px;
+  background: #000;
+}
+
+.liveVideo {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #000;
+}
+
+.liveCenterHint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+  color: #cbd5e1;
+  background: rgba(2, 6, 23, 0.35);
+}
+
+.liveCenterHintError {
+  color: #fecaca;
+}
+
+@media (max-width: 1200px) {
+  .liveGrid6,
+  .liveGrid9 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .liveGrid4,
+  .liveGrid6,
+  .liveGrid9 {
+    grid-template-columns: 1fr;
+  }
+
+  .liveTileBody,
+  .liveTilePlaceholder,
+  .liveVideoWrap {
+    min-height: 220px;
+  }
+
+  .liveTileHint {
+    font-size: 20px;
+  }
+}
+
+@media (max-width: 640px) {
+  .liveTopToolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .liveGridSelect {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .liveTileCompactBar {
+    flex-direction: column;
+  }
+
+  .liveStreamSelect {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+}
+
+.liveTopPanelCard {
+  padding: 14px 16px 16px;
+}
+
+.liveTopToolbarCompact {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}
+
+.liveGridSelectSmall {
+  width: 132px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.liveCameraChipsWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.liveCameraChipWide {
+  width: 280px;
+  min-height: auto;
+  padding: 14px 14px 12px;
+}
+
+.liveCameraChipTitle {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.liveCameraChipAddr {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.liveCameraChipBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.liveWorkspaceCard {
+  padding: 12px;
+}
+
+.liveGrid {
+  display: grid;
+  gap: 16px;
+}
+
+.liveGrid1 {
+  grid-template-columns: 1fr;
+}
+
+.liveGrid4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.liveGrid6 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.liveGrid9 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.liveTile {
+  border-radius: 22px;
+  overflow: hidden;
+  background: #020b3a;
+  border: 1px solid #16204f;
+}
+
+.liveTileCompactBar {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  background: #11193f;
+}
+
+.liveSelectCompact {
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.liveCameraSelect {
+  flex: 1 1 auto;
+}
+
+.liveStreamSelect {
+  width: 112px;
+  flex: 0 0 112px;
+}
+
+.liveTileBody {
+  min-height: 320px;
+  background: #020b3a;
+}
+
+.liveTileVideoBody {
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.liveTilePlaceholder {
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #cbd5e1;
+  background: #020b3a;
+}
+
+.liveTileHint {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.liveVideoWrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  background: #000;
+  cursor: pointer;
+}
+
+.liveVideo {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #000;
+}
+
+.liveCenterHint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+  color: #cbd5e1;
+  background: rgba(2, 6, 23, 0.35);
+}
+
+.liveCenterHintError {
+  color: #fecaca;
+}
+
+@media (max-width: 1200px) {
+  .liveGrid6,
+  .liveGrid9 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .liveGrid4,
+  .liveGrid6,
+  .liveGrid9 {
+    grid-template-columns: 1fr;
+  }
+
+  .liveTileBody,
+  .liveTilePlaceholder,
+  .liveVideoWrap {
+    min-height: 240px;
+  }
+
+  .liveTileHint {
+    font-size: 20px;
+  }
+
+  .liveCameraChipWide {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .liveTileCompactBar {
+    flex-direction: column;
+  }
+
+  .liveStreamSelect {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+}
+
+.liveTopPanelCardCompact {
+  padding: 10px 12px 12px;
+}
+
+.liveTopRowCompact {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin-bottom: 10px;
+}
+
+.liveGridSelectMini {
+  width: 108px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.liveCameraChipsWrapCompact {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.liveCameraChipCompact {
+  width: 330px;
+  padding: 12px 14px 10px;
+  border: 1px solid #dbe3ee;
+  border-radius: 18px;
+  background: #f8fbff;
+}
+
+.liveCameraChipCompactTitle {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+
+.liveCameraChipCompactMetaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.liveCameraChipCompactAddr {
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.liveCameraChipCompactBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.liveWorkspaceCardCompact {
+  padding: 12px;
+}
+
+.liveGrid {
+  display: grid;
+  gap: 16px;
+}
+
+.liveGrid1 {
+  grid-template-columns: 1fr;
+}
+
+.liveGrid4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.liveGrid6 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.liveGrid9 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.liveTile {
+  border-radius: 22px;
+  overflow: hidden;
+  background: #020b3a;
+  border: 1px solid #16204f;
+}
+
+.liveTileCompactBar {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  background: #11193f;
+}
+
+.liveSelectCompact {
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.liveCameraSelect {
+  flex: 1 1 auto;
+}
+
+.liveStreamSelect {
+  width: 112px;
+  flex: 0 0 112px;
+}
+
+.liveTileBody {
+  min-height: 320px;
+  background: #020b3a;
+}
+
+.liveTileVideoBody {
+  padding: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.liveTilePlaceholder {
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #cbd5e1;
+  background: #020b3a;
+}
+
+.liveTileHint {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.liveVideoWrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  background: #000;
+  cursor: pointer;
+}
+
+.liveVideo {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #000;
+}
+
+.liveCenterHint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+  color: #cbd5e1;
+  background: rgba(2, 6, 23, 0.35);
+}
+
+.liveCenterHintError {
+  color: #fecaca;
+}
+
+@media (max-width: 1200px) {
+  .liveGrid6,
+  .liveGrid9 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .liveGrid4,
+  .liveGrid6,
+  .liveGrid9 {
+    grid-template-columns: 1fr;
+  }
+
+  .liveTileBody,
+  .liveTilePlaceholder,
+  .liveVideoWrap {
+    min-height: 240px;
+  }
+
+  .liveTileHint {
+    font-size: 20px;
+  }
+
+  .liveCameraChipCompact {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .liveTileCompactBar {
+    flex-direction: column;
+  }
+
+  .liveStreamSelect {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .liveCameraChipCompactMetaRow {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+.chronologyTopCard {
+  padding: 12px;
+}
+
+.chronologyControlsRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chronologyDateInput {
+  width: 170px;
+}
+
+.chronologyTimeInput {
+  width: 150px;
+}
+
+.chronologyApplyButton {
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.chronologyGridSelect {
+  width: 110px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.chronologySpeedGroup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chronologySpeedButton {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid #d7dee8;
+  border-radius: 10px;
+  background: #f1f5f9;
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.chronologySpeedButton.active {
+  background: #0f172a;
+  color: #fff;
+  border-color: #0f172a;
+}
+
+.chronologyWorkspaceCard {
+  padding: 12px;
+}
+
+.chronologyGrid {
+  display: grid;
+  gap: 16px;
+}
+
+.chronologyGrid2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.chronologyGrid4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.chronologyTile {
+  border-radius: 22px;
+  overflow: hidden;
+  background: #020b3a;
+  border: 1px solid #16204f;
+}
+
+.chronologyTileBar {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  background: #11193f;
+}
+
+.chronologyCameraSelect {
+  flex: 1 1 auto;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.chronologyTileBody {
+  min-height: 320px;
+  background: #020b3a;
+}
+
+.chronologyPlaceholder {
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #cbd5e1;
+  background: #020b3a;
+  font-size: 22px;
+}
+
+.archiveVideoWrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  background: #000;
+  cursor: pointer;
+}
+
+.archiveVideo {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #000;
+}
+
+.archiveCenterHint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+  color: #cbd5e1;
+  background: rgba(2, 6, 23, 0.35);
+}
+
+.archiveCenterHintError {
+  color: #fecaca;
+}
+
+@media (max-width: 900px) {
+  .chronologyGrid2,
+  .chronologyGrid4 {
+    grid-template-columns: 1fr;
+  }
+
+  .chronologyTileBody,
+  .chronologyPlaceholder,
+  .archiveVideoWrap {
+    min-height: 240px;
+  }
+}
+
+.chronologyIconButton {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #d7dee8;
+  border-radius: 12px;
+  background: #f1f5f9;
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.chronologyIconButton:hover {
+  background: #e2e8f0;
+}
+
+.chronologyControlsRowSpread {
+  justify-content: space-between;
+}
+
+.chronologyControlsLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chronologyCurrentTimeBox {
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid #d7dee8;
+  border-radius: 12px;
+  background: #f8fbff;
+  color: #0f172a;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+@media (max-width: 1200px) {
+  .chronologyControlsRowSpread {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .chronologyCurrentTimeBox {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+.chronologyTileBody {
+  aspect-ratio: 16 / 9;
+  min-height: 0;
+  background: #020b3a;
+}
+
+.archiveVideoWrap {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: #000;
+  cursor: pointer;
+}
+
+.archiveVideo {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #000;
+}
+
+.chronologyPlaceholder {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #cbd5e1;
+  background: #020b3a;
+  font-size: 22px;
+}
+
+.archiveVideo {
+  object-fit: contain;
+  background: #000;
+}
+
+.chronologyTimelineCard {
+  background: #fff;
+  border-radius: 24px;
+  padding: 14px 16px 16px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
+  margin-bottom: 14px;
+}
+
+.chronologyTimelineTopBar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  margin-bottom: 12px;
+}
+
+.chronologyTimelineZoomControls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chronologyTimelineZoomLabel {
+  min-width: 56px;
+  text-align: center;
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.chronologyTimelineTicks {
+  display: grid;
+  grid-template-columns: repeat(9, minmax(0, 1fr));
+  gap: 0;
+  margin-bottom: 10px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.chronologyTimelineTick {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.chronologyTimelineBody {
+  position: relative;
+  min-height: 150px;
+  border: 1px solid #d7dee8;
+  border-radius: 18px;
+  background:
+    linear-gradient(to right, rgba(148, 163, 184, 0.16) 1px, transparent 1px);
+  background-size: 12.5% 100%;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.chronologyTimelineCenterLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: #2563eb;
+  z-index: 5;
+}
+
+.chronologyTimelineTracks {
+  position: relative;
+  z-index: 2;
+  padding: 12px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.chronologyTimelineTrackRow {
+  display: grid;
+  grid-template-columns: 190px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.chronologyTimelineTrackLabel {
+  color: #0f172a;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chronologyTimelineTrackLane {
+  position: relative;
+  height: 20px;
+  border-radius: 999px;
+  background: #eef2f7;
+  overflow: hidden;
+}
+
+.chronologyTimelineRange {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 999px;
+  background: #0f172a;
+}
+
+.chronologyTimelineEmpty {
+  min-height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 14px;
+  padding: 20px;
+  text-align: center;
+}
+
+.chronologyIconButton {
+  min-width: 40px;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid #d7dee8;
+  border-radius: 12px;
+  background: #f1f5f9;
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.chronologyIconButton:hover {
+  background: #e2e8f0;
+}
+
+.chronologySpeedGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+}
+
+.chronologySpeedButton {
+  width: 58px;
+  min-width: 58px;
+  height: 36px;
+  padding: 0 6px;
+  border: 1px solid #d7dee8;
+  border-radius: 10px;
+  background: #f1f5f9;
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.chronologySpeedButton.active {
+  background: #0f172a;
+  color: #fff;
+  border-color: #0f172a;
+}
+
+@media (max-width: 1100px) {
+  .chronologyTimelineTrackRow {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+}
+
+@media (max-width: 900px) {
+  .chronologyTimelineTicks {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    row-gap: 6px;
+  }
+}

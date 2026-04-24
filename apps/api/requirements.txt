@@ -1,0 +1,12 @@
+fastapi==0.115.12
+uvicorn[standard]==0.34.2
+sqlalchemy==2.0.40
+psycopg[binary]==3.2.7
+pydantic==2.11.3
+pydantic-settings==2.8.1
+python-multipart==0.0.20
+cryptography==44.0.2
+passlib[bcrypt]==1.7.4
+PyJWT==2.10.1
+onvif-zeep==0.2.12
+zeep==4.3.2

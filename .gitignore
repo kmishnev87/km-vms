@@ -1,0 +1,13 @@
+.env
+*.tar.gz
+*.zip
+data/
+backups/
+node_modules/
+.next/
+apps/web/node_modules/
+apps/web/.next/
+__pycache__/
+*.pyc
+.DS_Store
+*.bak

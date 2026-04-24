@@ -1,0 +1,135 @@
+name: tnas-vms
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: vms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vms
+      POSTGRES_USER: vms
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      TZ: ${TZ:-Asia/Yekaterinburg}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vms -d vms"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    networks:
+      - vms-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: vms-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    networks:
+      - vms-net
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: vms-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      APP_ENV: production
+      APP_HOST: 0.0.0.0
+      APP_PORT: 8000
+      DATABASE_URL: postgresql+psycopg://vms:${POSTGRES_PASSWORD}@postgres:5432/vms
+      JWT_SECRET: ${JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      STORAGE_ROOT: /storage/archive
+      STORAGE_PREVIEWS: /storage/previews
+      STORAGE_EXPORTS: /storage/exports
+      DEFAULT_LIVE_STREAM: sub
+      DEFAULT_RECORD_STREAM: main
+      ADMIN_USERNAME: ${ADMIN_USERNAME}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      ADMIN_FULL_NAME: ${ADMIN_FULL_NAME}
+    volumes:
+      - ${SURVEILLANCE_ROOT}:/storage/archive
+      - ./data/previews:/storage/previews
+      - ./data/exports:/storage/exports
+    ports:
+      - "${API_PORT:-18000}:8000"
+    networks:
+      - vms-net
+
+  recorder:
+    build:
+      context: ./apps/recorder
+      dockerfile: Dockerfile
+    container_name: vms-recorder
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      DATABASE_URL: postgresql+psycopg://vms:${POSTGRES_PASSWORD}@postgres:5432/vms
+      STORAGE_ROOT: /storage/archive
+      SEGMENT_DURATION_SEC: 300
+      FFMPEG_LOGLEVEL: warning
+    volumes:
+      - ${SURVEILLANCE_ROOT}:/storage/archive
+    networks:
+      - vms-net
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: vms-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
+      TZ: ${TZ:-Asia/Yekaterinburg}
+    networks:
+      - vms-net
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: vms-nginx
+    restart: unless-stopped
+    depends_on:
+      web:
+        condition: service_started
+      api:
+        condition: service_started
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+    ports:
+      - "${HTTP_PORT:-8088}:80"
+    volumes:
+      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./data/exports:/var/www/exports:ro
+      - ./data/previews:/var/www/previews:ro
+    networks:
+      - vms-net
+
+networks:
+  vms-net:
+    driver: bridge
