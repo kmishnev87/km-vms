@@ -1,10 +1,10 @@
 import os
 import re
-import time
 import signal
 import subprocess
-from pathlib import Path
+import time
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -12,6 +12,7 @@ from sqlalchemy.orm import sessionmaker
 DATABASE_URL = os.getenv("DATABASE_URL")
 STORAGE_ROOT = Path(os.getenv("STORAGE_ROOT", "/storage/archive"))
 FFMPEG_LOGLEVEL = os.getenv("FFMPEG_LOGLEVEL", "warning")
+DEFAULT_RECORD_STREAM = os.getenv("DEFAULT_RECORD_STREAM", "main").lower()
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -22,6 +23,7 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 processes = {}
+restart_state = {}
 running = True
 
 
@@ -53,11 +55,15 @@ def build_segment_pattern(camera_name: str, folder_name: str) -> str:
 
 
 def choose_input_url(row) -> str | None:
+    preferred = (getattr(row, "default_record_stream", None) or DEFAULT_RECORD_STREAM).lower()
+    if preferred == "sub":
+        primary = row.rtsp_sub_url or row.rtsp_main_url
+    else:
+        primary = row.rtsp_main_url or row.rtsp_sub_url
+
     protocol = (row.protocol or "").lower()
-    if protocol == "rtsp":
-        return row.rtsp_main_url or row.rtsp_sub_url
-    if protocol == "onvif":
-        return row.rtsp_main_url or row.rtsp_sub_url
+    if protocol in {"rtsp", "onvif"}:
+        return primary
     return None
 
 
@@ -73,6 +79,7 @@ def ffmpeg_cmd(camera):
     return [
         "ffmpeg",
         "-hide_banner",
+        "-nostdin",
         "-loglevel", FFMPEG_LOGLEVEL,
         "-rtsp_transport", (camera.rtsp_transport or "tcp"),
         "-i", input_url,
@@ -93,23 +100,29 @@ def ffmpeg_cmd(camera):
 def mark_camera_status(camera_id: int, status: str, last_error: str | None = None):
     with engine.begin() as conn:
         conn.execute(
-            text("""
+            text(
+                """
                 UPDATE cameras
                 SET status = :status,
                     last_error = :last_error,
                     updated_at = NOW()
                 WHERE id = :camera_id
-            """),
+                """
+            ),
             {
                 "camera_id": camera_id,
                 "status": status,
                 "last_error": last_error,
-            }
+            },
         )
 
 
 def start_camera(camera):
     if camera.id in processes:
+        return
+
+    restart_info = restart_state.get(camera.id)
+    if restart_info and restart_info.get("blocked_until", 0) > time.time():
         return
 
     cmd = ffmpeg_cmd(camera)
@@ -121,7 +134,7 @@ def start_camera(camera):
         cmd,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
     )
 
     processes[camera.id] = {
@@ -130,6 +143,7 @@ def start_camera(camera):
         "folder_name": camera.storage_folder_name,
         "started_at": time.time(),
     }
+    restart_state.pop(camera.id, None)
     mark_camera_status(camera.id, "recording", None)
     print(f"[RECORDER] START {camera.id} {camera.name}")
 
@@ -159,23 +173,21 @@ def enforce_retention(camera_id: int, folder_name: str, retention_days: int, sto
 
     files = sorted([p for p in root.rglob("*.mp4") if p.is_file()], key=lambda p: p.stat().st_mtime)
 
-    # Правило по дням
     if retention_days and retention_days > 0:
         cutoff = time.time() - (retention_days * 86400)
-        for f in list(files):
+        for file_path in list(files):
             try:
-                if f.stat().st_mtime < cutoff:
-                    f.unlink(missing_ok=True)
+                if file_path.stat().st_mtime < cutoff:
+                    file_path.unlink(missing_ok=True)
             except Exception:
                 pass
         files = sorted([p for p in root.rglob("*.mp4") if p.is_file()], key=lambda p: p.stat().st_mtime)
 
-    # Правило по объёму
     quota_bytes = max(int(storage_quota_gb), 50) * 1024 * 1024 * 1024
     total = 0
-    for f in files:
+    for file_path in files:
         try:
-            total += f.stat().st_size
+            total += file_path.stat().st_size
         except Exception:
             pass
 
@@ -192,25 +204,30 @@ def enforce_retention(camera_id: int, folder_name: str, retention_days: int, sto
 def sync_cameras():
     db = SessionLocal()
     try:
-        rows = db.execute(text("""
-            SELECT
-                id,
-                name,
-                storage_folder_name,
-                enabled,
-                protocol,
-                host,
-                port,
-                rtsp_main_url,
-                rtsp_sub_url,
-                rtsp_transport,
-                recording_mode,
-                segment_minutes,
-                retention_days,
-                storage_quota_gb
-            FROM cameras
-            ORDER BY id ASC
-        """)).fetchall()
+        rows = db.execute(
+            text(
+                """
+                SELECT
+                    id,
+                    name,
+                    storage_folder_name,
+                    enabled,
+                    protocol,
+                    host,
+                    port,
+                    rtsp_main_url,
+                    rtsp_sub_url,
+                    rtsp_transport,
+                    recording_mode,
+                    default_record_stream,
+                    segment_minutes,
+                    retention_days,
+                    storage_quota_gb
+                FROM cameras
+                ORDER BY id ASC
+                """
+            )
+        ).fetchall()
 
         active_ids = set()
 
@@ -223,11 +240,13 @@ def sync_cameras():
             )
 
             if not row.enabled:
+                restart_state.pop(row.id, None)
                 if row.id in processes:
                     stop_camera(row.id, "disabled")
                 continue
 
             if row.recording_mode != "always":
+                restart_state.pop(row.id, None)
                 if row.id in processes:
                     stop_camera(row.id, "idle")
                 continue
@@ -239,6 +258,7 @@ def sync_cameras():
 
         current_ids = set(processes.keys())
         for camera_id in current_ids - active_ids:
+            restart_state.pop(camera_id, None)
             stop_camera(camera_id, "removed_or_disabled")
 
     finally:
@@ -254,9 +274,16 @@ def check_children():
                 err = proc.stderr.read()[-2000:]
             except Exception:
                 pass
+
             processes.pop(camera_id, None)
+            attempt = int(restart_state.get(camera_id, {}).get("attempt", 0)) + 1
+            backoff = min(30, 10 * attempt)
+            restart_state[camera_id] = {
+                "attempt": attempt,
+                "blocked_until": time.time() + backoff,
+            }
             mark_camera_status(camera_id, "error", err or "ffmpeg stopped unexpectedly")
-            print(f"[RECORDER] EXIT {camera_id}")
+            print(f"[RECORDER] EXIT {camera_id} backoff={backoff}s")
 
 
 def shutdown_handler(signum, frame):
@@ -274,8 +301,8 @@ while running:
     try:
         sync_cameras()
         check_children()
-    except Exception as e:
-        print(f"[RECORDER] loop error: {e}")
+    except Exception as exc:
+        print(f"[RECORDER] loop error: {exc}")
     time.sleep(5)
 
 for camera_id in list(processes.keys()):

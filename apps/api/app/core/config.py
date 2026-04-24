@@ -16,6 +16,12 @@ class Settings(BaseSettings):
 
     default_live_stream: str = "sub"
     default_record_stream: str = "main"
+    live_transcode: bool = False
+    live_video_codec: str = "copy"
+    live_audio_mode: str = "none"
+    live_idle_ttl_seconds: int = 45
+    live_cleanup_interval_seconds: int = 10
+    live_start_timeout_seconds: int = 8
 
     admin_username: str = "admin"
     admin_password: str = "Admin_Change_Me_2026"

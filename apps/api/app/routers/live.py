@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -19,6 +19,9 @@ from app.services.live_hls import (
     get_playlist_file,
     get_segment_file,
     get_stream_debug,
+    list_stream_status,
+    stop_all_streams,
+    stop_stream,
 )
 
 router = APIRouter(prefix="/live", tags=["live"])
@@ -27,6 +30,11 @@ StreamKey = Literal["main", "sub", "sub2"]
 
 
 class LiveStartPayload(BaseModel):
+    camera_id: int
+    stream: StreamKey = "main"
+
+
+class LiveStopPayload(BaseModel):
     camera_id: int
     stream: StreamKey = "main"
 
@@ -74,6 +82,44 @@ def start_live_stream(
     return result
 
 
+@router.post("/stop")
+def stop_live_stream(
+    payload: LiveStopPayload,
+    current_user: User = Depends(get_current_user),
+):
+    stopped = stop_stream(payload.camera_id, payload.stream)
+    return {
+        "ok": True,
+        "stopped": stopped,
+        "camera_id": payload.camera_id,
+        "stream": payload.stream,
+    }
+
+
+@router.post("/stop-all")
+def stop_all_live_streams(
+    current_user: User = Depends(get_current_user),
+):
+    stopped_count = stop_all_streams()
+    return {
+        "ok": True,
+        "stopped_count": stopped_count,
+    }
+
+
+@router.get("/status")
+def live_status(
+    camera_id: Optional[int] = Query(default=None),
+    stream: Optional[StreamKey] = Query(default=None),
+    current_user: User = Depends(get_current_user),
+):
+    items = list_stream_status(camera_id=camera_id, stream=stream)
+    return {
+        "items": items,
+        "count": len(items),
+    }
+
+
 @router.get("/{camera_id}/{stream}/index.m3u8")
 def live_playlist(
     request: Request,
@@ -85,17 +131,17 @@ def live_playlist(
     _authorize_live_request(request, token)
 
     camera = _get_camera(db, camera_id)
-    result = ensure_stream(camera, stream)
+    result = ensure_stream(camera, stream, wait_for_ready=False)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Не удалось запустить live поток")
 
     playlist = get_playlist_file(camera_id, stream)
-    if not playlist.exists():
+    if not playlist.exists() or playlist.stat().st_size <= 0:
         debug = get_stream_debug(camera_id, stream)
         raise HTTPException(
             status_code=503,
             detail={
-                "message": "Плейлист HLS пока не создан",
+                "message": "Плейлист HLS пока не готов",
                 "debug": debug,
             },
         )
@@ -108,13 +154,9 @@ def live_playlist(
         lines.append(line)
 
     patched_playlist = "\n".join(lines) + "\n"
-    temp_playlist = playlist.parent / "index_auth.m3u8"
-    temp_playlist.write_text(patched_playlist, encoding="utf-8")
-
-    return FileResponse(
-        path=temp_playlist,
+    return Response(
+        content=patched_playlist,
         media_type="application/vnd.apple.mpegurl",
-        filename="index.m3u8",
         headers={"Cache-Control": "no-store"},
     )
 

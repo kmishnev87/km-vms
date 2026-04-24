@@ -4,7 +4,23 @@ import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import { apiFetch } from "../lib/api";
 
-const MAX_RETRIES = 6;
+const MAX_RETRIES = 4;
+const READY_POLL_INTERVAL_MS = 700;
+const READY_TIMEOUT_MS = 10000;
+
+const TEXT = {
+  noToken: "\u041d\u0435\u0442 \u0442\u043e\u043a\u0435\u043d\u0430 \u0430\u0432\u0442\u043e\u0440\u0438\u0437\u0430\u0446\u0438\u0438",
+  loading: "\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0430\u0435\u043c \u043f\u043e\u0442\u043e\u043a...",
+  waiting: "\u0416\u0434\u0451\u043c \u0433\u043e\u0442\u043e\u0432\u043d\u043e\u0441\u0442\u044c \u043f\u043e\u0442\u043e\u043a\u0430...",
+  failedPlay: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u043e\u0441\u043f\u0440\u043e\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u043f\u043e\u0442\u043e\u043a",
+  failedStart: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u043f\u0443\u0441\u0442\u0438\u0442\u044c \u043f\u043e\u0442\u043e\u043a",
+  browserUnsupported: "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043d\u0435 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u0438\u0432\u0430\u0435\u0442 HLS",
+  doubleClick: "\u0414\u0432\u043e\u0439\u043d\u043e\u0439 \u043a\u043b\u0438\u043a \u2014 \u043d\u0430 \u0432\u0435\u0441\u044c \u044d\u043a\u0440\u0430\u043d",
+};
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export default function TilePlayer({ cameraId, stream }) {
   const videoRef = useRef(null);
@@ -39,6 +55,30 @@ export default function TilePlayer({ cameraId, stream }) {
     }
   }
 
+  async function stopBackendStream(targetCameraId, targetStream, keepalive = false) {
+    if (!targetCameraId || !targetStream) return;
+
+    const token =
+      typeof window !== "undefined" ? localStorage.getItem("token") : null;
+
+    if (!token) return;
+
+    try {
+      await fetch("/api/live/stop", {
+        method: "POST",
+        keepalive,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          camera_id: Number(targetCameraId),
+          stream: targetStream,
+        }),
+      });
+    } catch (_) {}
+  }
+
   function toggleFullscreen() {
     const el = wrapRef.current;
     if (!el) return;
@@ -52,16 +92,131 @@ export default function TilePlayer({ cameraId, stream }) {
 
   useEffect(() => {
     let cancelled = false;
+    const sourceKey = {
+      cameraId: cameraId ? Number(cameraId) : null,
+      stream: stream || null,
+    };
+    async function waitForReady() {
+      const deadline = Date.now() + READY_TIMEOUT_MS;
+      while (!cancelled && Date.now() < deadline) {
+        try {
+          const response = await apiFetch(
+            `/live/status?camera_id=${encodeURIComponent(sourceKey.cameraId)}&stream=${encodeURIComponent(sourceKey.stream)}`
+          );
+          const item = response?.items?.[0];
+          if (item?.running && item?.ready) {
+            return true;
+          }
+        } catch (_) {}
+
+        setStatus("waiting");
+        await sleep(READY_POLL_INTERVAL_MS);
+      }
+
+      return false;
+    }
+
+    function scheduleRetry(message) {
+      if (cancelled) return;
+
+      if (attemptRef.current >= MAX_RETRIES) {
+        setStatus("error");
+        setError(message);
+        return;
+      }
+
+      const delay = 1200 + attemptRef.current * 1000;
+      attemptRef.current += 1;
+      setStatus("loading");
+      setError("");
+      destroyPlayer();
+      retryTimerRef.current = setTimeout(() => {
+        startPlayback();
+      }, delay);
+    }
+
+    async function attachPlayer(src) {
+      const video = videoRef.current;
+      if (!video) return;
+
+      destroyPlayer();
+
+      if (Hls.isSupported()) {
+        const hls = new Hls({
+          lowLatencyMode: true,
+          backBufferLength: 12,
+          maxBufferLength: 6,
+          liveSyncDurationCount: 2,
+          liveMaxLatencyDurationCount: 4,
+          manifestLoadingTimeOut: 8000,
+          levelLoadingTimeOut: 8000,
+          fragLoadingTimeOut: 12000,
+          manifestLoadingMaxRetry: 2,
+          levelLoadingMaxRetry: 2,
+          fragLoadingMaxRetry: 2,
+        });
+
+        hlsRef.current = hls;
+
+        hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+          if (!cancelled) {
+            hls.loadSource(src);
+          }
+        });
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          if (cancelled) return;
+          setStatus("playing");
+          setError("");
+          attemptRef.current = 0;
+          video.play().catch(() => {});
+        });
+
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (cancelled || !data?.fatal) return;
+          scheduleRetry(TEXT.failedPlay);
+        });
+
+        hls.attachMedia(video);
+        return;
+      }
+
+      if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = src;
+
+        const onLoaded = () => {
+          if (cancelled) return;
+          setStatus("playing");
+          setError("");
+          attemptRef.current = 0;
+          video.play().catch(() => {});
+        };
+
+        const onError = () => {
+          if (!cancelled) {
+            scheduleRetry(TEXT.failedPlay);
+          }
+        };
+
+        video.addEventListener("loadedmetadata", onLoaded, { once: true });
+        video.addEventListener("error", onError, { once: true });
+        video.load();
+        return;
+      }
+
+      setStatus("error");
+      setError(TEXT.browserUnsupported);
+    }
 
     async function startPlayback() {
-      if (!cameraId || !stream) return;
+      if (!sourceKey.cameraId || !sourceKey.stream) return;
 
       const token =
         typeof window !== "undefined" ? localStorage.getItem("token") : null;
 
       if (!token) {
         setStatus("error");
-        setError("Нет токена авторизации");
+        setError(TEXT.noToken);
         return;
       }
 
@@ -73,126 +228,43 @@ export default function TilePlayer({ cameraId, stream }) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            camera_id: Number(cameraId),
-            stream,
+            camera_id: sourceKey.cameraId,
+            stream: sourceKey.stream,
           }),
         });
 
         if (cancelled) return;
 
-        const src = `/api/live/${cameraId}/${stream}/index.m3u8?token=${encodeURIComponent(token)}`;
-        const video = videoRef.current;
-        if (!video) return;
-
-        destroyPlayer();
-
-        if (Hls.isSupported()) {
-          const hls = new Hls({
-            lowLatencyMode: true,
-            backBufferLength: 20,
-            maxBufferLength: 8,
-            liveSyncDurationCount: 2,
-            liveMaxLatencyDurationCount: 4,
-            manifestLoadingTimeOut: 10000,
-            levelLoadingTimeOut: 10000,
-            fragLoadingTimeOut: 15000,
-          });
-
-          hlsRef.current = hls;
-
-          hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-            hls.loadSource(src);
-          });
-
-          hls.on(Hls.Events.MANIFEST_PARSED, () => {
-            if (cancelled) return;
-            setStatus("playing");
-            setError("");
-            attemptRef.current = 0;
-            video.play().catch(() => {});
-          });
-
-          hls.on(Hls.Events.ERROR, (_event, data) => {
-            if (cancelled) return;
-
-            if (data?.fatal) {
-              if (attemptRef.current < MAX_RETRIES) {
-                const delay = 1200 + attemptRef.current * 800;
-                attemptRef.current += 1;
-                setStatus("loading");
-                setError("");
-                destroyPlayer();
-                retryTimerRef.current = setTimeout(() => {
-                  startPlayback();
-                }, delay);
-              } else {
-                setStatus("error");
-                setError("Не удалось воспроизвести поток");
-              }
-            }
-          });
-
-          hls.attachMedia(video);
-        } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-          video.src = src;
-
-          const onLoaded = () => {
-            if (cancelled) return;
-            setStatus("playing");
-            setError("");
-            attemptRef.current = 0;
-            video.play().catch(() => {});
-          };
-
-          const onError = () => {
-            if (cancelled) return;
-
-            if (attemptRef.current < MAX_RETRIES) {
-              const delay = 1200 + attemptRef.current * 800;
-              attemptRef.current += 1;
-              setStatus("loading");
-              setError("");
-              destroyPlayer();
-              retryTimerRef.current = setTimeout(() => {
-                startPlayback();
-              }, delay);
-            } else {
-              setStatus("error");
-              setError("Не удалось воспроизвести поток");
-            }
-          };
-
-          video.addEventListener("loadedmetadata", onLoaded, { once: true });
-          video.addEventListener("error", onError, { once: true });
-        } else {
-          setStatus("error");
-          setError("Браузер не поддерживает HLS");
+        const ready = await waitForReady();
+        if (!ready) {
+          scheduleRetry(TEXT.failedStart);
+          return;
         }
-      } catch (_) {
-        if (cancelled) return;
 
-        if (attemptRef.current < MAX_RETRIES) {
-          const delay = 1200 + attemptRef.current * 800;
-          attemptRef.current += 1;
-          setStatus("loading");
-          setError("");
-          destroyPlayer();
-          retryTimerRef.current = setTimeout(() => {
-            startPlayback();
-          }, delay);
-        } else {
-          setStatus("error");
-          setError("Не удалось запустить поток");
+        const src = `/api/live/${sourceKey.cameraId}/${sourceKey.stream}/index.m3u8?token=${encodeURIComponent(token)}`;
+        if (!cancelled) {
+          await attachPlayer(src);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          scheduleRetry(err?.message || TEXT.failedStart);
         }
       }
     }
 
+    function handlePageHide() {
+      stopBackendStream(sourceKey.cameraId, sourceKey.stream, true);
+    }
+
     attemptRef.current = 0;
     startPlayback();
+    window.addEventListener("pagehide", handlePageHide);
 
     return () => {
       cancelled = true;
+      window.removeEventListener("pagehide", handlePageHide);
       destroyPlayer();
+      stopBackendStream(sourceKey.cameraId, sourceKey.stream, true);
     };
   }, [cameraId, stream]);
 
@@ -201,7 +273,7 @@ export default function TilePlayer({ cameraId, stream }) {
       ref={wrapRef}
       className="liveVideoWrap"
       onDoubleClick={toggleFullscreen}
-      title="Двойной клик — на весь экран"
+      title={TEXT.doubleClick}
     >
       <video
         ref={videoRef}
@@ -212,8 +284,10 @@ export default function TilePlayer({ cameraId, stream }) {
         controls={false}
       />
 
-      {status === "loading" ? (
-        <div className="liveCenterHint">Подключаем поток...</div>
+      {status === "loading" || status === "waiting" ? (
+        <div className="liveCenterHint">
+          {status === "waiting" ? TEXT.waiting : TEXT.loading}
+        </div>
       ) : null}
 
       {status === "error" ? (

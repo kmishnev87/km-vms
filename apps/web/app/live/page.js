@@ -37,6 +37,10 @@ function getDefaultStream(camera) {
   const available = detectAvailableStreams(camera);
   const preferred = (camera?.default_live_stream || "").toLowerCase();
 
+  if (available.some((item) => item.key === "sub")) {
+    return "sub";
+  }
+
   if (preferred && available.some((x) => x.key === preferred)) {
     return preferred;
   }
