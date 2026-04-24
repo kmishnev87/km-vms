@@ -92,7 +92,7 @@ export default function LoginPage() {
             fontWeight: 800,
           }}
         >
-          Вход в TNAS VMS
+          Вход в KM VMS
         </h1>
 
         <div

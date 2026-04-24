@@ -22,7 +22,12 @@ export default function Layout({ children }) {
   return (
     <div className="layoutShell">
       <aside className="sidebar">
-        <div className="brand">VMS</div>
+        <div className="brand">
+          <div style={{ lineHeight: "1.12", textAlign: "center" }}>
+            <div style={{ fontSize: 17, fontWeight: 900 }}>KM</div>
+            <div style={{ fontSize: 17, fontWeight: 900, marginTop: 3 }}>VMS</div>
+          </div>
+        </div>
 
         <nav className="sidebarNav">
           {items.map((item) => (

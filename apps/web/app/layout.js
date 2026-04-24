@@ -1,7 +1,7 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "TNAS VMS",
+  title: "KM VMS",
   description: "Система видеонаблюдения"
 };
 
