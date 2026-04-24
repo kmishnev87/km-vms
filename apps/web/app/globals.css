@@ -1866,6 +1866,21 @@ textarea {
   cursor: grabbing;
 }
 
+.chronologyTimelineFrame {
+  position: relative;
+  padding-top: 34px;
+}
+
+.chronologyTimelineTimeLayer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 188px;
+  right: 10px;
+  z-index: 1;
+  pointer-events: none;
+}
+
 .chronologyTimelineAxis {
   position: absolute;
   inset: 0 0 auto 0;
@@ -1900,10 +1915,12 @@ textarea {
 .chronologyTimelineAxisLabel {
   position: absolute;
   top: 4px;
-  left: 4px;
+  left: 0;
+  transform: translateX(-50%);
   color: #64748b;
   font-size: 11px;
   white-space: nowrap;
+  text-align: center;
 }
 
 .chronologyTimelineCenterLine {
@@ -1919,7 +1936,7 @@ textarea {
 
 .chronologyTimelineCenterLabel {
   position: absolute;
-  top: 6px;
+  top: 0;
   left: 50%;
   transform: translateX(-50%);
   z-index: 6;
@@ -1946,13 +1963,17 @@ textarea {
 }
 
 .chronologyTimelineTrackRow {
-  display: grid;
-  grid-template-columns: 168px 1fr;
-  gap: 10px;
-  align-items: center;
+  position: relative;
+  min-height: 18px;
+  padding-left: 178px;
 }
 
 .chronologyTimelineTrackLabel {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 168px;
+  transform: translateY(-50%);
   color: #0f172a;
   font-size: 13px;
   white-space: nowrap;
@@ -2030,9 +2051,20 @@ textarea {
 }
 
 @media (max-width: 1100px) {
+  .chronologyTimelineTimeLayer {
+    left: 10px;
+  }
+
   .chronologyTimelineTrackRow {
-    grid-template-columns: 1fr;
+    padding-left: 0;
+    display: grid;
     gap: 6px;
+  }
+
+  .chronologyTimelineTrackLabel {
+    position: static;
+    width: auto;
+    transform: none;
   }
 }
 

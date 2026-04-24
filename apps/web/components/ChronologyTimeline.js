@@ -26,8 +26,26 @@ function formatTick(dt, zoomKey) {
   return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}`;
 }
 
-function toMs(value) {
-  return new Date(value).getTime();
+function parseNaiveDateTime(value) {
+  if (!value) return Number.NaN;
+
+  const match = String(value).match(
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
+  );
+
+  if (!match) {
+    return new Date(value).getTime();
+  }
+
+  const [, year, month, day, hours, minutes, seconds = "00"] = match;
+  return new Date(
+    Number(year),
+    Number(month) - 1,
+    Number(day),
+    Number(hours),
+    Number(minutes),
+    Number(seconds)
+  ).getTime();
 }
 
 function alignMs(ms, stepMs) {
@@ -176,81 +194,89 @@ export default function ChronologyTimeline({
             +
           </button>
         </div>
-
       </div>
 
-      <div
-        ref={rootRef}
-        className={`chronologyTimelineBody ${dragging ? "isDragging" : ""}`}
-        onMouseDown={handlePointerDown}
-      >
-        <div className="chronologyTimelineAxis">
-          {axisMarks.map((mark) => (
-            <div
-              key={`${mark.ms}-${mark.isMajor ? "major" : "minor"}`}
-              className={`chronologyTimelineAxisMark ${mark.isMajor ? "major" : "minor"}`}
-              style={{ left: `${mark.leftPct}%` }}
-            >
-              <div className="chronologyTimelineAxisLine" />
-              {mark.isMajor ? (
-                <div className="chronologyTimelineAxisLabel">{mark.label}</div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-
-        <div className="chronologyTimelineCenterLine" />
+      <div className="chronologyTimelineFrame">
         <div className="chronologyTimelineCenterLabel">{currentTimeLabel || "—"}</div>
 
-        {selectedCameraIds.length ? (
-          <div className="chronologyTimelineTracks">
-            {selectedCameraIds.map((cameraId) => {
-              const cameraKey = String(cameraId);
-              const item = rangesByCamera?.[cameraKey];
-              const ranges = item?.ranges || [];
-              const cameraName = cameraNames?.[cameraKey] || `Камера ${cameraKey}`;
-
-              return (
-                <div className="chronologyTimelineTrackRow" key={cameraKey}>
-                  <div className="chronologyTimelineTrackLabel">{cameraName}</div>
-
-                  <div className="chronologyTimelineTrackLane">
-                    {ranges.map((range, idx) => {
-                      const rangeStart = toMs(range.start);
-                      const rangeEnd = toMs(range.end);
-
-                      if (rangeEnd <= startMs || rangeStart >= endMs) {
-                        return null;
-                      }
-
-                      const clippedStart = Math.max(rangeStart, startMs);
-                      const clippedEnd = Math.min(rangeEnd, endMs);
-
-                      const leftPct = ((clippedStart - startMs) / (endMs - startMs)) * 100;
-                      const widthPct = ((clippedEnd - clippedStart) / (endMs - startMs)) * 100;
-
-                      return (
-                        <div
-                          key={idx}
-                          className="chronologyTimelineRange"
-                          style={{
-                            left: `${leftPct}%`,
-                            width: `${Math.max(widthPct, 0.35)}%`,
-                          }}
-                          title={`${range.start} — ${range.end}`}
-                        />
-                      );
-                    })}
-                  </div>
+        <div
+          ref={rootRef}
+          className={`chronologyTimelineBody ${dragging ? "isDragging" : ""}`}
+          onMouseDown={handlePointerDown}
+        >
+          <div className="chronologyTimelineTimeLayer">
+            <div className="chronologyTimelineAxis">
+              {axisMarks.map((mark) => (
+                <div
+                  key={`${mark.ms}-${mark.isMajor ? "major" : "minor"}`}
+                  className={`chronologyTimelineAxisMark ${mark.isMajor ? "major" : "minor"}`}
+                  style={{ left: `${mark.leftPct}%` }}
+                >
+                  <div className="chronologyTimelineAxisLine" />
+                  {mark.isMajor ? (
+                    <div className="chronologyTimelineAxisLabel">{mark.label}</div>
+                  ) : null}
                 </div>
-              );
-            })}
+              ))}
+            </div>
+
+            <div className="chronologyTimelineCenterLine" />
           </div>
-        ) : (
-          <div className="chronologyTimelineEmpty">
-            Выбери камеры для отображения диапазонов на таймлайне
-          </div>
-        )}
+
+          {selectedCameraIds.length ? (
+            <div className="chronologyTimelineTracks">
+              {selectedCameraIds.map((cameraId) => {
+                const cameraKey = String(cameraId);
+                const item = rangesByCamera?.[cameraKey];
+                const ranges = item?.ranges || [];
+                const cameraName = cameraNames?.[cameraKey] || `Камера ${cameraKey}`;
+
+                return (
+                  <div className="chronologyTimelineTrackRow" key={cameraKey}>
+                    <div className="chronologyTimelineTrackLabel">{cameraName}</div>
+
+                    <div className="chronologyTimelineTrackLane">
+                      {ranges.map((range, idx) => {
+                        const rangeStart = parseNaiveDateTime(range.start);
+                        const rangeEnd = parseNaiveDateTime(range.end);
+
+                        if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd)) {
+                          return null;
+                        }
+
+                        if (rangeEnd <= startMs || rangeStart >= endMs) {
+                          return null;
+                        }
+
+                        const clippedStart = Math.max(rangeStart, startMs);
+                        const clippedEnd = Math.min(rangeEnd, endMs);
+
+                        const leftPct = ((clippedStart - startMs) / (endMs - startMs)) * 100;
+                        const widthPct = ((clippedEnd - clippedStart) / (endMs - startMs)) * 100;
+
+                        return (
+                          <div
+                            key={idx}
+                            className="chronologyTimelineRange"
+                            style={{
+                              left: `${leftPct}%`,
+                              width: `${Math.max(widthPct, 0.35)}%`,
+                            }}
+                            title={`${range.start} — ${range.end}`}
+                          />
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="chronologyTimelineEmpty">
+              Выбери камеры для отображения диапазонов на таймлайне
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
