@@ -1816,8 +1816,9 @@ textarea {
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
-  margin-bottom: 8px;
-  flex-wrap: wrap;
+  min-height: 28px;
+  margin-bottom: 6px;
+  position: relative;
 }
 
 .chronologyTimelineZoomControls {
@@ -1853,7 +1854,7 @@ textarea {
 
 .chronologyTimelineBody {
   position: relative;
-  min-height: 116px;
+  min-height: 112px;
   border: 1px solid #d7dee8;
   border-radius: 18px;
   background: linear-gradient(180deg, #fbfdff 0%, #f4f8fc 100%);
@@ -1868,7 +1869,6 @@ textarea {
 
 .chronologyTimelineFrame {
   position: relative;
-  padding-top: 34px;
 }
 
 .chronologyTimelineTimeLayer {
@@ -1884,7 +1884,7 @@ textarea {
 .chronologyTimelineAxis {
   position: absolute;
   inset: 0 0 auto 0;
-  height: 42px;
+  height: 38px;
   border-bottom: 1px solid rgba(203, 213, 225, 0.7);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(248, 250, 252, 0.92));
@@ -1900,25 +1900,25 @@ textarea {
 
 .chronologyTimelineAxisLine {
   position: absolute;
-  top: 22px;
+  top: 20px;
   bottom: 0;
   width: 1px;
   background: rgba(148, 163, 184, 0.34);
 }
 
 .chronologyTimelineAxisMark.major .chronologyTimelineAxisLine {
-  top: 16px;
+  top: 14px;
   width: 1px;
   background: rgba(100, 116, 139, 0.52);
 }
 
 .chronologyTimelineAxisLabel {
   position: absolute;
-  top: 4px;
+  top: 2px;
   left: 0;
   transform: translateX(-50%);
   color: #64748b;
-  font-size: 11px;
+  font-size: 10px;
   white-space: nowrap;
   text-align: center;
 }
@@ -1940,8 +1940,8 @@ textarea {
   left: 50%;
   transform: translateX(-50%);
   z-index: 6;
-  min-height: 24px;
-  padding: 3px 8px;
+  min-height: 22px;
+  padding: 2px 8px;
   border-radius: 999px;
   background: rgba(37, 99, 235, 0.12);
   color: #1d4ed8;
@@ -1956,7 +1956,7 @@ textarea {
 .chronologyTimelineTracks {
   position: relative;
   z-index: 2;
-  padding: 50px 10px 10px;
+  padding: 44px 10px 10px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -1998,13 +1998,13 @@ textarea {
 }
 
 .chronologyTimelineEmpty {
-  min-height: 116px;
+  min-height: 112px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: #64748b;
   font-size: 14px;
-  padding: 50px 20px 16px;
+  padding: 44px 20px 16px;
   text-align: center;
 }
 
@@ -2070,7 +2070,7 @@ textarea {
 
 @media (max-width: 900px) {
   .chronologyTimelineBody {
-    min-height: 124px;
+    min-height: 118px;
   }
 
   .chronologyTimelineCenterLabel {

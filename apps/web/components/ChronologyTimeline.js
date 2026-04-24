@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 const ZOOM_OPTIONS = [
-  { key: "24h", label: "24ч", hours: 24, majorEveryMinutes: 120, minorEveryMinutes: 30 },
+  { key: "24h", label: "24ч", hours: 24, majorEveryMinutes: 60, minorEveryMinutes: 30 },
   { key: "3d", label: "3д", hours: 72, majorEveryMinutes: 360, minorEveryMinutes: 120 },
   { key: "7d", label: "7д", hours: 168, majorEveryMinutes: 720, minorEveryMinutes: 360 },
 ];
@@ -16,7 +16,7 @@ function pad(v) {
 
 function formatTick(dt, zoomKey) {
   if (zoomKey === "24h") {
-    return `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
+    return `${pad(dt.getHours())}:00`;
   }
 
   if (zoomKey === "3d") {
@@ -84,6 +84,7 @@ export default function ChronologyTimeline({
 
     for (let ms = alignMs(nextStartMs, minorStepMs); ms <= nextEndMs; ms += minorStepMs) {
       if (ms < nextStartMs) continue;
+
       const isMajor = ms % majorStepMs === 0;
       marks.push({
         ms,
@@ -174,30 +175,30 @@ export default function ChronologyTimeline({
 
   return (
     <div className="chronologyTimelineCard">
-      <div className="chronologyTimelineHeader">
-        <div className="chronologyTimelineZoomControls">
-          <button
-            className="chronologyTimelineZoomButton"
-            onClick={onZoomOut}
-            title="Уменьшить диапазон"
-          >
-            -
-          </button>
-
-          <div className="chronologyTimelineZoomLabel">{zoom.label}</div>
-
-          <button
-            className="chronologyTimelineZoomButton"
-            onClick={onZoomIn}
-            title="Увеличить диапазон"
-          >
-            +
-          </button>
-        </div>
-      </div>
-
       <div className="chronologyTimelineFrame">
-        <div className="chronologyTimelineCenterLabel">{currentTimeLabel || "—"}</div>
+        <div className="chronologyTimelineHeader">
+          <div className="chronologyTimelineZoomControls">
+            <button
+              className="chronologyTimelineZoomButton"
+              onClick={onZoomOut}
+              title="Уменьшить диапазон"
+            >
+              -
+            </button>
+
+            <div className="chronologyTimelineZoomLabel">{zoom.label}</div>
+
+            <button
+              className="chronologyTimelineZoomButton"
+              onClick={onZoomIn}
+              title="Увеличить диапазон"
+            >
+              +
+            </button>
+          </div>
+
+          <div className="chronologyTimelineCenterLabel">{currentTimeLabel || "—"}</div>
+        </div>
 
         <div
           ref={rootRef}
