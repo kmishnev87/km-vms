@@ -15,6 +15,7 @@ const DEFAULT_H_PCT = 0.29;
 
 const TEXT = {
   cameras: "\u041a\u0430\u043c\u0435\u0440\u044b",
+  align: "\u0412\u044b\u0440\u043e\u0432\u043d\u044f\u0442\u044c",
   loadError: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043a\u0430\u043c\u0435\u0440\u044b",
   empty: "\u041f\u0435\u0440\u0435\u0442\u0430\u0449\u0438\u0442\u0435 \u043a\u0430\u043c\u0435\u0440\u0443 \u043d\u0430 canvas",
   camera: "\u041a\u0430\u043c\u0435\u0440\u0430",
@@ -96,6 +97,28 @@ function saveTiles(tiles) {
 
 function nextZIndex(tiles) {
   return tiles.reduce((max, tile) => Math.max(max, Number(tile.z || 2)), 2) + 1;
+}
+
+function chooseAutoGrid(count, workspaceW, workspaceH) {
+  if (count <= 1) return { cols: 1, rows: 1 };
+
+  let best = { cols: count, rows: 1, score: -Infinity };
+  const workspaceRatio = workspaceW / Math.max(workspaceH, 1);
+
+  for (let cols = 1; cols <= count; cols += 1) {
+    const rows = Math.ceil(count / cols);
+    const cellRatio = (workspaceRatio * rows) / cols;
+    const areaScore = 1 / (cols * rows);
+    const shapePenalty = Math.abs(Math.log(Math.max(cellRatio, 0.01) / (16 / 9)));
+    const emptyPenalty = (cols * rows - count) * 0.08;
+    const score = areaScore - shapePenalty * 0.03 - emptyPenalty;
+
+    if (score > best.score) {
+      best = { cols, rows, score };
+    }
+  }
+
+  return best;
 }
 
 export default function Live2Page() {
@@ -183,6 +206,30 @@ export default function Live2Page() {
       const z = nextZIndex(prev);
       if (Number(current.z || 2) === z - 1) return prev;
       return prev.map((tile) => (tile.id === tileId ? { ...tile, z } : tile));
+    });
+  }
+
+  function autoLayoutTiles() {
+    setTiles((prev) => {
+      if (!prev.length) return prev;
+
+      const bounds = workspaceBounds();
+      const workspaceW = bounds?.width || 16;
+      const workspaceH = bounds?.height || 9;
+      const { cols, rows } = chooseAutoGrid(prev.length, workspaceW, workspaceH);
+      const wPct = 1 / cols;
+      const hPct = 1 / rows;
+
+      return prev.map((tile, idx) =>
+        normalizeTile({
+          ...tile,
+          xPct: (idx % cols) * wPct,
+          yPct: Math.floor(idx / cols) * hPct,
+          wPct,
+          hPct,
+          z: idx + 2,
+        })
+      );
     });
   }
 
@@ -298,7 +345,17 @@ export default function Live2Page() {
     <Layout>
       <div className="live2Shell">
         <aside className="live2CameraPanel">
-          <div className="live2PanelTitle">{TEXT.cameras}</div>
+          <div className="live2PanelHeader">
+            <div className="live2PanelTitle">{TEXT.cameras}</div>
+            <button
+              type="button"
+              className="live2AlignButton"
+              onClick={autoLayoutTiles}
+              disabled={!tiles.length}
+            >
+              {TEXT.align}
+            </button>
+          </div>
           {error ? <div className="live2Error">{error}</div> : null}
 
           <div className="live2CameraList">

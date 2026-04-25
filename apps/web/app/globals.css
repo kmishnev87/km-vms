@@ -2645,11 +2645,41 @@ textarea {
   overflow: auto;
 }
 
-.live2PanelTitle {
+.live2PanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
   margin-bottom: 8px;
+}
+
+.live2PanelTitle {
   color: #0f172a;
   font-size: 15px;
   font-weight: 800;
+}
+
+.live2AlignButton {
+  height: 26px;
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 0 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.live2AlignButton:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.live2AlignButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .live2Error {
