@@ -22,32 +22,30 @@ export default function Layout({ children }) {
 
   return (
     <div className="layoutShell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div style={{ lineHeight: "1.12", textAlign: "center" }}>
-            <div style={{ fontSize: 17, fontWeight: 900 }}>KM</div>
-            <div style={{ fontSize: 17, fontWeight: 900, marginTop: 3 }}>VMS</div>
-          </div>
-        </div>
+      <header className="topNav">
+        <Link href="/live" className="topBrand" aria-label="KM VMS">
+          <span>KM</span>
+          <span>VMS</span>
+        </Link>
 
-        <nav className="sidebarNav">
+        <nav className="topNavItems">
           {items.map((item) => (
             <Link
               key={item.href}
               href={item.href}
-              className={`navItem ${pathname === item.href ? "active" : ""}`}
+              className={`topNavItem ${pathname === item.href ? "active" : ""}`}
             >
-              <div className="navIcon">{item.icon}</div>
-              <div className="navLabel">{item.label}</div>
+              <span className="topNavIcon">{item.icon}</span>
+              <span className="topNavLabel">{item.label}</span>
             </Link>
           ))}
-
-          <button className="navItem navButtonItem" onClick={logout} type="button">
-            <div className="navIcon">{"\u238b"}</div>
-            <div className="navLabel">Выход</div>
-          </button>
         </nav>
-      </aside>
+
+        <button className="topNavItem topNavButton" onClick={logout} type="button">
+          <span className="topNavIcon">{"\u238b"}</span>
+          <span className="topNavLabel">\u0412\u044b\u0445\u043e\u0434</span>
+        </button>
+      </header>
 
       <main className="mainContent">{children}</main>
     </div>
