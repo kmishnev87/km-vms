@@ -22,34 +22,36 @@ export default function Layout({ children }) {
   return (
     <div className="layoutShell">
       <header className="topNav">
-        <Link href="/" className="topBrand" aria-label="KM VMS">
-          <span>KM</span>
-          <span>VMS</span>
-        </Link>
+        <div className="topNavInner">
+          <Link href="/" className="topBrand" aria-label="KM VMS">
+            <span>KM</span>
+            <span>VMS</span>
+          </Link>
 
-        <nav className="topNavItems">
-          {items.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`topNavItem ${pathname === item.href ? "active" : ""}`}
-              title={item.label}
-              aria-label={item.label}
-            >
-              <img className="topNavIconImage" src={item.iconSrc} alt="" />
-            </Link>
-          ))}
-        </nav>
+          <nav className="topNavItems">
+            {items.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`topNavItem ${pathname === item.href ? "active" : ""}`}
+                title={item.label}
+                aria-label={item.label}
+              >
+                <img className="topNavIconImage" src={item.iconSrc} alt="" />
+              </Link>
+            ))}
+          </nav>
 
-        <button
-          className="topNavItem topNavButton"
-          onClick={logout}
-          type="button"
-          title={"\u0412\u044b\u0445\u043e\u0434"}
-          aria-label={"\u0412\u044b\u0445\u043e\u0434"}
-        >
-          <img className="topNavIconImage" src="/icons/nav/logout.png" alt="" />
-        </button>
+          <button
+            className="topNavItem topNavButton"
+            onClick={logout}
+            type="button"
+            title={"\u0412\u044b\u0445\u043e\u0434"}
+            aria-label={"\u0412\u044b\u0445\u043e\u0434"}
+          >
+            <img className="topNavIconImage" src="/icons/nav/logout.png" alt="" />
+          </button>
+        </div>
       </header>
 
       <main className="mainContent">{children}</main>
