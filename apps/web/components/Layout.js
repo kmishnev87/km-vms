@@ -8,6 +8,7 @@ const items = [
   { href: "/recordings", label: "\u0417\u0430\u043f\u0438\u0441\u0438", icon: "\ud83c\udf9e\ufe0f" },
   { href: "/cameras", label: "\u041a\u0430\u043c\u0435\u0440\u044b", icon: "\ud83d\udcf7" },
   { href: "/timeline", label: "\u0425\u0440\u043e\u043d\u043e\u043b\u043e\u0433\u0438\u044f", icon: "\ud83d\udd52" },
+  { href: "/chronology2", label: "\u0425\u0440\u043e\u043d\u043e\u043b\u043e\u0433\u0438\u044f 2.0", icon: "\u23f1" },
 ];
 
 export default function Layout({ children }) {

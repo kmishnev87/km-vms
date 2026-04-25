@@ -2966,3 +2966,376 @@ textarea {
     grid-template-rows: none;
   }
 }
+
+.chronology2Shell {
+  height: calc(100vh - 78px);
+  min-height: 620px;
+  display: flex;
+  gap: 8px;
+}
+
+.chronology2CameraPanel {
+  width: 204px;
+  flex: 0 0 204px;
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 8px;
+  overflow: auto;
+}
+
+.chronology2PanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.chronology2PanelTitle {
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.chronology2AlignButton {
+  height: 26px;
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 0 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chronology2AlignButton:hover {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.chronology2AlignButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chronology2Error {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fee2e2;
+  color: #991b1b;
+  font-size: 13px;
+}
+
+.chronology2CameraList {
+  display: grid;
+  gap: 6px;
+}
+
+.chronology2CameraItem {
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 8px;
+  cursor: grab;
+}
+
+.chronology2CameraItem:active {
+  cursor: grabbing;
+}
+
+.chronology2CameraName {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chronology2CameraMeta {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chronology2Main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.chronology2Toolbar {
+  min-height: 40px;
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chronology2DateInput,
+.chronology2TimeInput {
+  height: 30px;
+  min-height: 30px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.chronology2DateInput {
+  width: 136px;
+}
+
+.chronology2TimeInput {
+  width: 112px;
+}
+
+.chronology2PrimaryButton,
+.chronology2IconButton,
+.chronology2SpeedButton {
+  height: 30px;
+  min-height: 30px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #0f172a;
+  padding: 0 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chronology2PrimaryButton {
+  background: #0f172a;
+  border-color: #0f172a;
+  color: #ffffff;
+  font-weight: 700;
+}
+
+.chronology2IconButton {
+  min-width: 34px;
+}
+
+.chronology2PrimaryButton:hover,
+.chronology2IconButton:hover,
+.chronology2SpeedButton:hover {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.chronology2PrimaryButton:hover {
+  background: #1e293b;
+  color: #ffffff;
+}
+
+.chronology2SpeedGroup {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chronology2SpeedButton {
+  min-width: 46px;
+  padding: 0 6px;
+}
+
+.chronology2SpeedButton.active {
+  background: #0f172a;
+  border-color: #0f172a;
+  color: #ffffff;
+}
+
+.chronology2TimeBox {
+  margin-left: auto;
+  min-height: 30px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #0f172a;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.chronology2TimelineWrap .chronologyTimelineCard {
+  margin-bottom: 0;
+  padding: 8px 10px 10px;
+  border-radius: 12px;
+}
+
+.chronology2TimelineWrap .chronologyTimelineBody {
+  min-height: 96px;
+  border-radius: 12px;
+}
+
+.chronology2Workspace {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #172554;
+  border-radius: 12px;
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    #020617;
+  background-size: 32px 32px;
+}
+
+.chronology2Workspace.isEditing {
+  user-select: none;
+}
+
+.chronology2Empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.chronology2EmptyTitle {
+  padding: 10px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.chronology2Tile {
+  position: absolute;
+  z-index: 2;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(96, 165, 250, 0.36);
+  border-radius: 8px;
+  background: #000000;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
+}
+
+.chronology2TileBar {
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 5px 4px 8px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #f8fafc;
+  cursor: move;
+}
+
+.chronology2TileTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.chronology2TileButton {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.1);
+  color: #f8fafc;
+  cursor: pointer;
+  font-size: 21px;
+  line-height: 1;
+}
+
+.chronology2TileButton:hover {
+  background: rgba(239, 68, 68, 0.7);
+}
+
+.chronology2TileVideo {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #000000;
+}
+
+.chronology2TileVideo .archiveVideoWrap {
+  min-height: 0;
+  height: 100%;
+  cursor: default;
+}
+
+.chronology2TileVideo .archiveCenterHint {
+  pointer-events: none;
+}
+
+.chronology2Missing {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.chronology2ResizeHandle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  background:
+    linear-gradient(135deg, transparent 0 48%, rgba(226, 232, 240, 0.85) 49% 55%, transparent 56%),
+    linear-gradient(135deg, transparent 0 66%, rgba(226, 232, 240, 0.75) 67% 73%, transparent 74%);
+  background-size: 18px 18px;
+  background-position: right bottom;
+  background-repeat: no-repeat;
+  cursor: nwse-resize;
+}
+
+@media (max-width: 900px) {
+  .chronology2Shell {
+    height: auto;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .chronology2CameraPanel {
+    width: 100%;
+    flex: 0 0 auto;
+    max-height: 220px;
+  }
+
+  .chronology2Workspace {
+    height: 680px;
+  }
+
+  .chronology2TimeBox {
+    width: 100%;
+    margin-left: 0;
+  }
+}

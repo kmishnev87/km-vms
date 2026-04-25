@@ -6,12 +6,15 @@ export default function ArchiveTilePlayer({
   playback,
   speed,
   isPlaying,
+  allowFullscreen = true,
 }) {
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
   const [status, setStatus] = useState("idle");
 
   function toggleFullscreen() {
+    if (!allowFullscreen) return;
+
     const el = wrapRef.current;
     if (!el) return;
 
@@ -141,8 +144,8 @@ export default function ArchiveTilePlayer({
     <div
       ref={wrapRef}
       className="archiveVideoWrap"
-      onDoubleClick={toggleFullscreen}
-      title="Двойной клик — на весь экран"
+      onDoubleClick={allowFullscreen ? toggleFullscreen : undefined}
+      title={allowFullscreen ? "Двойной клик — на весь экран" : undefined}
     >
       <video
         key={playback?.playbackKey || "empty"}
