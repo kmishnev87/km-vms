@@ -2718,7 +2718,10 @@ textarea {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid #172554;
   border-radius: 12px;
   background:
@@ -2730,6 +2733,19 @@ textarea {
 
 .live2Workspace.isEditing {
   user-select: none;
+}
+
+.live2CanvasViewport {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+.live2Canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: top left;
 }
 
 .live2Empty {
