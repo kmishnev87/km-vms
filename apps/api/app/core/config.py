@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     live_video_codec: str = "libx264"
     live_audio_mode: str = "none"
     live_idle_ttl_seconds: int = 45
+    live_viewer_ttl_seconds: int = 60
     live_cleanup_interval_seconds: int = 10
     live_start_timeout_seconds: int = 8
 

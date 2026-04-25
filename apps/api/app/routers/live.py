@@ -14,15 +14,7 @@ from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.user import User
 from app.routers.deps import get_current_user
-from app.services.live_hls import (
-    ensure_stream,
-    get_playlist_file,
-    get_segment_file,
-    get_stream_debug,
-    list_stream_status,
-    stop_all_streams,
-    stop_stream,
-)
+from app.services.live_engine_v2 import manager
 
 router = APIRouter(prefix="/live", tags=["live"])
 
@@ -37,6 +29,17 @@ class LiveStartPayload(BaseModel):
 class LiveStopPayload(BaseModel):
     camera_id: int
     stream: StreamKey = "main"
+
+
+class LiveViewerPayload(BaseModel):
+    camera_id: int
+    stream: StreamKey = "main"
+
+
+class LiveFallbackPayload(BaseModel):
+    camera_id: int
+    stream: StreamKey = "main"
+    reason: str = "client_fallback"
 
 
 def _get_camera(db: Session, camera_id: int) -> Camera:
@@ -76,7 +79,7 @@ def start_live_stream(
     current_user: User = Depends(get_current_user),
 ):
     camera = _get_camera(db, payload.camera_id)
-    result = ensure_stream(camera, payload.stream)
+    result = manager.ensure_stream(camera, payload.stream)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Не удалось запустить live поток")
     return result
@@ -87,7 +90,7 @@ def stop_live_stream(
     payload: LiveStopPayload,
     current_user: User = Depends(get_current_user),
 ):
-    stopped = stop_stream(payload.camera_id, payload.stream)
+    stopped = manager.stop_stream(payload.camera_id, payload.stream)
     return {
         "ok": True,
         "stopped": stopped,
@@ -100,7 +103,7 @@ def stop_live_stream(
 def stop_all_live_streams(
     current_user: User = Depends(get_current_user),
 ):
-    stopped_count = stop_all_streams()
+    stopped_count = manager.stop_all_streams()
     return {
         "ok": True,
         "stopped_count": stopped_count,
@@ -113,11 +116,83 @@ def live_status(
     stream: Optional[StreamKey] = Query(default=None),
     current_user: User = Depends(get_current_user),
 ):
-    items = list_stream_status(camera_id=camera_id, stream=stream)
+    items = manager.status(camera_id=camera_id, stream=stream)
     return {
         "items": items,
         "count": len(items),
     }
+
+
+@router.post("/viewers")
+def open_live_viewer(
+    payload: LiveViewerPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    camera = _get_camera(db, payload.camera_id)
+    result = manager.open_viewer(camera, payload.stream)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Не удалось открыть live viewer")
+    return result
+
+
+@router.delete("/viewers/{viewer_id}")
+def close_live_viewer(
+    viewer_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    closed = manager.close_viewer(viewer_id)
+    return {
+        "ok": True,
+        "closed": closed,
+        "viewer_id": viewer_id,
+    }
+
+
+@router.post("/viewers/{viewer_id}/touch")
+def touch_live_viewer(
+    viewer_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    touched = manager.touch_viewer(viewer_id)
+    return {
+        "ok": True,
+        "touched": touched,
+        "viewer_id": viewer_id,
+    }
+
+
+@router.post("/fallback")
+def force_live_fallback(
+    payload: LiveFallbackPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    camera = _get_camera(db, payload.camera_id)
+    result = manager.force_fallback(camera, payload.stream, reason=payload.reason)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Не удалось включить fallback")
+    return result
+
+
+@router.get("/debug")
+def live_debug_all(
+    camera_id: Optional[int] = Query(default=None),
+    stream: Optional[StreamKey] = Query(default=None),
+    current_user: User = Depends(get_current_user),
+):
+    return manager.debug(camera_id=camera_id, stream=stream)
+
+
+@router.get("/debug/{camera_id}/{stream}")
+def live_debug_stream(
+    camera_id: int,
+    stream: StreamKey,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_camera(db, camera_id)
+    return manager.debug(camera_id=camera_id, stream=stream)
 
 
 @router.get("/{camera_id}/{stream}/index.m3u8")
@@ -131,13 +206,13 @@ def live_playlist(
     _authorize_live_request(request, token)
 
     camera = _get_camera(db, camera_id)
-    result = ensure_stream(camera, stream, wait_for_ready=False)
+    result = manager.ensure_stream(camera, stream, wait_for_ready=False)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Не удалось запустить live поток")
 
-    playlist = get_playlist_file(camera_id, stream)
+    playlist = manager.get_playlist_file(camera_id, stream)
     if not playlist.exists() or playlist.stat().st_size <= 0:
-        debug = get_stream_debug(camera_id, stream)
+        debug = manager.debug(camera_id=camera_id, stream=stream)
         raise HTTPException(
             status_code=503,
             detail={
@@ -174,7 +249,7 @@ def live_segment(
     if "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="Недопустимое имя сегмента")
 
-    file_path = get_segment_file(camera_id, stream, filename)
+    file_path = manager.get_segment_file(camera_id, stream, filename)
     if not Path(file_path).exists():
         raise HTTPException(status_code=404, detail="Сегмент не найден")
 
@@ -184,16 +259,3 @@ def live_segment(
         media_type=media_type,
         headers={"Cache-Control": "no-store"},
     )
-
-
-@router.get("/{camera_id}/{stream}/debug")
-def live_debug(
-    request: Request,
-    camera_id: int,
-    stream: StreamKey,
-    token: Optional[str] = Query(default=None),
-    db: Session = Depends(get_db),
-):
-    _authorize_live_request(request, token)
-    _get_camera(db, camera_id)
-    return get_stream_debug(camera_id, stream)

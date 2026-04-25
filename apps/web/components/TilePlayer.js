@@ -7,6 +7,7 @@ import { apiFetch } from "../lib/api";
 const MAX_RETRIES = 4;
 const READY_POLL_INTERVAL_MS = 700;
 const READY_TIMEOUT_MS = 10000;
+const VIEWER_TOUCH_INTERVAL_MS = 15000;
 
 const TEXT = {
   noToken: "\u041d\u0435\u0442 \u0442\u043e\u043a\u0435\u043d\u0430 \u0430\u0432\u0442\u043e\u0440\u0438\u0437\u0430\u0446\u0438\u0438",
@@ -27,7 +28,10 @@ export default function TilePlayer({ cameraId, stream }) {
   const wrapRef = useRef(null);
   const hlsRef = useRef(null);
   const retryTimerRef = useRef(null);
+  const touchTimerRef = useRef(null);
   const attemptRef = useRef(0);
+  const viewerIdRef = useRef(null);
+  const fallbackRequestedRef = useRef(false);
 
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
@@ -72,6 +76,40 @@ export default function TilePlayer({ cameraId, stream }) {
       cameraId: cameraId ? Number(cameraId) : null,
       stream: stream || null,
     };
+
+    async function closeViewer() {
+      if (touchTimerRef.current) {
+        clearInterval(touchTimerRef.current);
+        touchTimerRef.current = null;
+      }
+
+      const viewerId = viewerIdRef.current;
+      viewerIdRef.current = null;
+      if (!viewerId) return;
+
+      try {
+        await apiFetch(`/live/viewers/${encodeURIComponent(viewerId)}`, {
+          method: "DELETE",
+        });
+      } catch (_) {}
+    }
+
+    function startViewerHeartbeat() {
+      if (touchTimerRef.current) {
+        clearInterval(touchTimerRef.current);
+        touchTimerRef.current = null;
+      }
+
+      touchTimerRef.current = setInterval(() => {
+        const viewerId = viewerIdRef.current;
+        if (!viewerId || cancelled) return;
+
+        apiFetch(`/live/viewers/${encodeURIComponent(viewerId)}/touch`, {
+          method: "POST",
+        }).catch(() => {});
+      }, VIEWER_TOUCH_INTERVAL_MS);
+    }
+
     async function waitForReady() {
       const deadline = Date.now() + READY_TIMEOUT_MS;
       while (!cancelled && Date.now() < deadline) {
@@ -109,6 +147,52 @@ export default function TilePlayer({ cameraId, stream }) {
       retryTimerRef.current = setTimeout(() => {
         startPlayback();
       }, delay);
+    }
+
+    async function requestFallbackAndRetry(message) {
+      if (cancelled) return;
+
+      if (fallbackRequestedRef.current) {
+        scheduleRetry(message);
+        return;
+      }
+
+      fallbackRequestedRef.current = true;
+      setStatus("waiting");
+      setError("");
+
+      try {
+        await apiFetch("/live/fallback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            camera_id: sourceKey.cameraId,
+            stream: sourceKey.stream,
+            reason: "hls_fatal_error",
+          }),
+        });
+
+        if (cancelled) return;
+
+        const ready = await waitForReady();
+        if (!ready) {
+          scheduleRetry(message);
+          return;
+        }
+
+        const token =
+          typeof window !== "undefined" ? localStorage.getItem("token") : null;
+        if (!token) {
+          setStatus("error");
+          setError(TEXT.noToken);
+          return;
+        }
+
+        const src = `/api/live/${sourceKey.cameraId}/${sourceKey.stream}/index.m3u8?token=${encodeURIComponent(token)}&fallback=${Date.now()}`;
+        await attachPlayer(src);
+      } catch (_) {
+        scheduleRetry(message);
+      }
     }
 
     async function attachPlayer(src) {
@@ -150,7 +234,7 @@ export default function TilePlayer({ cameraId, stream }) {
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
           if (cancelled || !data?.fatal) return;
-          scheduleRetry(TEXT.failedPlay);
+          requestFallbackAndRetry(TEXT.failedPlay);
         });
 
         hls.attachMedia(video);
@@ -170,7 +254,7 @@ export default function TilePlayer({ cameraId, stream }) {
 
         const onError = () => {
           if (!cancelled) {
-            scheduleRetry(TEXT.failedPlay);
+            requestFallbackAndRetry(TEXT.failedPlay);
           }
         };
 
@@ -200,7 +284,9 @@ export default function TilePlayer({ cameraId, stream }) {
       setError("");
 
       try {
-        await apiFetch("/live/start", {
+        await closeViewer();
+
+        const viewer = await apiFetch("/live/viewers", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -208,8 +294,13 @@ export default function TilePlayer({ cameraId, stream }) {
             stream: sourceKey.stream,
           }),
         });
+        viewerIdRef.current = viewer?.viewer_id || null;
+        startViewerHeartbeat();
 
-        if (cancelled) return;
+        if (cancelled) {
+          await closeViewer();
+          return;
+        }
 
         const ready = await waitForReady();
         if (!ready) {
@@ -229,11 +320,13 @@ export default function TilePlayer({ cameraId, stream }) {
     }
 
     attemptRef.current = 0;
+    fallbackRequestedRef.current = false;
     startPlayback();
 
     return () => {
       cancelled = true;
       destroyPlayer();
+      closeViewer();
     };
   }, [cameraId, stream]);
 

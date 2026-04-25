@@ -12,7 +12,7 @@ from app.routers.live import router as live_router
 from app.routers.recordings import router as recordings_router
 from app.routers.storage import router as storage_router
 from app.services.bootstrap import init_db, ensure_admin
-from app.services.live_hls import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
+from app.services.live_engine_v2 import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
 
 app = FastAPI(
     title="TNAS VMS API",
