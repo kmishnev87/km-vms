@@ -2639,6 +2639,247 @@ textarea {
   background: rgba(15, 23, 42, 0.76);
 }
 
+.live2Shell {
+  height: calc(100vh - 66px);
+  min-height: 680px;
+  display: flex;
+  gap: 12px;
+}
+
+.live2CameraPanel {
+  width: 280px;
+  flex: 0 0 280px;
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 18px;
+  background: #ffffff;
+  padding: 12px;
+  overflow: auto;
+}
+
+.live2PanelTitle {
+  margin-bottom: 10px;
+  color: #0f172a;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.live2Error {
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fee2e2;
+  color: #991b1b;
+  font-size: 13px;
+}
+
+.live2CameraList {
+  display: grid;
+  gap: 8px;
+}
+
+.live2CameraItem {
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 10px;
+  cursor: grab;
+}
+
+.live2CameraItem:active {
+  cursor: grabbing;
+}
+
+.live2CameraName {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live2CameraMeta {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live2StreamButtons {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.live2StreamButton {
+  height: 28px;
+  min-width: 54px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 12px;
+  cursor: grab;
+}
+
+.live2Workspace {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #172554;
+  border-radius: 18px;
+  background:
+    linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+    #020617;
+  background-size: 32px 32px;
+}
+
+.live2Workspace.isEditing {
+  user-select: none;
+}
+
+.live2Empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.live2EmptyTitle {
+  padding: 10px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.live2Tile {
+  position: absolute;
+  z-index: 2;
+  min-width: 260px;
+  min-height: 170px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(96, 165, 250, 0.36);
+  border-radius: 10px;
+  background: #000000;
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
+}
+
+.live2TileBar {
+  height: 38px;
+  flex: 0 0 38px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px 5px 10px;
+  background: rgba(15, 23, 42, 0.92);
+  color: #f8fafc;
+  cursor: move;
+}
+
+.live2TileTitle {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.live2TileSelect {
+  height: 28px;
+  min-height: 28px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #0f172a;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.live2IconButton {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.1);
+  color: #f8fafc;
+  cursor: pointer;
+  font-size: 21px;
+  line-height: 1;
+}
+
+.live2IconButton:hover {
+  background: rgba(239, 68, 68, 0.7);
+}
+
+.live2TileVideo {
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #000000;
+}
+
+.live2TileVideo .liveVideoWrap {
+  min-height: 0;
+  height: 100%;
+}
+
+.live2TileVideo .liveVideo {
+  object-fit: contain;
+}
+
+.live2Missing {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #cbd5e1;
+  font-size: 14px;
+}
+
+.live2ResizeHandle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  background:
+    linear-gradient(135deg, transparent 0 48%, rgba(226, 232, 240, 0.85) 49% 55%, transparent 56%),
+    linear-gradient(135deg, transparent 0 66%, rgba(226, 232, 240, 0.75) 67% 73%, transparent 74%);
+  cursor: nwse-resize;
+}
+
+@media (max-width: 900px) {
+  .live2Shell {
+    height: auto;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .live2CameraPanel {
+    width: 100%;
+    flex: 0 0 auto;
+    max-height: 260px;
+  }
+
+  .live2Workspace {
+    height: 720px;
+  }
+}
+
 @media (max-width: 1100px) {
   .chronologyTimelineTimeLayer {
     left: 10px;
