@@ -61,8 +61,8 @@ services:
       STORAGE_EXPORTS: /storage/exports
       DEFAULT_LIVE_STREAM: sub
       DEFAULT_RECORD_STREAM: main
-      LIVE_TRANSCODE: "false"
-      LIVE_VIDEO_CODEC: copy
+      LIVE_TRANSCODE: "true"
+      LIVE_VIDEO_CODEC: libx264
       LIVE_AUDIO_MODE: none
       LIVE_IDLE_TTL_SECONDS: 45
       LIVE_CLEANUP_INTERVAL_SECONDS: 10

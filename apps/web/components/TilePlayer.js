@@ -55,30 +55,6 @@ export default function TilePlayer({ cameraId, stream }) {
     }
   }
 
-  async function stopBackendStream(targetCameraId, targetStream, keepalive = false) {
-    if (!targetCameraId || !targetStream) return;
-
-    const token =
-      typeof window !== "undefined" ? localStorage.getItem("token") : null;
-
-    if (!token) return;
-
-    try {
-      await fetch("/api/live/stop", {
-        method: "POST",
-        keepalive,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          camera_id: Number(targetCameraId),
-          stream: targetStream,
-        }),
-      });
-    } catch (_) {}
-  }
-
   function toggleFullscreen() {
     const el = wrapRef.current;
     if (!el) return;
@@ -252,19 +228,12 @@ export default function TilePlayer({ cameraId, stream }) {
       }
     }
 
-    function handlePageHide() {
-      stopBackendStream(sourceKey.cameraId, sourceKey.stream, true);
-    }
-
     attemptRef.current = 0;
     startPlayback();
-    window.addEventListener("pagehide", handlePageHide);
 
     return () => {
       cancelled = true;
-      window.removeEventListener("pagehide", handlePageHide);
       destroyPlayer();
-      stopBackendStream(sourceKey.cameraId, sourceKey.stream, true);
     };
   }, [cameraId, stream]);
 
