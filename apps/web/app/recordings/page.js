@@ -432,6 +432,7 @@ export default function RecordingsPage() {
 
   return (
     <Layout>
+      <div className="standardPage">
       <div className="pageHeader recordingsHeader">
         <div>
           <h1 className="pageTitle">{TEXT.title}</h1>
@@ -714,6 +715,7 @@ export default function RecordingsPage() {
           </div>
         </div>
       ) : null}
+      </div>
     </Layout>
   );
 }

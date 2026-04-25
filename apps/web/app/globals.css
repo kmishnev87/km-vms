@@ -119,6 +119,13 @@ textarea {
   padding: 10px 12px 16px;
 }
 
+.standardPage {
+  width: 100%;
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 0 12px;
+}
+
 .dashboardPage {
   min-height: calc(100vh - 78px);
   display: flex;
@@ -999,6 +1006,10 @@ textarea {
 
   .mainContent {
     padding: 8px;
+  }
+
+  .standardPage {
+    padding: 0;
   }
 
   .dashboardHeader {

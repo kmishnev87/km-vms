@@ -379,6 +379,7 @@ export default function CamerasPage() {
 
   return (
     <Layout>
+      <div className="standardPage">
       <div className="pageHeader">
         <div>
           <h1 className="pageTitle">Камеры</h1>
@@ -753,6 +754,7 @@ export default function CamerasPage() {
           </div>
         </div>
       ) : null}
+      </div>
     </Layout>
   );
 }
