@@ -38,6 +38,8 @@ const TEXT = {
   missing: "\u041a\u0430\u043c\u0435\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430",
   resize: "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0430\u0437\u043c\u0435\u0440",
   find: "\u041d\u0430\u0439\u0442\u0438",
+  fullscreen: "\u041d\u0430 \u0432\u0435\u0441\u044c \u044d\u043a\u0440\u0430\u043d",
+  exitFullscreen: "\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0432 workspace",
 };
 
 function clamp(value, min, max) {
@@ -176,6 +178,7 @@ export default function Chronology2Page() {
   const [zoomKey, setZoomKey] = useState("24h");
   const [playbackMap, setPlaybackMap] = useState({});
   const [rangesData, setRangesData] = useState({});
+  const [fullscreenTileId, setFullscreenTileId] = useState(null);
 
   async function loadCameras() {
     try {
@@ -330,6 +333,7 @@ export default function Chronology2Page() {
 
   function removeTile(tileId) {
     setTiles((prev) => prev.filter((tile) => tile.id !== tileId));
+    setFullscreenTileId((prev) => (prev === tileId ? null : prev));
     setPlaybackMap((prev) => {
       const next = { ...prev };
       delete next[tileId];
@@ -378,6 +382,7 @@ export default function Chronology2Page() {
   }
 
   function startMove(event, tile) {
+    if (fullscreenTileId) return;
     if (event.button !== 0) return;
     const bounds = workspaceBounds();
     if (!bounds) return;
@@ -398,6 +403,7 @@ export default function Chronology2Page() {
   }
 
   function startResize(event, tile) {
+    if (fullscreenTileId) return;
     if (event.button !== 0) return;
     const bounds = workspaceBounds();
     if (!bounds) return;
@@ -704,6 +710,17 @@ export default function Chronology2Page() {
     loadRanges();
   }, [currentTs, zoomKey, selectedCameraKey]);
 
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        setFullscreenTileId(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   return (
     <Layout>
       <div className="chronology2Shell">
@@ -825,18 +842,27 @@ export default function Chronology2Page() {
               return (
                 <div
                   key={tile.id}
-                  className="chronology2Tile"
+                  className={`chronology2Tile ${fullscreenTileId === tile.id ? "fullscreen" : ""}`}
                   style={{
-                    left: `${tile.xPct * 100}%`,
-                    top: `${tile.yPct * 100}%`,
-                    width: `${tile.wPct * 100}%`,
-                    height: `${tile.hPct * 100}%`,
-                    zIndex: tile.z || 2,
+                    left: fullscreenTileId === tile.id ? undefined : `${tile.xPct * 100}%`,
+                    top: fullscreenTileId === tile.id ? undefined : `${tile.yPct * 100}%`,
+                    width: fullscreenTileId === tile.id ? undefined : `${tile.wPct * 100}%`,
+                    height: fullscreenTileId === tile.id ? undefined : `${tile.hPct * 100}%`,
+                    zIndex: fullscreenTileId === tile.id ? 4000 : tile.z || 2,
                   }}
                   onPointerDown={(event) => startMove(event, tile)}
                 >
                   <div className="chronology2TileBar">
                     <div className="chronology2TileTitle">{camera?.name || TEXT.camera}</div>
+                    <button
+                      type="button"
+                      className="chronology2TileButton chronology2FullscreenButton"
+                      title={fullscreenTileId === tile.id ? TEXT.exitFullscreen : TEXT.fullscreen}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={() => setFullscreenTileId((prev) => (prev === tile.id ? null : tile.id))}
+                    >
+                      {fullscreenTileId === tile.id ? "\u29c9" : "\u26f6"}
+                    </button>
                     <button
                       type="button"
                       className="chronology2TileButton"
@@ -863,7 +889,7 @@ export default function Chronology2Page() {
 
                   <button
                     type="button"
-                    className="chronology2ResizeHandle"
+                    className={`chronology2ResizeHandle ${fullscreenTileId === tile.id ? "hidden" : ""}`}
                     title={TEXT.resize}
                     onPointerDown={(event) => startResize(event, tile)}
                   />

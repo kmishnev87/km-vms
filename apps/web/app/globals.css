@@ -119,6 +119,100 @@ textarea {
   padding: 10px 12px 16px;
 }
 
+.dashboardPage {
+  min-height: calc(100vh - 78px);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 8px 0;
+}
+
+.dashboardHeader {
+  min-height: 132px;
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 24px;
+  display: flex;
+  align-items: center;
+}
+
+.dashboardTitle {
+  margin: 0;
+  color: #0f172a;
+  font-size: 34px;
+  line-height: 1.1;
+  font-weight: 900;
+}
+
+.dashboardSubtitle {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 15px;
+}
+
+.dashboardGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.dashboardCard {
+  min-height: 150px;
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  background: #ffffff;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 24px;
+  align-items: start;
+  gap: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.dashboardCard:hover {
+  border-color: #bfdbfe;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  transform: translateY(-1px);
+}
+
+.dashboardCardIcon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: #eff6ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #1d4ed8;
+  font-size: 22px;
+}
+
+.dashboardCardBody {
+  min-width: 0;
+}
+
+.dashboardCardTitle {
+  color: #0f172a;
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.dashboardCardText {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.dashboardCardArrow {
+  color: #94a3b8;
+  font-size: 20px;
+  line-height: 1;
+  justify-self: end;
+}
+
 .pageHeader {
   display: flex;
   align-items: flex-start;
@@ -905,6 +999,19 @@ textarea {
 
   .mainContent {
     padding: 8px;
+  }
+
+  .dashboardHeader {
+    min-height: 112px;
+    padding: 18px;
+  }
+
+  .dashboardTitle {
+    font-size: 28px;
+  }
+
+  .dashboardGrid {
+    grid-template-columns: 1fr;
   }
 
   .card {
@@ -3241,7 +3348,7 @@ textarea {
   height: 34px;
   flex: 0 0 34px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
+  grid-template-columns: minmax(0, 1fr) 30px 30px;
   align-items: center;
   gap: 6px;
   padding: 4px 5px 4px 8px;
@@ -3273,6 +3380,24 @@ textarea {
 
 .chronology2TileButton:hover {
   background: rgba(239, 68, 68, 0.7);
+}
+
+.chronology2FullscreenButton:hover {
+  background: rgba(37, 99, 235, 0.72);
+}
+
+.chronology2Tile.fullscreen {
+  position: fixed;
+  inset: 8px;
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.48);
+}
+
+.chronology2Tile.fullscreen .chronology2TileBar {
+  height: 38px;
+  flex-basis: 38px;
 }
 
 .chronology2TileVideo {
@@ -3315,6 +3440,10 @@ textarea {
   background-position: right bottom;
   background-repeat: no-repeat;
   cursor: nwse-resize;
+}
+
+.chronology2ResizeHandle.hidden {
+  display: none;
 }
 
 @media (max-width: 900px) {
