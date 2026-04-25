@@ -6,12 +6,12 @@ import TilePlayer from "../../components/TilePlayer";
 import { apiFetch } from "../../lib/api";
 
 const STORAGE_KEY = "vms_live2_workspace_v1";
-const CANVAS_W = 1600;
-const CANVAS_H = 900;
-const MIN_TILE_W = 260;
-const MIN_TILE_H = 170;
-const DEFAULT_TILE_W = 420;
-const DEFAULT_TILE_H = 260;
+const LEGACY_CANVAS_W = 1600;
+const LEGACY_CANVAS_H = 900;
+const MIN_TILE_W = 220;
+const MIN_TILE_H = 150;
+const DEFAULT_W_PCT = 0.28;
+const DEFAULT_H_PCT = 0.29;
 
 const TEXT = {
   cameras: "\u041a\u0430\u043c\u0435\u0440\u044b",
@@ -41,11 +41,47 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function normalizeTile(tile) {
+  const hasPercent =
+    Number.isFinite(tile?.xPct) &&
+    Number.isFinite(tile?.yPct) &&
+    Number.isFinite(tile?.wPct) &&
+    Number.isFinite(tile?.hPct);
+
+  if (hasPercent) {
+    const wPct = clamp(Number(tile.wPct), 0.05, 1);
+    const hPct = clamp(Number(tile.hPct), 0.05, 1);
+    return {
+      id: String(tile.id || `${tile.cameraId}-${tile.stream}-${Date.now()}`),
+      cameraId: String(tile.cameraId || ""),
+      stream: tile.stream || "sub",
+      xPct: clamp(Number(tile.xPct), 0, 1 - wPct),
+      yPct: clamp(Number(tile.yPct), 0, 1 - hPct),
+      wPct,
+      hPct,
+      z: Number(tile.z || 2),
+    };
+  }
+
+  const wPct = clamp(Number(tile?.w || 420) / LEGACY_CANVAS_W, 0.05, 1);
+  const hPct = clamp(Number(tile?.h || 260) / LEGACY_CANVAS_H, 0.05, 1);
+  return {
+    id: String(tile?.id || `${tile?.cameraId || "camera"}-${tile?.stream || "sub"}-${Date.now()}`),
+    cameraId: String(tile?.cameraId || ""),
+    stream: tile?.stream || "sub",
+    xPct: clamp(Number(tile?.x || 0) / LEGACY_CANVAS_W, 0, 1 - wPct),
+    yPct: clamp(Number(tile?.y || 0) / LEGACY_CANVAS_H, 0, 1 - hPct),
+    wPct,
+    hPct,
+    z: Number(tile?.z || 2),
+  };
+}
+
 function readSavedTiles() {
   if (typeof window === "undefined") return [];
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    return Array.isArray(parsed) ? parsed : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeTile) : [];
   } catch {
     return [];
   }
@@ -54,7 +90,7 @@ function readSavedTiles() {
 function saveTiles(tiles) {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tiles));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tiles.map(normalizeTile)));
   } catch {}
 }
 
@@ -64,14 +100,12 @@ function nextZIndex(tiles) {
 
 export default function Live2Page() {
   const workspaceRef = useRef(null);
-  const canvasRef = useRef(null);
   const hydratedRef = useRef(false);
   const [cameras, setCameras] = useState([]);
   const [tiles, setTiles] = useState([]);
   const [error, setError] = useState("");
   const [dragState, setDragState] = useState(null);
   const [resizeState, setResizeState] = useState(null);
-  const [scale, setScale] = useState(1);
 
   async function loadCameras() {
     try {
@@ -96,72 +130,45 @@ export default function Live2Page() {
     saveTiles(tiles);
   }, [tiles]);
 
-  useEffect(() => {
-    const workspace = workspaceRef.current;
-    if (!workspace) return undefined;
-
-    function updateScale() {
-      const bounds = workspace.getBoundingClientRect();
-      const nextScale = Math.min(bounds.width / CANVAS_W, bounds.height / CANVAS_H);
-      setScale(clamp(nextScale, 0.25, 1.25));
-    }
-
-    updateScale();
-    const observer = new ResizeObserver(updateScale);
-    observer.observe(workspace);
-    window.addEventListener("resize", updateScale);
-
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", updateScale);
-    };
-  }, []);
-
   const cameraMap = useMemo(() => {
     const map = new Map();
     cameras.forEach((camera) => map.set(String(camera.id), camera));
     return map;
   }, [cameras]);
 
-  function canvasPoint(clientX, clientY) {
-    const bounds = canvasRef.current?.getBoundingClientRect();
-    if (!bounds) return null;
-    return {
-      x: (clientX - bounds.left) / scale,
-      y: (clientY - bounds.top) / scale,
-    };
+  function workspaceBounds() {
+    return workspaceRef.current?.getBoundingClientRect() || null;
   }
 
   function addTile(cameraId, stream, clientX, clientY) {
-    const point = canvasPoint(clientX, clientY);
-    if (!point) return;
+    const bounds = workspaceBounds();
+    if (!bounds) return;
 
-    const tileW = DEFAULT_TILE_W;
-    const tileH = DEFAULT_TILE_H;
-    const x = clamp(point.x - tileW / 2, 8, CANVAS_W - tileW - 8);
-    const y = clamp(point.y - 28, 8, CANVAS_H - tileH - 8);
+    const minWPct = MIN_TILE_W / Math.max(bounds.width, 1);
+    const minHPct = MIN_TILE_H / Math.max(bounds.height, 1);
+    const wPct = clamp(DEFAULT_W_PCT, minWPct, 0.9);
+    const hPct = clamp(DEFAULT_H_PCT, minHPct, 0.9);
+    const xPct = clamp((clientX - bounds.left) / bounds.width - wPct / 2, 0, 1 - wPct);
+    const yPct = clamp((clientY - bounds.top) / bounds.height - 0.03, 0, 1 - hPct);
 
-    setTiles((prev) => {
-      const z = nextZIndex(prev);
-      return [
-        ...prev,
-        {
-          id: `${cameraId}-${stream}-${Date.now()}`,
-          cameraId: String(cameraId),
-          stream,
-          x,
-          y,
-          w: tileW,
-          h: tileH,
-          z,
-        },
-      ];
-    });
+    setTiles((prev) => [
+      ...prev,
+      {
+        id: `${cameraId}-${stream}-${Date.now()}`,
+        cameraId: String(cameraId),
+        stream,
+        xPct,
+        yPct,
+        wPct,
+        hPct,
+        z: nextZIndex(prev),
+      },
+    ]);
   }
 
   function updateTile(tileId, patch) {
     setTiles((prev) =>
-      prev.map((tile) => (tile.id === tileId ? { ...tile, ...patch } : tile))
+      prev.map((tile) => (tile.id === tileId ? normalizeTile({ ...tile, ...patch }) : tile))
     );
   }
 
@@ -188,22 +195,29 @@ export default function Live2Page() {
 
   function startMove(event, tile) {
     if (event.button !== 0) return;
+    const bounds = workspaceBounds();
+    if (!bounds) return;
+
     event.preventDefault();
     bringToFront(tile.id);
     setDragState({
       id: tile.id,
       startX: event.clientX,
       startY: event.clientY,
-      tileX: tile.x,
-      tileY: tile.y,
-      scale,
-      maxX: Math.max(8, CANVAS_W - tile.w - 8),
-      maxY: Math.max(8, CANVAS_H - tile.h - 8),
+      tileX: tile.xPct,
+      tileY: tile.yPct,
+      tileW: tile.wPct,
+      tileH: tile.hPct,
+      workspaceW: bounds.width,
+      workspaceH: bounds.height,
     });
   }
 
   function startResize(event, tile) {
     if (event.button !== 0) return;
+    const bounds = workspaceBounds();
+    if (!bounds) return;
+
     event.preventDefault();
     event.stopPropagation();
     bringToFront(tile.id);
@@ -211,11 +225,12 @@ export default function Live2Page() {
       id: tile.id,
       startX: event.clientX,
       startY: event.clientY,
-      tileW: tile.w,
-      tileH: tile.h,
-      scale,
-      maxW: Math.max(MIN_TILE_W, CANVAS_W - tile.x - 8),
-      maxH: Math.max(MIN_TILE_H, CANVAS_H - tile.y - 8),
+      tileX: tile.xPct,
+      tileY: tile.yPct,
+      tileW: tile.wPct,
+      tileH: tile.hPct,
+      workspaceW: bounds.width,
+      workspaceH: bounds.height,
     });
   }
 
@@ -224,16 +239,16 @@ export default function Live2Page() {
 
     function onMove(event) {
       const nextX = clamp(
-        dragState.tileX + (event.clientX - dragState.startX) / dragState.scale,
-        8,
-        dragState.maxX
+        dragState.tileX + (event.clientX - dragState.startX) / dragState.workspaceW,
+        0,
+        1 - dragState.tileW
       );
       const nextY = clamp(
-        dragState.tileY + (event.clientY - dragState.startY) / dragState.scale,
-        8,
-        dragState.maxY
+        dragState.tileY + (event.clientY - dragState.startY) / dragState.workspaceH,
+        0,
+        1 - dragState.tileH
       );
-      updateTile(dragState.id, { x: nextX, y: nextY });
+      updateTile(dragState.id, { xPct: nextX, yPct: nextY });
     }
 
     function onUp() {
@@ -252,17 +267,19 @@ export default function Live2Page() {
     if (!resizeState) return undefined;
 
     function onMove(event) {
+      const minWPct = MIN_TILE_W / Math.max(resizeState.workspaceW, 1);
+      const minHPct = MIN_TILE_H / Math.max(resizeState.workspaceH, 1);
       const nextW = clamp(
-        resizeState.tileW + (event.clientX - resizeState.startX) / resizeState.scale,
-        MIN_TILE_W,
-        resizeState.maxW
+        resizeState.tileW + (event.clientX - resizeState.startX) / resizeState.workspaceW,
+        minWPct,
+        1 - resizeState.tileX
       );
       const nextH = clamp(
-        resizeState.tileH + (event.clientY - resizeState.startY) / resizeState.scale,
-        MIN_TILE_H,
-        resizeState.maxH
+        resizeState.tileH + (event.clientY - resizeState.startY) / resizeState.workspaceH,
+        minHPct,
+        1 - resizeState.tileY
       );
-      updateTile(resizeState.id, { w: nextW, h: nextH });
+      updateTile(resizeState.id, { wPct: nextW, hPct: nextH });
     }
 
     function onUp() {
@@ -335,89 +352,72 @@ export default function Live2Page() {
           }}
           onDrop={handleDrop}
         >
-          <div
-            className="live2CanvasViewport"
-            style={{
-              width: CANVAS_W * scale,
-              height: CANVAS_H * scale,
-            }}
-          >
-            <div
-              ref={canvasRef}
-              className="live2Canvas"
-              style={{
-                width: CANVAS_W * scale,
-                height: CANVAS_H * scale,
-              }}
-            >
-              {!tiles.length ? (
-                <div className="live2Empty">
-                  <div className="live2EmptyTitle">{TEXT.empty}</div>
-                </div>
-              ) : null}
-
-              {tiles.map((tile) => {
-                const camera = cameraMap.get(String(tile.cameraId));
-                const streams = detectStreams(camera);
-                const stream = streams.some((item) => item.key === tile.stream)
-                  ? tile.stream
-                  : defaultStream(camera);
-
-                return (
-                  <div
-                    key={tile.id}
-                    className="live2Tile"
-                    style={{
-                      left: tile.x * scale,
-                      top: tile.y * scale,
-                      width: tile.w * scale,
-                      height: tile.h * scale,
-                      zIndex: tile.z || 2,
-                    }}
-                    onPointerDown={(event) => startMove(event, tile)}
-                  >
-                    <div className="live2TileBar">
-                      <div className="live2TileTitle">{camera?.name || TEXT.camera}</div>
-                      <select
-                        className="live2TileSelect"
-                        value={stream}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onChange={(event) => updateTile(tile.id, { stream: event.target.value })}
-                      >
-                        {streams.map((item) => (
-                          <option key={item.key} value={item.key}>{item.label}</option>
-                        ))}
-                      </select>
-                      <button
-                        type="button"
-                        className="live2IconButton"
-                        title={TEXT.close}
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onClick={() => removeTile(tile.id)}
-                      >
-                        {"\u00d7"}
-                      </button>
-                    </div>
-
-                    <div className="live2TileVideo">
-                      {camera ? (
-                        <TilePlayer cameraId={camera.id} stream={stream} />
-                      ) : (
-                        <div className="live2Missing">{TEXT.unavailable}</div>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      className="live2ResizeHandle"
-                      title={TEXT.resize}
-                      onPointerDown={(event) => startResize(event, tile)}
-                    />
-                  </div>
-                );
-              })}
+          {!tiles.length ? (
+            <div className="live2Empty">
+              <div className="live2EmptyTitle">{TEXT.empty}</div>
             </div>
-          </div>
+          ) : null}
+
+          {tiles.map((tile) => {
+            const camera = cameraMap.get(String(tile.cameraId));
+            const streams = detectStreams(camera);
+            const stream = streams.some((item) => item.key === tile.stream)
+              ? tile.stream
+              : defaultStream(camera);
+
+            return (
+              <div
+                key={tile.id}
+                className="live2Tile"
+                style={{
+                  left: `${tile.xPct * 100}%`,
+                  top: `${tile.yPct * 100}%`,
+                  width: `${tile.wPct * 100}%`,
+                  height: `${tile.hPct * 100}%`,
+                  zIndex: tile.z || 2,
+                }}
+                onPointerDown={(event) => startMove(event, tile)}
+              >
+                <div className="live2TileBar">
+                  <div className="live2TileTitle">{camera?.name || TEXT.camera}</div>
+                  <select
+                    className="live2TileSelect"
+                    value={stream}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onChange={(event) => updateTile(tile.id, { stream: event.target.value })}
+                  >
+                    {streams.map((item) => (
+                      <option key={item.key} value={item.key}>{item.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="live2IconButton"
+                    title={TEXT.close}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => removeTile(tile.id)}
+                  >
+                    {"\u00d7"}
+                  </button>
+                </div>
+
+                <div className="live2TileVideo">
+                  {camera ? (
+                    <TilePlayer cameraId={camera.id} stream={stream} />
+                  ) : (
+                    <div className="live2Missing">{TEXT.unavailable}</div>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  className="live2ResizeHandle"
+                  title={TEXT.resize}
+                  onPointerDown={(event) => startResize(event, tile)}
+                />
+              </div>
+            );
+          })}
         </section>
       </div>
     </Layout>
