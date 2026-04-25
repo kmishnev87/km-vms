@@ -346,9 +346,8 @@ export default function Live2Page() {
               ref={canvasRef}
               className="live2Canvas"
               style={{
-                width: CANVAS_W,
-                height: CANVAS_H,
-                transform: `scale(${scale})`,
+                width: CANVAS_W * scale,
+                height: CANVAS_H * scale,
               }}
             >
               {!tiles.length ? (
@@ -369,15 +368,15 @@ export default function Live2Page() {
                     key={tile.id}
                     className="live2Tile"
                     style={{
-                      left: tile.x,
-                      top: tile.y,
-                      width: tile.w,
-                      height: tile.h,
+                      left: tile.x * scale,
+                      top: tile.y * scale,
+                      width: tile.w * scale,
+                      height: tile.h * scale,
                       zIndex: tile.z || 2,
                     }}
-                    onPointerDown={() => bringToFront(tile.id)}
+                    onPointerDown={(event) => startMove(event, tile)}
                   >
-                    <div className="live2TileBar" onPointerDown={(event) => startMove(event, tile)}>
+                    <div className="live2TileBar">
                       <div className="live2TileTitle">{camera?.name || TEXT.camera}</div>
                       <select
                         className="live2TileSelect"

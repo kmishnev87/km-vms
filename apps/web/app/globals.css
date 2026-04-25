@@ -2742,10 +2742,7 @@ textarea {
 }
 
 .live2Canvas {
-  position: absolute;
-  top: 0;
-  left: 0;
-  transform-origin: top left;
+  position: relative;
 }
 
 .live2Empty {
@@ -2769,8 +2766,8 @@ textarea {
 .live2Tile {
   position: absolute;
   z-index: 2;
-  min-width: 260px;
-  min-height: 170px;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
