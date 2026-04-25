@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import shutil
 import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from app.core.config import settings
 from app.models.camera import Camera
@@ -44,8 +46,62 @@ def _playlist_path(camera_id: int, stream: str) -> Path:
 def _choose_input_url(camera: Camera, stream: str) -> str | None:
     stream = (stream or "").lower()
     if stream == "sub":
-      return camera.rtsp_sub_url or camera.rtsp_main_url
+        return camera.rtsp_sub_url or camera.rtsp_main_url
     return camera.rtsp_main_url or camera.rtsp_sub_url
+
+
+def _mask_url_password(url: str | None) -> str:
+    if not url:
+        return ""
+
+    try:
+        parsed = urlsplit(url)
+    except Exception:
+        return url
+
+    if not parsed.password:
+        return url
+
+    return url.replace(f":{parsed.password}@", ":***@")
+
+
+def _log_input_url(camera: Camera, stream: str, input_url: str):
+    try:
+        parsed = urlsplit(input_url)
+        logger.info(
+            "Live RTSP input camera_id=%s stream=%s selected_url=%s scheme=%s host=%s port=%s has_credentials=%s fallback_to_main=%s fallback_to_sub=%s",
+            camera.id,
+            stream,
+            _mask_url_password(input_url),
+            parsed.scheme,
+            parsed.hostname,
+            parsed.port,
+            bool(parsed.username or parsed.password),
+            stream == "sub" and bool(camera.rtsp_main_url) and not bool(camera.rtsp_sub_url),
+            stream != "sub" and bool(camera.rtsp_sub_url) and not bool(camera.rtsp_main_url),
+        )
+        if parsed.scheme.lower() != "rtsp":
+            logger.warning(
+                "Live RTSP input has unexpected scheme camera_id=%s stream=%s scheme=%s url=%s",
+                camera.id,
+                stream,
+                parsed.scheme,
+                _mask_url_password(input_url),
+            )
+        if not parsed.hostname:
+            logger.warning(
+                "Live RTSP input has no hostname camera_id=%s stream=%s url=%s",
+                camera.id,
+                stream,
+                _mask_url_password(input_url),
+            )
+    except Exception:
+        logger.exception(
+            "Failed to inspect live RTSP URL camera_id=%s stream=%s url=%s",
+            camera.id,
+            stream,
+            _mask_url_password(input_url),
+        )
 
 
 def _stderr_log_path(camera_id: int, stream: str) -> Path:
@@ -100,7 +156,7 @@ def _ffmpeg_cmd(camera: Camera, stream: str, out_dir: Path) -> list[str] | None:
         "-nostdin",
         "-loglevel", "warning",
         "-rtsp_transport", rtsp_transport,
-        "-stimeout", "5000000",
+        "-timeout", "5000000",
         "-rw_timeout", "5000000",
         "-fflags", "nobuffer+discardcorrupt",
         "-flags", "low_delay",
@@ -137,6 +193,16 @@ def _touch_stream_locked(camera_id: int, stream: str):
         info["last_access"] = time.time()
 
 
+def _read_log_tail(path: Path | None, max_chars: int = 4000) -> str:
+    if not path or not Path(path).exists():
+        return ""
+
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")[-max_chars:]
+    except Exception:
+        return ""
+
+
 def _stop_process_locked(sid: str, info: dict, reason: str, cleanup_files: bool = True):
     proc: subprocess.Popen = info["proc"]
     camera_id = info["camera_id"]
@@ -155,9 +221,23 @@ def _stop_process_locked(sid: str, info: dict, reason: str, cleanup_files: bool 
                 pass
 
     try:
+        info["stderr_file"].flush()
         info["stderr_file"].close()
     except Exception:
         pass
+
+    exit_code = proc.poll()
+    stderr_tail = _read_log_tail(info.get("stderr_path"))
+    logger.warning(
+        "Live ffmpeg stopped camera_id=%s stream=%s pid=%s reason=%s exit_code=%s command=%s stderr_tail=%s",
+        camera_id,
+        stream,
+        proc.pid,
+        reason,
+        exit_code,
+        info.get("cmd_text", ""),
+        stderr_tail,
+    )
 
     _PROCESSES.pop(sid, None)
 
@@ -262,6 +342,20 @@ def ensure_stream(camera: Camera, stream: str, wait_for_ready: bool = True) -> d
                 "error": "Не найден RTSP URL для выбранного потока",
             }
 
+        input_url = _choose_input_url(camera, stream)
+        if input_url:
+            _log_input_url(camera, stream, input_url)
+
+        cmd_text = shlex.join(
+            [_mask_url_password(part) if part == input_url else part for part in cmd]
+        )
+        logger.info(
+            "Starting live ffmpeg camera_id=%s stream=%s command=%s",
+            camera.id,
+            stream,
+            cmd_text,
+        )
+
         stderr_path = _stderr_log_path(camera.id, stream)
         stderr_file = open(stderr_path, "a", encoding="utf-8")
 
@@ -279,6 +373,7 @@ def ensure_stream(camera: Camera, stream: str, wait_for_ready: bool = True) -> d
             "proc": proc,
             "stderr_file": stderr_file,
             "stderr_path": stderr_path,
+            "cmd_text": cmd_text,
             "last_access": started_at,
             "started_at": started_at,
         }
@@ -299,6 +394,13 @@ def ensure_stream(camera: Camera, stream: str, wait_for_ready: bool = True) -> d
             with _LOCK:
                 current = _PROCESSES.get(sid)
                 if not _process_running(current):
+                    if current:
+                        _stop_process_locked(
+                            sid,
+                            current,
+                            reason="process_exit",
+                            cleanup_files=False,
+                        )
                     break
             if _is_ready(camera.id, stream):
                 ready = True
@@ -400,17 +502,12 @@ def get_stream_debug(camera_id: int, stream: str) -> dict:
     with _LOCK:
         info = _PROCESSES.get(sid)
         running = _process_running(info)
-        log_path = info.get("stderr_path") if info else None
+        log_path = info.get("stderr_path") if info else _stderr_log_path(camera_id, stream)
         pid = info["proc"].pid if running and info else None
         started_at = info.get("started_at") if info else None
         last_access = info.get("last_access") if info else None
 
-    log_tail = ""
-    if log_path and Path(log_path).exists():
-        try:
-            log_tail = Path(log_path).read_text(encoding="utf-8")[-4000:]
-        except Exception:
-            log_tail = ""
+    log_tail = _read_log_tail(log_path)
 
     return {
         "running": running,
