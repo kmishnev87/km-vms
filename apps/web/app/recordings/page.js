@@ -540,6 +540,14 @@ export default function RecordingsPage() {
       <div className="card recordingsTableCard">
         <div className="recordingsTableWrap">
           <table className="table recordingsTable">
+            <colgroup>
+              <col className="recordingsSelectCol" />
+              <col className="recordingsCameraCol" />
+              <col className="recordingsFileCol" />
+              <col className="recordingsDateCol" />
+              <col className="recordingsSizeCol" />
+              <col className="recordingsActionsCol" />
+            </colgroup>
             <thead>
               <tr>
                 <th style={{ width: 44 }}>
