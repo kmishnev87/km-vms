@@ -2822,14 +2822,14 @@ textarea {
   background: rgba(15, 23, 42, 0.76);
 }
 
-.live2Shell {
+.liveWorkspaceShell {
   height: calc(100vh - 78px);
   min-height: 620px;
   display: flex;
   gap: 8px;
 }
 
-.live2CameraPanel {
+.liveWorkspaceCameraPanel {
   width: 204px;
   flex: 0 0 204px;
   min-width: 0;
@@ -2840,7 +2840,7 @@ textarea {
   overflow: auto;
 }
 
-.live2PanelHeader {
+.liveWorkspacePanelHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2848,13 +2848,13 @@ textarea {
   margin-bottom: 8px;
 }
 
-.live2PanelTitle {
+.liveWorkspacePanelTitle {
   color: #0f172a;
   font-size: 15px;
   font-weight: 800;
 }
 
-.live2AlignButton {
+.liveWorkspaceAlignButton {
   height: 26px;
   min-width: 0;
   border: 1px solid #cbd5e1;
@@ -2866,18 +2866,18 @@ textarea {
   cursor: pointer;
 }
 
-.live2AlignButton:hover {
+.liveWorkspaceAlignButton:hover {
   background: #eff6ff;
   border-color: #bfdbfe;
   color: #1d4ed8;
 }
 
-.live2AlignButton:disabled {
+.liveWorkspaceAlignButton:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-.live2Error {
+.liveWorkspaceError {
   margin-bottom: 10px;
   padding: 8px 10px;
   border-radius: 10px;
@@ -2886,12 +2886,12 @@ textarea {
   font-size: 13px;
 }
 
-.live2CameraList {
+.liveWorkspaceCameraList {
   display: grid;
   gap: 6px;
 }
 
-.live2CameraItem {
+.liveWorkspaceCameraItem {
   border: 1px solid #dbe3ef;
   border-radius: 10px;
   background: #f8fafc;
@@ -2899,11 +2899,11 @@ textarea {
   cursor: grab;
 }
 
-.live2CameraItem:active {
+.liveWorkspaceCameraItem:active {
   cursor: grabbing;
 }
 
-.live2CameraName {
+.liveWorkspaceCameraName {
   color: #0f172a;
   font-size: 13px;
   font-weight: 800;
@@ -2913,7 +2913,7 @@ textarea {
   white-space: nowrap;
 }
 
-.live2CameraMeta {
+.liveWorkspaceCameraMeta {
   margin-top: 3px;
   color: #64748b;
   font-size: 12px;
@@ -2922,13 +2922,13 @@ textarea {
   white-space: nowrap;
 }
 
-.live2StreamButtons {
+.liveWorkspaceStreamButtons {
   display: flex;
   gap: 4px;
   margin-top: 6px;
 }
 
-.live2StreamButton {
+.liveWorkspaceStreamButton {
   height: 24px;
   min-width: 46px;
   border: 1px solid #cbd5e1;
@@ -2939,7 +2939,7 @@ textarea {
   cursor: grab;
 }
 
-.live2Workspace {
+.liveWorkspaceCanvas {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
@@ -2953,11 +2953,11 @@ textarea {
   background-size: 32px 32px;
 }
 
-.live2Workspace.isEditing {
+.liveWorkspaceCanvas.isEditing {
   user-select: none;
 }
 
-.live2Empty {
+.liveWorkspaceEmpty {
   position: absolute;
   inset: 0;
   display: flex;
@@ -2966,7 +2966,7 @@ textarea {
   pointer-events: none;
 }
 
-.live2EmptyTitle {
+.liveWorkspaceEmptyTitle {
   padding: 10px 14px;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 12px;
@@ -2975,7 +2975,7 @@ textarea {
   font-size: 14px;
 }
 
-.live2Tile {
+.liveWorkspaceTile {
   position: absolute;
   z-index: 2;
   min-width: 0;
@@ -2989,7 +2989,7 @@ textarea {
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
 }
 
-.live2TileBar {
+.liveWorkspaceTileBar {
   height: 34px;
   flex: 0 0 34px;
   display: grid;
@@ -3002,7 +3002,7 @@ textarea {
   cursor: move;
 }
 
-.live2TileTitle {
+.liveWorkspaceTileTitle {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3011,7 +3011,7 @@ textarea {
   font-weight: 800;
 }
 
-.live2TileSelect {
+.liveWorkspaceTileSelect {
   height: 26px;
   min-height: 26px;
   border: 1px solid rgba(148, 163, 184, 0.5);
@@ -3022,7 +3022,7 @@ textarea {
   font-size: 12px;
 }
 
-.live2IconButton {
+.liveWorkspaceIconButton {
   width: 26px;
   height: 26px;
   border: 0;
@@ -3034,30 +3034,30 @@ textarea {
   line-height: 1;
 }
 
-.live2IconButton:hover {
+.liveWorkspaceIconButton:hover {
   background: rgba(239, 68, 68, 0.7);
 }
 
-.live2TileVideo {
+.liveWorkspaceTileVideo {
   flex: 1 1 auto;
   min-height: 0;
   background: #000000;
 }
 
-.live2TileVideo .liveVideoWrap {
+.liveWorkspaceTileVideo .liveVideoWrap {
   min-height: 0;
   height: 100%;
 }
 
-.live2TileVideo .liveVideo {
+.liveWorkspaceTileVideo .liveVideo {
   object-fit: contain;
 }
 
-.live2TileVideo .liveCenterHint {
+.liveWorkspaceTileVideo .liveCenterHint {
   pointer-events: none;
 }
 
-.live2Missing {
+.liveWorkspaceMissing {
   height: 100%;
   display: flex;
   align-items: center;
@@ -3066,7 +3066,7 @@ textarea {
   font-size: 14px;
 }
 
-.live2ResizeHandle {
+.liveWorkspaceResizeHandle {
   position: absolute;
   right: 0;
   bottom: 0;
@@ -3084,19 +3084,19 @@ textarea {
 }
 
 @media (max-width: 900px) {
-  .live2Shell {
+  .liveWorkspaceShell {
     height: auto;
     min-height: 0;
     flex-direction: column;
   }
 
-  .live2CameraPanel {
+  .liveWorkspaceCameraPanel {
     width: 100%;
     flex: 0 0 auto;
     max-height: 260px;
   }
 
-  .live2Workspace {
+  .liveWorkspaceCanvas {
     height: 720px;
   }
 }

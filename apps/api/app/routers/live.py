@@ -23,11 +23,6 @@ StreamKey = Literal["main", "sub", "sub2"]
 HLS_FILENAME_RE = re.compile(r"^(index\.m3u8|seg_\d+\.ts)$")
 
 
-class LiveStartPayload(BaseModel):
-    camera_id: int
-    stream: StreamKey = "main"
-
-
 class LiveStopPayload(BaseModel):
     camera_id: int
     stream: StreamKey = "main"
@@ -93,6 +88,11 @@ def _hls_debug_payload(camera_id: int, stream: str) -> dict:
         "failure_reason": item.get("failure_reason"),
         "last_error": item.get("last_error"),
         "stderr_tail": item.get("stderr_tail"),
+        "startup_elapsed_seconds": item.get("startup_elapsed_seconds"),
+        "startup_deadline_seconds": item.get("startup_deadline_seconds"),
+        "startup_hard_deadline_seconds": item.get("startup_hard_deadline_seconds"),
+        "last_ffmpeg_progress_at": item.get("last_ffmpeg_progress_at"),
+        "ffmpeg_progress_detected": item.get("ffmpeg_progress_detected"),
     }
 
 
@@ -119,19 +119,6 @@ def _serve_live_playlist(camera_id: int, stream: str, token: Optional[str]) -> R
         media_type="application/vnd.apple.mpegurl",
         headers={"Cache-Control": "no-store"},
     )
-
-
-@router.post("/start")
-def start_live_stream(
-    payload: LiveStartPayload,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    camera = _get_camera(db, payload.camera_id)
-    result = manager.ensure_stream(camera, payload.stream, wait_for_ready=False)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error") or "Не удалось запустить live поток")
-    return result
 
 
 @router.post("/stop")

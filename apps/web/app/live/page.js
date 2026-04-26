@@ -5,7 +5,7 @@ import Layout from "../../components/Layout";
 import TilePlayer from "../../components/TilePlayer";
 import { apiFetch } from "../../lib/api";
 
-const STORAGE_KEY = "vms_live2_workspace_v1";
+const STORAGE_KEY = "vms_live_workspace_v1";
 const LEGACY_CANVAS_W = 1600;
 const LEGACY_CANVAS_H = 900;
 const MIN_TILE_W = 220;
@@ -121,7 +121,7 @@ function chooseAutoGrid(count, workspaceW, workspaceH) {
   return best;
 }
 
-export default function Live2Page() {
+export default function LivePage() {
   const workspaceRef = useRef(null);
   const hydratedRef = useRef(false);
   const [cameras, setCameras] = useState([]);
@@ -343,22 +343,22 @@ export default function Live2Page() {
 
   return (
     <Layout>
-      <div className="live2Shell">
-        <aside className="live2CameraPanel">
-          <div className="live2PanelHeader">
-            <div className="live2PanelTitle">{TEXT.cameras}</div>
+      <div className="liveWorkspaceShell">
+        <aside className="liveWorkspaceCameraPanel">
+          <div className="liveWorkspacePanelHeader">
+            <div className="liveWorkspacePanelTitle">{TEXT.cameras}</div>
             <button
               type="button"
-              className="live2AlignButton"
+              className="liveWorkspaceAlignButton"
               onClick={autoLayoutTiles}
               disabled={!tiles.length}
             >
               {TEXT.align}
             </button>
           </div>
-          {error ? <div className="live2Error">{error}</div> : null}
+          {error ? <div className="liveWorkspaceError">{error}</div> : null}
 
-          <div className="live2CameraList">
+          <div className="liveWorkspaceCameraList">
             {cameras.map((camera) => {
               const streams = detectStreams(camera);
               const initialStream = defaultStream(camera);
@@ -366,7 +366,7 @@ export default function Live2Page() {
               return (
                 <div
                   key={camera.id}
-                  className="live2CameraItem"
+                  className="liveWorkspaceCameraItem"
                   draggable
                   onDragStart={(event) => {
                     event.dataTransfer.setData("application/x-camera-id", String(camera.id));
@@ -374,14 +374,14 @@ export default function Live2Page() {
                     event.dataTransfer.effectAllowed = "copy";
                   }}
                 >
-                  <div className="live2CameraName">{camera.name}</div>
-                  <div className="live2CameraMeta">{camera.host}:{camera.port}</div>
-                  <div className="live2StreamButtons">
+                  <div className="liveWorkspaceCameraName">{camera.name}</div>
+                  <div className="liveWorkspaceCameraMeta">{camera.host}:{camera.port}</div>
+                  <div className="liveWorkspaceStreamButtons">
                     {streams.map((stream) => (
                       <button
                         key={stream.key}
                         type="button"
-                        className="live2StreamButton"
+                        className="liveWorkspaceStreamButton"
                         draggable
                         onDragStart={(event) => {
                           event.stopPropagation();
@@ -402,7 +402,7 @@ export default function Live2Page() {
 
         <section
           ref={workspaceRef}
-          className={`live2Workspace ${dragState || resizeState ? "isEditing" : ""}`}
+          className={`liveWorkspaceCanvas ${dragState || resizeState ? "isEditing" : ""}`}
           onDragOver={(event) => {
             event.preventDefault();
             event.dataTransfer.dropEffect = "copy";
@@ -410,8 +410,8 @@ export default function Live2Page() {
           onDrop={handleDrop}
         >
           {!tiles.length ? (
-            <div className="live2Empty">
-              <div className="live2EmptyTitle">{TEXT.empty}</div>
+            <div className="liveWorkspaceEmpty">
+              <div className="liveWorkspaceEmptyTitle">{TEXT.empty}</div>
             </div>
           ) : null}
 
@@ -425,7 +425,7 @@ export default function Live2Page() {
             return (
               <div
                 key={tile.id}
-                className="live2Tile"
+                className="liveWorkspaceTile"
                 style={{
                   left: `${tile.xPct * 100}%`,
                   top: `${tile.yPct * 100}%`,
@@ -435,10 +435,10 @@ export default function Live2Page() {
                 }}
                 onPointerDown={(event) => startMove(event, tile)}
               >
-                <div className="live2TileBar">
-                  <div className="live2TileTitle">{camera?.name || TEXT.camera}</div>
+                <div className="liveWorkspaceTileBar">
+                  <div className="liveWorkspaceTileTitle">{camera?.name || TEXT.camera}</div>
                   <select
-                    className="live2TileSelect"
+                    className="liveWorkspaceTileSelect"
                     value={stream}
                     onPointerDown={(event) => event.stopPropagation()}
                     onChange={(event) => updateTile(tile.id, { stream: event.target.value })}
@@ -449,7 +449,7 @@ export default function Live2Page() {
                   </select>
                   <button
                     type="button"
-                    className="live2IconButton"
+                    className="liveWorkspaceIconButton"
                     title={TEXT.close}
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => removeTile(tile.id)}
@@ -458,17 +458,17 @@ export default function Live2Page() {
                   </button>
                 </div>
 
-                <div className="live2TileVideo">
+                <div className="liveWorkspaceTileVideo">
                   {camera ? (
                     <TilePlayer cameraId={camera.id} stream={stream} />
                   ) : (
-                    <div className="live2Missing">{TEXT.unavailable}</div>
+                    <div className="liveWorkspaceMissing">{TEXT.unavailable}</div>
                   )}
                 </div>
 
                 <button
                   type="button"
-                  className="live2ResizeHandle"
+                  className="liveWorkspaceResizeHandle"
                   title={TEXT.resize}
                   onPointerDown={(event) => startResize(event, tile)}
                 />

@@ -6,7 +6,7 @@ import { apiFetch } from "../lib/api";
 
 const MAX_RETRIES = 4;
 const READY_POLL_INTERVAL_MS = 700;
-const READY_TIMEOUT_MS = 30000;
+const READY_TIMEOUT_MS = 210000;
 const VIEWER_TOUCH_INTERVAL_MS = 15000;
 
 const TEXT = {

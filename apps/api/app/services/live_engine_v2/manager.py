@@ -24,6 +24,27 @@ from app.services.live_engine_v2.ffmpeg import (
 logger = logging.getLogger(__name__)
 
 StreamKey = tuple[int, str]
+FFMPEG_PROGRESS_PATTERNS = (
+    "frame=",
+    "Opening '",
+    "Opening \"",
+    ".ts'",
+    ".ts\"",
+    ".m3u8.tmp",
+)
+FFMPEG_FATAL_PATTERNS = (
+    "401 Unauthorized",
+    "403 Forbidden",
+    "Connection refused",
+    "Connection timed out",
+    "Invalid data found",
+    "Server returned 4",
+    "Could not write header",
+    "Conversion failed",
+)
+STARTUP_INITIAL_TIMEOUT_SECONDS = 20
+STARTUP_PROGRESS_GRACE_SECONDS = 90
+STARTUP_HARD_TIMEOUT_SECONDS = 180
 
 
 def _camera_source(camera: Camera):
@@ -65,6 +86,10 @@ class StreamInstance:
         self.restart_count = 0
         self.camera_source = None
         self.start_deadline: float | None = None
+        self.start_hard_deadline: float | None = None
+        self.last_ffmpeg_progress_at: float | None = None
+        self.progress_detected = False
+        self.stderr_progress_size = 0
 
     @property
     def sid(self) -> str:
@@ -111,6 +136,33 @@ class StreamInstance:
         except Exception:
             return ""
 
+    def _detect_progress_locked(self, stderr_tail: str | None = None) -> bool:
+        tail = stderr_tail if stderr_tail is not None else self._read_log_tail()
+        if not tail:
+            return False
+        path = self.stderr_path or self.default_stderr_path
+        try:
+            current_size = path.stat().st_size if path.exists() else 0
+        except Exception:
+            current_size = 0
+        if current_size <= self.stderr_progress_size and self.progress_detected:
+            return False
+        if any(pattern in tail for pattern in FFMPEG_PROGRESS_PATTERNS):
+            self.progress_detected = True
+            self.stderr_progress_size = current_size
+            self.last_ffmpeg_progress_at = time.time()
+            return True
+        return False
+
+    def _detect_fatal_error(self, stderr_tail: str | None = None) -> str | None:
+        tail = stderr_tail if stderr_tail is not None else self._read_log_tail()
+        if not tail:
+            return None
+        for pattern in FFMPEG_FATAL_PATTERNS:
+            if pattern in tail:
+                return pattern
+        return None
+
     def _mark_process_exit_locked(self, reason: str = "ffmpeg_exit", cleanup_files: bool = True):
         proc = self.proc
         if not proc:
@@ -142,6 +194,7 @@ class StreamInstance:
         self.status = "failed"
         self.started_at = None
         self.start_deadline = None
+        self.start_hard_deadline = None
 
         if cleanup_files:
             shutil.rmtree(self.stream_dir, ignore_errors=True)
@@ -198,6 +251,9 @@ class StreamInstance:
             self.status = "starting"
             self.failure_reason = None
             self.camera_source = _camera_source(camera)
+            self.progress_detected = False
+            self.last_ffmpeg_progress_at = None
+            self.stderr_progress_size = 0
             self.mode = self._choose_mode(camera, input_url, force_mode=force_mode)
             self.requested_mode = force_mode or "auto"
             cmd = build_hls_command(
@@ -249,7 +305,9 @@ class StreamInstance:
 
             self.status = "running"
             self.started_at = time.time()
-            self.start_deadline = self.started_at + max(int(settings.live_start_timeout_seconds), 2)
+            initial_timeout = max(int(settings.live_start_timeout_seconds), STARTUP_INITIAL_TIMEOUT_SECONDS)
+            self.start_deadline = self.started_at + initial_timeout
+            self.start_hard_deadline = self.started_at + max(initial_timeout * 2, STARTUP_HARD_TIMEOUT_SECONDS)
             self.last_exit_code = None
             self.last_error = None
 
@@ -307,6 +365,7 @@ class StreamInstance:
             self.failure_reason = None if self.status == "stopped" else reason
             self.started_at = None
             self.start_deadline = None
+            self.start_hard_deadline = None
 
             if cleanup_files:
                 shutil.rmtree(self.stream_dir, ignore_errors=True)
@@ -316,10 +375,15 @@ class StreamInstance:
             if self.is_ready():
                 return False
 
+            stderr_tail = self._read_log_tail()
+            fatal_error = self._detect_fatal_error(stderr_tail)
+
             if self.proc and self.proc.poll() is not None:
                 previous_mode = self.mode
                 source = self.camera_source
-                reason = "copy_failed" if previous_mode == "copy" else "transcode_failed"
+                reason = "copy_failed" if previous_mode == "copy" else "ffmpeg_exit"
+                if previous_mode != "copy" and fatal_error:
+                    reason = "rtsp_error" if "Connection" in fatal_error or "401" in fatal_error or "403" in fatal_error else "transcode_failed"
                 self._mark_process_exit_locked(reason=reason, cleanup_files=True)
                 if previous_mode == "copy" and source:
                     self.restart_count += 1
@@ -331,8 +395,16 @@ class StreamInstance:
             if not self.is_running() or not self.start_deadline:
                 return False
 
-            if time.time() <= self.start_deadline:
+            self._detect_progress_locked(stderr_tail)
+            now = time.time()
+            if now <= self.start_deadline:
                 return False
+
+            if fatal_error:
+                self.stop(reason="rtsp_error", cleanup_files=True)
+                self.failure_reason = "rtsp_error"
+                self.last_error = stderr_tail
+                return True
 
             source = self.camera_source
             if self.mode == "copy" and source:
@@ -347,8 +419,20 @@ class StreamInstance:
                 self.start(source, force_mode="fallback_transcode")
                 return True
 
-            self.stop(reason="hls_not_ready", cleanup_files=True)
-            self.failure_reason = "transcode_failed" if self.mode == "fallback_transcode" else "hls_not_ready"
+            last_progress = self.last_ffmpeg_progress_at or self.started_at or now
+            hard_deadline = self.start_hard_deadline or (now + STARTUP_HARD_TIMEOUT_SECONDS)
+            if self.progress_detected and now - last_progress <= STARTUP_PROGRESS_GRACE_SECONDS and now <= hard_deadline:
+                self.status = "starting"
+                return False
+
+            if now <= hard_deadline and self.playlist_path.exists():
+                self.status = "starting"
+                return False
+
+            reason = "startup_timeout_no_progress" if not self.progress_detected else "startup_timeout_no_hls"
+            self.stop(reason=reason, cleanup_files=True)
+            self.failure_reason = reason
+            self.last_error = stderr_tail
             return True
 
     def note_process_exit_if_needed(self) -> bool:
@@ -383,6 +467,11 @@ class StreamInstance:
             "last_access": self.last_access,
             "uptime_seconds": round(now - self.started_at, 2) if self.started_at else 0,
             "idle_seconds": round(now - self.last_access, 2),
+            "startup_elapsed_seconds": round(now - self.started_at, 2) if self.started_at and not ready else 0,
+            "startup_deadline_seconds": round(self.start_deadline - now, 2) if self.start_deadline else None,
+            "startup_hard_deadline_seconds": round(self.start_hard_deadline - now, 2) if self.start_hard_deadline else None,
+            "last_ffmpeg_progress_at": self.last_ffmpeg_progress_at,
+            "ffmpeg_progress_detected": self.progress_detected,
             "ready": ready,
             "playlist_path": str(self.playlist_path),
             "playlist_exists": self.playlist_path.exists(),
@@ -394,7 +483,7 @@ class StreamInstance:
             "failure_reason": self.failure_reason,
             "last_error": self.last_error,
             "restart_count": self.restart_count,
-            "stderr_tail": self._read_log_tail(),
+            "stderr_tail": self._read_log_tail() or self.last_error,
             "command": self.cmd_text,
         }
 
@@ -455,8 +544,7 @@ class StreamManager:
         self,
         camera: Camera,
         stream: str,
-        wait_for_ready: bool = True,
-        allow_fallback_retry: bool = True,
+        wait_for_ready: bool = False,
     ) -> dict:
         with self.lock:
             instance = self._get_stream_locked(camera.id, stream)
@@ -466,39 +554,8 @@ class StreamManager:
         if not result.get("ok"):
             return result
 
-        if wait_for_ready:
-            deadline = time.time() + max(int(settings.live_start_timeout_seconds), 2)
-            while time.time() < deadline:
-                if instance.maintain_startup():
-                    deadline = time.time() + max(int(settings.live_start_timeout_seconds), 2)
-                    allow_fallback_retry = False
-                    continue
-                if instance.is_ready():
-                    break
-                time.sleep(0.25)
-
         snapshot = instance.snapshot(viewers=viewers)
         if wait_for_ready and not snapshot["ready"]:
-            if allow_fallback_retry and instance.mode == "copy" and snapshot["running"]:
-                logger.warning(
-                    "Live Engine copy mode did not become ready, switching to fallback camera_id=%s stream=%s",
-                    camera.id,
-                    stream,
-                )
-                with instance.lock:
-                    instance.restart_count += 1
-                    instance.last_fallback_reason = "copy_not_ready"
-                    instance.stop(reason="copy_not_ready", cleanup_files=True)
-                    result = instance.start(camera, force_mode="fallback_transcode")
-                if not result.get("ok"):
-                    return result
-                return self.ensure_stream(
-                    camera,
-                    stream,
-                    wait_for_ready=True,
-                    allow_fallback_retry=False,
-                )
-
             return {
                 "ok": False,
                 "error": snapshot.get("failure_reason") or snapshot.get("last_error") or "Live stream is not ready",

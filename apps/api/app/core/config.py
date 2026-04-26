@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     live_idle_ttl_seconds: int = 45
     live_viewer_ttl_seconds: int = 60
     live_cleanup_interval_seconds: int = 10
-    live_start_timeout_seconds: int = 8
+    live_start_timeout_seconds: int = 20
 
     admin_username: str = "admin"
     admin_password: str = "Admin_Change_Me_2026"
