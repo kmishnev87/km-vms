@@ -80,7 +80,25 @@ def _hls_debug_payload(camera_id: int, stream: str) -> dict:
         "running": item.get("running"),
         "ready": item.get("ready"),
         "pid": item.get("pid"),
+        "pid_exists": item.get("pid_exists"),
+        "pid_cmdline": item.get("pid_cmdline"),
+        "process_poll": item.get("process_poll"),
+        "is_zombie": item.get("is_zombie"),
+        "running_verified": item.get("running_verified"),
+        "process_started_at": item.get("process_started_at"),
+        "process_age_seconds": item.get("process_age_seconds"),
         "mode": item.get("mode"),
+        "requested_mode": item.get("requested_mode"),
+        "selected_mode": item.get("selected_mode"),
+        "input_codec": item.get("input_codec"),
+        "input_resolution": item.get("input_resolution"),
+        "input_fps": item.get("input_fps"),
+        "copy_eligible": item.get("copy_eligible"),
+        "browser_compatible": item.get("browser_compatible"),
+        "reason_for_transcode": item.get("reason_for_transcode"),
+        "high_cpu_risk": item.get("high_cpu_risk"),
+        "resource_limit": item.get("resource_limit"),
+        "hardware_accel_available": item.get("hardware_accel_available"),
         "playlist_path": item.get("playlist_path"),
         "playlist_exists": item.get("playlist_exists"),
         "segment_count": item.get("segment_count"),
@@ -175,8 +193,9 @@ def open_live_viewer(
     camera = _get_camera(db, payload.camera_id)
     result = manager.open_viewer(camera, payload.stream)
     if not result.get("ok"):
+        status_code = 503 if result.get("error_code") == "resource_limit" else 400
         raise HTTPException(
-            status_code=400,
+            status_code=status_code,
             detail={
                 "message": result.get("error") or "Не удалось открыть live viewer",
                 "debug": result,

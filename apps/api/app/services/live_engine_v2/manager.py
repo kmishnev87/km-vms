@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -61,6 +62,44 @@ def _camera_source(camera: Camera):
     )
 
 
+def _read_proc_cmdline(pid: int | None) -> str:
+    if not pid:
+        return ""
+    path = Path("/proc") / str(pid) / "cmdline"
+    try:
+        raw = path.read_bytes()
+    except Exception:
+        return ""
+    return raw.replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+
+
+def _read_proc_state(pid: int | None) -> str:
+    if not pid:
+        return ""
+    path = Path("/proc") / str(pid) / "stat"
+    try:
+        parts = path.read_text(encoding="utf-8", errors="replace").split()
+        return parts[2] if len(parts) > 2 else ""
+    except Exception:
+        return ""
+
+
+def _pid_exists(pid: int | None) -> bool:
+    if not pid:
+        return False
+    if Path("/proc").exists():
+        return (Path("/proc") / str(pid)).exists()
+    try:
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _hardware_accel_available() -> bool:
+    return Path("/dev/dri").exists()
+
+
 @dataclass
 class ViewerSession:
     id: str
@@ -88,6 +127,15 @@ class StreamInstance:
         self.last_error: str | None = None
         self.last_fallback_reason: str | None = None
         self.failure_reason: str | None = None
+        self.input_codec: str | None = None
+        self.input_width: int | None = None
+        self.input_height: int | None = None
+        self.input_fps: float | None = None
+        self.copy_eligible = False
+        self.browser_compatible = False
+        self.reason_for_transcode: str | None = None
+        self.high_cpu_risk = False
+        self.resource_limit: str | None = None
         self.restart_count = 0
         self.camera_source = None
         self.start_deadline: float | None = None
@@ -124,7 +172,29 @@ class StreamInstance:
         return self.stream_dir / "ffmpeg.log"
 
     def is_running(self) -> bool:
-        return bool(self.proc and self.proc.poll() is None)
+        return self.process_info()["running_verified"]
+
+    def process_info(self) -> dict:
+        proc = self.proc
+        poll_value = proc.poll() if proc else None
+        pid = proc.pid if proc else None
+        pid_exists = _pid_exists(pid)
+        cmdline = _read_proc_cmdline(pid)
+        state = _read_proc_state(pid)
+        is_zombie = state == "Z"
+        proc_fs_available = Path("/proc").exists()
+        cmdline_ok = "ffmpeg" in cmdline.lower() if cmdline else not proc_fs_available
+        running_verified = bool(proc and poll_value is None and pid_exists and not is_zombie and cmdline_ok)
+        return {
+            "pid": pid,
+            "pid_exists": pid_exists,
+            "pid_cmdline": cmdline,
+            "process_poll": poll_value,
+            "is_zombie": is_zombie,
+            "running_verified": running_verified,
+            "process_started_at": self.started_at,
+            "process_age_seconds": round(time.time() - self.started_at, 2) if self.started_at else 0,
+        }
 
     def is_ready(self) -> bool:
         try:
@@ -258,8 +328,23 @@ class StreamInstance:
             shutil.rmtree(self.stream_dir, ignore_errors=True)
 
     def _choose_mode(self, camera: Camera, input_url: str, force_mode: str | None = None) -> str:
+        probe = probe_video_codec(input_url, (camera.rtsp_transport or "tcp").lower())
+        self.last_error = probe.error
+        self.input_codec = probe.codec
+        self.input_width = probe.width
+        self.input_height = probe.height
+        self.input_fps = probe.fps
+        self.copy_eligible = bool(probe.safe_for_copy)
+        self.browser_compatible = probe.codec == "h264"
+        self.high_cpu_risk = bool(
+            (self.stream == "main" and (probe.codec in {"hevc", "h265"} or (probe.width or 0) >= 2560))
+            or (probe.width or 0) >= 3840
+            or (probe.fps or 0) > 30
+        )
+
         if force_mode == "fallback_transcode":
             self.last_fallback_reason = self.last_fallback_reason or "forced_fallback"
+            self.reason_for_transcode = "forced_fallback"
             return "fallback_transcode"
 
         if force_mode == "copy":
@@ -268,15 +353,16 @@ class StreamInstance:
         requested_policy = (settings.live_video_codec or "auto").lower()
         if settings.live_transcode or requested_policy in {"libx264", "h264", "transcode", "fallback_transcode"}:
             self.last_fallback_reason = "forced_transcode" if settings.live_transcode else f"settings_codec:{requested_policy}"
+            self.reason_for_transcode = self.last_fallback_reason
             return "fallback_transcode"
 
-        probe = probe_video_codec(input_url, (camera.rtsp_transport or "tcp").lower())
-        self.last_error = probe.error
         if probe.safe_for_copy:
             self.last_fallback_reason = None
+            self.reason_for_transcode = None
             return "copy"
 
         self.last_fallback_reason = f"codec_not_safe_for_copy:{probe.codec or 'unknown'}"
+        self.reason_for_transcode = self.last_fallback_reason
         logger.warning(
             "Live Engine fallback selected camera_id=%s stream=%s codec=%s probe_error=%s",
             camera.id,
@@ -286,7 +372,7 @@ class StreamInstance:
         )
         return "fallback_transcode"
 
-    def start(self, camera: Camera, force_mode: str | None = None) -> dict:
+    def start(self, camera: Camera, force_mode: str | None = None, transcode_allowed: bool = True) -> dict:
         with self.lock:
             self.touch()
             if self.is_running():
@@ -322,8 +408,27 @@ class StreamInstance:
             self.too_slow_since = None
             self.stop_reason = None
             self.stopped_by_backend = False
+            self.input_codec = None
+            self.input_width = None
+            self.input_height = None
+            self.input_fps = None
+            self.copy_eligible = False
+            self.browser_compatible = False
+            self.reason_for_transcode = None
+            self.high_cpu_risk = False
+            self.resource_limit = None
             self.mode = self._choose_mode(camera, input_url, force_mode=force_mode)
             self.requested_mode = force_mode or "auto"
+            if self.mode != "copy" and not transcode_allowed:
+                self.resource_limit = "max_concurrent_transcodes"
+                self._set_state_locked("failed", "resource_limit", failure_reason="resource_limit")
+                self.last_error = "Live transcode resource limit reached"
+                return {
+                    "ok": False,
+                    "error": self.last_error,
+                    "error_code": "resource_limit",
+                    **self.snapshot(viewers=0),
+                }
             cmd = build_hls_command(
                 camera=camera,
                 stream=self.stream,
@@ -450,6 +555,12 @@ class StreamInstance:
 
             stderr_tail = self._read_log_tail()
             fatal_error = self._detect_fatal_error(stderr_tail)
+            process_info = self.process_info()
+
+            if self.proc and self.proc.poll() is None and not process_info["running_verified"]:
+                reason = "zombie_process" if process_info["is_zombie"] else "stale_process"
+                self.stop(reason=reason, cleanup_files=True)
+                return True
 
             if self.proc and self.proc.poll() is not None:
                 previous_mode = self.mode
@@ -519,7 +630,8 @@ class StreamInstance:
 
     def snapshot(self, viewers: int) -> dict:
         now = time.time()
-        running = self.is_running()
+        process_info = self.process_info()
+        running = process_info["running_verified"]
         ready = self.is_ready()
         if running and ready:
             status = "ready"
@@ -533,10 +645,23 @@ class StreamInstance:
             "stream": self.stream,
             "stream_type": self.stream,
             "pid": self.proc.pid if running and self.proc else None,
+            **process_info,
             "running": running,
             "status": status,
             "mode": "copy" if self.mode == "copy" else "transcode",
             "requested_mode": self.requested_mode,
+            "selected_mode": "copy" if self.mode == "copy" else "transcode",
+            "input_codec": self.input_codec,
+            "input_resolution": f"{self.input_width}x{self.input_height}" if self.input_width and self.input_height else None,
+            "input_width": self.input_width,
+            "input_height": self.input_height,
+            "input_fps": self.input_fps,
+            "copy_eligible": self.copy_eligible,
+            "browser_compatible": self.browser_compatible,
+            "reason_for_transcode": self.reason_for_transcode,
+            "high_cpu_risk": self.high_cpu_risk,
+            "resource_limit": self.resource_limit,
+            "hardware_accel_available": _hardware_accel_available(),
             "viewers": viewers,
             "started_at": self.started_at,
             "last_access": self.last_access,
@@ -611,6 +736,15 @@ class StreamManager:
             if self._key(viewer.camera_id, viewer.stream) == key
         ]
 
+    def _running_transcodes_locked(self, exclude_key: StreamKey | None = None) -> int:
+        count = 0
+        for key, instance in self.streams.items():
+            if exclude_key and key == exclude_key:
+                continue
+            if instance.mode != "copy" and instance.is_running():
+                count += 1
+        return count
+
     def _cleanup_stale_viewers_locked(self, now: float | None = None):
         now = now or time.time()
         ttl = max(int(settings.live_viewer_ttl_seconds), 15)
@@ -629,8 +763,12 @@ class StreamManager:
         with self.lock:
             instance = self._get_stream_locked(camera.id, stream)
             viewers = self._viewer_count_locked(camera.id, stream)
+            transcode_allowed = (
+                self._running_transcodes_locked(exclude_key=self._key(camera.id, stream))
+                < max(int(settings.live_max_concurrent_transcodes), 0)
+            )
 
-        result = instance.start(camera)
+        result = instance.start(camera, transcode_allowed=transcode_allowed)
         if not result.get("ok"):
             return result
 
@@ -658,7 +796,7 @@ class StreamManager:
 
         result = self.ensure_stream(camera, stream)
         if not result.get("ok"):
-            if result.get("error_code") == "no_rtsp_url":
+            if result.get("error_code") in {"no_rtsp_url", "resource_limit"}:
                 self.close_viewer(viewer_id)
                 return result
 

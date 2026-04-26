@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 class ProbeResult:
     codec: str | None
     safe_for_copy: bool
+    width: int | None = None
+    height: int | None = None
+    fps: float | None = None
     error: str | None = None
 
 
@@ -98,9 +101,9 @@ def probe_video_codec(input_url: str, rtsp_transport: str) -> ProbeResult:
         "-select_streams",
         "v:0",
         "-show_entries",
-        "stream=codec_name",
+        "stream=codec_name,width,height,avg_frame_rate,r_frame_rate",
         "-of",
-        "default=noprint_wrappers=1:nokey=1",
+        "default=noprint_wrappers=1",
         input_url,
     ]
 
@@ -116,16 +119,53 @@ def probe_video_codec(input_url: str, rtsp_transport: str) -> ProbeResult:
     except Exception as exc:
         return ProbeResult(codec=None, safe_for_copy=False, error=str(exc))
 
-    codec = (result.stdout or "").strip().splitlines()
-    codec_name = codec[0].strip().lower() if codec else None
+    values = {}
+    for line in (result.stdout or "").strip().splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+
+    def parse_int(value: str | None) -> int | None:
+        try:
+            return int(value) if value else None
+        except Exception:
+            return None
+
+    def parse_fps(value: str | None) -> float | None:
+        if not value or value in {"0/0", "N/A"}:
+            return None
+        try:
+            if "/" in value:
+                num, den = value.split("/", 1)
+                den_value = float(den)
+                return round(float(num) / den_value, 3) if den_value else None
+            return round(float(value), 3)
+        except Exception:
+            return None
+
+    codec_name = (values.get("codec_name") or "").strip().lower() or None
+    fps = parse_fps(values.get("avg_frame_rate")) or parse_fps(values.get("r_frame_rate"))
+    width = parse_int(values.get("width"))
+    height = parse_int(values.get("height"))
     if result.returncode != 0:
         return ProbeResult(
             codec=codec_name,
             safe_for_copy=False,
+            width=width,
+            height=height,
+            fps=fps,
             error=(result.stderr or "").strip()[-1200:] or f"ffprobe exit {result.returncode}",
         )
 
-    return ProbeResult(codec=codec_name, safe_for_copy=codec_name == "h264", error=None)
+    return ProbeResult(
+        codec=codec_name,
+        safe_for_copy=codec_name == "h264",
+        width=width,
+        height=height,
+        fps=fps,
+        error=None,
+    )
 
 
 def build_hls_command(
@@ -152,6 +192,14 @@ def build_hls_command(
             "zerolatency",
             "-pix_fmt",
             "yuv420p",
+            "-fps_mode",
+            "passthrough",
+            "-g",
+            "50",
+            "-keyint_min",
+            "25",
+            "-sc_threshold",
+            "0",
         ]
 
     audio_mode = (settings.live_audio_mode or "none").lower()
@@ -168,10 +216,18 @@ def build_hls_command(
         "-nostdin",
         "-loglevel",
         "info",
+        "-fflags",
+        "nobuffer",
+        "-flags",
+        "low_delay",
         "-rtsp_transport",
         rtsp_transport,
         "-timeout",
         "5000000",
+        "-analyzeduration",
+        "1000000",
+        "-probesize",
+        "1000000",
         "-i",
         input_url,
         "-map",

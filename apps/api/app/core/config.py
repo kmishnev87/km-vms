@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     live_viewer_ttl_seconds: int = 60
     live_cleanup_interval_seconds: int = 10
     live_start_timeout_seconds: int = 20
+    live_max_concurrent_transcodes: int = 2
 
     admin_username: str = "admin"
     admin_password: str = "Admin_Change_Me_2026"
