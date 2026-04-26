@@ -167,7 +167,7 @@ def build_hls_command(
         "-hide_banner",
         "-nostdin",
         "-loglevel",
-        "warning",
+        "info",
         "-rtsp_transport",
         rtsp_transport,
         "-timeout",

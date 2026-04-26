@@ -185,6 +185,50 @@ export default function TilePlayer({ cameraId, stream }) {
       setError(message || TEXT.failedStart);
     }
 
+    function isStillStarting(readyState) {
+      return Boolean(
+        readyState?.item?.running &&
+          (readyState.item.status === "starting" || readyState.item.status === "restarting")
+      );
+    }
+
+    function buildPlaylistUrl(token) {
+      return `/api/live/${sourceKey.cameraId}/${sourceKey.stream}/index.m3u8?token=${encodeURIComponent(token)}`;
+    }
+
+    function continueWaitingForReady(token, message) {
+      if (cancelled) return;
+
+      setStatus("waiting");
+      setError("");
+      retryTimerRef.current = setTimeout(async () => {
+        if (cancelled) return;
+
+        const readyState = await waitForReady();
+        if (readyState.ready) {
+          await attachPlayer(buildPlaylistUrl(token));
+          return;
+        }
+
+        if (readyState.item?.mode === "copy") {
+          await requestFallbackAndRetry(message);
+          return;
+        }
+
+        if (readyState.failed) {
+          failWithMessage(readyState.message || message);
+          return;
+        }
+
+        if (isStillStarting(readyState)) {
+          continueWaitingForReady(token, message);
+          return;
+        }
+
+        scheduleRetry(message);
+      }, READY_POLL_INTERVAL_MS);
+    }
+
     async function requestFallbackAndRetry(message) {
       if (cancelled) return;
 
@@ -220,6 +264,14 @@ export default function TilePlayer({ cameraId, stream }) {
             failWithMessage(readyState.message || message);
             return;
           }
+          if (isStillStarting(readyState)) {
+            const token =
+              typeof window !== "undefined" ? localStorage.getItem("token") : null;
+            if (token) {
+              continueWaitingForReady(token, message);
+              return;
+            }
+          }
           scheduleRetry(message);
           return;
         }
@@ -232,7 +284,7 @@ export default function TilePlayer({ cameraId, stream }) {
           return;
         }
 
-        const src = `/api/live/${sourceKey.cameraId}/${sourceKey.stream}/index.m3u8?token=${encodeURIComponent(token)}&fallback=${Date.now()}`;
+        const src = `${buildPlaylistUrl(token)}&fallback=${Date.now()}`;
         await attachPlayer(src);
       } catch (_) {
         scheduleRetry(message);
@@ -356,11 +408,15 @@ export default function TilePlayer({ cameraId, stream }) {
             failWithMessage(readyState.message || TEXT.failedStart);
             return;
           }
+          if (isStillStarting(readyState)) {
+            continueWaitingForReady(token, TEXT.failedStart);
+            return;
+          }
           scheduleRetry(TEXT.failedStart);
           return;
         }
 
-        const src = `/api/live/${sourceKey.cameraId}/${sourceKey.stream}/index.m3u8?token=${encodeURIComponent(token)}`;
+        const src = buildPlaylistUrl(token);
         if (!cancelled) {
           await attachPlayer(src);
         }

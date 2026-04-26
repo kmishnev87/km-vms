@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -19,6 +20,7 @@ from app.services.live_engine_v2 import manager
 router = APIRouter(prefix="/live", tags=["live"])
 
 StreamKey = Literal["main", "sub", "sub2"]
+HLS_FILENAME_RE = re.compile(r"^(index\.m3u8|seg_\d+\.ts)$")
 
 
 class LiveStartPayload(BaseModel):
@@ -70,6 +72,59 @@ def _authorize_live_request(request: Request, token: Optional[str]) -> str:
         raise HTTPException(status_code=401, detail="Invalid token")
 
     return username
+
+
+def _validate_hls_filename(filename: str):
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Invalid HLS filename")
+    if not HLS_FILENAME_RE.match(filename):
+        raise HTTPException(status_code=400, detail="Invalid HLS filename")
+
+
+def _hls_debug_payload(camera_id: int, stream: str) -> dict:
+    debug = manager.debug(camera_id=camera_id, stream=stream)
+    item = (debug.get("items") or [{}])[0]
+    return {
+        "camera_id": camera_id,
+        "stream": stream,
+        "status": item.get("status"),
+        "running": item.get("running"),
+        "ready": item.get("ready"),
+        "pid": item.get("pid"),
+        "mode": item.get("mode"),
+        "playlist_path": item.get("playlist_path"),
+        "playlist_exists": item.get("playlist_exists"),
+        "segment_count": item.get("segment_count"),
+        "exit_code": item.get("exit_code"),
+        "failure_reason": item.get("failure_reason"),
+        "last_error": item.get("last_error"),
+        "stderr_tail": item.get("stderr_tail"),
+    }
+
+
+def _serve_live_playlist(camera_id: int, stream: str, token: Optional[str]) -> Response:
+    playlist = manager.get_playlist_file(camera_id, stream)
+    if not playlist.exists() or playlist.stat().st_size <= 0:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "HLS playlist is not ready",
+                "debug": _hls_debug_payload(camera_id, stream),
+            },
+        )
+
+    playlist_text = playlist.read_text(encoding="utf-8")
+    lines = []
+    for line in playlist_text.splitlines():
+        if line.endswith(".ts"):
+            line = f"/api/live/{camera_id}/{stream}/{line}?token={token or ''}"
+        lines.append(line)
+
+    return Response(
+        content="\n".join(lines) + "\n",
+        media_type="application/vnd.apple.mpegurl",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/start")
@@ -210,36 +265,8 @@ def live_playlist(
     db: Session = Depends(get_db),
 ):
     _authorize_live_request(request, token)
-
-    camera = _get_camera(db, camera_id)
-    result = manager.ensure_stream(camera, stream, wait_for_ready=False)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error") or "Не удалось запустить live поток")
-
-    playlist = manager.get_playlist_file(camera_id, stream)
-    if not playlist.exists() or playlist.stat().st_size <= 0:
-        debug = manager.debug(camera_id=camera_id, stream=stream)
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "message": "Плейлист HLS пока не готов",
-                "debug": debug,
-            },
-        )
-
-    playlist_text = playlist.read_text(encoding="utf-8")
-    lines = []
-    for line in playlist_text.splitlines():
-        if line.endswith(".ts"):
-            line = f"/api/live/{camera_id}/{stream}/{line}?token={token}"
-        lines.append(line)
-
-    patched_playlist = "\n".join(lines) + "\n"
-    return Response(
-        content=patched_playlist,
-        media_type="application/vnd.apple.mpegurl",
-        headers={"Cache-Control": "no-store"},
-    )
+    _get_camera(db, camera_id)
+    return _serve_live_playlist(camera_id, stream, token)
 
 
 @router.get("/{camera_id}/{stream}/{filename}")
@@ -249,11 +276,14 @@ def live_segment(
     stream: StreamKey,
     filename: str,
     token: Optional[str] = Query(default=None),
+    db: Session = Depends(get_db),
 ):
     _authorize_live_request(request, token)
+    _get_camera(db, camera_id)
+    _validate_hls_filename(filename)
 
-    if "/" in filename or "\\" in filename:
-        raise HTTPException(status_code=400, detail="Недопустимое имя сегмента")
+    if filename == "index.m3u8":
+        return _serve_live_playlist(camera_id, stream, token)
 
     file_path = manager.get_segment_file(camera_id, stream, filename)
     if not Path(file_path).exists():
