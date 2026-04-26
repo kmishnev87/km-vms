@@ -6,7 +6,7 @@ import { apiFetch } from "../lib/api";
 
 const MAX_RETRIES = 4;
 const READY_POLL_INTERVAL_MS = 700;
-const READY_TIMEOUT_MS = 10000;
+const READY_TIMEOUT_MS = 30000;
 const VIEWER_TOUCH_INTERVAL_MS = 15000;
 
 const TEXT = {
@@ -128,14 +128,28 @@ export default function TilePlayer({ cameraId, stream }) {
 
     async function waitForReady() {
       const deadline = Date.now() + READY_TIMEOUT_MS;
+      let lastItem = null;
       while (!cancelled && Date.now() < deadline) {
         try {
           const response = await apiFetch(
             `/live/status?camera_id=${encodeURIComponent(sourceKey.cameraId)}&stream=${encodeURIComponent(sourceKey.stream)}`
           );
           const item = response?.items?.[0];
+          if (item) lastItem = item;
           if (item?.running && item?.ready) {
-            return true;
+            return { ready: true, item };
+          }
+          if (
+            item?.status === "failed" ||
+            item?.failure_reason ||
+            (item?.exit_code !== null && item?.exit_code !== undefined)
+          ) {
+            return {
+              ready: false,
+              failed: true,
+              message: item?.failure_reason || item?.last_error || TEXT.failedStart,
+              item,
+            };
           }
         } catch (_) {}
 
@@ -143,7 +157,7 @@ export default function TilePlayer({ cameraId, stream }) {
         await sleep(READY_POLL_INTERVAL_MS);
       }
 
-      return false;
+      return { ready: false, failed: false, message: TEXT.failedStart, item: lastItem };
     }
 
     function scheduleRetry(message) {
@@ -196,8 +210,16 @@ export default function TilePlayer({ cameraId, stream }) {
 
         if (cancelled) return;
 
-        const ready = await waitForReady();
-        if (!ready) {
+        const readyState = await waitForReady();
+        if (!readyState.ready) {
+          if (readyState.item?.mode === "copy") {
+            await requestFallbackAndRetry(message);
+            return;
+          }
+          if (readyState.failed) {
+            failWithMessage(readyState.message || message);
+            return;
+          }
           scheduleRetry(message);
           return;
         }
@@ -324,8 +346,16 @@ export default function TilePlayer({ cameraId, stream }) {
           return;
         }
 
-        const ready = await waitForReady();
-        if (!ready) {
+        const readyState = await waitForReady();
+        if (!readyState.ready) {
+          if (readyState.item?.mode === "copy") {
+            await requestFallbackAndRetry(TEXT.failedStart);
+            return;
+          }
+          if (readyState.failed) {
+            failWithMessage(readyState.message || TEXT.failedStart);
+            return;
+          }
           scheduleRetry(TEXT.failedStart);
           return;
         }

@@ -99,7 +99,7 @@ class StreamInstance:
         except Exception:
             return ""
 
-    def _mark_process_exit_locked(self, reason: str = "process_exit"):
+    def _mark_process_exit_locked(self, reason: str = "process_exit", cleanup_files: bool = True):
         proc = self.proc
         if not proc:
             return
@@ -129,6 +129,9 @@ class StreamInstance:
         self.stderr_file = None
         self.status = "failed"
         self.started_at = None
+
+        if cleanup_files:
+            shutil.rmtree(self.stream_dir, ignore_errors=True)
 
     def _choose_mode(self, camera: Camera, input_url: str, force_mode: str | None = None) -> str:
         if force_mode == "fallback_transcode":
@@ -171,8 +174,7 @@ class StreamInstance:
 
             if self.proc:
                 if self.proc.poll() is not None:
-                    self._mark_process_exit_locked(reason="restart_dead_process")
-                    self._cleanup_dir()
+                    self._mark_process_exit_locked(reason="restart_dead_process", cleanup_files=True)
                 else:
                     self.stop(reason="restart_running_process", cleanup_files=True)
 
@@ -207,12 +209,34 @@ class StreamInstance:
                 self.cmd_text,
             )
 
-            self.proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=self.stderr_file,
-                text=True,
-            )
+            try:
+                self.proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=self.stderr_file,
+                    text=True,
+                )
+            except Exception as exc:
+                try:
+                    self.stderr_file.write(f"Failed to start ffmpeg: {exc}\n")
+                    self.stderr_file.flush()
+                    self.stderr_file.close()
+                except Exception:
+                    pass
+                self.proc = None
+                self.stderr_file = None
+                self.status = "failed"
+                self.failure_reason = "ffmpeg_start_failed"
+                self.last_error = str(exc)
+                logger.exception(
+                    "Live Engine failed to start ffmpeg camera_id=%s stream=%s mode=%s command=%s",
+                    camera.id,
+                    self.stream,
+                    self.mode,
+                    self.cmd_text,
+                )
+                return {"ok": False, "error": str(exc), **self.snapshot(viewers=0)}
+
             self.status = "running"
             self.started_at = time.time()
             self.last_exit_code = None
@@ -278,7 +302,7 @@ class StreamInstance:
     def note_process_exit_if_needed(self) -> bool:
         with self.lock:
             if self.proc and self.proc.poll() is not None:
-                self._mark_process_exit_locked(reason="process_exit")
+                self._mark_process_exit_locked(reason="process_exit", cleanup_files=True)
                 return True
             return False
 
@@ -464,7 +488,7 @@ class StreamManager:
             )
             viewers = self._viewer_count_locked(camera.id, stream)
 
-        result = self.ensure_stream(camera, stream, wait_for_ready=True)
+        result = self.ensure_stream(camera, stream, wait_for_ready=False)
         if not result.get("ok"):
             self.close_viewer(viewer_id)
             return result

@@ -133,7 +133,7 @@ def open_live_viewer(
     result = manager.open_viewer(camera, payload.stream)
     if not result.get("ok"):
         raise HTTPException(
-            status_code=503,
+            status_code=400,
             detail={
                 "message": result.get("error") or "Не удалось открыть live viewer",
                 "debug": result,
