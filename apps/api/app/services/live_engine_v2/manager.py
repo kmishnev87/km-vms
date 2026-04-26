@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 import threading
@@ -17,7 +18,6 @@ from app.services.live_engine_v2.ffmpeg import (
     choose_input_url,
     command_text,
     inspect_input_url,
-    mask_url_password,
     probe_video_codec,
 )
 
@@ -45,6 +45,11 @@ FFMPEG_FATAL_PATTERNS = (
 STARTUP_INITIAL_TIMEOUT_SECONDS = 20
 STARTUP_PROGRESS_GRACE_SECONDS = 90
 STARTUP_HARD_TIMEOUT_SECONDS = 180
+SLOW_TRANSCODE_FAIL_SECONDS = 75
+PROGRESS_RE = re.compile(
+    r"frame=\s*(?P<frame>\d+).*?fps=\s*(?P<fps>[\d.]+).*?time=(?P<time>\d+:\d+:\d+(?:\.\d+)?).*?speed=\s*(?P<speed>[\d.]+)x",
+    re.S,
+)
 
 
 def _camera_source(camera: Camera):
@@ -90,6 +95,15 @@ class StreamInstance:
         self.last_ffmpeg_progress_at: float | None = None
         self.progress_detected = False
         self.stderr_progress_size = 0
+        self.last_frame: int | None = None
+        self.last_fps: float | None = None
+        self.last_speed: float | None = None
+        self.last_progress_time: str | None = None
+        self.too_slow_since: float | None = None
+        self.stop_reason: str | None = None
+        self.stopped_by_backend = False
+        self.state_changed_at = time.time()
+        self.last_state_transition = "initialized"
 
     @property
     def sid(self) -> str:
@@ -122,6 +136,13 @@ class StreamInstance:
     def touch(self):
         self.last_access = time.time()
 
+    def _set_state_locked(self, status: str, transition: str, failure_reason: str | None = None):
+        if self.status != status or self.last_state_transition != transition:
+            self.state_changed_at = time.time()
+            self.last_state_transition = transition
+        self.status = status
+        self.failure_reason = failure_reason
+
     def _cleanup_dir(self):
         if self.stream_dir.exists():
             shutil.rmtree(self.stream_dir, ignore_errors=True)
@@ -151,8 +172,45 @@ class StreamInstance:
             self.progress_detected = True
             self.stderr_progress_size = current_size
             self.last_ffmpeg_progress_at = time.time()
+            self._parse_progress_locked(tail)
             return True
         return False
+
+    def _parse_progress_locked(self, stderr_tail: str):
+        matches = list(PROGRESS_RE.finditer(stderr_tail or ""))
+        if not matches:
+            return
+
+        match = matches[-1]
+        try:
+            self.last_frame = int(match.group("frame"))
+        except Exception:
+            pass
+        try:
+            self.last_fps = float(match.group("fps"))
+        except Exception:
+            pass
+        try:
+            self.last_speed = float(match.group("speed"))
+        except Exception:
+            pass
+        self.last_progress_time = match.group("time")
+
+        if self.last_speed is not None and self.last_speed < 0.25:
+            self.too_slow_since = self.too_slow_since or time.time()
+        else:
+            self.too_slow_since = None
+
+    def _speed_state(self) -> str:
+        if self.last_speed is None:
+            return "unknown"
+        if self.last_speed >= 0.9:
+            return "normal"
+        if self.last_speed >= 0.5:
+            return "degraded"
+        if self.last_speed >= 0.25:
+            return "slow"
+        return "too_slow"
 
     def _detect_fatal_error(self, stderr_tail: str | None = None) -> str | None:
         tail = stderr_tail if stderr_tail is not None else self._read_log_tail()
@@ -191,7 +249,7 @@ class StreamInstance:
         )
         self.proc = None
         self.stderr_file = None
-        self.status = "failed"
+        self._set_state_locked("failed", reason, failure_reason=reason)
         self.started_at = None
         self.start_deadline = None
         self.start_hard_deadline = None
@@ -242,18 +300,28 @@ class StreamInstance:
 
             input_url = choose_input_url(camera, self.stream)
             if not input_url:
-                self.status = "failed"
+                self._set_state_locked("failed", "no_rtsp_url", failure_reason="no_rtsp_url")
                 self.last_error = "No RTSP URL for selected stream"
-                return {"ok": False, "error": "Не найден RTSP URL для выбранного потока"}
+                return {
+                    "ok": False,
+                    "error": "Не найден RTSP URL для выбранного потока",
+                    "error_code": "no_rtsp_url",
+                }
 
             inspect_input_url(camera, self.stream, input_url)
             self._cleanup_dir()
-            self.status = "starting"
-            self.failure_reason = None
+            self._set_state_locked("starting", "start_requested", failure_reason=None)
             self.camera_source = _camera_source(camera)
             self.progress_detected = False
             self.last_ffmpeg_progress_at = None
             self.stderr_progress_size = 0
+            self.last_frame = None
+            self.last_fps = None
+            self.last_speed = None
+            self.last_progress_time = None
+            self.too_slow_since = None
+            self.stop_reason = None
+            self.stopped_by_backend = False
             self.mode = self._choose_mode(camera, input_url, force_mode=force_mode)
             self.requested_mode = force_mode or "auto"
             cmd = build_hls_command(
@@ -291,8 +359,7 @@ class StreamInstance:
                     pass
                 self.proc = None
                 self.stderr_file = None
-                self.status = "failed"
-                self.failure_reason = "ffmpeg_start_failed"
+                self._set_state_locked("failed", "ffmpeg_start_failed", failure_reason="ffmpeg_start_failed")
                 self.last_error = str(exc)
                 logger.exception(
                     "Live Engine failed to start ffmpeg camera_id=%s stream=%s mode=%s command=%s",
@@ -303,7 +370,7 @@ class StreamInstance:
                 )
                 return {"ok": False, "error": str(exc), **self.snapshot(viewers=0)}
 
-            self.status = "running"
+            self._set_state_locked("starting", "ffmpeg_started", failure_reason=None)
             self.started_at = time.time()
             initial_timeout = max(int(settings.live_start_timeout_seconds), STARTUP_INITIAL_TIMEOUT_SECONDS)
             self.start_deadline = self.started_at + initial_timeout
@@ -324,7 +391,9 @@ class StreamInstance:
 
     def stop(self, reason: str, cleanup_files: bool = True):
         with self.lock:
-            self.status = "stopping"
+            self._set_state_locked("stopping", f"stopping:{reason}", failure_reason=None)
+            self.stop_reason = reason
+            self.stopped_by_backend = True
             proc = self.proc
             if proc and proc.poll() is None:
                 try:
@@ -361,8 +430,11 @@ class StreamInstance:
 
             self.proc = None
             self.stderr_file = None
-            self.status = "stopped" if reason.startswith("idle") or reason in {"stop_all", "client_stop"} else "failed"
-            self.failure_reason = None if self.status == "stopped" else reason
+            graceful = reason.startswith("idle") or reason in {"stop_all", "client_stop"}
+            if graceful:
+                self._set_state_locked("stopped", reason, failure_reason=None)
+            else:
+                self._set_state_locked("failed", reason, failure_reason=reason)
             self.started_at = None
             self.start_deadline = None
             self.start_hard_deadline = None
@@ -373,6 +445,7 @@ class StreamInstance:
     def maintain_startup(self) -> bool:
         with self.lock:
             if self.is_ready():
+                self._set_state_locked("ready", "hls_ready", failure_reason=None)
                 return False
 
             stderr_tail = self._read_log_tail()
@@ -402,7 +475,6 @@ class StreamInstance:
 
             if fatal_error:
                 self.stop(reason="rtsp_error", cleanup_files=True)
-                self.failure_reason = "rtsp_error"
                 self.last_error = stderr_tail
                 return True
 
@@ -421,26 +493,29 @@ class StreamInstance:
 
             last_progress = self.last_ffmpeg_progress_at or self.started_at or now
             hard_deadline = self.start_hard_deadline or (now + STARTUP_HARD_TIMEOUT_SECONDS)
+            if (
+                self.last_speed is not None
+                and self.last_speed < 0.25
+                and self.too_slow_since
+                and not self.is_ready()
+                and now - self.too_slow_since > SLOW_TRANSCODE_FAIL_SECONDS
+            ):
+                self.stop(reason="slow_transcode_no_hls", cleanup_files=True)
+                self.last_error = stderr_tail
+                return True
+
             if self.progress_detected and now - last_progress <= STARTUP_PROGRESS_GRACE_SECONDS and now <= hard_deadline:
-                self.status = "starting"
+                self._set_state_locked("starting", "ffmpeg_progress", failure_reason=None)
                 return False
 
             if now <= hard_deadline and self.playlist_path.exists():
-                self.status = "starting"
+                self._set_state_locked("starting", "hls_partial_output", failure_reason=None)
                 return False
 
             reason = "startup_timeout_no_progress" if not self.progress_detected else "startup_timeout_no_hls"
             self.stop(reason=reason, cleanup_files=True)
-            self.failure_reason = reason
             self.last_error = stderr_tail
             return True
-
-    def note_process_exit_if_needed(self) -> bool:
-        with self.lock:
-            if self.proc and self.proc.poll() is not None:
-                self._mark_process_exit_locked(reason="process_exit", cleanup_files=True)
-                return True
-            return False
 
     def snapshot(self, viewers: int) -> dict:
         now = time.time()
@@ -472,6 +547,16 @@ class StreamInstance:
             "startup_hard_deadline_seconds": round(self.start_hard_deadline - now, 2) if self.start_hard_deadline else None,
             "last_ffmpeg_progress_at": self.last_ffmpeg_progress_at,
             "ffmpeg_progress_detected": self.progress_detected,
+            "last_frame": self.last_frame,
+            "last_fps": self.last_fps,
+            "last_speed": self.last_speed,
+            "last_progress_time": self.last_progress_time,
+            "speed_state": self._speed_state(),
+            "too_slow_seconds": round(now - self.too_slow_since, 2) if self.too_slow_since else 0,
+            "stop_reason": self.stop_reason,
+            "stopped_by_backend": self.stopped_by_backend,
+            "state_changed_at": self.state_changed_at,
+            "last_state_transition": self.last_state_transition,
             "ready": ready,
             "playlist_path": str(self.playlist_path),
             "playlist_exists": self.playlist_path.exists(),
@@ -586,8 +671,20 @@ class StreamManager:
 
         result = self.ensure_stream(camera, stream, wait_for_ready=False)
         if not result.get("ok"):
-            self.close_viewer(viewer_id)
-            return result
+            if result.get("error_code") == "no_rtsp_url":
+                self.close_viewer(viewer_id)
+                return result
+
+            with self.lock:
+                viewers = self._viewer_count_locked(camera.id, stream)
+            snapshot = instance.snapshot(viewers=viewers)
+            return {
+                "ok": True,
+                "viewer_id": viewer_id,
+                "stream_url": f"/api/live/{camera.id}/{stream}/index.m3u8",
+                "recoverable_start_error": result.get("error") or snapshot.get("failure_reason"),
+                **snapshot,
+            }
 
         with self.lock:
             viewers = self._viewer_count_locked(camera.id, stream)
@@ -664,6 +761,9 @@ class StreamManager:
                 continue
             if instance.is_running() and now - instance.last_access > ttl:
                 instance.stop(reason=f"idle_ttl:{int(now - instance.last_access)}s", cleanup_files=True)
+            elif not instance.is_running() and now - instance.last_access > ttl:
+                with self.lock:
+                    self.streams.pop(key, None)
 
     def start_cleanup_worker(self):
         with self.lock:
