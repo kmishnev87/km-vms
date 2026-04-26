@@ -47,7 +47,6 @@ export default function TilePlayer({ cameraId, stream }) {
   const touchTimerRef = useRef(null);
   const attemptRef = useRef(0);
   const viewerIdRef = useRef(null);
-  const fallbackRequestedRef = useRef(false);
 
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
@@ -210,11 +209,6 @@ export default function TilePlayer({ cameraId, stream }) {
           return;
         }
 
-        if (readyState.item?.mode === "copy") {
-          await requestFallbackAndRetry(message);
-          return;
-        }
-
         if (readyState.failed) {
           failWithMessage(readyState.message || message);
           return;
@@ -225,70 +219,8 @@ export default function TilePlayer({ cameraId, stream }) {
           return;
         }
 
-        scheduleRetry(message);
+        failWithMessage(message);
       }, READY_POLL_INTERVAL_MS);
-    }
-
-    async function requestFallbackAndRetry(message) {
-      if (cancelled) return;
-
-      if (fallbackRequestedRef.current) {
-        scheduleRetry(message);
-        return;
-      }
-
-      fallbackRequestedRef.current = true;
-      setStatus("waiting");
-      setError("");
-
-      try {
-        await apiFetch("/live/fallback", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            camera_id: sourceKey.cameraId,
-            stream: sourceKey.stream,
-            reason: "hls_fatal_error",
-          }),
-        });
-
-        if (cancelled) return;
-
-        const readyState = await waitForReady();
-        if (!readyState.ready) {
-          if (readyState.item?.mode === "copy") {
-            await requestFallbackAndRetry(message);
-            return;
-          }
-          if (readyState.failed) {
-            failWithMessage(readyState.message || message);
-            return;
-          }
-          if (isStillStarting(readyState)) {
-            const token =
-              typeof window !== "undefined" ? localStorage.getItem("token") : null;
-            if (token) {
-              continueWaitingForReady(token, message);
-              return;
-            }
-          }
-          scheduleRetry(message);
-          return;
-        }
-
-        const token =
-          typeof window !== "undefined" ? localStorage.getItem("token") : null;
-        if (!token) {
-          setStatus("error");
-          setError(TEXT.noToken);
-          return;
-        }
-
-        const src = `${buildPlaylistUrl(token)}&fallback=${Date.now()}`;
-        await attachPlayer(src);
-      } catch (_) {
-        scheduleRetry(message);
-      }
     }
 
     async function attachPlayer(src) {
@@ -330,7 +262,7 @@ export default function TilePlayer({ cameraId, stream }) {
 
         hls.on(Hls.Events.ERROR, (_event, data) => {
           if (cancelled || !data?.fatal) return;
-          requestFallbackAndRetry(TEXT.failedPlay);
+          failWithMessage(TEXT.failedPlay);
         });
 
         hls.attachMedia(video);
@@ -350,7 +282,7 @@ export default function TilePlayer({ cameraId, stream }) {
 
         const onError = () => {
           if (!cancelled) {
-            requestFallbackAndRetry(TEXT.failedPlay);
+            failWithMessage(TEXT.failedPlay);
           }
         };
 
@@ -400,10 +332,6 @@ export default function TilePlayer({ cameraId, stream }) {
 
         const readyState = await waitForReady();
         if (!readyState.ready) {
-          if (readyState.item?.mode === "copy") {
-            await requestFallbackAndRetry(TEXT.failedStart);
-            return;
-          }
           if (readyState.failed) {
             failWithMessage(readyState.message || TEXT.failedStart);
             return;
@@ -412,7 +340,7 @@ export default function TilePlayer({ cameraId, stream }) {
             continueWaitingForReady(token, TEXT.failedStart);
             return;
           }
-          scheduleRetry(TEXT.failedStart);
+          failWithMessage(TEXT.failedStart);
           return;
         }
 
@@ -433,7 +361,6 @@ export default function TilePlayer({ cameraId, stream }) {
     }
 
     attemptRef.current = 0;
-    fallbackRequestedRef.current = false;
     startPlayback();
 
     return () => {

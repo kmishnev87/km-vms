@@ -52,7 +52,9 @@ export default function LoginPage() {
       }
 
       localStorage.setItem("token", data.access_token);
-      router.push("/live");
+      localStorage.removeItem("vms_login_redirect");
+      sessionStorage.removeItem("vms_login_redirect");
+      router.push("/");
       router.refresh();
     } catch (err) {
       setError(err?.message || "Ошибка входа");

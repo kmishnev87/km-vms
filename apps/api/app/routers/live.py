@@ -38,12 +38,6 @@ class LiveViewerPayload(BaseModel):
     stream: StreamKey = "main"
 
 
-class LiveFallbackPayload(BaseModel):
-    camera_id: int
-    stream: StreamKey = "main"
-    reason: str = "client_fallback"
-
-
 def _get_camera(db: Session, camera_id: int) -> Camera:
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:
@@ -134,7 +128,7 @@ def start_live_stream(
     current_user: User = Depends(get_current_user),
 ):
     camera = _get_camera(db, payload.camera_id)
-    result = manager.ensure_stream(camera, payload.stream)
+    result = manager.ensure_stream(camera, payload.stream, wait_for_ready=False)
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "Не удалось запустить live поток")
     return result
@@ -221,19 +215,6 @@ def touch_live_viewer(
         "touched": touched,
         "viewer_id": viewer_id,
     }
-
-
-@router.post("/fallback")
-def force_live_fallback(
-    payload: LiveFallbackPayload,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    camera = _get_camera(db, payload.camera_id)
-    result = manager.force_fallback(camera, payload.stream, reason=payload.reason)
-    if not result.get("ok"):
-        raise HTTPException(status_code=400, detail=result.get("error") or "Не удалось включить fallback")
-    return result
 
 
 @router.get("/debug")

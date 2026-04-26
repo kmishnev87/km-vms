@@ -8,6 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 from app.core.config import settings
 from app.models.camera import Camera
@@ -23,6 +24,15 @@ from app.services.live_engine_v2.ffmpeg import (
 logger = logging.getLogger(__name__)
 
 StreamKey = tuple[int, str]
+
+
+def _camera_source(camera: Camera):
+    return SimpleNamespace(
+        id=camera.id,
+        rtsp_main_url=camera.rtsp_main_url,
+        rtsp_sub_url=camera.rtsp_sub_url,
+        rtsp_transport=camera.rtsp_transport,
+    )
 
 
 @dataclass
@@ -53,6 +63,8 @@ class StreamInstance:
         self.last_fallback_reason: str | None = None
         self.failure_reason: str | None = None
         self.restart_count = 0
+        self.camera_source = None
+        self.start_deadline: float | None = None
 
     @property
     def sid(self) -> str:
@@ -99,7 +111,7 @@ class StreamInstance:
         except Exception:
             return ""
 
-    def _mark_process_exit_locked(self, reason: str = "process_exit", cleanup_files: bool = True):
+    def _mark_process_exit_locked(self, reason: str = "ffmpeg_exit", cleanup_files: bool = True):
         proc = self.proc
         if not proc:
             return
@@ -129,6 +141,7 @@ class StreamInstance:
         self.stderr_file = None
         self.status = "failed"
         self.started_at = None
+        self.start_deadline = None
 
         if cleanup_files:
             shutil.rmtree(self.stream_dir, ignore_errors=True)
@@ -141,13 +154,9 @@ class StreamInstance:
         if force_mode == "copy":
             return "copy"
 
-        if settings.live_transcode:
-            self.last_fallback_reason = "settings_live_transcode_enabled"
-            return "fallback_transcode"
-
-        requested_codec = (settings.live_video_codec or "copy").lower()
-        if requested_codec != "copy":
-            self.last_fallback_reason = f"settings_codec:{requested_codec}"
+        requested_policy = (settings.live_video_codec or "auto").lower()
+        if settings.live_transcode or requested_policy in {"libx264", "h264", "transcode", "fallback_transcode"}:
+            self.last_fallback_reason = "forced_transcode" if settings.live_transcode else f"settings_codec:{requested_policy}"
             return "fallback_transcode"
 
         probe = probe_video_codec(input_url, (camera.rtsp_transport or "tcp").lower())
@@ -188,6 +197,7 @@ class StreamInstance:
             self._cleanup_dir()
             self.status = "starting"
             self.failure_reason = None
+            self.camera_source = _camera_source(camera)
             self.mode = self._choose_mode(camera, input_url, force_mode=force_mode)
             self.requested_mode = force_mode or "auto"
             cmd = build_hls_command(
@@ -239,6 +249,7 @@ class StreamInstance:
 
             self.status = "running"
             self.started_at = time.time()
+            self.start_deadline = self.started_at + max(int(settings.live_start_timeout_seconds), 2)
             self.last_exit_code = None
             self.last_error = None
 
@@ -295,9 +306,50 @@ class StreamInstance:
             self.status = "stopped" if reason.startswith("idle") or reason in {"stop_all", "client_stop"} else "failed"
             self.failure_reason = None if self.status == "stopped" else reason
             self.started_at = None
+            self.start_deadline = None
 
             if cleanup_files:
                 shutil.rmtree(self.stream_dir, ignore_errors=True)
+
+    def maintain_startup(self) -> bool:
+        with self.lock:
+            if self.is_ready():
+                return False
+
+            if self.proc and self.proc.poll() is not None:
+                previous_mode = self.mode
+                source = self.camera_source
+                reason = "copy_failed" if previous_mode == "copy" else "transcode_failed"
+                self._mark_process_exit_locked(reason=reason, cleanup_files=True)
+                if previous_mode == "copy" and source:
+                    self.restart_count += 1
+                    self.last_fallback_reason = "copy_failed"
+                    self.start(source, force_mode="fallback_transcode")
+                    return True
+                return False
+
+            if not self.is_running() or not self.start_deadline:
+                return False
+
+            if time.time() <= self.start_deadline:
+                return False
+
+            source = self.camera_source
+            if self.mode == "copy" and source:
+                logger.warning(
+                    "Live Engine copy mode timed out before HLS ready, switching to transcode camera_id=%s stream=%s",
+                    self.camera_id,
+                    self.stream,
+                )
+                self.restart_count += 1
+                self.last_fallback_reason = "copy_not_ready"
+                self.stop(reason="copy_not_ready", cleanup_files=True)
+                self.start(source, force_mode="fallback_transcode")
+                return True
+
+            self.stop(reason="hls_not_ready", cleanup_files=True)
+            self.failure_reason = "transcode_failed" if self.mode == "fallback_transcode" else "hls_not_ready"
+            return True
 
     def note_process_exit_if_needed(self) -> bool:
         with self.lock:
@@ -417,23 +469,10 @@ class StreamManager:
         if wait_for_ready:
             deadline = time.time() + max(int(settings.live_start_timeout_seconds), 2)
             while time.time() < deadline:
-                if instance.note_process_exit_if_needed():
-                    if allow_fallback_retry and instance.mode == "copy":
-                        logger.warning(
-                            "Live Engine copy mode failed before ready, switching to fallback camera_id=%s stream=%s",
-                            camera.id,
-                            stream,
-                        )
-                        with instance.lock:
-                            instance.restart_count += 1
-                            instance.last_fallback_reason = "copy_failed_before_ready"
-                            result = instance.start(camera, force_mode="fallback_transcode")
-                        if not result.get("ok"):
-                            return result
-                        deadline = time.time() + max(int(settings.live_start_timeout_seconds), 2)
-                        allow_fallback_retry = False
-                        continue
-                    break
+                if instance.maintain_startup():
+                    deadline = time.time() + max(int(settings.live_start_timeout_seconds), 2)
+                    allow_fallback_retry = False
+                    continue
                 if instance.is_ready():
                     break
                 time.sleep(0.25)
@@ -524,36 +563,14 @@ class StreamManager:
                 instance.touch()
             return True
 
-    def force_fallback(self, camera: Camera, stream: str, reason: str) -> dict:
-        with self.lock:
-            instance = self._get_stream_locked(camera.id, stream)
-            viewers = self._viewer_count_locked(camera.id, stream)
-
-        with instance.lock:
-            instance.last_fallback_reason = reason or "client_fallback"
-            if instance.is_running():
-                instance.stop(reason=f"fallback_switch:{reason}", cleanup_files=True)
-            result = instance.start(camera, force_mode="fallback_transcode")
-
-        if not result.get("ok"):
-            return result
-
-        return {
-            "ok": True,
-            **instance.snapshot(viewers=viewers),
-            "stream_url": f"/api/live/{camera.id}/{stream}/index.m3u8",
-        }
-
     def get_playlist_file(self, camera_id: int, stream: str) -> Path:
         with self.lock:
             instance = self._get_stream_locked(camera_id, stream)
-        instance.touch()
         return instance.playlist_path
 
     def get_segment_file(self, camera_id: int, stream: str, filename: str) -> Path:
         with self.lock:
             instance = self._get_stream_locked(camera_id, stream)
-        instance.touch()
         return instance.stream_dir / filename
 
     def stop_stream(self, camera_id: int, stream: str, reason: str = "client_stop") -> bool:
@@ -583,7 +600,7 @@ class StreamManager:
             instances = list(self.streams.items())
 
         for key, instance in instances:
-            instance.note_process_exit_if_needed()
+            instance.maintain_startup()
             with self.lock:
                 viewers = self._viewer_count_locked(instance.camera_id, instance.stream)
             if viewers > 0:

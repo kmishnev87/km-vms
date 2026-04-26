@@ -5,27 +5,26 @@ import Layout from "../../components/Layout";
 import TilePlayer from "../../components/TilePlayer";
 import { apiFetch } from "../../lib/api";
 
-const GRID_OPTIONS = [
-  { value: 1, label: "1 окно" },
-  { value: 4, label: "4 окна" },
-  { value: 6, label: "6 окон" },
-  { value: 9, label: "9 окон" },
-];
+const STORAGE_KEY = "vms_live2_workspace_v1";
+const LEGACY_CANVAS_W = 1600;
+const LEGACY_CANVAS_H = 900;
+const MIN_TILE_W = 220;
+const MIN_TILE_H = 150;
+const DEFAULT_W_PCT = 0.28;
+const DEFAULT_H_PCT = 0.29;
 
-const LIVE_GRID_KEY = "vms_live_grid_count";
-const LIVE_TILES_KEY = "vms_live_tiles_v3";
+const TEXT = {
+  cameras: "\u041a\u0430\u043c\u0435\u0440\u044b",
+  align: "\u0412\u044b\u0440\u043e\u0432\u043d\u044f\u0442\u044c",
+  loadError: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043a\u0430\u043c\u0435\u0440\u044b",
+  empty: "\u041f\u0435\u0440\u0435\u0442\u0430\u0449\u0438\u0442\u0435 \u043a\u0430\u043c\u0435\u0440\u0443 \u043d\u0430 canvas",
+  camera: "\u041a\u0430\u043c\u0435\u0440\u0430",
+  close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
+  unavailable: "\u041a\u0430\u043c\u0435\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430",
+  resize: "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0430\u0437\u043c\u0435\u0440",
+};
 
-function getStatusBadge(camera) {
-  if (!camera?.enabled) return { text: "Отключена", cls: "warn" };
-  if (camera.status === "recording") return { text: "Идёт запись", cls: "ok" };
-  if (camera.status === "error") return { text: "Ошибка", cls: "err" };
-  if (camera.status === "enabled" || camera.status === "created") {
-    return { text: "Включена", cls: "ok" };
-  }
-  return { text: "Включена", cls: "ok" };
-}
-
-function detectAvailableStreams(camera) {
+function detectStreams(camera) {
   const result = [];
   if (camera?.rtsp_main_url) result.push({ key: "main", label: "Main" });
   if (camera?.rtsp_sub_url) result.push({ key: "sub", label: "Sub" });
@@ -33,169 +32,126 @@ function detectAvailableStreams(camera) {
   return result;
 }
 
-function getDefaultStream(camera) {
-  const available = detectAvailableStreams(camera);
-  const preferred = (camera?.default_live_stream || "").toLowerCase();
-
-  if (available.some((item) => item.key === "sub")) {
-    return "sub";
-  }
-
-  if (preferred && available.some((x) => x.key === preferred)) {
-    return preferred;
-  }
-
-  return available[0]?.key || "main";
+function defaultStream(camera) {
+  const streams = detectStreams(camera);
+  if (streams.some((item) => item.key === "sub")) return "sub";
+  return streams[0]?.key || "main";
 }
 
-function buildDefaultTiles(count, cameras) {
-  const tiles = [];
-  for (let i = 0; i < count; i += 1) {
-    const cam = cameras[i] || null;
-    tiles.push({
-      slot: i + 1,
-      cameraId: cam?.id ? String(cam.id) : "",
-      stream: cam ? getDefaultStream(cam) : "main",
-    });
-  }
-  return tiles;
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
 
-function readSavedGrid() {
-  if (typeof window === "undefined") return 4;
-  try {
-    const raw = localStorage.getItem(LIVE_GRID_KEY);
-    const parsed = Number(raw);
-    return [1, 4, 6, 9].includes(parsed) ? parsed : 4;
-  } catch {
-    return 4;
+function normalizeTile(tile) {
+  const hasPercent =
+    Number.isFinite(tile?.xPct) &&
+    Number.isFinite(tile?.yPct) &&
+    Number.isFinite(tile?.wPct) &&
+    Number.isFinite(tile?.hPct);
+
+  if (hasPercent) {
+    const wPct = clamp(Number(tile.wPct), 0.05, 1);
+    const hPct = clamp(Number(tile.hPct), 0.05, 1);
+    return {
+      id: String(tile.id || `${tile.cameraId}-${tile.stream}-${Date.now()}`),
+      cameraId: String(tile.cameraId || ""),
+      stream: tile.stream || "sub",
+      xPct: clamp(Number(tile.xPct), 0, 1 - wPct),
+      yPct: clamp(Number(tile.yPct), 0, 1 - hPct),
+      wPct,
+      hPct,
+      z: Number(tile.z || 2),
+    };
   }
+
+  const wPct = clamp(Number(tile?.w || 420) / LEGACY_CANVAS_W, 0.05, 1);
+  const hPct = clamp(Number(tile?.h || 260) / LEGACY_CANVAS_H, 0.05, 1);
+  return {
+    id: String(tile?.id || `${tile?.cameraId || "camera"}-${tile?.stream || "sub"}-${Date.now()}`),
+    cameraId: String(tile?.cameraId || ""),
+    stream: tile?.stream || "sub",
+    xPct: clamp(Number(tile?.x || 0) / LEGACY_CANVAS_W, 0, 1 - wPct),
+    yPct: clamp(Number(tile?.y || 0) / LEGACY_CANVAS_H, 0, 1 - hPct),
+    wPct,
+    hPct,
+    z: Number(tile?.z || 2),
+  };
 }
 
 function readSavedTiles() {
   if (typeof window === "undefined") return [];
   try {
-    const raw = localStorage.getItem(LIVE_TILES_KEY);
-    const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed : [];
+    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
+    return Array.isArray(parsed) ? parsed.map(normalizeTile) : [];
   } catch {
     return [];
   }
 }
 
-function saveGrid(value) {
+function saveTiles(tiles) {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(LIVE_GRID_KEY, String(value));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tiles.map(normalizeTile)));
   } catch {}
 }
 
-function saveTiles(value) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(LIVE_TILES_KEY, JSON.stringify(value));
-  } catch {}
+function nextZIndex(tiles) {
+  return tiles.reduce((max, tile) => Math.max(max, Number(tile.z || 2)), 2) + 1;
 }
 
-function reconcileTilesWithCameras(rawTiles, gridCount, cameras) {
-  const validIds = new Set(cameras.map((cam) => String(cam.id)));
-  const base = Array.isArray(rawTiles) && rawTiles.length
-    ? rawTiles.slice(0, gridCount)
-    : buildDefaultTiles(gridCount, cameras);
+function chooseAutoGrid(count, workspaceW, workspaceH) {
+  if (count <= 1) return { cols: 1, rows: 1 };
 
-  while (base.length < gridCount) {
-    base.push({
-      slot: base.length + 1,
-      cameraId: "",
-      stream: "main",
-    });
+  let best = { cols: count, rows: 1, score: -Infinity };
+  const workspaceRatio = workspaceW / Math.max(workspaceH, 1);
+
+  for (let cols = 1; cols <= count; cols += 1) {
+    const rows = Math.ceil(count / cols);
+    const cellRatio = (workspaceRatio * rows) / cols;
+    const areaScore = 1 / (cols * rows);
+    const shapePenalty = Math.abs(Math.log(Math.max(cellRatio, 0.01) / (16 / 9)));
+    const emptyPenalty = (cols * rows - count) * 0.08;
+    const score = areaScore - shapePenalty * 0.03 - emptyPenalty;
+
+    if (score > best.score) {
+      best = { cols, rows, score };
+    }
   }
 
-  return base.map((tile, idx) => {
-    const savedCameraId = String(tile?.cameraId || "");
-    const savedStream = String(tile?.stream || "").toLowerCase();
-
-    if (!savedCameraId || !validIds.has(savedCameraId)) {
-      return {
-        slot: idx + 1,
-        cameraId: "",
-        stream: "main",
-      };
-    }
-
-    const camera = cameras.find((cam) => String(cam.id) === savedCameraId) || null;
-    if (!camera) {
-      return {
-        slot: idx + 1,
-        cameraId: "",
-        stream: "main",
-      };
-    }
-
-    const streams = detectAvailableStreams(camera);
-    const finalStream = streams.some((s) => s.key === savedStream)
-      ? savedStream
-      : getDefaultStream(camera);
-
-    return {
-      slot: idx + 1,
-      cameraId: savedCameraId,
-      stream: finalStream,
-    };
-  });
+  return best;
 }
 
-export default function LivePage() {
+export default function Live2Page() {
+  const workspaceRef = useRef(null);
+  const hydratedRef = useRef(false);
   const [cameras, setCameras] = useState([]);
-  const [gridCount, setGridCount] = useState(4);
   const [tiles, setTiles] = useState([]);
   const [error, setError] = useState("");
+  const [dragState, setDragState] = useState(null);
+  const [resizeState, setResizeState] = useState(null);
 
-  const hydratedRef = useRef(false);
-
-  async function load() {
+  async function loadCameras() {
     try {
       setError("");
-      const cams = await apiFetch("/cameras");
-      setCameras(Array.isArray(cams) ? cams : []);
+      const data = await apiFetch("/cameras");
+      setCameras(Array.isArray(data) ? data : []);
     } catch (err) {
-      setError(err.message || "Ошибка загрузки камер");
+      setError(err.message || TEXT.loadError);
     }
   }
 
   useEffect(() => {
-    const savedGrid = readSavedGrid();
-    const savedTiles = readSavedTiles();
-
-    setGridCount(savedGrid);
-    setTiles(savedTiles);
+    setTiles(readSavedTiles());
     hydratedRef.current = true;
-
-    load();
-    const timer = setInterval(load, 5000);
+    loadCameras();
+    const timer = setInterval(loadCameras, 8000);
     return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
     if (!hydratedRef.current) return;
-    saveGrid(gridCount);
-  }, [gridCount]);
-
-  useEffect(() => {
-    if (!hydratedRef.current) return;
     saveTiles(tiles);
   }, [tiles]);
-
-  useEffect(() => {
-    if (!hydratedRef.current) return;
-    if (!cameras.length) return;
-
-    setTiles((prev) => {
-      const next = reconcileTilesWithCameras(prev, gridCount, cameras);
-      saveTiles(next);
-      return next;
-    });
-  }, [cameras, gridCount]);
 
   const cameraMap = useMemo(() => {
     const map = new Map();
@@ -203,155 +159,323 @@ export default function LivePage() {
     return map;
   }, [cameras]);
 
-  function patchTiles(nextTiles) {
-    setTiles(nextTiles);
-    saveTiles(nextTiles);
+  function workspaceBounds() {
+    return workspaceRef.current?.getBoundingClientRect() || null;
   }
 
-  function patchTile(slotIndex, patch) {
-    const nextTiles = tiles.map((tile, idx) =>
-      idx === slotIndex ? { ...tile, ...patch } : tile
+  function addTile(cameraId, stream, clientX, clientY) {
+    const bounds = workspaceBounds();
+    if (!bounds) return;
+
+    const minWPct = MIN_TILE_W / Math.max(bounds.width, 1);
+    const minHPct = MIN_TILE_H / Math.max(bounds.height, 1);
+    const wPct = clamp(DEFAULT_W_PCT, minWPct, 0.9);
+    const hPct = clamp(DEFAULT_H_PCT, minHPct, 0.9);
+    const xPct = clamp((clientX - bounds.left) / bounds.width - wPct / 2, 0, 1 - wPct);
+    const yPct = clamp((clientY - bounds.top) / bounds.height - 0.03, 0, 1 - hPct);
+
+    setTiles((prev) => [
+      ...prev,
+      {
+        id: `${cameraId}-${stream}-${Date.now()}`,
+        cameraId: String(cameraId),
+        stream,
+        xPct,
+        yPct,
+        wPct,
+        hPct,
+        z: nextZIndex(prev),
+      },
+    ]);
+  }
+
+  function updateTile(tileId, patch) {
+    setTiles((prev) =>
+      prev.map((tile) => (tile.id === tileId ? normalizeTile({ ...tile, ...patch }) : tile))
     );
-    patchTiles(nextTiles);
   }
 
-  function getTileCamera(tile) {
-    if (!tile?.cameraId) return null;
-    return cameraMap.get(String(tile.cameraId)) || null;
+  function removeTile(tileId) {
+    setTiles((prev) => prev.filter((tile) => tile.id !== tileId));
   }
+
+  function bringToFront(tileId) {
+    setTiles((prev) => {
+      const current = prev.find((tile) => tile.id === tileId);
+      if (!current) return prev;
+      const z = nextZIndex(prev);
+      if (Number(current.z || 2) === z - 1) return prev;
+      return prev.map((tile) => (tile.id === tileId ? { ...tile, z } : tile));
+    });
+  }
+
+  function autoLayoutTiles() {
+    setTiles((prev) => {
+      if (!prev.length) return prev;
+
+      const bounds = workspaceBounds();
+      const workspaceW = bounds?.width || 16;
+      const workspaceH = bounds?.height || 9;
+      const { cols, rows } = chooseAutoGrid(prev.length, workspaceW, workspaceH);
+      const wPct = 1 / cols;
+      const hPct = 1 / rows;
+
+      return prev.map((tile, idx) =>
+        normalizeTile({
+          ...tile,
+          xPct: (idx % cols) * wPct,
+          yPct: Math.floor(idx / cols) * hPct,
+          wPct,
+          hPct,
+          z: idx + 2,
+        })
+      );
+    });
+  }
+
+  function handleDrop(event) {
+    event.preventDefault();
+    const cameraId = event.dataTransfer.getData("application/x-camera-id");
+    const stream = event.dataTransfer.getData("application/x-camera-stream") || "sub";
+    if (cameraId) addTile(cameraId, stream, event.clientX, event.clientY);
+  }
+
+  function startMove(event, tile) {
+    if (event.button !== 0) return;
+    const bounds = workspaceBounds();
+    if (!bounds) return;
+
+    event.preventDefault();
+    bringToFront(tile.id);
+    setDragState({
+      id: tile.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      tileX: tile.xPct,
+      tileY: tile.yPct,
+      tileW: tile.wPct,
+      tileH: tile.hPct,
+      workspaceW: bounds.width,
+      workspaceH: bounds.height,
+    });
+  }
+
+  function startResize(event, tile) {
+    if (event.button !== 0) return;
+    const bounds = workspaceBounds();
+    if (!bounds) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    bringToFront(tile.id);
+    setResizeState({
+      id: tile.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      tileX: tile.xPct,
+      tileY: tile.yPct,
+      tileW: tile.wPct,
+      tileH: tile.hPct,
+      workspaceW: bounds.width,
+      workspaceH: bounds.height,
+    });
+  }
+
+  useEffect(() => {
+    if (!dragState) return undefined;
+
+    function onMove(event) {
+      const nextX = clamp(
+        dragState.tileX + (event.clientX - dragState.startX) / dragState.workspaceW,
+        0,
+        1 - dragState.tileW
+      );
+      const nextY = clamp(
+        dragState.tileY + (event.clientY - dragState.startY) / dragState.workspaceH,
+        0,
+        1 - dragState.tileH
+      );
+      updateTile(dragState.id, { xPct: nextX, yPct: nextY });
+    }
+
+    function onUp() {
+      setDragState(null);
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [dragState]);
+
+  useEffect(() => {
+    if (!resizeState) return undefined;
+
+    function onMove(event) {
+      const minWPct = MIN_TILE_W / Math.max(resizeState.workspaceW, 1);
+      const minHPct = MIN_TILE_H / Math.max(resizeState.workspaceH, 1);
+      const nextW = clamp(
+        resizeState.tileW + (event.clientX - resizeState.startX) / resizeState.workspaceW,
+        minWPct,
+        1 - resizeState.tileX
+      );
+      const nextH = clamp(
+        resizeState.tileH + (event.clientY - resizeState.startY) / resizeState.workspaceH,
+        minHPct,
+        1 - resizeState.tileY
+      );
+      updateTile(resizeState.id, { wPct: nextW, hPct: nextH });
+    }
+
+    function onUp() {
+      setResizeState(null);
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [resizeState]);
 
   return (
     <Layout>
-      {error ? (
-        <div className="badge err" style={{ marginBottom: 14 }}>
-          {error}
-        </div>
-      ) : null}
+      <div className="live2Shell">
+        <aside className="live2CameraPanel">
+          <div className="live2PanelHeader">
+            <div className="live2PanelTitle">{TEXT.cameras}</div>
+            <button
+              type="button"
+              className="live2AlignButton"
+              onClick={autoLayoutTiles}
+              disabled={!tiles.length}
+            >
+              {TEXT.align}
+            </button>
+          </div>
+          {error ? <div className="live2Error">{error}</div> : null}
 
-      <div className="card liveTopPanelCardCompact" style={{ marginBottom: 14 }}>
-        <div className="liveTopRowCompact">
-          <select
-            className="select liveGridSelectMini"
-            value={gridCount}
-            onChange={(e) => {
-              const nextGrid = Number(e.target.value);
-              setGridCount(nextGrid);
-              saveGrid(nextGrid);
-
-              const nextTiles = reconcileTilesWithCameras(tiles, nextGrid, cameras);
-              patchTiles(nextTiles);
-            }}
-          >
-            {GRID_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="liveCameraChipsWrapCompact">
-          {cameras.length ? (
-            cameras.map((camera) => {
-              const badge = getStatusBadge(camera);
-              const streams = detectAvailableStreams(camera);
+          <div className="live2CameraList">
+            {cameras.map((camera) => {
+              const streams = detectStreams(camera);
+              const initialStream = defaultStream(camera);
 
               return (
-                <div className="liveCameraChipCompact" key={camera.id}>
-                  <div className="liveCameraChipCompactTitle">{camera.name}</div>
-
-                  <div className="liveCameraChipCompactMetaRow">
-                    <div className="liveCameraChipCompactAddr">
-                      {camera.host}:{camera.port}
-                    </div>
-                    <span className={`badge ${badge.cls}`}>{badge.text}</span>
-                  </div>
-
-                  <div className="liveCameraChipCompactBadges">
-                    <span className="badge">{(camera.protocol || "").toUpperCase()}</span>
+                <div
+                  key={camera.id}
+                  className="live2CameraItem"
+                  draggable
+                  onDragStart={(event) => {
+                    event.dataTransfer.setData("application/x-camera-id", String(camera.id));
+                    event.dataTransfer.setData("application/x-camera-stream", initialStream);
+                    event.dataTransfer.effectAllowed = "copy";
+                  }}
+                >
+                  <div className="live2CameraName">{camera.name}</div>
+                  <div className="live2CameraMeta">{camera.host}:{camera.port}</div>
+                  <div className="live2StreamButtons">
                     {streams.map((stream) => (
-                      <span className="badge" key={stream.key}>
+                      <button
+                        key={stream.key}
+                        type="button"
+                        className="live2StreamButton"
+                        draggable
+                        onDragStart={(event) => {
+                          event.stopPropagation();
+                          event.dataTransfer.setData("application/x-camera-id", String(camera.id));
+                          event.dataTransfer.setData("application/x-camera-stream", stream.key);
+                          event.dataTransfer.effectAllowed = "copy";
+                        }}
+                      >
                         {stream.label}
-                      </span>
+                      </button>
                     ))}
                   </div>
                 </div>
               );
-            })
-          ) : (
-            <div className="liveCameraStripEmpty">Камеры не добавлены.</div>
-          )}
-        </div>
-      </div>
+            })}
+          </div>
+        </aside>
 
-      <div className="card liveWorkspaceCardCompact">
-        <div className={`liveGrid liveGrid${gridCount}`}>
-          {tiles.map((tile, idx) => {
-            const camera = getTileCamera(tile);
-            const streams = detectAvailableStreams(camera);
-            const currentStream = streams.some((s) => s.key === tile.stream)
+        <section
+          ref={workspaceRef}
+          className={`live2Workspace ${dragState || resizeState ? "isEditing" : ""}`}
+          onDragOver={(event) => {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }}
+          onDrop={handleDrop}
+        >
+          {!tiles.length ? (
+            <div className="live2Empty">
+              <div className="live2EmptyTitle">{TEXT.empty}</div>
+            </div>
+          ) : null}
+
+          {tiles.map((tile) => {
+            const camera = cameraMap.get(String(tile.cameraId));
+            const streams = detectStreams(camera);
+            const stream = streams.some((item) => item.key === tile.stream)
               ? tile.stream
-              : (camera ? getDefaultStream(camera) : "main");
+              : defaultStream(camera);
 
             return (
-              <div className="liveTile" key={tile.slot}>
-                <div className="liveTileCompactBar">
+              <div
+                key={tile.id}
+                className="live2Tile"
+                style={{
+                  left: `${tile.xPct * 100}%`,
+                  top: `${tile.yPct * 100}%`,
+                  width: `${tile.wPct * 100}%`,
+                  height: `${tile.hPct * 100}%`,
+                  zIndex: tile.z || 2,
+                }}
+                onPointerDown={(event) => startMove(event, tile)}
+              >
+                <div className="live2TileBar">
+                  <div className="live2TileTitle">{camera?.name || TEXT.camera}</div>
                   <select
-                    className="select liveSelectCompact liveCameraSelect"
-                    value={tile.cameraId}
-                    onChange={(e) => {
-                      const selectedId = e.target.value;
-                      const selectedCamera =
-                        cameraMap.get(String(selectedId)) || null;
-
-                      patchTile(idx, {
-                        cameraId: selectedId,
-                        stream: selectedCamera
-                          ? getDefaultStream(selectedCamera)
-                          : "main",
-                      });
-                    }}
+                    className="live2TileSelect"
+                    value={stream}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onChange={(event) => updateTile(tile.id, { stream: event.target.value })}
                   >
-                    <option value="">Выбери камеру</option>
-                    {cameras.map((cam) => (
-                      <option key={cam.id} value={cam.id}>
-                        {cam.name}
-                      </option>
+                    {streams.map((item) => (
+                      <option key={item.key} value={item.key}>{item.label}</option>
                     ))}
                   </select>
-
-                  <select
-                    className="select liveSelectCompact liveStreamSelect"
-                    value={currentStream}
-                    onChange={(e) => {
-                      patchTile(idx, { stream: e.target.value });
-                    }}
-                    disabled={!camera}
+                  <button
+                    type="button"
+                    className="live2IconButton"
+                    title={TEXT.close}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => removeTile(tile.id)}
                   >
-                    {streams.map((stream) => (
-                      <option key={stream.key} value={stream.key}>
-                        {stream.label}
-                      </option>
-                    ))}
-                  </select>
+                    {"\u00d7"}
+                  </button>
                 </div>
 
-                <div className="liveTileBody liveTileVideoBody">
+                <div className="live2TileVideo">
                   {camera ? (
-                    <TilePlayer
-                      cameraId={camera.id}
-                      stream={currentStream}
-                    />
+                    <TilePlayer cameraId={camera.id} stream={stream} />
                   ) : (
-                    <div className="liveTilePlaceholder">
-                      <div className="liveTileHint">Выбери камеру</div>
-                    </div>
+                    <div className="live2Missing">{TEXT.unavailable}</div>
                   )}
                 </div>
+
+                <button
+                  type="button"
+                  className="live2ResizeHandle"
+                  title={TEXT.resize}
+                  onPointerDown={(event) => startResize(event, tile)}
+                />
               </div>
             );
           })}
-        </div>
+        </section>
       </div>
     </Layout>
   );

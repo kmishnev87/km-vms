@@ -6,7 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 const items = [
   { href: "/cameras", label: "\u041a\u0430\u043c\u0435\u0440\u044b", iconSrc: "/icons/nav/cameras.png" },
   { href: "/recordings", label: "\u0417\u0430\u043f\u0438\u0441\u0438", iconSrc: "/icons/nav/records.png" },
-  { href: "/live2", label: "\u041e\u043d\u043b\u0430\u0439\u043d", iconSrc: "/icons/nav/online.png" },
+  { href: "/live", label: "\u041e\u043d\u043b\u0430\u0439\u043d", iconSrc: "/icons/nav/online.png" },
   { href: "/chronology2", label: "\u0425\u0440\u043e\u043d\u043e\u043b\u043e\u0433\u0438\u044f", iconSrc: "/icons/nav/chronology.png" },
 ];
 
@@ -16,6 +16,7 @@ export default function Layout({ children }) {
 
   function logout() {
     localStorage.removeItem("token");
+    localStorage.removeItem("vms_login_redirect");
     router.push("/login");
   }
 
