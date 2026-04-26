@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,7 +24,7 @@ class Settings(BaseSettings):
     live_viewer_ttl_seconds: int = 60
     live_cleanup_interval_seconds: int = 10
     live_start_timeout_seconds: int = 20
-    live_max_concurrent_transcodes: int = 2
+    live_max_concurrent_transcodes: int | None = 0
 
     admin_username: str = "admin"
     admin_password: str = "Admin_Change_Me_2026"
@@ -34,6 +35,15 @@ class Settings(BaseSettings):
         extra="ignore",
         case_sensitive=False,
     )
+
+    @field_validator("live_max_concurrent_transcodes", mode="before")
+    @classmethod
+    def parse_live_transcode_limit(cls, value):
+        if value is None:
+            return 0
+        if isinstance(value, str) and value.strip().lower() in {"", "0", "none", "null", "unlimited", "off"}:
+            return 0
+        return value
 
 
 settings = Settings()

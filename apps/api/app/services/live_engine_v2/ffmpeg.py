@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -11,6 +12,7 @@ from app.core.config import settings
 from app.models.camera import Camera
 
 logger = logging.getLogger(__name__)
+RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://[^:\s/@]+):([^@\s]+)@", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -33,16 +35,23 @@ def choose_input_url(camera: Camera, stream: str) -> str | None:
 def mask_url_password(url: str | None) -> str:
     if not url:
         return ""
+    return mask_rtsp_credentials(url)
+
+
+def mask_rtsp_credentials(text: str | None) -> str:
+    if not text:
+        return ""
+    masked = RTSP_CREDENTIALS_RE.sub(r"\1:***@", text)
 
     try:
-        parsed = urlsplit(url)
+        parsed = urlsplit(masked)
     except Exception:
-        return url
+        return masked
 
     if not parsed.password:
-        return url
+        return masked
 
-    return url.replace(f":{parsed.password}@", ":***@")
+    return masked.replace(f":{parsed.password}@", ":***@")
 
 
 def inspect_input_url(camera: Camera, stream: str, input_url: str):
@@ -85,7 +94,7 @@ def inspect_input_url(camera: Camera, stream: str, input_url: str):
 
 
 def command_text(cmd: list[str], input_url: str | None = None) -> str:
-    return shlex.join([mask_url_password(part) if input_url and part == input_url else part for part in cmd])
+    return mask_rtsp_credentials(shlex.join(cmd))
 
 
 def probe_video_codec(input_url: str, rtsp_transport: str) -> ProbeResult:
@@ -175,14 +184,20 @@ def build_hls_command(
     input_url: str,
     out_dir: Path,
     mode: str,
+    input_fps: float | None = None,
 ) -> list[str]:
     playlist = out_dir / "index.m3u8"
     segment_pattern = out_dir / "seg_%06d.ts"
     rtsp_transport = (camera.rtsp_transport or "tcp").lower()
+    hls_time = 2
 
     if mode == "copy":
         video_args = ["-c:v", "copy"]
     else:
+        fps_for_gop = input_fps if input_fps and input_fps > 0 else 25
+        fps_for_gop = max(1, min(float(fps_for_gop), 60))
+        gop_size = max(10, min(int(round(fps_for_gop * hls_time)), 120))
+        keyint_min = max(1, min(int(round(fps_for_gop)), gop_size))
         video_args = [
             "-c:v",
             "libx264",
@@ -195,9 +210,9 @@ def build_hls_command(
             "-fps_mode",
             "passthrough",
             "-g",
-            "50",
+            str(gop_size),
             "-keyint_min",
-            "25",
+            str(keyint_min),
             "-sc_threshold",
             "0",
         ]
@@ -239,7 +254,7 @@ def build_hls_command(
         "-f",
         "hls",
         "-hls_time",
-        "2",
+        str(hls_time),
         "-hls_list_size",
         "6",
         "-hls_flags",

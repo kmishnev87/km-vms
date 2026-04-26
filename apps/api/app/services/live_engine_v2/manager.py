@@ -19,6 +19,7 @@ from app.services.live_engine_v2.ffmpeg import (
     choose_input_url,
     command_text,
     inspect_input_url,
+    mask_rtsp_credentials,
     probe_video_codec,
 )
 
@@ -70,7 +71,7 @@ def _read_proc_cmdline(pid: int | None) -> str:
         raw = path.read_bytes()
     except Exception:
         return ""
-    return raw.replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+    return mask_rtsp_credentials(raw.replace(b"\x00", b" ").decode("utf-8", errors="replace").strip())
 
 
 def _read_proc_state(pid: int | None) -> str:
@@ -223,7 +224,7 @@ class StreamInstance:
         if not path.exists():
             return ""
         try:
-            return path.read_text(encoding="utf-8", errors="replace")[-max_chars:]
+            return mask_rtsp_credentials(path.read_text(encoding="utf-8", errors="replace")[-max_chars:])
         except Exception:
             return ""
 
@@ -329,7 +330,7 @@ class StreamInstance:
 
     def _choose_mode(self, camera: Camera, input_url: str, force_mode: str | None = None) -> str:
         probe = probe_video_codec(input_url, (camera.rtsp_transport or "tcp").lower())
-        self.last_error = probe.error
+        self.last_error = mask_rtsp_credentials(probe.error)
         self.input_codec = probe.codec
         self.input_width = probe.width
         self.input_height = probe.height
@@ -435,6 +436,7 @@ class StreamInstance:
                 input_url=input_url,
                 out_dir=self.stream_dir,
                 mode="copy" if self.mode == "copy" else "fallback_transcode",
+                input_fps=self.input_fps,
             )
             self.cmd_text = command_text(cmd, input_url)
             self.stderr_path = self.default_stderr_path
@@ -465,7 +467,7 @@ class StreamInstance:
                 self.proc = None
                 self.stderr_file = None
                 self._set_state_locked("failed", "ffmpeg_start_failed", failure_reason="ffmpeg_start_failed")
-                self.last_error = str(exc)
+                self.last_error = mask_rtsp_credentials(str(exc))
                 logger.exception(
                     "Live Engine failed to start ffmpeg camera_id=%s stream=%s mode=%s command=%s",
                     camera.id,
@@ -691,7 +693,7 @@ class StreamInstance:
             "exit_code": self.last_exit_code,
             "fallback_reason": self.last_fallback_reason,
             "failure_reason": self.failure_reason,
-            "last_error": self.last_error,
+            "last_error": mask_rtsp_credentials(self.last_error),
             "restart_count": self.restart_count,
             "stderr_tail": self._read_log_tail() or self.last_error,
             "command": self.cmd_text,
@@ -759,13 +761,15 @@ class StreamManager:
                 )
                 self.viewers.pop(viewer_id, None)
 
-    def ensure_stream(self, camera: Camera, stream: str) -> dict:
+    def start_or_reuse_stream(self, camera: Camera, stream: str) -> dict:
         with self.lock:
             instance = self._get_stream_locked(camera.id, stream)
             viewers = self._viewer_count_locked(camera.id, stream)
+            transcode_limit = int(settings.live_max_concurrent_transcodes or 0)
             transcode_allowed = (
-                self._running_transcodes_locked(exclude_key=self._key(camera.id, stream))
-                < max(int(settings.live_max_concurrent_transcodes), 0)
+                True
+                if transcode_limit <= 0
+                else self._running_transcodes_locked(exclude_key=self._key(camera.id, stream)) < transcode_limit
             )
 
         result = instance.start(camera, transcode_allowed=transcode_allowed)
@@ -794,7 +798,7 @@ class StreamManager:
             )
             viewers = self._viewer_count_locked(camera.id, stream)
 
-        result = self.ensure_stream(camera, stream)
+        result = self.start_or_reuse_stream(camera, stream)
         if not result.get("ok"):
             if result.get("error_code") in {"no_rtsp_url", "resource_limit"}:
                 self.close_viewer(viewer_id)
