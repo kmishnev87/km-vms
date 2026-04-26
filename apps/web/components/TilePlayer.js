@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import { apiFetch } from "../lib/api";
 
-const MAX_RETRIES = 4;
 const READY_POLL_INTERVAL_MS = 700;
 const READY_TIMEOUT_MS = 210000;
 const VIEWER_TOUCH_INTERVAL_MS = 15000;
@@ -45,7 +44,6 @@ export default function TilePlayer({ cameraId, stream }) {
   const hlsRef = useRef(null);
   const retryTimerRef = useRef(null);
   const touchTimerRef = useRef(null);
-  const attemptRef = useRef(0);
   const viewerIdRef = useRef(null);
 
   const [status, setStatus] = useState("idle");
@@ -159,25 +157,6 @@ export default function TilePlayer({ cameraId, stream }) {
       return { ready: false, failed: false, message: TEXT.failedStart, item: lastItem };
     }
 
-    function scheduleRetry(message) {
-      if (cancelled) return;
-
-      if (attemptRef.current >= MAX_RETRIES) {
-        setStatus("error");
-        setError(message);
-        return;
-      }
-
-      const delay = 1200 + attemptRef.current * 1000;
-      attemptRef.current += 1;
-      setStatus("loading");
-      setError("");
-      destroyPlayer();
-      retryTimerRef.current = setTimeout(() => {
-        startPlayback();
-      }, delay);
-    }
-
     function failWithMessage(message) {
       destroyPlayer();
       setStatus("error");
@@ -256,7 +235,6 @@ export default function TilePlayer({ cameraId, stream }) {
           if (cancelled) return;
           setStatus("playing");
           setError("");
-          attemptRef.current = 0;
           video.play().catch(() => {});
         });
 
@@ -276,7 +254,6 @@ export default function TilePlayer({ cameraId, stream }) {
           if (cancelled) return;
           setStatus("playing");
           setError("");
-          attemptRef.current = 0;
           video.play().catch(() => {});
         };
 
@@ -355,12 +332,11 @@ export default function TilePlayer({ cameraId, stream }) {
             failWithMessage(message);
             return;
           }
-          scheduleRetry(message);
+          failWithMessage(message);
         }
       }
     }
 
-    attemptRef.current = 0;
     startPlayback();
 
     return () => {

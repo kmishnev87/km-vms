@@ -22,6 +22,7 @@ const TEXT = {
   close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
   unavailable: "\u041a\u0430\u043c\u0435\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430",
   resize: "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0430\u0437\u043c\u0435\u0440",
+  duplicate: "\u041a\u0430\u043c\u0435\u0440\u0430 \u0443\u0436\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0430",
 };
 
 function detectStreams(camera) {
@@ -82,7 +83,7 @@ function readSavedTiles() {
   if (typeof window === "undefined") return [];
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]");
-    return Array.isArray(parsed) ? parsed.map(normalizeTile) : [];
+    return Array.isArray(parsed) ? dedupeTiles(parsed.map(normalizeTile)) : [];
   } catch {
     return [];
   }
@@ -91,8 +92,19 @@ function readSavedTiles() {
 function saveTiles(tiles) {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(tiles.map(normalizeTile)));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(dedupeTiles(tiles.map(normalizeTile))));
   } catch {}
+}
+
+function dedupeTiles(tiles) {
+  const seen = new Set();
+  return tiles.filter((tile) => {
+    const cameraId = String(tile?.cameraId || "");
+    if (!cameraId) return true;
+    if (seen.has(cameraId)) return false;
+    seen.add(cameraId);
+    return true;
+  });
 }
 
 function nextZIndex(tiles) {
@@ -166,6 +178,7 @@ export default function LivePage() {
   function addTile(cameraId, stream, clientX, clientY) {
     const bounds = workspaceBounds();
     if (!bounds) return;
+    const normalizedCameraId = String(cameraId || "");
 
     const minWPct = MIN_TILE_W / Math.max(bounds.width, 1);
     const minHPct = MIN_TILE_H / Math.max(bounds.height, 1);
@@ -174,24 +187,31 @@ export default function LivePage() {
     const xPct = clamp((clientX - bounds.left) / bounds.width - wPct / 2, 0, 1 - wPct);
     const yPct = clamp((clientY - bounds.top) / bounds.height - 0.03, 0, 1 - hPct);
 
-    setTiles((prev) => [
-      ...prev,
-      {
-        id: `${cameraId}-${stream}-${Date.now()}`,
-        cameraId: String(cameraId),
-        stream,
-        xPct,
-        yPct,
-        wPct,
-        hPct,
-        z: nextZIndex(prev),
-      },
-    ]);
+    setTiles((prev) => {
+      if (prev.some((tile) => String(tile.cameraId || "") === normalizedCameraId)) {
+        setError(TEXT.duplicate);
+        return prev;
+      }
+      setError("");
+      return [
+        ...prev,
+        {
+          id: `${cameraId}-${stream}-${Date.now()}`,
+          cameraId: normalizedCameraId,
+          stream,
+          xPct,
+          yPct,
+          wPct,
+          hPct,
+          z: nextZIndex(prev),
+        },
+      ];
+    });
   }
 
   function updateTile(tileId, patch) {
     setTiles((prev) =>
-      prev.map((tile) => (tile.id === tileId ? normalizeTile({ ...tile, ...patch }) : tile))
+      dedupeTiles(prev.map((tile) => (tile.id === tileId ? normalizeTile({ ...tile, ...patch }) : tile)))
     );
   }
 
@@ -211,16 +231,17 @@ export default function LivePage() {
 
   function autoLayoutTiles() {
     setTiles((prev) => {
-      if (!prev.length) return prev;
+      const source = dedupeTiles(prev);
+      if (!source.length) return source;
 
       const bounds = workspaceBounds();
       const workspaceW = bounds?.width || 16;
       const workspaceH = bounds?.height || 9;
-      const { cols, rows } = chooseAutoGrid(prev.length, workspaceW, workspaceH);
+      const { cols, rows } = chooseAutoGrid(source.length, workspaceW, workspaceH);
       const wPct = 1 / cols;
       const hPct = 1 / rows;
 
-      return prev.map((tile, idx) =>
+      return source.map((tile, idx) =>
         normalizeTile({
           ...tile,
           xPct: (idx % cols) * wPct,

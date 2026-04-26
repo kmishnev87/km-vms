@@ -625,12 +625,7 @@ class StreamManager:
                 )
                 self.viewers.pop(viewer_id, None)
 
-    def ensure_stream(
-        self,
-        camera: Camera,
-        stream: str,
-        wait_for_ready: bool = False,
-    ) -> dict:
+    def ensure_stream(self, camera: Camera, stream: str) -> dict:
         with self.lock:
             instance = self._get_stream_locked(camera.id, stream)
             viewers = self._viewer_count_locked(camera.id, stream)
@@ -640,14 +635,6 @@ class StreamManager:
             return result
 
         snapshot = instance.snapshot(viewers=viewers)
-        if wait_for_ready and not snapshot["ready"]:
-            return {
-                "ok": False,
-                "error": snapshot.get("failure_reason") or snapshot.get("last_error") or "Live stream is not ready",
-                **snapshot,
-                "stream_url": f"/api/live/{camera.id}/{stream}/index.m3u8",
-            }
-
         return {
             "ok": True,
             **snapshot,
@@ -669,7 +656,7 @@ class StreamManager:
             )
             viewers = self._viewer_count_locked(camera.id, stream)
 
-        result = self.ensure_stream(camera, stream, wait_for_ready=False)
+        result = self.ensure_stream(camera, stream)
         if not result.get("ok"):
             if result.get("error_code") == "no_rtsp_url":
                 self.close_viewer(viewer_id)
