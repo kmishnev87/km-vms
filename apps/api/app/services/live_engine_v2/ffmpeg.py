@@ -190,32 +190,33 @@ def build_hls_command(
     segment_pattern = out_dir / "seg_%06d.ts"
     rtsp_transport = (camera.rtsp_transport or "tcp").lower()
     hls_time = 2
+    transcode_profile = (settings.live_transcode_profile or "stable").lower()
 
     if mode == "copy":
         video_args = ["-c:v", "copy"]
     else:
         fps_for_gop = input_fps if input_fps and input_fps > 0 else 25
-        fps_for_gop = max(1, min(float(fps_for_gop), 60))
-        gop_size = max(10, min(int(round(fps_for_gop * hls_time)), 120))
-        keyint_min = max(1, min(int(round(fps_for_gop)), gop_size))
+        fps_for_gop = max(10, min(float(fps_for_gop), 60))
+        gop_size = max(20, min(int(round(fps_for_gop * hls_time)), 120))
+        keyint_min = max(10, min(int(round(fps_for_gop)), gop_size))
         video_args = [
             "-c:v",
             "libx264",
             "-preset",
             "veryfast",
-            "-tune",
-            "zerolatency",
             "-pix_fmt",
             "yuv420p",
-            "-fps_mode",
-            "passthrough",
             "-g",
             str(gop_size),
             "-keyint_min",
             str(keyint_min),
             "-sc_threshold",
             "0",
+            "-force_key_frames",
+            f"expr:gte(t,n_forced*{hls_time})",
         ]
+        if transcode_profile in {"low_latency", "zerolatency"}:
+            video_args[6:6] = ["-tune", "zerolatency"]
 
     audio_mode = (settings.live_audio_mode or "none").lower()
     if audio_mode in {"none", "off", "disable", "disabled"}:
@@ -231,10 +232,6 @@ def build_hls_command(
         "-nostdin",
         "-loglevel",
         "info",
-        "-fflags",
-        "nobuffer",
-        "-flags",
-        "low_delay",
         "-rtsp_transport",
         rtsp_transport,
         "-timeout",
@@ -258,7 +255,7 @@ def build_hls_command(
         "-hls_list_size",
         "6",
         "-hls_flags",
-        "delete_segments+omit_endlist+program_date_time",
+        "delete_segments+omit_endlist+program_date_time+independent_segments",
         "-hls_segment_filename",
         str(segment_pattern),
         str(playlist),
