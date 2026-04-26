@@ -34,7 +34,9 @@ export async function apiFetch(path, options = {}) {
     try {
       if (isJson) {
         const data = await response.json();
-        detail = data?.detail || JSON.stringify(data);
+        detail = typeof data?.detail === "string"
+          ? data.detail
+          : JSON.stringify(data);
       } else {
         detail = await response.text();
       }
@@ -59,7 +61,9 @@ export async function apiFetchBlob(path, options = {}) {
       const contentType = response.headers.get("content-type") || "";
       if (contentType.includes("application/json")) {
         const data = await response.json();
-        detail = data?.detail || JSON.stringify(data);
+        detail = typeof data?.detail === "string"
+          ? data.detail
+          : JSON.stringify(data);
       } else {
         detail = await response.text();
       }

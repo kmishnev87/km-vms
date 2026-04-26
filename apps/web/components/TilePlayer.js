@@ -19,6 +19,22 @@ const TEXT = {
   doubleClick: "\u0414\u0432\u043e\u0439\u043d\u043e\u0439 \u043a\u043b\u0438\u043a \u2014 \u043d\u0430 \u0432\u0435\u0441\u044c \u044d\u043a\u0440\u0430\u043d",
 };
 
+function extractErrorMessage(err, fallback) {
+  const raw = err?.message || "";
+  if (!raw) return fallback;
+
+  try {
+    const parsed = JSON.parse(raw);
+    const detail = parsed?.detail;
+    if (typeof detail === "string") return detail;
+    if (detail?.message) return detail.message;
+    if (detail?.debug?.failure_reason) return detail.debug.failure_reason;
+    if (detail?.debug?.last_error) return detail.debug.last_error;
+  } catch (_) {}
+
+  return raw || fallback;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -147,6 +163,12 @@ export default function TilePlayer({ cameraId, stream }) {
       retryTimerRef.current = setTimeout(() => {
         startPlayback();
       }, delay);
+    }
+
+    function failWithMessage(message) {
+      destroyPlayer();
+      setStatus("error");
+      setError(message || TEXT.failedStart);
     }
 
     async function requestFallbackAndRetry(message) {
@@ -314,7 +336,12 @@ export default function TilePlayer({ cameraId, stream }) {
         }
       } catch (err) {
         if (!cancelled) {
-          scheduleRetry(err?.message || TEXT.failedStart);
+          const message = extractErrorMessage(err, TEXT.failedStart);
+          if (String(message).includes("Live stream is not ready") || String(message).includes("process_exit")) {
+            failWithMessage(message);
+            return;
+          }
+          scheduleRetry(message);
         }
       }
     }

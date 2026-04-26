@@ -45,12 +45,13 @@ class StreamInstance:
         self.cmd_text = ""
         self.mode = "fallback_transcode"
         self.requested_mode = "auto"
-        self.status = "idle"
+        self.status = "stopped"
         self.started_at: float | None = None
         self.last_access = time.time()
         self.last_exit_code: int | None = None
         self.last_error: str | None = None
         self.last_fallback_reason: str | None = None
+        self.failure_reason: str | None = None
         self.restart_count = 0
 
     @property
@@ -98,6 +99,37 @@ class StreamInstance:
         except Exception:
             return ""
 
+    def _mark_process_exit_locked(self, reason: str = "process_exit"):
+        proc = self.proc
+        if not proc:
+            return
+
+        if self.stderr_file:
+            try:
+                self.stderr_file.flush()
+                self.stderr_file.close()
+            except Exception:
+                pass
+
+        self.last_exit_code = proc.poll()
+        self.failure_reason = reason
+        self.last_error = self._read_log_tail()
+        logger.warning(
+            "Live Engine ffmpeg exited camera_id=%s stream=%s pid=%s reason=%s exit_code=%s mode=%s command=%s stderr_tail=%s",
+            self.camera_id,
+            self.stream,
+            proc.pid,
+            reason,
+            self.last_exit_code,
+            self.mode,
+            self.cmd_text,
+            self.last_error,
+        )
+        self.proc = None
+        self.stderr_file = None
+        self.status = "failed"
+        self.started_at = None
+
     def _choose_mode(self, camera: Camera, input_url: str, force_mode: str | None = None) -> str:
         if force_mode == "fallback_transcode":
             self.last_fallback_reason = self.last_fallback_reason or "forced_fallback"
@@ -138,7 +170,11 @@ class StreamInstance:
                 return self.snapshot(viewers=0)
 
             if self.proc:
-                self.stop(reason="restart_dead_process", cleanup_files=True)
+                if self.proc.poll() is not None:
+                    self._mark_process_exit_locked(reason="restart_dead_process")
+                    self._cleanup_dir()
+                else:
+                    self.stop(reason="restart_running_process", cleanup_files=True)
 
             input_url = choose_input_url(camera, self.stream)
             if not input_url:
@@ -148,6 +184,8 @@ class StreamInstance:
 
             inspect_input_url(camera, self.stream, input_url)
             self._cleanup_dir()
+            self.status = "starting"
+            self.failure_reason = None
             self.mode = self._choose_mode(camera, input_url, force_mode=force_mode)
             self.requested_mode = force_mode or "auto"
             cmd = build_hls_command(
@@ -193,6 +231,7 @@ class StreamInstance:
 
     def stop(self, reason: str, cleanup_files: bool = True):
         with self.lock:
+            self.status = "stopping"
             proc = self.proc
             if proc and proc.poll() is None:
                 try:
@@ -229,7 +268,8 @@ class StreamInstance:
 
             self.proc = None
             self.stderr_file = None
-            self.status = "idle" if reason.startswith("idle") or reason in {"stop_all", "client_stop"} else "failed"
+            self.status = "stopped" if reason.startswith("idle") or reason in {"stop_all", "client_stop"} else "failed"
+            self.failure_reason = None if self.status == "stopped" else reason
             self.started_at = None
 
             if cleanup_files:
@@ -238,32 +278,46 @@ class StreamInstance:
     def note_process_exit_if_needed(self) -> bool:
         with self.lock:
             if self.proc and self.proc.poll() is not None:
-                self.stop(reason="process_exit", cleanup_files=True)
+                self._mark_process_exit_locked(reason="process_exit")
                 return True
             return False
 
     def snapshot(self, viewers: int) -> dict:
         now = time.time()
         running = self.is_running()
+        ready = self.is_ready()
+        if running and ready:
+            status = "ready"
+        elif running:
+            status = self.status if self.status in {"starting", "restarting"} else "starting"
+        else:
+            status = self.status
         return {
+            "stream_key": self.sid,
             "camera_id": self.camera_id,
             "stream": self.stream,
+            "stream_type": self.stream,
             "pid": self.proc.pid if running and self.proc else None,
             "running": running,
-            "status": self.status,
-            "mode": self.mode,
+            "status": status,
+            "mode": "copy" if self.mode == "copy" else "transcode",
             "requested_mode": self.requested_mode,
             "viewers": viewers,
             "started_at": self.started_at,
             "last_access": self.last_access,
             "uptime_seconds": round(now - self.started_at, 2) if self.started_at else 0,
             "idle_seconds": round(now - self.last_access, 2),
-            "ready": self.is_ready(),
+            "ready": ready,
+            "playlist_path": str(self.playlist_path),
             "playlist_exists": self.playlist_path.exists(),
             "playlist_size": self.playlist_path.stat().st_size if self.playlist_path.exists() else 0,
+            "segment_count": len(list(self.stream_dir.glob("seg_*.ts"))) if self.stream_dir.exists() else 0,
             "segments_count": len(list(self.stream_dir.glob("seg_*.ts"))) if self.stream_dir.exists() else 0,
             "exit_code": self.last_exit_code,
             "fallback_reason": self.last_fallback_reason,
+            "failure_reason": self.failure_reason,
+            "last_error": self.last_error,
+            "restart_count": self.restart_count,
             "stderr_tail": self._read_log_tail(),
             "command": self.cmd_text,
         }
@@ -292,6 +346,21 @@ class StreamManager:
         key = self._key(camera_id, stream)
         return sum(1 for viewer in self.viewers.values() if self._key(viewer.camera_id, viewer.stream) == key)
 
+    def _viewer_details_locked(self, camera_id: int, stream: str) -> list[dict]:
+        now = time.time()
+        key = self._key(camera_id, stream)
+        return [
+            {
+                "id": viewer.id,
+                "created_at": viewer.created_at,
+                "last_heartbeat": viewer.last_seen,
+                "age_seconds": round(now - viewer.created_at, 2),
+                "idle_seconds": round(now - viewer.last_seen, 2),
+            }
+            for viewer in self.viewers.values()
+            if self._key(viewer.camera_id, viewer.stream) == key
+        ]
+
     def _cleanup_stale_viewers_locked(self, now: float | None = None):
         now = now or time.time()
         ttl = max(int(settings.live_viewer_ttl_seconds), 15)
@@ -306,7 +375,13 @@ class StreamManager:
                 )
                 self.viewers.pop(viewer_id, None)
 
-    def ensure_stream(self, camera: Camera, stream: str, wait_for_ready: bool = True) -> dict:
+    def ensure_stream(
+        self,
+        camera: Camera,
+        stream: str,
+        wait_for_ready: bool = True,
+        allow_fallback_retry: bool = True,
+    ) -> dict:
         with self.lock:
             instance = self._get_stream_locked(camera.id, stream)
             viewers = self._viewer_count_locked(camera.id, stream)
@@ -319,12 +394,55 @@ class StreamManager:
             deadline = time.time() + max(int(settings.live_start_timeout_seconds), 2)
             while time.time() < deadline:
                 if instance.note_process_exit_if_needed():
+                    if allow_fallback_retry and instance.mode == "copy":
+                        logger.warning(
+                            "Live Engine copy mode failed before ready, switching to fallback camera_id=%s stream=%s",
+                            camera.id,
+                            stream,
+                        )
+                        with instance.lock:
+                            instance.restart_count += 1
+                            instance.last_fallback_reason = "copy_failed_before_ready"
+                            result = instance.start(camera, force_mode="fallback_transcode")
+                        if not result.get("ok"):
+                            return result
+                        deadline = time.time() + max(int(settings.live_start_timeout_seconds), 2)
+                        allow_fallback_retry = False
+                        continue
                     break
                 if instance.is_ready():
                     break
                 time.sleep(0.25)
 
         snapshot = instance.snapshot(viewers=viewers)
+        if wait_for_ready and not snapshot["ready"]:
+            if allow_fallback_retry and instance.mode == "copy" and snapshot["running"]:
+                logger.warning(
+                    "Live Engine copy mode did not become ready, switching to fallback camera_id=%s stream=%s",
+                    camera.id,
+                    stream,
+                )
+                with instance.lock:
+                    instance.restart_count += 1
+                    instance.last_fallback_reason = "copy_not_ready"
+                    instance.stop(reason="copy_not_ready", cleanup_files=True)
+                    result = instance.start(camera, force_mode="fallback_transcode")
+                if not result.get("ok"):
+                    return result
+                return self.ensure_stream(
+                    camera,
+                    stream,
+                    wait_for_ready=True,
+                    allow_fallback_retry=False,
+                )
+
+            return {
+                "ok": False,
+                "error": snapshot.get("failure_reason") or snapshot.get("last_error") or "Live stream is not ready",
+                **snapshot,
+                "stream_url": f"/api/live/{camera.id}/{stream}/index.m3u8",
+            }
+
         return {
             "ok": True,
             **snapshot,
@@ -351,6 +469,8 @@ class StreamManager:
             self.close_viewer(viewer_id)
             return result
 
+        with self.lock:
+            viewers = self._viewer_count_locked(camera.id, stream)
         snapshot = instance.snapshot(viewers=viewers)
         return {
             "ok": True,
@@ -490,7 +610,15 @@ class StreamManager:
                 continue
             with self.lock:
                 viewers = self._viewer_count_locked(instance.camera_id, instance.stream)
-            result.append(instance.snapshot(viewers=viewers))
+                viewer_details = self._viewer_details_locked(instance.camera_id, instance.stream)
+            item = instance.snapshot(viewers=viewers)
+            item["viewer_ids"] = [viewer["id"] for viewer in viewer_details]
+            item["viewer_sessions"] = viewer_details
+            item["last_heartbeat"] = max(
+                [viewer["last_heartbeat"] for viewer in viewer_details],
+                default=None,
+            )
+            result.append(item)
         return result
 
     def debug(self, camera_id: int | None = None, stream: str | None = None) -> dict:
