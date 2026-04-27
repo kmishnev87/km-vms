@@ -200,10 +200,7 @@ textarea {
   min-height: 230px;
   border: 1px solid #dbe3ef;
   border-radius: 14px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.88)),
-    var(--dashboard-card-bg, none) center / cover no-repeat,
-    #ffffff;
+  background: #ffffff;
   padding: 16px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px;
@@ -213,9 +210,31 @@ textarea {
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
+.dashboardCard::before {
+  content: "";
+  position: absolute;
+  right: -10px;
+  top: 50%;
+  width: 58%;
+  height: 92%;
+  background: var(--dashboard-card-bg, none) center right / contain no-repeat;
+  opacity: 0.28;
+  transform: translateY(-50%);
+  filter: saturate(1.08) contrast(1.08);
+  pointer-events: none;
+}
+
+.dashboardCard::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.92) 56%, rgba(255, 255, 255, 0.68) 100%);
+  pointer-events: none;
+}
+
 .dashboardCard > * {
   position: relative;
-  z-index: 1;
+  z-index: 2;
 }
 
 .dashboardCard:hover {
@@ -388,9 +407,9 @@ textarea {
 
 .settingsPage {
   width: 100%;
-  max-width: 1400px;
+  max-width: 1180px;
   margin: 0 auto;
-  padding: 10px 12px 18px;
+  padding: 8px 12px 18px;
 }
 
 .settingsHeader {
@@ -405,22 +424,26 @@ textarea {
 }
 
 .settingsTitleBlock > img {
-  width: 46px;
-  height: 46px;
+  width: 48px;
+  height: 48px;
   object-fit: contain;
   flex: 0 0 auto;
 }
 
 .settingsSections {
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
 .settingsSection {
   border: 1px solid #dbe3ef;
   border-radius: 12px;
   background: #ffffff;
-  padding: 14px;
+  padding: 12px 14px;
+}
+
+.settingsSectionCompact {
+  max-width: 920px;
 }
 
 .settingsSection h2 {
@@ -431,7 +454,7 @@ textarea {
 }
 
 .settingsSectionHead {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .settingsSectionHead p {
@@ -448,12 +471,28 @@ textarea {
 }
 
 .settingsSectionTitle img,
-.settingsFieldLabel img,
 .settingsUsersNote img {
-  width: 34px;
-  height: 34px;
+  width: 40px;
+  height: 40px;
   object-fit: contain;
   flex: 0 0 auto;
+}
+
+.settingsFieldLabel img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.settingsControlGrid {
+  display: grid;
+  gap: 12px;
+}
+
+.settingsControlGrid.two {
+  grid-template-columns: minmax(220px, 320px) minmax(320px, 480px);
+  align-items: start;
 }
 
 .settingsGrid {
@@ -464,10 +503,28 @@ textarea {
 
 .settingsField {
   display: grid;
-  gap: 7px;
+  gap: 6px;
   color: #475569;
   font-size: 13px;
   font-weight: 800;
+}
+
+.settingsControl {
+  max-width: 420px;
+}
+
+.settingsControlWide {
+  max-width: 520px;
+}
+
+.settingsSelect,
+.settingsInput {
+  width: 100%;
+  min-height: 38px;
+}
+
+.timezoneSelect {
+  min-width: 320px;
 }
 
 .settingsFieldLabel,
@@ -509,7 +566,7 @@ textarea {
   align-items: flex-start;
   gap: 12px;
   flex-wrap: wrap;
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .settingsNote {
@@ -521,6 +578,7 @@ textarea {
 
 .settingsStatus {
   min-width: 240px;
+  max-width: 520px;
   border: 1px solid #dbe3ef;
   border-radius: 10px;
   background: #f8fafc;
@@ -530,6 +588,50 @@ textarea {
   gap: 4px;
   font-size: 13px;
   line-height: 1.35;
+}
+
+.settingsStorageLayout,
+.settingsHardwareLayout {
+  display: grid;
+  grid-template-columns: minmax(300px, 520px) minmax(260px, 420px);
+  gap: 12px;
+  align-items: start;
+}
+
+.settingsStorageAction {
+  align-self: end;
+}
+
+.settingsPathControl {
+  max-width: 560px;
+}
+
+.settingsHardwareOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.settingsBadge {
+  border: 1px solid #dbe3ef;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.settingsBadge.ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.settingsBadge.disabled {
+  color: #94a3b8;
+  background: #f1f5f9;
 }
 
 .settingsStatus strong {
@@ -1403,6 +1505,22 @@ textarea {
 @media (max-width: 900px) {
   .pageHeader {
     flex-direction: column;
+  }
+
+  .settingsControlGrid.two,
+  .settingsStorageLayout,
+  .settingsHardwareLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsControl,
+  .settingsControlWide,
+  .settingsPathControl {
+    max-width: none;
+  }
+
+  .timezoneSelect {
+    min-width: 0;
   }
 
   .formGrid {

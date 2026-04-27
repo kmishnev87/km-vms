@@ -4,22 +4,65 @@ import { useEffect, useMemo, useState } from "react";
 import Layout from "../../components/Layout";
 import { apiFetch } from "../../lib/api";
 
-const TIMEZONES = [
-  "UTC",
-  "Europe/Moscow",
-  "Asia/Yekaterinburg",
-  "Asia/Novosibirsk",
-  "Asia/Krasnoyarsk",
-  "Asia/Irkutsk",
-  "Asia/Yakutsk",
-  "Asia/Vladivostok",
+const TIMEZONE_GROUPS = [
+  { label: "UTC", zones: [{ value: "UTC", ru: "UTC", en: "UTC" }] },
+  {
+    label: "Europe",
+    zones: [
+      { value: "Europe/London", ru: "Лондон", en: "London" },
+      { value: "Europe/Berlin", ru: "Берлин", en: "Berlin" },
+      { value: "Europe/Paris", ru: "Париж", en: "Paris" },
+      { value: "Europe/Moscow", ru: "Москва", en: "Moscow" },
+    ],
+  },
+  {
+    label: "Asia",
+    zones: [
+      { value: "Asia/Yekaterinburg", ru: "Екатеринбург", en: "Yekaterinburg" },
+      { value: "Asia/Novosibirsk", ru: "Новосибирск", en: "Novosibirsk" },
+      { value: "Asia/Krasnoyarsk", ru: "Красноярск", en: "Krasnoyarsk" },
+      { value: "Asia/Irkutsk", ru: "Иркутск", en: "Irkutsk" },
+      { value: "Asia/Yakutsk", ru: "Якутск", en: "Yakutsk" },
+      { value: "Asia/Vladivostok", ru: "Владивосток", en: "Vladivostok" },
+      { value: "Asia/Tokyo", ru: "Токио", en: "Tokyo" },
+      { value: "Asia/Shanghai", ru: "Шанхай", en: "Shanghai" },
+      { value: "Asia/Dubai", ru: "Дубай", en: "Dubai" },
+    ],
+  },
+  {
+    label: "North America",
+    zones: [
+      { value: "America/New_York", ru: "Eastern Time", en: "Eastern Time" },
+      { value: "America/Chicago", ru: "Central Time", en: "Central Time" },
+      { value: "America/Denver", ru: "Mountain Time", en: "Mountain Time" },
+      { value: "America/Los_Angeles", ru: "Pacific Time", en: "Pacific Time" },
+      { value: "America/Toronto", ru: "Торонто", en: "Toronto" },
+    ],
+  },
+  {
+    label: "South America",
+    zones: [
+      { value: "America/Sao_Paulo", ru: "Сан-Паулу", en: "Sao Paulo" },
+      { value: "America/Argentina/Buenos_Aires", ru: "Буэнос-Айрес", en: "Buenos Aires" },
+    ],
+  },
+  {
+    label: "Australia",
+    zones: [
+      { value: "Australia/Sydney", ru: "Сидней", en: "Sydney" },
+      { value: "Australia/Perth", ru: "Перт", en: "Perth" },
+    ],
+  },
 ];
+
+const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "nvenc", "amf", "cpu"];
 
 const BACKEND_LABELS = {
   auto: { ru: "Автоматически", en: "Automatic" },
-  qsv: { ru: "Intel Quick Sync", en: "Intel Quick Sync" },
+  qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV" },
   vaapi: { ru: "VAAPI / Linux hardware acceleration", en: "VAAPI / Linux hardware acceleration" },
-  nvenc: { ru: "NVIDIA NVENC", en: "NVIDIA NVENC" },
+  nvenc: { ru: "NVIDIA NVENC/NVDEC", en: "NVIDIA NVENC/NVDEC" },
+  amf: { ru: "AMD AMF / AMD hardware acceleration", en: "AMD AMF / AMD hardware acceleration" },
   cpu: { ru: "CPU fallback", en: "CPU fallback" },
 };
 
@@ -38,9 +81,9 @@ const TEXT = {
     timezone: "Часовой пояс",
     timezoneHelp: "Часовой пояс используется для отображения времени, архива и будущей хронологии.",
     storage: "Хранилище",
-    storageText: "Папка архива внутри контейнера. Она должна быть подключена к папке на NAS/сервере через docker-compose volume.",
-    storagePath: "Папка архива внутри контейнера",
-    hostPath: "NAS/host path определяется в docker-compose volume mapping.",
+    storageText: "Физический путь на NAS задаётся в docker-compose volume mapping. Внутри контейнера он доступен как путь архива ниже.",
+    storagePath: "Путь архива внутри контейнера",
+    hostPath: "NAS/server path определяется в docker-compose volume mapping.",
     validate: "Проверить хранилище",
     storageOk: "Хранилище доступно.",
     storageFail: "Хранилище недоступно",
@@ -50,19 +93,22 @@ const TEXT = {
     writeDenied: "Нет прав на запись",
     created: "Папка создана",
     exists: "Папка существует",
+    yes: "да",
+    no: "нет",
     recording: "Запись",
     recordingText: "Профиль задаёт формат будущих архивных файлов Recorder PRO.",
     recordingProfile: "Профиль записи",
     balanced: "Сбалансированный",
-    balancedHelp: "Рекомендуемый режим. Сейчас сохраняет архив в MKV как наиболее безопасный общий вариант.",
+    balancedHelp: "Рекомендуемый режим. Сейчас: MKV.",
     compatibility: "Максимальная совместимость",
-    compatibilityHelp: "MP4 легче открыть во многих плеерах, но он менее устойчив при аварийном завершении записи.",
+    compatibilityHelp: "Сейчас: MP4. Легче открыть в плеерах, но менее устойчив при аварийном завершении.",
     reliability: "Максимальная надёжность",
-    reliabilityHelp: "MKV лучше переносит прерывание процесса или сервера и подходит для NAS.",
+    reliabilityHelp: "Сейчас: MKV. Лучше переносит прерывание процесса или сервера.",
     mapsTo: "Формат",
     hardware: "Аппаратное ускорение",
-    hardwareText: "Показывает доступные возможности сервера и выбранный режим кодирования.",
+    hardwareText: "Доступные режимы сервера. Недоступные варианты видны, но отключены.",
     hardwareMode: "Режим аппаратного ускорения",
+    unavailableMode: "Этот режим недоступен на данном сервере или не прошёл проверку.",
     rescan: "Проверить аппаратные возможности",
     hardwareAvailable: "Аппаратное ускорение доступно.",
     hardwareUnavailable: "Аппаратное ускорение недоступно. Будет использоваться CPU fallback.",
@@ -70,7 +116,8 @@ const TEXT = {
     dockerFail: "Docker не имеет доступа к видеоустройству или устройство не найдено.",
     selected: "Выбрано",
     availableOptions: "Доступные варианты",
-    noOptions: "На этом сервере аппаратные варианты недоступны или не прошли проверку.",
+    failedValidation: "Не прошёл проверку",
+    notDetected: "Не найдено на этом сервере",
     cpuFallback: "Fallback на CPU доступен.",
     technicalDetails: "Технические детали",
     security: "Безопасность и сессия",
@@ -95,9 +142,9 @@ const TEXT = {
     timezone: "Timezone",
     timezoneHelp: "Timezone is used for displayed time, archive timestamps, and future chronology.",
     storage: "Storage",
-    storageText: "Archive folder inside the container. It must be mapped to a NAS/server folder through docker-compose volume mapping.",
-    storagePath: "Archive folder inside container",
-    hostPath: "NAS/host path is defined by docker-compose volume mapping.",
+    storageText: "The physical NAS path is defined by docker-compose volume mapping. Inside the container it is available as the archive path below.",
+    storagePath: "Archive path inside container",
+    hostPath: "NAS/server path is defined by docker-compose volume mapping.",
     validate: "Validate storage",
     storageOk: "Storage is available.",
     storageFail: "Storage is unavailable",
@@ -107,19 +154,22 @@ const TEXT = {
     writeDenied: "Write access: denied",
     created: "Folder was created",
     exists: "Folder exists",
+    yes: "yes",
+    no: "no",
     recording: "Recording",
     recordingText: "The profile defines the future Recorder PRO archive file format.",
     recordingProfile: "Recording profile",
     balanced: "Balanced",
-    balancedHelp: "Recommended mode. It currently stores archive files as MKV for the safest general-purpose behavior.",
+    balancedHelp: "Recommended mode. Current mapping: MKV.",
     compatibility: "Maximum compatibility",
-    compatibilityHelp: "MP4 opens more easily in many players, but is less crash-safe if recording stops abruptly.",
+    compatibilityHelp: "Current mapping: MP4. Easier to open in players, but less crash-safe.",
     reliability: "Maximum reliability",
-    reliabilityHelp: "MKV is more resilient to interrupted processes or server shutdowns and suits NAS recording.",
+    reliabilityHelp: "Current mapping: MKV. More resilient to process or server interruptions.",
     mapsTo: "Format",
     hardware: "Hardware Acceleration",
-    hardwareText: "Shows server capabilities and the selected encoding mode.",
+    hardwareText: "Server acceleration modes. Unavailable options are visible but disabled.",
     hardwareMode: "Hardware acceleration mode",
+    unavailableMode: "This mode is unavailable on this server or failed validation.",
     rescan: "Check hardware capabilities",
     hardwareAvailable: "Hardware acceleration is available.",
     hardwareUnavailable: "Hardware acceleration is unavailable. CPU fallback will be used.",
@@ -127,7 +177,8 @@ const TEXT = {
     dockerFail: "Docker cannot access the video device or the device is missing.",
     selected: "Selected",
     availableOptions: "Available options",
-    noOptions: "Hardware options are unavailable or did not pass validation on this server.",
+    failedValidation: "Failed validation",
+    notDetected: "Not detected on this server",
     cpuFallback: "CPU fallback is available.",
     technicalDetails: "Technical details",
     security: "Security / Session",
@@ -149,13 +200,31 @@ function backendLabel(value, lang) {
   return BACKEND_LABELS[key]?.[lang] || key;
 }
 
-function formatBytes(value, lang) {
+function timezoneOffset(zone) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      timeZoneName: "shortOffset",
+      hour: "2-digit",
+    }).formatToParts(new Date());
+    const value = parts.find((part) => part.type === "timeZoneName")?.value || "UTC";
+    return value.replace("GMT", "UTC");
+  } catch {
+    return "UTC";
+  }
+}
+
+function timezoneLabel(zone, lang) {
+  const name = zone[lang] || zone.en || zone.value;
+  return `${timezoneOffset(zone.value)} — ${name} (${zone.value})`;
+}
+
+function formatBytes(value) {
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
-  const units = ["B", "GB", "TB"];
   if (bytes < 1024 ** 3) return `${Math.round(bytes / 1024 / 1024)} MB`;
-  if (bytes < 1024 ** 4) return `${(bytes / 1024 ** 3).toFixed(1)} ${units[1]}`;
-  return `${(bytes / 1024 ** 4).toFixed(1)} ${units[2]}`;
+  if (bytes < 1024 ** 4) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
 }
 
 function parseErrorDetail(message) {
@@ -195,6 +264,15 @@ function profileFromFormat(format) {
   return format === "mp4" ? "compatibility" : "balanced";
 }
 
+function hardwareOptionState(backend, hardware, t) {
+  if (backend === "auto" || backend === "cpu") return { selectable: true, reason: "" };
+  const status = hardware?.backend_status?.[backend];
+  const available = (hardware?.available_backends || []).includes(backend);
+  if (available) return { selectable: true, reason: "" };
+  if (status?.candidate) return { selectable: false, reason: status.reason || t.failedValidation };
+  return { selectable: false, reason: t.notDetected };
+}
+
 export default function SettingsPage() {
   const [settings, setSettings] = useState(null);
   const [hardware, setHardware] = useState(null);
@@ -203,6 +281,7 @@ export default function SettingsPage() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [hardwareNotice, setHardwareNotice] = useState("");
   const lang = languageOf(settings);
   const t = TEXT[lang] || TEXT.ru;
   const languageIcon = lang === "en"
@@ -284,23 +363,31 @@ export default function SettingsPage() {
     }
   }
 
-  const hardwareOptions = useMemo(() => {
-    const values = new Set(["auto", "cpu"]);
-    if (settings?.hardware_preferred_backend) values.add(settings.hardware_preferred_backend);
-    (hardware?.available_backends || []).forEach((item) => values.add(item));
-    Object.entries(hardware?.backend_status || {}).forEach(([key, value]) => {
-      if (value?.candidate) values.add(key);
-    });
-    return ["auto", "qsv", "vaapi", "nvenc", "cpu"].filter((item) => values.has(item));
-  }, [hardware, settings?.hardware_preferred_backend]);
-
-  const selectedHardware = settings?.hardware_preferred_backend || hardware?.selected_backend || "auto";
+  const selectedHardware = settings?.hardware_preferred_backend || "auto";
   const availableHardware = hardware?.available_backends || [];
   const profileHelp = {
     balanced: t.balancedHelp,
     compatibility: t.compatibilityHelp,
     reliability: t.reliabilityHelp,
   }[recordingProfile];
+
+  const hardwareSummary = useMemo(() => (
+    HARDWARE_OPTIONS.map((backend) => ({
+      backend,
+      ...hardwareOptionState(backend, hardware, t),
+    }))
+  ), [hardware, t]);
+
+  function handleHardwareChange(event) {
+    const value = event.target.value || "auto";
+    const state = hardwareOptionState(value, hardware, t);
+    if (!state.selectable) {
+      setHardwareNotice(t.unavailableMode);
+      return;
+    }
+    setHardwareNotice("");
+    patch("hardware_preferred_backend", value === "auto" ? null : value);
+  }
 
   return (
     <Layout>
@@ -320,10 +407,11 @@ export default function SettingsPage() {
 
         {error ? <div className="settingsAlert error">{error}</div> : null}
         {message ? <div className="settingsAlert ok">{message}</div> : null}
+        {hardwareNotice ? <div className="settingsAlert error">{hardwareNotice}</div> : null}
 
         {!settings ? null : (
           <div className="settingsSections">
-            <section className="settingsSection">
+            <section className="settingsSection settingsSectionCompact">
               <div className="settingsSectionHead">
                 <h2 className="settingsSectionTitle">
                   <img src="/icons/nav/settings-icon.png" alt="" />
@@ -331,24 +419,30 @@ export default function SettingsPage() {
                 </h2>
                 <p>{t.systemText}</p>
               </div>
-              <div className="settingsGrid">
-                <label className="settingsField">
+              <div className="settingsControlGrid two">
+                <label className="settingsField settingsControl">
                   <span className="settingsFieldLabel">
                     <img src={languageIcon} alt="" />
                     {t.language}
                   </span>
-                  <select className="select" value={settings.language} onChange={(event) => patch("language", event.target.value)}>
+                  <select className="select settingsSelect" value={settings.language} onChange={(event) => patch("language", event.target.value)}>
                     <option value="ru">{t.russian}</option>
                     <option value="en">{t.english}</option>
                   </select>
                 </label>
-                <label className="settingsField">
+                <label className="settingsField settingsControl settingsControlWide">
                   <span className="settingsFieldLabel">
                     <img src="/icons/nav/timezone-icon.png" alt="" />
                     {t.timezone}
                   </span>
-                  <select className="select" value={settings.timezone || ""} onChange={(event) => patch("timezone", event.target.value)}>
-                    {TIMEZONES.map((zone) => <option key={zone} value={zone}>{zone}</option>)}
+                  <select className="select settingsSelect timezoneSelect" value={settings.timezone || ""} onChange={(event) => patch("timezone", event.target.value)}>
+                    {TIMEZONE_GROUPS.map((group) => (
+                      <optgroup key={group.label} label={group.label}>
+                        {group.zones.map((zone) => (
+                          <option key={zone.value} value={zone.value}>{timezoneLabel(zone, lang)}</option>
+                        ))}
+                      </optgroup>
+                    ))}
                   </select>
                   <span className="settingsHint">{t.timezoneHelp}</span>
                 </label>
@@ -363,28 +457,28 @@ export default function SettingsPage() {
                 </h2>
                 <p>{t.storageText}</p>
               </div>
-              <div className="settingsGrid">
-                <label className="settingsField settingsFull">
+              <div className="settingsStorageLayout">
+                <label className="settingsField settingsControl settingsPathControl">
                   <span>{t.storagePath}</span>
-                  <input className="input" value={settings.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} />
+                  <input className="input settingsInput" value={settings.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} />
                   <span className="settingsHint">{t.hostPath}</span>
                 </label>
-              </div>
-              <div className="settingsActions">
-                <button className="button secondary small" onClick={validateStorage}>{t.validate}</button>
+                <div className="settingsStorageAction">
+                  <button className="button secondary small" onClick={validateStorage}>{t.validate}</button>
+                </div>
                 {storageResult ? (
                   <div className={`settingsStatus ${storageResult.ok ? "ok" : "error"}`}>
                     <strong>{storageMessage(storageResult, lang)}</strong>
                     <span>{t.path}: {storageResult.path}</span>
                     <span>{storageResult.writable ? t.writeAllowed : t.writeDenied}</span>
-                    <span>{storageResult.created ? t.created : t.exists}: {storageResult.exists ? "yes" : "no"}</span>
-                    {storageResult.free_bytes != null ? <span>{t.free}: {formatBytes(storageResult.free_bytes, lang)}</span> : null}
+                    <span>{storageResult.created ? t.created : t.exists}: {storageResult.exists ? t.yes : t.no}</span>
+                    {storageResult.free_bytes != null ? <span>{t.free}: {formatBytes(storageResult.free_bytes)}</span> : null}
                   </div>
                 ) : null}
               </div>
             </section>
 
-            <section className="settingsSection">
+            <section className="settingsSection settingsSectionCompact">
               <div className="settingsSectionHead">
                 <h2 className="settingsSectionTitle">
                   <img src="/icons/nav/records.png" alt="" />
@@ -392,9 +486,9 @@ export default function SettingsPage() {
                 </h2>
                 <p>{t.recordingText}</p>
               </div>
-              <label className="settingsField">
+              <label className="settingsField settingsControl settingsControlWide">
                 <span>{t.recordingProfile}</span>
-                <select className="select" value={recordingProfile} onChange={(event) => setRecordingProfile(event.target.value)}>
+                <select className="select settingsSelect" value={recordingProfile} onChange={(event) => setRecordingProfile(event.target.value)}>
                   <option value="balanced">{t.balanced}</option>
                   <option value="compatibility">{t.compatibility}</option>
                   <option value="reliability">{t.reliability}</option>
@@ -413,13 +507,18 @@ export default function SettingsPage() {
                 </h2>
                 <p>{t.hardwareText}</p>
               </div>
-              <div className="settingsGrid settingsHardwareGrid">
-                <label className="settingsField">
+              <div className="settingsHardwareLayout">
+                <label className="settingsField settingsControl settingsControlWide">
                   <span>{t.hardwareMode}</span>
-                  <select className="select" value={settings.hardware_preferred_backend || ""} onChange={(event) => patch("hardware_preferred_backend", event.target.value || null)}>
-                    {hardwareOptions.map((backend) => (
-                      <option key={backend} value={backend === "auto" ? "" : backend} title={backendLabel(backend, lang)}>
-                        {backendLabel(backend, lang)}
+                  <select className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange}>
+                    {hardwareSummary.map(({ backend, selectable, reason }) => (
+                      <option
+                        key={backend}
+                        value={backend}
+                        disabled={!selectable}
+                        title={reason || backendLabel(backend, lang)}
+                      >
+                        {backendLabel(backend, lang)}{selectable ? "" : ` — ${reason || t.notDetected}`}
                       </option>
                     ))}
                   </select>
@@ -435,9 +534,14 @@ export default function SettingsPage() {
                 <button className="button secondary small" onClick={rescanHardware}>{t.rescan}</button>
               </div>
               <div className="settingsNote">
-                {availableHardware.length
-                  ? `${t.availableOptions}: ${availableHardware.map((backend) => backendLabel(backend, lang)).join(", ")}.`
-                  : t.noOptions}
+                {t.availableOptions}: {availableHardware.length ? availableHardware.map((backend) => backendLabel(backend, lang)).join(", ") : backendLabel("cpu", lang)}.
+              </div>
+              <div className="settingsHardwareOptions">
+                {hardwareSummary.map(({ backend, selectable, reason }) => (
+                  <span key={backend} className={`settingsBadge ${selectable ? "ok" : "disabled"}`} title={reason || ""}>
+                    {backendLabel(backend, lang)}
+                  </span>
+                ))}
               </div>
               {[...(hardware?.warnings || []), ...(hardware?.errors || [])].length ? (
                 <div className="settingsStatus warn compact">
@@ -454,7 +558,7 @@ export default function SettingsPage() {
               ) : null}
             </section>
 
-            <section className="settingsSection">
+            <section className="settingsSection settingsSectionCompact">
               <div className="settingsSectionHead">
                 <h2 className="settingsSectionTitle">
                   <img src="/icons/nav/security-icon.png" alt="" />
