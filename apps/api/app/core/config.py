@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     live_transcode_profile: str = "stable"
     live_unstable_source_target_fps: int = 20
     live_audio_mode: str = "none"
+    live_hwaccel_mode: str = "auto"
+    live_hwaccel_backend: str = "auto"
+    live_hwaccel_device: str = "/dev/dri/renderD128"
     live_idle_ttl_seconds: int = 45
     live_viewer_ttl_seconds: int = 60
     live_cleanup_interval_seconds: int = 10

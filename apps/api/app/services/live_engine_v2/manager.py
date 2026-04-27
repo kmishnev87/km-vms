@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 from app.core.config import settings
 from app.models.camera import Camera
+from app.services.hardware import get_hardware_capabilities, hardware_capabilities_summary
 from app.services.live_engine_v2.ffmpeg import (
     build_hls_command,
     choose_input_url,
@@ -46,6 +47,8 @@ FFMPEG_FATAL_PATTERNS = (
     "Conversion failed",
 )
 STARTUP_INITIAL_TIMEOUT_SECONDS = 20
+HARDWARE_STARTUP_TIMEOUT_SECONDS = 6
+HARDWARE_HARD_TIMEOUT_SECONDS = 12
 STARTUP_PROGRESS_GRACE_SECONDS = 90
 STARTUP_HARD_TIMEOUT_SECONDS = 180
 SLOW_TRANSCODE_FAIL_SECONDS = 75
@@ -100,10 +103,6 @@ def _pid_exists(pid: int | None) -> bool:
         return False
 
 
-def _hardware_accel_available() -> bool:
-    return Path("/dev/dri").exists()
-
-
 @dataclass
 class ViewerSession:
     id: str
@@ -146,6 +145,14 @@ class StreamInstance:
         self.reason_for_transcode: str | None = None
         self.high_cpu_risk = False
         self.resource_limit: str | None = None
+        self.hw_backend: str | None = None
+        self.hw_device: str | None = None
+        self.hwaccel_mode = settings.live_hwaccel_mode
+        self.selected_pipeline = "cpu"
+        self.hw_decode = False
+        self.hw_encode = False
+        self.fallback_to_cpu = False
+        self.hw_failure_reason: str | None = None
         self.restart_count = 0
         self.camera_source = None
         self.start_deadline: float | None = None
@@ -394,24 +401,59 @@ class StreamInstance:
         if force_mode == "fallback_transcode":
             self.last_fallback_reason = self.last_fallback_reason or "forced_fallback"
             self.reason_for_transcode = "forced_fallback"
+            self.selected_pipeline = "cpu_transcode"
             return "fallback_transcode"
 
         if force_mode == "copy":
+            self.selected_pipeline = "copy"
             return "copy"
+
+        if probe.safe_for_copy:
+            self.last_fallback_reason = None
+            self.reason_for_transcode = None
+            self.selected_pipeline = "copy"
+            return "copy"
+
+        hw_mode = (settings.live_hwaccel_mode or "auto").lower()
+        caps = get_hardware_capabilities()
+        preferred_backend = caps.get("preferred_backend")
+        if (
+            probe.codec in {"hevc", "h265"}
+            and hw_mode not in {"off", "disabled", "false", "0"}
+            and caps.get("hardware_accel_available")
+            and preferred_backend in {"vaapi", "qsv"}
+        ):
+            self.hw_backend = preferred_backend
+            self.hw_device = caps.get("render_device") or settings.live_hwaccel_device
+            self.hwaccel_mode = settings.live_hwaccel_mode
+            self.hw_decode = True
+            self.hw_encode = True
+            self.fallback_to_cpu = False
+            self.hw_failure_reason = None
+            self.selected_pipeline = "hardware_transcode"
+            self.last_fallback_reason = None
+            self.reason_for_transcode = "codec_requires_h264_for_hls"
+            return "hardware_transcode"
 
         requested_policy = (settings.live_video_codec or "auto").lower()
         if settings.live_transcode or requested_policy in {"libx264", "h264", "transcode", "fallback_transcode"}:
             self.last_fallback_reason = "forced_transcode" if settings.live_transcode else f"settings_codec:{requested_policy}"
             self.reason_for_transcode = self.last_fallback_reason
+            self.selected_pipeline = "cpu_transcode"
             return "fallback_transcode"
-
-        if probe.safe_for_copy:
-            self.last_fallback_reason = None
-            self.reason_for_transcode = None
-            return "copy"
 
         self.last_fallback_reason = f"codec_not_safe_for_copy:{probe.codec or 'unknown'}"
         self.reason_for_transcode = self.last_fallback_reason
+        self.hw_backend = None
+        self.hw_device = caps.get("render_device") or settings.live_hwaccel_device
+        self.hwaccel_mode = settings.live_hwaccel_mode
+        self.hw_decode = False
+        self.hw_encode = False
+        self.selected_pipeline = "cpu_transcode"
+        if probe.codec in {"hevc", "h265"} and hw_mode not in {"off", "disabled", "false", "0"}:
+            warnings = caps.get("warnings") or []
+            errors = caps.get("errors") or []
+            self.hw_failure_reason = "; ".join([*warnings, *errors])[:1200] or "hardware_accel_not_available"
         logger.warning(
             "Live Engine fallback selected camera_id=%s stream=%s codec=%s probe_error=%s",
             camera.id,
@@ -472,6 +514,13 @@ class StreamInstance:
             self.reason_for_transcode = None
             self.high_cpu_risk = False
             self.resource_limit = None
+            self.hw_backend = None
+            self.hw_device = settings.live_hwaccel_device
+            self.hwaccel_mode = settings.live_hwaccel_mode
+            self.selected_pipeline = "cpu"
+            self.hw_decode = False
+            self.hw_encode = False
+            self.fallback_to_cpu = force_mode == "fallback_transcode" and bool(self.hw_failure_reason)
             self.mode = self._choose_mode(camera, input_url, force_mode=force_mode)
             self.requested_mode = force_mode or "auto"
             if self.mode != "copy" and not transcode_allowed:
@@ -489,9 +538,11 @@ class StreamInstance:
                 stream=self.stream,
                 input_url=input_url,
                 out_dir=self.stream_dir,
-                mode="copy" if self.mode == "copy" else "fallback_transcode",
+                mode=self.mode,
                 input_fps=self.input_fps,
                 force_stable_fps=self.force_stable_fps,
+                hw_backend=self.hw_backend,
+                hw_device=self.hw_device,
             )
             self.cmd_text = command_text(cmd, input_url)
             self.stderr_path = self.default_stderr_path
@@ -523,6 +574,14 @@ class StreamInstance:
                 self.stderr_file = None
                 self._set_state_locked("failed", "ffmpeg_start_failed", failure_reason="ffmpeg_start_failed")
                 self.last_error = mask_rtsp_credentials(str(exc))
+                if self.mode == "hardware_transcode":
+                    self.fallback_to_cpu = True
+                    self.hw_failure_reason = self.last_error
+                    self.last_fallback_reason = "hardware_start_failed"
+                    self.restart_count += 1
+                    self.restart_reason = "hardware_start_failed"
+                    self.start(camera, force_mode="fallback_transcode", transcode_allowed=transcode_allowed)
+                    return self.snapshot(viewers=0)
                 logger.exception(
                     "Live Engine failed to start ffmpeg camera_id=%s stream=%s mode=%s command=%s",
                     camera.id,
@@ -535,8 +594,12 @@ class StreamInstance:
             self._set_state_locked("starting", "ffmpeg_started", failure_reason=None)
             self.started_at = time.time()
             initial_timeout = max(int(settings.live_start_timeout_seconds), STARTUP_INITIAL_TIMEOUT_SECONDS)
-            self.start_deadline = self.started_at + initial_timeout
-            self.start_hard_deadline = self.started_at + max(initial_timeout * 2, STARTUP_HARD_TIMEOUT_SECONDS)
+            if self.mode == "hardware_transcode":
+                self.start_deadline = self.started_at + HARDWARE_STARTUP_TIMEOUT_SECONDS
+                self.start_hard_deadline = self.started_at + HARDWARE_HARD_TIMEOUT_SECONDS
+            else:
+                self.start_deadline = self.started_at + initial_timeout
+                self.start_hard_deadline = self.started_at + max(initial_timeout * 2, STARTUP_HARD_TIMEOUT_SECONDS)
             self.last_exit_code = None
             self.last_error = None
 
@@ -636,12 +699,31 @@ class StreamInstance:
                     self.last_fallback_reason = "copy_failed"
                     self.start(source, force_mode="fallback_transcode")
                     return True
+                if previous_mode == "hardware_transcode" and source:
+                    self.restart_count += 1
+                    self.restart_reason = "hardware_failed"
+                    self.fallback_to_cpu = True
+                    self.hw_failure_reason = self.last_error or stderr_tail or reason
+                    self.last_fallback_reason = "hardware_failed"
+                    self.start(source, force_mode="fallback_transcode")
+                    return True
                 return False
 
             if not self.is_running() or not self.start_deadline:
                 return False
 
             now = time.time()
+            source = self.camera_source
+            if self.mode == "hardware_transcode" and fatal_error and source:
+                self.restart_count += 1
+                self.restart_reason = "hardware_fatal_error"
+                self.fallback_to_cpu = True
+                self.hw_failure_reason = stderr_tail or fatal_error
+                self.last_fallback_reason = "hardware_fatal_error"
+                self.stop(reason="hardware_fatal_error", cleanup_files=True)
+                self.start(source, force_mode="fallback_transcode")
+                return True
+
             if now <= self.start_deadline:
                 return False
 
@@ -650,7 +732,6 @@ class StreamInstance:
                 self.last_error = stderr_tail
                 return True
 
-            source = self.camera_source
             if self.mode == "copy" and source:
                 logger.warning(
                     "Live Engine copy mode timed out before HLS ready, switching to transcode camera_id=%s stream=%s",
@@ -661,6 +742,16 @@ class StreamInstance:
                 self.restart_reason = "copy_not_ready"
                 self.last_fallback_reason = "copy_not_ready"
                 self.stop(reason="copy_not_ready", cleanup_files=True)
+                self.start(source, force_mode="fallback_transcode")
+                return True
+
+            if self.mode == "hardware_transcode" and source:
+                self.restart_count += 1
+                self.restart_reason = "hardware_no_hls"
+                self.fallback_to_cpu = True
+                self.hw_failure_reason = stderr_tail or "hardware_transcode did not produce HLS before fast deadline"
+                self.last_fallback_reason = "hardware_no_hls"
+                self.stop(reason="hardware_no_hls", cleanup_files=True)
                 self.start(source, force_mode="fallback_transcode")
                 return True
 
@@ -686,6 +777,15 @@ class StreamInstance:
                 return False
 
             reason = "startup_timeout_no_progress" if not self.progress_detected else "startup_timeout_no_hls"
+            if self.mode == "hardware_transcode" and source:
+                self.restart_count += 1
+                self.restart_reason = reason
+                self.fallback_to_cpu = True
+                self.hw_failure_reason = stderr_tail or reason
+                self.last_fallback_reason = reason
+                self.stop(reason=reason, cleanup_files=True)
+                self.start(source, force_mode="fallback_transcode")
+                return True
             self.stop(reason=reason, cleanup_files=True)
             self.last_error = stderr_tail
             return True
@@ -713,7 +813,7 @@ class StreamInstance:
             "status": status,
             "mode": "copy" if self.mode == "copy" else "transcode",
             "requested_mode": self.requested_mode,
-            "selected_mode": "copy" if self.mode == "copy" else "transcode",
+            "selected_mode": self.mode,
             "input_codec": self.input_codec,
             "input_resolution": f"{self.input_width}x{self.input_height}" if self.input_width and self.input_height else None,
             "input_width": self.input_width,
@@ -730,7 +830,17 @@ class StreamInstance:
             "reason_for_transcode": self.reason_for_transcode,
             "high_cpu_risk": self.high_cpu_risk,
             "resource_limit": self.resource_limit,
-            "hardware_accel_available": _hardware_accel_available(),
+            "hardware_accel_available": get_hardware_capabilities().get("hardware_accel_available"),
+            "hw_backend": self.hw_backend,
+            "hw_device": self.hw_device,
+            "hwaccel_mode": self.hwaccel_mode,
+            "selected_pipeline": self.selected_pipeline,
+            "hw_decode": self.hw_decode,
+            "hw_encode": self.hw_encode,
+            "fallback_to_cpu": self.fallback_to_cpu,
+            "hw_failure_reason": mask_rtsp_credentials(self.hw_failure_reason),
+            "docker_device_access_ok": get_hardware_capabilities().get("docker_device_access_ok"),
+            "hardware_misconfigured": get_hardware_capabilities().get("hardware_misconfigured"),
             "viewers": viewers,
             "started_at": self.started_at,
             "last_access": self.last_access,
@@ -1038,6 +1148,7 @@ class StreamManager:
             "count": len(items),
             "viewers": viewers,
             "viewers_count": len(viewers),
+            "hardware_capabilities": hardware_capabilities_summary(),
         }
 
 

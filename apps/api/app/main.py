@@ -8,10 +8,12 @@ from app.db.session import SessionLocal
 from app.routers.auth import router as auth_router
 from app.routers.cameras import router as cameras_router
 from app.routers.chronology import router as chronology_router
+from app.routers.hardware import router as hardware_router
 from app.routers.live import router as live_router
 from app.routers.recordings import router as recordings_router
 from app.routers.storage import router as storage_router
 from app.services.bootstrap import init_db, ensure_admin
+from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine_v2 import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
 
 app = FastAPI(
@@ -41,6 +43,7 @@ def startup():
     finally:
         db.close()
 
+    refresh_hardware_capabilities()
     start_cleanup_worker()
 
 
@@ -85,5 +88,6 @@ app.include_router(auth_router)
 app.include_router(cameras_router)
 app.include_router(recordings_router)
 app.include_router(storage_router)
+app.include_router(hardware_router)
 app.include_router(live_router)
 app.include_router(chronology_router)

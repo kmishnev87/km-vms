@@ -196,6 +196,8 @@ def build_hls_command(
     mode: str,
     input_fps: float | None = None,
     force_stable_fps: bool = False,
+    hw_backend: str | None = None,
+    hw_device: str | None = None,
 ) -> list[str]:
     playlist = out_dir / "index.m3u8"
     segment_pattern = out_dir / "seg_%06d.ts"
@@ -204,8 +206,61 @@ def build_hls_command(
     transcode_profile = (settings.live_transcode_profile or "stable").lower()
     output_fps, forced_fps = select_output_fps(input_fps, force_stable_fps)
 
+    input_hw_args: list[str] = []
+
     if mode == "copy":
         video_args = ["-c:v", "copy"]
+    elif mode == "hardware_transcode" and hw_backend == "vaapi":
+        fps_for_gop = output_fps or (input_fps if input_fps and input_fps > 0 else 25)
+        fps_for_gop = max(10, min(float(fps_for_gop), 60))
+        gop_size = max(20, min(int(round(fps_for_gop * hls_time)), 120))
+        keyint_min = max(10, min(int(round(fps_for_gop)), gop_size))
+        fps_args = ["-r", str(int(round(output_fps))), "-vsync", "1"] if forced_fps and output_fps else []
+        input_hw_args = [
+            "-hwaccel",
+            "vaapi",
+            "-hwaccel_device",
+            hw_device or settings.live_hwaccel_device,
+            "-hwaccel_output_format",
+            "vaapi",
+        ]
+        video_args = [
+            "-vf",
+            "scale_vaapi=format=nv12",
+            "-c:v",
+            "h264_vaapi",
+            "-qp",
+            "24",
+            "-g",
+            str(gop_size),
+            "-keyint_min",
+            str(keyint_min),
+            "-bf",
+            "0",
+            *fps_args,
+            "-force_key_frames",
+            f"expr:gte(t,n_forced*{hls_time})",
+        ]
+    elif mode == "hardware_transcode" and hw_backend == "qsv":
+        fps_for_gop = output_fps or (input_fps if input_fps and input_fps > 0 else 25)
+        fps_for_gop = max(10, min(float(fps_for_gop), 60))
+        gop_size = max(20, min(int(round(fps_for_gop * hls_time)), 120))
+        keyint_min = max(10, min(int(round(fps_for_gop)), gop_size))
+        fps_args = ["-r", str(int(round(output_fps))), "-vsync", "1"] if forced_fps and output_fps else []
+        input_hw_args = ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
+        video_args = [
+            "-c:v",
+            "h264_qsv",
+            "-global_quality",
+            "24",
+            "-g",
+            str(gop_size),
+            "-keyint_min",
+            str(keyint_min),
+            "-bf",
+            "0",
+            *fps_args,
+        ]
     else:
         fps_for_gop = output_fps or (input_fps if input_fps and input_fps > 0 else 25)
         fps_for_gop = max(10, min(float(fps_for_gop), 60))
@@ -264,6 +319,7 @@ def build_hls_command(
         "1000000",
         "-probesize",
         "1000000",
+        *input_hw_args,
         "-i",
         input_url,
         "-map",
