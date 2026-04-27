@@ -49,7 +49,6 @@ STARTUP_INITIAL_TIMEOUT_SECONDS = 20
 STARTUP_PROGRESS_GRACE_SECONDS = 90
 STARTUP_HARD_TIMEOUT_SECONDS = 180
 SLOW_TRANSCODE_FAIL_SECONDS = 75
-UNSTABLE_SOURCE_RESTART_SECONDS = 35
 FRAME_RE = re.compile(r"frame=\s*(?P<value>\d+)")
 FPS_RE = re.compile(r"fps=\s*(?P<value>[\d.]+)")
 TIME_RE = re.compile(r"time=(?P<value>\d+:\d+:\d+(?:\.\d+)?)")
@@ -140,6 +139,8 @@ class StreamInstance:
         self.force_stable_fps = False
         self.jitter_detected = False
         self.unstable_source = False
+        self.restart_reason: str | None = None
+        self.auto_restart_allowed = False
         self.copy_eligible = False
         self.browser_compatible = False
         self.reason_for_transcode: str | None = None
@@ -214,6 +215,14 @@ class StreamInstance:
             return self.playlist_path.exists() and self.playlist_path.stat().st_size > 0 and bool(segments)
         except Exception:
             return False
+
+    def _hls_update_times(self) -> tuple[float | None, float | None]:
+        try:
+            playlist_updated_at = self.playlist_path.stat().st_mtime if self.playlist_path.exists() else None
+            segment_times = [segment.stat().st_mtime for segment in self.stream_dir.glob("seg_*.ts")]
+            return playlist_updated_at, max(segment_times) if segment_times else None
+        except Exception:
+            return None, None
 
     def touch(self):
         self.last_access = time.time()
@@ -604,27 +613,8 @@ class StreamInstance:
                 self._detect_progress_locked(stderr_tail)
 
             if self.is_ready():
-                if (
-                    self.mode != "copy"
-                    and not self.force_stable_fps
-                    and self.unstable_since
-                    and time.time() - self.unstable_since > UNSTABLE_SOURCE_RESTART_SECONDS
-                    and self.camera_source
-                ):
-                    logger.warning(
-                        "Live Engine unstable source detected, restarting with stable FPS camera_id=%s stream=%s speed=%s dup=%s drop=%s",
-                        self.camera_id,
-                        self.stream,
-                        self.last_speed,
-                        self.dup_frames,
-                        self.drop_frames,
-                    )
-                    source = self.camera_source
-                    self.force_stable_fps = True
-                    self.restart_count += 1
-                    self.stop(reason="unstable_source_restart", cleanup_files=True)
-                    self.start(source, force_mode="fallback_transcode")
-                    return True
+                if self.jitter_detected:
+                    self.unstable_source = True
                 self._set_state_locked("ready", "hls_ready", failure_reason=None)
                 return False
 
@@ -642,6 +632,7 @@ class StreamInstance:
                 self._mark_process_exit_locked(reason=reason, cleanup_files=True)
                 if previous_mode == "copy" and source:
                     self.restart_count += 1
+                    self.restart_reason = "copy_failed"
                     self.last_fallback_reason = "copy_failed"
                     self.start(source, force_mode="fallback_transcode")
                     return True
@@ -667,6 +658,7 @@ class StreamInstance:
                     self.stream,
                 )
                 self.restart_count += 1
+                self.restart_reason = "copy_not_ready"
                 self.last_fallback_reason = "copy_not_ready"
                 self.stop(reason="copy_not_ready", cleanup_files=True)
                 self.start(source, force_mode="fallback_transcode")
@@ -703,6 +695,7 @@ class StreamInstance:
         process_info = self.process_info()
         running = process_info["running_verified"]
         ready = self.is_ready()
+        playlist_updated_at, last_segment_at = self._hls_update_times()
         if running and ready:
             status = "ready"
         elif running:
@@ -730,6 +723,8 @@ class StreamInstance:
             "output_fps": self.output_fps,
             "jitter_detected": self.jitter_detected,
             "unstable_source": self.unstable_source,
+            "restart_reason": self.restart_reason,
+            "auto_restart_allowed": self.auto_restart_allowed,
             "copy_eligible": self.copy_eligible,
             "browser_compatible": self.browser_compatible,
             "reason_for_transcode": self.reason_for_transcode,
@@ -762,6 +757,8 @@ class StreamInstance:
             "playlist_path": str(self.playlist_path),
             "playlist_exists": self.playlist_path.exists(),
             "playlist_size": self.playlist_path.stat().st_size if self.playlist_path.exists() else 0,
+            "playlist_updated_at": playlist_updated_at,
+            "last_segment_at": last_segment_at,
             "segment_count": len(list(self.stream_dir.glob("seg_*.ts"))) if self.stream_dir.exists() else 0,
             "segments_count": len(list(self.stream_dir.glob("seg_*.ts"))) if self.stream_dir.exists() else 0,
             "exit_code": self.last_exit_code,
