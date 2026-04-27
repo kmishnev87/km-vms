@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function TimelineRedirectPage() {
-  redirect("/chronology2");
+  redirect("/chronology");
 }

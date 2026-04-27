@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
@@ -29,7 +29,7 @@ const DASHBOARD_ITEMS = [
     description: "\u0416\u0438\u0432\u043e\u0439 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440 \u043a\u0430\u043c\u0435\u0440 \u0432 \u0441\u0432\u043e\u0431\u043e\u0434\u043d\u043e\u043c workspace.",
   },
   {
-    href: "/chronology2",
+    href: "/chronology",
     iconSrc: "/icons/nav/chronology.png",
     bgSrc: "/icons/nav/dashboard-card-chronology-bg.png",
     title: "\u0425\u0440\u043e\u043d\u043e\u043b\u043e\u0433\u0438\u044f",

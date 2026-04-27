@@ -393,6 +393,24 @@ textarea {
   padding: 10px 12px 18px;
 }
 
+.settingsHeader {
+  align-items: center;
+}
+
+.settingsTitleBlock {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.settingsTitleBlock > img {
+  width: 46px;
+  height: 46px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
 .settingsSections {
   display: grid;
   gap: 12px;
@@ -400,16 +418,27 @@ textarea {
 
 .settingsSection {
   border: 1px solid #dbe3ef;
-  border-radius: 14px;
+  border-radius: 12px;
   background: #ffffff;
-  padding: 16px;
+  padding: 14px;
 }
 
 .settingsSection h2 {
-  margin: 0 0 12px;
+  margin: 0;
   color: #0f172a;
-  font-size: 18px;
+  font-size: 17px;
   line-height: 1.2;
+}
+
+.settingsSectionHead {
+  margin-bottom: 12px;
+}
+
+.settingsSectionHead p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .settingsSectionTitle {
@@ -421,8 +450,8 @@ textarea {
 .settingsSectionTitle img,
 .settingsFieldLabel img,
 .settingsUsersNote img {
-  width: 30px;
-  height: 30px;
+  width: 34px;
+  height: 34px;
   object-fit: contain;
   flex: 0 0 auto;
 }
@@ -448,8 +477,39 @@ textarea {
   gap: 8px;
 }
 
+.settingsUsersNote div {
+  display: grid;
+  gap: 3px;
+}
+
+.settingsUsersNote strong {
+  color: #0f172a;
+}
+
+.settingsUsersNote span {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
 .settingsFull {
   grid-column: 1 / -1;
+}
+
+.settingsHint {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+.settingsActions {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
 }
 
 .settingsNote {
@@ -457,6 +517,71 @@ textarea {
   color: #64748b;
   font-size: 13px;
   line-height: 1.45;
+}
+
+.settingsStatus {
+  min-width: 240px;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #f8fafc;
+  color: #334155;
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.settingsStatus strong {
+  color: #0f172a;
+}
+
+.settingsStatus.ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.settingsStatus.ok strong {
+  color: #14532d;
+}
+
+.settingsStatus.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.settingsStatus.warn {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.settingsStatus.compact {
+  margin-top: 10px;
+}
+
+.settingsDetails {
+  margin-top: 10px;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #f8fafc;
+  overflow: hidden;
+}
+
+.settingsDetails summary {
+  cursor: pointer;
+  padding: 10px 12px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.settingsDetails .settingsJson {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
 }
 
 .settingsJson {
@@ -3432,14 +3557,14 @@ textarea {
   }
 }
 
-.chronology2Shell {
+.chronologyShell {
   height: calc(100vh - 78px);
   min-height: 620px;
   display: flex;
   gap: 8px;
 }
 
-.chronology2CameraPanel {
+.chronologyCameraPanel {
   width: 204px;
   flex: 0 0 204px;
   min-width: 0;
@@ -3450,7 +3575,7 @@ textarea {
   overflow: auto;
 }
 
-.chronology2PanelHeader {
+.chronologyPanelHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3458,13 +3583,13 @@ textarea {
   margin-bottom: 8px;
 }
 
-.chronology2PanelTitle {
+.chronologyPanelTitle {
   color: #0f172a;
   font-size: 15px;
   font-weight: 800;
 }
 
-.chronology2AlignButton {
+.chronologyAlignButton {
   height: 26px;
   min-width: 0;
   border: 1px solid #cbd5e1;
@@ -3476,18 +3601,18 @@ textarea {
   cursor: pointer;
 }
 
-.chronology2AlignButton:hover {
+.chronologyAlignButton:hover {
   background: #eff6ff;
   border-color: #bfdbfe;
   color: #1d4ed8;
 }
 
-.chronology2AlignButton:disabled {
+.chronologyAlignButton:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 
-.chronology2Error {
+.chronologyError {
   margin-bottom: 10px;
   padding: 8px 10px;
   border-radius: 10px;
@@ -3496,12 +3621,12 @@ textarea {
   font-size: 13px;
 }
 
-.chronology2CameraList {
+.chronologyCameraList {
   display: grid;
   gap: 6px;
 }
 
-.chronology2CameraItem {
+.chronologyCameraItem {
   border: 1px solid #dbe3ef;
   border-radius: 10px;
   background: #f8fafc;
@@ -3509,11 +3634,11 @@ textarea {
   cursor: grab;
 }
 
-.chronology2CameraItem:active {
+.chronologyCameraItem:active {
   cursor: grabbing;
 }
 
-.chronology2CameraName {
+.chronologyCameraName {
   color: #0f172a;
   font-size: 13px;
   font-weight: 800;
@@ -3523,7 +3648,7 @@ textarea {
   white-space: nowrap;
 }
 
-.chronology2CameraMeta {
+.chronologyCameraMeta {
   margin-top: 3px;
   color: #64748b;
   font-size: 12px;
@@ -3532,7 +3657,7 @@ textarea {
   white-space: nowrap;
 }
 
-.chronology2Main {
+.chronologyMain {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
@@ -3540,7 +3665,7 @@ textarea {
   gap: 8px;
 }
 
-.chronology2Toolbar {
+.chronologyToolbar {
   min-height: 40px;
   border: 1px solid #dbe3ef;
   border-radius: 12px;
@@ -3552,8 +3677,8 @@ textarea {
   flex-wrap: wrap;
 }
 
-.chronology2DateInput,
-.chronology2TimeInput {
+.chronologyDateInput,
+.chronologyTimeInput {
   height: 30px;
   min-height: 30px;
   border: 1px solid #cbd5e1;
@@ -3564,17 +3689,17 @@ textarea {
   font-size: 12px;
 }
 
-.chronology2DateInput {
+.chronologyDateInput {
   width: 136px;
 }
 
-.chronology2TimeInput {
+.chronologyTimeInput {
   width: 112px;
 }
 
-.chronology2PrimaryButton,
-.chronology2IconButton,
-.chronology2SpeedButton {
+.chronologyPrimaryButton,
+.chronologyIconButton,
+.chronologySpeedButton {
   height: 30px;
   min-height: 30px;
   border: 1px solid #cbd5e1;
@@ -3586,48 +3711,48 @@ textarea {
   cursor: pointer;
 }
 
-.chronology2PrimaryButton {
+.chronologyPrimaryButton {
   background: #0f172a;
   border-color: #0f172a;
   color: #ffffff;
   font-weight: 700;
 }
 
-.chronology2IconButton {
+.chronologyIconButton {
   min-width: 34px;
 }
 
-.chronology2PrimaryButton:hover,
-.chronology2IconButton:hover,
-.chronology2SpeedButton:hover {
+.chronologyPrimaryButton:hover,
+.chronologyIconButton:hover,
+.chronologySpeedButton:hover {
   border-color: #bfdbfe;
   background: #eff6ff;
   color: #1d4ed8;
 }
 
-.chronology2PrimaryButton:hover {
+.chronologyPrimaryButton:hover {
   background: #1e293b;
   color: #ffffff;
 }
 
-.chronology2SpeedGroup {
+.chronologySpeedGroup {
   display: flex;
   align-items: center;
   gap: 4px;
 }
 
-.chronology2SpeedButton {
+.chronologySpeedButton {
   min-width: 46px;
   padding: 0 6px;
 }
 
-.chronology2SpeedButton.active {
+.chronologySpeedButton.active {
   background: #0f172a;
   border-color: #0f172a;
   color: #ffffff;
 }
 
-.chronology2TimeBox {
+.chronologyTimeBox {
   margin-left: auto;
   min-height: 30px;
   border: 1px solid #dbe3ef;
@@ -3640,18 +3765,18 @@ textarea {
   white-space: nowrap;
 }
 
-.chronology2TimelineWrap .chronologyTimelineCard {
+.chronologyTimelineWrap .chronologyTimelineCard {
   margin-bottom: 0;
   padding: 8px 10px 10px;
   border-radius: 12px;
 }
 
-.chronology2TimelineWrap .chronologyTimelineBody {
+.chronologyTimelineWrap .chronologyTimelineBody {
   min-height: 96px;
   border-radius: 12px;
 }
 
-.chronology2Workspace {
+.chronologyWorkspace {
   position: relative;
   flex: 1 1 auto;
   min-width: 0;
@@ -3666,11 +3791,11 @@ textarea {
   background-size: 32px 32px;
 }
 
-.chronology2Workspace.isEditing {
+.chronologyWorkspace.isEditing {
   user-select: none;
 }
 
-.chronology2Empty {
+.chronologyEmpty {
   position: absolute;
   inset: 0;
   display: flex;
@@ -3679,7 +3804,7 @@ textarea {
   pointer-events: none;
 }
 
-.chronology2EmptyTitle {
+.chronologyEmptyTitle {
   padding: 10px 14px;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 12px;
@@ -3688,7 +3813,7 @@ textarea {
   font-size: 14px;
 }
 
-.chronology2Tile {
+.chronologyTile {
   position: absolute;
   z-index: 2;
   min-width: 0;
@@ -3702,7 +3827,7 @@ textarea {
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
 }
 
-.chronology2TileBar {
+.chronologyTileBar {
   height: 34px;
   flex: 0 0 34px;
   display: grid;
@@ -3715,7 +3840,7 @@ textarea {
   cursor: move;
 }
 
-.chronology2TileTitle {
+.chronologyTileTitle {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3724,7 +3849,7 @@ textarea {
   font-weight: 800;
 }
 
-.chronology2TileButton {
+.chronologyTileButton {
   width: 26px;
   height: 26px;
   border: 0;
@@ -3736,15 +3861,15 @@ textarea {
   line-height: 1;
 }
 
-.chronology2TileButton:hover {
+.chronologyTileButton:hover {
   background: rgba(239, 68, 68, 0.7);
 }
 
-.chronology2FullscreenButton:hover {
+.chronologyFullscreenButton:hover {
   background: rgba(37, 99, 235, 0.72);
 }
 
-.chronology2Tile.fullscreen {
+.chronologyTile.fullscreen {
   position: fixed;
   inset: 8px;
   width: auto;
@@ -3753,28 +3878,28 @@ textarea {
   box-shadow: 0 22px 70px rgba(0, 0, 0, 0.48);
 }
 
-.chronology2Tile.fullscreen .chronology2TileBar {
+.chronologyTile.fullscreen .chronologyTileBar {
   height: 38px;
   flex-basis: 38px;
 }
 
-.chronology2TileVideo {
+.chronologyTileVideo {
   flex: 1 1 auto;
   min-height: 0;
   background: #000000;
 }
 
-.chronology2TileVideo .archiveVideoWrap {
+.chronologyTileVideo .archiveVideoWrap {
   min-height: 0;
   height: 100%;
   cursor: default;
 }
 
-.chronology2TileVideo .archiveCenterHint {
+.chronologyTileVideo .archiveCenterHint {
   pointer-events: none;
 }
 
-.chronology2Missing {
+.chronologyMissing {
   height: 100%;
   display: flex;
   align-items: center;
@@ -3783,7 +3908,7 @@ textarea {
   font-size: 14px;
 }
 
-.chronology2ResizeHandle {
+.chronologyResizeHandle {
   position: absolute;
   right: 0;
   bottom: 0;
@@ -3800,28 +3925,28 @@ textarea {
   cursor: nwse-resize;
 }
 
-.chronology2ResizeHandle.hidden {
+.chronologyResizeHandle.hidden {
   display: none;
 }
 
 @media (max-width: 900px) {
-  .chronology2Shell {
+  .chronologyShell {
     height: auto;
     min-height: 0;
     flex-direction: column;
   }
 
-  .chronology2CameraPanel {
+  .chronologyCameraPanel {
     width: 100%;
     flex: 0 0 auto;
     max-height: 220px;
   }
 
-  .chronology2Workspace {
+  .chronologyWorkspace {
     height: 680px;
   }
 
-  .chronology2TimeBox {
+  .chronologyTimeBox {
     width: 100%;
     margin-left: 0;
   }
