@@ -6,23 +6,30 @@ ENV TZ=Asia/Yekaterinburg
 
 WORKDIR /app
 
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    gnupg \
-    tzdata \
-    libdrm2 \
-    libva2 \
-    libva-drm2 \
-    vainfo \
-    intel-media-va-driver \
-    mesa-va-drivers \
-    libmfx1 \
-    libvpl2 \
-    && groupadd -f render \
-    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
-    && echo $TZ > /etc/timezone \
-    && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      gnupg \
+      tzdata \
+      libdrm2 \
+      libva2 \
+      libva-drm2 \
+      vainfo \
+      intel-media-va-driver \
+      mesa-va-drivers; \
+    for package in libvpl2 libmfx1; do \
+      if apt-cache show "$package" >/dev/null 2>&1; then \
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "$package"; \
+      else \
+        echo "Skipping unavailable optional media package: $package"; \
+      fi; \
+    done; \
+    groupadd -f render; \
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime; \
+    echo $TZ > /etc/timezone; \
+    rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
     mkdir -p /etc/apt/keyrings; \
