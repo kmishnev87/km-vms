@@ -57,6 +57,9 @@ export default function SettingsPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const t = TEXT[settings?.language || "ru"] || TEXT.ru;
+  const languageIcon = settings?.language === "en"
+    ? "/icons/nav/language-icon_ENG.png"
+    : "/icons/nav/language-icon_RU.png";
 
   useEffect(() => {
     load();
@@ -146,24 +149,30 @@ export default function SettingsPage() {
         {!settings ? null : (
           <div className="settingsSections">
             <section className="settingsSection">
-              <h2>{t.system}</h2>
+              <h2 className="settingsSectionTitle">
+                <img src="/icons/nav/settings-icon.png" alt="" />
+                <span>{t.system}</span>
+              </h2>
               <div className="settingsGrid">
                 <label className="settingsField">
-                  <span>{t.language}</span>
+                  <span className="settingsFieldLabel"><img src={languageIcon} alt="" />{t.language}</span>
                   <select className="select" value={settings.language} onChange={(e) => patch("language", e.target.value)}>
                     <option value="ru">RU</option>
                     <option value="en">EN</option>
                   </select>
                 </label>
                 <label className="settingsField">
-                  <span>{t.timezone}</span>
+                  <span className="settingsFieldLabel"><img src="/icons/nav/timezone-icon.png" alt="" />{t.timezone}</span>
                   <input className="input" value={settings.timezone || ""} onChange={(e) => patch("timezone", e.target.value)} />
                 </label>
               </div>
             </section>
 
             <section className="settingsSection">
-              <h2>{t.storage}</h2>
+              <h2 className="settingsSectionTitle">
+                <img src="/icons/nav/storage-icon.png" alt="" />
+                <span>{t.storage}</span>
+              </h2>
               <div className="settingsGrid">
                 <label className="settingsField settingsFull">
                   <span>{t.storagePath}</span>
@@ -177,7 +186,10 @@ export default function SettingsPage() {
             </section>
 
             <section className="settingsSection">
-              <h2>{t.recording}</h2>
+              <h2 className="settingsSectionTitle">
+                <img src="/icons/nav/storage-icon.png" alt="" />
+                <span>{t.recording}</span>
+              </h2>
               <div className="settingsGrid">
                 <label className="settingsField">
                   <span>{t.recordingFormat}</span>
@@ -191,7 +203,10 @@ export default function SettingsPage() {
             </section>
 
             <section className="settingsSection">
-              <h2>{t.hardware}</h2>
+              <h2 className="settingsSectionTitle">
+                <img src="/icons/nav/hardware-icon.png" alt="" />
+                <span>{t.hardware}</span>
+              </h2>
               <button className="button secondary small" onClick={rescanHardware}>{t.rescan}</button>
               <div className="settingsGrid settingsHardwareGrid">
                 <label className="settingsField">
@@ -206,9 +221,15 @@ export default function SettingsPage() {
             </section>
 
             <section className="settingsSection">
-              <h2>{t.security}</h2>
+              <h2 className="settingsSectionTitle">
+                <img src="/icons/nav/security-icon.png" alt="" />
+                <span>{t.security}</span>
+              </h2>
               <div className="settingsNote">{t.securityNote}</div>
-              <div className="settingsNote">{t.rolesNote}</div>
+              <div className="settingsNote settingsUsersNote">
+                <img src="/icons/nav/users-icon.png" alt="" />
+                <span>{t.rolesNote}</span>
+              </div>
             </section>
           </div>
         )}

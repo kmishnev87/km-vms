@@ -10,7 +10,6 @@ const items = [
   { href: "/recordings", label: "\u0417\u0430\u043f\u0438\u0441\u0438", iconSrc: "/icons/nav/records.png" },
   { href: "/live", label: "\u041e\u043d\u043b\u0430\u0439\u043d", iconSrc: "/icons/nav/online.png" },
   { href: "/chronology2", label: "\u0425\u0440\u043e\u043d\u043e\u043b\u043e\u0433\u0438\u044f", iconSrc: "/icons/nav/chronology.png" },
-  { href: "/settings", label: "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", glyph: "\u2699" },
 ];
 
 export default function Layout({ children }) {
@@ -64,15 +63,26 @@ export default function Layout({ children }) {
             ))}
           </nav>
 
-          <button
-            className="topNavItem topNavButton"
-            onClick={logout}
-            type="button"
-            title={"\u0412\u044b\u0445\u043e\u0434"}
-            aria-label={"\u0412\u044b\u0445\u043e\u0434"}
-          >
-            <img className="topNavIconImage" src="/icons/nav/logout.png" alt="" />
-          </button>
+          <div className="topNavRight">
+            <Link
+              href="/settings"
+              className={`topNavItem ${pathname === "/settings" ? "active" : ""}`}
+              title={"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438"}
+              aria-label={"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438"}
+            >
+              <img className="topNavIconImage" src="/icons/nav/settings-icon.png" alt="" />
+            </Link>
+
+            <button
+              className="topNavItem topNavButton"
+              onClick={logout}
+              type="button"
+              title={"\u0412\u044b\u0445\u043e\u0434"}
+              aria-label={"\u0412\u044b\u0445\u043e\u0434"}
+            >
+              <img className="topNavIconImage" src="/icons/nav/logout.png" alt="" />
+            </button>
+          </div>
         </div>
       </header>
 

@@ -76,6 +76,14 @@ textarea {
   min-width: 0;
 }
 
+.topNavRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
 .topNavItem {
   height: 44px;
   width: 46px;
@@ -93,7 +101,6 @@ textarea {
 }
 
 .topNavButton {
-  margin-left: 18px;
   background: transparent;
   font: inherit;
   cursor: pointer;
@@ -148,13 +155,23 @@ textarea {
 }
 
 .dashboardHeader {
+  position: relative;
+  overflow: hidden;
   min-height: 132px;
   border: 1px solid #dbe3ef;
   border-radius: 14px;
-  background: #ffffff;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.96) 0%, rgba(255, 255, 255, 0.9) 46%, rgba(255, 255, 255, 0.72) 100%),
+    url("/icons/nav/dashboard-header-bg.png") center right / cover no-repeat,
+    #ffffff;
   padding: 24px;
   display: flex;
   align-items: center;
+}
+
+.dashboardHeader > * {
+  position: relative;
+  z-index: 1;
 }
 
 .dashboardTitle {
@@ -178,10 +195,15 @@ textarea {
 }
 
 .dashboardCard {
+  position: relative;
+  overflow: hidden;
   min-height: 230px;
   border: 1px solid #dbe3ef;
   border-radius: 14px;
-  background: #ffffff;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(255, 255, 255, 0.88)),
+    var(--dashboard-card-bg, none) center / cover no-repeat,
+    #ffffff;
   padding: 16px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px;
@@ -189,6 +211,11 @@ textarea {
   align-items: start;
   gap: 12px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.dashboardCard > * {
+  position: relative;
+  z-index: 1;
 }
 
 .dashboardCard:hover {
@@ -385,6 +412,21 @@ textarea {
   line-height: 1.2;
 }
 
+.settingsSectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settingsSectionTitle img,
+.settingsFieldLabel img,
+.settingsUsersNote img {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
 .settingsGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -397,6 +439,13 @@ textarea {
   color: #475569;
   font-size: 13px;
   font-weight: 800;
+}
+
+.settingsFieldLabel,
+.settingsUsersNote {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .settingsFull {
@@ -1276,7 +1325,7 @@ textarea {
   }
 
   .topNavButton {
-    margin-left: 10px;
+    margin-left: 0;
   }
 
   .topNavIconImage {
