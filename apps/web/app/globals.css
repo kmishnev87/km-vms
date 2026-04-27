@@ -218,7 +218,7 @@ textarea {
   width: 58%;
   height: 92%;
   background: var(--dashboard-card-bg, none) center right / contain no-repeat;
-  opacity: 0.28;
+  opacity: 0.46;
   transform: translateY(-50%);
   filter: saturate(1.08) contrast(1.08);
   pointer-events: none;
@@ -228,7 +228,7 @@ textarea {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.92) 56%, rgba(255, 255, 255, 0.68) 100%);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.9) 58%, rgba(255, 255, 255, 0.48) 100%);
   pointer-events: none;
 }
 
@@ -407,7 +407,7 @@ textarea {
 
 .settingsPage {
   width: 100%;
-  max-width: 1180px;
+  max-width: 1120px;
   margin: 0 auto;
   padding: 8px 12px 18px;
 }
@@ -432,7 +432,7 @@ textarea {
 
 .settingsSections {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .settingsSection {
@@ -440,10 +440,6 @@ textarea {
   border-radius: 12px;
   background: #ffffff;
   padding: 12px 14px;
-}
-
-.settingsSectionCompact {
-  max-width: 920px;
 }
 
 .settingsSection h2 {
@@ -479,8 +475,8 @@ textarea {
 }
 
 .settingsFieldLabel img {
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   object-fit: contain;
   flex: 0 0 auto;
 }
@@ -491,7 +487,7 @@ textarea {
 }
 
 .settingsControlGrid.two {
-  grid-template-columns: minmax(220px, 320px) minmax(320px, 480px);
+  grid-template-columns: minmax(220px, 360px) minmax(220px, 360px);
   align-items: start;
 }
 
@@ -510,11 +506,11 @@ textarea {
 }
 
 .settingsControl {
-  max-width: 420px;
+  max-width: 360px;
 }
 
 .settingsControlWide {
-  max-width: 520px;
+  max-width: 420px;
 }
 
 .settingsSelect,
@@ -524,7 +520,7 @@ textarea {
 }
 
 .timezoneSelect {
-  min-width: 320px;
+  min-width: 0;
 }
 
 .settingsFieldLabel,
@@ -593,9 +589,13 @@ textarea {
 .settingsStorageLayout,
 .settingsHardwareLayout {
   display: grid;
-  grid-template-columns: minmax(300px, 520px) minmax(260px, 420px);
+  grid-template-columns: minmax(260px, 420px) auto;
   gap: 12px;
   align-items: start;
+}
+
+.settingsHardwareLayout.single {
+  grid-template-columns: minmax(260px, 420px);
 }
 
 .settingsStorageAction {
@@ -603,7 +603,29 @@ textarea {
 }
 
 .settingsPathControl {
-  max-width: 560px;
+  max-width: 420px;
+}
+
+.settingsToast {
+  position: fixed;
+  top: 72px;
+  right: 24px;
+  z-index: 7000;
+  max-width: min(360px, calc(100vw - 32px));
+  border: 1px solid #bbf7d0;
+  border-radius: 12px;
+  background: #f0fdf4;
+  color: #14532d;
+  padding: 10px 12px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.settingsToast.error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
 }
 
 .settingsHardwareOptions {

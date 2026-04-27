@@ -1,59 +1,42 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import { apiFetch } from "../../lib/api";
 
-const TIMEZONE_GROUPS = [
-  { label: "UTC", zones: [{ value: "UTC", ru: "UTC", en: "UTC" }] },
-  {
-    label: "Europe",
-    zones: [
-      { value: "Europe/London", ru: "Лондон", en: "London" },
-      { value: "Europe/Berlin", ru: "Берлин", en: "Berlin" },
-      { value: "Europe/Paris", ru: "Париж", en: "Paris" },
-      { value: "Europe/Moscow", ru: "Москва", en: "Moscow" },
-    ],
-  },
-  {
-    label: "Asia",
-    zones: [
-      { value: "Asia/Yekaterinburg", ru: "Екатеринбург", en: "Yekaterinburg" },
-      { value: "Asia/Novosibirsk", ru: "Новосибирск", en: "Novosibirsk" },
-      { value: "Asia/Krasnoyarsk", ru: "Красноярск", en: "Krasnoyarsk" },
-      { value: "Asia/Irkutsk", ru: "Иркутск", en: "Irkutsk" },
-      { value: "Asia/Yakutsk", ru: "Якутск", en: "Yakutsk" },
-      { value: "Asia/Vladivostok", ru: "Владивосток", en: "Vladivostok" },
-      { value: "Asia/Tokyo", ru: "Токио", en: "Tokyo" },
-      { value: "Asia/Shanghai", ru: "Шанхай", en: "Shanghai" },
-      { value: "Asia/Dubai", ru: "Дубай", en: "Dubai" },
-    ],
-  },
-  {
-    label: "North America",
-    zones: [
-      { value: "America/New_York", ru: "Eastern Time", en: "Eastern Time" },
-      { value: "America/Chicago", ru: "Central Time", en: "Central Time" },
-      { value: "America/Denver", ru: "Mountain Time", en: "Mountain Time" },
-      { value: "America/Los_Angeles", ru: "Pacific Time", en: "Pacific Time" },
-      { value: "America/Toronto", ru: "Торонто", en: "Toronto" },
-    ],
-  },
-  {
-    label: "South America",
-    zones: [
-      { value: "America/Sao_Paulo", ru: "Сан-Паулу", en: "Sao Paulo" },
-      { value: "America/Argentina/Buenos_Aires", ru: "Буэнос-Айрес", en: "Buenos Aires" },
-    ],
-  },
-  {
-    label: "Australia",
-    zones: [
-      { value: "Australia/Sydney", ru: "Сидней", en: "Sydney" },
-      { value: "Australia/Perth", ru: "Перт", en: "Perth" },
-    ],
-  },
-];
+const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
+  const offset = index - 12;
+  const sign = offset >= 0 ? "+" : "-";
+  const label = offset === 0 ? "UTC+00:00" : `UTC${sign}${String(Math.abs(offset)).padStart(2, "0")}:00`;
+  const value = offset === 0 ? "UTC" : `Etc/GMT${offset > 0 ? "-" : "+"}${Math.abs(offset)}`;
+  return { offset, label, value };
+});
+
+const LEGACY_TIMEZONE_OFFSETS = {
+  UTC: 0,
+  "Europe/London": 0,
+  "Europe/Berlin": 1,
+  "Europe/Paris": 1,
+  "Europe/Moscow": 3,
+  "Asia/Dubai": 4,
+  "Asia/Yekaterinburg": 5,
+  "Asia/Novosibirsk": 7,
+  "Asia/Krasnoyarsk": 7,
+  "Asia/Irkutsk": 8,
+  "Asia/Shanghai": 8,
+  "Asia/Tokyo": 9,
+  "Asia/Yakutsk": 9,
+  "Asia/Vladivostok": 10,
+  "America/New_York": -5,
+  "America/Toronto": -5,
+  "America/Chicago": -6,
+  "America/Denver": -7,
+  "America/Los_Angeles": -8,
+  "America/Sao_Paulo": -3,
+  "America/Argentina/Buenos_Aires": -3,
+  "Australia/Perth": 8,
+  "Australia/Sydney": 10,
+};
 
 const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "nvenc", "amf", "cpu"];
 
@@ -73,6 +56,8 @@ const TEXT = {
     save: "Сохранить",
     saving: "Сохранение...",
     saved: "Настройки сохранены",
+    storageValidated: "Хранилище доступно. Свободно: {free}",
+    hardwareChecked: "Аппаратные возможности проверены",
     system: "Система",
     systemText: "Базовые параметры интерфейса и отображения времени.",
     language: "Язык",
@@ -112,8 +97,6 @@ const TEXT = {
     rescan: "Проверить аппаратные возможности",
     hardwareAvailable: "Аппаратное ускорение доступно.",
     hardwareUnavailable: "Аппаратное ускорение недоступно. Будет использоваться CPU fallback.",
-    dockerOk: "Docker имеет доступ к видеоустройству.",
-    dockerFail: "Docker не имеет доступа к видеоустройству или устройство не найдено.",
     selected: "Выбрано",
     availableOptions: "Доступные варианты",
     failedValidation: "Не прошёл проверку",
@@ -127,6 +110,7 @@ const TEXT = {
     notAuthenticated: "Нужно войти заново.",
     forbidden: "Недостаточно прав.",
     network: "Сервер недоступен.",
+    i18nNote: "Глобальный перевод интерфейса ещё не завершён. На этом этапе язык полностью применяется к странице настроек.",
   },
   en: {
     title: "Settings",
@@ -134,6 +118,8 @@ const TEXT = {
     save: "Save",
     saving: "Saving...",
     saved: "Settings saved",
+    storageValidated: "Storage is available. Free: {free}",
+    hardwareChecked: "Hardware capabilities checked",
     system: "System",
     systemText: "Core interface and displayed time settings.",
     language: "Language",
@@ -173,8 +159,6 @@ const TEXT = {
     rescan: "Check hardware capabilities",
     hardwareAvailable: "Hardware acceleration is available.",
     hardwareUnavailable: "Hardware acceleration is unavailable. CPU fallback will be used.",
-    dockerOk: "Docker has access to the video device.",
-    dockerFail: "Docker cannot access the video device or the device is missing.",
     selected: "Selected",
     availableOptions: "Available options",
     failedValidation: "Failed validation",
@@ -188,6 +172,7 @@ const TEXT = {
     notAuthenticated: "Please sign in again.",
     forbidden: "Insufficient permissions.",
     network: "Server is unavailable.",
+    i18nNote: "Global interface translation is not complete yet. At this stage, language is fully applied to Settings.",
   },
 };
 
@@ -198,25 +183,6 @@ function languageOf(settings) {
 function backendLabel(value, lang) {
   const key = value || "auto";
   return BACKEND_LABELS[key]?.[lang] || key;
-}
-
-function timezoneOffset(zone) {
-  try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: zone,
-      timeZoneName: "shortOffset",
-      hour: "2-digit",
-    }).formatToParts(new Date());
-    const value = parts.find((part) => part.type === "timeZoneName")?.value || "UTC";
-    return value.replace("GMT", "UTC");
-  } catch {
-    return "UTC";
-  }
-}
-
-function timezoneLabel(zone, lang) {
-  const name = zone[lang] || zone.en || zone.value;
-  return `${timezoneOffset(zone.value)} — ${name} (${zone.value})`;
 }
 
 function formatBytes(value) {
@@ -264,6 +230,12 @@ function profileFromFormat(format) {
   return format === "mp4" ? "compatibility" : "balanced";
 }
 
+function timezoneValueForSettings(timezone) {
+  if (UTC_TIMEZONES.some((zone) => zone.value === timezone)) return timezone;
+  const offset = LEGACY_TIMEZONE_OFFSETS[timezone] ?? 0;
+  return UTC_TIMEZONES.find((zone) => zone.offset === offset)?.value || "UTC";
+}
+
 function hardwareOptionState(backend, hardware, t) {
   if (backend === "auto" || backend === "cpu") return { selectable: true, reason: "" };
   const status = hardware?.backend_status?.[backend];
@@ -276,12 +248,10 @@ function hardwareOptionState(backend, hardware, t) {
 export default function SettingsPage() {
   const [settings, setSettings] = useState(null);
   const [hardware, setHardware] = useState(null);
-  const [storageResult, setStorageResult] = useState(null);
   const [recordingProfile, setRecordingProfile] = useState("balanced");
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [toast, setToast] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [hardwareNotice, setHardwareNotice] = useState("");
+  const toastTimerRef = useRef(null);
   const lang = languageOf(settings);
   const t = TEXT[lang] || TEXT.ru;
   const languageIcon = lang === "en"
@@ -290,10 +260,16 @@ export default function SettingsPage() {
 
   useEffect(() => {
     load();
+    return () => window.clearTimeout(toastTimerRef.current);
   }, []);
 
+  function showToast(text, type = "ok") {
+    setToast({ text, type });
+    window.clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2800);
+  }
+
   async function load() {
-    setError("");
     try {
       const [settingsData, hardwareData] = await Promise.all([
         apiFetch("/settings"),
@@ -303,7 +279,7 @@ export default function SettingsPage() {
       setRecordingProfile(profileFromFormat(settingsData?.recording_format));
       setHardware(hardwareData);
     } catch (err) {
-      setError(humanError(err, lang));
+      showToast(humanError(err, lang), "error");
     }
   }
 
@@ -313,14 +289,12 @@ export default function SettingsPage() {
 
   async function save() {
     setBusy(true);
-    setError("");
-    setMessage("");
     try {
       const updated = await apiFetch("/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          timezone: settings.timezone,
+          timezone: timezoneValueForSettings(settings.timezone),
           language: settings.language,
           storage_path: settings.storage_path,
           recording_format: recordingFormatForProfile(recordingProfile),
@@ -328,38 +302,36 @@ export default function SettingsPage() {
         }),
       });
       setSettings(updated);
-      setMessage(t.saved);
+      showToast(t.saved);
     } catch (err) {
-      setError(humanError(err, lang));
+      showToast(humanError(err, lang), "error");
     } finally {
       setBusy(false);
     }
   }
 
   async function validateStorage() {
-    setStorageResult(null);
-    setError("");
-    setMessage("");
     try {
       const result = await apiFetch("/settings/storage/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ storage_path: settings.storage_path, create: true }),
       });
-      setStorageResult(result);
-      if (!result.ok) setError(storageMessage(result, lang));
+      showToast(
+        result.ok ? t.storageValidated.replace("{free}", formatBytes(result.free_bytes)) : storageMessage(result, lang),
+        result.ok ? "ok" : "error"
+      );
     } catch (err) {
-      setError(humanError(err, lang));
+      showToast(humanError(err, lang), "error");
     }
   }
 
   async function rescanHardware() {
-    setError("");
-    setMessage("");
     try {
       setHardware(await apiFetch("/hardware/rescan", { method: "POST" }));
+      showToast(t.hardwareChecked);
     } catch (err) {
-      setError(humanError(err, lang));
+      showToast(humanError(err, lang), "error");
     }
   }
 
@@ -382,16 +354,17 @@ export default function SettingsPage() {
     const value = event.target.value || "auto";
     const state = hardwareOptionState(value, hardware, t);
     if (!state.selectable) {
-      setHardwareNotice(t.unavailableMode);
+      showToast(t.unavailableMode, "error");
       return;
     }
-    setHardwareNotice("");
     patch("hardware_preferred_backend", value === "auto" ? null : value);
   }
 
   return (
     <Layout>
       <div className="settingsPage">
+        {toast ? <div className={`settingsToast ${toast.type}`}>{toast.text}</div> : null}
+
         <div className="pageHeader settingsHeader">
           <div className="settingsTitleBlock">
             <img src="/icons/nav/settings-icon.png" alt="" />
@@ -405,13 +378,9 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        {error ? <div className="settingsAlert error">{error}</div> : null}
-        {message ? <div className="settingsAlert ok">{message}</div> : null}
-        {hardwareNotice ? <div className="settingsAlert error">{hardwareNotice}</div> : null}
-
         {!settings ? null : (
           <div className="settingsSections">
-            <section className="settingsSection settingsSectionCompact">
+            <section className="settingsSection">
               <div className="settingsSectionHead">
                 <h2 className="settingsSectionTitle">
                   <img src="/icons/nav/settings-icon.png" alt="" />
@@ -429,19 +398,20 @@ export default function SettingsPage() {
                     <option value="ru">{t.russian}</option>
                     <option value="en">{t.english}</option>
                   </select>
+                  <span className="settingsHint">{t.i18nNote}</span>
                 </label>
-                <label className="settingsField settingsControl settingsControlWide">
+                <label className="settingsField settingsControl">
                   <span className="settingsFieldLabel">
                     <img src="/icons/nav/timezone-icon.png" alt="" />
                     {t.timezone}
                   </span>
-                  <select className="select settingsSelect timezoneSelect" value={settings.timezone || ""} onChange={(event) => patch("timezone", event.target.value)}>
-                    {TIMEZONE_GROUPS.map((group) => (
-                      <optgroup key={group.label} label={group.label}>
-                        {group.zones.map((zone) => (
-                          <option key={zone.value} value={zone.value}>{timezoneLabel(zone, lang)}</option>
-                        ))}
-                      </optgroup>
+                  <select
+                    className="select settingsSelect timezoneSelect"
+                    value={timezoneValueForSettings(settings.timezone)}
+                    onChange={(event) => patch("timezone", event.target.value)}
+                  >
+                    {UTC_TIMEZONES.map((zone) => (
+                      <option key={zone.value} value={zone.value}>{zone.label}</option>
                     ))}
                   </select>
                   <span className="settingsHint">{t.timezoneHelp}</span>
@@ -466,19 +436,10 @@ export default function SettingsPage() {
                 <div className="settingsStorageAction">
                   <button className="button secondary small" onClick={validateStorage}>{t.validate}</button>
                 </div>
-                {storageResult ? (
-                  <div className={`settingsStatus ${storageResult.ok ? "ok" : "error"}`}>
-                    <strong>{storageMessage(storageResult, lang)}</strong>
-                    <span>{t.path}: {storageResult.path}</span>
-                    <span>{storageResult.writable ? t.writeAllowed : t.writeDenied}</span>
-                    <span>{storageResult.created ? t.created : t.exists}: {storageResult.exists ? t.yes : t.no}</span>
-                    {storageResult.free_bytes != null ? <span>{t.free}: {formatBytes(storageResult.free_bytes)}</span> : null}
-                  </div>
-                ) : null}
               </div>
             </section>
 
-            <section className="settingsSection settingsSectionCompact">
+            <section className="settingsSection">
               <div className="settingsSectionHead">
                 <h2 className="settingsSectionTitle">
                   <img src="/icons/nav/records.png" alt="" />
@@ -507,7 +468,7 @@ export default function SettingsPage() {
                 </h2>
                 <p>{t.hardwareText}</p>
               </div>
-              <div className="settingsHardwareLayout">
+              <div className="settingsHardwareLayout single">
                 <label className="settingsField settingsControl settingsControlWide">
                   <span>{t.hardwareMode}</span>
                   <select className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange}>
@@ -518,23 +479,17 @@ export default function SettingsPage() {
                         disabled={!selectable}
                         title={reason || backendLabel(backend, lang)}
                       >
-                        {backendLabel(backend, lang)}{selectable ? "" : ` — ${reason || t.notDetected}`}
+                        {backendLabel(backend, lang)}
                       </option>
                     ))}
                   </select>
                 </label>
-                <div className={`settingsStatus ${hardware?.hardware_accel_available ? "ok" : "warn"}`}>
-                  <strong>{hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable}</strong>
-                  <span>{t.selected}: {backendLabel(selectedHardware, lang)}</span>
-                  <span>{hardware?.docker_device_access_ok ? t.dockerOk : t.dockerFail}</span>
-                  <span>{t.cpuFallback}</span>
-                </div>
               </div>
               <div className="settingsActions">
                 <button className="button secondary small" onClick={rescanHardware}>{t.rescan}</button>
               </div>
               <div className="settingsNote">
-                {t.availableOptions}: {availableHardware.length ? availableHardware.map((backend) => backendLabel(backend, lang)).join(", ") : backendLabel("cpu", lang)}.
+                {hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.
               </div>
               <div className="settingsHardwareOptions">
                 {hardwareSummary.map(({ backend, selectable, reason }) => (
@@ -558,7 +513,7 @@ export default function SettingsPage() {
               ) : null}
             </section>
 
-            <section className="settingsSection settingsSectionCompact">
+            <section className="settingsSection">
               <div className="settingsSectionHead">
                 <h2 className="settingsSectionTitle">
                   <img src="/icons/nav/security-icon.png" alt="" />
