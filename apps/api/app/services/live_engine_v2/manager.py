@@ -149,6 +149,9 @@ class StreamInstance:
         self.hw_device: str | None = None
         self.hwaccel_mode = settings.live_hwaccel_mode
         self.selected_pipeline = "cpu"
+        self.selected_backend = "cpu"
+        self.attempted_backends: list[str] = []
+        self.failed_backends: dict[str, str] = {}
         self.hw_decode = False
         self.hw_encode = False
         self.fallback_to_cpu = False
@@ -380,7 +383,60 @@ class StreamInstance:
         if cleanup_files:
             shutil.rmtree(self.stream_dir, ignore_errors=True)
 
-    def _choose_mode(self, camera: Camera, input_url: str, force_mode: str | None = None) -> str:
+    def _next_hw_backend(self, caps: dict) -> str | None:
+        available = caps.get("available_backends") or []
+        priority = caps.get("backend_priority") or available
+        for backend in priority:
+            if backend in available and backend not in self.failed_backends:
+                return backend
+        return None
+
+    def _mark_hw_backend_failed(self, reason: str, detail: str | None = None):
+        backend = self.hw_backend
+        if not backend:
+            return
+        failure = mask_rtsp_credentials(detail or reason or "hardware_backend_failed")
+        self.failed_backends[backend] = failure
+        self.hw_failure_reason = failure
+        self.last_fallback_reason = reason
+        self.fallback_to_cpu = False
+
+    def _retry_next_backend_or_cpu_locked(self, source, reason: str, detail: str | None = None) -> bool:
+        self._mark_hw_backend_failed(reason, detail)
+        caps = get_hardware_capabilities()
+        next_backend = self._next_hw_backend(caps)
+        self.restart_count += 1
+        self.restart_reason = reason
+        if next_backend:
+            logger.warning(
+                "Live Engine hardware backend failed, trying next backend camera_id=%s stream=%s failed_backend=%s next_backend=%s reason=%s",
+                self.camera_id,
+                self.stream,
+                self.hw_backend,
+                next_backend,
+                mask_rtsp_credentials(detail or reason),
+            )
+            self.start(source, transcode_allowed=True, force_hw_backend=next_backend)
+            return True
+
+        self.fallback_to_cpu = True
+        self.selected_backend = "cpu"
+        logger.warning(
+            "Live Engine all hardware backends failed, falling back to CPU camera_id=%s stream=%s failed_backends=%s",
+            self.camera_id,
+            self.stream,
+            self.failed_backends,
+        )
+        self.start(source, force_mode="fallback_transcode")
+        return True
+
+    def _choose_mode(
+        self,
+        camera: Camera,
+        input_url: str,
+        force_mode: str | None = None,
+        force_hw_backend: str | None = None,
+    ) -> str:
         probe = probe_video_codec(input_url, (camera.rtsp_transport or "tcp").lower())
         self.last_error = mask_rtsp_credentials(probe.error)
         self.input_codec = probe.codec
@@ -402,26 +458,33 @@ class StreamInstance:
             self.last_fallback_reason = self.last_fallback_reason or "forced_fallback"
             self.reason_for_transcode = "forced_fallback"
             self.selected_pipeline = "cpu_transcode"
+            self.selected_backend = "cpu"
+            self.hw_backend = None
+            self.hw_decode = False
+            self.hw_encode = False
+            self.fallback_to_cpu = bool(self.failed_backends)
             return "fallback_transcode"
 
         if force_mode == "copy":
             self.selected_pipeline = "copy"
+            self.selected_backend = "copy"
             return "copy"
 
         if probe.safe_for_copy:
             self.last_fallback_reason = None
             self.reason_for_transcode = None
             self.selected_pipeline = "copy"
+            self.selected_backend = "copy"
             return "copy"
 
         hw_mode = (settings.live_hwaccel_mode or "auto").lower()
         caps = get_hardware_capabilities()
-        preferred_backend = caps.get("preferred_backend")
+        preferred_backend = force_hw_backend or self._next_hw_backend(caps)
         if (
             probe.codec in {"hevc", "h265"}
             and hw_mode not in {"off", "disabled", "false", "0"}
             and caps.get("hardware_accel_available")
-            and preferred_backend in {"vaapi", "qsv"}
+            and preferred_backend in {"qsv", "vaapi", "nvenc"}
         ):
             self.hw_backend = preferred_backend
             self.hw_device = caps.get("render_device") or settings.live_hwaccel_device
@@ -431,6 +494,9 @@ class StreamInstance:
             self.fallback_to_cpu = False
             self.hw_failure_reason = None
             self.selected_pipeline = "hardware_transcode"
+            self.selected_backend = preferred_backend
+            if preferred_backend not in self.attempted_backends:
+                self.attempted_backends.append(preferred_backend)
             self.last_fallback_reason = None
             self.reason_for_transcode = "codec_requires_h264_for_hls"
             return "hardware_transcode"
@@ -440,6 +506,7 @@ class StreamInstance:
             self.last_fallback_reason = "forced_transcode" if settings.live_transcode else f"settings_codec:{requested_policy}"
             self.reason_for_transcode = self.last_fallback_reason
             self.selected_pipeline = "cpu_transcode"
+            self.selected_backend = "cpu"
             return "fallback_transcode"
 
         self.last_fallback_reason = f"codec_not_safe_for_copy:{probe.codec or 'unknown'}"
@@ -450,10 +517,13 @@ class StreamInstance:
         self.hw_decode = False
         self.hw_encode = False
         self.selected_pipeline = "cpu_transcode"
+        self.selected_backend = "cpu"
+        self.fallback_to_cpu = bool(self.failed_backends)
         if probe.codec in {"hevc", "h265"} and hw_mode not in {"off", "disabled", "false", "0"}:
             warnings = caps.get("warnings") or []
             errors = caps.get("errors") or []
-            self.hw_failure_reason = "; ".join([*warnings, *errors])[:1200] or "hardware_accel_not_available"
+            failed = [f"{backend}:{reason}" for backend, reason in self.failed_backends.items()]
+            self.hw_failure_reason = "; ".join([*failed, *warnings, *errors])[:1200] or "hardware_accel_not_available"
         logger.warning(
             "Live Engine fallback selected camera_id=%s stream=%s codec=%s probe_error=%s",
             camera.id,
@@ -463,7 +533,13 @@ class StreamInstance:
         )
         return "fallback_transcode"
 
-    def start(self, camera: Camera, force_mode: str | None = None, transcode_allowed: bool = True) -> dict:
+    def start(
+        self,
+        camera: Camera,
+        force_mode: str | None = None,
+        transcode_allowed: bool = True,
+        force_hw_backend: str | None = None,
+    ) -> dict:
         with self.lock:
             self.touch()
             if self.is_running():
@@ -518,10 +594,22 @@ class StreamInstance:
             self.hw_device = settings.live_hwaccel_device
             self.hwaccel_mode = settings.live_hwaccel_mode
             self.selected_pipeline = "cpu"
+            self.selected_backend = "cpu"
             self.hw_decode = False
             self.hw_encode = False
-            self.fallback_to_cpu = force_mode == "fallback_transcode" and bool(self.hw_failure_reason)
-            self.mode = self._choose_mode(camera, input_url, force_mode=force_mode)
+            if force_mode is None and force_hw_backend is None:
+                self.attempted_backends = []
+                self.failed_backends = {}
+                self.fallback_to_cpu = False
+                self.hw_failure_reason = None
+            else:
+                self.fallback_to_cpu = force_mode == "fallback_transcode" and bool(self.failed_backends)
+            self.mode = self._choose_mode(
+                camera,
+                input_url,
+                force_mode=force_mode,
+                force_hw_backend=force_hw_backend,
+            )
             self.requested_mode = force_mode or "auto"
             if self.mode != "copy" and not transcode_allowed:
                 self.resource_limit = "max_concurrent_transcodes"
@@ -575,12 +663,7 @@ class StreamInstance:
                 self._set_state_locked("failed", "ffmpeg_start_failed", failure_reason="ffmpeg_start_failed")
                 self.last_error = mask_rtsp_credentials(str(exc))
                 if self.mode == "hardware_transcode":
-                    self.fallback_to_cpu = True
-                    self.hw_failure_reason = self.last_error
-                    self.last_fallback_reason = "hardware_start_failed"
-                    self.restart_count += 1
-                    self.restart_reason = "hardware_start_failed"
-                    self.start(camera, force_mode="fallback_transcode", transcode_allowed=transcode_allowed)
+                    self._retry_next_backend_or_cpu_locked(camera, "hardware_start_failed", self.last_error)
                     return self.snapshot(viewers=0)
                 logger.exception(
                     "Live Engine failed to start ffmpeg camera_id=%s stream=%s mode=%s command=%s",
@@ -700,13 +783,11 @@ class StreamInstance:
                     self.start(source, force_mode="fallback_transcode")
                     return True
                 if previous_mode == "hardware_transcode" and source:
-                    self.restart_count += 1
-                    self.restart_reason = "hardware_failed"
-                    self.fallback_to_cpu = True
-                    self.hw_failure_reason = self.last_error or stderr_tail or reason
-                    self.last_fallback_reason = "hardware_failed"
-                    self.start(source, force_mode="fallback_transcode")
-                    return True
+                    return self._retry_next_backend_or_cpu_locked(
+                        source,
+                        "hardware_failed",
+                        self.last_error or stderr_tail or reason,
+                    )
                 return False
 
             if not self.is_running() or not self.start_deadline:
@@ -715,14 +796,12 @@ class StreamInstance:
             now = time.time()
             source = self.camera_source
             if self.mode == "hardware_transcode" and fatal_error and source:
-                self.restart_count += 1
-                self.restart_reason = "hardware_fatal_error"
-                self.fallback_to_cpu = True
-                self.hw_failure_reason = stderr_tail or fatal_error
-                self.last_fallback_reason = "hardware_fatal_error"
                 self.stop(reason="hardware_fatal_error", cleanup_files=True)
-                self.start(source, force_mode="fallback_transcode")
-                return True
+                return self._retry_next_backend_or_cpu_locked(
+                    source,
+                    "hardware_fatal_error",
+                    stderr_tail or fatal_error,
+                )
 
             if now <= self.start_deadline:
                 return False
@@ -746,14 +825,12 @@ class StreamInstance:
                 return True
 
             if self.mode == "hardware_transcode" and source:
-                self.restart_count += 1
-                self.restart_reason = "hardware_no_hls"
-                self.fallback_to_cpu = True
-                self.hw_failure_reason = stderr_tail or "hardware_transcode did not produce HLS before fast deadline"
-                self.last_fallback_reason = "hardware_no_hls"
                 self.stop(reason="hardware_no_hls", cleanup_files=True)
-                self.start(source, force_mode="fallback_transcode")
-                return True
+                return self._retry_next_backend_or_cpu_locked(
+                    source,
+                    "hardware_no_hls",
+                    stderr_tail or "hardware_transcode did not produce HLS before fast deadline",
+                )
 
             last_progress = self.last_ffmpeg_progress_at or self.started_at or now
             hard_deadline = self.start_hard_deadline or (now + STARTUP_HARD_TIMEOUT_SECONDS)
@@ -778,14 +855,8 @@ class StreamInstance:
 
             reason = "startup_timeout_no_progress" if not self.progress_detected else "startup_timeout_no_hls"
             if self.mode == "hardware_transcode" and source:
-                self.restart_count += 1
-                self.restart_reason = reason
-                self.fallback_to_cpu = True
-                self.hw_failure_reason = stderr_tail or reason
-                self.last_fallback_reason = reason
                 self.stop(reason=reason, cleanup_files=True)
-                self.start(source, force_mode="fallback_transcode")
-                return True
+                return self._retry_next_backend_or_cpu_locked(source, reason, stderr_tail or reason)
             self.stop(reason=reason, cleanup_files=True)
             self.last_error = stderr_tail
             return True
@@ -835,6 +906,9 @@ class StreamInstance:
             "hw_device": self.hw_device,
             "hwaccel_mode": self.hwaccel_mode,
             "selected_pipeline": self.selected_pipeline,
+            "selected_backend": self.selected_backend,
+            "attempted_backends": self.attempted_backends,
+            "failed_backends": self.failed_backends,
             "hw_decode": self.hw_decode,
             "hw_encode": self.hw_encode,
             "fallback_to_cpu": self.fallback_to_cpu,

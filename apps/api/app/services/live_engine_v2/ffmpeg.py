@@ -247,12 +247,43 @@ def build_hls_command(
         gop_size = max(20, min(int(round(fps_for_gop * hls_time)), 120))
         keyint_min = max(10, min(int(round(fps_for_gop)), gop_size))
         fps_args = ["-r", str(int(round(output_fps))), "-vsync", "1"] if forced_fps and output_fps else []
-        input_hw_args = ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
+        input_hw_args = [
+            "-init_hw_device",
+            "qsv=qsv:hw_any",
+            "-filter_hw_device",
+            "qsv",
+            "-hwaccel",
+            "qsv",
+            "-hwaccel_output_format",
+            "qsv",
+        ]
         video_args = [
             "-c:v",
             "h264_qsv",
             "-global_quality",
             "24",
+            "-g",
+            str(gop_size),
+            "-keyint_min",
+            str(keyint_min),
+            "-bf",
+            "0",
+            *fps_args,
+        ]
+    elif mode == "hardware_transcode" and hw_backend == "nvenc":
+        fps_for_gop = output_fps or (input_fps if input_fps and input_fps > 0 else 25)
+        fps_for_gop = max(10, min(float(fps_for_gop), 60))
+        gop_size = max(20, min(int(round(fps_for_gop * hls_time)), 120))
+        keyint_min = max(10, min(int(round(fps_for_gop)), gop_size))
+        fps_args = ["-r", str(int(round(output_fps))), "-vsync", "1"] if forced_fps and output_fps else []
+        input_hw_args = ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
+        video_args = [
+            "-c:v",
+            "h264_nvenc",
+            "-preset",
+            "p4",
+            "-tune",
+            "ll",
             "-g",
             str(gop_size),
             "-keyint_min",
