@@ -21,6 +21,7 @@ from app.services.live_engine_v2.ffmpeg import (
     inspect_input_url,
     mask_rtsp_credentials,
     probe_video_codec,
+    select_output_fps,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,10 +49,13 @@ STARTUP_INITIAL_TIMEOUT_SECONDS = 20
 STARTUP_PROGRESS_GRACE_SECONDS = 90
 STARTUP_HARD_TIMEOUT_SECONDS = 180
 SLOW_TRANSCODE_FAIL_SECONDS = 75
-PROGRESS_RE = re.compile(
-    r"frame=\s*(?P<frame>\d+).*?fps=\s*(?P<fps>[\d.]+).*?time=(?P<time>\d+:\d+:\d+(?:\.\d+)?).*?speed=\s*(?P<speed>[\d.]+)x",
-    re.S,
-)
+UNSTABLE_SOURCE_RESTART_SECONDS = 35
+FRAME_RE = re.compile(r"frame=\s*(?P<value>\d+)")
+FPS_RE = re.compile(r"fps=\s*(?P<value>[\d.]+)")
+TIME_RE = re.compile(r"time=(?P<value>\d+:\d+:\d+(?:\.\d+)?)")
+SPEED_RE = re.compile(r"speed=\s*(?P<value>[\d.]+)x")
+DUP_RE = re.compile(r"dup=\s*(?P<value>\d+)")
+DROP_RE = re.compile(r"drop=\s*(?P<value>\d+)")
 
 
 def _camera_source(camera: Camera):
@@ -132,6 +136,10 @@ class StreamInstance:
         self.input_width: int | None = None
         self.input_height: int | None = None
         self.input_fps: float | None = None
+        self.output_fps: float | None = None
+        self.force_stable_fps = False
+        self.jitter_detected = False
+        self.unstable_source = False
         self.copy_eligible = False
         self.browser_compatible = False
         self.reason_for_transcode: str | None = None
@@ -147,8 +155,11 @@ class StreamInstance:
         self.last_frame: int | None = None
         self.last_fps: float | None = None
         self.last_speed: float | None = None
+        self.dup_frames: int | None = None
+        self.drop_frames: int | None = None
         self.last_progress_time: str | None = None
         self.too_slow_since: float | None = None
+        self.unstable_since: float | None = None
         self.stop_reason: str | None = None
         self.stopped_by_backend = False
         self.state_changed_at = time.time()
@@ -248,29 +259,54 @@ class StreamInstance:
         return False
 
     def _parse_progress_locked(self, stderr_tail: str):
-        matches = list(PROGRESS_RE.finditer(stderr_tail or ""))
-        if not matches:
+        tail = stderr_tail or ""
+        if "frame=" not in tail:
             return
 
-        match = matches[-1]
+        def last_value(pattern):
+            matches = list(pattern.finditer(tail))
+            return matches[-1].group("value") if matches else None
+
         try:
-            self.last_frame = int(match.group("frame"))
+            frame = last_value(FRAME_RE)
+            self.last_frame = int(frame) if frame is not None else self.last_frame
         except Exception:
             pass
         try:
-            self.last_fps = float(match.group("fps"))
+            fps = last_value(FPS_RE)
+            self.last_fps = float(fps) if fps is not None else self.last_fps
         except Exception:
             pass
         try:
-            self.last_speed = float(match.group("speed"))
+            speed = last_value(SPEED_RE)
+            self.last_speed = float(speed) if speed is not None else self.last_speed
         except Exception:
             pass
-        self.last_progress_time = match.group("time")
+        try:
+            dup = last_value(DUP_RE)
+            self.dup_frames = int(dup) if dup is not None else self.dup_frames
+        except Exception:
+            pass
+        try:
+            drop = last_value(DROP_RE)
+            self.drop_frames = int(drop) if drop is not None else self.drop_frames
+        except Exception:
+            pass
+        progress_time = last_value(TIME_RE)
+        self.last_progress_time = progress_time or self.last_progress_time
 
         if self.last_speed is not None and self.last_speed < 0.25:
             self.too_slow_since = self.too_slow_since or time.time()
         else:
             self.too_slow_since = None
+
+        has_dup_drop = (self.dup_frames or 0) > 0 or (self.drop_frames or 0) > 0
+        slow_for_preview = self.last_speed is not None and self.last_speed < 0.7
+        self.jitter_detected = bool(has_dup_drop or slow_for_preview)
+        if self.jitter_detected:
+            self.unstable_since = self.unstable_since or time.time()
+        else:
+            self.unstable_since = None
 
     def _speed_state(self) -> str:
         if self.last_speed is None:
@@ -335,6 +371,9 @@ class StreamInstance:
         self.input_width = probe.width
         self.input_height = probe.height
         self.input_fps = probe.fps
+        self.output_fps, forced_fps = select_output_fps(probe.fps, self.force_stable_fps)
+        self.unstable_source = bool(forced_fps)
+        self.jitter_detected = bool(forced_fps)
         self.copy_eligible = bool(probe.safe_for_copy)
         self.browser_compatible = probe.codec == "h264"
         self.high_cpu_risk = bool(
@@ -405,14 +444,20 @@ class StreamInstance:
             self.last_frame = None
             self.last_fps = None
             self.last_speed = None
+            self.dup_frames = None
+            self.drop_frames = None
             self.last_progress_time = None
             self.too_slow_since = None
+            self.unstable_since = None
             self.stop_reason = None
             self.stopped_by_backend = False
             self.input_codec = None
             self.input_width = None
             self.input_height = None
             self.input_fps = None
+            self.output_fps = None
+            self.jitter_detected = False
+            self.unstable_source = bool(self.force_stable_fps)
             self.copy_eligible = False
             self.browser_compatible = False
             self.reason_for_transcode = None
@@ -437,6 +482,7 @@ class StreamInstance:
                 out_dir=self.stream_dir,
                 mode="copy" if self.mode == "copy" else "fallback_transcode",
                 input_fps=self.input_fps,
+                force_stable_fps=self.force_stable_fps,
             )
             self.cmd_text = command_text(cmd, input_url)
             self.stderr_path = self.default_stderr_path
@@ -551,13 +597,36 @@ class StreamInstance:
 
     def maintain_startup(self) -> bool:
         with self.lock:
-            if self.is_ready():
-                self._set_state_locked("ready", "hls_ready", failure_reason=None)
-                return False
-
             stderr_tail = self._read_log_tail()
             fatal_error = self._detect_fatal_error(stderr_tail)
             process_info = self.process_info()
+            if self.is_running():
+                self._detect_progress_locked(stderr_tail)
+
+            if self.is_ready():
+                if (
+                    self.mode != "copy"
+                    and not self.force_stable_fps
+                    and self.unstable_since
+                    and time.time() - self.unstable_since > UNSTABLE_SOURCE_RESTART_SECONDS
+                    and self.camera_source
+                ):
+                    logger.warning(
+                        "Live Engine unstable source detected, restarting with stable FPS camera_id=%s stream=%s speed=%s dup=%s drop=%s",
+                        self.camera_id,
+                        self.stream,
+                        self.last_speed,
+                        self.dup_frames,
+                        self.drop_frames,
+                    )
+                    source = self.camera_source
+                    self.force_stable_fps = True
+                    self.restart_count += 1
+                    self.stop(reason="unstable_source_restart", cleanup_files=True)
+                    self.start(source, force_mode="fallback_transcode")
+                    return True
+                self._set_state_locked("ready", "hls_ready", failure_reason=None)
+                return False
 
             if self.proc and self.proc.poll() is None and not process_info["running_verified"]:
                 reason = "zombie_process" if process_info["is_zombie"] else "stale_process"
@@ -581,7 +650,6 @@ class StreamInstance:
             if not self.is_running() or not self.start_deadline:
                 return False
 
-            self._detect_progress_locked(stderr_tail)
             now = time.time()
             if now <= self.start_deadline:
                 return False
@@ -658,6 +726,10 @@ class StreamInstance:
             "input_width": self.input_width,
             "input_height": self.input_height,
             "input_fps": self.input_fps,
+            "real_input_fps": self.input_fps,
+            "output_fps": self.output_fps,
+            "jitter_detected": self.jitter_detected,
+            "unstable_source": self.unstable_source,
             "copy_eligible": self.copy_eligible,
             "browser_compatible": self.browser_compatible,
             "reason_for_transcode": self.reason_for_transcode,
@@ -677,6 +749,8 @@ class StreamInstance:
             "last_frame": self.last_frame,
             "last_fps": self.last_fps,
             "last_speed": self.last_speed,
+            "dup_frames": self.dup_frames,
+            "drop_frames": self.drop_frames,
             "last_progress_time": self.last_progress_time,
             "speed_state": self._speed_state(),
             "too_slow_seconds": round(now - self.too_slow_since, 2) if self.too_slow_since else 0,

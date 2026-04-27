@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     live_transcode: bool = False
     live_video_codec: str = "auto"
     live_transcode_profile: str = "stable"
+    live_unstable_source_target_fps: int = 20
     live_audio_mode: str = "none"
     live_idle_ttl_seconds: int = 45
     live_viewer_ttl_seconds: int = 60

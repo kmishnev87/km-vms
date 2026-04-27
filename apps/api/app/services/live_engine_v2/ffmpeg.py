@@ -97,6 +97,16 @@ def command_text(cmd: list[str], input_url: str | None = None) -> str:
     return mask_rtsp_credentials(shlex.join(cmd))
 
 
+def select_output_fps(input_fps: float | None, force_stable_fps: bool) -> tuple[float | None, bool]:
+    if force_stable_fps:
+        return float(max(10, min(int(settings.live_unstable_source_target_fps or 20), 25))), True
+    if input_fps is None or input_fps <= 0:
+        return float(max(10, min(int(settings.live_unstable_source_target_fps or 20), 25))), True
+    if input_fps < 5 or input_fps > 60:
+        return float(max(10, min(int(settings.live_unstable_source_target_fps or 20), 25))), True
+    return None, False
+
+
 def probe_video_codec(input_url: str, rtsp_transport: str) -> ProbeResult:
     cmd = [
         "ffprobe",
@@ -185,20 +195,23 @@ def build_hls_command(
     out_dir: Path,
     mode: str,
     input_fps: float | None = None,
+    force_stable_fps: bool = False,
 ) -> list[str]:
     playlist = out_dir / "index.m3u8"
     segment_pattern = out_dir / "seg_%06d.ts"
     rtsp_transport = (camera.rtsp_transport or "tcp").lower()
     hls_time = 2
     transcode_profile = (settings.live_transcode_profile or "stable").lower()
+    output_fps, forced_fps = select_output_fps(input_fps, force_stable_fps)
 
     if mode == "copy":
         video_args = ["-c:v", "copy"]
     else:
-        fps_for_gop = input_fps if input_fps and input_fps > 0 else 25
+        fps_for_gop = output_fps or (input_fps if input_fps and input_fps > 0 else 25)
         fps_for_gop = max(10, min(float(fps_for_gop), 60))
         gop_size = max(20, min(int(round(fps_for_gop * hls_time)), 120))
         keyint_min = max(10, min(int(round(fps_for_gop)), gop_size))
+        fps_args = ["-r", str(int(round(output_fps))), "-vsync", "1"] if forced_fps and output_fps else []
         video_args = [
             "-c:v",
             "libx264",
@@ -214,6 +227,7 @@ def build_hls_command(
             "0",
             "-force_key_frames",
             f"expr:gte(t,n_forced*{hls_time})",
+            *fps_args,
         ]
         if transcode_profile in {"low_latency", "zerolatency"}:
             video_args[6:6] = ["-tune", "zerolatency"]
@@ -226,12 +240,22 @@ def build_hls_command(
     else:
         audio_args = ["-c:a", "aac", "-ar", "44100", "-ac", "1"]
 
+    input_timing_args = []
+    if mode != "copy":
+        input_timing_args = [
+            "-fflags",
+            "+genpts",
+            "-use_wallclock_as_timestamps",
+            "1",
+        ]
+
     return [
         "ffmpeg",
         "-hide_banner",
         "-nostdin",
         "-loglevel",
         "info",
+        *input_timing_args,
         "-rtsp_transport",
         rtsp_transport,
         "-timeout",
