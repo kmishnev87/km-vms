@@ -300,10 +300,22 @@ def detect_hardware_capabilities() -> dict:
             "candidate": candidates.get(backend, False),
             "runtime_ok": False,
             "failed_runtime": False,
+            "runtime_check_skipped": False,
             "reason": None,
         }
         if not status["candidate"]:
             status["reason"] = "missing_hwaccel_or_codec_or_device_access"
+            backend_status[backend] = status
+            continue
+
+        if (
+            backend == "nvenc"
+            and available_backends
+            and mode != "nvenc"
+            and backend_setting != "nvenc"
+        ):
+            status["runtime_check_skipped"] = True
+            status["reason"] = "runtime_validation_skipped_not_selected"
             backend_status[backend] = status
             continue
 

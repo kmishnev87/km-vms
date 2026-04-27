@@ -114,8 +114,16 @@ def patch_settings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
+    data = payload.model_dump(exclude_unset=True)
     try:
-        system = update_system_settings(db, payload.model_dump(exclude_unset=True))
+        if "storage_path" in data:
+            storage_check = validate_storage_path(data["storage_path"], create=True)
+            if not storage_check["ok"]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"storage": storage_check},
+                )
+        system = update_system_settings(db, data)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
     return serialize_settings(system)
