@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../components/Layout";
+import { getAuthToken } from "../lib/api";
 
 const DASHBOARD_ITEMS = [
   {
@@ -30,6 +31,12 @@ const DASHBOARD_ITEMS = [
     title: "\u0425\u0440\u043e\u043d\u043e\u043b\u043e\u0433\u0438\u044f",
     description: "\u0421\u0438\u043d\u0445\u0440\u043e\u043d\u043d\u044b\u0439 \u0430\u0440\u0445\u0438\u0432 \u043a\u0430\u043c\u0435\u0440 \u0441 \u043e\u0431\u0449\u0435\u0439 \u0432\u0440\u0435\u043c\u0435\u043d\u043d\u043e\u0439 \u0442\u043e\u0447\u043a\u043e\u0439.",
   },
+  {
+    href: "/settings",
+    glyph: "\u2699",
+    title: "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438",
+    description: "\u0426\u0435\u043d\u0442\u0440 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f KM VMS: \u0441\u0438\u0441\u0442\u0435\u043c\u0430, \u0445\u0440\u0430\u043d\u0438\u043b\u0438\u0449\u0435, hardware \u0438 \u0441\u0435\u0441\u0441\u0438\u0438.",
+  },
 ];
 
 export default function HomePage() {
@@ -37,12 +44,26 @@ export default function HomePage() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem("token");
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
-    setReady(true);
+    fetch("/api/system/status")
+      .then((response) => response.ok ? response.json() : null)
+      .then((status) => {
+        if (status?.setup_required) {
+          router.replace("/setup");
+          return;
+        }
+        if (!getAuthToken()) {
+          router.replace("/login");
+          return;
+        }
+        setReady(true);
+      })
+      .catch(() => {
+        if (!getAuthToken()) {
+          router.replace("/login");
+          return;
+        }
+        setReady(true);
+      });
   }, [router]);
 
   if (!ready) return null;
@@ -63,7 +84,7 @@ export default function HomePage() {
           {DASHBOARD_ITEMS.map((item) => (
             <Link href={item.href} className="dashboardCard" key={item.href}>
               <div className="dashboardCardIcon">
-                <img src={item.iconSrc} alt="" />
+                {item.iconSrc ? <img src={item.iconSrc} alt="" /> : <span className="dashboardCardGlyph">{item.glyph}</span>}
               </div>
               <div className="dashboardCardBody">
                 <div className="dashboardCardTitle">{item.title}</div>

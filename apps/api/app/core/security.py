@@ -29,12 +29,15 @@ def verify_password(password: str, password_hash: str) -> bool:
     return pwd_context.verify(password, password_hash)
 
 
-def create_access_token(subject: str, expires_minutes: int = 60 * 12) -> str:
+def create_access_token(subject: str, expires_minutes: int = 60 * 12, expires_at: datetime | None = None) -> str:
     now = datetime.now(timezone.utc)
+    expiry = expires_at or (now + timedelta(minutes=expires_minutes))
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
     payload = {
         "sub": subject,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=expires_minutes)).timestamp()),
+        "exp": int(expiry.timestamp()),
     }
     return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
 

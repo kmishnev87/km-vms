@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
-import { apiFetch } from "../lib/api";
+import { apiFetch, getAuthToken } from "../lib/api";
 
 const READY_POLL_INTERVAL_MS = 700;
 const READY_TIMEOUT_MS = 210000;
@@ -276,8 +276,7 @@ export default function TilePlayer({ cameraId, stream }) {
     async function startPlayback() {
       if (!sourceKey.cameraId || !sourceKey.stream) return;
 
-      const token =
-        typeof window !== "undefined" ? localStorage.getItem("token") : null;
+      const token = getAuthToken();
 
       if (!token) {
         setStatus("error");

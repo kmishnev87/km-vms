@@ -1,22 +1,43 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import { clearAuthToken, getAuthToken } from "../lib/api";
 
 const items = [
   { href: "/cameras", label: "\u041a\u0430\u043c\u0435\u0440\u044b", iconSrc: "/icons/nav/cameras.png" },
   { href: "/recordings", label: "\u0417\u0430\u043f\u0438\u0441\u0438", iconSrc: "/icons/nav/records.png" },
   { href: "/live", label: "\u041e\u043d\u043b\u0430\u0439\u043d", iconSrc: "/icons/nav/online.png" },
   { href: "/chronology2", label: "\u0425\u0440\u043e\u043d\u043e\u043b\u043e\u0433\u0438\u044f", iconSrc: "/icons/nav/chronology.png" },
+  { href: "/settings", label: "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438", glyph: "\u2699" },
 ];
 
 export default function Layout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
 
+  useEffect(() => {
+    fetch("/api/system/status")
+      .then((response) => response.ok ? response.json() : null)
+      .then((status) => {
+        if (status?.setup_required) {
+          router.replace("/setup");
+          return;
+        }
+        if (!getAuthToken()) {
+          router.replace("/login");
+        }
+      })
+      .catch(() => {
+        if (!getAuthToken()) router.replace("/login");
+      });
+  }, [router]);
+
   function logout() {
-    localStorage.removeItem("token");
+    clearAuthToken();
     localStorage.removeItem("vms_login_redirect");
+    sessionStorage.removeItem("vms_login_redirect");
     router.push("/login");
   }
 
@@ -38,7 +59,7 @@ export default function Layout({ children }) {
                 title={item.label}
                 aria-label={item.label}
               >
-                <img className="topNavIconImage" src={item.iconSrc} alt="" />
+                {item.iconSrc ? <img className="topNavIconImage" src={item.iconSrc} alt="" /> : <span className="topNavGlyph">{item.glyph}</span>}
               </Link>
             ))}
           </nav>

@@ -1,4 +1,6 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "/api";
+const TOKEN_KEY = "token";
+const TOKEN_EXPIRES_KEY = "token_expires_at";
 
 function buildUrl(path) {
   if (!path) return API_BASE;
@@ -7,14 +9,43 @@ function buildUrl(path) {
   return `${API_BASE}/${path}`;
 }
 
-function getToken() {
+export function getAuthToken() {
   if (typeof window === "undefined") return "";
-  return localStorage.getItem("token") || "";
+  const expiresAt = localStorage.getItem(TOKEN_EXPIRES_KEY);
+  const persisted = localStorage.getItem(TOKEN_KEY) || "";
+  if (persisted && !expiresAt) {
+    localStorage.removeItem(TOKEN_KEY);
+    return sessionStorage.getItem(TOKEN_KEY) || "";
+  }
+  if (persisted && expiresAt && Date.now() > Date.parse(expiresAt)) {
+    clearAuthToken();
+    return "";
+  }
+  return persisted || sessionStorage.getItem(TOKEN_KEY) || "";
+}
+
+export function saveAuthToken(token, { persistent = false, expiresAt = null } = {}) {
+  if (typeof window === "undefined") return;
+  clearAuthToken();
+  if (persistent) {
+    localStorage.setItem(TOKEN_KEY, token);
+    if (expiresAt) localStorage.setItem(TOKEN_EXPIRES_KEY, expiresAt);
+    return;
+  }
+  sessionStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearAuthToken() {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(TOKEN_EXPIRES_KEY);
+  sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_EXPIRES_KEY);
 }
 
 function makeHeaders(extra = {}) {
   const headers = { ...extra };
-  const token = getToken();
+  const token = getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
 }

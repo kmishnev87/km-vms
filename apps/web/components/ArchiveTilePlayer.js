@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { getAuthToken } from "../lib/api";
 
 export default function ArchiveTilePlayer({
   playback,
@@ -52,8 +53,7 @@ export default function ArchiveTilePlayer({
       return;
     }
 
-    const token =
-      typeof window !== "undefined" ? localStorage.getItem("token") : null;
+    const token = getAuthToken();
 
     if (!token) {
       hardReset();
