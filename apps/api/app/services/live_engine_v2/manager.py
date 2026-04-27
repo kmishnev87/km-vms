@@ -47,8 +47,10 @@ FFMPEG_FATAL_PATTERNS = (
     "Conversion failed",
 )
 STARTUP_INITIAL_TIMEOUT_SECONDS = 20
-HARDWARE_STARTUP_TIMEOUT_SECONDS = 6
-HARDWARE_HARD_TIMEOUT_SECONDS = 12
+HARDWARE_STARTUP_TIMEOUT_SECONDS = 30
+HARDWARE_MAIN_STARTUP_TIMEOUT_SECONDS = 45
+HARDWARE_PROGRESS_GRACE_SECONDS = 120
+HARDWARE_HARD_TIMEOUT_SECONDS = 180
 STARTUP_PROGRESS_GRACE_SECONDS = 90
 STARTUP_HARD_TIMEOUT_SECONDS = 180
 SLOW_TRANSCODE_FAIL_SECONDS = 75
@@ -337,6 +339,19 @@ class StreamInstance:
         if self.last_speed >= 0.25:
             return "slow"
         return "too_slow"
+
+    def _hardware_progress_detected(self) -> bool:
+        return self.mode == "hardware_transcode" and bool(
+            self.progress_detected
+            or self.last_ffmpeg_progress_at
+            or (self.last_frame or 0) > 0
+            or self.last_progress_time
+        )
+
+    def _hardware_readiness_elapsed(self) -> float:
+        if self.mode != "hardware_transcode" or not self.started_at:
+            return 0
+        return round(time.time() - self.started_at, 2)
 
     def _detect_fatal_error(self, stderr_tail: str | None = None) -> str | None:
         tail = stderr_tail if stderr_tail is not None else self._read_log_tail()
@@ -678,7 +693,12 @@ class StreamInstance:
             self.started_at = time.time()
             initial_timeout = max(int(settings.live_start_timeout_seconds), STARTUP_INITIAL_TIMEOUT_SECONDS)
             if self.mode == "hardware_transcode":
-                self.start_deadline = self.started_at + HARDWARE_STARTUP_TIMEOUT_SECONDS
+                hardware_timeout = (
+                    HARDWARE_MAIN_STARTUP_TIMEOUT_SECONDS
+                    if self.stream == "main"
+                    else HARDWARE_STARTUP_TIMEOUT_SECONDS
+                )
+                self.start_deadline = self.started_at + hardware_timeout
                 self.start_hard_deadline = self.started_at + HARDWARE_HARD_TIMEOUT_SECONDS
             else:
                 self.start_deadline = self.started_at + initial_timeout
@@ -825,11 +845,21 @@ class StreamInstance:
                 return True
 
             if self.mode == "hardware_transcode" and source:
+                if self._hardware_progress_detected():
+                    last_progress = self.last_ffmpeg_progress_at or self.started_at or now
+                    if now - last_progress <= HARDWARE_PROGRESS_GRACE_SECONDS:
+                        self._set_state_locked("starting", "hardware_ffmpeg_progress", failure_reason=None)
+                        return False
+
+                if self.playlist_path.exists():
+                    self._set_state_locked("starting", "hardware_hls_partial_output", failure_reason=None)
+                    return False
+
                 self.stop(reason="hardware_no_hls", cleanup_files=True)
                 return self._retry_next_backend_or_cpu_locked(
                     source,
                     "hardware_no_hls",
-                    stderr_tail or "hardware_transcode did not produce HLS before fast deadline",
+                    stderr_tail or "hardware_transcode did not produce HLS and no ffmpeg progress was detected",
                 )
 
             last_progress = self.last_ffmpeg_progress_at or self.started_at or now
@@ -855,6 +885,9 @@ class StreamInstance:
 
             reason = "startup_timeout_no_progress" if not self.progress_detected else "startup_timeout_no_hls"
             if self.mode == "hardware_transcode" and source:
+                if self._hardware_progress_detected():
+                    self._set_state_locked("starting", "hardware_progress_no_hls", failure_reason=None)
+                    return False
                 self.stop(reason=reason, cleanup_files=True)
                 return self._retry_next_backend_or_cpu_locked(source, reason, stderr_tail or reason)
             self.stop(reason=reason, cleanup_files=True)
@@ -925,6 +958,8 @@ class StreamInstance:
             "startup_hard_deadline_seconds": round(self.start_hard_deadline - now, 2) if self.start_hard_deadline else None,
             "last_ffmpeg_progress_at": self.last_ffmpeg_progress_at,
             "ffmpeg_progress_detected": self.progress_detected,
+            "hardware_progress_detected": self._hardware_progress_detected(),
+            "hardware_readiness_elapsed": self._hardware_readiness_elapsed(),
             "last_frame": self.last_frame,
             "last_fps": self.last_fps,
             "last_speed": self.last_speed,

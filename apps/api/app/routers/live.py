@@ -124,6 +124,8 @@ def _hls_debug_payload(camera_id: int, stream: str) -> dict:
         "startup_hard_deadline_seconds": item.get("startup_hard_deadline_seconds"),
         "last_ffmpeg_progress_at": item.get("last_ffmpeg_progress_at"),
         "ffmpeg_progress_detected": item.get("ffmpeg_progress_detected"),
+        "hardware_progress_detected": item.get("hardware_progress_detected"),
+        "hardware_readiness_elapsed": item.get("hardware_readiness_elapsed"),
         "last_fps": item.get("last_fps"),
         "last_speed": item.get("last_speed"),
         "speed_state": item.get("speed_state"),
