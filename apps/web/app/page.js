@@ -103,6 +103,7 @@ export default function HomePage() {
               <div className="dashboardCardIcon">
                 <img src={item.iconSrc} alt="" />
               </div>
+              {item.bgSrc ? <img className="dashboardCardDecor" src={item.bgSrc} alt="" /> : null}
               <div className="dashboardCardBody">
                 <div className="dashboardCardTitle">{typeof item.title === "string" ? item.title : item.title[language] || item.title.ru}</div>
                 <div className="dashboardCardText">{typeof item.description === "string" ? item.description : item.description[language] || item.description.ru}</div>

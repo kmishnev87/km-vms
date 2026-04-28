@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import os
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -37,11 +38,13 @@ def get_system_settings(db: Session) -> SystemSettings:
 
 
 def serialize_settings(row: SystemSettings) -> dict:
+    storage_host_path = os.getenv("STORAGE_HOST_ROOT") or None
     return {
         "system_initialized": row.system_initialized,
         "timezone": row.timezone,
         "language": row.language,
         "storage_path": row.storage_path,
+        "storage_host_path": storage_host_path,
         "recording_format": row.recording_format,
         "hardware_preferred_backend": row.hardware_preferred_backend,
         "created_at": row.created_at,

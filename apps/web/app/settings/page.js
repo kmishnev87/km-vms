@@ -12,41 +12,15 @@ const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
   return { offset, label, value };
 });
 
-const LEGACY_TIMEZONE_OFFSETS = {
-  UTC: 0,
-  "Europe/London": 0,
-  "Europe/Berlin": 1,
-  "Europe/Paris": 1,
-  "Europe/Moscow": 3,
-  "Asia/Dubai": 4,
-  "Asia/Yekaterinburg": 5,
-  "Asia/Novosibirsk": 7,
-  "Asia/Krasnoyarsk": 7,
-  "Asia/Irkutsk": 8,
-  "Asia/Shanghai": 8,
-  "Asia/Tokyo": 9,
-  "Asia/Yakutsk": 9,
-  "Asia/Vladivostok": 10,
-  "America/New_York": -5,
-  "America/Toronto": -5,
-  "America/Chicago": -6,
-  "America/Denver": -7,
-  "America/Los_Angeles": -8,
-  "America/Sao_Paulo": -3,
-  "America/Argentina/Buenos_Aires": -3,
-  "Australia/Perth": 8,
-  "Australia/Sydney": 10,
-};
-
 const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "nvenc", "amf", "cpu"];
 
 const BACKEND_LABELS = {
   auto: { ru: "Автоматически", en: "Automatic" },
   qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV" },
-  vaapi: { ru: "VAAPI / Linux hardware acceleration", en: "VAAPI / Linux hardware acceleration" },
+  vaapi: { ru: "VAAPI / аппаратное ускорение Linux", en: "VAAPI / Linux hardware acceleration" },
   nvenc: { ru: "NVIDIA NVENC/NVDEC", en: "NVIDIA NVENC/NVDEC" },
-  amf: { ru: "AMD AMF / AMD hardware acceleration", en: "AMD AMF / AMD hardware acceleration" },
-  cpu: { ru: "CPU fallback", en: "CPU fallback" },
+  amf: { ru: "AMD AMF / аппаратное ускорение AMD", en: "AMD AMF / AMD hardware acceleration" },
+  cpu: { ru: "Резервный режим CPU", en: "CPU fallback" },
 };
 
 const TEXT = {
@@ -68,7 +42,8 @@ const TEXT = {
     storage: "Хранилище",
     storageText: "Физический путь на NAS задаётся в docker-compose volume mapping. Внутри контейнера он доступен как путь архива ниже.",
     storagePath: "Путь архива внутри контейнера",
-    hostPath: "NAS/server path определяется в docker-compose volume mapping.",
+    hostPath: "Путь на сервере",
+    hostPathUnknown: "Определяется в docker-compose",
     validate: "Проверить хранилище",
     storageOk: "Хранилище доступно.",
     storageFail: "Хранилище недоступно",
@@ -101,7 +76,7 @@ const TEXT = {
     availableOptions: "Доступные варианты",
     failedValidation: "Не прошёл проверку",
     notDetected: "Не найдено на этом сервере",
-    cpuFallback: "Fallback на CPU доступен.",
+    cpuFallback: "Резервный режим CPU доступен.",
     technicalDetails: "Технические детали",
     security: "Безопасность и сессия",
     securityText: "Если включить “Оставаться в системе”, вход сохраняется до 24:00 системного дня. После полуночи потребуется войти снова.",
@@ -130,7 +105,8 @@ const TEXT = {
     storage: "Storage",
     storageText: "The physical NAS path is defined by docker-compose volume mapping. Inside the container it is available as the archive path below.",
     storagePath: "Archive path inside container",
-    hostPath: "NAS/server path is defined by docker-compose volume mapping.",
+    hostPath: "Server path",
+    hostPathUnknown: "Defined in docker-compose",
     validate: "Validate storage",
     storageOk: "Storage is available.",
     storageFail: "Storage is unavailable",
@@ -230,9 +206,24 @@ function profileFromFormat(format) {
   return format === "mp4" ? "compatibility" : "balanced";
 }
 
+function offsetFromTimezone(timezone) {
+  try {
+    const value = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      timeZoneName: "shortOffset",
+      hour: "2-digit",
+    }).formatToParts(new Date()).find((part) => part.type === "timeZoneName")?.value || "GMT";
+    const match = value.match(/^GMT([+-])(\d{1,2})(?::\d{2})?$/);
+    if (!match) return 0;
+    return (match[1] === "-" ? -1 : 1) * Number(match[2]);
+  } catch {
+    return 0;
+  }
+}
+
 function timezoneValueForSettings(timezone) {
   if (UTC_TIMEZONES.some((zone) => zone.value === timezone)) return timezone;
-  const offset = LEGACY_TIMEZONE_OFFSETS[timezone] ?? 0;
+  const offset = offsetFromTimezone(timezone);
   return UTC_TIMEZONES.find((zone) => zone.offset === offset)?.value || "UTC";
 }
 
@@ -431,7 +422,9 @@ export default function SettingsPage() {
                 <label className="settingsField settingsControl settingsPathControl">
                   <span>{t.storagePath}</span>
                   <input className="input settingsInput" value={settings.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} />
-                  <span className="settingsHint">{t.hostPath}</span>
+                  <span className="settingsHint">
+                    {t.hostPath}: {settings.storage_host_path || t.hostPathUnknown}
+                  </span>
                 </label>
                 <div className="settingsStorageAction">
                   <button className="button secondary small" onClick={validateStorage}>{t.validate}</button>
@@ -498,13 +491,6 @@ export default function SettingsPage() {
                   </span>
                 ))}
               </div>
-              {[...(hardware?.warnings || []), ...(hardware?.errors || [])].length ? (
-                <div className="settingsStatus warn compact">
-                  {[...(hardware?.warnings || []), ...(hardware?.errors || [])].map((item, index) => (
-                    <span key={`${item}-${index}`}>{item}</span>
-                  ))}
-                </div>
-              ) : null}
               {hardware ? (
                 <details className="settingsDetails">
                   <summary>{t.technicalDetails}</summary>

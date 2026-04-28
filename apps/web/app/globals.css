@@ -1,3 +1,7 @@
+:root {
+  --settings-control-width: 360px;
+}
+
 html,
 body {
   margin: 0;
@@ -210,26 +214,28 @@ textarea {
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
-.dashboardCard::before {
-  content: "";
+.dashboardCardDecor {
   position: absolute;
-  right: -10px;
+  right: 10px;
   top: 50%;
-  width: 58%;
-  height: 92%;
-  background: var(--dashboard-card-bg, none) center right / contain no-repeat;
-  opacity: 0.46;
+  width: 46%;
+  height: 74%;
+  object-fit: contain;
+  object-position: center right;
+  opacity: 0.72;
   transform: translateY(-50%);
-  filter: saturate(1.08) contrast(1.08);
+  filter: saturate(1.1) contrast(1.08);
   pointer-events: none;
+  z-index: 1;
 }
 
 .dashboardCard::after {
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.98) 0%, rgba(255, 255, 255, 0.9) 58%, rgba(255, 255, 255, 0.48) 100%);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.99) 0%, rgba(255, 255, 255, 0.94) 54%, rgba(255, 255, 255, 0.24) 100%);
   pointer-events: none;
+  z-index: 1;
 }
 
 .dashboardCard > * {
@@ -487,7 +493,7 @@ textarea {
 }
 
 .settingsControlGrid.two {
-  grid-template-columns: minmax(220px, 360px) minmax(220px, 360px);
+  grid-template-columns: var(--settings-control-width) var(--settings-control-width);
   align-items: start;
 }
 
@@ -506,11 +512,13 @@ textarea {
 }
 
 .settingsControl {
-  max-width: 360px;
+  width: var(--settings-control-width);
+  max-width: var(--settings-control-width);
 }
 
 .settingsControlWide {
-  max-width: 420px;
+  width: var(--settings-control-width);
+  max-width: var(--settings-control-width);
 }
 
 .settingsSelect,
@@ -565,6 +573,12 @@ textarea {
   margin-top: 8px;
 }
 
+.settingsActions .button,
+.settingsStorageAction .button {
+  width: var(--settings-control-width);
+  max-width: var(--settings-control-width);
+}
+
 .settingsNote {
   margin-top: 10px;
   color: #64748b;
@@ -589,13 +603,13 @@ textarea {
 .settingsStorageLayout,
 .settingsHardwareLayout {
   display: grid;
-  grid-template-columns: minmax(260px, 420px) auto;
+  grid-template-columns: var(--settings-control-width) var(--settings-control-width);
   gap: 12px;
   align-items: start;
 }
 
 .settingsHardwareLayout.single {
-  grid-template-columns: minmax(260px, 420px);
+  grid-template-columns: var(--settings-control-width);
 }
 
 .settingsStorageAction {
@@ -603,15 +617,18 @@ textarea {
 }
 
 .settingsPathControl {
-  max-width: 420px;
+  width: var(--settings-control-width);
+  max-width: var(--settings-control-width);
 }
 
 .settingsToast {
   position: fixed;
   top: 72px;
-  right: 24px;
+  left: 50%;
+  transform: translateX(-50%);
   z-index: 7000;
-  max-width: min(360px, calc(100vw - 32px));
+  width: auto;
+  max-width: min(320px, calc(100vw - 32px));
   border: 1px solid #bbf7d0;
   border-radius: 12px;
   background: #f0fdf4;
@@ -620,6 +637,7 @@ textarea {
   box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
   font-size: 13px;
   line-height: 1.35;
+  text-align: center;
 }
 
 .settingsToast.error {
@@ -1538,6 +1556,13 @@ textarea {
   .settingsControl,
   .settingsControlWide,
   .settingsPathControl {
+    width: 100%;
+    max-width: none;
+  }
+
+  .settingsActions .button,
+  .settingsStorageAction .button {
+    width: 100%;
     max-width: none;
   }
 
