@@ -30,6 +30,7 @@ const TEXT = {
     save: "Сохранить",
     saving: "Сохранение...",
     saved: "Настройки сохранены",
+    changesApplied: "Изменения успешно применены",
     storageValidated: "Хранилище доступно. Свободно: {free}",
     hardwareChecked: "Аппаратные возможности проверены",
     system: "Система",
@@ -93,6 +94,7 @@ const TEXT = {
     save: "Save",
     saving: "Saving...",
     saved: "Settings saved",
+    changesApplied: "Changes applied successfully",
     storageValidated: "Storage is available. Free: {free}",
     hardwareChecked: "Hardware capabilities checked",
     system: "System",
@@ -251,11 +253,18 @@ export default function SettingsPage() {
 
   useEffect(() => {
     load();
-    return () => window.clearTimeout(toastTimerRef.current);
+    function onLanguage(event) {
+      if (event.detail) patch("language", event.detail);
+    }
+    window.addEventListener("km-vms-language", onLanguage);
+    return () => {
+      window.clearTimeout(toastTimerRef.current);
+      window.removeEventListener("km-vms-language", onLanguage);
+    };
   }, []);
 
-  function showToast(text, type = "ok") {
-    setToast({ text, type });
+  function showToast(title, type = "ok", subtitle = "") {
+    setToast({ title, subtitle, type });
     window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2800);
   }
@@ -293,7 +302,8 @@ export default function SettingsPage() {
         }),
       });
       setSettings(updated);
-      showToast(t.saved);
+      window.dispatchEvent(new CustomEvent("km-vms-language", { detail: updated.language }));
+      showToast(t.saved, "ok", t.changesApplied);
     } catch (err) {
       showToast(humanError(err, lang), "error");
     } finally {
@@ -351,10 +361,21 @@ export default function SettingsPage() {
     patch("hardware_preferred_backend", value === "auto" ? null : value);
   }
 
+  function handleSettingsLanguageChange(event) {
+    const nextLanguage = event.target.value;
+    patch("language", nextLanguage);
+    window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextLanguage }));
+  }
+
   return (
     <Layout>
       <div className="settingsPage">
-        {toast ? <div className={`settingsToast ${toast.type}`}>{toast.text}</div> : null}
+        {toast ? (
+          <div className={`settingsToast ${toast.type}`}>
+            <strong>{toast.title}</strong>
+            {toast.subtitle ? <span>{toast.subtitle}</span> : null}
+          </div>
+        ) : null}
 
         <div className="pageHeader settingsHeader">
           <div className="settingsTitleBlock">
@@ -370,127 +391,100 @@ export default function SettingsPage() {
         </div>
 
         {!settings ? null : (
-          <div className="settingsSections">
-            <section className="settingsSection">
-              <div className="settingsSectionHead">
-                <h2 className="settingsSectionTitle">
-                  <img src="/icons/nav/settings-icon.png" alt="" />
-                  <span>{t.system}</span>
-                </h2>
-                <p>{t.systemText}</p>
-              </div>
-              <div className="settingsControlGrid two">
-                <label className="settingsField settingsControl">
-                  <span className="settingsFieldLabel">
-                    <img src={languageIcon} alt="" />
-                    {t.language}
-                  </span>
-                  <select className="select settingsSelect" value={settings.language} onChange={(event) => patch("language", event.target.value)}>
+          <div className="settingsReferenceLayout">
+            <section className="settingsPanel">
+              <div className="settingsRow">
+                <div className="settingsRowIcon"><img src={languageIcon} alt="" /></div>
+                <div className="settingsRowText">
+                  <strong>{t.language}</strong>
+                  <span>{t.i18nNote}</span>
+                </div>
+                <div className="settingsRowControl">
+                  <select className="select settingsSelect" value={settings.language} onChange={handleSettingsLanguageChange}>
                     <option value="ru">{t.russian}</option>
                     <option value="en">{t.english}</option>
                   </select>
-                  <span className="settingsHint">{t.i18nNote}</span>
-                </label>
-                <label className="settingsField settingsControl">
-                  <span className="settingsFieldLabel">
-                    <img src="/icons/nav/timezone-icon.png" alt="" />
-                    {t.timezone}
-                  </span>
-                  <select
-                    className="select settingsSelect timezoneSelect"
-                    value={timezoneValueForSettings(settings.timezone)}
-                    onChange={(event) => patch("timezone", event.target.value)}
-                  >
-                    {UTC_TIMEZONES.map((zone) => (
-                      <option key={zone.value} value={zone.value}>{zone.label}</option>
-                    ))}
-                  </select>
-                  <span className="settingsHint">{t.timezoneHelp}</span>
-                </label>
+                </div>
               </div>
-            </section>
 
-            <section className="settingsSection">
-              <div className="settingsSectionHead">
-                <h2 className="settingsSectionTitle">
-                  <img src="/icons/nav/storage-icon.png" alt="" />
-                  <span>{t.storage}</span>
-                </h2>
-                <p>{t.storageText}</p>
+              <div className="settingsRow">
+                <div className="settingsRowIcon"><img src="/icons/nav/timezone-icon.png" alt="" /></div>
+                <div className="settingsRowText">
+                  <strong>{t.timezone}</strong>
+                  <span>{t.timezoneHelp}</span>
+                </div>
+                <div className="settingsRowControl">
+                  <select className="select settingsSelect timezoneSelect" value={timezoneValueForSettings(settings.timezone)} onChange={(event) => patch("timezone", event.target.value)}>
+                    {UTC_TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
+                  </select>
+                </div>
               </div>
-              <div className="settingsStorageLayout">
-                <label className="settingsField settingsControl settingsPathControl">
-                  <span>{t.storagePath}</span>
+
+              <div className="settingsRow">
+                <div className="settingsRowIcon"><img src="/icons/nav/storage-icon.png" alt="" /></div>
+                <div className="settingsRowText">
+                  <strong>{t.storage}</strong>
+                  <span>{t.storageText}</span>
+                  <small>{t.hostPath}: {settings.storage_host_path || t.hostPathUnknown}</small>
+                </div>
+                <div className="settingsRowControl stacked">
                   <input className="input settingsInput" value={settings.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} />
-                  <span className="settingsHint">
-                    {t.hostPath}: {settings.storage_host_path || t.hostPathUnknown}
-                  </span>
-                </label>
-                <div className="settingsStorageAction">
                   <button className="button secondary small" onClick={validateStorage}>{t.validate}</button>
                 </div>
               </div>
-            </section>
 
-            <section className="settingsSection">
-              <div className="settingsSectionHead">
-                <h2 className="settingsSectionTitle">
-                  <img src="/icons/nav/records.png" alt="" />
-                  <span>{t.recording}</span>
-                </h2>
-                <p>{t.recordingText}</p>
+              <div className="settingsRow">
+                <div className="settingsRowIcon"><img src="/icons/nav/records.png" alt="" /></div>
+                <div className="settingsRowText">
+                  <strong>{t.recording}</strong>
+                  <span>{profileHelp} {t.mapsTo}: {recordingFormatForProfile(recordingProfile).toUpperCase()}.</span>
+                </div>
+                <div className="settingsRowControl">
+                  <select className="select settingsSelect" value={recordingProfile} onChange={(event) => setRecordingProfile(event.target.value)}>
+                    <option value="balanced">{t.balanced}</option>
+                    <option value="compatibility">{t.compatibility}</option>
+                    <option value="reliability">{t.reliability}</option>
+                  </select>
+                </div>
               </div>
-              <label className="settingsField settingsControl settingsControlWide">
-                <span>{t.recordingProfile}</span>
-                <select className="select settingsSelect" value={recordingProfile} onChange={(event) => setRecordingProfile(event.target.value)}>
-                  <option value="balanced">{t.balanced}</option>
-                  <option value="compatibility">{t.compatibility}</option>
-                  <option value="reliability">{t.reliability}</option>
-                </select>
-              </label>
-              <div className="settingsNote">
-                {profileHelp} {t.mapsTo}: {recordingFormatForProfile(recordingProfile).toUpperCase()}.
-              </div>
-            </section>
 
-            <section className="settingsSection">
-              <div className="settingsSectionHead">
-                <h2 className="settingsSectionTitle">
-                  <img src="/icons/nav/hardware-icon.png" alt="" />
-                  <span>{t.hardware}</span>
-                </h2>
-                <p>{t.hardwareText}</p>
-              </div>
-              <div className="settingsHardwareLayout single">
-                <label className="settingsField settingsControl settingsControlWide">
-                  <span>{t.hardwareMode}</span>
+              <div className="settingsRow">
+                <div className="settingsRowIcon"><img src="/icons/nav/hardware-icon.png" alt="" /></div>
+                <div className="settingsRowText">
+                  <strong>{t.hardware}</strong>
+                  <span>{hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.</span>
+                  <div className="settingsHardwareOptions">
+                    {hardwareSummary.map(({ backend, selectable, reason }) => (
+                      <span key={backend} className={`settingsBadge ${selectable ? "ok" : "disabled"}`} title={reason || ""}>
+                        {backendLabel(backend, lang)}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="settingsRowControl stacked">
                   <select className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange}>
                     {hardwareSummary.map(({ backend, selectable, reason }) => (
-                      <option
-                        key={backend}
-                        value={backend}
-                        disabled={!selectable}
-                        title={reason || backendLabel(backend, lang)}
-                      >
+                      <option key={backend} value={backend} disabled={!selectable} title={reason || backendLabel(backend, lang)}>
                         {backendLabel(backend, lang)}
                       </option>
                     ))}
                   </select>
-                </label>
+                  <button className="button secondary small" onClick={rescanHardware}>{t.rescan}</button>
+                </div>
               </div>
-              <div className="settingsActions">
-                <button className="button secondary small" onClick={rescanHardware}>{t.rescan}</button>
+
+              <div className="settingsRow">
+                <div className="settingsRowIcon"><img src="/icons/nav/security-icon.png" alt="" /></div>
+                <div className="settingsRowText">
+                  <strong>{t.security}</strong>
+                  <span>{t.securityText}</span>
+                  <small>{t.users}: {t.usersText}</small>
+                </div>
+                <div className="settingsRowControl">
+                  <img className="settingsInlineIcon" src="/icons/nav/users-icon.png" alt="" />
+                </div>
               </div>
-              <div className="settingsNote">
-                {hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.
-              </div>
-              <div className="settingsHardwareOptions">
-                {hardwareSummary.map(({ backend, selectable, reason }) => (
-                  <span key={backend} className={`settingsBadge ${selectable ? "ok" : "disabled"}`} title={reason || ""}>
-                    {backendLabel(backend, lang)}
-                  </span>
-                ))}
-              </div>
+
               {hardware ? (
                 <details className="settingsDetails">
                   <summary>{t.technicalDetails}</summary>
@@ -499,22 +493,9 @@ export default function SettingsPage() {
               ) : null}
             </section>
 
-            <section className="settingsSection">
-              <div className="settingsSectionHead">
-                <h2 className="settingsSectionTitle">
-                  <img src="/icons/nav/security-icon.png" alt="" />
-                  <span>{t.security}</span>
-                </h2>
-                <p>{t.securityText}</p>
-              </div>
-              <div className="settingsUsersNote">
-                <img src="/icons/nav/users-icon.png" alt="" />
-                <div>
-                  <strong>{t.users}</strong>
-                  <span>{t.usersText}</span>
-                </div>
-              </div>
-            </section>
+            <aside className="settingsVisual" aria-hidden="true">
+              <img src="/icons/nav/dashboard-header-bg.png" alt="" />
+            </aside>
           </div>
         )}
       </div>

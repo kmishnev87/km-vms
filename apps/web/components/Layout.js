@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { clearAuthToken, getAuthToken } from "../lib/api";
+import { apiFetch, clearAuthToken, getAuthToken } from "../lib/api";
 
 const items = [
   { href: "/cameras", label: "\u041a\u0430\u043c\u0435\u0440\u044b", iconSrc: "/icons/nav/cameras.png" },
@@ -15,6 +15,8 @@ const items = [
 export default function Layout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [language, setLanguage] = useState("ru");
+  const [username, setUsername] = useState("");
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -24,6 +26,7 @@ export default function Layout({ children }) {
           router.replace("/setup");
           return;
         }
+        if (status?.language) setLanguage(status.language);
         if (!getAuthToken()) {
           router.replace("/login");
         }
@@ -32,6 +35,34 @@ export default function Layout({ children }) {
         if (!getAuthToken()) router.replace("/login");
       });
   }, [router]);
+
+  useEffect(() => {
+    if (!getAuthToken()) return;
+    apiFetch("/auth/me")
+      .then((user) => setUsername(user?.full_name || user?.username || ""))
+      .catch(() => setUsername(""));
+  }, []);
+
+  useEffect(() => {
+    function onLanguage(event) {
+      if (event.detail) setLanguage(event.detail);
+    }
+    window.addEventListener("km-vms-language", onLanguage);
+    return () => window.removeEventListener("km-vms-language", onLanguage);
+  }, []);
+
+  async function changeLanguage(event) {
+    const nextLanguage = event.target.value;
+    setLanguage(nextLanguage);
+    window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextLanguage }));
+    try {
+      await apiFetch("/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language: nextLanguage }),
+      });
+    } catch (_) {}
+  }
 
   function logout() {
     clearAuthToken();
@@ -64,6 +95,15 @@ export default function Layout({ children }) {
           </nav>
 
           <div className="topNavRight">
+            <select className="topLanguageSelect" value={language} onChange={changeLanguage} aria-label="Language">
+              <option value="ru">RU</option>
+              <option value="en">EN</option>
+            </select>
+
+            <div className="topUserChip" title={username || (language === "en" ? "User" : "Пользователь")}>
+              {username || (language === "en" ? "User" : "Пользователь")}
+            </div>
+
             <Link
               href="/settings"
               className={`topNavItem ${pathname === "/settings" ? "active" : ""}`}
