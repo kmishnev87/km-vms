@@ -1,6 +1,6 @@
 :root {
   --settings-control-width: 280px;
-  --settings-storage-width: 320px;
+  --settings-action-width: 74px;
 }
 
 html,
@@ -215,13 +215,18 @@ textarea {
 }
 
 .dashboardHeaderImage {
-  width: min(48%, 520px);
-  height: 128px;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(56%, 620px);
+  height: 100%;
   object-fit: cover;
   object-position: center right;
-  border-radius: 12px;
-  opacity: 0.9;
-  filter: saturate(1.2) contrast(1.05);
+  border-radius: 0 14px 14px 0;
+  opacity: 1;
+  filter: saturate(1.25) contrast(1.08);
+  z-index: 0;
 }
 
 .dashboardTitle {
@@ -780,23 +785,17 @@ textarea {
   background: #450a0a;
 }
 
-.settingsReferenceLayout {
-  display: grid;
-  grid-template-columns: minmax(0, 760px) minmax(260px, 1fr);
-  gap: 14px;
-  align-items: stretch;
-}
-
 .settingsPanel {
   border: 1px solid #dbe3ef;
   border-radius: 14px;
   background: #ffffff;
   overflow: hidden;
+  width: 100%;
 }
 
 .settingsRow {
   display: grid;
-  grid-template-columns: 48px minmax(0, 1fr) minmax(240px, 320px);
+  grid-template-columns: 48px minmax(0, 1fr) var(--settings-control-width) var(--settings-action-width);
   gap: 12px;
   align-items: center;
   min-height: 82px;
@@ -859,49 +858,24 @@ textarea {
   gap: 7px;
 }
 
-.settingsRowControl.stacked {
-  width: var(--settings-storage-width);
-}
-
 .settingsRowControl .settingsSelect,
 .settingsRowControl .settingsInput {
   width: 100%;
   min-height: 38px;
 }
 
-.settingsRowControl .button {
-  justify-self: start;
-  width: auto;
-  min-width: 0;
+.settingsRowAction {
+  justify-self: end;
+  width: var(--settings-action-width);
+}
+
+.settingsRowAction .button {
+  width: var(--settings-action-width);
+  min-width: var(--settings-action-width);
+  min-height: 38px;
+  padding-left: 0;
+  padding-right: 0;
   white-space: nowrap;
-}
-
-.settingsVisual {
-  position: relative;
-  overflow: hidden;
-  min-height: 100%;
-  border: 1px solid #dbe3ef;
-  border-radius: 14px;
-  background: #ffffff;
-}
-
-.settingsVisual::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.24));
-  pointer-events: none;
-}
-
-.settingsVisual img {
-  width: 100%;
-  height: 100%;
-  min-height: 520px;
-  object-fit: cover;
-  object-position: center;
-  opacity: 0.92;
-  filter: saturate(1.18) contrast(1.04);
-  display: block;
 }
 
 .dashboardCardBody {
@@ -1710,14 +1684,6 @@ textarea {
     grid-template-columns: 1fr;
   }
 
-  .settingsReferenceLayout {
-    grid-template-columns: 1fr;
-  }
-
-  .settingsVisual {
-    display: none;
-  }
-
   .settingsRow {
     grid-template-columns: 48px minmax(0, 1fr);
   }
@@ -1728,8 +1694,10 @@ textarea {
     width: min(var(--settings-control-width), 100%);
   }
 
-  .settingsRowControl.stacked {
-    width: min(var(--settings-storage-width), 100%);
+  .settingsRowAction {
+    grid-column: 2;
+    justify-self: start;
+    width: var(--settings-action-width);
   }
 
   .settingsControl,
@@ -1743,6 +1711,11 @@ textarea {
   .settingsStorageAction .button {
     width: 100%;
     max-width: none;
+  }
+
+  .settingsRowAction .button {
+    width: var(--settings-action-width);
+    max-width: var(--settings-action-width);
   }
 
   .timezoneSelect {

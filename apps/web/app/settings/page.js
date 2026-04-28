@@ -17,9 +17,9 @@ const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "nvenc", "amf", "cpu"];
 const BACKEND_LABELS = {
   auto: { ru: "Автоматически", en: "Automatic" },
   qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV" },
-  vaapi: { ru: "VAAPI / аппаратное ускорение Linux", en: "VAAPI / Linux hardware acceleration" },
+  vaapi: { ru: "VAAPI", en: "VAAPI" },
   nvenc: { ru: "NVIDIA NVENC/NVDEC", en: "NVIDIA NVENC/NVDEC" },
-  amf: { ru: "AMD AMF / аппаратное ускорение AMD", en: "AMD AMF / AMD hardware acceleration" },
+  amf: { ru: "AMD AMF", en: "AMD AMF" },
   cpu: { ru: "Резервный режим CPU", en: "CPU fallback" },
 };
 
@@ -45,7 +45,7 @@ const TEXT = {
     storagePath: "Путь архива внутри контейнера",
     hostPath: "Путь на сервере",
     hostPathUnknown: "Определяется в docker-compose",
-    validate: "Проверить хранилище",
+    validate: "Тест",
     storageOk: "Хранилище доступно.",
     storageFail: "Хранилище недоступно",
     path: "Путь",
@@ -70,7 +70,7 @@ const TEXT = {
     hardwareText: "Доступные режимы сервера. Недоступные варианты видны, но отключены.",
     hardwareMode: "Режим аппаратного ускорения",
     unavailableMode: "Этот режим недоступен на данном сервере или не прошёл проверку.",
-    rescan: "Проверить аппаратные возможности",
+    rescan: "Тест",
     hardwareAvailable: "Аппаратное ускорение доступно.",
     hardwareUnavailable: "Аппаратное ускорение недоступно. Будет использоваться CPU fallback.",
     selected: "Выбрано",
@@ -109,7 +109,7 @@ const TEXT = {
     storagePath: "Archive path inside container",
     hostPath: "Server path",
     hostPathUnknown: "Defined in docker-compose",
-    validate: "Validate storage",
+    validate: "Test",
     storageOk: "Storage is available.",
     storageFail: "Storage is unavailable",
     path: "Path",
@@ -134,7 +134,7 @@ const TEXT = {
     hardwareText: "Server acceleration modes. Unavailable options are visible but disabled.",
     hardwareMode: "Hardware acceleration mode",
     unavailableMode: "This mode is unavailable on this server or failed validation.",
-    rescan: "Check hardware capabilities",
+    rescan: "Test",
     hardwareAvailable: "Hardware acceleration is available.",
     hardwareUnavailable: "Hardware acceleration is unavailable. CPU fallback will be used.",
     selected: "Selected",
@@ -429,6 +429,8 @@ export default function SettingsPage() {
                 </div>
                 <div className="settingsRowControl stacked">
                   <input className="input settingsInput" value={settings.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} />
+                </div>
+                <div className="settingsRowAction">
                   <button className="button secondary small" onClick={validateStorage}>{t.validate}</button>
                 </div>
               </div>
@@ -461,7 +463,7 @@ export default function SettingsPage() {
                     ))}
                   </div>
                 </div>
-                <div className="settingsRowControl stacked">
+                <div className="settingsRowControl">
                   <select className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange}>
                     {hardwareSummary.map(({ backend, selectable, reason }) => (
                       <option key={backend} value={backend} disabled={!selectable} title={reason || backendLabel(backend, lang)}>
@@ -469,6 +471,8 @@ export default function SettingsPage() {
                       </option>
                     ))}
                   </select>
+                </div>
+                <div className="settingsRowAction">
                   <button className="button secondary small" onClick={rescanHardware}>{t.rescan}</button>
                 </div>
               </div>
@@ -493,9 +497,6 @@ export default function SettingsPage() {
               ) : null}
             </section>
 
-            <aside className="settingsVisual" aria-hidden="true">
-              <img src="/icons/nav/dashboard-header-bg.png" alt="" />
-            </aside>
           </div>
         )}
       </div>
