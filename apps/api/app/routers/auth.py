@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
+from app.core.permissions import ROLE_PERMISSIONS
 from app.core.security import create_access_token, verify_password
 from app.db.session import get_db
 from app.models.user import User
@@ -35,6 +36,9 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
         expires_at = expires_at.astimezone(timezone.utc)
 
     token = create_access_token(user.username, expires_at=expires_at)
+    user.last_login_at = datetime.utcnow()
+    db.add(user)
+    db.commit()
     return TokenResponse(access_token=token, expires_at=expires_at.isoformat() if expires_at else None)
 
 
@@ -45,4 +49,7 @@ def me(current_user: User = Depends(get_current_user)):
         username=current_user.username,
         full_name=current_user.full_name,
         role=current_user.role,
+        permissions=sorted(ROLE_PERMISSIONS.get(current_user.role, set())),
+        is_active=bool(current_user.is_active),
+        last_login_at=current_user.last_login_at.isoformat() if getattr(current_user, "last_login_at", None) else None,
     )

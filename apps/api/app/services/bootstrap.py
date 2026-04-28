@@ -24,6 +24,8 @@ def migrate_user_table() -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE NOT NULL"))
         if "updated_at" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL"))
+        if "last_login_at" not in columns:
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP NULL"))
 
 
 def ensure_system_settings(db: Session) -> SystemSettings:

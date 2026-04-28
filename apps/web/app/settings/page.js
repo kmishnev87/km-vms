@@ -62,6 +62,32 @@ const TEXT = {
     securityText: "Если включить «Оставаться в системе», вход сохраняется до 24:00 системного дня.",
     users: "Пользователи и роли",
     usersText: "Фундамент ролей уже включён: admin, operator, viewer. Полное управление пользователями будет добавлено отдельным этапом.",
+    usersDenied: "Недостаточно прав для управления пользователями.",
+    currentUser: "Текущий пользователь",
+    sessionPolicy: "Сессия до 24:00 при включённом режиме «Оставаться в системе».",
+    addUser: "Добавить пользователя",
+    editUser: "Изменить пользователя",
+    username: "Логин",
+    displayName: "Имя",
+    password: "Пароль",
+    passwordOptional: "Пароль (если нужно изменить)",
+    role: "Роль",
+    status: "Статус",
+    active: "Активен",
+    inactive: "Отключён",
+    actions: "Действия",
+    edit: "Изменить",
+    deactivate: "Отключить",
+    activate: "Включить",
+    create: "Создать",
+    update: "Сохранить",
+    close: "Закрыть",
+    usernameRequired: "Укажите логин.",
+    passwordRequired: "Укажите пароль не короче 8 символов.",
+    roleRequired: "Выберите роль.",
+    roleAdmin: "Администратор",
+    roleOperator: "Оператор",
+    roleViewer: "Наблюдатель",
     toasts: {
       saveOkTitle: "Настройки сохранены",
       saveOkText: "Изменения успешно применены",
@@ -81,6 +107,12 @@ const TEXT = {
       hardwareFailTitle: "Проверка аппаратных возможностей не выполнена",
       hardwareFailText: "Повторите проверку позже",
       unavailableTitle: "Режим недоступен",
+      userCreatedTitle: "Пользователь создан",
+      userUpdatedTitle: "Пользователь обновлён",
+      userDisabledTitle: "Пользователь отключён",
+      userEnabledTitle: "Пользователь включён",
+      usersFailTitle: "Пользователи недоступны",
+      usersFailText: "Не удалось выполнить действие с пользователем",
     },
     tooltips: {
       timezone: "Используется для отображения времени, записи файлов и хронологии.",
@@ -135,6 +167,32 @@ const TEXT = {
     securityText: "If \"Stay signed in\" is enabled, the session is kept until midnight of the system day.",
     users: "Users / Roles",
     usersText: "Role foundation is active: admin, operator, viewer. Full user management will be added in a dedicated stage.",
+    usersDenied: "Insufficient permissions to manage users.",
+    currentUser: "Current user",
+    sessionPolicy: "Session is kept until 24:00 when \"Stay signed in\" is enabled.",
+    addUser: "Add user",
+    editUser: "Edit user",
+    username: "Username",
+    displayName: "Name",
+    password: "Password",
+    passwordOptional: "Password (change only if needed)",
+    role: "Role",
+    status: "Status",
+    active: "Active",
+    inactive: "Disabled",
+    actions: "Actions",
+    edit: "Edit",
+    deactivate: "Disable",
+    activate: "Enable",
+    create: "Create",
+    update: "Save",
+    close: "Close",
+    usernameRequired: "Enter username.",
+    passwordRequired: "Enter a password with at least 8 characters.",
+    roleRequired: "Select a role.",
+    roleAdmin: "Administrator",
+    roleOperator: "Operator",
+    roleViewer: "Viewer",
     toasts: {
       saveOkTitle: "Settings saved",
       saveOkText: "Changes applied successfully",
@@ -154,6 +212,12 @@ const TEXT = {
       hardwareFailTitle: "Hardware capability check failed",
       hardwareFailText: "Try checking again later",
       unavailableTitle: "Mode unavailable",
+      userCreatedTitle: "User created",
+      userUpdatedTitle: "User updated",
+      userDisabledTitle: "User disabled",
+      userEnabledTitle: "User enabled",
+      usersFailTitle: "Users unavailable",
+      usersFailText: "User action failed",
     },
     tooltips: {
       timezone: "Used for time display, recording timestamps, and chronology.",
@@ -179,6 +243,13 @@ function languageOf(settings) {
 function backendLabel(value, lang) {
   const key = value || "auto";
   return BACKEND_LABELS[key]?.[lang] || key;
+}
+
+function roleLabel(role, t) {
+  if (!role) return "-";
+  if (role === "admin") return t.roleAdmin;
+  if (role === "operator") return t.roleOperator;
+  return t.roleViewer;
 }
 
 function settingsDraftFromApi(data) {
@@ -246,6 +317,9 @@ function normalizedError(err, lang, context = "generic") {
   if (context === "hardware") {
     return { variant: "error", title: t.toasts.hardwareFailTitle, text: t.toasts.hardwareFailText };
   }
+  if (context === "users") {
+    return { variant: "error", title: t.toasts.usersFailTitle, text: t.toasts.usersFailText };
+  }
   return { variant: "error", title: t.toasts.networkTitle, text: t.toasts.networkText };
 }
 
@@ -305,11 +379,17 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [storageChecking, setStorageChecking] = useState(false);
   const [hardwareChecking, setHardwareChecking] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [usersLoading, setUsersLoading] = useState(false);
+  const [userBusy, setUserBusy] = useState(false);
+  const [userModal, setUserModal] = useState(null);
   const toastTimerRef = useRef(null);
   const lang = languageOf(draft || savedDraft);
   const t = TEXT[lang] || TEXT.ru;
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
   const anyBusy = saving || storageChecking || hardwareChecking;
+  const canManageUsers = Boolean(currentUser?.permissions?.includes("admin_access"));
   const languageIcon = lang === "en"
     ? "/icons/nav/language-icon_ENG.png"
     : "/icons/nav/language-icon_RU.png";
@@ -334,16 +414,32 @@ export default function SettingsPage() {
 
   async function load() {
     try {
-      const [settingsData, hardwareData] = await Promise.all([
+      const [settingsData, hardwareData, meData] = await Promise.all([
         apiFetch("/settings"),
         apiFetch("/hardware/capabilities"),
+        apiFetch("/users/me"),
       ]);
       const nextDraft = settingsDraftFromApi(settingsData);
       setDraft(nextDraft);
       setSavedDraft(nextDraft);
       setHardware(hardwareData);
+      setCurrentUser(meData);
+      if (meData?.permissions?.includes("admin_access")) {
+        await loadUsers();
+      }
     } catch (err) {
       showToast(normalizedError(err, lang));
+    }
+  }
+
+  async function loadUsers() {
+    setUsersLoading(true);
+    try {
+      setUsers(await apiFetch("/users"));
+    } catch (err) {
+      showToast(normalizedError(err, lang, "users"));
+    } finally {
+      setUsersLoading(false);
     }
   }
 
@@ -458,6 +554,108 @@ export default function SettingsPage() {
     window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextLanguage }));
   }
 
+  function openCreateUser() {
+    setUserModal({
+      mode: "create",
+      id: null,
+      username: "",
+      display_name: "",
+      password: "",
+      role: "viewer",
+      is_active: true,
+      error: "",
+    });
+  }
+
+  function openEditUser(user) {
+    setUserModal({
+      mode: "edit",
+      id: user.id,
+      username: user.username,
+      display_name: user.display_name || "",
+      password: "",
+      role: user.role,
+      is_active: Boolean(user.is_active),
+      error: "",
+    });
+  }
+
+  function patchUserModal(key, value) {
+    setUserModal((current) => ({ ...current, [key]: value, error: "" }));
+  }
+
+  async function submitUserModal(event) {
+    event.preventDefault();
+    if (!userModal || userBusy) return;
+    if (!userModal.username.trim()) {
+      patchUserModal("error", t.usernameRequired);
+      return;
+    }
+    if (userModal.mode === "create" && userModal.password.length < 8) {
+      patchUserModal("error", t.passwordRequired);
+      return;
+    }
+    if (!["admin", "operator", "viewer"].includes(userModal.role)) {
+      patchUserModal("error", t.roleRequired);
+      return;
+    }
+
+    setUserBusy(true);
+    try {
+      const body = {
+        username: userModal.username.trim(),
+        display_name: userModal.display_name.trim(),
+        role: userModal.role,
+        is_active: Boolean(userModal.is_active),
+      };
+      if (userModal.password) body.password = userModal.password;
+
+      if (userModal.mode === "create") {
+        await apiFetch("/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        showToast({ variant: "success", title: t.toasts.userCreatedTitle, text: userModal.username.trim() });
+      } else {
+        await apiFetch(`/users/${userModal.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        showToast({ variant: "success", title: t.toasts.userUpdatedTitle, text: userModal.username.trim() });
+      }
+      setUserModal(null);
+      await loadUsers();
+    } catch (err) {
+      showToast(normalizedError(err, lang, "users"));
+    } finally {
+      setUserBusy(false);
+    }
+  }
+
+  async function toggleUserActive(user) {
+    if (userBusy) return;
+    setUserBusy(true);
+    try {
+      await apiFetch(`/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: !user.is_active }),
+      });
+      showToast({
+        variant: "success",
+        title: user.is_active ? t.toasts.userDisabledTitle : t.toasts.userEnabledTitle,
+        text: user.username,
+      });
+      await loadUsers();
+    } catch (err) {
+      showToast(normalizedError(err, lang, "users"));
+    } finally {
+      setUserBusy(false);
+    }
+  }
+
   return (
     <Layout>
       <div className="settingsPage">
@@ -479,7 +677,7 @@ export default function SettingsPage() {
             </div>
 
             <div className="settingsHeaderActions">
-              <span className={`settingsDirtyNote ${dirty ? "visible" : ""}`}>{t.dirty}</span>
+              {dirty ? <span className="settingsDirtyNote">{t.dirty}</span> : null}
               <button className="button secondary small settingsCancelButton" onClick={cancelChanges} disabled={!dirty || anyBusy}>
                 {t.cancel}
               </button>
@@ -592,16 +790,121 @@ export default function SettingsPage() {
                   <div className="settingsRowIcon"><img src="/icons/nav/users-icon.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label>{t.users}<InfoTip text={t.tooltips.users} /></label>
-                    <span>{t.usersText}</span>
+                    <span>{canManageUsers ? t.usersText : t.usersDenied}</span>
                   </div>
                   <div className="settingsRowControl settingsRowControlMeta">
-                    <img className="settingsInlineIcon" src="/icons/nav/users-icon.png" alt="" />
+                    <button className="button secondary small settingsUsersAddButton" onClick={openCreateUser} disabled={!canManageUsers || usersLoading || userBusy}>
+                      {t.addUser}
+                    </button>
                   </div>
+                </div>
+
+                <div className="settingsUsersBlock">
+                  <div className="settingsSecuritySummary">
+                    <div>
+                      <span>{t.currentUser}</span>
+                      <strong>{currentUser?.username || "-"}</strong>
+                      <small>{roleLabel(currentUser?.role, t)}</small>
+                    </div>
+                    <div>
+                      <span>{t.security}</span>
+                      <strong>24:00</strong>
+                      <small>{t.sessionPolicy}</small>
+                    </div>
+                  </div>
+
+                  {canManageUsers ? (
+                    <div className="settingsUsersTableWrap">
+                      <table className="settingsUsersTable">
+                        <thead>
+                          <tr>
+                            <th>{t.username}</th>
+                            <th>{t.role}</th>
+                            <th>{t.status}</th>
+                            <th>{t.actions}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {users.map((user) => (
+                            <tr key={user.id}>
+                              <td>
+                                <strong>{user.username}</strong>
+                                {user.display_name ? <small>{user.display_name}</small> : null}
+                              </td>
+                              <td>{roleLabel(user.role, t)}</td>
+                              <td>
+                                <span className={`settingsUserStatus ${user.is_active ? "active" : "inactive"}`}>
+                                  {user.is_active ? t.active : t.inactive}
+                                </span>
+                              </td>
+                              <td>
+                                <div className="settingsUserActions">
+                                  <button className="button secondary small" onClick={() => openEditUser(user)} disabled={userBusy}>{t.edit}</button>
+                                  <button className="button secondary small" onClick={() => toggleUserActive(user)} disabled={userBusy}>
+                                    {user.is_active ? t.deactivate : t.activate}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
                 </div>
               </section>
             </div>
           )}
         </div>
+
+        {userModal ? (
+          <div className="settingsModalOverlay" role="presentation">
+            <form className="settingsUserModal" onSubmit={submitUserModal}>
+              <div className="settingsUserModalHeader">
+                <h2>{userModal.mode === "create" ? t.addUser : t.editUser}</h2>
+                <button type="button" className="settingsModalClose" onClick={() => setUserModal(null)} aria-label={t.close}>×</button>
+              </div>
+
+              <label className="settingsModalField">
+                <span>{t.username}</span>
+                <input className="input" value={userModal.username} onChange={(event) => patchUserModal("username", event.target.value)} disabled={userModal.mode === "edit" || userBusy} />
+              </label>
+
+              <label className="settingsModalField">
+                <span>{t.displayName}</span>
+                <input className="input" value={userModal.display_name} onChange={(event) => patchUserModal("display_name", event.target.value)} disabled={userBusy} />
+              </label>
+
+              <label className="settingsModalField">
+                <span>{userModal.mode === "create" ? t.password : t.passwordOptional}</span>
+                <input className="input" type="password" value={userModal.password} onChange={(event) => patchUserModal("password", event.target.value)} disabled={userBusy} autoComplete="new-password" />
+              </label>
+
+              <div className="settingsModalGrid">
+                <label className="settingsModalField">
+                  <span>{t.role}</span>
+                  <select className="select" value={userModal.role} onChange={(event) => patchUserModal("role", event.target.value)} disabled={userBusy}>
+                    <option value="admin">{t.roleAdmin}</option>
+                    <option value="operator">{t.roleOperator}</option>
+                    <option value="viewer">{t.roleViewer}</option>
+                  </select>
+                </label>
+
+                <label className="settingsModalCheck">
+                  <input type="checkbox" checked={userModal.is_active} onChange={(event) => patchUserModal("is_active", event.target.checked)} disabled={userBusy} />
+                  <span>{t.active}</span>
+                </label>
+              </div>
+
+              {userModal.error ? <div className="settingsModalError">{userModal.error}</div> : null}
+
+              <div className="settingsModalActions">
+                <button type="button" className="button secondary small" onClick={() => setUserModal(null)} disabled={userBusy}>{t.cancel}</button>
+                <button type="submit" className="button small" disabled={userBusy}>{userModal.mode === "create" ? t.create : t.update}</button>
+              </div>
+            </form>
+          </div>
+        ) : null}
       </div>
     </Layout>
   );

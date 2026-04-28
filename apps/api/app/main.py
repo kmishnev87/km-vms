@@ -13,6 +13,7 @@ from app.routers.live import router as live_router
 from app.routers.recordings import router as recordings_router
 from app.routers.settings import router as settings_router
 from app.routers.storage import router as storage_router
+from app.routers.users import router as users_router
 from app.services.bootstrap import init_db, ensure_admin, ensure_system_settings
 from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine_v2 import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
@@ -88,6 +89,7 @@ def system_info():
 
 app.include_router(auth_router)
 app.include_router(settings_router)
+app.include_router(users_router)
 app.include_router(cameras_router)
 app.include_router(recordings_router)
 app.include_router(storage_router)

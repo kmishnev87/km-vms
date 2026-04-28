@@ -18,3 +18,6 @@ class UserMeResponse(BaseModel):
     username: str
     full_name: str
     role: str
+    permissions: list[str] = []
+    is_active: bool = True
+    last_login_at: str | None = None
