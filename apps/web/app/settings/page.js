@@ -12,14 +12,14 @@ const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
   return { offset, label, value };
 });
 
-const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "nvenc", "amf", "cpu"];
+const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "amf", "nvenc", "cpu"];
 
 const BACKEND_LABELS = {
   auto: { ru: "Автоматически", en: "Automatic" },
   qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV" },
   vaapi: { ru: "VAAPI", en: "VAAPI" },
-  nvenc: { ru: "NVIDIA NVENC/NVDEC", en: "NVIDIA NVENC/NVDEC" },
   amf: { ru: "AMD AMF", en: "AMD AMF" },
+  nvenc: { ru: "NVIDIA NVENC/NVDEC", en: "NVIDIA NVENC/NVDEC" },
   cpu: { ru: "Резервный режим CPU", en: "CPU fallback" },
 };
 
@@ -33,60 +33,58 @@ const TEXT = {
     changesApplied: "Изменения успешно применены",
     storageValidated: "Хранилище доступно. Свободно: {free}",
     hardwareChecked: "Аппаратные возможности проверены",
-    system: "Система",
-    systemText: "Базовые параметры интерфейса и отображения времени.",
     language: "Язык",
     russian: "Русский",
     english: "English",
     timezone: "Часовой пояс",
-    timezoneHelp: "Часовой пояс используется для отображения времени, архива и будущей хронологии.",
+    timezoneHelp: "Определяет время интерфейса, архива и хронологии.",
     storage: "Хранилище",
-    storageText: "Физический путь на NAS задаётся в docker-compose volume mapping. Внутри контейнера он доступен как путь архива ниже.",
-    storagePath: "Путь архива внутри контейнера",
+    storageText: "Путь архива внутри контейнера. Серверный путь задаётся в docker-compose.",
     hostPath: "Путь на сервере",
     hostPathUnknown: "Определяется в docker-compose",
     validate: "Тест",
     storageOk: "Хранилище доступно.",
     storageFail: "Хранилище недоступно",
-    path: "Путь",
-    free: "Свободно",
-    writeAllowed: "Запись разрешена",
     writeDenied: "Нет прав на запись",
-    created: "Папка создана",
-    exists: "Папка существует",
-    yes: "да",
-    no: "нет",
     recording: "Запись",
-    recordingText: "Профиль задаёт формат будущих архивных файлов Recorder PRO.",
-    recordingProfile: "Профиль записи",
-    balanced: "Сбалансированный",
-    balancedHelp: "Рекомендуемый режим. Сейчас: MKV.",
-    compatibility: "Максимальная совместимость",
-    compatibilityHelp: "Сейчас: MP4. Легче открыть в плеерах, но менее устойчив при аварийном завершении.",
-    reliability: "Максимальная надёжность",
-    reliabilityHelp: "Сейчас: MKV. Лучше переносит прерывание процесса или сервера.",
+    balanced: "Баланс",
+    balancedHelp: "Рекомендуемый режим. Сейчас используется MKV.",
+    compatibility: "Макс. совместимость",
+    compatibilityHelp: "Сейчас используется MP4. Удобнее для плееров.",
+    reliability: "Макс. надежность",
+    reliabilityHelp: "Сейчас используется MKV. Лучше переносит сбои записи.",
     mapsTo: "Формат",
     hardware: "Аппаратное ускорение",
-    hardwareText: "Доступные режимы сервера. Недоступные варианты видны, но отключены.",
-    hardwareMode: "Режим аппаратного ускорения",
+    hardwareText: "Доступные режимы сервера. Недоступные варианты показаны серым.",
     unavailableMode: "Этот режим недоступен на данном сервере или не прошёл проверку.",
     rescan: "Тест",
     hardwareAvailable: "Аппаратное ускорение доступно.",
     hardwareUnavailable: "Аппаратное ускорение недоступно. Будет использоваться CPU fallback.",
     selected: "Выбрано",
-    availableOptions: "Доступные варианты",
     failedValidation: "Не прошёл проверку",
     notDetected: "Не найдено на этом сервере",
-    cpuFallback: "Резервный режим CPU доступен.",
-    technicalDetails: "Технические детали",
     security: "Безопасность и сессия",
-    securityText: "Если включить “Оставаться в системе”, вход сохраняется до 24:00 системного дня. После полуночи потребуется войти снова.",
+    securityText: "Если включить «Оставаться в системе», вход сохраняется до 24:00 системного дня.",
     users: "Пользователи и роли",
     usersText: "Фундамент ролей уже включён: admin, operator, viewer. Полное управление пользователями будет добавлено отдельным этапом.",
     notAuthenticated: "Нужно войти заново.",
     forbidden: "Недостаточно прав.",
     network: "Сервер недоступен.",
-    i18nNote: "Глобальный перевод интерфейса ещё не завершён. На этом этапе язык полностью применяется к странице настроек.",
+    i18nNote: "Язык применяется к странице настроек и общим элементам интерфейса.",
+    tooltips: {
+      timezone: "Используется для отображения времени, записи файлов и хронологии.",
+      storage: "Папка внутри контейнера. Фактический путь на сервере задаётся в docker-compose.",
+      recording: "Определяет формат и поведение записи видео.",
+      hardware: "Использует видеоускорение сервера для обработки видео.",
+      auto: "Система сама выбирает оптимальное ускорение.",
+      qsv: "Аппаратное ускорение через встроенную графику Intel.",
+      vaapi: "Аппаратное ускорение для Linux-систем.",
+      nvenc: "Аппаратное ускорение через видеокарты NVIDIA.",
+      amf: "Аппаратное ускорение через видеокарты AMD.",
+      cpu: "Обработка видео без ускорения, только на процессоре.",
+      security: "Настройки авторизации и времени сессии.",
+      users: "Управление доступом пользователей к системе.",
+    },
   },
   en: {
     title: "Settings",
@@ -97,60 +95,58 @@ const TEXT = {
     changesApplied: "Changes applied successfully",
     storageValidated: "Storage is available. Free: {free}",
     hardwareChecked: "Hardware capabilities checked",
-    system: "System",
-    systemText: "Core interface and displayed time settings.",
     language: "Language",
     russian: "Русский",
     english: "English",
     timezone: "Timezone",
-    timezoneHelp: "Timezone is used for displayed time, archive timestamps, and future chronology.",
+    timezoneHelp: "Defines interface time, archive timestamps, and chronology.",
     storage: "Storage",
-    storageText: "The physical NAS path is defined by docker-compose volume mapping. Inside the container it is available as the archive path below.",
-    storagePath: "Archive path inside container",
+    storageText: "Archive path inside the container. The server path is defined in docker-compose.",
     hostPath: "Server path",
     hostPathUnknown: "Defined in docker-compose",
     validate: "Test",
     storageOk: "Storage is available.",
     storageFail: "Storage is unavailable",
-    path: "Path",
-    free: "Free space",
-    writeAllowed: "Write access: allowed",
-    writeDenied: "Write access: denied",
-    created: "Folder was created",
-    exists: "Folder exists",
-    yes: "yes",
-    no: "no",
+    writeDenied: "Write access denied",
     recording: "Recording",
-    recordingText: "The profile defines the future Recorder PRO archive file format.",
-    recordingProfile: "Recording profile",
     balanced: "Balanced",
     balancedHelp: "Recommended mode. Current mapping: MKV.",
     compatibility: "Maximum compatibility",
-    compatibilityHelp: "Current mapping: MP4. Easier to open in players, but less crash-safe.",
+    compatibilityHelp: "Current mapping: MP4. Easier to open in players.",
     reliability: "Maximum reliability",
-    reliabilityHelp: "Current mapping: MKV. More resilient to process or server interruptions.",
+    reliabilityHelp: "Current mapping: MKV. More resilient to recording interruptions.",
     mapsTo: "Format",
     hardware: "Hardware Acceleration",
     hardwareText: "Server acceleration modes. Unavailable options are visible but disabled.",
-    hardwareMode: "Hardware acceleration mode",
     unavailableMode: "This mode is unavailable on this server or failed validation.",
     rescan: "Test",
     hardwareAvailable: "Hardware acceleration is available.",
     hardwareUnavailable: "Hardware acceleration is unavailable. CPU fallback will be used.",
     selected: "Selected",
-    availableOptions: "Available options",
     failedValidation: "Failed validation",
     notDetected: "Not detected on this server",
-    cpuFallback: "CPU fallback is available.",
-    technicalDetails: "Technical details",
     security: "Security / Session",
-    securityText: "If “Stay signed in” is enabled, the session is kept until midnight of the system day. After midnight, login is required again.",
+    securityText: "If \"Stay signed in\" is enabled, the session is kept until midnight of the system day.",
     users: "Users / Roles",
     usersText: "Role foundation is active: admin, operator, viewer. Full user management will be added in a dedicated stage.",
     notAuthenticated: "Please sign in again.",
     forbidden: "Insufficient permissions.",
     network: "Server is unavailable.",
-    i18nNote: "Global interface translation is not complete yet. At this stage, language is fully applied to Settings.",
+    i18nNote: "Language is applied to Settings and shared interface controls.",
+    tooltips: {
+      timezone: "Used for time display, recording timestamps, and chronology.",
+      storage: "Folder inside the container. The real server path is defined in docker-compose.",
+      recording: "Defines recording format and behavior.",
+      hardware: "Uses server video acceleration for video processing.",
+      auto: "The system selects the best available acceleration.",
+      qsv: "Hardware acceleration through Intel integrated graphics.",
+      vaapi: "Hardware acceleration for Linux systems.",
+      nvenc: "Hardware acceleration through NVIDIA GPUs.",
+      amf: "Hardware acceleration through AMD GPUs.",
+      cpu: "Video processing without acceleration, using CPU only.",
+      security: "Authorization and session time settings.",
+      users: "Manage user access to the system.",
+    },
   },
 };
 
@@ -165,7 +161,7 @@ function backendLabel(value, lang) {
 
 function formatBytes(value) {
   const bytes = Number(value);
-  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  if (!Number.isFinite(bytes) || bytes < 0) return "-";
   if (bytes < 1024 ** 3) return `${Math.round(bytes / 1024 / 1024)} MB`;
   if (bytes < 1024 ** 4) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
   return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
@@ -236,6 +232,16 @@ function hardwareOptionState(backend, hardware, t) {
   if (available) return { selectable: true, reason: "" };
   if (status?.candidate) return { selectable: false, reason: status.reason || t.failedValidation };
   return { selectable: false, reason: t.notDetected };
+}
+
+function InfoTip({ text }) {
+  if (!text) return null;
+  return (
+    <span className="settingsInfoTip" tabIndex="0" aria-label={text}>
+      i
+      <span className="settingsInfoBubble" role="tooltip">{text}</span>
+    </span>
+  );
 }
 
 export default function SettingsPage() {
@@ -337,7 +343,6 @@ export default function SettingsPage() {
   }
 
   const selectedHardware = settings?.hardware_preferred_backend || "auto";
-  const availableHardware = hardware?.available_backends || [];
   const profileHelp = {
     balanced: t.balancedHelp,
     compatibility: t.compatibilityHelp,
@@ -377,128 +382,129 @@ export default function SettingsPage() {
           </div>
         ) : null}
 
-        <div className="pageHeader settingsHeader">
-          <div className="settingsTitleBlock">
-            <img src="/icons/nav/settings-icon.png" alt="" />
-            <div>
-              <h1 className="pageTitle">{t.title}</h1>
-              <div className="pageSubtitle">{t.subtitle}</div>
+        <div className="settingsWorkspace">
+          <div className="pageHeader settingsHeader">
+            <div className="settingsTitleBlock">
+              <img src="/icons/nav/settings-icon.png" alt="" />
+              <div>
+                <h1 className="pageTitle">{t.title}</h1>
+                <div className="pageSubtitle">{t.subtitle}</div>
+              </div>
             </div>
+            <button className="button small" onClick={save} disabled={!settings || busy}>
+              {busy ? t.saving : t.save}
+            </button>
           </div>
-          <button className="button small" onClick={save} disabled={!settings || busy}>
-            {busy ? t.saving : t.save}
-          </button>
-        </div>
 
-        {!settings ? null : (
-          <div className="settingsReferenceLayout">
-            <section className="settingsPanel">
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src={languageIcon} alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.language}</strong>
-                  <span>{t.i18nNote}</span>
-                </div>
-                <div className="settingsRowControl">
-                  <select className="select settingsSelect" value={settings.language} onChange={handleSettingsLanguageChange}>
-                    <option value="ru">{t.russian}</option>
-                    <option value="en">{t.english}</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/timezone-icon.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.timezone}</strong>
-                  <span>{t.timezoneHelp}</span>
-                </div>
-                <div className="settingsRowControl">
-                  <select className="select settingsSelect timezoneSelect" value={timezoneValueForSettings(settings.timezone)} onChange={(event) => patch("timezone", event.target.value)}>
-                    {UTC_TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/storage-icon.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.storage}</strong>
-                  <span>{t.storageText}</span>
-                  <small>{t.hostPath}: {settings.storage_host_path || t.hostPathUnknown}</small>
-                </div>
-                <div className="settingsRowControl stacked">
-                  <input className="input settingsInput" value={settings.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} />
-                </div>
-                <div className="settingsRowAction">
-                  <button className="button secondary small" onClick={validateStorage}>{t.validate}</button>
-                </div>
-              </div>
-
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/records.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.recording}</strong>
-                  <span>{profileHelp} {t.mapsTo}: {recordingFormatForProfile(recordingProfile).toUpperCase()}.</span>
-                </div>
-                <div className="settingsRowControl">
-                  <select className="select settingsSelect" value={recordingProfile} onChange={(event) => setRecordingProfile(event.target.value)}>
-                    <option value="balanced">{t.balanced}</option>
-                    <option value="compatibility">{t.compatibility}</option>
-                    <option value="reliability">{t.reliability}</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/hardware-icon.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.hardware}</strong>
-                  <span>{hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.</span>
-                  <div className="settingsHardwareOptions">
-                    {hardwareSummary.map(({ backend, selectable, reason }) => (
-                      <span key={backend} className={`settingsBadge ${selectable ? "ok" : "disabled"}`} title={reason || ""}>
-                        {backendLabel(backend, lang)}
-                      </span>
-                    ))}
+          {!settings ? null : (
+            <div className="settingsReferenceLayout">
+              <section className="settingsPanel">
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src={languageIcon} alt="" /></div>
+                  <div className="settingsRowText">
+                    <strong>{t.language}</strong>
+                    <span>{t.i18nNote}</span>
+                  </div>
+                  <div className="settingsRowControl">
+                    <select className="select settingsSelect" value={settings.language} onChange={handleSettingsLanguageChange}>
+                      <option value="ru">{t.russian}</option>
+                      <option value="en">{t.english}</option>
+                    </select>
                   </div>
                 </div>
-                <div className="settingsRowControl">
-                  <select className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange}>
-                    {hardwareSummary.map(({ backend, selectable, reason }) => (
-                      <option key={backend} value={backend} disabled={!selectable} title={reason || backendLabel(backend, lang)}>
-                        {backendLabel(backend, lang)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="settingsRowAction">
-                  <button className="button secondary small" onClick={rescanHardware}>{t.rescan}</button>
-                </div>
-              </div>
 
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/security-icon.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.security}</strong>
-                  <span>{t.securityText}</span>
-                  <small>{t.users}: {t.usersText}</small>
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/icons/nav/timezone-icon.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <strong>{t.timezone}<InfoTip text={t.tooltips.timezone} /></strong>
+                    <span>{t.timezoneHelp}</span>
+                  </div>
+                  <div className="settingsRowControl">
+                    <select className="select settingsSelect timezoneSelect" value={timezoneValueForSettings(settings.timezone)} onChange={(event) => patch("timezone", event.target.value)}>
+                      {UTC_TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
+                    </select>
+                  </div>
                 </div>
-                <div className="settingsRowControl">
-                  <img className="settingsInlineIcon" src="/icons/nav/users-icon.png" alt="" />
+
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/icons/nav/storage-icon.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <strong>{t.storage}<InfoTip text={t.tooltips.storage} /></strong>
+                    <span>{t.storageText}</span>
+                    <small>{t.hostPath}: {settings.storage_host_path || t.hostPathUnknown}</small>
+                  </div>
+                  <div className="settingsRowControl">
+                    <input className="input settingsInput" value={settings.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} />
+                    <button className="button secondary small settingsTestButton" onClick={validateStorage}>{t.validate}</button>
+                  </div>
                 </div>
-              </div>
 
-              {hardware ? (
-                <details className="settingsDetails">
-                  <summary>{t.technicalDetails}</summary>
-                  <pre className="settingsJson">{JSON.stringify(hardware, null, 2)}</pre>
-                </details>
-              ) : null}
-            </section>
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/icons/nav/records.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <strong>{t.recording}<InfoTip text={t.tooltips.recording} /></strong>
+                    <span>{profileHelp} {t.mapsTo}: {recordingFormatForProfile(recordingProfile).toUpperCase()}.</span>
+                  </div>
+                  <div className="settingsRowControl">
+                    <select className="select settingsSelect" value={recordingProfile} onChange={(event) => setRecordingProfile(event.target.value)}>
+                      <option value="balanced">{t.balanced}</option>
+                      <option value="reliability">{t.reliability}</option>
+                      <option value="compatibility">{t.compatibility}</option>
+                    </select>
+                  </div>
+                </div>
 
-          </div>
-        )}
+                <div className="settingsRow settingsRowHardware">
+                  <div className="settingsRowIcon"><img src="/icons/nav/hardware-icon.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <strong>{t.hardware}<InfoTip text={t.tooltips.hardware} /></strong>
+                    <span>{hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.</span>
+                    <div className="settingsHardwareOptions">
+                      {hardwareSummary.map(({ backend, selectable, reason }) => (
+                        <span key={backend} className={`settingsBadge settingsBadge-${backend} ${selectable ? "ok" : "disabled"}`} title={reason || t.tooltips[backend]}>
+                          {backendLabel(backend, lang)}
+                          <InfoTip text={t.tooltips[backend]} />
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="settingsRowControl">
+                    <select className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange}>
+                      {hardwareSummary.map(({ backend, selectable, reason }) => (
+                        <option key={backend} value={backend} disabled={!selectable} title={reason || backendLabel(backend, lang)}>
+                          {backendLabel(backend, lang)}
+                        </option>
+                      ))}
+                    </select>
+                    <button className="button secondary small settingsTestButton" onClick={rescanHardware}>{t.rescan}</button>
+                  </div>
+                </div>
+
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/icons/nav/security-icon.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <strong>{t.security}<InfoTip text={t.tooltips.security} /></strong>
+                    <span>{t.securityText}</span>
+                  </div>
+                  <div className="settingsRowControl settingsRowControlMeta">
+                    <span className="settingsMetaPill">24:00</span>
+                  </div>
+                </div>
+
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/icons/nav/users-icon.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <strong>{t.users}<InfoTip text={t.tooltips.users} /></strong>
+                    <span>{t.usersText}</span>
+                  </div>
+                  <div className="settingsRowControl settingsRowControlMeta">
+                    <img className="settingsInlineIcon" src="/icons/nav/users-icon.png" alt="" />
+                  </div>
+                </div>
+              </section>
+            </div>
+          )}
+        </div>
       </div>
     </Layout>
   );
