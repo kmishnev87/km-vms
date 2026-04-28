@@ -29,10 +29,9 @@ const TEXT = {
     subtitle: "Системные параметры KM VMS: язык, время, архив, запись, ускорение и безопасность.",
     save: "Сохранить",
     saving: "Сохранение...",
-    saved: "Настройки сохранены",
-    changesApplied: "Изменения успешно применены",
-    storageValidated: "Хранилище доступно. Свободно: {free}",
-    hardwareChecked: "Аппаратные возможности проверены",
+    cancel: "Отменить",
+    dirty: "Есть несохранённые изменения",
+    checking: "Проверка...",
     language: "Язык",
     russian: "Русский",
     english: "English",
@@ -43,9 +42,6 @@ const TEXT = {
     hostPath: "Путь на сервере",
     hostPathUnknown: "Определяется в docker-compose",
     validate: "Тест",
-    storageOk: "Хранилище доступно.",
-    storageFail: "Хранилище недоступно",
-    writeDenied: "Нет прав на запись",
     recording: "Запись",
     balanced: "Баланс",
     balancedHelp: "Рекомендуемый режим. Сейчас используется MKV.",
@@ -55,22 +51,37 @@ const TEXT = {
     reliabilityHelp: "Сейчас используется MKV. Лучше переносит сбои записи.",
     mapsTo: "Формат",
     hardware: "Аппаратное ускорение",
-    hardwareText: "Доступные режимы сервера. Недоступные варианты показаны серым.",
-    unavailableMode: "Этот режим недоступен на данном сервере или не прошёл проверку.",
-    rescan: "Тест",
     hardwareAvailable: "Аппаратное ускорение доступно.",
     hardwareUnavailable: "Аппаратное ускорение недоступно. Будет использоваться CPU fallback.",
     selected: "Выбрано",
+    unavailableMode: "Этот режим недоступен на данном сервере или не прошёл проверку.",
+    rescan: "Тест",
     failedValidation: "Не прошёл проверку",
     notDetected: "Не найдено на этом сервере",
     security: "Безопасность и сессия",
     securityText: "Если включить «Оставаться в системе», вход сохраняется до 24:00 системного дня.",
     users: "Пользователи и роли",
     usersText: "Фундамент ролей уже включён: admin, operator, viewer. Полное управление пользователями будет добавлено отдельным этапом.",
-    notAuthenticated: "Нужно войти заново.",
-    forbidden: "Недостаточно прав.",
-    network: "Сервер недоступен.",
-    i18nNote: "Язык применяется к странице настроек и общим элементам интерфейса.",
+    toasts: {
+      saveOkTitle: "Настройки сохранены",
+      saveOkText: "Изменения успешно применены",
+      storageOkTitle: "Хранилище доступно",
+      storageOkText: "Свободно: {free}",
+      hardwareOkTitle: "Аппаратные возможности проверены",
+      hardwareOkText: "Доступно: {modes}",
+      hardwareFallbackTitle: "Режим изменён",
+      hardwareFallbackText: "Выбранный режим недоступен. Включён автоматический выбор.",
+      authTitle: "Нужно войти заново",
+      authText: "Сессия истекла или токен недействителен",
+      forbiddenTitle: "Недостаточно прав",
+      forbiddenText: "У текущего пользователя нет доступа к настройкам",
+      networkTitle: "Сервер недоступен",
+      networkText: "Проверьте подключение или состояние сервиса",
+      storageFailTitle: "Хранилище недоступно",
+      hardwareFailTitle: "Проверка аппаратных возможностей не выполнена",
+      hardwareFailText: "Повторите проверку позже",
+      unavailableTitle: "Режим недоступен",
+    },
     tooltips: {
       timezone: "Используется для отображения времени, записи файлов и хронологии.",
       storage: "Папка внутри контейнера. Фактический путь на сервере задаётся в docker-compose.",
@@ -91,10 +102,9 @@ const TEXT = {
     subtitle: "KM VMS system settings: language, time, archive storage, recording, acceleration, and security.",
     save: "Save",
     saving: "Saving...",
-    saved: "Settings saved",
-    changesApplied: "Changes applied successfully",
-    storageValidated: "Storage is available. Free: {free}",
-    hardwareChecked: "Hardware capabilities checked",
+    cancel: "Cancel",
+    dirty: "You have unsaved changes",
+    checking: "Checking...",
     language: "Language",
     russian: "Русский",
     english: "English",
@@ -105,9 +115,6 @@ const TEXT = {
     hostPath: "Server path",
     hostPathUnknown: "Defined in docker-compose",
     validate: "Test",
-    storageOk: "Storage is available.",
-    storageFail: "Storage is unavailable",
-    writeDenied: "Write access denied",
     recording: "Recording",
     balanced: "Balanced",
     balancedHelp: "Recommended mode. Current mapping: MKV.",
@@ -117,22 +124,37 @@ const TEXT = {
     reliabilityHelp: "Current mapping: MKV. More resilient to recording interruptions.",
     mapsTo: "Format",
     hardware: "Hardware Acceleration",
-    hardwareText: "Server acceleration modes. Unavailable options are visible but disabled.",
-    unavailableMode: "This mode is unavailable on this server or failed validation.",
-    rescan: "Test",
     hardwareAvailable: "Hardware acceleration is available.",
     hardwareUnavailable: "Hardware acceleration is unavailable. CPU fallback will be used.",
     selected: "Selected",
+    unavailableMode: "This mode is unavailable on this server or failed validation.",
+    rescan: "Test",
     failedValidation: "Failed validation",
     notDetected: "Not detected on this server",
     security: "Security / Session",
     securityText: "If \"Stay signed in\" is enabled, the session is kept until midnight of the system day.",
     users: "Users / Roles",
     usersText: "Role foundation is active: admin, operator, viewer. Full user management will be added in a dedicated stage.",
-    notAuthenticated: "Please sign in again.",
-    forbidden: "Insufficient permissions.",
-    network: "Server is unavailable.",
-    i18nNote: "Language is applied to Settings and shared interface controls.",
+    toasts: {
+      saveOkTitle: "Settings saved",
+      saveOkText: "Changes applied successfully",
+      storageOkTitle: "Storage available",
+      storageOkText: "Free: {free}",
+      hardwareOkTitle: "Hardware capabilities checked",
+      hardwareOkText: "Available: {modes}",
+      hardwareFallbackTitle: "Mode changed",
+      hardwareFallbackText: "Selected mode is unavailable. Automatic selection is enabled.",
+      authTitle: "Sign in required",
+      authText: "Session expired or token is invalid",
+      forbiddenTitle: "Insufficient permissions",
+      forbiddenText: "Current user cannot manage settings",
+      networkTitle: "Server unavailable",
+      networkText: "Check connection or service status",
+      storageFailTitle: "Storage unavailable",
+      hardwareFailTitle: "Hardware capability check failed",
+      hardwareFailText: "Try checking again later",
+      unavailableTitle: "Mode unavailable",
+    },
     tooltips: {
       timezone: "Used for time display, recording timestamps, and chronology.",
       storage: "Folder inside the container. The real server path is defined in docker-compose.",
@@ -159,10 +181,35 @@ function backendLabel(value, lang) {
   return BACKEND_LABELS[key]?.[lang] || key;
 }
 
+function settingsDraftFromApi(data) {
+  return {
+    timezone: data?.timezone || "UTC",
+    language: data?.language === "en" ? "en" : "ru",
+    storage_path: data?.storage_path || "",
+    storage_host_path: data?.storage_host_path || "",
+    recordingProfile: profileFromFormat(data?.recording_format),
+    hardware_preferred_backend: data?.hardware_preferred_backend || null,
+  };
+}
+
+function payloadFromDraft(draft) {
+  return {
+    timezone: timezoneValueForSettings(draft.timezone),
+    language: draft.language,
+    storage_path: draft.storage_path,
+    recording_format: recordingFormatForProfile(draft.recordingProfile),
+    hardware_preferred_backend: draft.hardware_preferred_backend || null,
+  };
+}
+
+function samePayload(left, right) {
+  if (!left || !right) return true;
+  return JSON.stringify(payloadFromDraft(left)) === JSON.stringify(payloadFromDraft(right));
+}
+
 function formatBytes(value) {
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes < 0) return "-";
-  if (bytes < 1024 ** 3) return `${Math.round(bytes / 1024 / 1024)} MB`;
   if (bytes < 1024 ** 4) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
   return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
 }
@@ -176,24 +223,30 @@ function parseErrorDetail(message) {
   }
 }
 
-function humanError(err, lang) {
+function normalizedError(err, lang, context = "generic") {
   const t = TEXT[lang] || TEXT.ru;
-  const message = err?.message || "";
+  const message = String(err?.message || "");
   const detail = parseErrorDetail(message);
   const storage = detail?.storage || detail?.detail?.storage;
+  const lower = message.toLowerCase();
 
-  if (storage?.error) return `${t.storageFail}: ${storage.error}`;
-  if (message.includes("Not authenticated") || message.includes("401")) return t.notAuthenticated;
-  if (message.includes("403") || message.includes("Forbidden")) return t.forbidden;
-  if (message.includes("Failed to fetch") || message.includes("NetworkError")) return t.network;
-  return message || t.network;
-}
-
-function storageMessage(result, lang) {
-  if (!result) return null;
-  const t = TEXT[lang] || TEXT.ru;
-  if (!result.ok) return `${t.storageFail}: ${result.error || t.writeDenied}`;
-  return t.storageOk;
+  if (lower.includes("not authenticated") || lower.includes("invalid token") || message.includes("401")) {
+    return { variant: "error", title: t.toasts.authTitle, text: t.toasts.authText };
+  }
+  if (message.includes("403") || lower.includes("forbidden")) {
+    return { variant: "error", title: t.toasts.forbiddenTitle, text: t.toasts.forbiddenText };
+  }
+  if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("server is unavailable")) {
+    return { variant: "error", title: t.toasts.networkTitle, text: t.toasts.networkText };
+  }
+  if (storage?.error || context === "storage") {
+    const reason = storage?.error || detail?.detail || (message && !message.startsWith("{") ? message : t.toasts.networkText);
+    return { variant: "error", title: t.toasts.storageFailTitle, text: reason };
+  }
+  if (context === "hardware") {
+    return { variant: "error", title: t.toasts.hardwareFailTitle, text: t.toasts.hardwareFailText };
+  }
+  return { variant: "error", title: t.toasts.networkTitle, text: t.toasts.networkText };
 }
 
 function recordingFormatForProfile(profile) {
@@ -245,14 +298,18 @@ function InfoTip({ text }) {
 }
 
 export default function SettingsPage() {
-  const [settings, setSettings] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [savedDraft, setSavedDraft] = useState(null);
   const [hardware, setHardware] = useState(null);
-  const [recordingProfile, setRecordingProfile] = useState("balanced");
   const [toast, setToast] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [storageChecking, setStorageChecking] = useState(false);
+  const [hardwareChecking, setHardwareChecking] = useState(false);
   const toastTimerRef = useRef(null);
-  const lang = languageOf(settings);
+  const lang = languageOf(draft || savedDraft);
   const t = TEXT[lang] || TEXT.ru;
+  const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
+  const anyBusy = saving || storageChecking || hardwareChecking;
   const languageIcon = lang === "en"
     ? "/icons/nav/language-icon_ENG.png"
     : "/icons/nav/language-icon_RU.png";
@@ -269,10 +326,10 @@ export default function SettingsPage() {
     };
   }, []);
 
-  function showToast(title, type = "ok", subtitle = "") {
-    setToast({ title, subtitle, type });
+  function showToast(nextToast) {
+    setToast(nextToast);
     window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2800);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
   }
 
   async function load() {
@@ -281,73 +338,102 @@ export default function SettingsPage() {
         apiFetch("/settings"),
         apiFetch("/hardware/capabilities"),
       ]);
-      setSettings(settingsData);
-      setRecordingProfile(profileFromFormat(settingsData?.recording_format));
+      const nextDraft = settingsDraftFromApi(settingsData);
+      setDraft(nextDraft);
+      setSavedDraft(nextDraft);
       setHardware(hardwareData);
     } catch (err) {
-      showToast(humanError(err, lang), "error");
+      showToast(normalizedError(err, lang));
     }
   }
 
   function patch(key, value) {
-    setSettings((current) => ({ ...current, [key]: value }));
+    setDraft((current) => ({ ...current, [key]: value }));
+  }
+
+  function cancelChanges() {
+    if (!savedDraft) return;
+    setDraft(savedDraft);
+    window.dispatchEvent(new CustomEvent("km-vms-language", { detail: savedDraft.language }));
   }
 
   async function save() {
-    setBusy(true);
+    if (!draft || !dirty || saving) return;
+    setSaving(true);
     try {
       const updated = await apiFetch("/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          timezone: timezoneValueForSettings(settings.timezone),
-          language: settings.language,
-          storage_path: settings.storage_path,
-          recording_format: recordingFormatForProfile(recordingProfile),
-          hardware_preferred_backend: settings.hardware_preferred_backend || null,
-        }),
+        body: JSON.stringify(payloadFromDraft(draft)),
       });
-      setSettings(updated);
-      window.dispatchEvent(new CustomEvent("km-vms-language", { detail: updated.language }));
-      showToast(t.saved, "ok", t.changesApplied);
+      const nextDraft = settingsDraftFromApi(updated);
+      setDraft(nextDraft);
+      setSavedDraft(nextDraft);
+      window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextDraft.language }));
+      showToast({ variant: "success", title: t.toasts.saveOkTitle, text: t.toasts.saveOkText });
     } catch (err) {
-      showToast(humanError(err, lang), "error");
+      showToast(normalizedError(err, lang));
     } finally {
-      setBusy(false);
+      setSaving(false);
     }
   }
 
   async function validateStorage() {
+    if (!draft || storageChecking) return;
+    setStorageChecking(true);
     try {
       const result = await apiFetch("/settings/storage/validate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storage_path: settings.storage_path, create: true }),
+        body: JSON.stringify({ storage_path: draft.storage_path, create: true }),
       });
-      showToast(
-        result.ok ? t.storageValidated.replace("{free}", formatBytes(result.free_bytes)) : storageMessage(result, lang),
-        result.ok ? "ok" : "error"
-      );
+      if (!result.ok) {
+        showToast({ variant: "error", title: t.toasts.storageFailTitle, text: result.error || t.writeDenied });
+      } else {
+        showToast({
+          variant: "success",
+          title: t.toasts.storageOkTitle,
+          text: t.toasts.storageOkText.replace("{free}", formatBytes(result.free_bytes)),
+        });
+      }
     } catch (err) {
-      showToast(humanError(err, lang), "error");
+      showToast(normalizedError(err, lang, "storage"));
+    } finally {
+      setStorageChecking(false);
     }
   }
 
   async function rescanHardware() {
+    if (hardwareChecking) return;
+    setHardwareChecking(true);
     try {
-      setHardware(await apiFetch("/hardware/rescan", { method: "POST" }));
-      showToast(t.hardwareChecked);
+      const nextHardware = await apiFetch("/hardware/rescan", { method: "POST" });
+      setHardware(nextHardware);
+      const selected = draft?.hardware_preferred_backend;
+      if (selected && !["auto", "cpu"].includes(selected) && !(nextHardware?.available_backends || []).includes(selected)) {
+        patch("hardware_preferred_backend", null);
+        showToast({ variant: "warning", title: t.toasts.hardwareFallbackTitle, text: t.toasts.hardwareFallbackText });
+      } else {
+        const available = (nextHardware?.available_backends || []).map((backend) => backendLabel(backend, lang)).join(", ") || backendLabel("cpu", lang);
+        showToast({
+          variant: "success",
+          title: t.toasts.hardwareOkTitle,
+          text: t.toasts.hardwareOkText.replace("{modes}", available),
+        });
+      }
     } catch (err) {
-      showToast(humanError(err, lang), "error");
+      showToast(normalizedError(err, lang, "hardware"));
+    } finally {
+      setHardwareChecking(false);
     }
   }
 
-  const selectedHardware = settings?.hardware_preferred_backend || "auto";
+  const selectedHardware = draft?.hardware_preferred_backend || "auto";
   const profileHelp = {
     balanced: t.balancedHelp,
     compatibility: t.compatibilityHelp,
     reliability: t.reliabilityHelp,
-  }[recordingProfile];
+  }[draft?.recordingProfile || "balanced"];
 
   const hardwareSummary = useMemo(() => (
     HARDWARE_OPTIONS.map((backend) => ({
@@ -360,7 +446,7 @@ export default function SettingsPage() {
     const value = event.target.value || "auto";
     const state = hardwareOptionState(value, hardware, t);
     if (!state.selectable) {
-      showToast(t.unavailableMode, "error");
+      showToast({ variant: "warning", title: t.toasts.unavailableTitle, text: t.unavailableMode });
       return;
     }
     patch("hardware_preferred_backend", value === "auto" ? null : value);
@@ -376,9 +462,9 @@ export default function SettingsPage() {
     <Layout>
       <div className="settingsPage">
         {toast ? (
-          <div className={`settingsToast ${toast.type}`}>
+          <div className={`settingsToast ${toast.variant || "info"}`}>
             <strong>{toast.title}</strong>
-            {toast.subtitle ? <span>{toast.subtitle}</span> : null}
+            {toast.text ? <span>{toast.text}</span> : null}
           </div>
         ) : null}
 
@@ -391,22 +477,29 @@ export default function SettingsPage() {
                 <div className="pageSubtitle">{t.subtitle}</div>
               </div>
             </div>
-            <button className="button small" onClick={save} disabled={!settings || busy}>
-              {busy ? t.saving : t.save}
-            </button>
+
+            <div className="settingsHeaderActions">
+              <span className={`settingsDirtyNote ${dirty ? "visible" : ""}`}>{t.dirty}</span>
+              <button className="button secondary small settingsCancelButton" onClick={cancelChanges} disabled={!dirty || anyBusy}>
+                {t.cancel}
+              </button>
+              <button className="button small" onClick={save} disabled={!draft || !dirty || saving}>
+                {saving ? t.saving : t.save}
+              </button>
+            </div>
           </div>
 
-          {!settings ? null : (
+          {!draft ? null : (
             <div className="settingsReferenceLayout">
               <section className="settingsPanel">
                 <div className="settingsRow">
                   <div className="settingsRowIcon"><img src={languageIcon} alt="" /></div>
                   <div className="settingsRowText">
-                    <strong>{t.language}</strong>
+                    <label htmlFor="settings-language">{t.language}</label>
                     <span>{t.i18nNote}</span>
                   </div>
                   <div className="settingsRowControl">
-                    <select className="select settingsSelect" value={settings.language} onChange={handleSettingsLanguageChange}>
+                    <select id="settings-language" className="select settingsSelect" value={draft.language} onChange={handleSettingsLanguageChange} disabled={saving}>
                       <option value="ru">{t.russian}</option>
                       <option value="en">{t.english}</option>
                     </select>
@@ -416,11 +509,11 @@ export default function SettingsPage() {
                 <div className="settingsRow">
                   <div className="settingsRowIcon"><img src="/icons/nav/timezone-icon.png" alt="" /></div>
                   <div className="settingsRowText">
-                    <strong>{t.timezone}<InfoTip text={t.tooltips.timezone} /></strong>
+                    <label htmlFor="settings-timezone">{t.timezone}<InfoTip text={t.tooltips.timezone} /></label>
                     <span>{t.timezoneHelp}</span>
                   </div>
                   <div className="settingsRowControl">
-                    <select className="select settingsSelect timezoneSelect" value={timezoneValueForSettings(settings.timezone)} onChange={(event) => patch("timezone", event.target.value)}>
+                    <select id="settings-timezone" className="select settingsSelect timezoneSelect" value={timezoneValueForSettings(draft.timezone)} onChange={(event) => patch("timezone", event.target.value)} disabled={saving}>
                       {UTC_TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
                     </select>
                   </div>
@@ -429,24 +522,26 @@ export default function SettingsPage() {
                 <div className="settingsRow">
                   <div className="settingsRowIcon"><img src="/icons/nav/storage-icon.png" alt="" /></div>
                   <div className="settingsRowText">
-                    <strong>{t.storage}<InfoTip text={t.tooltips.storage} /></strong>
+                    <label htmlFor="settings-storage">{t.storage}<InfoTip text={t.tooltips.storage} /></label>
                     <span>{t.storageText}</span>
-                    <small>{t.hostPath}: {settings.storage_host_path || t.hostPathUnknown}</small>
+                    <small>{t.hostPath}: {draft.storage_host_path || t.hostPathUnknown}</small>
                   </div>
                   <div className="settingsRowControl">
-                    <input className="input settingsInput" value={settings.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} />
-                    <button className="button secondary small settingsTestButton" onClick={validateStorage}>{t.validate}</button>
+                    <input id="settings-storage" className="input settingsInput" value={draft.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} disabled={saving || storageChecking} />
+                    <button className="button secondary small settingsTestButton" onClick={validateStorage} disabled={storageChecking || saving}>
+                      {storageChecking ? t.checking : t.validate}
+                    </button>
                   </div>
                 </div>
 
                 <div className="settingsRow">
                   <div className="settingsRowIcon"><img src="/icons/nav/records.png" alt="" /></div>
                   <div className="settingsRowText">
-                    <strong>{t.recording}<InfoTip text={t.tooltips.recording} /></strong>
-                    <span>{profileHelp} {t.mapsTo}: {recordingFormatForProfile(recordingProfile).toUpperCase()}.</span>
+                    <label htmlFor="settings-recording">{t.recording}<InfoTip text={t.tooltips.recording} /></label>
+                    <span>{profileHelp} {t.mapsTo}: {recordingFormatForProfile(draft.recordingProfile).toUpperCase()}.</span>
                   </div>
                   <div className="settingsRowControl">
-                    <select className="select settingsSelect" value={recordingProfile} onChange={(event) => setRecordingProfile(event.target.value)}>
+                    <select id="settings-recording" className="select settingsSelect" value={draft.recordingProfile} onChange={(event) => patch("recordingProfile", event.target.value)} disabled={saving}>
                       <option value="balanced">{t.balanced}</option>
                       <option value="reliability">{t.reliability}</option>
                       <option value="compatibility">{t.compatibility}</option>
@@ -457,7 +552,7 @@ export default function SettingsPage() {
                 <div className="settingsRow settingsRowHardware">
                   <div className="settingsRowIcon"><img src="/icons/nav/hardware-icon.png" alt="" /></div>
                   <div className="settingsRowText">
-                    <strong>{t.hardware}<InfoTip text={t.tooltips.hardware} /></strong>
+                    <label htmlFor="settings-hardware">{t.hardware}<InfoTip text={t.tooltips.hardware} /></label>
                     <span>{hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.</span>
                     <div className="settingsHardwareOptions">
                       {hardwareSummary.map(({ backend, selectable, reason }) => (
@@ -469,21 +564,23 @@ export default function SettingsPage() {
                     </div>
                   </div>
                   <div className="settingsRowControl">
-                    <select className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange}>
+                    <select id="settings-hardware" className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange} disabled={saving || hardwareChecking}>
                       {hardwareSummary.map(({ backend, selectable, reason }) => (
                         <option key={backend} value={backend} disabled={!selectable} title={reason || backendLabel(backend, lang)}>
                           {backendLabel(backend, lang)}
                         </option>
                       ))}
                     </select>
-                    <button className="button secondary small settingsTestButton" onClick={rescanHardware}>{t.rescan}</button>
+                    <button className="button secondary small settingsTestButton" onClick={rescanHardware} disabled={hardwareChecking || saving}>
+                      {hardwareChecking ? t.checking : t.rescan}
+                    </button>
                   </div>
                 </div>
 
                 <div className="settingsRow">
                   <div className="settingsRowIcon"><img src="/icons/nav/security-icon.png" alt="" /></div>
                   <div className="settingsRowText">
-                    <strong>{t.security}<InfoTip text={t.tooltips.security} /></strong>
+                    <label>{t.security}<InfoTip text={t.tooltips.security} /></label>
                     <span>{t.securityText}</span>
                   </div>
                   <div className="settingsRowControl settingsRowControlMeta">
@@ -494,7 +591,7 @@ export default function SettingsPage() {
                 <div className="settingsRow">
                   <div className="settingsRowIcon"><img src="/icons/nav/users-icon.png" alt="" /></div>
                   <div className="settingsRowText">
-                    <strong>{t.users}<InfoTip text={t.tooltips.users} /></strong>
+                    <label>{t.users}<InfoTip text={t.tooltips.users} /></label>
                     <span>{t.usersText}</span>
                   </div>
                   <div className="settingsRowControl settingsRowControlMeta">
