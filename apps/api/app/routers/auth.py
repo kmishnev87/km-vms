@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.permissions import ROLE_PERMISSIONS
+from app.core.permissions import get_permissions_for_role
 from app.core.security import create_access_token, verify_password
 from app.db.session import get_db
 from app.models.user import User
@@ -49,7 +49,7 @@ def me(current_user: User = Depends(get_current_user)):
         username=current_user.username,
         full_name=current_user.full_name,
         role=current_user.role,
-        permissions=sorted(ROLE_PERMISSIONS.get(current_user.role, set())),
+        permissions=sorted(get_permissions_for_role(current_user.role)),
         is_active=bool(current_user.is_active),
         last_login_at=current_user.last_login_at.isoformat() if getattr(current_user, "last_login_at", None) else None,
     )

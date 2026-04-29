@@ -125,14 +125,8 @@ def patch_settings(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     data = payload.model_dump(exclude_unset=True)
+    data.pop("storage_path", None)
     try:
-        if "storage_path" in data:
-            storage_check = validate_storage_path(data["storage_path"], create=True)
-            if not storage_check["ok"]:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"storage": storage_check},
-                )
         system = update_system_settings(db, data)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
@@ -182,7 +176,7 @@ def build_log_archive(report_text: str | None = None, include_logs: bool = True)
 
 @router.get("/settings/logs/archive")
 def download_log_archive(
-    current_user: User = Depends(require_permission("manage_settings")),
+    current_user: User = Depends(require_permission("run_diagnostics")),
 ):
     archive = build_log_archive()
     filename = f"km-vms-logs-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
@@ -196,7 +190,7 @@ def download_log_archive(
 @router.post("/settings/bug-report")
 def create_bug_report(
     payload: BugReportRequest,
-    current_user: User = Depends(require_permission("manage_settings")),
+    current_user: User = Depends(require_permission("run_diagnostics")),
 ):
     archive = build_log_archive(report_text=payload.text, include_logs=payload.include_logs)
     filename = f"km-vms-bug-report-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"

@@ -333,7 +333,6 @@ function payloadFromDraft(draft) {
   return {
     timezone: timezoneValueForSettings(draft.timezone),
     language: draft.language,
-    storage_path: draft.storage_path,
     recording_format: recordingFormatForProfile(draft.recordingProfile),
     hardware_preferred_backend: draft.hardware_preferred_backend || null,
   };
@@ -493,7 +492,6 @@ export default function SettingsPage() {
   const [hardware, setHardware] = useState(null);
   const [toast, setToast] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [storageChecking, setStorageChecking] = useState(false);
   const [hardwareChecking, setHardwareChecking] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [users, setUsers] = useState([]);
@@ -509,8 +507,8 @@ export default function SettingsPage() {
   const lang = languageOf(draft || savedDraft);
   const t = TEXT[lang] || TEXT.ru;
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
-  const anyBusy = saving || storageChecking || hardwareChecking;
-  const canManageUsers = Boolean(currentUser?.permissions?.includes("admin_access"));
+  const anyBusy = saving || hardwareChecking;
+  const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
   const languageIcon = lang === "en"
     ? "/icons/nav/language-icon_ENG.png"
@@ -593,31 +591,6 @@ export default function SettingsPage() {
       showToast(normalizedError(err, lang));
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function validateStorage() {
-    if (!draft || storageChecking) return;
-    setStorageChecking(true);
-    try {
-      const result = await apiFetch("/settings/storage/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storage_path: draft.storage_path, create: true }),
-      });
-      if (!result.ok) {
-        showToast({ variant: "error", title: t.toasts.storageFailTitle, text: result.error || t.writeDenied });
-      } else {
-        showToast({
-          variant: "success",
-          title: t.toasts.storageOkTitle,
-          text: t.toasts.storageOkText.replace("{free}", formatBytes(result.free_bytes)),
-        });
-      }
-    } catch (err) {
-      showToast(normalizedError(err, lang, "storage"));
-    } finally {
-      setStorageChecking(false);
     }
   }
 
@@ -969,13 +942,10 @@ export default function SettingsPage() {
                   <div className="settingsRowText">
                     <label htmlFor="settings-storage">{t.storage}<InfoTip text={t.tooltips.storage} /></label>
                     <span>{t.storageText}</span>
-                    <small>{t.hostPath}: {draft.storage_host_path || t.hostPathUnknown}</small>
+                    <small>{draft.storage_path || ""}</small>
                   </div>
                   <div className="settingsRowControl">
-                    <input id="settings-storage" className="input settingsInput" value={draft.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} disabled={saving || storageChecking} />
-                    <button className="button secondary small settingsTestButton" onClick={validateStorage} disabled={storageChecking || saving}>
-                      {storageChecking ? t.checking : t.validate}
-                    </button>
+                    <input id="settings-storage" className="input settingsInput" value={draft.storage_host_path || t.hostPathUnknown} readOnly disabled />
                   </div>
                 </div>
 

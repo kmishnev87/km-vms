@@ -13,6 +13,7 @@ from app.models.system_settings import SystemSettings
 
 LANGUAGES = {"ru", "en"}
 RECORDING_FORMATS = {"mkv", "mp4"}
+HARDWARE_BACKENDS = {"auto", "cpu", "qsv", "vaapi", "nvenc", "amf"}
 
 
 def default_timezone() -> str:
@@ -38,7 +39,7 @@ def get_system_settings(db: Session) -> SystemSettings:
 
 
 def serialize_settings(row: SystemSettings) -> dict:
-    storage_host_path = os.getenv("STORAGE_HOST_ROOT") or None
+    storage_host_path = os.getenv("STORAGE_HOST_ROOT") or os.getenv("SURVEILLANCE_ROOT") or None
     return {
         "system_initialized": row.system_initialized,
         "timezone": row.timezone,
@@ -89,7 +90,10 @@ def validate_settings_payload(payload: dict, partial: bool = False) -> dict:
 
     if "hardware_preferred_backend" in payload:
         value = payload.get("hardware_preferred_backend")
-        data["hardware_preferred_backend"] = str(value).strip() if value else None
+        normalized = str(value).strip().lower() if value else ""
+        if normalized and normalized not in HARDWARE_BACKENDS:
+            raise ValueError("hardware_preferred_backend is invalid")
+        data["hardware_preferred_backend"] = None if normalized in {"", "auto"} else normalized
 
     return data
 
@@ -142,3 +146,26 @@ def validate_storage_path(path_value: str, create: bool = True) -> dict:
     except Exception as exc:
         result["error"] = str(exc)
         return result
+
+
+def get_hardware_preferred_backend() -> str:
+    try:
+        from app.db.session import SessionLocal
+
+        db = SessionLocal()
+        try:
+            row = get_system_settings(db)
+            value = str(row.hardware_preferred_backend or "").strip().lower()
+            return value if value in HARDWARE_BACKENDS else ""
+        finally:
+            db.close()
+    except Exception:
+        return ""
+
+
+def effective_hardware_backend_setting() -> str:
+    preferred = get_hardware_preferred_backend()
+    if preferred:
+        return preferred
+    value = str(settings.live_hwaccel_backend or "auto").strip().lower()
+    return value if value in HARDWARE_BACKENDS else "auto"

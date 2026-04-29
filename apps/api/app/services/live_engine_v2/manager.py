@@ -494,12 +494,13 @@ class StreamInstance:
 
         hw_mode = (settings.live_hwaccel_mode or "auto").lower()
         caps = get_hardware_capabilities()
-        preferred_backend = force_hw_backend or self._next_hw_backend(caps)
+        configured_backend = (caps.get("config") or {}).get("backend")
+        preferred_backend = None if configured_backend == "cpu" else (force_hw_backend or self._next_hw_backend(caps))
         if (
             probe.codec in {"hevc", "h265"}
             and hw_mode not in {"off", "disabled", "false", "0"}
             and caps.get("hardware_accel_available")
-            and preferred_backend in {"qsv", "vaapi", "nvenc"}
+            and preferred_backend in {"qsv", "vaapi", "nvenc", "amf"}
         ):
             self.hw_backend = preferred_backend
             self.hw_device = caps.get("render_device") or settings.live_hwaccel_device

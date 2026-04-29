@@ -4,6 +4,7 @@ const TOKEN_EXPIRES_KEY = "token_expires_at";
 const FORBIDDEN_RU = "Раздел недоступен. Ограничены права пользователя.";
 const FORBIDDEN_EN = "Section unavailable. User permissions are limited.";
 const LEGACY_FORBIDDEN_TEXT = ["Insufficient", "permissions"].join(" ");
+const LEGACY_FORBIDDEN_RU = "Ограничены права пользователя";
 
 export function forbiddenMessage(language = "ru") {
   return language === "en" ? FORBIDDEN_EN : FORBIDDEN_RU;
@@ -77,7 +78,12 @@ function makeHeaders(extra = {}) {
 }
 
 function normalizeErrorDetail(response, detail) {
-  if (response.status === 403 || String(detail).includes(LEGACY_FORBIDDEN_TEXT)) {
+  const text = String(detail || "");
+  if (
+    response.status === 403 ||
+    text.includes(LEGACY_FORBIDDEN_TEXT) ||
+    text.includes(LEGACY_FORBIDDEN_RU)
+  ) {
     return forbiddenMessage(currentUiLanguage());
   }
   return detail || "Ошибка запроса";

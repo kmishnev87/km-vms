@@ -9,6 +9,8 @@ from app.models.user import User
 
 bearer_scheme = HTTPBearer(auto_error=True)
 FORBIDDEN_DETAIL = "Раздел недоступен. Ограничены права пользователя."
+INVALID_TOKEN_DETAIL = "Недействительный токен"
+USER_NOT_FOUND_DETAIL = "Пользователь не найден"
 
 
 def get_current_user(
@@ -20,23 +22,27 @@ def get_current_user(
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Недействительный токен",
+            detail=INVALID_TOKEN_DETAIL,
         )
 
     username = payload.get("sub")
     if not username:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Недействительный токен",
+            detail=INVALID_TOKEN_DETAIL,
         )
 
     user = db.query(User).filter(User.username == username).first()
     if not user or not getattr(user, "is_active", True):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Пользователь не найден",
+            detail=USER_NOT_FOUND_DETAIL,
         )
     return user
+
+
+def require_auth(current_user: User = Depends(get_current_user)) -> User:
+    return current_user
 
 
 def require_permission(permission: str):

@@ -8,10 +8,11 @@ import time
 from pathlib import Path
 
 from app.core.config import settings
+from app.services.system_settings import effective_hardware_backend_setting
 
 logger = logging.getLogger(__name__)
 
-BACKEND_PRIORITY = ("qsv", "vaapi", "nvenc")
+BACKEND_PRIORITY = ("qsv", "vaapi", "nvenc", "amf")
 _CACHE_LOCK = threading.RLock()
 _CAPABILITIES_CACHE: dict | None = None
 
@@ -58,13 +59,14 @@ def _matching_codecs(output: str, names: tuple[str, ...]) -> list[str]:
 
 
 def _backend_order(mode: str, backend_setting: str) -> list[str]:
-    requested = mode if mode in BACKEND_PRIORITY else backend_setting
+    requested = backend_setting if backend_setting in BACKEND_PRIORITY else mode
     if requested in BACKEND_PRIORITY:
         return [requested, *[backend for backend in BACKEND_PRIORITY if backend != requested]]
     return list(BACKEND_PRIORITY)
 
 
 def _empty_capabilities(reason: str) -> dict:
+    backend_setting = effective_hardware_backend_setting()
     return {
         "detected_at": time.time(),
         "ffmpeg_build": {},
@@ -79,6 +81,7 @@ def _empty_capabilities(reason: str) -> dict:
         "vaapi_available": False,
         "qsv_available": False,
         "nvenc_available": False,
+        "amf_available": False,
         "drm_available": False,
         "render_device": settings.live_hwaccel_device,
         "codecs": {
@@ -95,7 +98,8 @@ def _empty_capabilities(reason: str) -> dict:
         "supported_decoders": [],
         "config": {
             "mode": settings.live_hwaccel_mode,
-            "backend": settings.live_hwaccel_backend,
+            "backend": backend_setting,
+            "env_backend": settings.live_hwaccel_backend,
             "device": settings.live_hwaccel_device,
         },
         "errors": [],
@@ -187,9 +191,33 @@ def _validate_nvenc() -> tuple[bool, str | None]:
     return False, _tail(stderr or stdout or f"ffmpeg exit {code}")
 
 
+def _validate_amf() -> tuple[bool, str | None]:
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-v",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=64x64:rate=1",
+        "-frames:v",
+        "1",
+        "-c:v",
+        "h264_amf",
+        "-f",
+        "null",
+        "-",
+    ]
+    code, stdout, stderr = _run_ffmpeg(cmd, timeout=8)
+    if code == 0:
+        return True, None
+    return False, _tail(stderr or stdout or f"ffmpeg exit {code}")
+
+
 def detect_hardware_capabilities() -> dict:
     mode = (settings.live_hwaccel_mode or "auto").lower()
-    backend_setting = (settings.live_hwaccel_backend or "auto").lower()
+    backend_setting = effective_hardware_backend_setting()
     render_device = settings.live_hwaccel_device or "/dev/dri/renderD128"
     render_path = Path(render_device)
     dri_path = Path("/dev/dri")
@@ -256,6 +284,8 @@ def detect_hardware_capabilities() -> dict:
         "hevc_qsv",
         "h264_nvenc",
         "hevc_nvenc",
+        "h264_amf",
+        "hevc_amf",
     )
     decoder_names = (
         "h264",
@@ -272,9 +302,9 @@ def detect_hardware_capabilities() -> dict:
 
     codecs = {
         "h264_decode": [name for name in ("h264", "h264_vaapi", "h264_qsv", "h264_cuvid") if name in supported_decoders],
-        "h264_encode": [name for name in ("libx264", "h264_vaapi", "h264_qsv", "h264_nvenc") if name in supported_encoders],
+        "h264_encode": [name for name in ("libx264", "h264_vaapi", "h264_qsv", "h264_nvenc", "h264_amf") if name in supported_encoders],
         "hevc_decode": [name for name in ("hevc", "hevc_vaapi", "hevc_qsv", "hevc_cuvid") if name in supported_decoders],
-        "hevc_encode": [name for name in ("libx265", "hevc_vaapi", "hevc_qsv", "hevc_nvenc") if name in supported_encoders],
+        "hevc_encode": [name for name in ("libx265", "hevc_vaapi", "hevc_qsv", "hevc_nvenc", "hevc_amf") if name in supported_encoders],
     }
 
     backend_priority = _backend_order(mode, backend_setting)
@@ -286,12 +316,14 @@ def detect_hardware_capabilities() -> dict:
         "qsv": bool("qsv" in supported_hwaccels and docker_access_ok and "h264_qsv" in supported_encoders and "hevc_qsv" in supported_decoders),
         "vaapi": bool("vaapi" in supported_hwaccels and docker_access_ok and "h264_vaapi" in supported_encoders and "hevc_vaapi" in supported_decoders),
         "nvenc": bool("cuda" in supported_hwaccels and "h264_nvenc" in supported_encoders and ("hevc_cuvid" in supported_decoders or "hevc" in supported_decoders)),
+        "amf": bool("h264_amf" in supported_encoders and ("hevc" in supported_decoders or "h264" in supported_decoders)),
     }
 
     validators = {
         "qsv": _validate_qsv,
         "vaapi": lambda: _validate_vaapi(render_device),
         "nvenc": _validate_nvenc,
+        "amf": _validate_amf,
     }
 
     available_backends: list[str] = []
@@ -319,6 +351,17 @@ def detect_hardware_capabilities() -> dict:
             backend_status[backend] = status
             continue
 
+        if (
+            backend == "amf"
+            and available_backends
+            and mode != "amf"
+            and backend_setting != "amf"
+        ):
+            status["runtime_check_skipped"] = True
+            status["reason"] = "runtime_validation_skipped_not_selected"
+            backend_status[backend] = status
+            continue
+
         attempted_backends.append(backend)
         ok, reason = validators[backend]()
         status["runtime_ok"] = ok
@@ -331,7 +374,7 @@ def detect_hardware_capabilities() -> dict:
             logger.warning("Hardware backend runtime validation failed backend=%s reason=%s", backend, reason)
         backend_status[backend] = status
 
-    selected_backend = available_backends[0] if available_backends else "cpu"
+    selected_backend = "cpu" if backend_setting == "cpu" else (available_backends[0] if available_backends else "cpu")
     drm_available = "drm" in supported_hwaccels or dri_exists
 
     return {
@@ -348,6 +391,7 @@ def detect_hardware_capabilities() -> dict:
         "vaapi_available": "vaapi" in available_backends,
         "qsv_available": "qsv" in available_backends,
         "nvenc_available": "nvenc" in available_backends,
+        "amf_available": "amf" in available_backends,
         "drm_available": drm_available,
         "render_device": render_device,
         "codecs": codecs,
@@ -359,7 +403,8 @@ def detect_hardware_capabilities() -> dict:
         "supported_decoders": supported_decoders,
         "config": {
             "mode": settings.live_hwaccel_mode,
-            "backend": settings.live_hwaccel_backend,
+            "backend": backend_setting,
+            "env_backend": settings.live_hwaccel_backend,
             "device": render_device,
         },
         "errors": errors,
@@ -394,6 +439,7 @@ def hardware_capabilities_summary() -> dict:
         "vaapi_available": caps.get("vaapi_available"),
         "qsv_available": caps.get("qsv_available"),
         "nvenc_available": caps.get("nvenc_available"),
+        "amf_available": caps.get("amf_available"),
         "drm_available": caps.get("drm_available"),
         "render_device": caps.get("render_device"),
         "docker_device_access_ok": caps.get("docker_device_access_ok"),

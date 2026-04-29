@@ -3,7 +3,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.permissions import ROLE_ADMIN, ROLE_OPERATOR, ROLE_OWNER, ROLE_PERMISSIONS, ROLE_VIEWER
+from app.core.permissions import ROLE_ADMIN, ROLE_OPERATOR, ROLE_OWNER, ROLE_VIEWER, get_permissions_for_role
 from app.core.security import hash_password, verify_password
 from app.db.session import get_db
 from app.models.user import User
@@ -75,26 +75,31 @@ def ensure_can_modify_user(
     next_role: str | None = None,
     next_active: bool | None = None,
 ) -> None:
-    if target.role == ROLE_OWNER:
-        if next_role is not None and next_role != ROLE_OWNER:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя понизить")
-        if next_active is False and bool(target.is_active):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя отключить")
-        if current_user.id != target.id and current_user.role != ROLE_OWNER:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
-    if current_user.role == ROLE_ADMIN and target.role == ROLE_OWNER:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
-    if current_user.role == ROLE_ADMIN and next_role == ROLE_ADMIN and target.id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
-    if current_user.role == ROLE_ADMIN and next_role == ROLE_OWNER:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
     if current_user.id == target.id:
         if next_role is not None and next_role != target.role:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя изменить собственную роль")
         if next_active is False and bool(target.is_active):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя отключить собственную учетную запись")
-    elif current_user.role != ROLE_OWNER and target.role == ROLE_ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
+
+    if target.role == ROLE_OWNER:
+        if current_user.id != target.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
+        if next_role is not None and next_role != ROLE_OWNER:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя понизить")
+        if next_active is False and bool(target.is_active):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя отключить")
+
+    if current_user.role == ROLE_OWNER:
+        return
+
+    if current_user.role == ROLE_ADMIN:
+        if target.role in {ROLE_OWNER, ROLE_ADMIN} and target.id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
+        if next_role in {ROLE_OWNER, ROLE_ADMIN} and target.id != current_user.id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
+        return
+
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
 
 
 @router.get("/me")
@@ -105,7 +110,7 @@ def users_me(current_user: User = Depends(get_current_user)):
         "display_name": current_user.full_name or "",
         "role": current_user.role,
         "is_active": bool(current_user.is_active),
-        "permissions": sorted(ROLE_PERMISSIONS.get(current_user.role, set())),
+        "permissions": sorted(get_permissions_for_role(current_user.role)),
         "last_login_at": getattr(current_user, "last_login_at", None),
     }
 
@@ -113,7 +118,7 @@ def users_me(current_user: User = Depends(get_current_user)):
 @router.get("", response_model=list[UserResponse])
 def list_users(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("admin_access")),
+    current_user: User = Depends(require_permission("manage_users")),
 ):
     return [serialize_user(user) for user in db.query(User).order_by(User.username.asc()).all()]
 
@@ -122,7 +127,7 @@ def list_users(
 def create_user(
     payload: UserCreateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("admin_access")),
+    current_user: User = Depends(require_permission("manage_users")),
 ):
     username = payload.username.strip()
     if db.query(User).filter(User.username == username).first():
@@ -148,7 +153,7 @@ def update_user(
     user_id: int,
     payload: UserUpdateRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("admin_access")),
+    current_user: User = Depends(require_permission("manage_users")),
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -186,7 +191,7 @@ def update_user(
 def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("admin_access")),
+    current_user: User = Depends(require_permission("manage_users")),
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:

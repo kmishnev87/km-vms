@@ -292,6 +292,25 @@ def build_hls_command(
             "0",
             *fps_args,
         ]
+    elif mode == "hardware_transcode" and hw_backend == "amf":
+        fps_for_gop = output_fps or (input_fps if input_fps and input_fps > 0 else 25)
+        fps_for_gop = max(10, min(float(fps_for_gop), 60))
+        gop_size = max(20, min(int(round(fps_for_gop * hls_time)), 120))
+        keyint_min = max(10, min(int(round(fps_for_gop)), gop_size))
+        fps_args = ["-r", str(int(round(output_fps))), "-vsync", "1"] if forced_fps and output_fps else []
+        video_args = [
+            "-c:v",
+            "h264_amf",
+            "-quality",
+            "speed",
+            "-g",
+            str(gop_size),
+            "-keyint_min",
+            str(keyint_min),
+            "-bf",
+            "0",
+            *fps_args,
+        ]
     else:
         fps_for_gop = output_fps or (input_fps if input_fps and input_fps > 0 else 25)
         fps_for_gop = max(10, min(float(fps_for_gop), 60))
