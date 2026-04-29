@@ -14,15 +14,17 @@ function currentUiLanguage() {
 }
 
 export function canAccessPath(user, href) {
-  const role = user?.role;
-  if (role === "owner" || role === "admin") return true;
-  if (href === "/live") return role === "operator" || role === "viewer";
-  if (href === "/recordings" || href === "/chronology") return role === "operator";
+  const permissions = new Set(user?.permissions || []);
+  if (href === "/live") return permissions.has("view_live");
+  if (href === "/recordings") return permissions.has("view_recordings");
+  if (href === "/chronology") return permissions.has("view_timeline");
+  if (href === "/cameras") return permissions.has("manage_cameras");
+  if (href === "/settings") return permissions.has("manage_settings");
   return false;
 }
 
 export function canDeleteRecordings(user) {
-  return user?.role === "owner" || user?.role === "admin";
+  return (user?.permissions || []).includes("delete_recordings");
 }
 
 function buildUrl(path) {

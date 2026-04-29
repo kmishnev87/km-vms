@@ -13,7 +13,7 @@ from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
-from app.routers.deps import get_current_user, require_permission
+from app.routers.deps import require_permission
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.onvif_service import (
@@ -23,6 +23,7 @@ from app.services.onvif_service import (
 )
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
+viewer_router = APIRouter(prefix="/viewer/cameras", tags=["viewer-cameras"])
 
 
 def assemble_rtsp_url(
@@ -194,16 +195,38 @@ def update_onvif_profile_route(
 @router.get("", response_model=list[CameraResponse])
 def list_cameras(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     return db.query(Camera).order_by(Camera.name.asc()).all()
+
+
+@viewer_router.get("")
+def list_viewer_cameras(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("view_live")),
+):
+    cameras = db.query(Camera).order_by(Camera.name.asc()).all()
+    return [
+        {
+            "id": camera.id,
+            "name": camera.name,
+            "enabled": bool(camera.enabled),
+            "host": camera.host,
+            "port": camera.port,
+            "status": camera.status,
+            "default_live_stream": camera.default_live_stream,
+            "rtsp_main_url": bool(camera.rtsp_main_url),
+            "rtsp_sub_url": bool(camera.rtsp_sub_url),
+        }
+        for camera in cameras
+    ]
 
 
 @router.get("/{camera_id}", response_model=CameraResponse)
 def get_camera(
     camera_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:

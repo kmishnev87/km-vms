@@ -1331,6 +1331,13 @@ textarea {
   font-weight: 500;
 }
 
+.settingsModalFieldError {
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 800;
+}
+
 .settingsModalGrid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

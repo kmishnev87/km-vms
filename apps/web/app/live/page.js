@@ -145,7 +145,7 @@ export default function LivePage() {
   async function loadCameras() {
     try {
       setError("");
-      const data = await apiFetch("/cameras");
+      const data = await apiFetch("/viewer/cameras");
       setCameras(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message || TEXT.loadError);

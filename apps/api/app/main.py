@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.routers.auth import router as auth_router
-from app.routers.cameras import router as cameras_router
+from app.routers.cameras import router as cameras_router, viewer_router as viewer_cameras_router
 from app.routers.chronology import router as chronology_router
 from app.routers.hardware import router as hardware_router
 from app.routers.live import router as live_router
@@ -92,6 +92,7 @@ app.include_router(auth_router)
 app.include_router(settings_router)
 app.include_router(users_router)
 app.include_router(cameras_router)
+app.include_router(viewer_cameras_router)
 app.include_router(recordings_router)
 app.include_router(storage_router)
 app.include_router(hardware_router)

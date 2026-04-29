@@ -4,13 +4,13 @@ import os
 from fastapi import APIRouter, Depends
 from app.core.config import settings
 from app.models.user import User
-from app.routers.deps import get_current_user
+from app.routers.deps import require_permission
 
 router = APIRouter(prefix="/storage", tags=["storage"])
 
 
 @router.get("/status")
-def storage_status(current_user: User = Depends(get_current_user)):
+def storage_status(current_user: User = Depends(require_permission("manage_settings"))):
     root = Path(settings.storage_root)
     previews = Path(settings.storage_previews)
     exports = Path(settings.storage_exports)

@@ -127,7 +127,7 @@ const TEXT = {
       userUpdatedTitle: "Пользователь обновлён",
       userDisabledTitle: "Пользователь отключён",
       userEnabledTitle: "Пользователь включён",
-      usersFailTitle: "Пользователи недоступны",
+      usersFailTitle: "Ошибка пользователя",
       usersFailText: "Не удалось выполнить действие с пользователем",
       logsTitle: "Архив логов подготовлен",
     },
@@ -249,7 +249,7 @@ const TEXT = {
       userUpdatedTitle: "User updated",
       userDisabledTitle: "User disabled",
       userEnabledTitle: "User enabled",
-      usersFailTitle: "Users unavailable",
+      usersFailTitle: "User error",
       usersFailText: "User action failed",
       logsTitle: "Log archive prepared",
     },
@@ -693,6 +693,7 @@ export default function SettingsPage() {
       password: "",
       password_confirm: "",
       current_password: "",
+      fieldErrors: {},
       role: options[0] || "viewer",
       is_active: true,
       error: "",
@@ -708,6 +709,7 @@ export default function SettingsPage() {
       password: "",
       password_confirm: "",
       current_password: "",
+      fieldErrors: {},
       role: user.role,
       is_active: Boolean(user.is_active),
       is_owner: user.role === "owner",
@@ -716,12 +718,26 @@ export default function SettingsPage() {
   }
 
   function patchUserModal(key, value) {
-    setUserModal((current) => ({ ...current, [key]: value, error: "" }));
+    setUserModal((current) => ({
+      ...current,
+      [key]: value,
+      error: "",
+      fieldErrors: {
+        ...(current?.fieldErrors || {}),
+        [key]: "",
+      },
+    }));
   }
 
-  function rejectUserPassword(message) {
-    patchUserModal("error", message);
-    showToast({ variant: "error", title: t.toasts.usersFailTitle, text: message });
+  function rejectUserPassword(field, message) {
+    setUserModal((current) => ({
+      ...current,
+      error: "",
+      fieldErrors: {
+        ...(current?.fieldErrors || {}),
+        [field]: message,
+      },
+    }));
   }
 
   function patchBugReportText(value) {
@@ -742,7 +758,7 @@ export default function SettingsPage() {
       return;
     }
     if (userModal.mode === "create" && userModal.password.length < 8) {
-      rejectUserPassword(passwordLengthMessage(lang));
+      rejectUserPassword("password", passwordLengthMessage(lang));
       return;
     }
     const availableRoles = userModal.mode === "edit" && userModal.id === currentUser?.id
@@ -755,11 +771,11 @@ export default function SettingsPage() {
       return;
     }
     if (userModal.mode === "edit" && userModal.password && userModal.password.length < 8) {
-      rejectUserPassword(passwordLengthMessage(lang));
+      rejectUserPassword("password", passwordLengthMessage(lang));
       return;
     }
     if ((userModal.mode === "create" || userModal.password) && userModal.password !== userModal.password_confirm) {
-      rejectUserPassword(passwordConfirmMessage(lang));
+      rejectUserPassword("password_confirm", passwordConfirmMessage(lang));
       return;
     }
     if (userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password && !userModal.current_password) {
@@ -808,7 +824,6 @@ export default function SettingsPage() {
       await loadUsers();
     } catch (err) {
       const errorToast = normalizedError(err, lang, "users");
-      patchUserModal("error", errorToast.text || errorToast.title);
       showToast(errorToast);
     } finally {
       setUserBusy(false);
@@ -1131,11 +1146,13 @@ export default function SettingsPage() {
                 <span>{userModal.mode === "create" ? t.password : userModal.id === currentUser?.id ? t.passwordOptional : t.resetPasswordLabel}</span>
                 <input className="input" type="password" value={userModal.password} onChange={(event) => patchUserModal("password", event.target.value)} disabled={userBusy} autoComplete="new-password" />
                 <small className="settingsModalHint">{passwordHint(lang)}</small>
+                {userModal.fieldErrors?.password ? <small className="settingsModalFieldError">{userModal.fieldErrors.password}</small> : null}
               </label>
 
               <label className="settingsModalField">
                 <span>{lang === "en" ? "Repeat password" : "Повторите пароль"}</span>
                 <input className="input" type="password" value={userModal.password_confirm || ""} onChange={(event) => patchUserModal("password_confirm", event.target.value)} disabled={userBusy || (userModal.mode === "edit" && !userModal.password)} autoComplete="new-password" />
+                {userModal.fieldErrors?.password_confirm ? <small className="settingsModalFieldError">{userModal.fieldErrors.password_confirm}</small> : null}
               </label>
 
               {userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password ? (
