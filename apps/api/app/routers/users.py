@@ -40,6 +40,16 @@ def active_owner_count(db: Session, exclude_user_id: int | None = None) -> int:
     return query.count()
 
 
+def active_critical_user_count(db: Session, exclude_user_id: int | None = None) -> int:
+    query = db.query(User).filter(
+        User.role.in_([ROLE_OWNER, ROLE_ADMIN]),
+        User.is_active == True,  # noqa: E712
+    )
+    if exclude_user_id is not None:
+        query = query.filter(User.id != exclude_user_id)
+    return query.count()
+
+
 def ensure_not_last_active_owner(db: Session, user: User, next_role: str | None = None, next_active: bool | None = None):
     role_after = next_role if next_role is not None else user.role
     active_after = bool(next_active) if next_active is not None else bool(user.is_active)
@@ -168,7 +178,7 @@ def update_user(
 
 
 @router.delete("/{user_id}", response_model=UserResponse)
-def deactivate_user(
+def delete_user(
     user_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("admin_access")),
@@ -177,11 +187,19 @@ def deactivate_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
-    ensure_can_modify_user(current_user, user, next_active=False)
-    ensure_not_last_active_owner(db, user, next_active=False)
-    user.is_active = False
-    user.updated_at = datetime.utcnow()
-    db.add(user)
+    if user.role == ROLE_OWNER:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя удалить")
+    if user.id == current_user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя удалить собственную учетную запись")
+    can_delete = current_user.role == ROLE_OWNER or (
+        current_user.role == ROLE_ADMIN and user.role not in {ROLE_OWNER, ROLE_ADMIN}
+    )
+    if not can_delete:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для удаления пользователя")
+    if bool(user.is_active) and user.role in {ROLE_OWNER, ROLE_ADMIN} and active_critical_user_count(db, exclude_user_id=user.id) <= 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя удалить последнего критического пользователя")
+
+    response = serialize_user(user)
+    db.delete(user)
     db.commit()
-    db.refresh(user)
-    return serialize_user(user)
+    return response

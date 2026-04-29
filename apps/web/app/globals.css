@@ -1,5 +1,5 @@
 :root {
-  --settings-control-width: 218px;
+  --settings-control-width: 248px;
   --settings-row-icon: 48px;
   --settings-row-gap: 14px;
   --settings-row-padding-y: 12px;
@@ -767,11 +767,12 @@ textarea {
 }
 
 .settingsHardwareOptions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  display: grid;
+  grid-template-columns: 184px 184px 96px;
+  gap: 6px 8px;
   margin-top: 8px;
   align-items: center;
+  max-width: 488px;
 }
 
 .settingsBadge-nvenc {
@@ -793,9 +794,11 @@ textarea {
   font-size: 12px;
   line-height: 1.2;
   display: inline-flex;
-  width: fit-content;
+  width: 184px;
   max-width: 100%;
+  min-width: 0;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   white-space: nowrap;
   transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
@@ -1027,7 +1030,7 @@ textarea {
 .settingsUsersTable td {
   padding: 9px 10px;
   border-bottom: 1px solid #e8eef6;
-  text-align: left;
+  text-align: center;
   vertical-align: middle;
   font-size: 12px;
 }
@@ -1075,13 +1078,19 @@ textarea {
 .settingsUserActions {
   display: flex;
   gap: 6px;
-  justify-content: flex-end;
+  justify-content: center;
 }
 
 .settingsUserActions .button {
   min-height: 30px;
-  padding: 0 9px;
   font-size: 12px;
+}
+
+.settingsUserActionButton {
+  width: 84px;
+  min-width: 84px;
+  padding: 0 6px;
+  text-transform: lowercase;
 }
 
 .settingsModalOverlay {
@@ -1117,6 +1126,11 @@ textarea {
   padding: 16px;
   display: grid;
   gap: 14px;
+}
+
+.settingsBadge-amf,
+.settingsBadge-vaapi {
+  width: 96px;
 }
 
 .settingsUsersModal {
@@ -2282,12 +2296,15 @@ textarea {
   }
 
   .settingsHardwareOptions {
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
+    max-width: 100%;
   }
 
-  .settingsBadge-nvenc,
-  .settingsBadge-cpu {
-    grid-column: auto;
+  .settingsBadge,
+  .settingsBadge-amf,
+  .settingsBadge-vaapi {
+    width: 100%;
   }
 
   .settingsInfoBubble {

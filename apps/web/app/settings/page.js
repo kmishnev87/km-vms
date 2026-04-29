@@ -13,7 +13,7 @@ const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
   return { offset, label, value };
 });
 
-const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "amf", "nvenc", "cpu"];
+const HARDWARE_OPTIONS = ["auto", "qsv", "amf", "nvenc", "cpu", "vaapi"];
 const BACKEND_LABELS = {
   auto: { ru: "Автоматический режим", en: "Automatic mode" },
   qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV" },
@@ -276,6 +276,8 @@ function languageOf(settings) {
 
 function backendLabel(value, lang) {
   const key = value || "auto";
+  if (lang === "ru" && key === "auto") return "Автоматический режим";
+  if (lang === "ru" && key === "cpu") return "Резервный режим CPU";
   return BACKEND_LABELS[key]?.[lang] || key;
 }
 
@@ -372,6 +374,9 @@ function normalizedError(err, lang, context = "generic") {
     return { variant: "error", title: t.toasts.hardwareFailTitle, text: t.toasts.hardwareFailText };
   }
   if (context === "users") {
+    if (lower.includes("password") && (lower.includes("8") || lower.includes("short"))) {
+      return { variant: "error", title: t.toasts.usersFailTitle, text: "Пароль должен быть не менее 8 символов" };
+    }
     return { variant: "error", title: t.toasts.usersFailTitle, text: humanErrorText(message, t.toasts.usersFailText) };
   }
   return { variant: "error", title: t.toasts.networkTitle, text: humanErrorText(message, t.toasts.networkText) };
@@ -430,6 +435,20 @@ function userCanBeManaged(currentUser, user) {
   if (currentUser.role === "owner") return true;
   if (currentUser.role !== "admin") return false;
   return user.role !== "owner" && user.role !== "admin";
+}
+
+function userCanBeDeleted(currentUser, user, users) {
+  if (!currentUser || !user) return false;
+  if (user.role === "owner") return false;
+  if (user.id === currentUser.id) return false;
+  if (!userCanBeManaged(currentUser, user)) return false;
+
+  const activeCriticalUsers = users.filter((item) => (
+    item.id !== user.id &&
+    item.is_active &&
+    (item.role === "owner" || item.role === "admin")
+  ));
+  return activeCriticalUsers.length > 0;
 }
 
 function roleOptionsFor(currentUser) {
@@ -684,8 +703,12 @@ export default function SettingsPage() {
       patchUserModal("error", t.usernameRequired);
       return;
     }
+    if (userModal.mode === "create" && !userModal.password) {
+      patchUserModal("error", "Пароль должен быть не менее 8 символов");
+      return;
+    }
     if (userModal.mode === "create" && userModal.password.length < 8) {
-      patchUserModal("error", t.passwordRequired);
+      patchUserModal("error", "Пароль должен быть не менее 8 символов");
       return;
     }
     const availableRoles = userModal.mode === "edit" && userModal.id === currentUser?.id
@@ -695,6 +718,10 @@ export default function SettingsPage() {
       : roleOptionsFor(currentUser);
     if (!availableRoles.includes(userModal.role)) {
       patchUserModal("error", t.roleRequired);
+      return;
+    }
+    if (userModal.mode === "edit" && userModal.password && userModal.password.length < 8) {
+      patchUserModal("error", "Пароль должен быть не менее 8 символов");
       return;
     }
     if (userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password && !userModal.current_password) {
@@ -762,6 +789,26 @@ export default function SettingsPage() {
       showToast({
         variant: "success",
         title: user.is_active ? t.toasts.userDisabledTitle : t.toasts.userEnabledTitle,
+        text: user.username,
+      });
+      await loadUsers();
+    } catch (err) {
+      showToast(normalizedError(err, lang, "users"));
+    } finally {
+      setUserBusy(false);
+    }
+  }
+
+  async function deleteUser(user) {
+    if (userBusy || !userCanBeDeleted(currentUser, user, users)) return;
+    if (!window.confirm(`Удалить пользователя ${user.username}?`)) return;
+
+    setUserBusy(true);
+    try {
+      await apiFetch(`/users/${user.id}`, { method: "DELETE" });
+      showToast({
+        variant: "success",
+        title: t.toasts.userDeletedTitle || "Пользователь удалён",
         text: user.username,
       });
       await loadUsers();
@@ -983,10 +1030,10 @@ export default function SettingsPage() {
                 <table className="settingsUsersTable">
                   <thead>
                     <tr>
-                      <th>{t.username}</th>
-                      <th>{t.role}</th>
-                      <th>{t.status}</th>
-                      <th>{t.actions}</th>
+                      <th>Логин</th>
+                      <th>Роль</th>
+                      <th>Статус</th>
+                      <th>Управление</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1004,9 +1051,10 @@ export default function SettingsPage() {
                         </td>
                         <td>
                           <div className="settingsUserActions">
-                            <button className="button secondary small" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)}>{t.edit}</button>
-                            <button className="button secondary small" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id}>
-                              {user.is_active ? t.deactivate : t.activate}
+                            <button className="button secondary small settingsUserActionButton" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)}>изменить</button>
+                            <button className="button secondary small settingsUserActionButton" onClick={() => deleteUser(user)} disabled={userBusy || !userCanBeDeleted(currentUser, user, users)}>удалить</button>
+                            <button className="button secondary small settingsUserActionButton" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id || user.role === "owner"}>
+                              {user.is_active ? "отключить" : "включить"}
                             </button>
                           </div>
                         </td>

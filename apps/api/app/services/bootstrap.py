@@ -48,12 +48,26 @@ def ensure_system_settings(db: Session) -> SystemSettings:
 
 
 def ensure_owner_migration(db: Session) -> None:
-    ensure_legacy_owner_migration(db)
     normalize_stage_403_users(db)
 
 
 def normalize_stage_403_users(db: Session) -> None:
     admin_kostya = db.query(User).filter(User.username == "Admin_Kostya").first()
+    kostya = db.query(User).filter(User.username == "Kostya").first()
+
+    if admin_kostya:
+        admin_kostya.role = ROLE_OWNER
+        admin_kostya.is_active = True
+        db.add(admin_kostya)
+
+    if kostya:
+        kostya.role = ROLE_ADMIN
+        kostya.is_active = True
+        db.add(kostya)
+
+    db.commit()
+    return
+
     legacy_admin = db.query(User).filter(User.username == "admin").first()
     kostya = db.query(User).filter(User.username == "Kostya").first()
     legacy_konstantin = (
@@ -141,6 +155,9 @@ def ensure_admin(db: Session) -> None:
     system = ensure_system_settings(db)
     if not system.system_initialized:
         return
+
+    ensure_owner_migration(db)
+    return
 
     existing = db.query(User).filter(User.username == settings.admin_username).first()
     if existing:
