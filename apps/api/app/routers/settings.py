@@ -367,7 +367,7 @@ def docker_logs_via_socket(container: str, mode: str) -> str:
     if mode == "extended":
         params += f"&since={int(time.time()) - 1800}"
     else:
-        params += "&tail=500"
+        params += f"&since={int(time.time()) - 600}"
     path = f"/containers/{quote(container, safe='')}/logs?{params}"
     request = (
         f"GET {path} HTTP/1.1\r\n"
@@ -407,7 +407,7 @@ def docker_logs_via_cli(container: str, mode: str) -> str:
     if mode == "extended":
         cmd.extend(["--since", "30m"])
     else:
-        cmd.extend(["--tail", "500"])
+        cmd.extend(["--since", "10m"])
     cmd.append(container)
 
     try:
@@ -478,7 +478,7 @@ def build_log_archive(
             {
                 "created_at": created_at,
                 "mode": mode,
-                "docker_log_rule": "--since=30m" if mode == "extended" else "--tail=500",
+                "docker_log_rule": "--since=30m" if mode == "extended" else "--since=10m",
                 "containers": DIAGNOSTIC_CONTAINERS,
             },
         )
