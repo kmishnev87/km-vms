@@ -60,6 +60,13 @@ def ensure_can_create_role(current_user: User, role: str) -> None:
 
 
 def ensure_can_modify_user(current_user: User, target: User, next_role: str | None = None, next_active: bool | None = None) -> None:
+    if target.role == ROLE_OWNER:
+        if next_role is not None and next_role != ROLE_OWNER:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя понизить")
+        if next_active is False and bool(target.is_active):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя отключить")
+        if current_user.id != target.id and current_user.role != ROLE_OWNER:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может изменять владельца")
     if current_user.role == ROLE_ADMIN and target.role == ROLE_OWNER:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может изменять владельца")
     if current_user.role == ROLE_ADMIN and next_role == ROLE_ADMIN and target.id != current_user.id:

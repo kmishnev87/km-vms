@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
-import { apiFetch, apiFetchBlob } from "../../lib/api";
+import { apiFetch, apiFetchBlob, clearAuthToken } from "../../lib/api";
 
 const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
   const offset = index - 12;
@@ -13,34 +14,8 @@ const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
 });
 
 const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "amf", "nvenc", "cpu"];
-const LOG_EVENT_CATEGORIES = [
-  { ru: "вход", en: "login" },
-  { ru: "выход", en: "logout" },
-  { ru: "ошибка входа", en: "failed login" },
-  { ru: "сессия истекла", en: "session expired" },
-  { ru: "настройки изменены", en: "settings changed" },
-  { ru: "тест хранилища", en: "storage test" },
-  { ru: "тест оборудования", en: "hardware test" },
-  { ru: "камера добавлена", en: "camera added" },
-  { ru: "камера изменена", en: "camera edited" },
-  { ru: "камера удалена", en: "camera deleted" },
-  { ru: "live-поток запущен/остановлен", en: "live stream started/stopped" },
-  { ru: "запись запущена/остановлена", en: "recording started/stopped" },
-  { ru: "ошибка записи", en: "recording error" },
-  { ru: "камера офлайн", en: "camera offline" },
-  { ru: "мало/нет места", en: "storage low / no space" },
-  { ru: "автоудаление по хранению", en: "recording auto-deleted by retention" },
-  { ru: "ручное удаление записи", en: "recording manually deleted" },
-  { ru: "пользователь создан", en: "user created" },
-  { ru: "пользователь изменён", en: "user edited" },
-  { ru: "роль изменена", en: "role changed" },
-  { ru: "пользователь отключён/включён", en: "user disabled/enabled" },
-  { ru: "пароль сброшен", en: "password reset" },
-  { ru: "отчёт создан/отправлен", en: "bug report created/sent" },
-];
-
 const BACKEND_LABELS = {
-  auto: { ru: "Автоматически", en: "Automatic" },
+  auto: { ru: "Автоматический режим", en: "Automatic mode" },
   qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV" },
   vaapi: { ru: "VAAPI", en: "VAAPI" },
   amf: { ru: "AMD AMF", en: "AMD AMF" },
@@ -58,6 +33,7 @@ const TEXT = {
     dirty: "Есть несохранённые изменения",
     checking: "Проверка...",
     language: "Язык",
+    languageHelp: "Язык интерфейса KM VMS.",
     russian: "Русский",
     english: "English",
     timezone: "Часовой пояс",
@@ -93,8 +69,8 @@ const TEXT = {
     sendBugReport: "Отправить отчёт",
     journalEmpty: "Журнал событий будет отображаться здесь после подключения backend-логирования.",
     reportSendingPending: "Отправка отчётов будет подключена после реализации backend-отправки.",
-    diagnosticArchiveReady: "Диагностический архив создан и прикреплён.",
-    resetPasswordLabel: "Сброс пароля администратором",
+    diagnosticArchiveReady: "Диагностический архив создан, прикреплён и скачан.",
+    resetPasswordLabel: "Новый пароль (сброс администратором)",
     users: "Пользователи и роли",
     usersText: "Управление пользователями, ролями и доступом к системе.",
     usersDenied: "Недостаточно прав для управления пользователями.",
@@ -121,6 +97,8 @@ const TEXT = {
     usernameRequired: "Укажите логин.",
     passwordRequired: "Укажите пароль не короче 8 символов.",
     currentPasswordRequired: "Укажите текущий пароль.",
+    credentialsChanged: "Данные входа изменены. Войдите заново.",
+    writeDenied: "Нет доступа на запись.",
     roleRequired: "Выберите роль.",
     roleOwner: "Владелец",
     roleAdmin: "Администратор",
@@ -177,6 +155,7 @@ const TEXT = {
     dirty: "You have unsaved changes",
     checking: "Checking...",
     language: "Language",
+    languageHelp: "KM VMS interface language.",
     russian: "Русский",
     english: "English",
     timezone: "Timezone",
@@ -212,9 +191,9 @@ const TEXT = {
     sendBugReport: "Send report",
     journalEmpty: "Event journal will appear here after backend logging is connected.",
     reportSendingPending: "Report sending will be connected after backend sending is implemented.",
-    diagnosticArchiveReady: "Diagnostic archive created and attached.",
-    resetPasswordLabel: "Admin password reset",
-    users: "Users / Roles",
+    diagnosticArchiveReady: "Diagnostic archive created, attached and downloaded.",
+    resetPasswordLabel: "New password (admin reset)",
+    users: "Users and roles",
     usersText: "Manage users, roles and system access.",
     usersDenied: "Insufficient permissions to manage users.",
     currentUser: "Current user",
@@ -240,6 +219,8 @@ const TEXT = {
     usernameRequired: "Enter username.",
     passwordRequired: "Enter a password with at least 8 characters.",
     currentPasswordRequired: "Enter current password.",
+    credentialsChanged: "Login credentials changed. Please sign in again.",
+    writeDenied: "Write access denied.",
     roleRequired: "Select a role.",
     roleOwner: "Owner",
     roleAdmin: "Administrator",
@@ -458,6 +439,7 @@ function roleOptionsFor(currentUser) {
 }
 
 export default function SettingsPage() {
+  const router = useRouter();
   const [draft, setDraft] = useState(null);
   const [savedDraft, setSavedDraft] = useState(null);
   const [hardware, setHardware] = useState(null);
@@ -469,11 +451,12 @@ export default function SettingsPage() {
   const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
   const [userBusy, setUserBusy] = useState(false);
+  const [usersModalOpen, setUsersModalOpen] = useState(false);
   const [userModal, setUserModal] = useState(null);
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
   const [bugReportText, setBugReportText] = useState("");
-  const [diagnosticArchiveReady, setDiagnosticArchiveReady] = useState(false);
+  const [diagnosticArchive, setDiagnosticArchive] = useState(null);
   const toastTimerRef = useRef(null);
   const lang = languageOf(draft || savedDraft);
   const t = TEXT[lang] || TEXT.ru;
@@ -644,6 +627,12 @@ export default function SettingsPage() {
     window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextLanguage }));
   }
 
+  async function openUsersModal() {
+    if (!canManageUsers || usersLoading) return;
+    setUsersModalOpen(true);
+    await loadUsers();
+  }
+
   function openCreateUser() {
     const options = roleOptionsFor(currentUser);
     setUserModal({
@@ -680,7 +669,12 @@ export default function SettingsPage() {
 
   function patchBugReportText(value) {
     setBugReportText(value);
-    setDiagnosticArchiveReady(false);
+  }
+
+  function closeSecurityModal() {
+    setSecurityModalOpen(false);
+    setDiagnosticArchive(null);
+    setBugReportText("");
   }
 
   async function submitUserModal(event) {
@@ -719,6 +713,10 @@ export default function SettingsPage() {
       if (userModal.password) body.password = userModal.password;
       if (userModal.current_password) body.current_password = userModal.current_password;
 
+      const changesOwnCredentials = userModal.mode === "edit"
+        && userModal.id === currentUser?.id
+        && (body.username !== currentUser?.username || Boolean(userModal.password));
+
       if (userModal.mode === "create") {
         await apiFetch("/users", {
           method: "POST",
@@ -732,6 +730,13 @@ export default function SettingsPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
+        if (changesOwnCredentials) {
+          setUserModal(null);
+          showToast({ variant: "success", title: t.credentialsChanged });
+          clearAuthToken();
+          router.replace("/login");
+          return;
+        }
         showToast({ variant: "success", title: t.toasts.userUpdatedTitle, text: userModal.username.trim() });
       }
       setUserModal(null);
@@ -784,9 +789,10 @@ export default function SettingsPage() {
     try {
       const { blob, filename } = await apiFetchBlob("/settings/logs/archive");
       downloadBlob(blob, filename);
-      setDiagnosticArchiveReady(true);
-      showToast({ variant: "success", title: t.toasts.logsTitle });
+      setDiagnosticArchive({ filename: filename || "km-vms-logs.zip" });
+      showToast({ variant: "success", title: t.toasts.logsTitle, text: filename || "" });
     } catch (err) {
+      setDiagnosticArchive(null);
       showToast(normalizedError(err, lang));
     } finally {
       setSecurityBusy(false);
@@ -835,7 +841,7 @@ export default function SettingsPage() {
                   <div className="settingsRowIcon"><img src={languageIcon} alt="" /></div>
                   <div className="settingsRowText">
                     <label htmlFor="settings-language">{t.language}</label>
-                    <span>{t.i18nNote}</span>
+                    <span>{t.languageHelp}</span>
                   </div>
                   <div className="settingsRowControl">
                     <select id="settings-language" className="select settingsSelect" value={draft.language} onChange={handleSettingsLanguageChange} disabled={saving}>
@@ -933,72 +939,85 @@ export default function SettingsPage() {
                   <div className="settingsRowIcon"><img src="/icons/nav/users-icon.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label>{t.users}<InfoTip text={t.tooltips.users} /></label>
-                    <span>{canManageUsers ? t.usersText : t.usersDenied}</span>
+                    <span>{t.usersText}</span>
                   </div>
                   <div className="settingsRowControl settingsRowControlMeta">
-                    <button className="button secondary small settingsUsersAddButton" onClick={openCreateUser} disabled={!canManageUsers || usersLoading || userBusy}>
-                      {t.addUser}
+                    <button className="button secondary small settingsUsersAddButton" onClick={openUsersModal} disabled={!canManageUsers || usersLoading || userBusy}>
+                      {t.open}
                     </button>
                   </div>
-                </div>
-
-                <div className="settingsUsersBlock">
-                  <div className="settingsSecuritySummary">
-                    <div>
-                      <span>{t.currentUser}</span>
-                      <strong>{currentUser?.username || "-"}</strong>
-                      <small>{roleLabel(currentUser?.role, t)}</small>
-                    </div>
-                    <div>
-                      <span>{t.session}</span>
-                      <strong>24:00</strong>
-                      <small>{t.sessionPolicy}</small>
-                    </div>
-                  </div>
-
-                  {canManageUsers ? (
-                    <div className="settingsUsersTableWrap">
-                      <table className="settingsUsersTable">
-                        <thead>
-                          <tr>
-                            <th>{t.username}</th>
-                            <th>{t.role}</th>
-                            <th>{t.status}</th>
-                            <th>{t.actions}</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {users.map((user) => (
-                            <tr key={user.id}>
-                              <td>
-                                <strong>{user.username}</strong>
-                                {user.display_name ? <small>{user.display_name}</small> : null}
-                              </td>
-                              <td>{roleLabel(user.role, t)}</td>
-                              <td>
-                                <span className={`settingsUserStatus ${user.is_active ? "active" : "inactive"}`}>
-                                  {user.is_active ? t.active : t.inactive}
-                                </span>
-                              </td>
-                              <td>
-                                <div className="settingsUserActions">
-                                  <button className="button secondary small" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)}>{t.edit}</button>
-                                  <button className="button secondary small" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id}>
-                                    {user.is_active ? t.deactivate : t.activate}
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : null}
                 </div>
               </section>
             </div>
           )}
         </div>
+
+        {usersModalOpen ? (
+          <div className="settingsModalOverlay" role="presentation">
+            <div className="settingsUsersModal" role="dialog" aria-modal="true" aria-label={t.users}>
+              <div className="settingsUserModalHeader">
+                <h2>{t.users}</h2>
+                <button type="button" className="settingsModalClose" onClick={() => setUsersModalOpen(false)} aria-label={t.close}>×</button>
+              </div>
+
+              <div className="settingsSecuritySummary">
+                <div>
+                  <span>{t.currentUser}</span>
+                  <strong>{currentUser?.username || "-"}</strong>
+                  <small>{currentUser?.display_name || currentUser?.full_name || "-"} · {roleLabel(currentUser?.role, t)}</small>
+                </div>
+                <div>
+                  <span>{t.session}</span>
+                  <strong>24:00</strong>
+                  <small>{t.sessionPolicy}</small>
+                </div>
+              </div>
+
+              <div className="settingsModalToolbar">
+                <button className="button small" onClick={openCreateUser} disabled={!canManageUsers || usersLoading || userBusy}>
+                  {t.addUser}
+                </button>
+              </div>
+
+              <div className="settingsUsersTableWrap">
+                <table className="settingsUsersTable">
+                  <thead>
+                    <tr>
+                      <th>{t.username}</th>
+                      <th>{t.role}</th>
+                      <th>{t.status}</th>
+                      <th>{t.actions}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map((user) => (
+                      <tr key={user.id}>
+                        <td>
+                          <strong>{user.username}</strong>
+                          {user.display_name ? <small>{user.display_name}</small> : null}
+                        </td>
+                        <td>{roleLabel(user.role, t)}</td>
+                        <td>
+                          <span className={`settingsUserStatus ${user.is_active ? "active" : "inactive"}`}>
+                            {user.is_active ? t.active : t.inactive}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="settingsUserActions">
+                            <button className="button secondary small" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)}>{t.edit}</button>
+                            <button className="button secondary small" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id}>
+                              {user.is_active ? t.deactivate : t.activate}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        ) : null}
 
         {userModal ? (
           <div className="settingsModalOverlay" role="presentation">
@@ -1061,17 +1080,12 @@ export default function SettingsPage() {
             <div className="settingsSecurityModal" role="dialog" aria-modal="true" aria-label={t.security}>
               <div className="settingsUserModalHeader">
                 <h2>{t.security}</h2>
-                <button type="button" className="settingsModalClose" onClick={() => setSecurityModalOpen(false)} aria-label={t.close}>×</button>
+                <button type="button" className="settingsModalClose" onClick={closeSecurityModal} aria-label={t.close}>×</button>
               </div>
 
               <section className="settingsSecurityModalSection">
                 <div className="settingsSecurityModalSectionHead">
                   <h3>{t.logJournal}</h3>
-                </div>
-                <div className="settingsJournalCategories" aria-label={t.logJournal}>
-                  {LOG_EVENT_CATEGORIES.map((category) => (
-                    <span key={category.en} className="settingsJournalCategory">{category[lang] || category.en}</span>
-                  ))}
                 </div>
                 <div className="settingsJournalEmpty">{t.journalEmpty}</div>
               </section>
@@ -1090,12 +1104,18 @@ export default function SettingsPage() {
                   placeholder={t.bugReportPlaceholder}
                   disabled={securityBusy}
                 />
-                {diagnosticArchiveReady ? <div className="settingsSecurityNote ok">{t.diagnosticArchiveReady}</div> : null}
+                {diagnosticArchive ? (
+                  <div className="settingsAttachmentBadge">
+                    <span>✓</span>
+                    <strong>{t.diagnosticArchiveReady}</strong>
+                    <small>{diagnosticArchive.filename}</small>
+                  </div>
+                ) : null}
                 <div className="settingsSecurityNote">{t.reportSendingPending}</div>
                 <button
                   className="button small settingsSecurityModalButton"
                   onClick={submitBugReport}
-                  disabled={securityBusy || !diagnosticArchiveReady || !bugReportText.trim()}
+                  disabled={securityBusy || !diagnosticArchive || !bugReportText.trim()}
                 >
                   {t.sendBugReport}
                 </button>

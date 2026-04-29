@@ -767,8 +767,8 @@ textarea {
 }
 
 .settingsHardwareOptions {
-  display: grid;
-  grid-template-columns: max-content max-content max-content max-content;
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
   align-items: center;
@@ -793,6 +793,8 @@ textarea {
   font-size: 12px;
   line-height: 1.2;
   display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
   align-items: center;
   gap: 5px;
   white-space: nowrap;
@@ -1117,6 +1119,25 @@ textarea {
   gap: 14px;
 }
 
+.settingsUsersModal {
+  width: min(100%, 820px);
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.settingsModalToolbar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .settingsSecurityModalSection {
   border: 1px solid #e2e8f0;
   border-radius: 10px;
@@ -1140,27 +1161,8 @@ textarea {
   line-height: 1.2;
 }
 
-.settingsJournalCategories {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.settingsJournalCategory {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  border: 1px solid #dbe3ef;
-  border-radius: 999px;
-  background: #ffffff;
-  color: #475569;
-  padding: 0 8px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .settingsJournalEmpty {
-  min-height: 76px;
+  min-height: 220px;
   border: 1px dashed #cbd5e1;
   border-radius: 10px;
   background: #ffffff;
@@ -1175,7 +1177,7 @@ textarea {
 }
 
 .settingsBugReportTextarea {
-  min-height: 120px;
+  min-height: 160px;
   resize: vertical;
   line-height: 1.4;
   padding-top: 10px;
@@ -1195,6 +1197,52 @@ textarea {
 .settingsSecurityNote.ok {
   color: #166534;
   font-weight: 800;
+}
+
+.settingsAttachmentBadge {
+  width: fit-content;
+  max-width: 100%;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 8px;
+  align-items: center;
+  border: 1px solid #bbf7d0;
+  border-radius: 10px;
+  background: #f0fdf4;
+  color: #166534;
+  padding: 8px 10px;
+}
+
+.settingsAttachmentBadge span {
+  grid-row: 1 / span 2;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #16a34a;
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.settingsAttachmentBadge strong,
+.settingsAttachmentBadge small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settingsAttachmentBadge strong {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.settingsAttachmentBadge small {
+  color: #15803d;
+  font-size: 12px;
 }
 
 .settingsUserModalHeader {
@@ -2234,7 +2282,6 @@ textarea {
   }
 
   .settingsHardwareOptions {
-    grid-template-columns: 1fr;
     align-items: start;
   }
 
