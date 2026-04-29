@@ -295,6 +295,18 @@ function passwordLengthMessage(lang) {
     : "Пароль должен быть не менее 8 символов.";
 }
 
+function passwordConfirmMessage(lang) {
+  return lang === "en"
+    ? "Passwords do not match."
+    : "Пароли не совпадают.";
+}
+
+function passwordHint(lang) {
+  return lang === "en"
+    ? "At least 8 characters. Enter the password twice to avoid mistakes."
+    : "Не менее 8 символов. Введите пароль дважды, чтобы исключить ошибку.";
+}
+
 function sortedUsersForTable(users) {
   const rolePriority = { owner: 0, admin: 1, operator: 2, viewer: 3 };
   return [...users].sort((left, right) => {
@@ -679,6 +691,7 @@ export default function SettingsPage() {
       username: "",
       display_name: "",
       password: "",
+      password_confirm: "",
       current_password: "",
       role: options[0] || "viewer",
       is_active: true,
@@ -693,6 +706,7 @@ export default function SettingsPage() {
       username: user.username,
       display_name: user.display_name || "",
       password: "",
+      password_confirm: "",
       current_password: "",
       role: user.role,
       is_active: Boolean(user.is_active),
@@ -703,6 +717,11 @@ export default function SettingsPage() {
 
   function patchUserModal(key, value) {
     setUserModal((current) => ({ ...current, [key]: value, error: "" }));
+  }
+
+  function rejectUserPassword(message) {
+    patchUserModal("error", message);
+    showToast({ variant: "error", title: t.toasts.usersFailTitle, text: message });
   }
 
   function patchBugReportText(value) {
@@ -723,7 +742,7 @@ export default function SettingsPage() {
       return;
     }
     if (userModal.mode === "create" && userModal.password.length < 8) {
-      patchUserModal("error", passwordLengthMessage(lang));
+      rejectUserPassword(passwordLengthMessage(lang));
       return;
     }
     const availableRoles = userModal.mode === "edit" && userModal.id === currentUser?.id
@@ -736,7 +755,11 @@ export default function SettingsPage() {
       return;
     }
     if (userModal.mode === "edit" && userModal.password && userModal.password.length < 8) {
-      patchUserModal("error", passwordLengthMessage(lang));
+      rejectUserPassword(passwordLengthMessage(lang));
+      return;
+    }
+    if ((userModal.mode === "create" || userModal.password) && userModal.password !== userModal.password_confirm) {
+      rejectUserPassword(passwordConfirmMessage(lang));
       return;
     }
     if (userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password && !userModal.current_password) {
@@ -1107,6 +1130,12 @@ export default function SettingsPage() {
               <label className="settingsModalField">
                 <span>{userModal.mode === "create" ? t.password : userModal.id === currentUser?.id ? t.passwordOptional : t.resetPasswordLabel}</span>
                 <input className="input" type="password" value={userModal.password} onChange={(event) => patchUserModal("password", event.target.value)} disabled={userBusy} autoComplete="new-password" />
+                <small className="settingsModalHint">{passwordHint(lang)}</small>
+              </label>
+
+              <label className="settingsModalField">
+                <span>{lang === "en" ? "Repeat password" : "Повторите пароль"}</span>
+                <input className="input" type="password" value={userModal.password_confirm || ""} onChange={(event) => patchUserModal("password_confirm", event.target.value)} disabled={userBusy || (userModal.mode === "edit" && !userModal.password)} autoComplete="new-password" />
               </label>
 
               {userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password ? (

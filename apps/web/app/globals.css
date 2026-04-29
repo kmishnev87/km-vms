@@ -1324,6 +1324,13 @@ textarea {
   font-weight: 800;
 }
 
+.settingsModalHint {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 500;
+}
+
 .settingsModalGrid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
