@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
-import { apiFetch, apiFetchBlob, clearAuthToken } from "../../lib/api";
+import { apiFetch, apiFetchBlob } from "../../lib/api";
 
 const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
   const offset = index - 12;
@@ -13,7 +12,41 @@ const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
   return { offset, label, value };
 });
 
-const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "nvenc", "amf", "cpu"];
+const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "amf", "nvenc", "cpu"];
+const LOG_EVENT_CATEGORIES = [
+  { ru: "вход", en: "login" },
+  { ru: "выход", en: "logout" },
+  { ru: "ошибка входа", en: "failed login" },
+  { ru: "сессия истекла", en: "session expired" },
+  { ru: "настройки изменены", en: "settings changed" },
+  { ru: "тест хранилища", en: "storage test" },
+  { ru: "тест оборудования", en: "hardware test" },
+  { ru: "камера добавлена", en: "camera added" },
+  { ru: "камера изменена", en: "camera edited" },
+  { ru: "камера удалена", en: "camera deleted" },
+  { ru: "live-поток запущен/остановлен", en: "live stream started/stopped" },
+  { ru: "запись запущена/остановлена", en: "recording started/stopped" },
+  { ru: "ошибка записи", en: "recording error" },
+  { ru: "камера офлайн", en: "camera offline" },
+  { ru: "мало/нет места", en: "storage low / no space" },
+  { ru: "автоудаление по хранению", en: "recording auto-deleted by retention" },
+  { ru: "ручное удаление записи", en: "recording manually deleted" },
+  { ru: "пользователь создан", en: "user created" },
+  { ru: "пользователь изменён", en: "user edited" },
+  { ru: "роль изменена", en: "role changed" },
+  { ru: "пользователь отключён/включён", en: "user disabled/enabled" },
+  { ru: "пароль сброшен", en: "password reset" },
+  { ru: "отчёт создан/отправлен", en: "bug report created/sent" },
+];
+
+const BACKEND_LABELS = {
+  auto: { ru: "Автоматически", en: "Automatic" },
+  qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV" },
+  vaapi: { ru: "VAAPI", en: "VAAPI" },
+  amf: { ru: "AMD AMF", en: "AMD AMF" },
+  nvenc: { ru: "NVIDIA NVENC/NVDEC", en: "NVIDIA NVENC/NVDEC" },
+  cpu: { ru: "Резервный режим CPU", en: "CPU fallback" },
+};
 
 const TEXT = {
   ru: {
@@ -21,31 +54,26 @@ const TEXT = {
     subtitle: "Системные параметры KM VMS: язык, время, архив, запись, ускорение и безопасность.",
     save: "Сохранить",
     saving: "Сохранение...",
-    saved: "Настройки сохранены",
-    changesApplied: "Изменения успешно применены",
-    storageValidated: "Хранилище доступно. Свободно: {free}",
-    hardwareChecked: "Аппаратные возможности проверены",
-    system: "Система",
+    cancel: "Отменить",
+    dirty: "Есть несохранённые изменения",
+    checking: "Проверка...",
     language: "Язык",
     russian: "Русский",
     english: "English",
     timezone: "Часовой пояс",
-    timezoneHelp: "Часовой пояс используется для отображения времени, архива и будущей хронологии.",
+    timezoneHelp: "Определяет время интерфейса, архива и хронологии.",
     storage: "Хранилище",
-    storageText: "Физический путь на NAS задаётся в docker-compose volume mapping.",
+    storageText: "Путь архива внутри контейнера. Серверный путь задаётся в docker-compose.",
     hostPath: "Путь на сервере",
     hostPathUnknown: "Определяется в docker-compose",
     validate: "Тест",
-    storageOk: "Хранилище доступно.",
-    storageFail: "Хранилище недоступно",
-    writeDenied: "Нет прав на запись",
     recording: "Запись",
-    balanced: "Сбалансированный",
-    balancedHelp: "Рекомендуемый режим. Сейчас: MKV.",
-    compatibility: "Максимальная совместимость",
-    compatibilityHelp: "Сейчас: MP4. Легче открыть в плеерах, но менее устойчиво при аварийном завершении.",
-    reliability: "Максимальная надёжность",
-    reliabilityHelp: "Сейчас: MKV. Лучше переносит прерывание процесса или сервера.",
+    balanced: "Баланс",
+    balancedHelp: "Рекомендуемый режим. Сейчас используется MKV.",
+    compatibility: "Макс. совместимость",
+    compatibilityHelp: "Сейчас используется MP4. Удобнее для плееров.",
+    reliability: "Макс. надежность",
+    reliabilityHelp: "Сейчас используется MKV. Лучше переносит сбои записи.",
     mapsTo: "Формат",
     hardware: "Аппаратное ускорение",
     hardwareAvailable: "Аппаратное ускорение доступно.",
@@ -55,81 +83,116 @@ const TEXT = {
     rescan: "Тест",
     failedValidation: "Не прошёл проверку",
     notDetected: "Не найдено на этом сервере",
-    users: "Пользователи и роли",
-    usersText: "Управление пользователями, ролями и доступом к системе.",
     security: "Безопасность",
     securityText: "Журнал логирования, сбор диагностических логов и отчёт об ошибке.",
+    logJournal: "Журнал логирования",
     open: "Открыть",
-    close: "Закрыть",
+    createDiagnosticArchive: "Создать диагностический архив",
+    bugReport: "Отчёт об ошибке",
+    bugReportPlaceholder: "Опишите проблему простым языком: что произошло, где нажимали, что ожидали увидеть.",
+    sendBugReport: "Отправить отчёт",
+    journalEmpty: "Журнал событий будет отображаться здесь после подключения backend-логирования.",
+    reportSendingPending: "Отправка отчётов будет подключена после реализации backend-отправки.",
+    diagnosticArchiveReady: "Диагностический архив создан и прикреплён.",
+    resetPasswordLabel: "Сброс пароля администратором",
+    users: "Пользователи и роли",
+    usersText: "Управление пользователями, ролями и доступом к системе.",
+    usersDenied: "Недостаточно прав для управления пользователями.",
+    currentUser: "Текущий пользователь",
     session: "Сессия",
-    sessionText: "Сессия сохраняется до 24:00 при включённом режиме «Оставаться в системе».",
-    login: "Логин",
-    role: "Роль",
-    status: "Статус",
-    management: "Управление",
-    active: "Активен",
-    inactive: "Отключён",
-    edit: "Изменить",
-    enable: "Включить",
-    disable: "Отключить",
+    sessionPolicy: "Сессия сохраняется до 24:00 при включённом режиме «Оставаться в системе».",
     addUser: "Добавить пользователя",
-    create: "Создать",
-    creating: "Создание...",
-    saveUser: "Сохранить",
-    savingUser: "Сохранение...",
+    editUser: "Изменить пользователя",
+    username: "Логин",
     displayName: "Имя",
     password: "Пароль",
-    newPassword: "Новый пароль",
-    adminResetPassword: "Новый пароль (сброс администратором)",
-    currentPassword: "Текущий пароль",
-    currentPasswordRequired: "Текущий пароль обязателен для смены собственного пароля.",
-    userCreated: "Пользователь создан",
-    userUpdated: "Пользователь обновлён",
-    duplicateUsername: "Такой логин уже существует.",
-    credentialsChanged: "Данные входа изменены. Войдите заново.",
-    loggingJournal: "Журнал логирования",
-    journalEmpty: "Журнал событий будет отображаться здесь после подключения backend-логирования.",
-    bugReport: "Отчёт об ошибке",
-    createArchive: "Создать диагностический архив",
-    archiveBusy: "Создание архива...",
-    archiveAttached: "Диагностический архив создан, прикреплён и скачан.",
-    describeProblem: "Опишите проблему простым языком: что произошло, где нажимали, что ожидали увидеть.",
-    sendReport: "Отправить отчёт",
-    sendPending: "Отправка отчётов будет подключена после реализации backend-отправки.",
-    notAuthenticated: "Нужно войти заново.",
-    forbidden: "Недостаточно прав.",
-    network: "Сервер недоступен.",
+    passwordOptional: "Пароль (если нужно изменить)",
+    role: "Роль",
+    status: "Статус",
+    active: "Активен",
+    inactive: "Отключён",
+    actions: "Управление",
+    edit: "Изменить",
+    deactivate: "Отключить",
+    activate: "Включить",
+    create: "Создать",
+    update: "Сохранить",
+    close: "Закрыть",
+    usernameRequired: "Укажите логин.",
+    passwordRequired: "Укажите пароль не короче 8 символов.",
+    currentPasswordRequired: "Укажите текущий пароль.",
+    roleRequired: "Выберите роль.",
+    roleOwner: "Владелец",
+    roleAdmin: "Администратор",
+    roleOperator: "Оператор",
+    roleViewer: "Наблюдатель",
+    toasts: {
+      saveOkTitle: "Настройки сохранены",
+      saveOkText: "Изменения успешно применены",
+      storageOkTitle: "Хранилище доступно",
+      storageOkText: "Свободно: {free}",
+      hardwareOkTitle: "Аппаратные возможности проверены",
+      hardwareOkText: "Доступно: {modes}",
+      hardwareFallbackTitle: "Режим изменён",
+      hardwareFallbackText: "Выбранный режим недоступен. Включён автоматический выбор.",
+      authTitle: "Нужно войти заново",
+      authText: "Сессия истекла или токен недействителен",
+      forbiddenTitle: "Недостаточно прав",
+      forbiddenText: "У текущего пользователя нет доступа к настройкам",
+      networkTitle: "Сервер недоступен",
+      networkText: "Проверьте подключение или состояние сервиса",
+      storageFailTitle: "Хранилище недоступно",
+      hardwareFailTitle: "Проверка аппаратных возможностей не выполнена",
+      hardwareFailText: "Повторите проверку позже",
+      unavailableTitle: "Режим недоступен",
+      userCreatedTitle: "Пользователь создан",
+      userUpdatedTitle: "Пользователь обновлён",
+      userDisabledTitle: "Пользователь отключён",
+      userEnabledTitle: "Пользователь включён",
+      usersFailTitle: "Пользователи недоступны",
+      usersFailText: "Не удалось выполнить действие с пользователем",
+      logsTitle: "Архив логов подготовлен",
+    },
+    tooltips: {
+      timezone: "Используется для отображения времени, записи файлов и хронологии.",
+      storage: "Папка внутри контейнера. Фактический путь на сервере задаётся в docker-compose.",
+      recording: "Определяет формат и поведение записи видео.",
+      hardware: "Использует видеоускорение сервера для обработки видео.",
+      auto: "Система сама выбирает оптимальное ускорение.",
+      qsv: "Аппаратное ускорение через встроенную графику Intel.",
+      vaapi: "Аппаратное ускорение для Linux-систем.",
+      nvenc: "Аппаратное ускорение через видеокарты NVIDIA.",
+      amf: "Аппаратное ускорение через видеокарты AMD.",
+      cpu: "Обработка видео без ускорения, только на процессоре.",
+      security: "Системный журнал логирования и отчёты об ошибках.",
+      users: "Управление доступом пользователей к системе.",
+    },
   },
   en: {
     title: "Settings",
     subtitle: "KM VMS system settings: language, time, archive storage, recording, acceleration, and security.",
     save: "Save",
     saving: "Saving...",
-    saved: "Settings saved",
-    changesApplied: "Changes applied successfully",
-    storageValidated: "Storage is available. Free: {free}",
-    hardwareChecked: "Hardware capabilities checked",
-    system: "System",
+    cancel: "Cancel",
+    dirty: "You have unsaved changes",
+    checking: "Checking...",
     language: "Language",
     russian: "Русский",
     english: "English",
     timezone: "Timezone",
-    timezoneHelp: "Timezone is used for displayed time, archive timestamps, and future chronology.",
+    timezoneHelp: "Defines interface time, archive timestamps, and chronology.",
     storage: "Storage",
-    storageText: "The physical NAS path is defined by docker-compose volume mapping.",
+    storageText: "Archive path inside the container. The server path is defined in docker-compose.",
     hostPath: "Server path",
     hostPathUnknown: "Defined in docker-compose",
     validate: "Test",
-    storageOk: "Storage is available.",
-    storageFail: "Storage is unavailable",
-    writeDenied: "Write access denied",
     recording: "Recording",
     balanced: "Balanced",
     balancedHelp: "Recommended mode. Current mapping: MKV.",
     compatibility: "Maximum compatibility",
-    compatibilityHelp: "Current mapping: MP4. Easier to open in players, but less crash-safe.",
+    compatibilityHelp: "Current mapping: MP4. Easier to open in players.",
     reliability: "Maximum reliability",
-    reliabilityHelp: "Current mapping: MKV. More resilient to process or server interruptions.",
+    reliabilityHelp: "Current mapping: MKV. More resilient to recording interruptions.",
     mapsTo: "Format",
     hardware: "Hardware Acceleration",
     hardwareAvailable: "Hardware acceleration is available.",
@@ -139,67 +202,91 @@ const TEXT = {
     rescan: "Test",
     failedValidation: "Failed validation",
     notDetected: "Not detected on this server",
-    users: "Users and roles",
-    usersText: "Manage users, roles and system access.",
     security: "Security",
     securityText: "Logging journal, diagnostic logs collection and bug report.",
+    logJournal: "Logging journal",
     open: "Open",
-    close: "Close",
+    createDiagnosticArchive: "Create diagnostic archive",
+    bugReport: "Bug report",
+    bugReportPlaceholder: "Describe the problem in simple language: what happened, where you clicked, what you expected.",
+    sendBugReport: "Send report",
+    journalEmpty: "Event journal will appear here after backend logging is connected.",
+    reportSendingPending: "Report sending will be connected after backend sending is implemented.",
+    diagnosticArchiveReady: "Diagnostic archive created and attached.",
+    resetPasswordLabel: "Admin password reset",
+    users: "Users / Roles",
+    usersText: "Manage users, roles and system access.",
+    usersDenied: "Insufficient permissions to manage users.",
+    currentUser: "Current user",
     session: "Session",
-    sessionText: 'Session is kept until 24:00 when "Stay signed in" is enabled.',
-    login: "Login",
+    sessionPolicy: "Session is kept until 24:00 when \"Stay signed in\" is enabled.",
+    addUser: "Add user",
+    editUser: "Edit user",
+    username: "Username",
+    displayName: "Name",
+    password: "Password",
+    passwordOptional: "Password (change only if needed)",
     role: "Role",
     status: "Status",
-    management: "Management",
     active: "Active",
-    inactive: "Inactive",
+    inactive: "Disabled",
+    actions: "Management",
     edit: "Edit",
-    enable: "Enable",
-    disable: "Disable",
-    addUser: "Add user",
+    deactivate: "Disable",
+    activate: "Enable",
     create: "Create",
-    creating: "Creating...",
-    saveUser: "Save",
-    savingUser: "Saving...",
-    displayName: "Display name",
-    password: "Password",
-    newPassword: "New password",
-    adminResetPassword: "New password (admin reset)",
-    currentPassword: "Current password",
-    currentPasswordRequired: "Current password is required to change your own password.",
-    userCreated: "User created",
-    userUpdated: "User updated",
-    duplicateUsername: "Username already exists.",
-    credentialsChanged: "Login credentials changed. Please sign in again.",
-    loggingJournal: "Logging journal",
-    journalEmpty: "Event journal will appear here after backend logging is connected.",
-    bugReport: "Bug report",
-    createArchive: "Create diagnostic archive",
-    archiveBusy: "Creating archive...",
-    archiveAttached: "Diagnostic archive created, attached and downloaded.",
-    describeProblem: "Describe the problem in simple language: what happened, where you clicked, what you expected.",
-    sendReport: "Send report",
-    sendPending: "Report sending will be connected after backend sending is implemented.",
-    notAuthenticated: "Please sign in again.",
-    forbidden: "Insufficient permissions.",
-    network: "Server is unavailable.",
+    update: "Save",
+    close: "Close",
+    usernameRequired: "Enter username.",
+    passwordRequired: "Enter a password with at least 8 characters.",
+    currentPasswordRequired: "Enter current password.",
+    roleRequired: "Select a role.",
+    roleOwner: "Owner",
+    roleAdmin: "Administrator",
+    roleOperator: "Operator",
+    roleViewer: "Viewer",
+    toasts: {
+      saveOkTitle: "Settings saved",
+      saveOkText: "Changes applied successfully",
+      storageOkTitle: "Storage available",
+      storageOkText: "Free: {free}",
+      hardwareOkTitle: "Hardware capabilities checked",
+      hardwareOkText: "Available: {modes}",
+      hardwareFallbackTitle: "Mode changed",
+      hardwareFallbackText: "Selected mode is unavailable. Automatic selection is enabled.",
+      authTitle: "Sign in required",
+      authText: "Session expired or token is invalid",
+      forbiddenTitle: "Insufficient permissions",
+      forbiddenText: "Current user cannot manage settings",
+      networkTitle: "Server unavailable",
+      networkText: "Check connection or service status",
+      storageFailTitle: "Storage unavailable",
+      hardwareFailTitle: "Hardware capability check failed",
+      hardwareFailText: "Try checking again later",
+      unavailableTitle: "Mode unavailable",
+      userCreatedTitle: "User created",
+      userUpdatedTitle: "User updated",
+      userDisabledTitle: "User disabled",
+      userEnabledTitle: "User enabled",
+      usersFailTitle: "Users unavailable",
+      usersFailText: "User action failed",
+      logsTitle: "Log archive prepared",
+    },
+    tooltips: {
+      timezone: "Used for time display, recording timestamps, and chronology.",
+      storage: "Folder inside the container. The real server path is defined in docker-compose.",
+      recording: "Defines recording format and behavior.",
+      hardware: "Uses server video acceleration for video processing.",
+      auto: "The system selects the best available acceleration.",
+      qsv: "Hardware acceleration through Intel integrated graphics.",
+      vaapi: "Hardware acceleration for Linux systems.",
+      nvenc: "Hardware acceleration through NVIDIA GPUs.",
+      amf: "Hardware acceleration through AMD GPUs.",
+      cpu: "Video processing without acceleration, using CPU only.",
+      security: "System logging and bug reports.",
+      users: "Manage user access to the system.",
+    },
   },
-};
-
-const ROLE_LABELS = {
-  owner: { ru: "Владелец", en: "Owner" },
-  admin: { ru: "Администратор", en: "Administrator" },
-  operator: { ru: "Оператор", en: "Operator" },
-  viewer: { ru: "Наблюдатель", en: "Viewer" },
-};
-
-const BACKEND_LABELS = {
-  auto: { ru: "Автоматический режим", en: "Automatic mode" },
-  qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV" },
-  vaapi: { ru: "VAAPI", en: "VAAPI" },
-  nvenc: { ru: "NVIDIA NVENC/NVDEC", en: "NVIDIA NVENC/NVDEC" },
-  amf: { ru: "AMD AMF", en: "AMD AMF" },
-  cpu: { ru: "Резервный режим CPU", en: "CPU fallback" },
 };
 
 function languageOf(settings) {
@@ -207,17 +294,47 @@ function languageOf(settings) {
 }
 
 function backendLabel(value, lang) {
-  return BACKEND_LABELS[value || "auto"]?.[lang] || value || "auto";
+  const key = value || "auto";
+  return BACKEND_LABELS[key]?.[lang] || key;
 }
 
-function roleLabel(role, lang) {
-  return ROLE_LABELS[role]?.[lang] || role;
+function roleLabel(role, t) {
+  if (!role) return "-";
+  if (role === "owner") return t.roleOwner;
+  if (role === "admin") return t.roleAdmin;
+  if (role === "operator") return t.roleOperator;
+  return t.roleViewer;
+}
+
+function settingsDraftFromApi(data) {
+  return {
+    timezone: data?.timezone || "UTC",
+    language: data?.language === "en" ? "en" : "ru",
+    storage_path: data?.storage_path || "",
+    storage_host_path: data?.storage_host_path || "",
+    recordingProfile: profileFromFormat(data?.recording_format),
+    hardware_preferred_backend: data?.hardware_preferred_backend || null,
+  };
+}
+
+function payloadFromDraft(draft) {
+  return {
+    timezone: timezoneValueForSettings(draft.timezone),
+    language: draft.language,
+    storage_path: draft.storage_path,
+    recording_format: recordingFormatForProfile(draft.recordingProfile),
+    hardware_preferred_backend: draft.hardware_preferred_backend || null,
+  };
+}
+
+function samePayload(left, right) {
+  if (!left || !right) return true;
+  return JSON.stringify(payloadFromDraft(left)) === JSON.stringify(payloadFromDraft(right));
 }
 
 function formatBytes(value) {
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes < 0) return "-";
-  if (bytes < 1024 ** 3) return `${Math.round(bytes / 1024 / 1024)} MB`;
   if (bytes < 1024 ** 4) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
   return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
 }
@@ -231,27 +348,52 @@ function parseErrorDetail(message) {
   }
 }
 
-function humanError(err, lang) {
-  const t = TEXT[lang] || TEXT.ru;
-  const message = err?.message || "";
+function humanErrorText(message, fallback) {
+  if (!message) return fallback;
   const detail = parseErrorDetail(message);
-  const storage = detail?.storage || detail?.detail?.storage;
-  const raw = typeof detail?.detail === "string" ? detail.detail : message;
-
-  if (storage?.error) return `${t.storageFail}: ${storage.error}`;
-  if (raw.includes("Username already exists")) return t.duplicateUsername;
-  if (raw.includes("Current password is required")) return t.currentPasswordRequired;
-  if (raw.includes("401") || raw.includes("Not authenticated")) return t.notAuthenticated;
-  if (raw.includes("403") || raw.includes("Forbidden") || raw.includes("Insufficient permissions")) return t.forbidden;
-  if (raw.includes("Failed to fetch") || raw.includes("NetworkError")) return t.network;
-  return raw || t.network;
+  const value = detail?.detail ?? detail;
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => item?.msg || item?.message || "")
+      .filter(Boolean)
+      .join("; ") || fallback;
+  }
+  if (value && typeof value === "object") {
+    if (typeof value.error === "string") return value.error;
+    if (typeof value.message === "string") return value.message;
+  }
+  if (!message.startsWith("{")) return message;
+  return fallback;
 }
 
-function storageMessage(result, lang) {
-  if (!result) return null;
+function normalizedError(err, lang, context = "generic") {
   const t = TEXT[lang] || TEXT.ru;
-  if (!result.ok) return `${t.storageFail}: ${result.error || t.writeDenied}`;
-  return t.storageOk;
+  const message = String(err?.message || "");
+  const detail = parseErrorDetail(message);
+  const storage = detail?.storage || detail?.detail?.storage;
+  const lower = message.toLowerCase();
+
+  if (lower.includes("not authenticated") || lower.includes("invalid token") || message.includes("401")) {
+    return { variant: "error", title: t.toasts.authTitle, text: t.toasts.authText };
+  }
+  if (message.includes("403") || lower.includes("forbidden")) {
+    return { variant: "error", title: t.toasts.forbiddenTitle, text: t.toasts.forbiddenText };
+  }
+  if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("server is unavailable")) {
+    return { variant: "error", title: t.toasts.networkTitle, text: t.toasts.networkText };
+  }
+  if (storage?.error || context === "storage") {
+    const reason = storage?.error || detail?.detail || (message && !message.startsWith("{") ? message : t.toasts.networkText);
+    return { variant: "error", title: t.toasts.storageFailTitle, text: reason };
+  }
+  if (context === "hardware") {
+    return { variant: "error", title: t.toasts.hardwareFailTitle, text: t.toasts.hardwareFailText };
+  }
+  if (context === "users") {
+    return { variant: "error", title: t.toasts.usersFailTitle, text: humanErrorText(message, t.toasts.usersFailText) };
+  }
+  return { variant: "error", title: t.toasts.networkTitle, text: humanErrorText(message, t.toasts.networkText) };
 }
 
 function recordingFormatForProfile(profile) {
@@ -292,39 +434,55 @@ function hardwareOptionState(backend, hardware, t) {
   return { selectable: false, reason: t.notDetected };
 }
 
-const blankUserForm = {
-  username: "",
-  full_name: "",
-  password: "",
-  current_password: "",
-  role: "viewer",
-  is_active: true,
-};
+function InfoTip({ text }) {
+  if (!text) return null;
+  return (
+    <span className="settingsInfoTip" tabIndex="0" aria-label={text}>
+      i
+      <span className="settingsInfoBubble" role="tooltip">{text}</span>
+    </span>
+  );
+}
+
+function userCanBeManaged(currentUser, user) {
+  if (!currentUser || !user) return false;
+  if (currentUser.role === "owner") return true;
+  if (currentUser.role !== "admin") return false;
+  return user.role !== "owner" && user.role !== "admin";
+}
+
+function roleOptionsFor(currentUser) {
+  if (currentUser?.role === "owner") return ["admin", "operator", "viewer"];
+  if (currentUser?.role === "admin") return ["operator", "viewer"];
+  return [];
+}
 
 export default function SettingsPage() {
-  const router = useRouter();
-  const [settings, setSettings] = useState(null);
+  const [draft, setDraft] = useState(null);
+  const [savedDraft, setSavedDraft] = useState(null);
   const [hardware, setHardware] = useState(null);
-  const [recordingProfile, setRecordingProfile] = useState("balanced");
   const [toast, setToast] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const [usersOpen, setUsersOpen] = useState(false);
-  const [securityOpen, setSecurityOpen] = useState(false);
-  const [users, setUsers] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [storageChecking, setStorageChecking] = useState(false);
+  const [hardwareChecking, setHardwareChecking] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
+  const [users, setUsers] = useState([]);
   const [usersLoading, setUsersLoading] = useState(false);
-  const [userSaving, setUserSaving] = useState(false);
-  const [userError, setUserError] = useState("");
-  const [userMode, setUserMode] = useState(null);
-  const [userForm, setUserForm] = useState(blankUserForm);
-  const [editingUser, setEditingUser] = useState(null);
-  const [archiveBusy, setArchiveBusy] = useState(false);
-  const [attachedArchive, setAttachedArchive] = useState(null);
-  const [reportText, setReportText] = useState("");
+  const [userBusy, setUserBusy] = useState(false);
+  const [userModal, setUserModal] = useState(null);
+  const [securityModalOpen, setSecurityModalOpen] = useState(false);
+  const [securityBusy, setSecurityBusy] = useState(false);
+  const [bugReportText, setBugReportText] = useState("");
+  const [diagnosticArchiveReady, setDiagnosticArchiveReady] = useState(false);
   const toastTimerRef = useRef(null);
-  const lang = languageOf(settings);
+  const lang = languageOf(draft || savedDraft);
   const t = TEXT[lang] || TEXT.ru;
-  const languageIcon = lang === "en" ? "/icons/nav/language-icon_ENG.png" : "/icons/nav/language-icon_RU.png";
+  const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
+  const anyBusy = saving || storageChecking || hardwareChecking;
+  const canManageUsers = Boolean(currentUser?.permissions?.includes("admin_access"));
+  const languageIcon = lang === "en"
+    ? "/icons/nav/language-icon_ENG.png"
+    : "/icons/nav/language-icon_RU.png";
 
   useEffect(() => {
     load();
@@ -338,243 +496,131 @@ export default function SettingsPage() {
     };
   }, []);
 
-  function showToast(title, type = "ok", subtitle = "") {
-    setToast({ title, subtitle, type });
+  function showToast(nextToast) {
+    setToast(nextToast);
     window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 3200);
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
   }
 
   async function load() {
     try {
-      const [settingsData, hardwareData] = await Promise.all([
+      const [settingsData, hardwareData, meData] = await Promise.all([
         apiFetch("/settings"),
         apiFetch("/hardware/capabilities"),
+        apiFetch("/users/me"),
       ]);
-      setSettings(settingsData);
-      setRecordingProfile(profileFromFormat(settingsData?.recording_format));
+      const nextDraft = settingsDraftFromApi(settingsData);
+      setDraft(nextDraft);
+      setSavedDraft(nextDraft);
       setHardware(hardwareData);
+      setCurrentUser(meData);
+      if (meData?.permissions?.includes("admin_access")) {
+        await loadUsers();
+      }
     } catch (err) {
-      showToast(humanError(err, lang), "error");
+      showToast(normalizedError(err, lang));
     }
-  }
-
-  function patch(key, value) {
-    setSettings((current) => ({ ...current, [key]: value }));
-  }
-
-  async function save() {
-    setBusy(true);
-    try {
-      const updated = await apiFetch("/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          timezone: timezoneValueForSettings(settings.timezone),
-          language: settings.language,
-          storage_path: settings.storage_path,
-          recording_format: recordingFormatForProfile(recordingProfile),
-          hardware_preferred_backend: settings.hardware_preferred_backend || null,
-        }),
-      });
-      setSettings(updated);
-      window.dispatchEvent(new CustomEvent("km-vms-language", { detail: updated.language }));
-      showToast(t.saved, "ok", t.changesApplied);
-    } catch (err) {
-      showToast(humanError(err, lang), "error");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function validateStorage() {
-    try {
-      const result = await apiFetch("/settings/storage/validate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storage_path: settings.storage_path, create: true }),
-      });
-      showToast(
-        result.ok ? t.storageValidated.replace("{free}", formatBytes(result.free_bytes)) : storageMessage(result, lang),
-        result.ok ? "ok" : "error"
-      );
-    } catch (err) {
-      showToast(humanError(err, lang), "error");
-    }
-  }
-
-  async function rescanHardware() {
-    try {
-      setHardware(await apiFetch("/hardware/rescan", { method: "POST" }));
-      showToast(t.hardwareChecked);
-    } catch (err) {
-      showToast(humanError(err, lang), "error");
-    }
-  }
-
-  async function openUsersModal() {
-    setUsersOpen(true);
-    await loadUsers();
   }
 
   async function loadUsers() {
     setUsersLoading(true);
     try {
-      const [me, list] = await Promise.all([apiFetch("/auth/me"), apiFetch("/users")]);
-      setCurrentUser(me);
-      setUsers(list);
+      setUsers(await apiFetch("/users"));
     } catch (err) {
-      showToast(humanError(err, lang), "error");
+      showToast(normalizedError(err, lang, "users"));
     } finally {
       setUsersLoading(false);
     }
   }
 
-  function assignableRoles(target = null) {
-    if (currentUser?.role === "owner") {
-      if (target?.id === currentUser.id) return ["owner"];
-      return ["admin", "operator", "viewer"];
-    }
-    if (currentUser?.role === "admin") return ["operator", "viewer"];
-    return [];
+  function patch(key, value) {
+    setDraft((current) => ({ ...current, [key]: value }));
   }
 
-  function canEditUser(user) {
-    if (!currentUser) return false;
-    if (currentUser.role === "owner") return true;
-    return currentUser.role === "admin" && user.role !== "owner";
+  function cancelChanges() {
+    if (!savedDraft) return;
+    setDraft(savedDraft);
+    window.dispatchEvent(new CustomEvent("km-vms-language", { detail: savedDraft.language }));
   }
 
-  function canToggleUser(user) {
-    if (!canEditUser(user)) return false;
-    if (user.id === currentUser?.id) return false;
-    if (user.role === "owner") return false;
-    return true;
-  }
-
-  function startCreateUser() {
-    const roles = assignableRoles();
-    setUserMode("create");
-    setEditingUser(null);
-    setUserError("");
-    setUserForm({ ...blankUserForm, role: roles[0] || "viewer" });
-  }
-
-  function startEditUser(user) {
-    setUserMode("edit");
-    setEditingUser(user);
-    setUserError("");
-    setUserForm({
-      username: user.username,
-      full_name: user.full_name || "",
-      password: "",
-      current_password: "",
-      role: user.role,
-      is_active: user.is_active,
-    });
-  }
-
-  async function submitUserForm(event) {
-    event.preventDefault();
-    setUserSaving(true);
-    setUserError("");
+  async function save() {
+    if (!draft || !dirty || saving) return;
+    setSaving(true);
     try {
-      if (userMode === "create") {
-        await apiFetch("/users", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            username: userForm.username,
-            full_name: userForm.full_name,
-            password: userForm.password,
-            role: userForm.role,
-            is_active: userForm.is_active,
-          }),
-        });
-        setUserMode(null);
-        await loadUsers();
-        showToast(t.userCreated);
-      } else if (editingUser) {
-        const payload = {
-          username: userForm.username,
-          full_name: userForm.full_name,
-          is_active: userForm.is_active,
-        };
-        if (userForm.role !== editingUser.role) payload.role = userForm.role;
-        if (userForm.password) {
-          payload.password = userForm.password;
-          if (editingUser.id === currentUser?.id) payload.current_password = userForm.current_password;
-        }
-        const result = await apiFetch(`/users/${editingUser.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-        if (result?.own_credentials_changed) {
-          showToast(t.credentialsChanged);
-          clearAuthToken();
-          window.setTimeout(() => router.replace("/login"), 500);
-          return;
-        }
-        setUserMode(null);
-        await loadUsers();
-        showToast(t.userUpdated);
-      }
-    } catch (err) {
-      const message = humanError(err, lang);
-      setUserError(message);
-      showToast(message, "error");
-    } finally {
-      setUserSaving(false);
-    }
-  }
-
-  async function toggleUser(user) {
-    try {
-      await apiFetch(`/users/${user.id}`, {
+      const updated = await apiFetch("/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_active: !user.is_active }),
+        body: JSON.stringify(payloadFromDraft(draft)),
       });
-      await loadUsers();
-      showToast(t.userUpdated);
+      const nextDraft = settingsDraftFromApi(updated);
+      setDraft(nextDraft);
+      setSavedDraft(nextDraft);
+      window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextDraft.language }));
+      showToast({ variant: "success", title: t.toasts.saveOkTitle, text: t.toasts.saveOkText });
     } catch (err) {
-      showToast(humanError(err, lang), "error");
-    }
-  }
-
-  async function createDiagnosticArchive() {
-    setArchiveBusy(true);
-    setAttachedArchive(null);
-    try {
-      const { blob, filename } = await apiFetchBlob("/diagnostics/archive", { method: "POST" });
-      const name = filename || "km-vms-diagnostics.zip";
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = name;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-      setAttachedArchive({ filename: name, size: blob.size });
-      showToast(t.archiveAttached);
-    } catch (err) {
-      showToast(humanError(err, lang), "error");
+      showToast(normalizedError(err, lang));
     } finally {
-      setArchiveBusy(false);
+      setSaving(false);
     }
   }
 
-  function sendReport() {
-    showToast(t.sendPending, "error");
+  async function validateStorage() {
+    if (!draft || storageChecking) return;
+    setStorageChecking(true);
+    try {
+      const result = await apiFetch("/settings/storage/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storage_path: draft.storage_path, create: true }),
+      });
+      if (!result.ok) {
+        showToast({ variant: "error", title: t.toasts.storageFailTitle, text: result.error || t.writeDenied });
+      } else {
+        showToast({
+          variant: "success",
+          title: t.toasts.storageOkTitle,
+          text: t.toasts.storageOkText.replace("{free}", formatBytes(result.free_bytes)),
+        });
+      }
+    } catch (err) {
+      showToast(normalizedError(err, lang, "storage"));
+    } finally {
+      setStorageChecking(false);
+    }
   }
 
-  const selectedHardware = settings?.hardware_preferred_backend || "auto";
+  async function rescanHardware() {
+    if (hardwareChecking) return;
+    setHardwareChecking(true);
+    try {
+      const nextHardware = await apiFetch("/hardware/rescan", { method: "POST" });
+      setHardware(nextHardware);
+      const selected = draft?.hardware_preferred_backend;
+      if (selected && !["auto", "cpu"].includes(selected) && !(nextHardware?.available_backends || []).includes(selected)) {
+        patch("hardware_preferred_backend", null);
+        showToast({ variant: "warning", title: t.toasts.hardwareFallbackTitle, text: t.toasts.hardwareFallbackText });
+      } else {
+        const available = (nextHardware?.available_backends || []).map((backend) => backendLabel(backend, lang)).join(", ") || backendLabel("cpu", lang);
+        showToast({
+          variant: "success",
+          title: t.toasts.hardwareOkTitle,
+          text: t.toasts.hardwareOkText.replace("{modes}", available),
+        });
+      }
+    } catch (err) {
+      showToast(normalizedError(err, lang, "hardware"));
+    } finally {
+      setHardwareChecking(false);
+    }
+  }
+
+  const selectedHardware = draft?.hardware_preferred_backend || "auto";
   const profileHelp = {
     balanced: t.balancedHelp,
     compatibility: t.compatibilityHelp,
     reliability: t.reliabilityHelp,
-  }[recordingProfile];
+  }[draft?.recordingProfile || "balanced"];
+
   const hardwareSummary = useMemo(() => (
     HARDWARE_OPTIONS.map((backend) => ({
       backend,
@@ -586,7 +632,7 @@ export default function SettingsPage() {
     const value = event.target.value || "auto";
     const state = hardwareOptionState(value, hardware, t);
     if (!state.selectable) {
-      showToast(t.unavailableMode, "error");
+      showToast({ variant: "warning", title: t.toasts.unavailableTitle, text: t.unavailableMode });
       return;
     }
     patch("hardware_preferred_backend", value === "auto" ? null : value);
@@ -598,277 +644,461 @@ export default function SettingsPage() {
     window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextLanguage }));
   }
 
-  const userFormRoles = assignableRoles(editingUser);
-  const currentUserSummary = currentUser
-    ? `${currentUser.username} / ${currentUser.full_name || "-"} / ${roleLabel(currentUser.role, lang)}`
-    : "-";
+  function openCreateUser() {
+    const options = roleOptionsFor(currentUser);
+    setUserModal({
+      mode: "create",
+      id: null,
+      username: "",
+      display_name: "",
+      password: "",
+      current_password: "",
+      role: options[0] || "viewer",
+      is_active: true,
+      error: "",
+    });
+  }
+
+  function openEditUser(user) {
+    setUserModal({
+      mode: "edit",
+      id: user.id,
+      username: user.username,
+      display_name: user.display_name || "",
+      password: "",
+      current_password: "",
+      role: user.role,
+      is_active: Boolean(user.is_active),
+      is_owner: user.role === "owner",
+      error: "",
+    });
+  }
+
+  function patchUserModal(key, value) {
+    setUserModal((current) => ({ ...current, [key]: value, error: "" }));
+  }
+
+  function patchBugReportText(value) {
+    setBugReportText(value);
+    setDiagnosticArchiveReady(false);
+  }
+
+  async function submitUserModal(event) {
+    event.preventDefault();
+    if (!userModal || userBusy) return;
+    if (!userModal.username.trim()) {
+      patchUserModal("error", t.usernameRequired);
+      return;
+    }
+    if (userModal.mode === "create" && userModal.password.length < 8) {
+      patchUserModal("error", t.passwordRequired);
+      return;
+    }
+    const availableRoles = userModal.mode === "edit" && userModal.id === currentUser?.id
+      ? [currentUser.role]
+      : userModal.mode === "edit" && userModal.is_owner
+      ? ["owner"]
+      : roleOptionsFor(currentUser);
+    if (!availableRoles.includes(userModal.role)) {
+      patchUserModal("error", t.roleRequired);
+      return;
+    }
+    if (userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password && !userModal.current_password) {
+      patchUserModal("error", t.currentPasswordRequired || t.passwordRequired);
+      return;
+    }
+
+    setUserBusy(true);
+    try {
+      const body = {
+        username: userModal.username.trim(),
+        display_name: userModal.display_name.trim(),
+        role: userModal.role,
+        is_active: Boolean(userModal.is_active),
+      };
+      if (userModal.password) body.password = userModal.password;
+      if (userModal.current_password) body.current_password = userModal.current_password;
+
+      if (userModal.mode === "create") {
+        await apiFetch("/users", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        showToast({ variant: "success", title: t.toasts.userCreatedTitle, text: userModal.username.trim() });
+      } else {
+        await apiFetch(`/users/${userModal.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        showToast({ variant: "success", title: t.toasts.userUpdatedTitle, text: userModal.username.trim() });
+      }
+      setUserModal(null);
+      await loadUsers();
+    } catch (err) {
+      const errorToast = normalizedError(err, lang, "users");
+      patchUserModal("error", errorToast.text || errorToast.title);
+      showToast(errorToast);
+    } finally {
+      setUserBusy(false);
+    }
+  }
+
+  async function toggleUserActive(user) {
+    if (userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id) return;
+    setUserBusy(true);
+    try {
+      await apiFetch(`/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: !user.is_active }),
+      });
+      showToast({
+        variant: "success",
+        title: user.is_active ? t.toasts.userDisabledTitle : t.toasts.userEnabledTitle,
+        text: user.username,
+      });
+      await loadUsers();
+    } catch (err) {
+      showToast(normalizedError(err, lang, "users"));
+    } finally {
+      setUserBusy(false);
+    }
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename || "km-vms-logs.zip";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function downloadLogArchive() {
+    if (securityBusy) return;
+    setSecurityBusy(true);
+    try {
+      const { blob, filename } = await apiFetchBlob("/settings/logs/archive");
+      downloadBlob(blob, filename);
+      setDiagnosticArchiveReady(true);
+      showToast({ variant: "success", title: t.toasts.logsTitle });
+    } catch (err) {
+      showToast(normalizedError(err, lang));
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+
+  async function submitBugReport() {
+    showToast({ variant: "info", title: t.bugReport, text: t.reportSendingPending });
+  }
 
   return (
     <Layout>
       <div className="settingsPage">
         {toast ? (
-          <div className={`settingsToast ${toast.type}`}>
+          <div className={`settingsToast ${toast.variant || "info"}`}>
             <strong>{toast.title}</strong>
-            {toast.subtitle ? <span>{toast.subtitle}</span> : null}
+            {toast.text ? <span>{toast.text}</span> : null}
           </div>
         ) : null}
 
-        <div className="pageHeader settingsHeader">
-          <div className="settingsTitleBlock">
-            <img src="/icons/nav/settings-icon.png" alt="" />
-            <div>
-              <h1 className="pageTitle">{t.title}</h1>
-              <div className="pageSubtitle">{t.subtitle}</div>
+        <div className="settingsWorkspace">
+          <div className="pageHeader settingsHeader">
+            <div className="settingsTitleBlock">
+              <img src="/icons/nav/settings-icon.png" alt="" />
+              <div>
+                <h1 className="pageTitle">{t.title}</h1>
+                <div className="pageSubtitle">{t.subtitle}</div>
+              </div>
+            </div>
+
+            <div className="settingsHeaderActions">
+              {dirty ? <span className="settingsDirtyNote">{t.dirty}</span> : null}
+              <button className="button secondary small settingsCancelButton" onClick={cancelChanges} disabled={!dirty || anyBusy}>
+                {t.cancel}
+              </button>
+              <button className="button small" onClick={save} disabled={!draft || !dirty || saving}>
+                {saving ? t.saving : t.save}
+              </button>
             </div>
           </div>
-          <button className="button small" onClick={save} disabled={!settings || busy}>
-            {busy ? t.saving : t.save}
-          </button>
-        </div>
 
-        {!settings ? null : (
-          <div className="settingsReferenceLayout">
-            <section className="settingsPanel">
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src={languageIcon} alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.language}</strong>
-                  <span>{t.system}</span>
-                </div>
-                <div className="settingsRowControl">
-                  <select className="select settingsSelect" value={settings.language} onChange={handleSettingsLanguageChange}>
-                    <option value="ru">{t.russian}</option>
-                    <option value="en">{t.english}</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/timezone-icon.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.timezone}</strong>
-                  <span>{t.timezoneHelp}</span>
-                </div>
-                <div className="settingsRowControl">
-                  <select className="select settingsSelect timezoneSelect" value={timezoneValueForSettings(settings.timezone)} onChange={(event) => patch("timezone", event.target.value)}>
-                    {UTC_TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
-                  </select>
-                </div>
-              </div>
-
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/storage-icon.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.storage}</strong>
-                  <span>{t.storageText}</span>
-                  <small>{t.hostPath}: {settings.storage_host_path || t.hostPathUnknown}</small>
-                </div>
-                <div className="settingsRowControl stacked">
-                  <input className="input settingsInput" value={settings.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} />
-                </div>
-                <div className="settingsRowAction">
-                  <button className="button secondary small" onClick={validateStorage}>{t.validate}</button>
-                </div>
-              </div>
-
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/records.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.recording}</strong>
-                  <span>{profileHelp} {t.mapsTo}: {recordingFormatForProfile(recordingProfile).toUpperCase()}.</span>
-                </div>
-                <div className="settingsRowControl">
-                  <select className="select settingsSelect" value={recordingProfile} onChange={(event) => setRecordingProfile(event.target.value)}>
-                    <option value="balanced">{t.balanced}</option>
-                    <option value="compatibility">{t.compatibility}</option>
-                    <option value="reliability">{t.reliability}</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/hardware-icon.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.hardware}</strong>
-                  <span>{hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.</span>
-                  <div className="settingsHardwareOptions">
-                    {hardwareSummary.map(({ backend, selectable, reason }) => (
-                      <span key={backend} className={`settingsBadge ${selectable ? "ok" : "disabled"}`} title={reason || ""}>
-                        {backendLabel(backend, lang)}
-                      </span>
-                    ))}
+          {!draft ? null : (
+            <div className="settingsReferenceLayout">
+              <section className="settingsPanel">
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src={languageIcon} alt="" /></div>
+                  <div className="settingsRowText">
+                    <label htmlFor="settings-language">{t.language}</label>
+                    <span>{t.i18nNote}</span>
+                  </div>
+                  <div className="settingsRowControl">
+                    <select id="settings-language" className="select settingsSelect" value={draft.language} onChange={handleSettingsLanguageChange} disabled={saving}>
+                      <option value="ru">{t.russian}</option>
+                      <option value="en">{t.english}</option>
+                    </select>
                   </div>
                 </div>
-                <div className="settingsRowControl">
-                  <select className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange}>
-                    {hardwareSummary.map(({ backend, selectable, reason }) => (
-                      <option key={backend} value={backend} disabled={!selectable} title={reason || backendLabel(backend, lang)}>
-                        {backendLabel(backend, lang)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="settingsRowAction">
-                  <button className="button secondary small" onClick={rescanHardware}>{t.rescan}</button>
-                </div>
-              </div>
 
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/users-icon.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.users}</strong>
-                  <span>{t.usersText}</span>
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/icons/nav/timezone-icon.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label htmlFor="settings-timezone">{t.timezone}<InfoTip text={t.tooltips.timezone} /></label>
+                    <span>{t.timezoneHelp}</span>
+                  </div>
+                  <div className="settingsRowControl">
+                    <select id="settings-timezone" className="select settingsSelect timezoneSelect" value={timezoneValueForSettings(draft.timezone)} onChange={(event) => patch("timezone", event.target.value)} disabled={saving}>
+                      {UTC_TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
+                    </select>
+                  </div>
                 </div>
-                <div className="settingsRowControl" />
-                <div className="settingsRowAction">
-                  <button className="button secondary small" onClick={openUsersModal}>{t.open}</button>
-                </div>
-              </div>
 
-              <div className="settingsRow">
-                <div className="settingsRowIcon"><img src="/icons/nav/security-icon.png" alt="" /></div>
-                <div className="settingsRowText">
-                  <strong>{t.security}</strong>
-                  <span>{t.securityText}</span>
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/icons/nav/storage-icon.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label htmlFor="settings-storage">{t.storage}<InfoTip text={t.tooltips.storage} /></label>
+                    <span>{t.storageText}</span>
+                    <small>{t.hostPath}: {draft.storage_host_path || t.hostPathUnknown}</small>
+                  </div>
+                  <div className="settingsRowControl">
+                    <input id="settings-storage" className="input settingsInput" value={draft.storage_path || ""} onChange={(event) => patch("storage_path", event.target.value)} disabled={saving || storageChecking} />
+                    <button className="button secondary small settingsTestButton" onClick={validateStorage} disabled={storageChecking || saving}>
+                      {storageChecking ? t.checking : t.validate}
+                    </button>
+                  </div>
                 </div>
-                <div className="settingsRowControl" />
-                <div className="settingsRowAction">
-                  <button className="button secondary small" onClick={() => setSecurityOpen(true)}>{t.open}</button>
-                </div>
-              </div>
-            </section>
-          </div>
-        )}
 
-        {usersOpen ? (
-          <div className="modalBackdrop">
-            <div className="modal modalWide settingsModal">
-              <div className="modalHeader">
-                <h2>{t.users}</h2>
-                <button className="iconCloseButton" onClick={() => setUsersOpen(false)} aria-label={t.close}>×</button>
-              </div>
-              <div className="settingsModalGrid">
-                <div className="settingsInfoTile">
-                  <strong>{currentUser?.username || "-"}</strong>
-                  <span>{currentUserSummary}</span>
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/icons/nav/records.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label htmlFor="settings-recording">{t.recording}<InfoTip text={t.tooltips.recording} /></label>
+                    <span>{profileHelp} {t.mapsTo}: {recordingFormatForProfile(draft.recordingProfile).toUpperCase()}.</span>
+                  </div>
+                  <div className="settingsRowControl">
+                    <select id="settings-recording" className="select settingsSelect" value={draft.recordingProfile} onChange={(event) => patch("recordingProfile", event.target.value)} disabled={saving}>
+                      <option value="balanced">{t.balanced}</option>
+                      <option value="reliability">{t.reliability}</option>
+                      <option value="compatibility">{t.compatibility}</option>
+                    </select>
+                  </div>
                 </div>
-                <div className="settingsInfoTile">
-                  <strong>{t.session}</strong>
-                  <span>24:00</span>
-                  <small>{t.sessionText}</small>
-                </div>
-              </div>
-              <div className="settingsModalToolbar">
-                <button className="button small" onClick={startCreateUser} disabled={!assignableRoles().length}>{t.addUser}</button>
-              </div>
-              {usersLoading ? <div className="settingsEmptyState">{t.saving}</div> : (
-                <div className="settingsTableWrap">
-                  <table className="table settingsUsersTable">
-                    <thead>
-                      <tr>
-                        <th>{t.login}</th>
-                        <th>{t.role}</th>
-                        <th>{t.status}</th>
-                        <th>{t.management}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {users.map((user) => (
-                        <tr key={user.id}>
-                          <td><strong>{user.username}</strong><small>{user.full_name || "-"}</small></td>
-                          <td>{roleLabel(user.role, lang)}</td>
-                          <td><span className={`badge ${user.is_active ? "ok" : "err"}`}>{user.is_active ? t.active : t.inactive}</span></td>
-                          <td>
-                            <div className="settingsUserActions">
-                              <button className="button secondary small" onClick={() => startEditUser(user)} disabled={!canEditUser(user)}>{t.edit}</button>
-                              <button className="button secondary small" onClick={() => toggleUser(user)} disabled={!canToggleUser(user)}>
-                                {user.is_active ? t.disable : t.enable}
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
+
+                <div className="settingsRow settingsRowHardware">
+                  <div className="settingsRowIcon"><img src="/icons/nav/hardware-icon.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label htmlFor="settings-hardware">{t.hardware}<InfoTip text={t.tooltips.hardware} /></label>
+                    <span>{hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.</span>
+                    <div className="settingsHardwareOptions">
+                      {hardwareSummary.map(({ backend, selectable, reason }) => (
+                        <span key={backend} className={`settingsBadge settingsBadge-${backend} ${selectable ? "ok" : "disabled"}`} title={reason || t.tooltips[backend]}>
+                          {backendLabel(backend, lang)}
+                          <InfoTip text={t.tooltips[backend]} />
+                        </span>
                       ))}
-                    </tbody>
-                  </table>
+                    </div>
+                  </div>
+                  <div className="settingsRowControl">
+                    <select id="settings-hardware" className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange} disabled={saving || hardwareChecking}>
+                      {hardwareSummary.map(({ backend, selectable, reason }) => (
+                        <option key={backend} value={backend} disabled={!selectable} title={reason || backendLabel(backend, lang)}>
+                          {backendLabel(backend, lang)}
+                        </option>
+                      ))}
+                    </select>
+                    <button className="button secondary small settingsTestButton" onClick={rescanHardware} disabled={hardwareChecking || saving}>
+                      {hardwareChecking ? t.checking : t.rescan}
+                    </button>
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
-        ) : null}
 
-        {userMode ? (
-          <div className="modalBackdrop">
-            <form className="modal settingsEditModal" onSubmit={submitUserForm}>
-              <div className="modalHeader">
-                <h2>{userMode === "create" ? t.addUser : t.edit}</h2>
-                <button type="button" className="iconCloseButton" onClick={() => setUserMode(null)} aria-label={t.close}>×</button>
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/icons/nav/security-icon.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label>{t.security}<InfoTip text={t.tooltips.security} /></label>
+                    <span>{t.securityText}</span>
+                  </div>
+                  <div className="settingsRowControl settingsRowControlMeta">
+                    <button className="button secondary small settingsUsersAddButton" onClick={() => setSecurityModalOpen(true)}>
+                      {t.open}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/icons/nav/users-icon.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label>{t.users}<InfoTip text={t.tooltips.users} /></label>
+                    <span>{canManageUsers ? t.usersText : t.usersDenied}</span>
+                  </div>
+                  <div className="settingsRowControl settingsRowControlMeta">
+                    <button className="button secondary small settingsUsersAddButton" onClick={openCreateUser} disabled={!canManageUsers || usersLoading || userBusy}>
+                      {t.addUser}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="settingsUsersBlock">
+                  <div className="settingsSecuritySummary">
+                    <div>
+                      <span>{t.currentUser}</span>
+                      <strong>{currentUser?.username || "-"}</strong>
+                      <small>{roleLabel(currentUser?.role, t)}</small>
+                    </div>
+                    <div>
+                      <span>{t.session}</span>
+                      <strong>24:00</strong>
+                      <small>{t.sessionPolicy}</small>
+                    </div>
+                  </div>
+
+                  {canManageUsers ? (
+                    <div className="settingsUsersTableWrap">
+                      <table className="settingsUsersTable">
+                        <thead>
+                          <tr>
+                            <th>{t.username}</th>
+                            <th>{t.role}</th>
+                            <th>{t.status}</th>
+                            <th>{t.actions}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {users.map((user) => (
+                            <tr key={user.id}>
+                              <td>
+                                <strong>{user.username}</strong>
+                                {user.display_name ? <small>{user.display_name}</small> : null}
+                              </td>
+                              <td>{roleLabel(user.role, t)}</td>
+                              <td>
+                                <span className={`settingsUserStatus ${user.is_active ? "active" : "inactive"}`}>
+                                  {user.is_active ? t.active : t.inactive}
+                                </span>
+                              </td>
+                              <td>
+                                <div className="settingsUserActions">
+                                  <button className="button secondary small" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)}>{t.edit}</button>
+                                  <button className="button secondary small" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id}>
+                                    {user.is_active ? t.deactivate : t.activate}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : null}
+                </div>
+              </section>
+            </div>
+          )}
+        </div>
+
+        {userModal ? (
+          <div className="settingsModalOverlay" role="presentation">
+            <form className="settingsUserModal" onSubmit={submitUserModal}>
+              <div className="settingsUserModalHeader">
+                <h2>{userModal.mode === "create" ? t.addUser : t.editUser}</h2>
+                <button type="button" className="settingsModalClose" onClick={() => setUserModal(null)} aria-label={t.close}>×</button>
               </div>
-              <div className="formGrid">
-                <label>
-                  <div className="formLabel">{t.login}</div>
-                  <input className="input" value={userForm.username} onChange={(event) => setUserForm({ ...userForm, username: event.target.value })} required />
+
+              <label className="settingsModalField">
+                <span>{t.username}</span>
+                <input className="input" value={userModal.username} onChange={(event) => patchUserModal("username", event.target.value)} disabled={userBusy} />
+              </label>
+
+              <label className="settingsModalField">
+                <span>{t.displayName}</span>
+                <input className="input" value={userModal.display_name} onChange={(event) => patchUserModal("display_name", event.target.value)} disabled={userBusy} />
+              </label>
+
+              <label className="settingsModalField">
+                <span>{userModal.mode === "create" ? t.password : userModal.id === currentUser?.id ? t.passwordOptional : t.resetPasswordLabel}</span>
+                <input className="input" type="password" value={userModal.password} onChange={(event) => patchUserModal("password", event.target.value)} disabled={userBusy} autoComplete="new-password" />
+              </label>
+
+              {userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password ? (
+                <label className="settingsModalField">
+                  <span>{t.currentPasswordRequired}</span>
+                  <input className="input" type="password" value={userModal.current_password} onChange={(event) => patchUserModal("current_password", event.target.value)} disabled={userBusy} autoComplete="current-password" />
                 </label>
-                <label>
-                  <div className="formLabel">{t.displayName}</div>
-                  <input className="input" value={userForm.full_name} onChange={(event) => setUserForm({ ...userForm, full_name: event.target.value })} />
-                </label>
-                <label>
-                  <div className="formLabel">{t.role}</div>
-                  <select className="select" value={userForm.role} onChange={(event) => setUserForm({ ...userForm, role: event.target.value })} disabled={editingUser?.id === currentUser?.id}>
-                    {(userFormRoles.includes(userForm.role) ? userFormRoles : [userForm.role]).map((role) => (
-                      <option key={role} value={role}>{roleLabel(role, lang)}</option>
+              ) : null}
+
+              <div className="settingsModalGrid">
+                <label className="settingsModalField">
+                  <span>{t.role}</span>
+                  <select className="select" value={userModal.role} onChange={(event) => patchUserModal("role", event.target.value)} disabled={userBusy || userModal.is_owner || userModal.id === currentUser?.id}>
+                    {(userModal.id === currentUser?.id ? [currentUser.role] : userModal.is_owner ? ["owner"] : roleOptionsFor(currentUser)).map((role) => (
+                      <option key={role} value={role}>{roleLabel(role, t)}</option>
                     ))}
                   </select>
                 </label>
-                <label>
-                  <div className="formLabel">{t.status}</div>
-                  <select className="select" value={userForm.is_active ? "1" : "0"} onChange={(event) => setUserForm({ ...userForm, is_active: event.target.value === "1" })} disabled={editingUser?.id === currentUser?.id || editingUser?.role === "owner"}>
-                    <option value="1">{t.active}</option>
-                    <option value="0">{t.inactive}</option>
-                  </select>
-                </label>
-                {editingUser?.id === currentUser?.id ? (
-                  <label>
-                    <div className="formLabel">{t.currentPassword}</div>
-                    <input className="input" type="password" value={userForm.current_password} onChange={(event) => setUserForm({ ...userForm, current_password: event.target.value })} autoComplete="current-password" />
-                  </label>
-                ) : null}
-                <label>
-                  <div className="formLabel">{userMode === "create" ? t.password : editingUser?.id === currentUser?.id ? t.newPassword : t.adminResetPassword}</div>
-                  <input className="input" type="password" value={userForm.password} onChange={(event) => setUserForm({ ...userForm, password: event.target.value })} required={userMode === "create"} autoComplete="new-password" />
+
+                <label className="settingsModalCheck">
+                  <input type="checkbox" checked={userModal.is_active} onChange={(event) => patchUserModal("is_active", event.target.checked)} disabled={userBusy || userModal.id === currentUser?.id} />
+                  <span>{t.active}</span>
                 </label>
               </div>
-              {userError ? <div className="settingsFormError">{userError}</div> : null}
-              <div className="actions">
-                <button type="button" className="button secondary" onClick={() => setUserMode(null)}>{t.close}</button>
-                <button className="button" disabled={userSaving}>{userSaving ? (userMode === "create" ? t.creating : t.savingUser) : (userMode === "create" ? t.create : t.saveUser)}</button>
+
+              {userModal.error ? <div className="settingsModalError">{userModal.error}</div> : null}
+
+              <div className="settingsModalActions">
+                <button type="button" className="button secondary small" onClick={() => setUserModal(null)} disabled={userBusy}>{t.cancel}</button>
+                <button type="submit" className="button small" disabled={userBusy}>{userModal.mode === "create" ? t.create : t.update}</button>
               </div>
             </form>
           </div>
         ) : null}
 
-        {securityOpen ? (
-          <div className="modalBackdrop">
-            <div className="modal modalWide settingsModal">
-              <div className="modalHeader">
+        {securityModalOpen ? (
+          <div className="settingsModalOverlay" role="presentation">
+            <div className="settingsSecurityModal" role="dialog" aria-modal="true" aria-label={t.security}>
+              <div className="settingsUserModalHeader">
                 <h2>{t.security}</h2>
-                <button className="iconCloseButton" onClick={() => { setSecurityOpen(false); setAttachedArchive(null); setReportText(""); }} aria-label={t.close}>×</button>
+                <button type="button" className="settingsModalClose" onClick={() => setSecurityModalOpen(false)} aria-label={t.close}>×</button>
               </div>
-              <section className="settingsSecuritySection">
-                <h3>{t.loggingJournal}</h3>
-                <div className="settingsJournalArea">{t.journalEmpty}</div>
+
+              <section className="settingsSecurityModalSection">
+                <div className="settingsSecurityModalSectionHead">
+                  <h3>{t.logJournal}</h3>
+                </div>
+                <div className="settingsJournalCategories" aria-label={t.logJournal}>
+                  {LOG_EVENT_CATEGORIES.map((category) => (
+                    <span key={category.en} className="settingsJournalCategory">{category[lang] || category.en}</span>
+                  ))}
+                </div>
+                <div className="settingsJournalEmpty">{t.journalEmpty}</div>
               </section>
-              <section className="settingsSecuritySection">
-                <h3>{t.bugReport}</h3>
-                <button className="button secondary" onClick={createDiagnosticArchive} disabled={archiveBusy}>{archiveBusy ? t.archiveBusy : t.createArchive}</button>
-                {attachedArchive ? (
-                  <div className="settingsAttachedArchive">
-                    <strong>{t.archiveAttached}</strong>
-                    <span>{attachedArchive.filename}</span>
-                  </div>
-                ) : null}
-                <textarea className="input settingsReportTextarea" value={reportText} onChange={(event) => setReportText(event.target.value)} placeholder={t.describeProblem} />
-                <button className="button" onClick={sendReport} disabled={!attachedArchive || !reportText.trim()}>{t.sendReport}</button>
+
+              <section className="settingsSecurityModalSection">
+                <div className="settingsSecurityModalSectionHead">
+                  <h3>{t.bugReport}</h3>
+                </div>
+                <button className="button secondary small settingsSecurityModalButton" onClick={downloadLogArchive} disabled={securityBusy}>
+                  {t.createDiagnosticArchive}
+                </button>
+                <textarea
+                  className="input settingsBugReportTextarea"
+                  value={bugReportText}
+                  onChange={(event) => patchBugReportText(event.target.value)}
+                  placeholder={t.bugReportPlaceholder}
+                  disabled={securityBusy}
+                />
+                {diagnosticArchiveReady ? <div className="settingsSecurityNote ok">{t.diagnosticArchiveReady}</div> : null}
+                <div className="settingsSecurityNote">{t.reportSendingPending}</div>
+                <button
+                  className="button small settingsSecurityModalButton"
+                  onClick={submitBugReport}
+                  disabled={securityBusy || !diagnosticArchiveReady || !bugReportText.trim()}
+                >
+                  {t.sendBugReport}
+                </button>
               </section>
             </div>
           </div>

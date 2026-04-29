@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import io
+import zipfile
 from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.permissions import ROLE_OWNER
 from app.core.security import hash_password
 from app.db.session import get_db
@@ -38,6 +43,11 @@ class SettingsUpdateRequest(BaseModel):
     storage_path: str | None = None
     recording_format: str | None = None
     hardware_preferred_backend: str | None = None
+
+
+class BugReportRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=10000)
+    include_logs: bool = True
 
 
 class StorageValidateRequest(BaseModel):
@@ -135,3 +145,63 @@ def validate_storage(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     return validate_storage_path(payload.storage_path, create=payload.create)
+
+
+def iter_log_files() -> list[Path]:
+    roots = [
+        Path(settings.storage_previews),
+        Path(settings.storage_exports),
+        Path(settings.storage_root),
+        Path("/tmp"),
+    ]
+    files: list[Path] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in root.rglob("*.log"):
+            if path.is_file():
+                files.append(path)
+    return sorted(files, key=lambda item: str(item))[:200]
+
+
+def build_log_archive(report_text: str | None = None, include_logs: bool = True) -> io.BytesIO:
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("system/info.txt", f"created_at={datetime.utcnow().isoformat()}Z\napp_env={settings.app_env}\n")
+        if report_text is not None:
+            bundle.writestr("bug-report.txt", report_text.strip() + "\n")
+        if include_logs:
+            for path in iter_log_files():
+                try:
+                    bundle.write(path, arcname=f"logs/{path.name}")
+                except OSError:
+                    continue
+    archive.seek(0)
+    return archive
+
+
+@router.get("/settings/logs/archive")
+def download_log_archive(
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    archive = build_log_archive()
+    filename = f"km-vms-logs-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
+    return StreamingResponse(
+        archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/settings/bug-report")
+def create_bug_report(
+    payload: BugReportRequest,
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    archive = build_log_archive(report_text=payload.text, include_logs=payload.include_logs)
+    filename = f"km-vms-bug-report-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
+    return StreamingResponse(
+        archive,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
