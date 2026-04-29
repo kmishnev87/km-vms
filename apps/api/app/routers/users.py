@@ -3,11 +3,11 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.permissions import ROLE_ADMIN, ROLE_OWNER, ROLE_PERMISSIONS
+from app.core.permissions import ROLE_ADMIN, ROLE_OPERATOR, ROLE_OWNER, ROLE_PERMISSIONS, ROLE_VIEWER
 from app.core.security import hash_password, verify_password
 from app.db.session import get_db
 from app.models.user import User
-from app.routers.deps import get_current_user, require_permission
+from app.routers.deps import FORBIDDEN_DETAIL, get_current_user, require_permission
 from app.schemas.user import ROLES, UserCreateRequest, UserResponse, UserUpdateRequest
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -62,34 +62,39 @@ def ensure_not_last_active_owner(db: Session, user: User, next_role: str | None 
 
 
 def ensure_can_create_role(current_user: User, role: str) -> None:
-    if current_user.role == ROLE_OWNER and role in {ROLE_ADMIN, "operator", "viewer"}:
+    if current_user.role == ROLE_OWNER and role in {ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER}:
         return
-    if current_user.role == ROLE_ADMIN and role in {"operator", "viewer"}:
+    if current_user.role == ROLE_ADMIN and role in {ROLE_OPERATOR, ROLE_VIEWER}:
         return
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для назначения этой роли")
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
 
 
-def ensure_can_modify_user(current_user: User, target: User, next_role: str | None = None, next_active: bool | None = None) -> None:
+def ensure_can_modify_user(
+    current_user: User,
+    target: User,
+    next_role: str | None = None,
+    next_active: bool | None = None,
+) -> None:
     if target.role == ROLE_OWNER:
         if next_role is not None and next_role != ROLE_OWNER:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя понизить")
         if next_active is False and bool(target.is_active):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя отключить")
         if current_user.id != target.id and current_user.role != ROLE_OWNER:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может изменять владельца")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
     if current_user.role == ROLE_ADMIN and target.role == ROLE_OWNER:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может изменять владельца")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
     if current_user.role == ROLE_ADMIN and next_role == ROLE_ADMIN and target.id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может назначать роль администратора")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
     if current_user.role == ROLE_ADMIN and next_role == ROLE_OWNER:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может назначать роль владельца")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
     if current_user.id == target.id:
         if next_role is not None and next_role != target.role:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя изменить собственную роль")
         if next_active is False and bool(target.is_active):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя отключить собственную учётную запись")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя отключить собственную учетную запись")
     elif current_user.role != ROLE_OWNER and target.role == ROLE_ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может изменять администратора")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
 
 
 @router.get("/me")
@@ -195,7 +200,7 @@ def delete_user(
         current_user.role == ROLE_ADMIN and user.role not in {ROLE_OWNER, ROLE_ADMIN}
     )
     if not can_delete:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для удаления пользователя")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
     if bool(user.is_active) and user.role in {ROLE_OWNER, ROLE_ADMIN} and active_critical_user_count(db, exclude_user_id=user.id) <= 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя удалить последнего критического пользователя")
 

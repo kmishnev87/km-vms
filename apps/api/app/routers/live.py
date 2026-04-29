@@ -11,10 +11,11 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.permissions import user_has_permission
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.user import User
-from app.routers.deps import get_current_user, require_permission
+from app.routers.deps import FORBIDDEN_DETAIL, require_permission
 from app.services.live_engine_v2 import manager
 
 router = APIRouter(prefix="/live", tags=["live"])
@@ -40,7 +41,7 @@ def _get_camera(db: Session, camera_id: int) -> Camera:
     return camera
 
 
-def _authorize_live_request(request: Request, token: Optional[str]) -> str:
+def _authorize_live_request(request: Request, token: Optional[str], db: Session) -> User:
     raw_token = token
 
     if not raw_token:
@@ -49,25 +50,30 @@ def _authorize_live_request(request: Request, token: Optional[str]) -> str:
             raw_token = auth[7:].strip()
 
     if not raw_token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        raise HTTPException(status_code=401, detail="Требуется авторизация")
 
     try:
         payload = jwt.decode(raw_token, settings.jwt_secret, algorithms=["HS256"])
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Недействительный токен")
 
     username = payload.get("sub")
     if not username:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Недействительный токен")
 
-    return username
+    user = db.query(User).filter(User.username == username).first()
+    if not user or not getattr(user, "is_active", True):
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
+    if not user_has_permission(user.role, "view_live"):
+        raise HTTPException(status_code=403, detail=FORBIDDEN_DETAIL)
+    return user
 
 
 def _validate_hls_filename(filename: str):
     if "/" in filename or "\\" in filename or ".." in filename:
-        raise HTTPException(status_code=400, detail="Invalid HLS filename")
+        raise HTTPException(status_code=400, detail="Некорректное имя HLS-файла")
     if not HLS_FILENAME_RE.match(filename):
-        raise HTTPException(status_code=400, detail="Invalid HLS filename")
+        raise HTTPException(status_code=400, detail="Некорректное имя HLS-файла")
 
 
 def _hls_debug_payload(camera_id: int, stream: str) -> dict:
@@ -142,7 +148,7 @@ def _serve_live_playlist(camera_id: int, stream: str, token: Optional[str]) -> R
         raise HTTPException(
             status_code=503,
             detail={
-                "message": "HLS playlist is not ready",
+                "message": "HLS-плейлист еще не готов",
                 "debug": _hls_debug_payload(camera_id, stream),
             },
         )
@@ -164,7 +170,7 @@ def _serve_live_playlist(camera_id: int, stream: str, token: Optional[str]) -> R
 @router.post("/stop")
 def stop_live_stream(
     payload: LiveStopPayload,
-    current_user: User = Depends(require_permission("view_live")),
+    current_user: User = Depends(require_permission("manage_settings")),
 ):
     stopped = manager.stop_stream(payload.camera_id, payload.stream)
     return {
@@ -177,7 +183,7 @@ def stop_live_stream(
 
 @router.post("/stop-all")
 def stop_all_live_streams(
-    current_user: User = Depends(require_permission("view_live")),
+    current_user: User = Depends(require_permission("manage_settings")),
 ):
     stopped_count = manager.stop_all_streams()
     return {
@@ -249,7 +255,7 @@ def touch_live_viewer(
 def live_debug_all(
     camera_id: Optional[int] = Query(default=None),
     stream: Optional[StreamKey] = Query(default=None),
-    current_user: User = Depends(require_permission("view_live")),
+    current_user: User = Depends(require_permission("manage_settings")),
 ):
     return manager.debug(camera_id=camera_id, stream=stream)
 
@@ -259,7 +265,7 @@ def live_debug_stream(
     camera_id: int,
     stream: StreamKey,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("view_live")),
+    current_user: User = Depends(require_permission("manage_settings")),
 ):
     _get_camera(db, camera_id)
     return manager.debug(camera_id=camera_id, stream=stream)
@@ -273,7 +279,7 @@ def live_playlist(
     token: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    _authorize_live_request(request, token)
+    _authorize_live_request(request, token, db)
     _get_camera(db, camera_id)
     return _serve_live_playlist(camera_id, stream, token)
 
@@ -287,7 +293,7 @@ def live_segment(
     token: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    _authorize_live_request(request, token)
+    _authorize_live_request(request, token, db)
     _get_camera(db, camera_id)
     _validate_hls_filename(filename)
 

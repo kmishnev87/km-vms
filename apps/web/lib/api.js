@@ -3,6 +3,7 @@ const TOKEN_KEY = "token";
 const TOKEN_EXPIRES_KEY = "token_expires_at";
 const FORBIDDEN_RU = "Раздел недоступен. Ограничены права пользователя.";
 const FORBIDDEN_EN = "Section unavailable. User permissions are limited.";
+const LEGACY_FORBIDDEN_TEXT = ["Insufficient", "permissions"].join(" ");
 
 export function forbiddenMessage(language = "ru") {
   return language === "en" ? FORBIDDEN_EN : FORBIDDEN_RU;
@@ -75,6 +76,13 @@ function makeHeaders(extra = {}) {
   return headers;
 }
 
+function normalizeErrorDetail(response, detail) {
+  if (response.status === 403 || String(detail).includes(LEGACY_FORBIDDEN_TEXT)) {
+    return forbiddenMessage(currentUiLanguage());
+  }
+  return detail || "Ошибка запроса";
+}
+
 export async function apiFetch(path, options = {}) {
   const url = buildUrl(path);
   const headers = makeHeaders(options.headers || {});
@@ -99,10 +107,7 @@ export async function apiFetch(path, options = {}) {
     } catch {
       detail = `HTTP ${response.status}`;
     }
-    if (response.status === 403 || String(detail).includes("Insufficient permissions")) {
-      detail = forbiddenMessage(currentUiLanguage());
-    }
-    throw new Error(detail || "Ошибка запроса");
+    throw new Error(normalizeErrorDetail(response, detail));
   }
 
   if (isJson) return response.json();
@@ -129,10 +134,7 @@ export async function apiFetchBlob(path, options = {}) {
     } catch {
       detail = `HTTP ${response.status}`;
     }
-    if (response.status === 403 || String(detail).includes("Insufficient permissions")) {
-      detail = forbiddenMessage(currentUiLanguage());
-    }
-    throw new Error(detail || "Ошибка запроса");
+    throw new Error(normalizeErrorDetail(response, detail));
   }
 
   const blob = await response.blob();

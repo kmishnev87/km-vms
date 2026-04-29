@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.models.user import User
 
 bearer_scheme = HTTPBearer(auto_error=True)
+FORBIDDEN_DETAIL = "Раздел недоступен. Ограничены права пользователя."
 
 
 def get_current_user(
@@ -43,7 +44,7 @@ def require_permission(permission: str):
         if not user_has_permission(current_user.role, permission):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Раздел недоступен. Ограничены права пользователя.",
+                detail=FORBIDDEN_DETAIL,
             )
         return current_user
 

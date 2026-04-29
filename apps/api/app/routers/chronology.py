@@ -10,9 +10,10 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.permissions import user_has_permission
 from app.models.camera import Camera
 from app.models.user import User
-from app.routers.deps import get_db, require_permission
+from app.routers.deps import FORBIDDEN_DETAIL, get_db, require_permission
 
 router = APIRouter(prefix="/chronology", tags=["chronology"])
 
@@ -47,11 +48,18 @@ def _resolve_camera_file(camera: Camera, rel_path: str) -> Path:
     return target
 
 
-def _validate_token(token: str):
+def _validate_token(token: str, db: Session):
     try:
-        jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
     except Exception:
         raise HTTPException(status_code=401, detail="Недействительный токен")
+
+    username = payload.get("sub")
+    user = db.query(User).filter(User.username == username).first() if username else None
+    if not user or not getattr(user, "is_active", True):
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
+    if not user_has_permission(user.role, "view_timeline"):
+        raise HTTPException(status_code=403, detail=FORBIDDEN_DETAIL)
 
 
 def _build_camera_files(camera: Camera):
@@ -263,7 +271,7 @@ def chronology_file(
     token: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    _validate_token(token)
+    _validate_token(token, db)
 
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:

@@ -18,7 +18,7 @@ from app.core.permissions import user_has_permission
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.user import User
-from app.routers.deps import get_current_user, require_permission
+from app.routers.deps import FORBIDDEN_DETAIL, require_permission
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
@@ -57,18 +57,18 @@ def safe_resolve_relative(relative_path: str) -> Path:
 
 def authorize_recording_token(token: str | None, db: Session) -> None:
     if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
+        raise HTTPException(status_code=401, detail="Требуется авторизация")
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
     except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        raise HTTPException(status_code=401, detail="Недействительный токен")
 
     username = payload.get("sub")
     user = db.query(User).filter(User.username == username).first() if username else None
     if not user or not getattr(user, "is_active", True):
-        raise HTTPException(status_code=401, detail="User not found")
+        raise HTTPException(status_code=401, detail="Пользователь не найден")
     if not user_has_permission(user.role, "view_recordings"):
-        raise HTTPException(status_code=403, detail="Раздел недоступен. Ограничены права пользователя.")
+        raise HTTPException(status_code=403, detail=FORBIDDEN_DETAIL)
 
 
 def human_size(size_bytes: int) -> str:

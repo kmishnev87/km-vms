@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
@@ -11,6 +11,7 @@ from app.routers.chronology import router as chronology_router
 from app.routers.hardware import router as hardware_router
 from app.routers.live import router as live_router
 from app.routers.recordings import router as recordings_router
+from app.routers.deps import require_permission
 from app.routers.settings import router as settings_router
 from app.routers.storage import router as storage_router
 from app.routers.users import router as users_router
@@ -77,7 +78,7 @@ def health():
 
 
 @app.get("/system/info")
-def system_info():
+def system_info(current_user=Depends(require_permission("manage_settings"))):
     return {
         "app_env": settings.app_env,
         "default_live_stream": settings.default_live_stream,
