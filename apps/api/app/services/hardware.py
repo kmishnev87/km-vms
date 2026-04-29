@@ -420,6 +420,12 @@ def refresh_hardware_capabilities() -> dict:
     return result
 
 
+def invalidate_hardware_capabilities() -> None:
+    global _CAPABILITIES_CACHE
+    with _CACHE_LOCK:
+        _CAPABILITIES_CACHE = None
+
+
 def get_hardware_capabilities() -> dict:
     with _CACHE_LOCK:
         cached = _CAPABILITIES_CACHE

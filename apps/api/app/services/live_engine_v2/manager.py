@@ -54,6 +54,10 @@ HARDWARE_HARD_TIMEOUT_SECONDS = 180
 STARTUP_PROGRESS_GRACE_SECONDS = 90
 STARTUP_HARD_TIMEOUT_SECONDS = 180
 SLOW_TRANSCODE_FAIL_SECONDS = 75
+CPU_ESCALATION_SPEED_THRESHOLD = 0.9
+CPU_ESCALATION_STABLE_SECONDS = 20
+CPU_ESCALATION_COOLDOWN_SECONDS = 120
+MAX_CPU_ESCALATIONS_PER_STREAM = 1
 FRAME_RE = re.compile(r"frame=\s*(?P<value>\d+)")
 FPS_RE = re.compile(r"fps=\s*(?P<value>[\d.]+)")
 TIME_RE = re.compile(r"time=(?P<value>\d+:\d+:\d+(?:\.\d+)?)")
@@ -152,6 +156,13 @@ class StreamInstance:
         self.hwaccel_mode = settings.live_hwaccel_mode
         self.selected_pipeline = "cpu"
         self.selected_backend = "cpu"
+        self.configured_backend = "auto"
+        self.effective_backend = "cpu"
+        self.decision_source = "auto"
+        self.decision_reason = ""
+        self.heavy_stream = False
+        self.copy_safe = False
+        self.hardware_candidates: list[str] = []
         self.attempted_backends: list[str] = []
         self.failed_backends: dict[str, str] = {}
         self.hw_decode = False
@@ -172,6 +183,9 @@ class StreamInstance:
         self.drop_frames: int | None = None
         self.last_progress_time: str | None = None
         self.too_slow_since: float | None = None
+        self.cpu_slow_since: float | None = None
+        self.last_cpu_escalation_at: float | None = None
+        self.cpu_escalation_count = 0
         self.unstable_since: float | None = None
         self.stop_reason: str | None = None
         self.stopped_by_backend = False
@@ -321,6 +335,11 @@ class StreamInstance:
         else:
             self.too_slow_since = None
 
+        if self.last_speed is not None and self.last_speed < CPU_ESCALATION_SPEED_THRESHOLD:
+            self.cpu_slow_since = self.cpu_slow_since or time.time()
+        else:
+            self.cpu_slow_since = None
+
         has_dup_drop = (self.dup_frames or 0) > 0 or (self.drop_frames or 0) > 0
         slow_for_preview = self.last_speed is not None and self.last_speed < 0.7
         self.jitter_detected = bool(has_dup_drop or slow_for_preview)
@@ -416,6 +435,114 @@ class StreamInstance:
         self.last_fallback_reason = reason
         self.fallback_to_cpu = False
 
+    def _configured_backend(self, caps: dict | None = None) -> str:
+        caps = caps or get_hardware_capabilities()
+        return str((caps.get("config") or {}).get("backend") or "auto").lower()
+
+    def _manual_hardware_backend(self, caps: dict | None = None) -> str | None:
+        configured = self._configured_backend(caps)
+        return configured if configured in {"qsv", "vaapi", "nvenc", "amf"} else None
+
+    def _hardware_candidates(self, caps: dict | None = None) -> list[str]:
+        caps = caps or get_hardware_capabilities()
+        available = caps.get("available_backends") or []
+        priority = caps.get("backend_priority") or available
+        return [backend for backend in priority if backend in available and backend not in self.failed_backends]
+
+    def _is_heavy_stream(self, probe) -> bool:
+        return bool(
+            probe.codec in {"hevc", "h265"}
+            or not probe.safe_for_copy
+            or self.stream == "main"
+            or (probe.width or 0) >= 1920
+            or (probe.height or 0) >= 1080
+            or (probe.width or 0) >= 2560
+            or (probe.fps or 0) >= 25
+            or self.high_cpu_risk
+        )
+
+    def _select_hardware_mode(self, backend: str, caps: dict, source: str, reason: str) -> str:
+        self.hw_backend = backend
+        self.hw_device = caps.get("render_device") or settings.live_hwaccel_device
+        self.hwaccel_mode = settings.live_hwaccel_mode
+        self.hw_decode = True
+        self.hw_encode = True
+        self.fallback_to_cpu = False
+        self.hw_failure_reason = None
+        self.selected_pipeline = "hardware_transcode"
+        self.selected_backend = backend
+        self.effective_backend = backend
+        self.decision_source = source
+        self.decision_reason = reason
+        if backend not in self.attempted_backends:
+            self.attempted_backends.append(backend)
+        self.last_fallback_reason = None
+        self.reason_for_transcode = reason
+        return "hardware_transcode"
+
+    def _start_hardware_or_cpu_locked(self, source, reason: str) -> bool:
+        caps = get_hardware_capabilities()
+        next_backend = None if self._configured_backend(caps) == "cpu" else self._next_hw_backend(caps)
+        self.restart_count += 1
+        self.restart_reason = reason
+        self.last_fallback_reason = reason
+        if next_backend:
+            logger.warning(
+                "Live Engine switching to hardware before CPU camera_id=%s stream=%s backend=%s reason=%s",
+                self.camera_id,
+                self.stream,
+                next_backend,
+                reason,
+            )
+            self.start(source, transcode_allowed=True, force_hw_backend=next_backend)
+            return True
+
+        self.start(source, force_mode="fallback_transcode")
+        return True
+
+    def _maybe_escalate_cpu_to_hardware_locked(self, now: float, source) -> bool:
+        if self.mode != "fallback_transcode" or not source:
+            return False
+        if self._configured_backend() == "cpu":
+            self.decision_reason = self.decision_reason or "manual_cpu_selected"
+            return False
+        if not (self.heavy_stream or self.high_cpu_risk):
+            return False
+        if self.last_speed is None or self.last_speed >= CPU_ESCALATION_SPEED_THRESHOLD:
+            return False
+        if not self.cpu_slow_since or now - self.cpu_slow_since < CPU_ESCALATION_STABLE_SECONDS:
+            return False
+        if self.cpu_escalation_count >= MAX_CPU_ESCALATIONS_PER_STREAM:
+            self.decision_reason = "cpu_slow_escalation_skipped:max_attempts"
+            return False
+        if self.last_cpu_escalation_at and now - self.last_cpu_escalation_at < CPU_ESCALATION_COOLDOWN_SECONDS:
+            self.decision_reason = "cpu_slow_escalation_skipped:cooldown"
+            return False
+
+        caps = get_hardware_capabilities()
+        next_backend = self._next_hw_backend(caps)
+        if not next_backend:
+            self.decision_reason = "cpu_slow_escalation_skipped:no_hardware_backend"
+            return False
+
+        self.cpu_escalation_count += 1
+        self.last_cpu_escalation_at = now
+        self.restart_count += 1
+        self.restart_reason = "cpu_too_slow_escalation"
+        self.last_fallback_reason = "cpu_too_slow_escalation"
+        self.decision_source = "escalation"
+        self.decision_reason = f"CPU speed {self.last_speed}x below realtime threshold; trying {next_backend}"
+        logger.warning(
+            "Live Engine CPU too slow, escalating to hardware camera_id=%s stream=%s speed=%s backend=%s",
+            self.camera_id,
+            self.stream,
+            self.last_speed,
+            next_backend,
+        )
+        self.stop(reason="cpu_too_slow_escalation", cleanup_files=True)
+        self.start(source, transcode_allowed=True, force_hw_backend=next_backend)
+        return True
+
     def _retry_next_backend_or_cpu_locked(self, source, reason: str, detail: str | None = None) -> bool:
         self._mark_hw_backend_failed(reason, detail)
         caps = get_hardware_capabilities()
@@ -436,6 +563,9 @@ class StreamInstance:
 
         self.fallback_to_cpu = True
         self.selected_backend = "cpu"
+        self.effective_backend = "cpu"
+        self.decision_source = "fallback"
+        self.decision_reason = f"all hardware backends failed; CPU fallback after {reason}"
         logger.warning(
             "Live Engine all hardware backends failed, falling back to CPU camera_id=%s stream=%s failed_backends=%s",
             self.camera_id,
@@ -453,6 +583,10 @@ class StreamInstance:
         force_hw_backend: str | None = None,
     ) -> str:
         probe = probe_video_codec(input_url, (camera.rtsp_transport or "tcp").lower())
+        caps = get_hardware_capabilities()
+        configured_backend = self._configured_backend(caps)
+        hw_mode = (settings.live_hwaccel_mode or "auto").lower()
+        requested_policy = (settings.live_video_codec or "auto").lower()
         self.last_error = mask_rtsp_credentials(probe.error)
         self.input_codec = probe.codec
         self.input_width = probe.width
@@ -462,18 +596,36 @@ class StreamInstance:
         self.unstable_source = bool(forced_fps)
         self.jitter_detected = bool(forced_fps)
         self.copy_eligible = bool(probe.safe_for_copy)
+        self.copy_safe = bool(probe.safe_for_copy)
         self.browser_compatible = probe.codec == "h264"
         self.high_cpu_risk = bool(
-            (self.stream == "main" and (probe.codec in {"hevc", "h265"} or (probe.width or 0) >= 2560))
+            probe.codec in {"hevc", "h265"}
+            or not probe.safe_for_copy
+            or self.stream == "main"
+            or (probe.width or 0) >= 1920
+            or (probe.height or 0) >= 1080
+            or (probe.width or 0) >= 2560
             or (probe.width or 0) >= 3840
-            or (probe.fps or 0) > 30
+            or (probe.fps or 0) >= 25
         )
+        self.heavy_stream = self._is_heavy_stream(probe)
+        self.hardware_candidates = self._hardware_candidates(caps)
+        self.configured_backend = configured_backend
+        self.hw_device = caps.get("render_device") or settings.live_hwaccel_device
+        self.hwaccel_mode = settings.live_hwaccel_mode
 
         if force_mode == "fallback_transcode":
             self.last_fallback_reason = self.last_fallback_reason or "forced_fallback"
             self.reason_for_transcode = "forced_fallback"
             self.selected_pipeline = "cpu_transcode"
             self.selected_backend = "cpu"
+            self.effective_backend = "cpu"
+            self.decision_source = "fallback" if self.failed_backends else ("user_forced" if configured_backend == "cpu" else "auto")
+            if self.failed_backends:
+                failed = ", ".join(self.failed_backends.keys())
+                self.decision_reason = f"CPU fallback selected after hardware failures: {failed}"
+            else:
+                self.decision_reason = self.decision_reason or "CPU fallback selected"
             self.hw_backend = None
             self.hw_decode = False
             self.hw_encode = False
@@ -483,59 +635,105 @@ class StreamInstance:
         if force_mode == "copy":
             self.selected_pipeline = "copy"
             self.selected_backend = "copy"
+            self.effective_backend = "copy"
+            self.decision_source = "auto"
+            self.decision_reason = "copy mode forced"
             return "copy"
 
-        if probe.safe_for_copy:
+        manual_backend = self._manual_hardware_backend(caps)
+        preferred_backend = None
+        if hw_mode not in {"off", "disabled", "false", "0"} and configured_backend != "cpu":
+            preferred_backend = force_hw_backend or manual_backend or self._next_hw_backend(caps)
+
+        if force_hw_backend:
+            if force_hw_backend in self.hardware_candidates or force_hw_backend in (caps.get("available_backends") or []):
+                return self._select_hardware_mode(
+                    force_hw_backend,
+                    caps,
+                    "fallback" if self.failed_backends else "auto",
+                    f"retrying hardware backend {force_hw_backend} before CPU",
+                )
+            self.failed_backends[force_hw_backend] = "requested_backend_not_available"
+            preferred_backend = self._next_hw_backend(caps)
+
+        if manual_backend:
+            if manual_backend in (caps.get("available_backends") or []):
+                return self._select_hardware_mode(
+                    manual_backend,
+                    caps,
+                    "user_forced",
+                    f"manual hardware backend selected: {manual_backend}",
+                )
+            self.hw_failure_reason = f"manual hardware backend {manual_backend} is not available"
+            preferred_backend = self._next_hw_backend(caps)
+
+        if configured_backend == "cpu":
+            self.reason_for_transcode = "manual_cpu_selected"
+            self.selected_pipeline = "cpu_transcode"
+            self.selected_backend = "cpu"
+            self.effective_backend = "cpu"
+            self.decision_source = "user_forced"
+            self.decision_reason = "manual CPU backend selected"
+            self.hw_backend = None
+            self.hw_decode = False
+            self.hw_encode = False
+            return "fallback_transcode"
+
+        if probe.safe_for_copy and not force_hw_backend and not manual_backend:
             self.last_fallback_reason = None
             self.reason_for_transcode = None
             self.selected_pipeline = "copy"
             self.selected_backend = "copy"
+            self.effective_backend = "copy"
+            self.decision_source = "auto"
+            self.decision_reason = "H264 stream is browser-safe; using copy mode"
             return "copy"
 
-        hw_mode = (settings.live_hwaccel_mode or "auto").lower()
-        caps = get_hardware_capabilities()
-        configured_backend = (caps.get("config") or {}).get("backend")
-        preferred_backend = None if configured_backend == "cpu" else (force_hw_backend or self._next_hw_backend(caps))
         if (
-            probe.codec in {"hevc", "h265"}
-            and hw_mode not in {"off", "disabled", "false", "0"}
+            preferred_backend in {"qsv", "vaapi", "nvenc", "amf"}
             and caps.get("hardware_accel_available")
-            and preferred_backend in {"qsv", "vaapi", "nvenc", "amf"}
+            and (self.heavy_stream or not probe.safe_for_copy or self.high_cpu_risk)
         ):
-            self.hw_backend = preferred_backend
-            self.hw_device = caps.get("render_device") or settings.live_hwaccel_device
-            self.hwaccel_mode = settings.live_hwaccel_mode
-            self.hw_decode = True
-            self.hw_encode = True
-            self.fallback_to_cpu = False
-            self.hw_failure_reason = None
-            self.selected_pipeline = "hardware_transcode"
-            self.selected_backend = preferred_backend
-            if preferred_backend not in self.attempted_backends:
-                self.attempted_backends.append(preferred_backend)
-            self.last_fallback_reason = None
-            self.reason_for_transcode = "codec_requires_h264_for_hls"
-            return "hardware_transcode"
+            reasons = []
+            if probe.codec in {"hevc", "h265"}:
+                reasons.append(f"codec={probe.codec}")
+            if not probe.safe_for_copy:
+                reasons.append("not_copy_safe")
+            if self.stream == "main":
+                reasons.append("main_stream")
+            if self.input_width and self.input_height:
+                reasons.append(f"resolution={self.input_width}x{self.input_height}")
+            if self.input_fps:
+                reasons.append(f"fps={self.input_fps}")
+            return self._select_hardware_mode(
+                preferred_backend,
+                caps,
+                "auto",
+                "heavy stream; " + ", ".join(reasons or ["hardware backend available"]),
+            )
 
-        requested_policy = (settings.live_video_codec or "auto").lower()
         if settings.live_transcode or requested_policy in {"libx264", "h264", "transcode", "fallback_transcode"}:
             self.last_fallback_reason = "forced_transcode" if settings.live_transcode else f"settings_codec:{requested_policy}"
             self.reason_for_transcode = self.last_fallback_reason
             self.selected_pipeline = "cpu_transcode"
             self.selected_backend = "cpu"
+            self.effective_backend = "cpu"
+            self.decision_source = "auto"
+            self.decision_reason = self.last_fallback_reason
             return "fallback_transcode"
 
         self.last_fallback_reason = f"codec_not_safe_for_copy:{probe.codec or 'unknown'}"
         self.reason_for_transcode = self.last_fallback_reason
         self.hw_backend = None
-        self.hw_device = caps.get("render_device") or settings.live_hwaccel_device
-        self.hwaccel_mode = settings.live_hwaccel_mode
         self.hw_decode = False
         self.hw_encode = False
         self.selected_pipeline = "cpu_transcode"
         self.selected_backend = "cpu"
+        self.effective_backend = "cpu"
+        self.decision_source = "fallback" if self.failed_backends else "auto"
+        self.decision_reason = "CPU selected because no runtime-ok hardware backend is available"
         self.fallback_to_cpu = bool(self.failed_backends)
-        if probe.codec in {"hevc", "h265"} and hw_mode not in {"off", "disabled", "false", "0"}:
+        if (self.heavy_stream or probe.codec in {"hevc", "h265"}) and hw_mode not in {"off", "disabled", "false", "0"}:
             warnings = caps.get("warnings") or []
             errors = caps.get("errors") or []
             failed = [f"{backend}:{reason}" for backend, reason in self.failed_backends.items()]
@@ -611,13 +809,23 @@ class StreamInstance:
             self.hwaccel_mode = settings.live_hwaccel_mode
             self.selected_pipeline = "cpu"
             self.selected_backend = "cpu"
+            self.configured_backend = "auto"
+            self.effective_backend = "cpu"
+            self.decision_source = "auto"
+            self.decision_reason = ""
+            self.heavy_stream = False
+            self.copy_safe = False
+            self.hardware_candidates = []
             self.hw_decode = False
             self.hw_encode = False
+            self.cpu_slow_since = None
             if force_mode is None and force_hw_backend is None:
                 self.attempted_backends = []
                 self.failed_backends = {}
                 self.fallback_to_cpu = False
                 self.hw_failure_reason = None
+                self.cpu_escalation_count = 0
+                self.last_cpu_escalation_at = None
             else:
                 self.fallback_to_cpu = force_mode == "fallback_transcode" and bool(self.failed_backends)
             self.mode = self._choose_mode(
@@ -780,6 +988,9 @@ class StreamInstance:
                 self._detect_progress_locked(stderr_tail)
 
             if self.is_ready():
+                source = self.camera_source
+                if self._maybe_escalate_cpu_to_hardware_locked(time.time(), source):
+                    return True
                 if self.jitter_detected:
                     self.unstable_source = True
                 self._set_state_locked("ready", "hls_ready", failure_reason=None)
@@ -798,11 +1009,9 @@ class StreamInstance:
                     reason = "rtsp_error" if "Connection" in fatal_error or "401" in fatal_error or "403" in fatal_error else "transcode_failed"
                 self._mark_process_exit_locked(reason=reason, cleanup_files=True)
                 if previous_mode == "copy" and source:
-                    self.restart_count += 1
                     self.restart_reason = "copy_failed"
                     self.last_fallback_reason = "copy_failed"
-                    self.start(source, force_mode="fallback_transcode")
-                    return True
+                    return self._start_hardware_or_cpu_locked(source, "copy_failed")
                 if previous_mode == "hardware_transcode" and source:
                     return self._retry_next_backend_or_cpu_locked(
                         source,
@@ -834,16 +1043,14 @@ class StreamInstance:
 
             if self.mode == "copy" and source:
                 logger.warning(
-                    "Live Engine copy mode timed out before HLS ready, switching to transcode camera_id=%s stream=%s",
+                    "Live Engine copy mode timed out before HLS ready, switching to hardware/CPU transcode camera_id=%s stream=%s",
                     self.camera_id,
                     self.stream,
                 )
-                self.restart_count += 1
                 self.restart_reason = "copy_not_ready"
                 self.last_fallback_reason = "copy_not_ready"
                 self.stop(reason="copy_not_ready", cleanup_files=True)
-                self.start(source, force_mode="fallback_transcode")
-                return True
+                return self._start_hardware_or_cpu_locked(source, "copy_not_ready")
 
             if self.mode == "hardware_transcode" and source:
                 if self._hardware_progress_detected():
@@ -865,6 +1072,8 @@ class StreamInstance:
 
             last_progress = self.last_ffmpeg_progress_at or self.started_at or now
             hard_deadline = self.start_hard_deadline or (now + STARTUP_HARD_TIMEOUT_SECONDS)
+            if self._maybe_escalate_cpu_to_hardware_locked(now, source):
+                return True
             if (
                 self.last_speed is not None
                 and self.last_speed < 0.25
@@ -941,6 +1150,13 @@ class StreamInstance:
             "hwaccel_mode": self.hwaccel_mode,
             "selected_pipeline": self.selected_pipeline,
             "selected_backend": self.selected_backend,
+            "configured_backend": self.configured_backend,
+            "effective_backend": self.effective_backend,
+            "decision_source": self.decision_source,
+            "decision_reason": self.decision_reason,
+            "copy_safe": self.copy_safe,
+            "heavy_stream": self.heavy_stream,
+            "hardware_candidates": self.hardware_candidates,
             "attempted_backends": self.attempted_backends,
             "failed_backends": self.failed_backends,
             "hw_decode": self.hw_decode,
@@ -969,6 +1185,8 @@ class StreamInstance:
             "last_progress_time": self.last_progress_time,
             "speed_state": self._speed_state(),
             "too_slow_seconds": round(now - self.too_slow_since, 2) if self.too_slow_since else 0,
+            "cpu_slow_seconds": round(now - self.cpu_slow_since, 2) if self.cpu_slow_since else 0,
+            "cpu_escalation_count": self.cpu_escalation_count,
             "stop_reason": self.stop_reason,
             "stopped_by_backend": self.stopped_by_backend,
             "state_changed_at": self.state_changed_at,

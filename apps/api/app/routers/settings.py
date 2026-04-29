@@ -25,7 +25,7 @@ from app.models.camera import Camera
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.routers.recordings import collect_recording_files
-from app.services.hardware import get_hardware_capabilities
+from app.services.hardware import get_hardware_capabilities, invalidate_hardware_capabilities
 from app.services.live_engine_v2 import manager as live_manager
 from app.services.system_settings import (
     get_system_settings,
@@ -152,10 +152,13 @@ def patch_settings(
 ):
     data = payload.model_dump(exclude_unset=True)
     data.pop("storage_path", None)
+    previous_hardware_backend = get_system_settings(db).hardware_preferred_backend
     try:
         system = update_system_settings(db, data)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    if "hardware_preferred_backend" in data and system.hardware_preferred_backend != previous_hardware_backend:
+        invalidate_hardware_capabilities()
     return serialize_settings(system)
 
 
