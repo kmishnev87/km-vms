@@ -14,7 +14,7 @@ from app.routers.recordings import router as recordings_router
 from app.routers.settings import router as settings_router
 from app.routers.storage import router as storage_router
 from app.routers.users import router as users_router
-from app.services.bootstrap import init_db, ensure_admin, ensure_system_settings
+from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration, ensure_system_settings
 from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine_v2 import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
 
@@ -42,6 +42,7 @@ def startup():
     db = SessionLocal()
     try:
         ensure_system_settings(db)
+        ensure_owner_migration(db)
         ensure_admin(db)
     finally:
         db.close()

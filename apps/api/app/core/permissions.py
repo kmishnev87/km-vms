@@ -1,3 +1,4 @@
+ROLE_OWNER = "owner"
 ROLE_ADMIN = "admin"
 ROLE_OPERATOR = "operator"
 ROLE_VIEWER = "viewer"
@@ -13,6 +14,7 @@ PERMISSIONS = {
 }
 
 ROLE_PERMISSIONS = {
+    ROLE_OWNER: PERMISSIONS,
     ROLE_ADMIN: PERMISSIONS,
     ROLE_OPERATOR: {
         "view_live",

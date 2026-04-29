@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
-import { apiFetch } from "../../lib/api";
+import { apiFetch, apiFetchBlob } from "../../lib/api";
 
 const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
   const offset = index - 12;
@@ -58,13 +58,19 @@ const TEXT = {
     rescan: "Тест",
     failedValidation: "Не прошёл проверку",
     notDetected: "Не найдено на этом сервере",
-    security: "Безопасность и сессия",
-    securityText: "Если включить «Оставаться в системе», вход сохраняется до 24:00 системного дня.",
+    security: "Безопасность",
+    securityText: "Журнал логирования и отчёт об ошибке с системными логами.",
+    logJournal: "Журнал логирования",
+    downloadLogs: "Скачать архив",
+    bugReport: "Отчёт об ошибке",
+    bugReportPlaceholder: "Опишите проблему",
+    sendBugReport: "Отправить отчёт",
     users: "Пользователи и роли",
-    usersText: "Фундамент ролей уже включён: admin, operator, viewer. Полное управление пользователями будет добавлено отдельным этапом.",
+    usersText: "Управление пользователями, ролями и доступом к системе.",
     usersDenied: "Недостаточно прав для управления пользователями.",
     currentUser: "Текущий пользователь",
-    sessionPolicy: "Сессия до 24:00 при включённом режиме «Оставаться в системе».",
+    session: "Сессия",
+    sessionPolicy: "Сессия сохраняется до 24:00 при включённом режиме «Оставаться в системе».",
     addUser: "Добавить пользователя",
     editUser: "Изменить пользователя",
     username: "Логин",
@@ -75,7 +81,7 @@ const TEXT = {
     status: "Статус",
     active: "Активен",
     inactive: "Отключён",
-    actions: "Действия",
+    actions: "Управление",
     edit: "Изменить",
     deactivate: "Отключить",
     activate: "Включить",
@@ -84,7 +90,9 @@ const TEXT = {
     close: "Закрыть",
     usernameRequired: "Укажите логин.",
     passwordRequired: "Укажите пароль не короче 8 символов.",
+    currentPasswordRequired: "Укажите текущий пароль.",
     roleRequired: "Выберите роль.",
+    roleOwner: "Владелец",
     roleAdmin: "Администратор",
     roleOperator: "Оператор",
     roleViewer: "Наблюдатель",
@@ -113,6 +121,8 @@ const TEXT = {
       userEnabledTitle: "Пользователь включён",
       usersFailTitle: "Пользователи недоступны",
       usersFailText: "Не удалось выполнить действие с пользователем",
+      logsTitle: "Архив логов подготовлен",
+      reportTitle: "Отчёт об ошибке подготовлен",
     },
     tooltips: {
       timezone: "Используется для отображения времени, записи файлов и хронологии.",
@@ -125,7 +135,7 @@ const TEXT = {
       nvenc: "Аппаратное ускорение через видеокарты NVIDIA.",
       amf: "Аппаратное ускорение через видеокарты AMD.",
       cpu: "Обработка видео без ускорения, только на процессоре.",
-      security: "Настройки авторизации и времени сессии.",
+      security: "Системный журнал логирования и отчёты об ошибках.",
       users: "Управление доступом пользователей к системе.",
     },
   },
@@ -163,12 +173,18 @@ const TEXT = {
     rescan: "Test",
     failedValidation: "Failed validation",
     notDetected: "Not detected on this server",
-    security: "Security / Session",
-    securityText: "If \"Stay signed in\" is enabled, the session is kept until midnight of the system day.",
+    security: "Security",
+    securityText: "System logging and bug reports with logs.",
+    logJournal: "Logging journal",
+    downloadLogs: "Download archive",
+    bugReport: "Bug report",
+    bugReportPlaceholder: "Describe the problem",
+    sendBugReport: "Send report",
     users: "Users / Roles",
-    usersText: "Role foundation is active: admin, operator, viewer. Full user management will be added in a dedicated stage.",
+    usersText: "Manage users, roles, and system access.",
     usersDenied: "Insufficient permissions to manage users.",
     currentUser: "Current user",
+    session: "Session",
     sessionPolicy: "Session is kept until 24:00 when \"Stay signed in\" is enabled.",
     addUser: "Add user",
     editUser: "Edit user",
@@ -189,7 +205,9 @@ const TEXT = {
     close: "Close",
     usernameRequired: "Enter username.",
     passwordRequired: "Enter a password with at least 8 characters.",
+    currentPasswordRequired: "Enter current password.",
     roleRequired: "Select a role.",
+    roleOwner: "Owner",
     roleAdmin: "Administrator",
     roleOperator: "Operator",
     roleViewer: "Viewer",
@@ -218,6 +236,8 @@ const TEXT = {
       userEnabledTitle: "User enabled",
       usersFailTitle: "Users unavailable",
       usersFailText: "User action failed",
+      logsTitle: "Log archive prepared",
+      reportTitle: "Bug report prepared",
     },
     tooltips: {
       timezone: "Used for time display, recording timestamps, and chronology.",
@@ -230,7 +250,7 @@ const TEXT = {
       nvenc: "Hardware acceleration through NVIDIA GPUs.",
       amf: "Hardware acceleration through AMD GPUs.",
       cpu: "Video processing without acceleration, using CPU only.",
-      security: "Authorization and session time settings.",
+      security: "System logging and bug reports.",
       users: "Manage user access to the system.",
     },
   },
@@ -247,6 +267,7 @@ function backendLabel(value, lang) {
 
 function roleLabel(role, t) {
   if (!role) return "-";
+  if (role === "owner") return t.roleOwner;
   if (role === "admin") return t.roleAdmin;
   if (role === "operator") return t.roleOperator;
   return t.roleViewer;
@@ -371,6 +392,19 @@ function InfoTip({ text }) {
   );
 }
 
+function userCanBeManaged(currentUser, user) {
+  if (!currentUser || !user) return false;
+  if (currentUser.role === "owner") return true;
+  if (currentUser.role !== "admin") return false;
+  return user.role !== "owner" && user.role !== "admin";
+}
+
+function roleOptionsFor(currentUser) {
+  if (currentUser?.role === "owner") return ["admin", "operator", "viewer"];
+  if (currentUser?.role === "admin") return ["operator", "viewer"];
+  return [];
+}
+
 export default function SettingsPage() {
   const [draft, setDraft] = useState(null);
   const [savedDraft, setSavedDraft] = useState(null);
@@ -384,6 +418,8 @@ export default function SettingsPage() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [userBusy, setUserBusy] = useState(false);
   const [userModal, setUserModal] = useState(null);
+  const [securityBusy, setSecurityBusy] = useState(false);
+  const [bugReportText, setBugReportText] = useState("");
   const toastTimerRef = useRef(null);
   const lang = languageOf(draft || savedDraft);
   const t = TEXT[lang] || TEXT.ru;
@@ -555,13 +591,15 @@ export default function SettingsPage() {
   }
 
   function openCreateUser() {
+    const options = roleOptionsFor(currentUser);
     setUserModal({
       mode: "create",
       id: null,
       username: "",
       display_name: "",
       password: "",
-      role: "viewer",
+      current_password: "",
+      role: options[0] || "viewer",
       is_active: true,
       error: "",
     });
@@ -574,8 +612,10 @@ export default function SettingsPage() {
       username: user.username,
       display_name: user.display_name || "",
       password: "",
+      current_password: "",
       role: user.role,
       is_active: Boolean(user.is_active),
+      is_owner: user.role === "owner",
       error: "",
     });
   }
@@ -595,8 +635,17 @@ export default function SettingsPage() {
       patchUserModal("error", t.passwordRequired);
       return;
     }
-    if (!["admin", "operator", "viewer"].includes(userModal.role)) {
+    const availableRoles = userModal.mode === "edit" && userModal.id === currentUser?.id
+      ? [currentUser.role]
+      : userModal.mode === "edit" && userModal.is_owner
+      ? ["owner"]
+      : roleOptionsFor(currentUser);
+    if (!availableRoles.includes(userModal.role)) {
       patchUserModal("error", t.roleRequired);
+      return;
+    }
+    if (userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password && !userModal.current_password) {
+      patchUserModal("error", t.currentPasswordRequired || t.passwordRequired);
       return;
     }
 
@@ -609,6 +658,7 @@ export default function SettingsPage() {
         is_active: Boolean(userModal.is_active),
       };
       if (userModal.password) body.password = userModal.password;
+      if (userModal.current_password) body.current_password = userModal.current_password;
 
       if (userModal.mode === "create") {
         await apiFetch("/users", {
@@ -635,7 +685,7 @@ export default function SettingsPage() {
   }
 
   async function toggleUserActive(user) {
-    if (userBusy) return;
+    if (userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id) return;
     setUserBusy(true);
     try {
       await apiFetch(`/users/${user.id}`, {
@@ -653,6 +703,50 @@ export default function SettingsPage() {
       showToast(normalizedError(err, lang, "users"));
     } finally {
       setUserBusy(false);
+    }
+  }
+
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename || "km-vms-logs.zip";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function downloadLogArchive() {
+    if (securityBusy) return;
+    setSecurityBusy(true);
+    try {
+      const { blob, filename } = await apiFetchBlob("/settings/logs/archive");
+      downloadBlob(blob, filename);
+      showToast({ variant: "success", title: t.toasts.logsTitle });
+    } catch (err) {
+      showToast(normalizedError(err, lang));
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+
+  async function submitBugReport() {
+    if (securityBusy || !bugReportText.trim()) return;
+    setSecurityBusy(true);
+    try {
+      const { blob, filename } = await apiFetchBlob("/settings/bug-report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: bugReportText.trim(), include_logs: true }),
+      });
+      downloadBlob(blob, filename);
+      setBugReportText("");
+      showToast({ variant: "success", title: t.toasts.reportTitle });
+    } catch (err) {
+      showToast(normalizedError(err, lang));
+    } finally {
+      setSecurityBusy(false);
     }
   }
 
@@ -780,9 +874,22 @@ export default function SettingsPage() {
                   <div className="settingsRowText">
                     <label>{t.security}<InfoTip text={t.tooltips.security} /></label>
                     <span>{t.securityText}</span>
+                    <small>{t.logJournal}</small>
                   </div>
-                  <div className="settingsRowControl settingsRowControlMeta">
-                    <span className="settingsMetaPill">24:00</span>
+                  <div className="settingsRowControl settingsSecurityControls">
+                    <button className="button secondary small" onClick={downloadLogArchive} disabled={securityBusy}>
+                      {t.downloadLogs}
+                    </button>
+                    <textarea
+                      className="input settingsBugReportInput"
+                      value={bugReportText}
+                      onChange={(event) => setBugReportText(event.target.value)}
+                      placeholder={t.bugReportPlaceholder}
+                      disabled={securityBusy}
+                    />
+                    <button className="button secondary small" onClick={submitBugReport} disabled={securityBusy || !bugReportText.trim()}>
+                      {t.sendBugReport}
+                    </button>
                   </div>
                 </div>
 
@@ -807,7 +914,7 @@ export default function SettingsPage() {
                       <small>{roleLabel(currentUser?.role, t)}</small>
                     </div>
                     <div>
-                      <span>{t.security}</span>
+                      <span>{t.session}</span>
                       <strong>24:00</strong>
                       <small>{t.sessionPolicy}</small>
                     </div>
@@ -839,8 +946,8 @@ export default function SettingsPage() {
                               </td>
                               <td>
                                 <div className="settingsUserActions">
-                                  <button className="button secondary small" onClick={() => openEditUser(user)} disabled={userBusy}>{t.edit}</button>
-                                  <button className="button secondary small" onClick={() => toggleUserActive(user)} disabled={userBusy}>
+                                  <button className="button secondary small" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)}>{t.edit}</button>
+                                  <button className="button secondary small" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id}>
                                     {user.is_active ? t.deactivate : t.activate}
                                   </button>
                                 </div>
@@ -867,7 +974,7 @@ export default function SettingsPage() {
 
               <label className="settingsModalField">
                 <span>{t.username}</span>
-                <input className="input" value={userModal.username} onChange={(event) => patchUserModal("username", event.target.value)} disabled={userModal.mode === "edit" || userBusy} />
+                <input className="input" value={userModal.username} onChange={(event) => patchUserModal("username", event.target.value)} disabled={userBusy} />
               </label>
 
               <label className="settingsModalField">
@@ -880,18 +987,25 @@ export default function SettingsPage() {
                 <input className="input" type="password" value={userModal.password} onChange={(event) => patchUserModal("password", event.target.value)} disabled={userBusy} autoComplete="new-password" />
               </label>
 
+              {userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password ? (
+                <label className="settingsModalField">
+                  <span>{t.currentPasswordRequired}</span>
+                  <input className="input" type="password" value={userModal.current_password} onChange={(event) => patchUserModal("current_password", event.target.value)} disabled={userBusy} autoComplete="current-password" />
+                </label>
+              ) : null}
+
               <div className="settingsModalGrid">
                 <label className="settingsModalField">
                   <span>{t.role}</span>
-                  <select className="select" value={userModal.role} onChange={(event) => patchUserModal("role", event.target.value)} disabled={userBusy}>
-                    <option value="admin">{t.roleAdmin}</option>
-                    <option value="operator">{t.roleOperator}</option>
-                    <option value="viewer">{t.roleViewer}</option>
+                  <select className="select" value={userModal.role} onChange={(event) => patchUserModal("role", event.target.value)} disabled={userBusy || userModal.is_owner || userModal.id === currentUser?.id}>
+                    {(userModal.id === currentUser?.id ? [currentUser.role] : userModal.is_owner ? ["owner"] : roleOptionsFor(currentUser)).map((role) => (
+                      <option key={role} value={role}>{roleLabel(role, t)}</option>
+                    ))}
                   </select>
                 </label>
 
                 <label className="settingsModalCheck">
-                  <input type="checkbox" checked={userModal.is_active} onChange={(event) => patchUserModal("is_active", event.target.checked)} disabled={userBusy} />
+                  <input type="checkbox" checked={userModal.is_active} onChange={(event) => patchUserModal("is_active", event.target.checked)} disabled={userBusy || userModal.id === currentUser?.id} />
                   <span>{t.active}</span>
                 </label>
               </div>

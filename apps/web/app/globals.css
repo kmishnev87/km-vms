@@ -775,7 +775,7 @@ textarea {
 }
 
 .settingsBadge-nvenc {
-  grid-column: 1 / span 2;
+  grid-column: auto;
 }
 
 .settingsBadge-cpu {
@@ -950,16 +950,14 @@ textarea {
   position: relative;
   min-width: 202px;
   display: grid;
-  grid-template-columns: auto auto;
+  grid-template-columns: minmax(0, auto) auto auto;
   align-items: center;
   justify-items: end;
   gap: 8px;
 }
 
 .settingsDirtyNote {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 4px);
+  position: static;
   color: #92400e;
   font-size: 12px;
   font-weight: 800;
@@ -972,6 +970,18 @@ textarea {
 
 .settingsUsersAddButton {
   width: 100%;
+}
+
+.settingsSecurityControls {
+  align-content: center;
+}
+
+.settingsBugReportInput {
+  min-height: 58px;
+  resize: vertical;
+  line-height: 1.3;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 .settingsUsersBlock {
@@ -2092,13 +2102,13 @@ textarea {
   .settingsHeaderActions {
     width: 100%;
     min-width: 0;
-    grid-template-columns: auto auto;
+    grid-template-columns: minmax(0, 1fr) auto auto;
     justify-items: end;
   }
 
   .settingsDirtyNote {
-    left: 0;
-    right: auto;
+    justify-self: start;
+    white-space: normal;
   }
 
   .settingsSecuritySummary {

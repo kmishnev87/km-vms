@@ -2,10 +2,10 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from app.core.permissions import ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER
+from app.core.permissions import ROLE_ADMIN, ROLE_OPERATOR, ROLE_OWNER, ROLE_VIEWER
 
 
-ROLES = {ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER}
+ROLES = {ROLE_OWNER, ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER}
 
 
 class UserResponse(BaseModel):
@@ -28,7 +28,9 @@ class UserCreateRequest(BaseModel):
 
 
 class UserUpdateRequest(BaseModel):
+    username: str | None = Field(default=None, min_length=2, max_length=100)
     role: str | None = None
     display_name: str | None = Field(default=None, max_length=255)
     is_active: bool | None = None
     password: str | None = Field(default=None, min_length=8, max_length=256)
+    current_password: str | None = Field(default=None, max_length=256)

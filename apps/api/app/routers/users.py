@@ -3,8 +3,8 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.permissions import ROLE_ADMIN, ROLE_PERMISSIONS
-from app.core.security import hash_password
+from app.core.permissions import ROLE_ADMIN, ROLE_OWNER, ROLE_PERMISSIONS
+from app.core.security import hash_password, verify_password
 from app.db.session import get_db
 from app.models.user import User
 from app.routers.deps import get_current_user, require_permission
@@ -33,22 +33,46 @@ def validate_role(role: str) -> str:
     return value
 
 
-def active_admin_count(db: Session, exclude_user_id: int | None = None) -> int:
-    query = db.query(User).filter(User.role == ROLE_ADMIN, User.is_active == True)  # noqa: E712
+def active_owner_count(db: Session, exclude_user_id: int | None = None) -> int:
+    query = db.query(User).filter(User.role == ROLE_OWNER, User.is_active == True)  # noqa: E712
     if exclude_user_id is not None:
         query = query.filter(User.id != exclude_user_id)
     return query.count()
 
 
-def ensure_not_last_active_admin(db: Session, user: User, next_role: str | None = None, next_active: bool | None = None):
+def ensure_not_last_active_owner(db: Session, user: User, next_role: str | None = None, next_active: bool | None = None):
     role_after = next_role if next_role is not None else user.role
     active_after = bool(next_active) if next_active is not None else bool(user.is_active)
-    if user.role == ROLE_ADMIN and bool(user.is_active) and (role_after != ROLE_ADMIN or not active_after):
-        if active_admin_count(db, exclude_user_id=user.id) <= 0:
+    if user.role == ROLE_OWNER and bool(user.is_active) and (role_after != ROLE_OWNER or not active_after):
+        if active_owner_count(db, exclude_user_id=user.id) <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot remove or demote the last active admin",
+                detail="Cannot remove or demote the last active owner",
             )
+
+
+def ensure_can_create_role(current_user: User, role: str) -> None:
+    if current_user.role == ROLE_OWNER and role in {ROLE_ADMIN, "operator", "viewer"}:
+        return
+    if current_user.role == ROLE_ADMIN and role in {"operator", "viewer"}:
+        return
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Role is not allowed")
+
+
+def ensure_can_modify_user(current_user: User, target: User, next_role: str | None = None, next_active: bool | None = None) -> None:
+    if current_user.role == ROLE_ADMIN and target.role == ROLE_OWNER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner cannot be modified by admin")
+    if current_user.role == ROLE_ADMIN and next_role == ROLE_ADMIN and target.id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin cannot assign admin role")
+    if current_user.role == ROLE_ADMIN and next_role == ROLE_OWNER:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin cannot assign owner role")
+    if current_user.id == target.id:
+        if next_role is not None and next_role != target.role:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot change own role")
+        if next_active is False and bool(target.is_active):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot disable self")
+    elif current_user.role != ROLE_OWNER and target.role == ROLE_ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin cannot modify admin")
 
 
 @router.get("/me")
@@ -81,12 +105,14 @@ def create_user(
     username = payload.username.strip()
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+    role = validate_role(payload.role)
+    ensure_can_create_role(current_user, role)
 
     user = User(
         username=username,
         full_name=(payload.display_name or "").strip(),
         password_hash=hash_password(payload.password),
-        role=validate_role(payload.role),
+        role=role,
         is_active=bool(payload.is_active),
     )
     db.add(user)
@@ -107,8 +133,15 @@ def update_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
     next_role = validate_role(payload.role) if payload.role is not None else None
-    ensure_not_last_active_admin(db, user, next_role=next_role, next_active=payload.is_active)
+    ensure_can_modify_user(current_user, user, next_role=next_role, next_active=payload.is_active)
+    ensure_not_last_active_owner(db, user, next_role=next_role, next_active=payload.is_active)
 
+    if payload.username is not None:
+        username = payload.username.strip()
+        existing = db.query(User).filter(User.username == username, User.id != user.id).first()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+        user.username = username
     if payload.display_name is not None:
         user.full_name = payload.display_name.strip()
     if next_role is not None:
@@ -116,6 +149,8 @@ def update_user(
     if payload.is_active is not None:
         user.is_active = bool(payload.is_active)
     if payload.password:
+        if current_user.id == user.id and not verify_password(payload.current_password or "", user.password_hash):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is required")
         user.password_hash = hash_password(payload.password)
     user.updated_at = datetime.utcnow()
 
@@ -135,7 +170,8 @@ def deactivate_user(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    ensure_not_last_active_admin(db, user, next_active=False)
+    ensure_can_modify_user(current_user, user, next_active=False)
+    ensure_not_last_active_owner(db, user, next_active=False)
     user.is_active = False
     user.updated_at = datetime.utcnow()
     db.add(user)
