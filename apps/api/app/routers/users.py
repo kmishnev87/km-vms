@@ -29,7 +29,7 @@ def serialize_user(user: User) -> UserResponse:
 def validate_role(role: str) -> str:
     value = str(role or "").strip().lower()
     if value not in ROLES:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid role")
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Недопустимая роль")
     return value
 
 
@@ -47,7 +47,7 @@ def ensure_not_last_active_owner(db: Session, user: User, next_role: str | None 
         if active_owner_count(db, exclude_user_id=user.id) <= 0:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot remove or demote the last active owner",
+                detail="Нельзя отключить или понизить последнего активного владельца",
             )
 
 
@@ -56,23 +56,23 @@ def ensure_can_create_role(current_user: User, role: str) -> None:
         return
     if current_user.role == ROLE_ADMIN and role in {"operator", "viewer"}:
         return
-    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Role is not allowed")
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав для назначения этой роли")
 
 
 def ensure_can_modify_user(current_user: User, target: User, next_role: str | None = None, next_active: bool | None = None) -> None:
     if current_user.role == ROLE_ADMIN and target.role == ROLE_OWNER:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner cannot be modified by admin")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может изменять владельца")
     if current_user.role == ROLE_ADMIN and next_role == ROLE_ADMIN and target.id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin cannot assign admin role")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может назначать роль администратора")
     if current_user.role == ROLE_ADMIN and next_role == ROLE_OWNER:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin cannot assign owner role")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может назначать роль владельца")
     if current_user.id == target.id:
         if next_role is not None and next_role != target.role:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot change own role")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя изменить собственную роль")
         if next_active is False and bool(target.is_active):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot disable self")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя отключить собственную учётную запись")
     elif current_user.role != ROLE_OWNER and target.role == ROLE_ADMIN:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin cannot modify admin")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Администратор не может изменять администратора")
 
 
 @router.get("/me")
@@ -104,7 +104,7 @@ def create_user(
 ):
     username = payload.username.strip()
     if db.query(User).filter(User.username == username).first():
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Пользователь с таким логином уже существует")
     role = validate_role(payload.role)
     ensure_can_create_role(current_user, role)
 
@@ -130,7 +130,7 @@ def update_user(
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
     next_role = validate_role(payload.role) if payload.role is not None else None
     ensure_can_modify_user(current_user, user, next_role=next_role, next_active=payload.is_active)
@@ -140,7 +140,7 @@ def update_user(
         username = payload.username.strip()
         existing = db.query(User).filter(User.username == username, User.id != user.id).first()
         if existing:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Пользователь с таким логином уже существует")
         user.username = username
     if payload.display_name is not None:
         user.full_name = payload.display_name.strip()
@@ -150,7 +150,7 @@ def update_user(
         user.is_active = bool(payload.is_active)
     if payload.password:
         if current_user.id == user.id and not verify_password(payload.current_password or "", user.password_hash):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Current password is required")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Укажите верный текущий пароль")
         user.password_hash = hash_password(payload.password)
     user.updated_at = datetime.utcnow()
 
@@ -168,7 +168,7 @@ def deactivate_user(
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
     ensure_can_modify_user(current_user, user, next_active=False)
     ensure_not_last_active_owner(db, user, next_active=False)

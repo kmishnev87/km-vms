@@ -779,7 +779,7 @@ textarea {
 }
 
 .settingsBadge-cpu {
-  grid-column: 3 / span 2;
+  grid-column: auto;
 }
 
 .settingsBadge {
@@ -972,18 +972,6 @@ textarea {
   width: 100%;
 }
 
-.settingsSecurityControls {
-  align-content: center;
-}
-
-.settingsBugReportInput {
-  min-height: 58px;
-  resize: vertical;
-  line-height: 1.3;
-  padding-top: 8px;
-  padding-bottom: 8px;
-}
-
 .settingsUsersBlock {
   padding: 12px 14px 14px;
   display: grid;
@@ -1114,6 +1102,99 @@ textarea {
   padding: 16px;
   display: grid;
   gap: 12px;
+}
+
+.settingsSecurityModal {
+  width: min(100%, 760px);
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  border: 1px solid #dbe3ef;
+  border-radius: 14px;
+  background: #ffffff;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.settingsSecurityModalSection {
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.settingsSecurityModalSectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.settingsSecurityModalSection h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.settingsJournalCategories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settingsJournalCategory {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid #dbe3ef;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475569;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settingsJournalEmpty {
+  min-height: 76px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #64748b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.settingsBugReportTextarea {
+  min-height: 120px;
+  resize: vertical;
+  line-height: 1.4;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.settingsSecurityModalButton {
+  justify-self: start;
+}
+
+.settingsSecurityNote {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settingsSecurityNote.ok {
+  color: #166534;
+  font-weight: 800;
 }
 
 .settingsUserModalHeader {

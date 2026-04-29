@@ -13,6 +13,31 @@ const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
 });
 
 const HARDWARE_OPTIONS = ["auto", "qsv", "vaapi", "amf", "nvenc", "cpu"];
+const LOG_EVENT_CATEGORIES = [
+  { ru: "вход", en: "login" },
+  { ru: "выход", en: "logout" },
+  { ru: "ошибка входа", en: "failed login" },
+  { ru: "сессия истекла", en: "session expired" },
+  { ru: "настройки изменены", en: "settings changed" },
+  { ru: "тест хранилища", en: "storage test" },
+  { ru: "тест оборудования", en: "hardware test" },
+  { ru: "камера добавлена", en: "camera added" },
+  { ru: "камера изменена", en: "camera edited" },
+  { ru: "камера удалена", en: "camera deleted" },
+  { ru: "live-поток запущен/остановлен", en: "live stream started/stopped" },
+  { ru: "запись запущена/остановлена", en: "recording started/stopped" },
+  { ru: "ошибка записи", en: "recording error" },
+  { ru: "камера офлайн", en: "camera offline" },
+  { ru: "мало/нет места", en: "storage low / no space" },
+  { ru: "автоудаление по хранению", en: "recording auto-deleted by retention" },
+  { ru: "ручное удаление записи", en: "recording manually deleted" },
+  { ru: "пользователь создан", en: "user created" },
+  { ru: "пользователь изменён", en: "user edited" },
+  { ru: "роль изменена", en: "role changed" },
+  { ru: "пользователь отключён/включён", en: "user disabled/enabled" },
+  { ru: "пароль сброшен", en: "password reset" },
+  { ru: "отчёт создан/отправлен", en: "bug report created/sent" },
+];
 
 const BACKEND_LABELS = {
   auto: { ru: "Автоматически", en: "Automatic" },
@@ -59,12 +84,17 @@ const TEXT = {
     failedValidation: "Не прошёл проверку",
     notDetected: "Не найдено на этом сервере",
     security: "Безопасность",
-    securityText: "Журнал логирования и отчёт об ошибке с системными логами.",
+    securityText: "Журнал логирования, сбор диагностических логов и отчёт об ошибке.",
     logJournal: "Журнал логирования",
-    downloadLogs: "Скачать архив",
+    open: "Открыть",
+    createDiagnosticArchive: "Создать диагностический архив",
     bugReport: "Отчёт об ошибке",
-    bugReportPlaceholder: "Опишите проблему",
+    bugReportPlaceholder: "Опишите проблему простым языком: что произошло, где нажимали, что ожидали увидеть.",
     sendBugReport: "Отправить отчёт",
+    journalEmpty: "Журнал событий будет отображаться здесь после подключения backend-логирования.",
+    reportSendingPending: "Отправка отчётов будет подключена после реализации backend-отправки.",
+    diagnosticArchiveReady: "Диагностический архив создан и прикреплён.",
+    resetPasswordLabel: "Сброс пароля администратором",
     users: "Пользователи и роли",
     usersText: "Управление пользователями, ролями и доступом к системе.",
     usersDenied: "Недостаточно прав для управления пользователями.",
@@ -122,7 +152,6 @@ const TEXT = {
       usersFailTitle: "Пользователи недоступны",
       usersFailText: "Не удалось выполнить действие с пользователем",
       logsTitle: "Архив логов подготовлен",
-      reportTitle: "Отчёт об ошибке подготовлен",
     },
     tooltips: {
       timezone: "Используется для отображения времени, записи файлов и хронологии.",
@@ -174,14 +203,19 @@ const TEXT = {
     failedValidation: "Failed validation",
     notDetected: "Not detected on this server",
     security: "Security",
-    securityText: "System logging and bug reports with logs.",
+    securityText: "Logging journal, diagnostic logs collection and bug report.",
     logJournal: "Logging journal",
-    downloadLogs: "Download archive",
+    open: "Open",
+    createDiagnosticArchive: "Create diagnostic archive",
     bugReport: "Bug report",
-    bugReportPlaceholder: "Describe the problem",
+    bugReportPlaceholder: "Describe the problem in simple language: what happened, where you clicked, what you expected.",
     sendBugReport: "Send report",
+    journalEmpty: "Event journal will appear here after backend logging is connected.",
+    reportSendingPending: "Report sending will be connected after backend sending is implemented.",
+    diagnosticArchiveReady: "Diagnostic archive created and attached.",
+    resetPasswordLabel: "Admin password reset",
     users: "Users / Roles",
-    usersText: "Manage users, roles, and system access.",
+    usersText: "Manage users, roles and system access.",
     usersDenied: "Insufficient permissions to manage users.",
     currentUser: "Current user",
     session: "Session",
@@ -196,7 +230,7 @@ const TEXT = {
     status: "Status",
     active: "Active",
     inactive: "Disabled",
-    actions: "Actions",
+    actions: "Management",
     edit: "Edit",
     deactivate: "Disable",
     activate: "Enable",
@@ -237,7 +271,6 @@ const TEXT = {
       usersFailTitle: "Users unavailable",
       usersFailText: "User action failed",
       logsTitle: "Log archive prepared",
-      reportTitle: "Bug report prepared",
     },
     tooltips: {
       timezone: "Used for time display, recording timestamps, and chronology.",
@@ -315,6 +348,25 @@ function parseErrorDetail(message) {
   }
 }
 
+function humanErrorText(message, fallback) {
+  if (!message) return fallback;
+  const detail = parseErrorDetail(message);
+  const value = detail?.detail ?? detail;
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => item?.msg || item?.message || "")
+      .filter(Boolean)
+      .join("; ") || fallback;
+  }
+  if (value && typeof value === "object") {
+    if (typeof value.error === "string") return value.error;
+    if (typeof value.message === "string") return value.message;
+  }
+  if (!message.startsWith("{")) return message;
+  return fallback;
+}
+
 function normalizedError(err, lang, context = "generic") {
   const t = TEXT[lang] || TEXT.ru;
   const message = String(err?.message || "");
@@ -339,9 +391,9 @@ function normalizedError(err, lang, context = "generic") {
     return { variant: "error", title: t.toasts.hardwareFailTitle, text: t.toasts.hardwareFailText };
   }
   if (context === "users") {
-    return { variant: "error", title: t.toasts.usersFailTitle, text: t.toasts.usersFailText };
+    return { variant: "error", title: t.toasts.usersFailTitle, text: humanErrorText(message, t.toasts.usersFailText) };
   }
-  return { variant: "error", title: t.toasts.networkTitle, text: t.toasts.networkText };
+  return { variant: "error", title: t.toasts.networkTitle, text: humanErrorText(message, t.toasts.networkText) };
 }
 
 function recordingFormatForProfile(profile) {
@@ -418,8 +470,10 @@ export default function SettingsPage() {
   const [usersLoading, setUsersLoading] = useState(false);
   const [userBusy, setUserBusy] = useState(false);
   const [userModal, setUserModal] = useState(null);
+  const [securityModalOpen, setSecurityModalOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
   const [bugReportText, setBugReportText] = useState("");
+  const [diagnosticArchiveReady, setDiagnosticArchiveReady] = useState(false);
   const toastTimerRef = useRef(null);
   const lang = languageOf(draft || savedDraft);
   const t = TEXT[lang] || TEXT.ru;
@@ -624,6 +678,11 @@ export default function SettingsPage() {
     setUserModal((current) => ({ ...current, [key]: value, error: "" }));
   }
 
+  function patchBugReportText(value) {
+    setBugReportText(value);
+    setDiagnosticArchiveReady(false);
+  }
+
   async function submitUserModal(event) {
     event.preventDefault();
     if (!userModal || userBusy) return;
@@ -678,7 +737,9 @@ export default function SettingsPage() {
       setUserModal(null);
       await loadUsers();
     } catch (err) {
-      showToast(normalizedError(err, lang, "users"));
+      const errorToast = normalizedError(err, lang, "users");
+      patchUserModal("error", errorToast.text || errorToast.title);
+      showToast(errorToast);
     } finally {
       setUserBusy(false);
     }
@@ -723,6 +784,7 @@ export default function SettingsPage() {
     try {
       const { blob, filename } = await apiFetchBlob("/settings/logs/archive");
       downloadBlob(blob, filename);
+      setDiagnosticArchiveReady(true);
       showToast({ variant: "success", title: t.toasts.logsTitle });
     } catch (err) {
       showToast(normalizedError(err, lang));
@@ -732,22 +794,7 @@ export default function SettingsPage() {
   }
 
   async function submitBugReport() {
-    if (securityBusy || !bugReportText.trim()) return;
-    setSecurityBusy(true);
-    try {
-      const { blob, filename } = await apiFetchBlob("/settings/bug-report", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: bugReportText.trim(), include_logs: true }),
-      });
-      downloadBlob(blob, filename);
-      setBugReportText("");
-      showToast({ variant: "success", title: t.toasts.reportTitle });
-    } catch (err) {
-      showToast(normalizedError(err, lang));
-    } finally {
-      setSecurityBusy(false);
-    }
+    showToast({ variant: "info", title: t.bugReport, text: t.reportSendingPending });
   }
 
   return (
@@ -874,21 +921,10 @@ export default function SettingsPage() {
                   <div className="settingsRowText">
                     <label>{t.security}<InfoTip text={t.tooltips.security} /></label>
                     <span>{t.securityText}</span>
-                    <small>{t.logJournal}</small>
                   </div>
-                  <div className="settingsRowControl settingsSecurityControls">
-                    <button className="button secondary small" onClick={downloadLogArchive} disabled={securityBusy}>
-                      {t.downloadLogs}
-                    </button>
-                    <textarea
-                      className="input settingsBugReportInput"
-                      value={bugReportText}
-                      onChange={(event) => setBugReportText(event.target.value)}
-                      placeholder={t.bugReportPlaceholder}
-                      disabled={securityBusy}
-                    />
-                    <button className="button secondary small" onClick={submitBugReport} disabled={securityBusy || !bugReportText.trim()}>
-                      {t.sendBugReport}
+                  <div className="settingsRowControl settingsRowControlMeta">
+                    <button className="button secondary small settingsUsersAddButton" onClick={() => setSecurityModalOpen(true)}>
+                      {t.open}
                     </button>
                   </div>
                 </div>
@@ -983,7 +1019,7 @@ export default function SettingsPage() {
               </label>
 
               <label className="settingsModalField">
-                <span>{userModal.mode === "create" ? t.password : t.passwordOptional}</span>
+                <span>{userModal.mode === "create" ? t.password : userModal.id === currentUser?.id ? t.passwordOptional : t.resetPasswordLabel}</span>
                 <input className="input" type="password" value={userModal.password} onChange={(event) => patchUserModal("password", event.target.value)} disabled={userBusy} autoComplete="new-password" />
               </label>
 
@@ -1017,6 +1053,54 @@ export default function SettingsPage() {
                 <button type="submit" className="button small" disabled={userBusy}>{userModal.mode === "create" ? t.create : t.update}</button>
               </div>
             </form>
+          </div>
+        ) : null}
+
+        {securityModalOpen ? (
+          <div className="settingsModalOverlay" role="presentation">
+            <div className="settingsSecurityModal" role="dialog" aria-modal="true" aria-label={t.security}>
+              <div className="settingsUserModalHeader">
+                <h2>{t.security}</h2>
+                <button type="button" className="settingsModalClose" onClick={() => setSecurityModalOpen(false)} aria-label={t.close}>×</button>
+              </div>
+
+              <section className="settingsSecurityModalSection">
+                <div className="settingsSecurityModalSectionHead">
+                  <h3>{t.logJournal}</h3>
+                </div>
+                <div className="settingsJournalCategories" aria-label={t.logJournal}>
+                  {LOG_EVENT_CATEGORIES.map((category) => (
+                    <span key={category.en} className="settingsJournalCategory">{category[lang] || category.en}</span>
+                  ))}
+                </div>
+                <div className="settingsJournalEmpty">{t.journalEmpty}</div>
+              </section>
+
+              <section className="settingsSecurityModalSection">
+                <div className="settingsSecurityModalSectionHead">
+                  <h3>{t.bugReport}</h3>
+                </div>
+                <button className="button secondary small settingsSecurityModalButton" onClick={downloadLogArchive} disabled={securityBusy}>
+                  {t.createDiagnosticArchive}
+                </button>
+                <textarea
+                  className="input settingsBugReportTextarea"
+                  value={bugReportText}
+                  onChange={(event) => patchBugReportText(event.target.value)}
+                  placeholder={t.bugReportPlaceholder}
+                  disabled={securityBusy}
+                />
+                {diagnosticArchiveReady ? <div className="settingsSecurityNote ok">{t.diagnosticArchiveReady}</div> : null}
+                <div className="settingsSecurityNote">{t.reportSendingPending}</div>
+                <button
+                  className="button small settingsSecurityModalButton"
+                  onClick={submitBugReport}
+                  disabled={securityBusy || !diagnosticArchiveReady || !bugReportText.trim()}
+                >
+                  {t.sendBugReport}
+                </button>
+              </section>
+            </div>
           </div>
         ) : null}
       </div>
