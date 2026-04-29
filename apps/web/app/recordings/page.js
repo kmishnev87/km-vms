@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
-import { apiFetch, apiFetchBlob } from "../../lib/api";
+import { apiFetch, apiFetchBlob, canDeleteRecordings, getAuthToken } from "../../lib/api";
 
 const PAGE_SIZE = 30;
 const TEXT = {
@@ -174,6 +174,7 @@ export default function RecordingsPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
 
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerTitle, setViewerTitle] = useState("");
@@ -181,6 +182,7 @@ export default function RecordingsPage() {
 
   const requestIdRef = useRef(0);
   const dangerMenuRef = useRef(null);
+  const canDelete = canDeleteRecordings(currentUser);
 
   async function loadCameras() {
     const data = await apiFetch("/recordings/cameras");
@@ -204,6 +206,8 @@ export default function RecordingsPage() {
   async function initialLoad() {
     try {
       setError("");
+      const me = await apiFetch("/auth/me");
+      setCurrentUser(me);
       await loadCameras();
     } catch (err) {
       setError(err.message);
@@ -344,7 +348,8 @@ export default function RecordingsPage() {
   function handleWatch(item) {
     try {
       setError("");
-      const url = `/api/recordings/stream?path=${encodeURIComponent(item.path)}`;
+      const token = getAuthToken();
+      const url = `/api/recordings/stream?path=${encodeURIComponent(item.path)}&token=${encodeURIComponent(token)}`;
       setViewerTitle(item.filename);
       setViewerUrl(url);
       setViewerOpen(true);
@@ -360,6 +365,7 @@ export default function RecordingsPage() {
   }
 
   async function handleDeleteOne(item) {
+    if (!canDelete) return;
     if (!window.confirm(`\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u044c "${item.filename}"?`)) return;
     try {
       setError("");
@@ -376,6 +382,7 @@ export default function RecordingsPage() {
   }
 
   async function handleDeleteSelected() {
+    if (!canDelete) return;
     if (!selectedPaths.length) return;
     if (!window.confirm(`\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438: ${selectedPaths.length} \u0448\u0442.?`)) return;
 
@@ -396,6 +403,7 @@ export default function RecordingsPage() {
   }
 
   async function handleDeleteByCamera() {
+    if (!canDelete) return;
     if (!selectedCamera || selectedCamera === "__all__") return;
     if (!window.confirm(`\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u0441\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 \u043a\u0430\u043c\u0435\u0440\u044b "${selectedCamera}"?`)) return;
 
@@ -415,6 +423,7 @@ export default function RecordingsPage() {
   }
 
   async function handleDeleteAll() {
+    if (!canDelete) return;
     if (!window.confirm("\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u043e\u043e\u0431\u0449\u0435 \u0432\u0441\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 \u0432\u0441\u0435\u0445 \u043a\u0430\u043c\u0435\u0440?")) return;
 
     try {
@@ -481,49 +490,53 @@ export default function RecordingsPage() {
               {ICONS.refresh}
             </button>
 
-            <button
-              className="button secondary small recordingsActionButton recordingsToolbarIconButton"
-              onClick={handleDeleteSelected}
-              disabled={!selectedPaths.length || busy}
-              title={TEXT.deleteSelected}
-              aria-label={TEXT.deleteSelected}
-            >
-              {ICONS.trash}
-            </button>
+            {canDelete ? (
+              <>
+                <button
+                  className="button secondary small recordingsActionButton recordingsToolbarIconButton"
+                  onClick={handleDeleteSelected}
+                  disabled={!selectedPaths.length || busy}
+                  title={TEXT.deleteSelected}
+                  aria-label={TEXT.deleteSelected}
+                >
+                  {ICONS.trash}
+                </button>
 
-            <div className="recordingsDangerMenu recordingsToolbarMenu" ref={dangerMenuRef}>
-              <button
-                className="button secondary small recordingsDangerTrigger"
-                onClick={() => setDangerMenuOpen((prev) => !prev)}
-                aria-haspopup="menu"
-                aria-expanded={dangerMenuOpen}
-                title={TEXT.dangerActions}
-              >
-                {ICONS.more}
-              </button>
+                <div className="recordingsDangerMenu recordingsToolbarMenu" ref={dangerMenuRef}>
+                  <button
+                    className="button secondary small recordingsDangerTrigger"
+                    onClick={() => setDangerMenuOpen((prev) => !prev)}
+                    aria-haspopup="menu"
+                    aria-expanded={dangerMenuOpen}
+                    title={TEXT.dangerActions}
+                  >
+                    {ICONS.more}
+                  </button>
 
-              {dangerMenuOpen ? (
-                <div className="recordingsDangerDropdown" role="menu">
-                  <div className="recordingsDangerTitle">{TEXT.dangerActions}</div>
-                  <button
-                    className="recordingsDangerItem"
-                    onClick={handleDeleteByCamera}
-                    disabled={selectedCamera === "__all__" || busy}
-                    role="menuitem"
-                  >
-                    {TEXT.deleteCamera}
-                  </button>
-                  <button
-                    className="recordingsDangerItem recordingsDangerItemAlert"
-                    onClick={handleDeleteAll}
-                    disabled={busy}
-                    role="menuitem"
-                  >
-                    {TEXT.deleteAll}
-                  </button>
+                  {dangerMenuOpen ? (
+                    <div className="recordingsDangerDropdown" role="menu">
+                      <div className="recordingsDangerTitle">{TEXT.dangerActions}</div>
+                      <button
+                        className="recordingsDangerItem"
+                        onClick={handleDeleteByCamera}
+                        disabled={selectedCamera === "__all__" || busy}
+                        role="menuitem"
+                      >
+                        {TEXT.deleteCamera}
+                      </button>
+                      <button
+                        className="recordingsDangerItem recordingsDangerItemAlert"
+                        onClick={handleDeleteAll}
+                        disabled={busy}
+                        role="menuitem"
+                      >
+                        {TEXT.deleteAll}
+                      </button>
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
+              </>
+            ) : null}
           </div>
         </div>
       </div>
@@ -551,12 +564,14 @@ export default function RecordingsPage() {
             <thead>
               <tr>
                 <th style={{ width: 44 }}>
-                  <input
-                    type="checkbox"
-                    checked={allVisibleSelected}
-                    onChange={toggleSelectAll}
-                    aria-label={TEXT.pickAllPage}
-                  />
+                  {canDelete ? (
+                    <input
+                      type="checkbox"
+                      checked={allVisibleSelected}
+                      onChange={toggleSelectAll}
+                      aria-label={TEXT.pickAllPage}
+                    />
+                  ) : null}
                 </th>
                 <th>
                   <button
@@ -593,12 +608,14 @@ export default function RecordingsPage() {
               {paginatedItems.map((item) => (
                 <tr key={item.path}>
                   <td>
-                    <input
-                      type="checkbox"
-                      checked={selectedPaths.includes(item.path)}
-                      onChange={() => toggleSelected(item.path)}
-                      aria-label={`\u0412\u044b\u0431\u0440\u0430\u0442\u044c ${item.filename}`}
-                    />
+                    {canDelete ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedPaths.includes(item.path)}
+                        onChange={() => toggleSelected(item.path)}
+                        aria-label={`\u0412\u044b\u0431\u0440\u0430\u0442\u044c ${item.filename}`}
+                      />
+                    ) : null}
                   </td>
                   <td className="recordingsCameraCell">{item.camera}</td>
                   <td className="recordingsFilenameCell">
@@ -630,15 +647,17 @@ export default function RecordingsPage() {
                       >
                         {ICONS.download}
                       </button>
-                      <button
-                        className="recordingsIconButton danger"
-                        onClick={() => handleDeleteOne(item)}
-                        disabled={busy}
-                        title={`${ICONS.remove} ${TEXT.remove}`}
-                        aria-label={TEXT.remove}
-                      >
-                        {ICONS.remove}
-                      </button>
+                      {canDelete ? (
+                        <button
+                          className="recordingsIconButton danger"
+                          onClick={() => handleDeleteOne(item)}
+                          disabled={busy}
+                          title={`${ICONS.remove} ${TEXT.remove}`}
+                          aria-label={TEXT.remove}
+                        >
+                          {ICONS.remove}
+                        </button>
+                      ) : null}
                     </div>
                   </td>
                 </tr>

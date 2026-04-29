@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { apiFetch, clearAuthToken, getAuthToken } from "../lib/api";
+import { apiFetch, canAccessPath, clearAuthToken, getAuthToken } from "../lib/api";
 
 const items = [
   { href: "/cameras", label: "\u041a\u0430\u043c\u0435\u0440\u044b", iconSrc: "/icons/nav/cameras.png" },
@@ -17,6 +17,7 @@ export default function Layout({ children }) {
   const router = useRouter();
   const [language, setLanguage] = useState("ru");
   const [username, setUsername] = useState("");
+  const [currentUser, setCurrentUser] = useState(null);
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -26,7 +27,10 @@ export default function Layout({ children }) {
           router.replace("/setup");
           return;
         }
-        if (status?.language) setLanguage(status.language);
+        if (status?.language) {
+          setLanguage(status.language);
+          localStorage.setItem("km_vms_language", status.language);
+        }
         if (!getAuthToken()) {
           router.replace("/login");
         }
@@ -39,8 +43,14 @@ export default function Layout({ children }) {
   useEffect(() => {
     if (!getAuthToken()) return;
     apiFetch("/auth/me")
-      .then((user) => setUsername(user?.full_name || user?.username || ""))
-      .catch(() => setUsername(""));
+      .then((user) => {
+        setCurrentUser(user);
+        setUsername(user?.full_name || user?.username || "");
+      })
+      .catch(() => {
+        setCurrentUser(null);
+        setUsername("");
+      });
   }, []);
 
   useEffect(() => {
@@ -54,6 +64,7 @@ export default function Layout({ children }) {
   async function changeLanguage(event) {
     const nextLanguage = event.target.value;
     setLanguage(nextLanguage);
+    localStorage.setItem("km_vms_language", nextLanguage);
     window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextLanguage }));
     try {
       await apiFetch("/settings", {
@@ -71,6 +82,16 @@ export default function Layout({ children }) {
     router.push("/login");
   }
 
+  const visibleItems = currentUser ? items.filter((item) => canAccessPath(currentUser, item.href)) : [];
+  const canOpenSettings = currentUser ? canAccessPath(currentUser, "/settings") : false;
+
+  useEffect(() => {
+    if (!currentUser || pathname === "/login" || pathname === "/setup") return;
+    if (pathname !== "/" && !canAccessPath(currentUser, pathname)) {
+      router.replace("/live");
+    }
+  }, [currentUser, pathname, router]);
+
   return (
     <div className="layoutShell">
       <header className="topNav">
@@ -81,7 +102,7 @@ export default function Layout({ children }) {
           </Link>
 
           <nav className="topNavItems">
-            {items.map((item) => (
+            {visibleItems.map((item) => (
               <Link
                 key={item.href}
                 href={item.href}
@@ -104,14 +125,16 @@ export default function Layout({ children }) {
               {username || (language === "en" ? "User" : "Пользователь")}
             </div>
 
-            <Link
-              href="/settings"
-              className={`topNavItem ${pathname === "/settings" ? "active" : ""}`}
-              title={"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438"}
-              aria-label={"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438"}
-            >
-              <img className="topNavIconImage" src="/icons/nav/settings-icon.png" alt="" />
-            </Link>
+            {canOpenSettings ? (
+              <Link
+                href="/settings"
+                className={`topNavItem ${pathname === "/settings" ? "active" : ""}`}
+                title={"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438"}
+                aria-label={"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438"}
+              >
+                <img className="topNavIconImage" src="/icons/nav/settings-icon.png" alt="" />
+              </Link>
+            ) : null}
 
             <button
               className="topNavItem topNavButton"

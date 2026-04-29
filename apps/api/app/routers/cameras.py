@@ -13,7 +13,7 @@ from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
-from app.routers.deps import get_current_user
+from app.routers.deps import get_current_user, require_permission
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.onvif_service import (
@@ -123,7 +123,7 @@ def build_test_url(payload: dict, db: Session | None = None) -> str | None:
 def onvif_profiles(
     payload: dict,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     creds = get_camera_credentials(db, payload)
 
@@ -154,7 +154,7 @@ def onvif_profiles(
 def onvif_profile_config(
     payload: dict,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     creds = get_camera_credentials(db, payload)
 
@@ -174,7 +174,7 @@ def onvif_profile_config(
 def update_onvif_profile_route(
     payload: dict,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     creds = get_camera_credentials(db, payload)
 
@@ -215,7 +215,7 @@ def get_camera(
 def test_camera(
     payload: dict,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     input_url = build_test_url(payload, db=db)
     if not input_url:
@@ -285,7 +285,7 @@ def test_camera(
 def create_camera(
     payload: CameraCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     existing = db.query(Camera).filter(Camera.name == payload.name).first()
     if existing:
@@ -345,7 +345,7 @@ def update_camera(
     camera_id: int,
     payload: CameraUpdate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:
@@ -403,7 +403,7 @@ def update_camera(
 def enable_camera(
     camera_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:
@@ -422,7 +422,7 @@ def enable_camera(
 def disable_camera(
     camera_id: int,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:
@@ -442,7 +442,7 @@ def delete_camera(
     camera_id: int,
     delete_files: bool = Query(False),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("manage_cameras")),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:

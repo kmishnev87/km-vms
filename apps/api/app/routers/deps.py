@@ -43,7 +43,7 @@ def require_permission(permission: str):
         if not user_has_permission(current_user.role, permission):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Insufficient permissions",
+                detail="Раздел недоступен. Ограничены права пользователя.",
             )
         return current_user
 

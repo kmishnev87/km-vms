@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.camera import Camera
-from app.routers.deps import get_db
+from app.models.user import User
+from app.routers.deps import get_db, require_permission
 
 router = APIRouter(prefix="/chronology", tags=["chronology"])
 
@@ -123,6 +124,7 @@ def chronology_playback(
     camera_id: int = Query(...),
     ts: str = Query(...),
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("view_timeline")),
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:
@@ -181,6 +183,7 @@ def chronology_ranges(
     from_ts: str = Query(..., alias="from"),
     to_ts: str = Query(..., alias="to"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("view_timeline")),
 ):
     try:
         parsed_ids = [int(x.strip()) for x in camera_ids.split(",") if x.strip()]

@@ -1079,18 +1079,43 @@ textarea {
   display: flex;
   gap: 6px;
   justify-content: center;
+  align-items: center;
 }
 
-.settingsUserActions .button {
-  min-height: 30px;
-  font-size: 12px;
+.settingsUserIconButton {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #0f172a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
 }
 
-.settingsUserActionButton {
-  width: 84px;
-  min-width: 84px;
-  padding: 0 6px;
-  text-transform: lowercase;
+.settingsUserIconButton:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.settingsUserIconButton.danger:hover:not(:disabled) {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.settingsUserIconButton:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  background: #f1f5f9;
+  color: #94a3b8;
 }
 
 .settingsModalOverlay {

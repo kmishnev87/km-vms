@@ -7,16 +7,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.permissions import user_has_permission
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.user import User
-from app.routers.deps import get_current_user
+from app.routers.deps import get_current_user, require_permission
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
@@ -51,6 +53,22 @@ def safe_resolve_relative(relative_path: str) -> Path:
         raise HTTPException(status_code=400, detail="Недопустимый путь")
 
     return target
+
+
+def authorize_recording_token(token: str | None, db: Session) -> None:
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    username = payload.get("sub")
+    user = db.query(User).filter(User.username == username).first() if username else None
+    if not user or not getattr(user, "is_active", True):
+        raise HTTPException(status_code=401, detail="User not found")
+    if not user_has_permission(user.role, "view_recordings"):
+        raise HTTPException(status_code=403, detail="Раздел недоступен. Ограничены права пользователя.")
 
 
 def human_size(size_bytes: int) -> str:
@@ -207,7 +225,7 @@ def stream_video(request: Request, file_path: Path):
 @router.get("/cameras")
 def list_recording_cameras(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_recordings")),
 ):
     return {"items": collect_camera_names(db)}
 
@@ -216,7 +234,7 @@ def list_recording_cameras(
 def list_recordings(
     camera: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_recordings")),
 ):
     items = collect_recording_files(camera_name=camera if camera and camera != "__all__" else None)
     total = sum(item["size_bytes"] for item in items)
@@ -233,7 +251,7 @@ def list_recordings(
 @router.get("/download")
 def download_recording(
     path: str = Query(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_recordings")),
 ):
     file_path = safe_resolve_relative(path)
     if not file_path.exists() or not file_path.is_file():
@@ -251,7 +269,10 @@ def download_recording(
 def stream_recording(
     request: Request,
     path: str = Query(...),
+    token: str | None = Query(default=None),
+    db: Session = Depends(get_db),
 ):
+    authorize_recording_token(token, db)
     file_path = safe_resolve_relative(path)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")
@@ -262,7 +283,7 @@ def stream_recording(
 @router.delete("")
 def delete_recording(
     path: str = Query(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("delete_recordings")),
 ):
     file_path = safe_resolve_relative(path)
     if not file_path.exists() or not file_path.is_file():
@@ -275,7 +296,7 @@ def delete_recording(
 @router.post("/bulk-delete")
 def bulk_delete_recordings(
     payload: BulkDeleteRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("delete_recordings")),
 ):
     deleted = 0
     for rel in payload.paths:
@@ -293,7 +314,7 @@ def bulk_delete_recordings(
 @router.delete("/by-camera")
 def delete_recordings_by_camera(
     camera: str = Query(...),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("delete_recordings")),
 ):
     if not camera:
         raise HTTPException(status_code=400, detail="Камера не указана")
@@ -320,7 +341,7 @@ def delete_recordings_by_camera(
 
 @router.delete("/all")
 def delete_all_recordings(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("delete_recordings")),
 ):
     root = storage_root()
     deleted = 0

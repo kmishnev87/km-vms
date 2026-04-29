@@ -20,12 +20,9 @@ ROLE_PERMISSIONS = {
         "view_live",
         "view_recordings",
         "view_timeline",
-        "manage_cameras",
     },
     ROLE_VIEWER: {
         "view_live",
-        "view_recordings",
-        "view_timeline",
     },
 }
 

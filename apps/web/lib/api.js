@@ -1,6 +1,29 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "/api";
 const TOKEN_KEY = "token";
 const TOKEN_EXPIRES_KEY = "token_expires_at";
+const FORBIDDEN_RU = "Раздел недоступен. Ограничены права пользователя.";
+const FORBIDDEN_EN = "Section unavailable. User permissions are limited.";
+
+export function forbiddenMessage(language = "ru") {
+  return language === "en" ? FORBIDDEN_EN : FORBIDDEN_RU;
+}
+
+function currentUiLanguage() {
+  if (typeof window === "undefined") return "ru";
+  return localStorage.getItem("km_vms_language") === "en" ? "en" : "ru";
+}
+
+export function canAccessPath(user, href) {
+  const role = user?.role;
+  if (role === "owner" || role === "admin") return true;
+  if (href === "/live") return role === "operator" || role === "viewer";
+  if (href === "/recordings" || href === "/chronology") return role === "operator";
+  return false;
+}
+
+export function canDeleteRecordings(user) {
+  return user?.role === "owner" || user?.role === "admin";
+}
 
 function buildUrl(path) {
   if (!path) return API_BASE;
@@ -74,6 +97,9 @@ export async function apiFetch(path, options = {}) {
     } catch {
       detail = `HTTP ${response.status}`;
     }
+    if (response.status === 403 || String(detail).includes("Insufficient permissions")) {
+      detail = forbiddenMessage(currentUiLanguage());
+    }
     throw new Error(detail || "Ошибка запроса");
   }
 
@@ -100,6 +126,9 @@ export async function apiFetchBlob(path, options = {}) {
       }
     } catch {
       detail = `HTTP ${response.status}`;
+    }
+    if (response.status === 403 || String(detail).includes("Insufficient permissions")) {
+      detail = forbiddenMessage(currentUiLanguage());
     }
     throw new Error(detail || "Ошибка запроса");
   }

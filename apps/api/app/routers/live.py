@@ -14,7 +14,7 @@ from app.core.config import settings
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.user import User
-from app.routers.deps import get_current_user
+from app.routers.deps import get_current_user, require_permission
 from app.services.live_engine_v2 import manager
 
 router = APIRouter(prefix="/live", tags=["live"])
@@ -164,7 +164,7 @@ def _serve_live_playlist(camera_id: int, stream: str, token: Optional[str]) -> R
 @router.post("/stop")
 def stop_live_stream(
     payload: LiveStopPayload,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_live")),
 ):
     stopped = manager.stop_stream(payload.camera_id, payload.stream)
     return {
@@ -177,7 +177,7 @@ def stop_live_stream(
 
 @router.post("/stop-all")
 def stop_all_live_streams(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_live")),
 ):
     stopped_count = manager.stop_all_streams()
     return {
@@ -190,7 +190,7 @@ def stop_all_live_streams(
 def live_status(
     camera_id: Optional[int] = Query(default=None),
     stream: Optional[StreamKey] = Query(default=None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_live")),
 ):
     items = manager.status(camera_id=camera_id, stream=stream)
     return {
@@ -203,7 +203,7 @@ def live_status(
 def open_live_viewer(
     payload: LiveViewerPayload,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_live")),
 ):
     camera = _get_camera(db, payload.camera_id)
     result = manager.open_viewer(camera, payload.stream)
@@ -222,7 +222,7 @@ def open_live_viewer(
 @router.delete("/viewers/{viewer_id}")
 def close_live_viewer(
     viewer_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_live")),
 ):
     closed = manager.close_viewer(viewer_id)
     return {
@@ -235,7 +235,7 @@ def close_live_viewer(
 @router.post("/viewers/{viewer_id}/touch")
 def touch_live_viewer(
     viewer_id: str,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_live")),
 ):
     touched = manager.touch_viewer(viewer_id)
     return {
@@ -249,7 +249,7 @@ def touch_live_viewer(
 def live_debug_all(
     camera_id: Optional[int] = Query(default=None),
     stream: Optional[StreamKey] = Query(default=None),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_live")),
 ):
     return manager.debug(camera_id=camera_id, stream=stream)
 
@@ -259,7 +259,7 @@ def live_debug_stream(
     camera_id: int,
     stream: StreamKey,
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_permission("view_live")),
 ):
     _get_camera(db, camera_id)
     return manager.debug(camera_id=camera_id, stream=stream)

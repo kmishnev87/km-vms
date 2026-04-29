@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
-import { apiFetch, apiFetchBlob, clearAuthToken } from "../../lib/api";
+import { apiFetch, apiFetchBlob, clearAuthToken, forbiddenMessage } from "../../lib/api";
 
 const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
   const offset = index - 12;
@@ -289,6 +289,23 @@ function roleLabel(role, t) {
   return t.roleViewer;
 }
 
+function passwordLengthMessage(lang) {
+  return lang === "en"
+    ? "Password must be at least 8 characters."
+    : "Пароль должен быть не менее 8 символов.";
+}
+
+function sortedUsersForTable(users) {
+  const rolePriority = { owner: 0, admin: 1, operator: 2, viewer: 3 };
+  return [...users].sort((left, right) => {
+    const roleCompare = (rolePriority[left.role] ?? 99) - (rolePriority[right.role] ?? 99);
+    if (roleCompare !== 0) return roleCompare;
+    const leftName = String(left.display_name || left.username || "");
+    const rightName = String(right.display_name || right.username || "");
+    return leftName.localeCompare(rightName, "ru", { sensitivity: "base", numeric: true });
+  });
+}
+
 function settingsDraftFromApi(data) {
   return {
     timezone: data?.timezone || "UTC",
@@ -360,8 +377,8 @@ function normalizedError(err, lang, context = "generic") {
   if (lower.includes("not authenticated") || lower.includes("invalid token") || message.includes("401")) {
     return { variant: "error", title: t.toasts.authTitle, text: t.toasts.authText };
   }
-  if (message.includes("403") || lower.includes("forbidden")) {
-    return { variant: "error", title: t.toasts.forbiddenTitle, text: t.toasts.forbiddenText };
+  if (message.includes("403") || lower.includes("forbidden") || message.includes("Ограничены права пользователя")) {
+    return { variant: "error", title: t.toasts.forbiddenTitle, text: forbiddenMessage(lang) };
   }
   if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("server is unavailable")) {
     return { variant: "error", title: t.toasts.networkTitle, text: t.toasts.networkText };
@@ -375,7 +392,7 @@ function normalizedError(err, lang, context = "generic") {
   }
   if (context === "users") {
     if (lower.includes("password") && (lower.includes("8") || lower.includes("short"))) {
-      return { variant: "error", title: t.toasts.usersFailTitle, text: "Пароль должен быть не менее 8 символов" };
+      return { variant: "error", title: t.toasts.usersFailTitle, text: passwordLengthMessage(lang) };
     }
     return { variant: "error", title: t.toasts.usersFailTitle, text: humanErrorText(message, t.toasts.usersFailText) };
   }
@@ -482,6 +499,7 @@ export default function SettingsPage() {
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
   const anyBusy = saving || storageChecking || hardwareChecking;
   const canManageUsers = Boolean(currentUser?.permissions?.includes("admin_access"));
+  const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
   const languageIcon = lang === "en"
     ? "/icons/nav/language-icon_ENG.png"
     : "/icons/nav/language-icon_RU.png";
@@ -643,6 +661,7 @@ export default function SettingsPage() {
   function handleSettingsLanguageChange(event) {
     const nextLanguage = event.target.value;
     patch("language", nextLanguage);
+    localStorage.setItem("km_vms_language", nextLanguage);
     window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextLanguage }));
   }
 
@@ -703,12 +722,8 @@ export default function SettingsPage() {
       patchUserModal("error", t.usernameRequired);
       return;
     }
-    if (userModal.mode === "create" && !userModal.password) {
-      patchUserModal("error", "Пароль должен быть не менее 8 символов");
-      return;
-    }
     if (userModal.mode === "create" && userModal.password.length < 8) {
-      patchUserModal("error", "Пароль должен быть не менее 8 символов");
+      patchUserModal("error", passwordLengthMessage(lang));
       return;
     }
     const availableRoles = userModal.mode === "edit" && userModal.id === currentUser?.id
@@ -721,7 +736,7 @@ export default function SettingsPage() {
       return;
     }
     if (userModal.mode === "edit" && userModal.password && userModal.password.length < 8) {
-      patchUserModal("error", "Пароль должен быть не менее 8 символов");
+      patchUserModal("error", passwordLengthMessage(lang));
       return;
     }
     if (userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password && !userModal.current_password) {
@@ -1030,14 +1045,14 @@ export default function SettingsPage() {
                 <table className="settingsUsersTable">
                   <thead>
                     <tr>
-                      <th>Логин</th>
-                      <th>Роль</th>
-                      <th>Статус</th>
-                      <th>Управление</th>
+                      <th>{lang === "en" ? "Login" : "Логин"}</th>
+                      <th>{lang === "en" ? "Role" : "Роль"}</th>
+                      <th>{lang === "en" ? "Status" : "Статус"}</th>
+                      <th>{lang === "en" ? "Management" : "Управление"}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {users.map((user) => (
+                    {sortedUsers.map((user) => (
                       <tr key={user.id}>
                         <td>
                           <strong>{user.username}</strong>
@@ -1051,10 +1066,14 @@ export default function SettingsPage() {
                         </td>
                         <td>
                           <div className="settingsUserActions">
-                            <button className="button secondary small settingsUserActionButton" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)}>изменить</button>
-                            <button className="button secondary small settingsUserActionButton" onClick={() => deleteUser(user)} disabled={userBusy || !userCanBeDeleted(currentUser, user, users)}>удалить</button>
-                            <button className="button secondary small settingsUserActionButton" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id || user.role === "owner"}>
-                              {user.is_active ? "отключить" : "включить"}
+                            <button className="settingsUserIconButton" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)} title="Изменить" aria-label="Изменить">
+                              {"\u270e"}
+                            </button>
+                            <button className="settingsUserIconButton danger" onClick={() => deleteUser(user)} disabled={userBusy || !userCanBeDeleted(currentUser, user, users)} title="Удалить" aria-label="Удалить">
+                              {"\u232b"}
+                            </button>
+                            <button className="settingsUserIconButton" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id || user.role === "owner"} title={user.is_active ? "Отключить" : "Включить"} aria-label={user.is_active ? "Отключить" : "Включить"}>
+                              {user.is_active ? "\u23fb" : "\u2713"}
                             </button>
                           </div>
                         </td>

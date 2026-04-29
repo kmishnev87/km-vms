@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../components/Layout";
-import { getAuthToken } from "../lib/api";
+import { apiFetch, canAccessPath, getAuthToken } from "../lib/api";
 
 const DASHBOARD_ITEMS = [
   {
@@ -49,6 +49,7 @@ export default function HomePage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [language, setLanguage] = useState("ru");
+  const [currentUser, setCurrentUser] = useState(null);
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -58,11 +59,18 @@ export default function HomePage() {
           router.replace("/setup");
           return;
         }
-        if (status?.language) setLanguage(status.language);
+        if (status?.language) {
+          setLanguage(status.language);
+          localStorage.setItem("km_vms_language", status.language);
+        }
         if (!getAuthToken()) {
           router.replace("/login");
           return;
         }
+        return apiFetch("/auth/me");
+      })
+      .then((user) => {
+        if (user) setCurrentUser(user);
         setReady(true);
       })
       .catch(() => {
@@ -70,11 +78,15 @@ export default function HomePage() {
           router.replace("/login");
           return;
         }
-        setReady(true);
+        apiFetch("/auth/me")
+          .then((user) => setCurrentUser(user))
+          .catch(() => setCurrentUser(null))
+          .finally(() => setReady(true));
       });
   }, [router]);
 
   if (!ready) return null;
+  const visibleItems = currentUser ? DASHBOARD_ITEMS.filter((item) => canAccessPath(currentUser, item.href)) : [];
 
   return (
     <Layout>
@@ -90,7 +102,7 @@ export default function HomePage() {
         </section>
 
         <section className="dashboardGrid" aria-label="Основные разделы">
-          {DASHBOARD_ITEMS.map((item) => (
+          {visibleItems.map((item) => (
             <Link
               href={item.href}
               className="dashboardCard"
