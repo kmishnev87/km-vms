@@ -81,6 +81,7 @@ services:
       - ${SURVEILLANCE_ROOT}:/storage/archive
       - ./data/previews:/storage/previews
       - ./data/exports:/storage/exports
+      - /var/run/docker.sock:/var/run/docker.sock
     devices:
       - /dev/dri:/dev/dri
     group_add:

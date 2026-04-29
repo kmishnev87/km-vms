@@ -70,6 +70,9 @@ const TEXT = {
     journalEmpty: "Журнал событий будет отображаться здесь после подключения backend-логирования.",
     reportSendingPending: "Отправка отчётов будет подключена после реализации backend-отправки.",
     diagnosticArchiveReady: "Диагностический архив создан, прикреплён и скачан.",
+    diagnosticArchiveQuestion: "Какой лог снять?",
+    diagnosticArchiveNormal: "Обычный",
+    diagnosticArchiveExtended: "Расширенный",
     resetPasswordLabel: "Новый пароль (сброс администратором)",
     users: "Пользователи и роли",
     usersText: "Управление пользователями, ролями и доступом к системе.",
@@ -192,6 +195,9 @@ const TEXT = {
     journalEmpty: "Event journal will appear here after backend logging is connected.",
     reportSendingPending: "Report sending will be connected after backend sending is implemented.",
     diagnosticArchiveReady: "Diagnostic archive created, attached and downloaded.",
+    diagnosticArchiveQuestion: "Which log should be collected?",
+    diagnosticArchiveNormal: "Normal",
+    diagnosticArchiveExtended: "Extended",
     resetPasswordLabel: "New password (admin reset)",
     users: "Users and roles",
     usersText: "Manage users, roles and system access.",
@@ -500,6 +506,7 @@ export default function SettingsPage() {
   const [usersModalOpen, setUsersModalOpen] = useState(false);
   const [userModal, setUserModal] = useState(null);
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
+  const [diagnosticChoiceOpen, setDiagnosticChoiceOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
   const [bugReportText, setBugReportText] = useState("");
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
@@ -719,6 +726,7 @@ export default function SettingsPage() {
 
   function closeSecurityModal() {
     setSecurityModalOpen(false);
+    setDiagnosticChoiceOpen(false);
     setDiagnosticArchive(null);
     setBugReportText("");
   }
@@ -856,11 +864,12 @@ export default function SettingsPage() {
     URL.revokeObjectURL(url);
   }
 
-  async function downloadLogArchive() {
+  async function downloadLogArchive(mode = "normal") {
     if (securityBusy) return;
+    setDiagnosticChoiceOpen(false);
     setSecurityBusy(true);
     try {
-      const { blob, filename } = await apiFetchBlob("/settings/logs/archive");
+      const { blob, filename } = await apiFetchBlob(`/settings/logs/archive?mode=${encodeURIComponent(mode)}`);
       downloadBlob(blob, filename);
       setDiagnosticArchive({ filename: filename || "km-vms-logs.zip" });
       showToast({ variant: "success", title: t.toasts.logsTitle, text: filename || "" });
@@ -1177,7 +1186,7 @@ export default function SettingsPage() {
                 <div className="settingsSecurityModalSectionHead">
                   <h3>{t.bugReport}</h3>
                 </div>
-                <button className="button secondary small settingsSecurityModalButton" onClick={downloadLogArchive} disabled={securityBusy}>
+                <button className="button secondary small settingsSecurityModalButton" onClick={() => setDiagnosticChoiceOpen(true)} disabled={securityBusy}>
                   {t.createDiagnosticArchive}
                 </button>
                 <textarea
@@ -1203,6 +1212,33 @@ export default function SettingsPage() {
                   {t.sendBugReport}
                 </button>
               </section>
+
+              {diagnosticChoiceOpen ? (
+                <div className="settingsDiagnosticChoiceOverlay" role="presentation">
+                  <div className="settingsDiagnosticChoice" role="dialog" aria-modal="true" aria-label={t.diagnosticArchiveQuestion}>
+                    <h3>{t.diagnosticArchiveQuestion}</h3>
+                    <div className="settingsDiagnosticChoiceActions">
+                      <button
+                        type="button"
+                        className="button secondary small settingsDiagnosticChoiceButton"
+                        onClick={() => downloadLogArchive("normal")}
+                        disabled={securityBusy}
+                      >
+                        {t.diagnosticArchiveNormal}
+                      </button>
+                      <button
+                        type="button"
+                        className="button small settingsDiagnosticChoiceButton"
+                        onClick={() => downloadLogArchive("extended")}
+                        disabled={securityBusy}
+                      >
+                        {t.diagnosticArchiveExtended}
+                      </button>
+                    </div>
+                    <button type="button" className="settingsModalClose settingsDiagnosticChoiceClose" onClick={() => setDiagnosticChoiceOpen(false)} aria-label={t.close}>Г—</button>
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
         ) : null}

@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import io
+import json
+import os
+import re
+import socket
+import subprocess
+import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -14,8 +21,12 @@ from app.core.config import settings
 from app.core.permissions import ROLE_OWNER
 from app.core.security import hash_password
 from app.db.session import get_db
+from app.models.camera import Camera
 from app.models.user import User
 from app.routers.deps import require_permission
+from app.routers.recordings import collect_recording_files
+from app.services.hardware import get_hardware_capabilities
+from app.services.live_engine_v2 import manager as live_manager
 from app.services.system_settings import (
     get_system_settings,
     serialize_settings,
@@ -25,6 +36,21 @@ from app.services.system_settings import (
 )
 
 router = APIRouter(tags=["settings"])
+
+DIAGNOSTIC_CONTAINERS = (
+    "vms-api",
+    "vms-recorder",
+    "vms-web",
+    "vms-nginx",
+    "vms-postgres",
+    "vms-redis",
+)
+DIAGNOSTIC_MODES = {"normal", "extended"}
+SENSITIVE_KEY_RE = re.compile(r"(password|secret|token|authorization|encryption_key|jwt)", re.IGNORECASE)
+RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://[^:\s/@]+):([^@\s]+)@", re.IGNORECASE)
+BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
+TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token)=)[^&\s]+", re.IGNORECASE)
+DOCKER_SOCKET = Path("/var/run/docker.sock")
 
 
 class SetupRequest(BaseModel):
@@ -158,28 +184,346 @@ def iter_log_files() -> list[Path]:
     return sorted(files, key=lambda item: str(item))[:200]
 
 
-def build_log_archive(report_text: str | None = None, include_logs: bool = True) -> io.BytesIO:
+def redact_text(value: str | None) -> str:
+    if not value:
+        return ""
+    text = RTSP_CREDENTIALS_RE.sub(r"\1:***@", str(value))
+    text = BEARER_RE.sub(r"\1***", text)
+    text = TOKEN_QUERY_RE.sub(r"\1***", text)
+    return text
+
+
+def safe_json(value):
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if SENSITIVE_KEY_RE.search(str(key)):
+                result[key] = "***"
+            else:
+                result[key] = safe_json(item)
+        return result
+    if isinstance(value, list):
+        return [safe_json(item) for item in value]
+    if isinstance(value, tuple):
+        return [safe_json(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, str):
+        return redact_text(value)
+    return value
+
+
+def write_json(bundle: zipfile.ZipFile, arcname: str, payload) -> None:
+    bundle.writestr(
+        arcname,
+        json.dumps(safe_json(payload), ensure_ascii=False, indent=2, default=str) + "\n",
+    )
+
+
+def safe_archive_name(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._/-]+", "_", value).strip("_") or "log"
+
+
+def camera_diagnostics(db: Session) -> list[dict]:
+    cameras = db.query(Camera).order_by(Camera.id.asc()).all()
+    return [
+        {
+            "id": camera.id,
+            "name": camera.name,
+            "storage_folder_name": camera.storage_folder_name,
+            "enabled": bool(camera.enabled),
+            "protocol": camera.protocol,
+            "host": camera.host,
+            "port": camera.port,
+            "username": camera.username,
+            "rtsp_main_url": camera.rtsp_main_url,
+            "rtsp_sub_url": camera.rtsp_sub_url,
+            "rtsp_transport": camera.rtsp_transport,
+            "recording_mode": camera.recording_mode,
+            "default_live_stream": camera.default_live_stream,
+            "default_record_stream": camera.default_record_stream,
+            "segment_minutes": camera.segment_minutes,
+            "retention_days": camera.retention_days,
+            "storage_quota_gb": camera.storage_quota_gb,
+            "status": camera.status,
+            "last_error": camera.last_error,
+            "created_at": camera.created_at,
+            "updated_at": camera.updated_at,
+        }
+        for camera in cameras
+    ]
+
+
+def storage_diagnostics() -> dict:
+    root = Path(settings.storage_root)
+    previews = Path(settings.storage_previews)
+    exports = Path(settings.storage_exports)
+    return {
+        "storage_root": str(root),
+        "storage_root_exists": root.exists(),
+        "storage_root_writable": os.access(root, os.W_OK) if root.exists() else False,
+        "storage_previews": str(previews),
+        "storage_previews_exists": previews.exists(),
+        "storage_exports": str(exports),
+        "storage_exports_exists": exports.exists(),
+    }
+
+
+def recordings_diagnostics() -> dict:
+    try:
+        items = collect_recording_files()
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    total_size = sum(int(item.get("size_bytes") or 0) for item in items)
+    by_camera: dict[str, dict] = {}
+    for item in items:
+        camera = str(item.get("camera") or "unknown")
+        row = by_camera.setdefault(camera, {"count": 0, "size_bytes": 0})
+        row["count"] += 1
+        row["size_bytes"] += int(item.get("size_bytes") or 0)
+    return {
+        "ok": True,
+        "count": len(items),
+        "size_bytes": total_size,
+        "by_camera": by_camera,
+        "latest": items[:50],
+    }
+
+
+def chronology_diagnostics(db: Session) -> dict:
+    rows = []
+    for camera in db.query(Camera).order_by(Camera.id.asc()).all():
+        root = Path(settings.storage_root) / camera.storage_folder_name
+        files = []
+        if root.exists():
+            for path in sorted(root.rglob("*.mp4"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)[:20]:
+                try:
+                    stat = path.stat()
+                    files.append(
+                        {
+                            "path": str(path.resolve().relative_to(root.resolve())),
+                            "size_bytes": stat.st_size,
+                            "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                        }
+                    )
+                except Exception as exc:
+                    files.append({"path": str(path), "error": str(exc)})
+        rows.append(
+            {
+                "camera_id": camera.id,
+                "camera_name": camera.name,
+                "archive_root": str(root),
+                "archive_root_exists": root.exists(),
+                "latest_mp4_files": files,
+            }
+        )
+    return {"items": rows}
+
+
+def decode_chunked_http_body(body: bytes) -> bytes:
+    chunks = []
+    idx = 0
+    while idx < len(body):
+        line_end = body.find(b"\r\n", idx)
+        if line_end < 0:
+            return body
+        size_raw = body[idx:line_end].split(b";", 1)[0]
+        try:
+            size = int(size_raw, 16)
+        except ValueError:
+            return body
+        idx = line_end + 2
+        if size == 0:
+            break
+        chunks.append(body[idx:idx + size])
+        idx += size + 2
+    return b"".join(chunks)
+
+
+def strip_docker_stream_frames(body: bytes) -> bytes:
+    frames = []
+    idx = 0
+    while idx + 8 <= len(body):
+        header = body[idx:idx + 8]
+        if header[0] not in {1, 2} or header[1:4] != b"\x00\x00\x00":
+            return body
+        size = int.from_bytes(header[4:8], "big")
+        idx += 8
+        frames.append(body[idx:idx + size])
+        idx += size
+    return b"".join(frames) if frames else body
+
+
+def docker_logs_via_socket(container: str, mode: str) -> str:
+    if not DOCKER_SOCKET.exists():
+        raise FileNotFoundError(f"{DOCKER_SOCKET} is not mounted")
+
+    params = "stdout=1&stderr=1&timestamps=1"
+    if mode == "extended":
+        params += f"&since={int(time.time()) - 1800}"
+    else:
+        params += "&tail=500"
+    path = f"/containers/{quote(container, safe='')}/logs?{params}"
+    request = (
+        f"GET {path} HTTP/1.1\r\n"
+        "Host: docker\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+    ).encode("ascii")
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+        sock.settimeout(20)
+        sock.connect(str(DOCKER_SOCKET))
+        sock.sendall(request)
+        chunks = []
+        while True:
+            data = sock.recv(65536)
+            if not data:
+                break
+            chunks.append(data)
+
+    response = b"".join(chunks)
+    header_end = response.find(b"\r\n\r\n")
+    if header_end < 0:
+        return response.decode("utf-8", errors="replace")
+
+    headers = response[:header_end].decode("iso-8859-1", errors="replace")
+    body = response[header_end + 4:]
+    if "transfer-encoding: chunked" in headers.lower():
+        body = decode_chunked_http_body(body)
+    body = strip_docker_stream_frames(body)
+    if not headers.startswith("HTTP/1.1 200") and not headers.startswith("HTTP/1.0 200"):
+        return f"Docker API error for {container}\n{headers}\n{body.decode('utf-8', errors='replace')}"
+    return body.decode("utf-8", errors="replace")
+
+
+def docker_logs_via_cli(container: str, mode: str) -> str:
+    cmd = ["docker", "logs"]
+    if mode == "extended":
+        cmd.extend(["--since", "30m"])
+    else:
+        cmd.extend(["--tail", "500"])
+    cmd.append(container)
+
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except Exception as exc:
+        return f"docker logs failed for {container}: {exc}\n"
+
+    output = result.stdout or ""
+    if result.returncode != 0:
+        output = f"docker logs exit_code={result.returncode}\n{output}"
+    return output
+
+
+def run_docker_logs(container: str, mode: str) -> str:
+    try:
+        return redact_text(docker_logs_via_socket(container, mode))
+    except Exception as socket_exc:
+        try:
+            return redact_text(docker_logs_via_cli(container, mode))
+        except Exception as cli_exc:
+            return (
+                f"Docker logs unavailable for {container}\n"
+                f"socket_error={socket_exc}\n"
+                f"cli_error={cli_exc}\n"
+            )
+
+
+def write_docker_logs(bundle: zipfile.ZipFile, mode: str) -> None:
+    for container in DIAGNOSTIC_CONTAINERS:
+        bundle.writestr(f"docker/{container}.log", run_docker_logs(container, mode))
+
+
+def write_file_logs(bundle: zipfile.ZipFile) -> None:
+    seen: set[Path] = set()
+    for path in iter_log_files():
+        try:
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            content = path.read_text(encoding="utf-8", errors="replace")
+            arcname = safe_archive_name(str(resolved).lstrip("/\\").replace("\\", "/"))
+            bundle.writestr(f"files/{arcname}", redact_text(content))
+        except OSError:
+            continue
+
+
+def build_log_archive(
+    db: Session,
+    mode: str = "normal",
+    report_text: str | None = None,
+    include_logs: bool = True,
+) -> io.BytesIO:
+    mode = mode if mode in DIAGNOSTIC_MODES else "normal"
+    created_at = datetime.utcnow().isoformat() + "Z"
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_DEFLATED) as bundle:
-        bundle.writestr("system/info.txt", f"created_at={datetime.utcnow().isoformat()}Z\napp_env={settings.app_env}\n")
+        write_json(
+            bundle,
+            "system/manifest.json",
+            {
+                "created_at": created_at,
+                "mode": mode,
+                "docker_log_rule": "--since=30m" if mode == "extended" else "--tail=500",
+                "containers": DIAGNOSTIC_CONTAINERS,
+            },
+        )
+        write_json(
+            bundle,
+            "system/info.json",
+            {
+                "created_at": created_at,
+                "app_env": settings.app_env,
+                "storage_root": settings.storage_root,
+                "storage_previews": settings.storage_previews,
+                "storage_exports": settings.storage_exports,
+                "default_live_stream": settings.default_live_stream,
+                "default_record_stream": settings.default_record_stream,
+                "live_transcode": settings.live_transcode,
+                "live_video_codec": settings.live_video_codec,
+                "live_hwaccel_mode": settings.live_hwaccel_mode,
+                "live_hwaccel_backend": settings.live_hwaccel_backend,
+                "live_max_concurrent_transcodes": settings.live_max_concurrent_transcodes,
+            },
+        )
+        write_json(bundle, "system/settings.json", serialize_settings(get_system_settings(db)))
+        write_json(bundle, "storage/status.json", storage_diagnostics())
+        write_json(bundle, "hardware/capabilities.json", get_hardware_capabilities())
+        write_json(bundle, "cameras/cameras.json", camera_diagnostics(db))
+        live_status = live_manager.status()
+        write_json(bundle, "live/status.json", {"items": live_status, "count": len(live_status)})
+        write_json(bundle, "live/debug.json", live_manager.debug())
+        write_json(bundle, "recordings/summary.json", recordings_diagnostics())
+        write_json(bundle, "chronology/summary.json", chronology_diagnostics(db))
         if report_text is not None:
             bundle.writestr("bug-report.txt", report_text.strip() + "\n")
         if include_logs:
-            for path in iter_log_files():
-                try:
-                    bundle.write(path, arcname=f"logs/{path.name}")
-                except OSError:
-                    continue
+            write_file_logs(bundle)
+            write_docker_logs(bundle, mode)
     archive.seek(0)
     return archive
 
 
 @router.get("/settings/logs/archive")
 def download_log_archive(
+    mode: str = Query("normal", pattern="^(normal|extended)$"),
+    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("run_diagnostics")),
 ):
-    archive = build_log_archive()
-    filename = f"km-vms-logs-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
+    archive = build_log_archive(db=db, mode=mode)
+    suffix = "extended" if mode == "extended" else "normal"
+    filename = f"km-vms-logs-{suffix}-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
     return StreamingResponse(
         archive,
         media_type="application/zip",
@@ -190,9 +534,10 @@ def download_log_archive(
 @router.post("/settings/bug-report")
 def create_bug_report(
     payload: BugReportRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("run_diagnostics")),
 ):
-    archive = build_log_archive(report_text=payload.text, include_logs=payload.include_logs)
+    archive = build_log_archive(db=db, report_text=payload.text, include_logs=payload.include_logs)
     filename = f"km-vms-bug-report-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
     return StreamingResponse(
         archive,
