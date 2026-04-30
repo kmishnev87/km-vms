@@ -531,6 +531,7 @@ export default function SettingsPage() {
   const [userBusy, setUserBusy] = useState(false);
   const [usersModalOpen, setUsersModalOpen] = useState(false);
   const [userModal, setUserModal] = useState(null);
+  const [userDeleteTarget, setUserDeleteTarget] = useState(null);
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
   const [diagnosticChoiceOpen, setDiagnosticChoiceOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
@@ -883,18 +884,22 @@ export default function SettingsPage() {
     }
   }
 
+  function requestDeleteUser(user) {
+    if (userBusy || !userCanBeDeleted(currentUser, user, users)) return;
+    setUserDeleteTarget(user);
+  }
+
   async function deleteUser(user) {
     if (userBusy || !userCanBeDeleted(currentUser, user, users)) return;
-    if (!window.confirm(`Удалить пользователя ${user.username}?`)) return;
-
     setUserBusy(true);
     try {
       await apiFetch(`/users/${user.id}`, { method: "DELETE" });
       showToast({
         variant: "success",
-        title: t.toasts.userDeletedTitle || "Пользователь удалён",
+        title: t.toasts.userDeletedTitle || (lang === "en" ? "User deleted" : "Пользователь удалён"),
         text: user.username,
       });
+      setUserDeleteTarget(null);
       await loadUsers();
     } catch (err) {
       showToast(normalizedError(err, lang, "users"));
@@ -1143,11 +1148,11 @@ export default function SettingsPage() {
                             <button className="settingsUserIconButton" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)} title="Изменить" aria-label="Изменить">
                               {"\u270e"}
                             </button>
-                            <button className="settingsUserIconButton danger" onClick={() => deleteUser(user)} disabled={userBusy || !userCanBeDeleted(currentUser, user, users)} title="Удалить" aria-label="Удалить">
-                              {"\ud83d\uddd1"}
-                            </button>
                             <button className="settingsUserIconButton" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id || user.role === "owner"} title={user.is_active ? "Отключить" : "Включить"} aria-label={user.is_active ? "Отключить" : "Включить"}>
                               {user.is_active ? "\u23fb" : "\u2713"}
+                            </button>
+                            <button className="settingsUserIconButton danger" onClick={() => requestDeleteUser(user)} disabled={userBusy || !userCanBeDeleted(currentUser, user, users)} title="Удалить" aria-label="Удалить">
+                              {"\ud83d\uddd1"}
                             </button>
                           </div>
                         </td>
@@ -1155,6 +1160,24 @@ export default function SettingsPage() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {userDeleteTarget ? (
+          <div className="settingsModalOverlay settingsConfirmOverlay" role="presentation">
+            <div className="settingsConfirmModal" role="dialog" aria-modal="true" aria-label={lang === "en" ? "Delete user" : "Удалить пользователя"}>
+              <div className="settingsUserModalHeader">
+                <h2>{lang === "en" ? "Delete user" : "Удалить пользователя"}</h2>
+                <button type="button" className="settingsModalClose" onClick={() => setUserDeleteTarget(null)} aria-label={t.close}>×</button>
+              </div>
+              <p>{lang === "en" ? "Delete user" : "Удалить пользователя"} <strong>{userDeleteTarget.username}</strong>?</p>
+              <div className="settingsModalActions">
+                <button type="button" className="button secondary small" onClick={() => setUserDeleteTarget(null)} disabled={userBusy}>{t.cancel}</button>
+                <button type="button" className="button small dangerButton" onClick={() => deleteUser(userDeleteTarget)} disabled={userBusy}>
+                  {userBusy ? (lang === "en" ? "Deleting..." : "Удаляем...") : (lang === "en" ? "Delete" : "Удалить")}
+                </button>
               </div>
             </div>
           </div>

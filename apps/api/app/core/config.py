@@ -1,5 +1,6 @@
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pathlib import Path
 
 
 class Settings(BaseSettings):
@@ -49,6 +50,18 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value.strip().lower() in {"", "0", "none", "null", "unlimited", "off"}:
             return 0
         return value
+
+    def camera_preview_path(self, camera_id: int) -> Path:
+        return Path(self.storage_previews) / "camera-previews" / f"{int(camera_id)}.jpg"
+
+    def camera_preview_url(self, camera_id: int) -> str:
+        return f"/previews/camera-previews/{int(camera_id)}.jpg"
+
+    def camera_test_preview_path(self, token: str) -> Path:
+        return Path(self.storage_previews) / "camera-tests" / f"{token}.jpg"
+
+    def camera_test_preview_url(self, token: str) -> str:
+        return f"/previews/camera-tests/{token}.jpg"
 
 
 settings = Settings()

@@ -2,7 +2,8 @@ from pathlib import Path
 import shutil
 import subprocess
 import json
-from urllib.parse import quote
+from uuid import uuid4
+from urllib.parse import quote, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
@@ -243,7 +244,7 @@ def test_camera(
 ):
     input_url = build_test_url(payload, db=db)
     if not input_url:
-        raise HTTPException(status_code=400, detail="Не указан RTSP URL или RTSP path для теста")
+        raise HTTPException(status_code=400, detail="Укажите RTSP path или URL для проверки камеры.")
 
     transport = payload.get("rtsp_transport") or "tcp"
 
@@ -266,25 +267,30 @@ def test_camera(
             check=False,
         )
     except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=400, detail="Тест не выполнен: камера не ответила вовремя")
+        raise HTTPException(status_code=400, detail="Камера не ответила вовремя. Проверьте адрес, порт и доступность камеры.")
 
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "Не удалось подключиться к камере").strip()
-        raise HTTPException(status_code=400, detail=detail)
+        raise HTTPException(status_code=400, detail="Не удалось подключиться к камере. Проверьте RTSP path, логин, пароль и сетевой доступ.")
 
     try:
         data = json.loads(result.stdout or "{}")
     except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Не удалось разобрать ответ ffprobe")
+        raise HTTPException(status_code=400, detail="Камера ответила нестандартно. Проверьте параметры потока.")
 
     streams = data.get("streams", [])
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+    preview_path, preview_url, preview_token = test_preview_destination(payload)
+    preview_ok = capture_camera_preview(input_url, transport, preview_path)
 
     return {
         "ok": True,
-        "input_url_used": input_url,
+        "display_path": safe_rtsp_display_path(input_url),
         "transport": transport,
+        "preview_url": preview_url if preview_ok else None,
+        "preview_token": preview_token if preview_ok and preview_token else None,
+        "preview_ok": preview_ok,
+        "preview_message": None if preview_ok else "Соединение установлено, но кадр превью получить не удалось.",
         "video": {
             "codec": video.get("codec_name") if video else None,
             "profile": video.get("profile") if video else None,
@@ -362,6 +368,7 @@ def create_camera(
     db.add(camera)
     db.commit()
     db.refresh(camera)
+    attach_test_preview_to_camera(payload.preview_token, camera.id)
     create_event(
         db=db,
         actor=current_user,
@@ -384,6 +391,79 @@ def create_camera(
     return camera
 
 
+def safe_rtsp_display_path(input_url: str | None) -> str:
+    if not input_url:
+        return "RTSP path указан"
+    try:
+        parsed = urlparse(input_url)
+        path = f"{parsed.path or ''}{('?' + parsed.query) if parsed.query else ''}"
+        return path or "RTSP path указан"
+    except Exception:
+        return "RTSP path указан"
+
+
+def safe_preview_token(value: str | None) -> str | None:
+    if not value:
+        return None
+    token = str(value).strip()
+    if not token:
+        return None
+    if all(ch.isalnum() or ch in {"-", "_"} for ch in token):
+        return token
+    return None
+
+
+def capture_camera_preview(input_url: str, transport: str, output_path: Path) -> bool:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-v", "error",
+        "-rtsp_transport", transport,
+        "-i", input_url,
+        "-frames:v", "1",
+        "-q:v", "4",
+        str(output_path),
+    ]
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    if result.returncode != 0:
+        output_path.unlink(missing_ok=True)
+        return False
+    return output_path.exists() and output_path.stat().st_size > 0
+
+
+def test_preview_destination(payload: dict) -> tuple[Path, str, str]:
+    camera_id = payload.get("camera_id")
+    if camera_id:
+        path = settings.camera_preview_path(int(camera_id))
+        return path, settings.camera_preview_url(int(camera_id)), ""
+    token = uuid4().hex
+    path = settings.camera_test_preview_path(token)
+    return path, settings.camera_test_preview_url(token), token
+
+
+def attach_test_preview_to_camera(token: str | None, camera_id: int) -> None:
+    safe_token = safe_preview_token(token)
+    if not safe_token:
+        return
+    source = settings.camera_test_preview_path(safe_token)
+    if not source.exists():
+        return
+    destination = settings.camera_preview_path(camera_id)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, destination)
+    source.unlink(missing_ok=True)
+
+
 @router.put("/{camera_id}", response_model=CameraResponse)
 def update_camera(
     camera_id: int,
@@ -397,6 +477,7 @@ def update_camera(
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
     data = payload.model_dump(exclude_unset=True)
+    preview_token = data.pop("preview_token", None)
 
     if "name" in data and data["name"] != camera.name:
         existing = db.query(Camera).filter(Camera.name == data["name"]).first()
@@ -456,6 +537,7 @@ def update_camera(
     db.add(camera)
     db.commit()
     db.refresh(camera)
+    attach_test_preview_to_camera(preview_token, camera.id)
     changed = {}
     for key, old_value in old_values.items():
         new_value = getattr(camera, key, None)
@@ -558,6 +640,7 @@ def delete_camera(
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
     folder_path = Path(settings.storage_root) / camera.storage_folder_name
+    preview_path = settings.camera_preview_path(camera.id)
     camera_name = camera.name
     camera_id_value = camera.id
 
@@ -581,3 +664,4 @@ def delete_camera(
 
     if delete_files and folder_path.exists() and folder_path.is_dir():
         shutil.rmtree(folder_path, ignore_errors=True)
+    preview_path.unlink(missing_ok=True)

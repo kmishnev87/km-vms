@@ -24,6 +24,7 @@ const initialForm = {
   segment_minutes: 5,
   retention_days: 30,
   storage_quota_gb: 50,
+  preview_token: null,
 };
 
 const initialOnvifConfig = {
@@ -35,6 +36,20 @@ const initialOnvifConfig = {
   iframe_interval: "",
   quality: "",
 };
+
+const PREVIEW_SENSITIVE_FIELDS = new Set([
+  "protocol",
+  "host",
+  "port",
+  "username",
+  "password",
+  "rtsp_main_url",
+  "rtsp_sub_url",
+  "rtsp_transport",
+  "onvif_path",
+  "onvif_profile_token",
+  "onvif_channel_id",
+]);
 
 function getStatusBadge(camera) {
   if (!camera.enabled) return { text: "Отключена", cls: "warn" };
@@ -56,6 +71,18 @@ function prettyRtspValue(value) {
     }
   }
   return value;
+}
+
+function normalizeCameraError(message) {
+  const text = String(message || "").trim();
+  if (!text) return "Не удалось выполнить действие. Проверьте параметры и повторите попытку.";
+  if (text.includes("ffprobe") || text.includes("Invalid data") || text.includes("Server returned")) {
+    return "Камера не ответила корректно. Проверьте RTSP path, логин, пароль и сетевой доступ.";
+  }
+  if (text.length > 180) {
+    return "Не удалось подключиться к камере. Проверьте адрес, порт и параметры потока.";
+  }
+  return text;
 }
 
 export default function CamerasPage() {
@@ -87,7 +114,7 @@ export default function CamerasPage() {
       setCameras(cams);
       setStorage(st);
     } catch (err) {
-      setError(err.message);
+      setError(normalizeCameraError(err.message));
     }
   }
 
@@ -98,7 +125,14 @@ export default function CamerasPage() {
   }, []);
 
   function patch(key, value) {
-    setForm((prev) => ({ ...prev, [key]: value }));
+    setForm((prev) => ({
+      ...prev,
+      [key]: value,
+      ...(PREVIEW_SENSITIVE_FIELDS.has(key) ? { preview_token: null } : {}),
+    }));
+    if (PREVIEW_SENSITIVE_FIELDS.has(key)) {
+      setTestResult(null);
+    }
   }
 
   function patchOnvifConfig(key, value) {
@@ -178,8 +212,11 @@ export default function CamerasPage() {
         headers: { "Content-Type": "application/json" },
       });
       setTestResult(result);
+      if (result.preview_token) {
+        patch("preview_token", result.preview_token);
+      }
     } catch (err) {
-      setError(err.message);
+      setError(normalizeCameraError(err.message));
       setTestResult(null);
     } finally {
       setTesting(false);
@@ -205,7 +242,7 @@ export default function CamerasPage() {
       });
       setOnvifData(result);
     } catch (err) {
-      setError(err.message);
+      setError(normalizeCameraError(err.message));
       setOnvifData(null);
     } finally {
       setOnvifBusy(false);
@@ -258,7 +295,7 @@ export default function CamerasPage() {
         quality: result.config?.quality || "",
       });
     } catch (err) {
-      setError(err.message);
+      setError(normalizeCameraError(err.message));
     } finally {
       setOnvifConfigBusy(false);
     }
@@ -298,7 +335,7 @@ export default function CamerasPage() {
       await loadOnvifProfileConfig();
       await runTest();
     } catch (err) {
-      setError(err.message);
+      setError(normalizeCameraError(err.message));
     } finally {
       setOnvifConfigBusy(false);
     }
@@ -340,7 +377,7 @@ export default function CamerasPage() {
       setOnvifConfig(initialOnvifConfig);
       await load();
     } catch (err) {
-      setError(err.message);
+      setError(normalizeCameraError(err.message));
     } finally {
       setBusy(false);
     }
@@ -354,7 +391,7 @@ export default function CamerasPage() {
       });
       await load();
     } catch (err) {
-      setError(err.message);
+      setError(normalizeCameraError(err.message));
     }
   }
 
@@ -371,7 +408,7 @@ export default function CamerasPage() {
       closeDeleteModal();
       await load();
     } catch (err) {
-      setError(err.message);
+      setError(normalizeCameraError(err.message));
     } finally {
       setBusy(false);
     }
@@ -388,7 +425,7 @@ export default function CamerasPage() {
         <button className="button" onClick={openCreate}>Добавить камеру</button>
       </div>
 
-      {error ? <div className="badge err" style={{ marginBottom: 14 }}>{error}</div> : null}
+      {error && !showEditor ? <div className="badge err" style={{ marginBottom: 14 }}>{error}</div> : null}
 
       <div className="card" style={{ marginBottom: 18 }}>
         <div className="toolbar">
@@ -412,9 +449,17 @@ export default function CamerasPage() {
               <div className="cameraCard card" key={camera.id}>
                 <div className="cameraCardGrid">
                   <div className="cameraField cameraNameField">
-                    <div className="cameraFieldLabel">Имя</div>
+                    <div className="cameraFieldLabel">Камера</div>
                     <div className="cameraPrimary">{camera.name}</div>
                     <div className="cameraSecondary">папка: {camera.storage_folder_name}</div>
+                  </div>
+
+                  <div className="cameraPreviewField" aria-label="Кадр камеры">
+                    {camera.preview_url ? (
+                      <img src={`${camera.preview_url}?v=${encodeURIComponent(camera.updated_at || camera.id)}`} alt="" />
+                    ) : (
+                      <div className="cameraPreviewPlaceholder">Нет кадра</div>
+                    )}
                   </div>
 
                   <div className="cameraField">
@@ -453,7 +498,7 @@ export default function CamerasPage() {
                     {"\u270e"}
                   </button>
                   <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? "Отключить" : "Включить"} aria-label={camera.enabled ? "Отключить" : "Включить"}>
-                    {camera.enabled ? "\u23fb" : "\u2713"}
+                    {camera.enabled ? "\u2713" : "\u23fb"}
                   </button>
                   <button className="cameraIconButton danger" onClick={() => openDeleteModal(camera)} title="Удалить" aria-label="Удалить">
                     {"\ud83d\uddd1"}
@@ -474,6 +519,8 @@ export default function CamerasPage() {
               </h2>
               <button className="iconCloseButton" onClick={() => setShowEditor(false)} aria-label="Закрыть">×</button>
             </div>
+
+            {error ? <div className="cameraModalError">{error}</div> : null}
 
             <div className="formGrid">
               <div>
@@ -607,14 +654,24 @@ export default function CamerasPage() {
               </div>
 
               {testResult ? (
-                <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: form.protocol === "onvif" ? 16 : 0 }}>
-                  <div><strong>Тест:</strong> OK</div>
-                  <div><strong>URL:</strong> {testResult.input_url_used}</div>
-                  <div><strong>Транспорт:</strong> {testResult.transport}</div>
-                  <div><strong>Видео:</strong> {testResult.video ? `${testResult.video.codec || "-"}, ${testResult.video.width || "-"}x${testResult.video.height || "-"}, fps ${testResult.video.fps || "-"}` : "нет"}</div>
-                  <div><strong>Аудио:</strong> {testResult.audio ? `${testResult.audio.codec || "-"}, channels ${testResult.audio.channels || "-"}, sample_rate ${testResult.audio.sample_rate || "-"}` : "нет"}</div>
-                  <div><strong>Формат:</strong> {testResult.format?.format_name || "-"}</div>
-                  <div><strong>Битрейт:</strong> {testResult.format?.bit_rate || "-"}</div>
+                <div className="cameraTestResult">
+                  <div className="cameraTestDetails">
+                    <div><strong>Тест:</strong> OK</div>
+                    <div><strong>Путь:</strong> <span className="cameraTestPath">{testResult.display_path || "RTSP path указан"}</span></div>
+                    <div><strong>Транспорт:</strong> {testResult.transport}</div>
+                    <div><strong>Видео:</strong> {testResult.video ? `${testResult.video.codec || "-"}, ${testResult.video.width || "-"}x${testResult.video.height || "-"}, fps ${testResult.video.fps || "-"}` : "нет"}</div>
+                    <div><strong>Аудио:</strong> {testResult.audio ? `${testResult.audio.codec || "-"}, channels ${testResult.audio.channels || "-"}, sample_rate ${testResult.audio.sample_rate || "-"}` : "нет"}</div>
+                    <div><strong>Формат:</strong> {testResult.format?.format_name || "-"}</div>
+                    <div><strong>Битрейт:</strong> {testResult.format?.bit_rate || "-"}</div>
+                    {testResult.preview_message ? <div className="cameraTestPreviewNote">{testResult.preview_message}</div> : null}
+                  </div>
+                  <div className="cameraTestPreview">
+                    {testResult.preview_url ? (
+                      <img src={`${testResult.preview_url}?v=${Date.now()}`} alt="" />
+                    ) : (
+                      <div className="cameraPreviewPlaceholder">Кадр недоступен</div>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <div style={{ color: "#64748b", fontSize: 14, marginBottom: form.protocol === "onvif" ? 16 : 0 }}>

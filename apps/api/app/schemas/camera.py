@@ -27,6 +27,7 @@ class CameraBase(BaseModel):
     segment_minutes: int = 5
     retention_days: int = 30
     storage_quota_gb: int = 50
+    preview_token: str | None = None
 
 
 class CameraCreate(CameraBase):
@@ -61,6 +62,7 @@ class CameraUpdate(BaseModel):
 
     status: str | None = None
     last_error: str | None = None
+    preview_token: str | None = None
 
 
 class CameraResponse(BaseModel):
@@ -86,6 +88,7 @@ class CameraResponse(BaseModel):
     storage_quota_gb: int
     status: str
     last_error: str | None
+    preview_url: str | None = None
     created_at: datetime
     updated_at: datetime
 

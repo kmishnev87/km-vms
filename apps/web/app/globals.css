@@ -714,10 +714,10 @@ textarea {
 
 .settingsToast {
   position: fixed;
-  top: 72px;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
-  z-index: 7000;
+  transform: translate(-50%, -50%);
+  z-index: 9500;
   width: auto;
   max-width: min(320px, calc(100vw - 32px));
   border: 1px solid #bfdbfe;
@@ -1072,7 +1072,28 @@ textarea {
 .settingsUsersTable {
   width: 100%;
   min-width: 680px;
+  table-layout: fixed;
   border-collapse: collapse;
+}
+
+.settingsUsersTable th:nth-child(1),
+.settingsUsersTable td:nth-child(1) {
+  width: 28%;
+}
+
+.settingsUsersTable th:nth-child(2),
+.settingsUsersTable td:nth-child(2) {
+  width: 24%;
+}
+
+.settingsUsersTable th:nth-child(3),
+.settingsUsersTable td:nth-child(3) {
+  width: 22%;
+}
+
+.settingsUsersTable th:nth-child(4),
+.settingsUsersTable td:nth-child(4) {
+  width: 150px;
 }
 
 .settingsUsersTable th,
@@ -1129,6 +1150,8 @@ textarea {
   gap: 6px;
   justify-content: center;
   align-items: center;
+  width: 114px;
+  margin: 0 auto;
 }
 
 .settingsUserIconButton {
@@ -1176,6 +1199,35 @@ textarea {
   justify-content: center;
   padding: 18px;
   background: rgba(15, 23, 42, 0.38);
+}
+
+.settingsConfirmOverlay {
+  z-index: 8600;
+}
+
+.settingsConfirmModal {
+  width: min(420px, calc(100vw - 32px));
+  border: 1px solid #dbe3ef;
+  border-radius: 18px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+  padding: 18px;
+}
+
+.settingsConfirmModal p {
+  margin: 0 0 18px;
+  color: #475569;
+  line-height: 1.45;
+}
+
+.dangerButton {
+  background: #991b1b;
+  border-color: #991b1b;
+}
+
+.dangerButton:hover:not(:disabled) {
+  background: #7f1d1d;
+  border-color: #7f1d1d;
 }
 
 .settingsUserModal {
@@ -2233,8 +2285,8 @@ textarea {
 
 .cameraCardGrid {
   display: grid;
-  grid-template-columns: 2.2fr 1fr 1.8fr repeat(4, minmax(90px, 1fr));
-  gap: 18px;
+  grid-template-columns: minmax(170px, 1.3fr) 116px minmax(82px, 0.55fr) minmax(170px, 1.25fr) repeat(4, minmax(82px, 0.7fr));
+  gap: 12px;
   align-items: start;
 }
 
@@ -2242,18 +2294,56 @@ textarea {
   font-size: 13px;
   color: #64748b;
   margin-bottom: 8px;
+  text-align: center;
+}
+
+.cameraField {
+  text-align: center;
 }
 
 .cameraPrimary {
   font-size: 18px;
   line-height: 1.25;
+  text-align: left;
 }
 
 .cameraSecondary {
-  margin-top: 10px;
-  font-size: 14px;
+  margin-top: 8px;
+  font-size: 9px;
   line-height: 1.35;
   color: #64748b;
+  text-align: left;
+}
+
+.cameraPreviewField {
+  width: 108px;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow: hidden;
+  align-self: center;
+}
+
+.cameraPreviewField img,
+.cameraTestPreview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cameraPreviewPlaceholder {
+  width: 100%;
+  height: 100%;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: center;
 }
 
 .cameraActions {
@@ -2297,6 +2387,48 @@ textarea {
   cursor: not-allowed;
   background: #f1f5f9;
   color: #94a3b8;
+}
+
+.cameraModalError {
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.cameraTestResult {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 24px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.cameraTestDetails {
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.cameraTestPath {
+  overflow-wrap: anywhere;
+}
+
+.cameraTestPreview {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #f8fafc;
+  overflow: hidden;
+}
+
+.cameraTestPreviewNote {
+  margin-top: 8px;
+  color: #92400e;
 }
 
 /* Онлайн / Хронология — возвращаем дружелюбный каркас */
@@ -2449,6 +2581,10 @@ textarea {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+  .cameraPreviewField {
+    justify-self: center;
+  }
+
   .liveColumns,
   .timelineColumns {
     grid-template-columns: 1fr;
@@ -2572,6 +2708,15 @@ textarea {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .cameraTestResult {
+    grid-template-columns: 1fr;
+  }
+
+  .cameraTestPreview {
+    max-width: 360px;
+    justify-self: center;
+  }
+
   .recordingsTable th,
   .recordingsTable td {
     padding: 12px 8px;
@@ -2667,6 +2812,10 @@ textarea {
 
   .cameraCardGrid {
     grid-template-columns: 1fr;
+  }
+
+  .cameraPreviewField {
+    justify-self: start;
   }
 
   .actions {

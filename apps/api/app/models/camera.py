@@ -4,6 +4,7 @@ from sqlalchemy import String, Integer, Boolean, DateTime, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
+from app.core.config import settings
 
 
 class Camera(Base):
@@ -44,3 +45,10 @@ class Camera(Base):
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    @property
+    def preview_url(self) -> str | None:
+        preview_path = settings.camera_preview_path(self.id)
+        if preview_path.exists():
+            return settings.camera_preview_url(self.id)
+        return None
