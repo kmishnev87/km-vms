@@ -68,6 +68,9 @@ const TEXT = {
     bugReportPlaceholder: "Опишите проблему простым языком: что произошло, где нажимали, что ожидали увидеть.",
     sendBugReport: "Отправить отчёт",
     journalEmpty: "Журнал событий будет отображаться здесь после подключения backend-логирования.",
+    journalLoading: "Загрузка журнала...",
+    journalError: "Журнал событий недоступен.",
+    journalSystemActor: "system",
     reportSendingPending: "Отправка отчётов будет подключена после реализации backend-отправки.",
     diagnosticArchiveReady: "Диагностический архив создан, прикреплён и скачан.",
     diagnosticArchiveQuestion: "Какой лог снять?",
@@ -193,6 +196,9 @@ const TEXT = {
     bugReportPlaceholder: "Describe the problem in simple language: what happened, where you clicked, what you expected.",
     sendBugReport: "Send report",
     journalEmpty: "Event journal will appear here after backend logging is connected.",
+    journalLoading: "Loading journal...",
+    journalError: "Event journal is unavailable.",
+    journalSystemActor: "system",
     reportSendingPending: "Report sending will be connected after backend sending is implemented.",
     diagnosticArchiveReady: "Diagnostic archive created, attached and downloaded.",
     diagnosticArchiveQuestion: "Which log should be collected?",
@@ -356,6 +362,26 @@ function formatBytes(value) {
   return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
 }
 
+function formatAuditTimestamp(value, lang) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(lang === "en" ? "en-US" : "ru-RU", {
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(date);
+}
+
+function auditMessage(event, lang) {
+  return lang === "en"
+    ? event?.message_en || event?.message_ru || ""
+    : event?.message_ru || event?.message_en || "";
+}
+
 function parseErrorDetail(message) {
   if (!message) return null;
   try {
@@ -508,6 +534,9 @@ export default function SettingsPage() {
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
   const [diagnosticChoiceOpen, setDiagnosticChoiceOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
+  const [auditEvents, setAuditEvents] = useState([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState("");
   const [bugReportText, setBugReportText] = useState("");
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
   const toastTimerRef = useRef(null);
@@ -532,6 +561,12 @@ export default function SettingsPage() {
       window.removeEventListener("km-vms-language", onLanguage);
     };
   }, []);
+
+  useEffect(() => {
+    if (securityModalOpen) {
+      loadAuditEvents();
+    }
+  }, [securityModalOpen]);
 
   function showToast(nextToast) {
     setToast(nextToast);
@@ -567,6 +602,20 @@ export default function SettingsPage() {
       showToast(normalizedError(err, lang, "users"));
     } finally {
       setUsersLoading(false);
+    }
+  }
+
+  async function loadAuditEvents() {
+    setAuditLoading(true);
+    setAuditError("");
+    try {
+      const data = await apiFetch("/audit/events?limit=50");
+      setAuditEvents(Array.isArray(data?.items) ? data.items : []);
+    } catch (err) {
+      setAuditEvents([]);
+      setAuditError(humanErrorText(String(err?.message || ""), t.journalError || "Event journal is unavailable."));
+    } finally {
+      setAuditLoading(false);
     }
   }
 
@@ -729,6 +778,7 @@ export default function SettingsPage() {
     setDiagnosticChoiceOpen(false);
     setDiagnosticArchive(null);
     setBugReportText("");
+    setAuditError("");
   }
 
   async function submitUserModal(event) {
@@ -1179,7 +1229,27 @@ export default function SettingsPage() {
                 <div className="settingsSecurityModalSectionHead">
                   <h3>{t.logJournal}</h3>
                 </div>
-                <div className="settingsJournalEmpty">{t.journalEmpty}</div>
+                {auditLoading ? (
+                  <div className="settingsJournalEmpty">{t.journalLoading || "Loading journal..."}</div>
+                ) : auditError ? (
+                  <div className="settingsJournalEmpty error">{auditError}</div>
+                ) : auditEvents.length ? (
+                  <div className="settingsAuditList">
+                    {auditEvents.map((event) => (
+                      <article className={`settingsAuditItem severity-${event.severity || "info"}`} key={event.id}>
+                        <div className="settingsAuditMeta">
+                          <time>{formatAuditTimestamp(event.created_at, lang)}</time>
+                          <span>{event.actor_username || t.journalSystemActor || "system"}</span>
+                          <span>{event.category}</span>
+                          <span>{event.severity}</span>
+                        </div>
+                        <div className="settingsAuditMessage">{auditMessage(event, lang)}</div>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="settingsJournalEmpty">{t.journalEmpty}</div>
+                )}
               </section>
 
               <section className="settingsSecurityModalSection">
@@ -1235,7 +1305,7 @@ export default function SettingsPage() {
                         {t.diagnosticArchiveExtended}
                       </button>
                     </div>
-                    <button type="button" className="settingsModalClose settingsDiagnosticChoiceClose" onClick={() => setDiagnosticChoiceOpen(false)} aria-label={t.close}>Г—</button>
+                    <button type="button" className="settingsModalClose settingsDiagnosticChoiceClose" onClick={() => setDiagnosticChoiceOpen(false)} aria-label={t.close}>×</button>
                   </div>
                 </div>
               ) : null}
