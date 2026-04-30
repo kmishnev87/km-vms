@@ -510,8 +510,8 @@ def build_log_archive(
     created_at = datetime.utcnow().isoformat() + "Z"
     audit_events = list_events(
         db,
-        limit=1000 if mode == "extended" else 500,
-        since_minutes=30 if mode == "extended" else None,
+        limit=1000,
+        since_minutes=30 if mode == "extended" else 10,
     )
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_DEFLATED) as bundle:
@@ -525,6 +525,7 @@ def build_log_archive(
                 "containers": DIAGNOSTIC_CONTAINERS,
                 "audit_events_included": True,
                 "audit_event_count": len(audit_events),
+                "audit_event_rule": "last 30 minutes" if mode == "extended" else "last 10 minutes",
                 "archive_mode": mode,
             },
         )
