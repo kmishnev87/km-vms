@@ -1,7 +1,7 @@
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.permissions import get_permissions_for_role
@@ -10,15 +10,48 @@ from app.db.session import get_db
 from app.models.user import User
 from app.routers.deps import get_current_user
 from app.schemas.auth import LoginRequest, TokenResponse, UserMeResponse
+from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.system_settings import get_system_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == payload.username).first()
-    if not user or not getattr(user, "is_active", True) or not verify_password(payload.password, user.password_hash):
+    if user and not getattr(user, "is_active", True):
+        create_event(
+            db=db,
+            actor=user,
+            category="auth",
+            event_type="auth.login_blocked_disabled",
+            severity="security",
+            message_ru=f"Вход пользователя {user.username} запрещён: пользователь отключён",
+            message_en=f"Login for {user.username} blocked: user is disabled",
+            target_type="user",
+            target_id=user.id,
+            target_name=user.username,
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверный логин или пароль",
+        )
+
+    if not user or not verify_password(payload.password, user.password_hash):
+        create_event(
+            db=db,
+            category="auth",
+            event_type="auth.login_failed",
+            severity="warning",
+            message_ru=f"Неудачная попытка входа для пользователя {payload.username}",
+            message_en=f"Failed login attempt for user {payload.username}",
+            target_type="user",
+            target_name=payload.username,
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Неверный логин или пароль",
@@ -39,6 +72,20 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user.last_login_at = datetime.utcnow()
     db.add(user)
     db.commit()
+    create_event(
+        db=db,
+        actor=user,
+        category="auth",
+        event_type="auth.login_success",
+        severity="info",
+        message_ru=f"{user.username} вошёл в систему",
+        message_en=f"{user.username} signed in",
+        target_type="user",
+        target_id=user.id,
+        target_name=user.username,
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
     return TokenResponse(access_token=token, expires_at=expires_at.isoformat() if expires_at else None)
 
 

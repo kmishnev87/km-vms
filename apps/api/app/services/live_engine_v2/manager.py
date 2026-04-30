@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 from app.core.config import settings
 from app.models.camera import Camera
+from app.services.audit_log import create_event
 from app.services.hardware import get_hardware_capabilities, hardware_capabilities_summary
 from app.services.live_engine_v2.ffmpeg import (
     build_hls_command,
@@ -69,6 +70,7 @@ DROP_RE = re.compile(r"drop=\s*(?P<value>\d+)")
 def _camera_source(camera: Camera):
     return SimpleNamespace(
         id=camera.id,
+        name=camera.name,
         rtsp_main_url=camera.rtsp_main_url,
         rtsp_sub_url=camera.rtsp_sub_url,
         rtsp_transport=camera.rtsp_transport,
@@ -253,6 +255,46 @@ class StreamInstance:
     def touch(self):
         self.last_access = time.time()
 
+    def _camera_name(self) -> str:
+        return str(getattr(self.camera_source, "name", None) or self.camera_id)
+
+    def _audit_metadata(self, extra: dict | None = None) -> dict:
+        payload = {
+            "camera_id": self.camera_id,
+            "camera_name": self._camera_name(),
+            "stream_type": self.stream,
+            "input_codec": self.input_codec,
+            "input_width": self.input_width,
+            "input_height": self.input_height,
+            "input_fps": self.input_fps,
+            "configured_backend": self.configured_backend,
+            "effective_backend": self.effective_backend,
+            "decision_source": self.decision_source,
+            "decision_reason": self.decision_reason,
+            "attempted_backends": self.attempted_backends,
+            "failed_backends": self.failed_backends,
+            "high_cpu_risk": self.high_cpu_risk,
+            "last_speed": self.last_speed,
+            "reason_for_transcode": self.reason_for_transcode,
+            "selected_pipeline": self.selected_pipeline,
+        }
+        if extra:
+            payload.update(extra)
+        return payload
+
+    def _audit_live_event(self, event_type: str, severity: str, message_ru: str, message_en: str, metadata: dict | None = None):
+        create_event(
+            category="live",
+            event_type=event_type,
+            severity=severity,
+            message_ru=message_ru,
+            message_en=message_en,
+            target_type="camera",
+            target_id=self.camera_id,
+            target_name=self._camera_name(),
+            metadata=self._audit_metadata(metadata),
+        )
+
     def _set_state_locked(self, status: str, transition: str, failure_reason: str | None = None):
         if self.status != status or self.last_state_transition != transition:
             self.state_changed_at = time.time()
@@ -407,6 +449,13 @@ class StreamInstance:
             self.cmd_text,
             self.last_error,
         )
+        self._audit_live_event(
+            "live.ffmpeg_exited",
+            "warning",
+            f"FFmpeg завершил поток {self._camera_name()} / {self.stream}: {reason}",
+            f"FFmpeg exited stream {self._camera_name()} / {self.stream}: {reason}",
+            metadata={"reason": reason, "exit_code": self.last_exit_code},
+        )
         self.proc = None
         self.stderr_file = None
         self._set_state_locked("failed", reason, failure_reason=reason)
@@ -434,6 +483,13 @@ class StreamInstance:
         self.hw_failure_reason = failure
         self.last_fallback_reason = reason
         self.fallback_to_cpu = False
+        self._audit_live_event(
+            "live.fallback",
+            "warning",
+            f"Live выполнил fallback для {self._camera_name()} / {self.stream}: {reason}",
+            f"Live fallback for {self._camera_name()} / {self.stream}: {reason}",
+            metadata={"backend": backend, "reason": reason, "detail": failure},
+        )
 
     def _configured_backend(self, caps: dict | None = None) -> str:
         caps = caps or get_hardware_capabilities()
@@ -478,6 +534,14 @@ class StreamInstance:
             self.attempted_backends.append(backend)
         self.last_fallback_reason = None
         self.reason_for_transcode = reason
+        if source == "auto":
+            self._audit_live_event(
+                "live.auto_decision",
+                "info",
+                f"Auto hardware выбрал {backend}: {reason}",
+                f"Auto hardware selected {backend}: {reason}",
+                metadata={"backend": backend, "reason": reason},
+            )
         return "hardware_transcode"
 
     def _start_hardware_or_cpu_locked(self, source, reason: str) -> bool:
@@ -497,6 +561,13 @@ class StreamInstance:
             self.start(source, transcode_allowed=True, force_hw_backend=next_backend)
             return True
 
+        self._audit_live_event(
+            "live.fallback",
+            "warning",
+            f"Live выполнил fallback для {self._camera_name()} / {self.stream}: {reason}",
+            f"Live fallback for {self._camera_name()} / {self.stream}: {reason}",
+            metadata={"reason": reason, "fallback": "cpu"},
+        )
         self.start(source, force_mode="fallback_transcode")
         return True
 
@@ -539,6 +610,13 @@ class StreamInstance:
             self.last_speed,
             next_backend,
         )
+        self._audit_live_event(
+            "live.cpu_escalation",
+            "warning",
+            f"Live переключает {self._camera_name()} / {self.stream} с CPU на hardware: скорость ниже realtime",
+            f"Live switches {self._camera_name()} / {self.stream} from CPU to hardware: speed below realtime",
+            metadata={"last_speed": self.last_speed, "backend": next_backend},
+        )
         self.stop(reason="cpu_too_slow_escalation", cleanup_files=True)
         self.start(source, transcode_allowed=True, force_hw_backend=next_backend)
         return True
@@ -571,6 +649,13 @@ class StreamInstance:
             self.camera_id,
             self.stream,
             self.failed_backends,
+        )
+        self._audit_live_event(
+            "live.fallback",
+            "warning",
+            f"Live выполнил fallback для {self._camera_name()} / {self.stream}: {reason}",
+            f"Live fallback for {self._camera_name()} / {self.stream}: {reason}",
+            metadata={"reason": reason, "failed_backends": self.failed_backends, "fallback": "cpu"},
         )
         self.start(source, force_mode="fallback_transcode")
         return True
@@ -887,6 +972,13 @@ class StreamInstance:
                 self._set_state_locked("failed", "ffmpeg_start_failed", failure_reason="ffmpeg_start_failed")
                 self.last_error = mask_rtsp_credentials(str(exc))
                 if self.mode == "hardware_transcode":
+                    self._audit_live_event(
+                        "live.ffmpeg_start_failed",
+                        "error",
+                        f"FFmpeg не запустил поток {self._camera_name()} / {self.stream}: {self.last_error}",
+                        f"FFmpeg failed to start stream {self._camera_name()} / {self.stream}: {self.last_error}",
+                        metadata={"error": self.last_error, "mode": self.mode},
+                    )
                     self._retry_next_backend_or_cpu_locked(camera, "hardware_start_failed", self.last_error)
                     return self.snapshot(viewers=0)
                 logger.exception(
@@ -895,6 +987,13 @@ class StreamInstance:
                     self.stream,
                     self.mode,
                     self.cmd_text,
+                )
+                self._audit_live_event(
+                    "live.ffmpeg_start_failed",
+                    "error",
+                    f"FFmpeg не запустил поток {self._camera_name()} / {self.stream}: {self.last_error}",
+                    f"FFmpeg failed to start stream {self._camera_name()} / {self.stream}: {self.last_error}",
+                    metadata={"error": self.last_error, "mode": self.mode},
                 )
                 return {"ok": False, "error": str(exc), **self.snapshot(viewers=0)}
 
@@ -922,6 +1021,21 @@ class StreamInstance:
                 self.proc.pid,
                 self.mode,
                 self.last_fallback_reason,
+            )
+            backend_label = self.effective_backend or self.selected_backend or self.mode
+            self._audit_live_event(
+                "live.backend_selected",
+                "info",
+                f"Live выбрал кодирование {backend_label} для {self._camera_name()} / {self.stream}",
+                f"Live selected {backend_label} for {self._camera_name()} / {self.stream}",
+                metadata={"backend": backend_label, "mode": self.mode},
+            )
+            self._audit_live_event(
+                "live.stream_started",
+                "info",
+                f"Live запустил поток {self._camera_name()} / {self.stream} через {backend_label}",
+                f"Live started stream {self._camera_name()} / {self.stream} via {backend_label}",
+                metadata={"pid": self.proc.pid if self.proc else None, "backend": backend_label, "mode": self.mode},
             )
 
             return {"ok": True, **self.snapshot(viewers=0)}
@@ -963,6 +1077,13 @@ class StreamInstance:
                 self.mode,
                 self.cmd_text,
                 stderr_tail,
+            )
+            self._audit_live_event(
+                "live.stream_stopped",
+                "info",
+                f"Live остановил поток {self._camera_name()} / {self.stream}",
+                f"Live stopped stream {self._camera_name()} / {self.stream}",
+                metadata={"reason": reason, "exit_code": exit_code},
             )
 
             self.proc = None

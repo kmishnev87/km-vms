@@ -15,6 +15,7 @@ from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
+from app.services.audit_log import create_event
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.onvif_service import (
     fetch_onvif_profiles,
@@ -360,6 +361,23 @@ def create_camera(
     db.add(camera)
     db.commit()
     db.refresh(camera)
+    create_event(
+        db=db,
+        actor=current_user,
+        category="cameras",
+        event_type="cameras.created",
+        message_ru=f"{current_user.username} добавил камеру {camera.name}",
+        message_en=f"{current_user.username} added camera {camera.name}",
+        target_type="camera",
+        target_id=camera.id,
+        target_name=camera.name,
+        metadata={
+            "protocol": camera.protocol,
+            "enabled": bool(camera.enabled),
+            "default_live_stream": camera.default_live_stream,
+            "default_record_stream": camera.default_record_stream,
+        },
+    )
     return camera
 
 
@@ -413,12 +431,44 @@ def update_camera(
     elif "password" in data:
         data.pop("password")
 
+    old_values = {
+        "name": camera.name,
+        "enabled": bool(camera.enabled),
+        "protocol": camera.protocol,
+        "host": camera.host,
+        "port": camera.port,
+        "username": camera.username,
+        "rtsp_transport": camera.rtsp_transport,
+        "recording_mode": camera.recording_mode,
+        "default_live_stream": camera.default_live_stream,
+        "default_record_stream": camera.default_record_stream,
+        "segment_minutes": camera.segment_minutes,
+        "retention_days": camera.retention_days,
+        "storage_quota_gb": camera.storage_quota_gb,
+    }
     for key, value in data.items():
         setattr(camera, key, value)
 
     db.add(camera)
     db.commit()
     db.refresh(camera)
+    changed = {}
+    for key, old_value in old_values.items():
+        new_value = getattr(camera, key, None)
+        if old_value != new_value:
+            changed[key] = {"old": old_value, "new": new_value}
+    create_event(
+        db=db,
+        actor=current_user,
+        category="cameras",
+        event_type="cameras.updated",
+        message_ru=f"{current_user.username} изменил камеру {camera.name}",
+        message_en=f"{current_user.username} updated camera {camera.name}",
+        target_type="camera",
+        target_id=camera.id,
+        target_name=camera.name,
+        metadata={"changed": changed, "credential_changed": "password" in payload.model_fields_set},
+    )
     return camera
 
 
@@ -438,6 +488,17 @@ def enable_camera(
     db.add(camera)
     db.commit()
     db.refresh(camera)
+    create_event(
+        db=db,
+        actor=current_user,
+        category="cameras",
+        event_type="cameras.enabled",
+        message_ru=f"{current_user.username} включил камеру {camera.name}",
+        message_en=f"{current_user.username} enabled camera {camera.name}",
+        target_type="camera",
+        target_id=camera.id,
+        target_name=camera.name,
+    )
     return camera
 
 
@@ -457,6 +518,17 @@ def disable_camera(
     db.add(camera)
     db.commit()
     db.refresh(camera)
+    create_event(
+        db=db,
+        actor=current_user,
+        category="cameras",
+        event_type="cameras.disabled",
+        message_ru=f"{current_user.username} отключил камеру {camera.name}",
+        message_en=f"{current_user.username} disabled camera {camera.name}",
+        target_type="camera",
+        target_id=camera.id,
+        target_name=camera.name,
+    )
     return camera
 
 
@@ -472,10 +544,24 @@ def delete_camera(
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
     folder_path = Path(settings.storage_root) / camera.storage_folder_name
+    camera_name = camera.name
+    camera_id_value = camera.id
 
     db.query(RecordingSegment).filter(RecordingSegment.camera_id == camera.id).delete()
     db.delete(camera)
     db.commit()
+    create_event(
+        db=db,
+        actor=current_user,
+        category="cameras",
+        event_type="cameras.deleted",
+        message_ru=f"{current_user.username} удалил камеру {camera_name}",
+        message_en=f"{current_user.username} deleted camera {camera_name}",
+        target_type="camera",
+        target_id=camera_id_value,
+        target_name=camera_name,
+        metadata={"delete_files": bool(delete_files)},
+    )
 
     if delete_files and folder_path.exists() and folder_path.is_dir():
         shutil.rmtree(folder_path, ignore_errors=True)

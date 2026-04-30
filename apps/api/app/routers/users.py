@@ -9,6 +9,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL, get_current_user, require_permission
 from app.schemas.user import ROLES, UserCreateRequest, UserResponse, UserUpdateRequest
+from app.services.audit_log import create_event
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -145,6 +146,18 @@ def create_user(
     db.add(user)
     db.commit()
     db.refresh(user)
+    create_event(
+        db=db,
+        actor=current_user,
+        category="users",
+        event_type="users.created",
+        message_ru=f"{current_user.username} создал пользователя {user.username}",
+        message_en=f"{current_user.username} created user {user.username}",
+        target_type="user",
+        target_id=user.id,
+        target_name=user.username,
+        metadata={"role": user.role, "is_active": bool(user.is_active)},
+    )
     return serialize_user(user)
 
 
@@ -160,8 +173,43 @@ def update_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
     next_role = validate_role(payload.role) if payload.role is not None else None
+    if current_user.id == user.id and (
+        (next_role is not None and next_role != user.role)
+        or (payload.is_active is False and bool(user.is_active))
+    ):
+        create_event(
+            db=db,
+            actor=current_user,
+            category="security",
+            event_type="security.forbidden_self_action",
+            severity="security",
+            message_ru=f"{current_user.username} попытался выполнить запрещённое действие над своей учётной записью",
+            message_en=f"{current_user.username} attempted forbidden self-action",
+            target_type="user",
+            target_id=user.id,
+            target_name=user.username,
+        )
+    if user.role == ROLE_OWNER and current_user.id != user.id:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="security",
+            event_type="security.forbidden_owner_modify",
+            severity="security",
+            message_ru=f"{current_user.username} попытался изменить владельца {user.username}, действие запрещено",
+            message_en=f"{current_user.username} attempted forbidden owner modification for {user.username}",
+            target_type="user",
+            target_id=user.id,
+            target_name=user.username,
+        )
     ensure_can_modify_user(current_user, user, next_role=next_role, next_active=payload.is_active)
     ensure_not_last_active_owner(db, user, next_role=next_role, next_active=payload.is_active)
+
+    old_username = user.username
+    old_full_name = user.full_name
+    old_role = user.role
+    old_active = bool(user.is_active)
+    password_changed = bool(payload.password)
 
     if payload.username is not None:
         username = payload.username.strip()
@@ -184,6 +232,65 @@ def update_user(
     db.add(user)
     db.commit()
     db.refresh(user)
+    changes = {}
+    if old_username != user.username:
+        changes["username"] = {"old": old_username, "new": user.username}
+    if old_full_name != user.full_name:
+        changes["display_name"] = {"old": old_full_name, "new": user.full_name}
+    if old_role != user.role:
+        changes["role"] = {"old": old_role, "new": user.role}
+        create_event(
+            db=db,
+            actor=current_user,
+            category="users",
+            event_type="users.role_changed",
+            message_ru=f"{current_user.username} изменил роль {user.username}: {old_role} → {user.role}",
+            message_en=f"{current_user.username} changed role for {user.username}: {old_role} -> {user.role}",
+            target_type="user",
+            target_id=user.id,
+            target_name=user.username,
+            metadata={"old_role": old_role, "new_role": user.role},
+        )
+    if old_active != bool(user.is_active):
+        enabled = bool(user.is_active)
+        create_event(
+            db=db,
+            actor=current_user,
+            category="users",
+            event_type="users.enabled" if enabled else "users.disabled",
+            message_ru=f"{current_user.username} {'включил' if enabled else 'отключил'} пользователя {user.username}",
+            message_en=f"{current_user.username} {'enabled' if enabled else 'disabled'} user {user.username}",
+            target_type="user",
+            target_id=user.id,
+            target_name=user.username,
+            metadata={"old_active": old_active, "new_active": enabled},
+        )
+    if password_changed:
+        self_change = current_user.id == user.id
+        create_event(
+            db=db,
+            actor=current_user,
+            category="users",
+            event_type="users.password_changed_self" if self_change else "users.password_reset_by_admin",
+            message_ru=f"{current_user.username} изменил свой пароль" if self_change else f"{current_user.username} сбросил пароль пользователя {user.username}",
+            message_en=f"{current_user.username} changed own password" if self_change else f"{current_user.username} reset password for {user.username}",
+            target_type="user",
+            target_id=user.id,
+            target_name=user.username,
+        )
+    if changes:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="users",
+            event_type="users.updated",
+            message_ru=f"{current_user.username} изменил пользователя {user.username}",
+            message_en=f"{current_user.username} updated user {user.username}",
+            target_type="user",
+            target_id=user.id,
+            target_name=user.username,
+            metadata={"changed": changes},
+        )
     return serialize_user(user)
 
 
@@ -198,8 +305,32 @@ def delete_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
 
     if user.role == ROLE_OWNER:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="security",
+            event_type="security.forbidden_owner_modify",
+            severity="security",
+            message_ru=f"{current_user.username} attempted forbidden owner modification for {user.username}",
+            message_en=f"{current_user.username} attempted forbidden owner modification for {user.username}",
+            target_type="user",
+            target_id=user.id,
+            target_name=user.username,
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя удалить")
     if user.id == current_user.id:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="security",
+            event_type="security.forbidden_self_action",
+            severity="security",
+            message_ru=f"{current_user.username} attempted forbidden self-action",
+            message_en=f"{current_user.username} attempted forbidden self-action",
+            target_type="user",
+            target_id=user.id,
+            target_name=user.username,
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя удалить собственную учетную запись")
     can_delete = current_user.role == ROLE_OWNER or (
         current_user.role == ROLE_ADMIN and user.role not in {ROLE_OWNER, ROLE_ADMIN}
@@ -210,6 +341,21 @@ def delete_user(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя удалить последнего критического пользователя")
 
     response = serialize_user(user)
+    target_id = user.id
+    target_name = user.username
+    target_role = user.role
     db.delete(user)
     db.commit()
+    create_event(
+        db=db,
+        actor=current_user,
+        category="users",
+        event_type="users.deleted",
+        message_ru=f"{current_user.username} удалил пользователя {target_name}",
+        message_en=f"{current_user.username} deleted user {target_name}",
+        target_type="user",
+        target_id=target_id,
+        target_name=target_name,
+        metadata={"role": target_role},
+    )
     return response

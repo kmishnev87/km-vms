@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -25,6 +25,7 @@ from app.models.camera import Camera
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.routers.recordings import collect_recording_files
+from app.services.audit_log import create_event, events_as_text, list_events, request_ip, request_user_agent, serialize_event
 from app.services.hardware import get_hardware_capabilities, invalidate_hardware_capabilities
 from app.services.live_engine_v2 import manager as live_manager
 from app.services.system_settings import (
@@ -147,18 +148,55 @@ def get_settings(
 @router.patch("/settings")
 def patch_settings(
     payload: SettingsUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     data = payload.model_dump(exclude_unset=True)
     data.pop("storage_path", None)
-    previous_hardware_backend = get_system_settings(db).hardware_preferred_backend
+    previous = serialize_settings(get_system_settings(db))
     try:
         system = update_system_settings(db, data)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
-    if "hardware_preferred_backend" in data and system.hardware_preferred_backend != previous_hardware_backend:
+    current = serialize_settings(system)
+    if "hardware_preferred_backend" in data and system.hardware_preferred_backend != previous.get("hardware_preferred_backend"):
         invalidate_hardware_capabilities()
+    setting_events = [
+        ("language", "settings.language_changed", "язык", "language"),
+        ("timezone", "settings.timezone_changed", "часовой пояс", "timezone"),
+        ("hardware_preferred_backend", "settings.hardware_backend_changed", "аппаратное ускорение", "hardware backend"),
+        ("recording_format", "settings.recording_profile_changed", "профиль записи", "recording profile"),
+    ]
+    changed = {}
+    for key, event_type, label_ru, label_en in setting_events:
+        if key in data and previous.get(key) != current.get(key):
+            changed[key] = {"old": previous.get(key), "new": current.get(key)}
+            create_event(
+                db=db,
+                actor=current_user,
+                category="settings",
+                event_type=event_type,
+                message_ru=f"{current_user.username} изменил {label_ru}: {previous.get(key)} → {current.get(key)}",
+                message_en=f"{current_user.username} changed {label_en}: {previous.get(key)} -> {current.get(key)}",
+                target_type="settings",
+                metadata={"field": key, "old": previous.get(key), "new": current.get(key)},
+                ip_address=request_ip(request),
+                user_agent=request_user_agent(request),
+            )
+    if changed or data:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="settings",
+            event_type="settings.saved",
+            message_ru=f"{current_user.username} сохранил настройки",
+            message_en=f"{current_user.username} saved settings",
+            target_type="settings",
+            metadata={"changed": changed},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
     return serialize_settings(system)
 
 
@@ -470,6 +508,11 @@ def build_log_archive(
 ) -> io.BytesIO:
     mode = mode if mode in DIAGNOSTIC_MODES else "normal"
     created_at = datetime.utcnow().isoformat() + "Z"
+    audit_events = list_events(
+        db,
+        limit=1000 if mode == "extended" else 500,
+        since_minutes=30 if mode == "extended" else None,
+    )
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_DEFLATED) as bundle:
         write_json(
@@ -480,6 +523,9 @@ def build_log_archive(
                 "mode": mode,
                 "docker_log_rule": "--since=30m" if mode == "extended" else "--since=10m",
                 "containers": DIAGNOSTIC_CONTAINERS,
+                "audit_events_included": True,
+                "audit_event_count": len(audit_events),
+                "archive_mode": mode,
             },
         )
         write_json(
@@ -509,6 +555,8 @@ def build_log_archive(
         write_json(bundle, "live/debug.json", live_manager.debug())
         write_json(bundle, "recordings/summary.json", recordings_diagnostics())
         write_json(bundle, "chronology/summary.json", chronology_diagnostics(db))
+        write_json(bundle, "audit/events_recent.json", [serialize_event(event) for event in audit_events])
+        bundle.writestr("audit/events_recent.txt", events_as_text(audit_events))
         if report_text is not None:
             bundle.writestr("bug-report.txt", report_text.strip() + "\n")
         if include_logs:
@@ -520,11 +568,52 @@ def build_log_archive(
 
 @router.get("/settings/logs/archive")
 def download_log_archive(
+    request: Request,
     mode: str = Query("normal", pattern="^(normal|extended)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("run_diagnostics")),
 ):
-    archive = build_log_archive(db=db, mode=mode)
+    create_event(
+        db=db,
+        actor=current_user,
+        category="diagnostics",
+        event_type="diagnostics.archive_requested",
+        message_ru=f"{current_user.username} запросил диагностический архив: {mode}",
+        message_en=f"{current_user.username} requested diagnostic archive: {mode}",
+        target_type="diagnostic_archive",
+        metadata={"mode": mode},
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    try:
+        archive = build_log_archive(db=db, mode=mode)
+    except Exception as exc:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="diagnostics",
+            event_type="diagnostics.archive_failed",
+            severity="error",
+            message_ru=f"Не удалось создать диагностический архив: {exc}",
+            message_en=f"Failed to create diagnostic archive: {exc}",
+            target_type="diagnostic_archive",
+            metadata={"mode": mode, "error": str(exc)},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise
+    create_event(
+        db=db,
+        actor=current_user,
+        category="diagnostics",
+        event_type="diagnostics.archive_created_extended" if mode == "extended" else "diagnostics.archive_created",
+        message_ru=f"{current_user.username} создал {'расширенный' if mode == 'extended' else 'обычный'} диагностический архив",
+        message_en=f"{current_user.username} created {'extended' if mode == 'extended' else 'normal'} diagnostic archive",
+        target_type="diagnostic_archive",
+        metadata={"mode": mode},
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
     suffix = "extended" if mode == "extended" else "normal"
     filename = f"km-vms-logs-{suffix}-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
     return StreamingResponse(
@@ -537,10 +626,51 @@ def download_log_archive(
 @router.post("/settings/bug-report")
 def create_bug_report(
     payload: BugReportRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("run_diagnostics")),
 ):
-    archive = build_log_archive(db=db, report_text=payload.text, include_logs=payload.include_logs)
+    create_event(
+        db=db,
+        actor=current_user,
+        category="diagnostics",
+        event_type="diagnostics.archive_requested",
+        message_ru=f"{current_user.username} запросил диагностический архив: bug_report",
+        message_en=f"{current_user.username} requested diagnostic archive: bug_report",
+        target_type="diagnostic_archive",
+        metadata={"mode": "bug_report", "include_logs": payload.include_logs},
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    try:
+        archive = build_log_archive(db=db, report_text=payload.text, include_logs=payload.include_logs)
+    except Exception as exc:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="diagnostics",
+            event_type="diagnostics.archive_failed",
+            severity="error",
+            message_ru=f"Не удалось создать диагностический архив: {exc}",
+            message_en=f"Failed to create diagnostic archive: {exc}",
+            target_type="diagnostic_archive",
+            metadata={"mode": "bug_report", "error": str(exc)},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise
+    create_event(
+        db=db,
+        actor=current_user,
+        category="diagnostics",
+        event_type="diagnostics.archive_created",
+        message_ru=f"{current_user.username} создал обычный диагностический архив",
+        message_en=f"{current_user.username} created normal diagnostic archive",
+        target_type="diagnostic_archive",
+        metadata={"mode": "bug_report", "include_logs": payload.include_logs},
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
     filename = f"km-vms-bug-report-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
     return StreamingResponse(
         archive,
