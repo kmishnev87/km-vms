@@ -467,7 +467,7 @@ export default function CamerasPage() {
 
                   <div className="cameraPreviewField" aria-label="Кадр камеры">
                     {camera.preview_url ? (
-                      <img src={`${camera.preview_url}?v=${encodeURIComponent(camera.updated_at || camera.id)}`} alt="" />
+                      <img src={camera.preview_url} alt="" />
                     ) : (
                       <div className="cameraPreviewPlaceholder">Нет кадра</div>
                     )}

@@ -2365,6 +2365,7 @@ textarea {
   width: 114px;
   text-align: center;
   justify-self: center;
+  margin-bottom: 12px;
 }
 
 .cameraPrimary {
@@ -2381,7 +2382,7 @@ textarea {
 .cameraSecondary {
   width: 100%;
   max-width: 100%;
-  margin-top: 8px;
+  margin-top: 3px;
   font-size: 9px;
   line-height: 1.35;
   color: #64748b;

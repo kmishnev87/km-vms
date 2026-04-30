@@ -50,5 +50,5 @@ class Camera(Base):
     def preview_url(self) -> str | None:
         preview_path = settings.camera_preview_path(self.id)
         if preview_path.exists():
-            return settings.camera_preview_url(self.id)
+            return f"{settings.camera_preview_url(self.id)}?v={preview_path.stat().st_mtime_ns}"
         return None
