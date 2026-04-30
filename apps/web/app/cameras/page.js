@@ -450,8 +450,19 @@ export default function CamerasPage() {
                 <div className="cameraCardGrid">
                   <div className="cameraField cameraNameField">
                     <div className="cameraFieldLabel">Камера</div>
-                    <div className="cameraPrimary">{camera.name}</div>
-                    <div className="cameraSecondary">папка: {camera.storage_folder_name}</div>
+                    <div className="cameraPrimary" title={camera.name}>{camera.name}</div>
+                    <div className="cameraSecondary" title={`папка: ${camera.storage_folder_name}`}>папка: {camera.storage_folder_name}</div>
+                    <div className="cameraActions">
+                      <button className="cameraIconButton" onClick={() => openEdit(camera)} title="Редактировать" aria-label="Редактировать">
+                        {"\u270e"}
+                      </button>
+                      <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? "Отключить" : "Включить"} aria-label={camera.enabled ? "Отключить" : "Включить"}>
+                        {camera.enabled ? "\u23fb" : "\u2713"}
+                      </button>
+                      <button className="cameraIconButton danger" onClick={() => openDeleteModal(camera)} title="Удалить" aria-label="Удалить">
+                        {"\ud83d\uddd1"}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="cameraPreviewField" aria-label="Кадр камеры">
@@ -462,48 +473,39 @@ export default function CamerasPage() {
                     )}
                   </div>
 
-                  <div className="cameraField">
-                    <div className="cameraFieldLabel">Протокол</div>
-                    <div>{camera.protocol?.toUpperCase()}</div>
-                  </div>
+                  <div className="cameraMetaGrid">
+                    <div className="cameraField">
+                      <div className="cameraFieldLabel">Протокол</div>
+                      <div>{camera.protocol?.toUpperCase()}</div>
+                    </div>
 
-                  <div className="cameraField">
-                    <div className="cameraFieldLabel">Адрес</div>
-                    <div>{camera.host}:{camera.port}</div>
-                  </div>
+                    <div className="cameraField">
+                      <div className="cameraFieldLabel">Адрес</div>
+                      <div>{camera.host}:{camera.port}</div>
+                    </div>
 
-                  <div className="cameraField">
-                    <div className="cameraFieldLabel">Сегм.</div>
-                    <div>{camera.segment_minutes} мин</div>
-                  </div>
+                    <div className="cameraField">
+                      <div className="cameraFieldLabel">Сегм.</div>
+                      <div>{camera.segment_minutes} мин</div>
+                    </div>
 
-                  <div className="cameraField">
-                    <div className="cameraFieldLabel">Хран.</div>
-                    <div>{camera.retention_days} дн</div>
-                  </div>
+                    <div className="cameraField">
+                      <div className="cameraFieldLabel">Хран.</div>
+                      <div>{camera.retention_days} дн</div>
+                    </div>
 
-                  <div className="cameraField">
-                    <div className="cameraFieldLabel">Лимит</div>
-                    <div>{camera.storage_quota_gb} ГБ</div>
-                  </div>
+                    <div className="cameraField">
+                      <div className="cameraFieldLabel">Лимит</div>
+                      <div>{camera.storage_quota_gb} ГБ</div>
+                    </div>
 
-                  <div className="cameraField">
-                    <div className="cameraFieldLabel">Статус</div>
-                    <div><span className={`badge ${badge.cls}`}>{badge.text}</span></div>
+                    <div className="cameraField">
+                      <div className="cameraFieldLabel">Статус</div>
+                      <div><span className={`badge ${badge.cls}`}>{badge.text}</span></div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="cameraActions">
-                  <button className="cameraIconButton" onClick={() => openEdit(camera)} title="Редактировать" aria-label="Редактировать">
-                    {"\u270e"}
-                  </button>
-                  <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? "Отключить" : "Включить"} aria-label={camera.enabled ? "Отключить" : "Включить"}>
-                    {camera.enabled ? "\u2713" : "\u23fb"}
-                  </button>
-                  <button className="cameraIconButton danger" onClick={() => openDeleteModal(camera)} title="Удалить" aria-label="Удалить">
-                    {"\ud83d\uddd1"}
-                  </button>
-                </div>
               </div>
             );
           })

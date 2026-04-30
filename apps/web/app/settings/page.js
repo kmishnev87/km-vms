@@ -1168,11 +1168,11 @@ export default function SettingsPage() {
         {userDeleteTarget ? (
           <div className="settingsModalOverlay settingsConfirmOverlay" role="presentation">
             <div className="settingsConfirmModal" role="dialog" aria-modal="true" aria-label={lang === "en" ? "Delete user" : "Удалить пользователя"}>
-              <div className="settingsUserModalHeader">
-                <h2>{lang === "en" ? "Delete user" : "Удалить пользователя"}</h2>
-                <button type="button" className="settingsModalClose" onClick={() => setUserDeleteTarget(null)} aria-label={t.close}>×</button>
-              </div>
-              <p>{lang === "en" ? "Delete user" : "Удалить пользователя"} <strong>{userDeleteTarget.username}</strong>?</p>
+              <button type="button" className="settingsModalClose settingsConfirmClose" onClick={() => setUserDeleteTarget(null)} aria-label={t.close}>×</button>
+              <p>
+                <span>{lang === "en" ? "Delete user" : "Удалить пользователя"}</span>
+                <strong>{userDeleteTarget.username}?</strong>
+              </p>
               <div className="settingsModalActions">
                 <button type="button" className="button secondary small" onClick={() => setUserDeleteTarget(null)} disabled={userBusy}>{t.cancel}</button>
                 <button type="button" className="button small dangerButton" onClick={() => deleteUser(userDeleteTarget)} disabled={userBusy}>

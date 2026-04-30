@@ -1211,13 +1211,53 @@ textarea {
   border-radius: 18px;
   background: #ffffff;
   box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
-  padding: 18px;
+  padding: 22px 24px 20px;
+  position: relative;
+  text-align: center;
 }
 
 .settingsConfirmModal p {
-  margin: 0 0 18px;
+  margin: 8px 0 22px;
   color: #475569;
   line-height: 1.45;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.settingsConfirmModal p span,
+.settingsConfirmModal p strong {
+  display: block;
+}
+
+.settingsConfirmModal p strong {
+  margin-top: 4px;
+  color: #0f172a;
+}
+
+.settingsConfirmClose {
+  position: absolute;
+  right: 14px;
+  top: 14px;
+}
+
+.settingsConfirmModal .settingsModalActions {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr auto 1fr;
+  gap: 0;
+  align-items: center;
+}
+
+.settingsConfirmModal .settingsModalActions .button {
+  min-width: 104px;
+  justify-content: center;
+}
+
+.settingsConfirmModal .settingsModalActions .button:first-child {
+  grid-column: 2;
+}
+
+.settingsConfirmModal .settingsModalActions .button:last-child {
+  grid-column: 4;
 }
 
 .dangerButton {
@@ -2280,14 +2320,14 @@ textarea {
 }
 
 .cameraCard {
-  padding: 18px 22px;
+  padding: 18px 22px 20px;
 }
 
 .cameraCardGrid {
   display: grid;
-  grid-template-columns: minmax(170px, 1.3fr) 116px minmax(82px, 0.55fr) minmax(170px, 1.25fr) repeat(4, minmax(82px, 0.7fr));
-  gap: 12px;
-  align-items: start;
+  grid-template-columns: minmax(190px, 1.1fr) 230px minmax(0, 4fr);
+  gap: 18px;
+  align-items: center;
 }
 
 .cameraFieldLabel {
@@ -2301,10 +2341,33 @@ textarea {
   text-align: center;
 }
 
+.cameraField > div:not(.cameraFieldLabel) {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+}
+
+.cameraNameField {
+  min-width: 0;
+  align-self: stretch;
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  align-content: start;
+}
+
+.cameraNameField .cameraFieldLabel {
+  width: 114px;
+  text-align: center;
+}
+
 .cameraPrimary {
   font-size: 18px;
   line-height: 1.25;
   text-align: left;
+  display: block;
+  min-height: 0;
+  min-width: 0;
 }
 
 .cameraSecondary {
@@ -2313,16 +2376,37 @@ textarea {
   line-height: 1.35;
   color: #64748b;
   text-align: left;
+  display: block;
+  min-height: 0;
+  min-width: 0;
+}
+
+.cameraNameField .cameraPrimary,
+.cameraNameField .cameraSecondary {
+  display: block;
+  min-height: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cameraPreviewField {
-  width: 108px;
+  width: 228px;
+  max-width: 100%;
   aspect-ratio: 16 / 9;
   border: 1px solid #dbe3ef;
   border-radius: 8px;
   background: #f8fafc;
   overflow: hidden;
-  align-self: center;
+  align-self: end;
+  justify-self: center;
+}
+
+.cameraMetaGrid {
+  display: grid;
+  grid-template-columns: minmax(78px, 0.7fr) minmax(160px, 1.35fr) repeat(4, minmax(78px, 0.7fr));
+  gap: 12px;
+  align-items: center;
 }
 
 .cameraPreviewField img,
@@ -2351,6 +2435,7 @@ textarea {
   gap: 6px;
   flex-wrap: wrap;
   margin-top: 18px;
+  align-self: end;
 }
 
 .cameraIconButton {
@@ -2578,11 +2663,16 @@ textarea {
 
 @media (max-width: 1200px) {
   .cameraCardGrid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: minmax(190px, 1fr) 230px minmax(260px, 1.4fr);
   }
 
   .cameraPreviewField {
     justify-self: center;
+  }
+
+  .cameraMetaGrid {
+    grid-template-columns: repeat(2, minmax(96px, 1fr));
+    gap: 14px 18px;
   }
 
   .liveColumns,
@@ -2705,7 +2795,26 @@ textarea {
   }
 
   .cameraCardGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1fr) 230px;
+    grid-template-areas:
+      "identity preview"
+      "meta meta";
+    align-items: end;
+  }
+
+  .cameraNameField {
+    grid-area: identity;
+  }
+
+  .cameraPreviewField {
+    grid-area: preview;
+  }
+
+  .cameraMetaGrid {
+    grid-area: meta;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding-top: 12px;
+    border-top: 1px solid #eef2f7;
   }
 
   .cameraTestResult {
@@ -2812,10 +2921,20 @@ textarea {
 
   .cameraCardGrid {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "identity"
+      "preview"
+      "meta";
+    align-items: start;
   }
 
   .cameraPreviewField {
-    justify-self: start;
+    justify-self: center;
+    width: min(100%, 260px);
+  }
+
+  .cameraMetaGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .actions {
