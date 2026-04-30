@@ -2325,9 +2325,9 @@ textarea {
 
 .cameraCardGrid {
   display: grid;
-  grid-template-columns: minmax(190px, 1.1fr) 230px minmax(0, 4fr);
+  grid-template-columns: minmax(190px, 1.1fr) 260px minmax(0, 4fr);
   gap: 18px;
-  align-items: center;
+  align-items: stretch;
 }
 
 .cameraFieldLabel {
@@ -2338,6 +2338,9 @@ textarea {
 }
 
 .cameraField {
+  align-self: stretch;
+  display: grid;
+  grid-template-rows: auto 1fr;
   text-align: center;
 }
 
@@ -2350,10 +2353,12 @@ textarea {
 
 .cameraNameField {
   min-width: 0;
+  overflow: hidden;
   align-self: stretch;
   display: grid;
   grid-template-rows: auto auto auto 1fr;
   align-content: start;
+  justify-items: center;
 }
 
 .cameraNameField .cameraFieldLabel {
@@ -2362,20 +2367,22 @@ textarea {
 }
 
 .cameraPrimary {
+  width: 100%;
   font-size: 18px;
   line-height: 1.25;
-  text-align: left;
+  text-align: center;
   display: block;
   min-height: 0;
   min-width: 0;
 }
 
 .cameraSecondary {
+  width: 100%;
   margin-top: 8px;
   font-size: 9px;
   line-height: 1.35;
   color: #64748b;
-  text-align: left;
+  text-align: center;
   display: block;
   min-height: 0;
   min-width: 0;
@@ -2391,22 +2398,24 @@ textarea {
 }
 
 .cameraPreviewField {
-  width: 228px;
+  width: 260px;
   max-width: 100%;
-  aspect-ratio: 16 / 9;
+  height: 100%;
+  min-height: 126px;
   border: 1px solid #dbe3ef;
   border-radius: 8px;
   background: #f8fafc;
   overflow: hidden;
-  align-self: end;
+  align-self: stretch;
   justify-self: center;
 }
 
 .cameraMetaGrid {
+  align-self: stretch;
   display: grid;
   grid-template-columns: minmax(78px, 0.7fr) minmax(160px, 1.35fr) repeat(4, minmax(78px, 0.7fr));
   gap: 12px;
-  align-items: center;
+  align-items: stretch;
 }
 
 .cameraPreviewField img,
@@ -2436,6 +2445,7 @@ textarea {
   flex-wrap: wrap;
   margin-top: 18px;
   align-self: end;
+  justify-content: center;
 }
 
 .cameraIconButton {
@@ -2663,7 +2673,7 @@ textarea {
 
 @media (max-width: 1200px) {
   .cameraCardGrid {
-    grid-template-columns: minmax(190px, 1fr) 230px minmax(260px, 1.4fr);
+    grid-template-columns: minmax(190px, 1fr) 260px minmax(260px, 1.4fr);
   }
 
   .cameraPreviewField {
@@ -2795,7 +2805,7 @@ textarea {
   }
 
   .cameraCardGrid {
-    grid-template-columns: minmax(0, 1fr) 230px;
+    grid-template-columns: minmax(0, 1fr) 260px;
     grid-template-areas:
       "identity preview"
       "meta meta";
@@ -2930,7 +2940,9 @@ textarea {
 
   .cameraPreviewField {
     justify-self: center;
-    width: min(100%, 260px);
+    width: min(100%, 280px);
+    height: auto;
+    aspect-ratio: 16 / 9;
   }
 
   .cameraMetaGrid {

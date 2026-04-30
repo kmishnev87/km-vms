@@ -457,7 +457,7 @@ export default function CamerasPage() {
                         {"\u270e"}
                       </button>
                       <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? "Отключить" : "Включить"} aria-label={camera.enabled ? "Отключить" : "Включить"}>
-                        {camera.enabled ? "\u23fb" : "\u2713"}
+                        {camera.enabled ? "\u2713" : "\u23fb"}
                       </button>
                       <button className="cameraIconButton danger" onClick={() => openDeleteModal(camera)} title="Удалить" aria-label="Удалить">
                         {"\ud83d\uddd1"}
