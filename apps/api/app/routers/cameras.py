@@ -421,8 +421,9 @@ def capture_camera_preview(input_url: str, transport: str, output_path: Path) ->
         "-v", "error",
         "-rtsp_transport", transport,
         "-i", input_url,
+        "-vf", "scale=640:-2:flags=lanczos,boxblur=0.25",
         "-frames:v", "1",
-        "-q:v", "4",
+        "-q:v", "5",
         str(output_path),
     ]
     try:
