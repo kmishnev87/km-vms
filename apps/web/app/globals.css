@@ -2358,19 +2358,21 @@ textarea {
   display: grid;
   grid-template-rows: auto auto auto 1fr;
   align-content: start;
-  justify-items: center;
+  justify-items: stretch;
 }
 
 .cameraNameField .cameraFieldLabel {
   width: 114px;
   text-align: center;
+  justify-self: center;
 }
 
 .cameraPrimary {
   width: 100%;
+  max-width: 100%;
   font-size: 18px;
   line-height: 1.25;
-  text-align: center;
+  text-align: left;
   display: block;
   min-height: 0;
   min-width: 0;
@@ -2378,11 +2380,12 @@ textarea {
 
 .cameraSecondary {
   width: 100%;
+  max-width: 100%;
   margin-top: 8px;
   font-size: 9px;
   line-height: 1.35;
   color: #64748b;
-  text-align: center;
+  text-align: left;
   display: block;
   min-height: 0;
   min-width: 0;
@@ -2395,6 +2398,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  direction: ltr;
 }
 
 .cameraPreviewField {
@@ -2446,6 +2450,8 @@ textarea {
   margin-top: 18px;
   align-self: end;
   justify-content: center;
+  justify-self: start;
+  width: 114px;
 }
 
 .cameraIconButton {
