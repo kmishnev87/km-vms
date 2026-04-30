@@ -67,6 +67,8 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("cameras", "GET", "/cameras/{camera_id}", PERMISSION_MANAGE_CAMERAS, "require_permission"),
     EndpointPermission("cameras", "POST", "/cameras", PERMISSION_MANAGE_CAMERAS, "require_permission"),
     EndpointPermission("cameras", "PUT", "/cameras/{camera_id}", PERMISSION_MANAGE_CAMERAS, "require_permission"),
+    EndpointPermission("cameras", "POST", "/cameras/{camera_id}/enable", PERMISSION_MANAGE_CAMERAS, "require_permission"),
+    EndpointPermission("cameras", "POST", "/cameras/{camera_id}/disable", PERMISSION_MANAGE_CAMERAS, "require_permission"),
     EndpointPermission("cameras", "DELETE", "/cameras/{camera_id}", PERMISSION_MANAGE_CAMERAS, "require_permission"),
     EndpointPermission("cameras", "POST", "/cameras/test", PERMISSION_MANAGE_CAMERAS, "require_permission"),
     EndpointPermission("cameras", "POST", "/cameras/onvif/profiles", PERMISSION_MANAGE_CAMERAS, "require_permission"),

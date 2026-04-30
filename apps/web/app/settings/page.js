@@ -56,7 +56,7 @@ const TEXT = {
     hardwareUnavailable: "Аппаратное ускорение недоступно. Будет использоваться CPU fallback.",
     selected: "Выбрано",
     unavailableMode: "Этот режим недоступен на данном сервере или не прошёл проверку.",
-    rescan: "Тест",
+    rescan: "Обновить аппаратные возможности",
     failedValidation: "Не прошёл проверку",
     notDetected: "Не найдено на этом сервере",
     security: "Безопасность",
@@ -184,7 +184,7 @@ const TEXT = {
     hardwareUnavailable: "Hardware acceleration is unavailable. CPU fallback will be used.",
     selected: "Selected",
     unavailableMode: "This mode is unavailable on this server or failed validation.",
-    rescan: "Test",
+    rescan: "Refresh hardware capabilities",
     failedValidation: "Failed validation",
     notDetected: "Not detected on this server",
     security: "Security",
@@ -1035,9 +1035,19 @@ export default function SettingsPage() {
                           <InfoTip text={t.tooltips[backend]} />
                         </span>
                       ))}
+                      <button
+                        type="button"
+                        className={`settingsHardwareRescanButton ${hardwareChecking ? "isChecking" : ""}`}
+                        onClick={rescanHardware}
+                        disabled={hardwareChecking || saving}
+                        title={hardwareChecking ? t.checking : t.rescan}
+                        aria-label={hardwareChecking ? t.checking : t.rescan}
+                      >
+                        {"↻"}
+                      </button>
                     </div>
                   </div>
-                  <div className="settingsRowControl">
+                  <div className="settingsRowControl settingsHardwareControl">
                     <select id="settings-hardware" className="select settingsSelect" value={selectedHardware} onChange={handleHardwareChange} disabled={saving || hardwareChecking}>
                       {hardwareSummary.map(({ backend, selectable, reason }) => (
                         <option key={backend} value={backend} disabled={!selectable} title={reason || backendLabel(backend, lang)}>
@@ -1045,9 +1055,6 @@ export default function SettingsPage() {
                         </option>
                       ))}
                     </select>
-                    <button className="button secondary small settingsTestButton" onClick={rescanHardware} disabled={hardwareChecking || saving}>
-                      {hardwareChecking ? t.checking : t.rescan}
-                    </button>
                   </div>
                 </div>
 
@@ -1137,7 +1144,7 @@ export default function SettingsPage() {
                               {"\u270e"}
                             </button>
                             <button className="settingsUserIconButton danger" onClick={() => deleteUser(user)} disabled={userBusy || !userCanBeDeleted(currentUser, user, users)} title="Удалить" aria-label="Удалить">
-                              {"\u232b"}
+                              {"\ud83d\uddd1"}
                             </button>
                             <button className="settingsUserIconButton" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id || user.role === "owner"} title={user.is_active ? "Отключить" : "Включить"} aria-label={user.is_active ? "Отключить" : "Включить"}>
                               {user.is_active ? "\u23fb" : "\u2713"}

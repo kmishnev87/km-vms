@@ -449,11 +449,15 @@ export default function CamerasPage() {
                 </div>
 
                 <div className="cameraActions">
-                  <button className="button secondary small" onClick={() => openEdit(camera)}>Редактировать</button>
-                  <button className="button secondary small" onClick={() => toggleCamera(camera)}>
-                    {camera.enabled ? "Отключить" : "Включить"}
+                  <button className="cameraIconButton" onClick={() => openEdit(camera)} title="Редактировать" aria-label="Редактировать">
+                    {"\u270e"}
                   </button>
-                  <button className="button secondary small" onClick={() => openDeleteModal(camera)}>Удалить</button>
+                  <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? "Отключить" : "Включить"} aria-label={camera.enabled ? "Отключить" : "Включить"}>
+                    {camera.enabled ? "\u23fb" : "\u2713"}
+                  </button>
+                  <button className="cameraIconButton danger" onClick={() => openDeleteModal(camera)} title="Удалить" aria-label="Удалить">
+                    {"\ud83d\uddd1"}
+                  </button>
                 </div>
               </div>
             );

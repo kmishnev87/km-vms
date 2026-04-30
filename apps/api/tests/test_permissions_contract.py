@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS, PUBLIC
 from app.core.permissions import (
@@ -14,6 +15,10 @@ from app.core.permissions import (
     get_permissions_for_role,
     user_has_permission,
 )
+from app.main import app, health
+from app.routers.deps import FORBIDDEN_DETAIL, require_permission
+from app.routers.settings import redact_text as settings_redact_text
+from app.routers.settings import safe_json
 from app.routers.users import ensure_can_create_role, ensure_can_modify_user
 
 
@@ -50,6 +55,18 @@ def decision(path: str, method: str):
     matches = decisions_for(path, method)
     assert len(matches) == 1
     return matches[0]
+
+
+def actual_app_routes():
+    routes = set()
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        for method in route.methods or []:
+            if method in {"HEAD", "OPTIONS"}:
+                continue
+            routes.add((method, route.path))
+    return routes
 
 
 def test_role_permissions_matrix():
@@ -107,6 +124,14 @@ def test_endpoint_permission_contract_is_explicit_and_reviewable():
     assert decision("/settings/bug-report", "POST").decision == "run_diagnostics"
 
 
+def test_endpoint_permission_registry_covers_actual_fastapi_routes():
+    actual = actual_app_routes()
+    registered = {(item.method, item.path) for item in ENDPOINT_PERMISSIONS}
+
+    assert actual - registered == set()
+    assert registered - actual == set()
+
+
 def test_endpoint_allowed_roles_contract():
     assert decision("/audit/events", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/settings", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
@@ -118,6 +143,17 @@ def test_endpoint_allowed_roles_contract():
     assert decision("/recordings", "DELETE").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/chronology/ranges", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN, ROLE_OPERATOR)
     assert decision("/live/debug", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
+    assert decision("/cameras/{camera_id}/enable", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
+    assert decision("/cameras/{camera_id}/disable", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
+
+
+def test_public_health_is_minimal_and_detailed_system_info_is_protected():
+    assert health() == {"status": "ok"}
+    assert "app_env" not in health()
+    assert "storage_root" not in health()
+    assert "storage_exists" not in health()
+    assert decision("/health", "GET").decision == PUBLIC
+    assert decision("/system/info", "GET").decision == "manage_settings"
 
 
 def test_management_cameras_are_separated_from_viewer_cameras():
@@ -129,6 +165,10 @@ def test_management_cameras_are_separated_from_viewer_cameras():
     viewer_body = source.split("def list_viewer_cameras", 1)[1].split("@router.get", 1)[0]
     assert '"password"' not in viewer_body
     assert "password_encrypted" not in viewer_body
+    assert '"rtsp_main_url": camera.rtsp_main_url' not in viewer_body
+    assert '"rtsp_sub_url": camera.rtsp_sub_url' not in viewer_body
+    assert '"rtsp_main_url": bool(camera.rtsp_main_url)' in source
+    assert '"rtsp_sub_url": bool(camera.rtsp_sub_url)' in source
     assert decision("/cameras", "GET").decision == "manage_cameras"
     assert decision("/viewer/cameras", "GET").decision == "view_live"
 
@@ -171,6 +211,16 @@ def test_settings_hardware_storage_users_and_system_info_are_permission_protecte
     assert 'Depends(require_permission("manage_settings"))' in read_app_file("main.py")
 
 
+def test_permission_denial_detail_is_normalized():
+    dependency = require_permission("manage_settings")
+    with pytest.raises(HTTPException) as exc:
+        dependency(user(10, ROLE_VIEWER))
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == FORBIDDEN_DETAIL
+    assert exc.value.detail != "Insufficient permissions"
+
+
 def test_diagnostic_archive_audit_contract_is_time_based():
     source = read_router("settings.py")
     assert '"audit/events_recent.json"' in source
@@ -178,3 +228,38 @@ def test_diagnostic_archive_audit_contract_is_time_based():
     assert 'since_minutes=30 if mode == "extended" else 10' in source
     assert '"audit_event_rule": "last 30 minutes" if mode == "extended" else "last 10 minutes"' in source
     assert '"docker_log_rule": "--since=30m" if mode == "extended" else "--since=10m"' in source
+
+
+def test_diagnostic_archive_permissions_are_limited_to_diagnostics_permission():
+    assert decision("/settings/logs/archive", "GET").decision == "run_diagnostics"
+    assert decision("/settings/bug-report", "POST").decision == "run_diagnostics"
+    assert decision("/settings/logs/archive", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
+    assert decision("/settings/bug-report", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
+
+
+def test_diagnostic_archive_redaction_helpers_mask_sensitive_values():
+    text = settings_redact_text(
+        "Authorization: Bearer archive-token rtsp://user:camera-pass@host/live?access_token=query-token"
+    )
+    assert "archive-token" not in text
+    assert "camera-pass" not in text
+    assert "query-token" not in text
+    assert "Bearer ***" in text
+    assert "rtsp://user:***@host/live" in text
+    assert "access_token=***" in text
+
+    payload = safe_json(
+        {
+            "password": "plain-secret",
+            "JWT_SECRET": "jwt-secret",
+            "camera": {"url": "rtsp://admin:rtsp-secret@camera/live"},
+            "items": [{"access_token": "nested-token"}],
+        }
+    )
+    rendered = str(payload)
+    assert "plain-secret" not in rendered
+    assert "jwt-secret" not in rendered
+    assert "rtsp-secret" not in rendered
+    assert "nested-token" not in rendered
+    assert payload["password"] == "***"
+    assert payload["JWT_SECRET"] == "***"

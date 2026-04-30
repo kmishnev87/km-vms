@@ -72,9 +72,6 @@ def root():
 def health():
     return {
         "status": "ok",
-        "app_env": settings.app_env,
-        "storage_root": settings.storage_root,
-        "storage_exists": Path(settings.storage_root).exists(),
     }
 
 
