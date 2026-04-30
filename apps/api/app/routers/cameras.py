@@ -4,7 +4,7 @@ import subprocess
 import json
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -15,7 +15,7 @@ from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
-from app.services.audit_log import create_event
+from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.onvif_service import (
     fetch_onvif_profiles,
@@ -308,6 +308,7 @@ def test_camera(
 @router.post("", response_model=CameraResponse, status_code=status.HTTP_201_CREATED)
 def create_camera(
     payload: CameraCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
@@ -377,6 +378,8 @@ def create_camera(
             "default_live_stream": camera.default_live_stream,
             "default_record_stream": camera.default_record_stream,
         },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
     )
     return camera
 
@@ -385,6 +388,7 @@ def create_camera(
 def update_camera(
     camera_id: int,
     payload: CameraUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
@@ -457,6 +461,7 @@ def update_camera(
         new_value = getattr(camera, key, None)
         if old_value != new_value:
             changed[key] = {"old": old_value, "new": new_value}
+    credential_changed = bool(payload.password)
     create_event(
         db=db,
         actor=current_user,
@@ -467,7 +472,9 @@ def update_camera(
         target_type="camera",
         target_id=camera.id,
         target_name=camera.name,
-        metadata={"changed": changed, "credential_changed": "password" in payload.model_fields_set},
+        metadata={"changed": changed, "credential_changed": credential_changed},
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
     )
     return camera
 
@@ -475,6 +482,7 @@ def update_camera(
 @router.post("/{camera_id}/enable", response_model=CameraResponse)
 def enable_camera(
     camera_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
@@ -498,6 +506,8 @@ def enable_camera(
         target_type="camera",
         target_id=camera.id,
         target_name=camera.name,
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
     )
     return camera
 
@@ -505,6 +515,7 @@ def enable_camera(
 @router.post("/{camera_id}/disable", response_model=CameraResponse)
 def disable_camera(
     camera_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
@@ -528,6 +539,8 @@ def disable_camera(
         target_type="camera",
         target_id=camera.id,
         target_name=camera.name,
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
     )
     return camera
 
@@ -535,6 +548,7 @@ def disable_camera(
 @router.delete("/{camera_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_camera(
     camera_id: int,
+    request: Request,
     delete_files: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
@@ -561,6 +575,8 @@ def delete_camera(
         target_id=camera_id_value,
         target_name=camera_name,
         metadata={"delete_files": bool(delete_files)},
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
     )
 
     if delete_files and folder_path.exists() and folder_path.is_dir():

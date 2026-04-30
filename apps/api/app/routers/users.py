@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.permissions import ROLE_ADMIN, ROLE_OPERATOR, ROLE_OWNER, ROLE_VIEWER, get_permissions_for_role
@@ -9,7 +9,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL, get_current_user, require_permission
 from app.schemas.user import ROLES, UserCreateRequest, UserResponse, UserUpdateRequest
-from app.services.audit_log import create_event
+from app.services.audit_log import create_event, request_ip, request_user_agent
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -127,9 +127,11 @@ def list_users(
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def create_user(
     payload: UserCreateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_users")),
 ):
+    audit_request = {"ip_address": request_ip(request), "user_agent": request_user_agent(request)}
     username = payload.username.strip()
     if db.query(User).filter(User.username == username).first():
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Пользователь с таким логином уже существует")
@@ -157,6 +159,7 @@ def create_user(
         target_id=user.id,
         target_name=user.username,
         metadata={"role": user.role, "is_active": bool(user.is_active)},
+        **audit_request,
     )
     return serialize_user(user)
 
@@ -165,9 +168,11 @@ def create_user(
 def update_user(
     user_id: int,
     payload: UserUpdateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_users")),
 ):
+    audit_request = {"ip_address": request_ip(request), "user_agent": request_user_agent(request)}
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
@@ -188,6 +193,7 @@ def update_user(
             target_type="user",
             target_id=user.id,
             target_name=user.username,
+            **audit_request,
         )
     if user.role == ROLE_OWNER and current_user.id != user.id:
         create_event(
@@ -201,6 +207,7 @@ def update_user(
             target_type="user",
             target_id=user.id,
             target_name=user.username,
+            **audit_request,
         )
     ensure_can_modify_user(current_user, user, next_role=next_role, next_active=payload.is_active)
     ensure_not_last_active_owner(db, user, next_role=next_role, next_active=payload.is_active)
@@ -250,6 +257,7 @@ def update_user(
             target_id=user.id,
             target_name=user.username,
             metadata={"old_role": old_role, "new_role": user.role},
+            **audit_request,
         )
     if old_active != bool(user.is_active):
         enabled = bool(user.is_active)
@@ -264,6 +272,7 @@ def update_user(
             target_id=user.id,
             target_name=user.username,
             metadata={"old_active": old_active, "new_active": enabled},
+            **audit_request,
         )
     if password_changed:
         self_change = current_user.id == user.id
@@ -277,6 +286,7 @@ def update_user(
             target_type="user",
             target_id=user.id,
             target_name=user.username,
+            **audit_request,
         )
     if changes:
         create_event(
@@ -290,6 +300,7 @@ def update_user(
             target_id=user.id,
             target_name=user.username,
             metadata={"changed": changes},
+            **audit_request,
         )
     return serialize_user(user)
 
@@ -297,9 +308,11 @@ def update_user(
 @router.delete("/{user_id}", response_model=UserResponse)
 def delete_user(
     user_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_users")),
 ):
+    audit_request = {"ip_address": request_ip(request), "user_agent": request_user_agent(request)}
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Пользователь не найден")
@@ -316,6 +329,7 @@ def delete_user(
             target_type="user",
             target_id=user.id,
             target_name=user.username,
+            **audit_request,
         )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Владельца нельзя удалить")
     if user.id == current_user.id:
@@ -330,6 +344,7 @@ def delete_user(
             target_type="user",
             target_id=user.id,
             target_name=user.username,
+            **audit_request,
         )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Нельзя удалить собственную учетную запись")
     can_delete = current_user.role == ROLE_OWNER or (
@@ -357,5 +372,6 @@ def delete_user(
         target_id=target_id,
         target_name=target_name,
         metadata={"role": target_role},
+        **audit_request,
     )
     return response

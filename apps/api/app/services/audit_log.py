@@ -108,6 +108,9 @@ def create_event(
 ) -> AuditEvent | None:
     category = category if category in CATEGORIES else "system"
     severity = severity if severity in SEVERITIES else "info"
+    sanitized_metadata = sanitize_metadata(metadata or {})
+    if event_type == "cameras.updated" and not sanitized_metadata.get("changed") and not sanitized_metadata.get("credential_changed"):
+        return None
     owns_session = db is None
     session = db or SessionLocal()
     try:
@@ -123,7 +126,7 @@ def create_event(
             target_type=target_type,
             target_id=str(target_id) if target_id is not None else None,
             target_name=redact_text(target_name) if target_name else None,
-            event_metadata=sanitize_metadata(metadata or {}),
+            event_metadata=sanitized_metadata,
             ip_address=ip_address,
             user_agent=user_agent,
         )

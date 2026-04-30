@@ -108,6 +108,7 @@ def test_endpoint_permission_contract_is_explicit_and_reviewable():
 
 
 def test_endpoint_allowed_roles_contract():
+    assert decision("/audit/events", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/settings", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/hardware/rescan", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/storage/status", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
@@ -161,9 +162,19 @@ def test_live_routes_are_permission_protected():
 
 
 def test_settings_hardware_storage_users_and_system_info_are_permission_protected():
+    assert decision("/audit/events", "GET").decision == "manage_settings"
     assert 'Depends(require_permission("manage_settings"))' in read_router("settings.py")
     assert 'Depends(require_permission("run_diagnostics"))' in read_router("settings.py")
     assert 'Depends(require_permission("manage_settings"))' in read_router("hardware.py")
     assert 'Depends(require_permission("manage_settings"))' in read_router("storage.py")
     assert 'Depends(require_permission("manage_users"))' in read_router("users.py")
     assert 'Depends(require_permission("manage_settings"))' in read_app_file("main.py")
+
+
+def test_diagnostic_archive_audit_contract_is_time_based():
+    source = read_router("settings.py")
+    assert '"audit/events_recent.json"' in source
+    assert '"audit/events_recent.txt"' in source
+    assert 'since_minutes=30 if mode == "extended" else 10' in source
+    assert '"audit_event_rule": "last 30 minutes" if mode == "extended" else "last 10 minutes"' in source
+    assert '"docker_log_rule": "--since=30m" if mode == "extended" else "--since=10m"' in source

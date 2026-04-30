@@ -59,6 +59,12 @@ CPU_ESCALATION_SPEED_THRESHOLD = 0.9
 CPU_ESCALATION_STABLE_SECONDS = 20
 CPU_ESCALATION_COOLDOWN_SECONDS = 120
 MAX_CPU_ESCALATIONS_PER_STREAM = 1
+LIVE_AUDIT_THROTTLE_SECONDS = 60
+LIVE_AUDIT_THROTTLED_EVENTS = {
+    "live.fallback",
+    "live.ffmpeg_start_failed",
+    "live.ffmpeg_exited",
+}
 FRAME_RE = re.compile(r"frame=\s*(?P<value>\d+)")
 FPS_RE = re.compile(r"fps=\s*(?P<value>[\d.]+)")
 TIME_RE = re.compile(r"time=(?P<value>\d+:\d+:\d+(?:\.\d+)?)")
@@ -193,6 +199,7 @@ class StreamInstance:
         self.stopped_by_backend = False
         self.state_changed_at = time.time()
         self.last_state_transition = "initialized"
+        self.audit_event_last_seen: dict[tuple, float] = {}
 
     @property
     def sid(self) -> str:
@@ -283,6 +290,20 @@ class StreamInstance:
         return payload
 
     def _audit_live_event(self, event_type: str, severity: str, message_ru: str, message_en: str, metadata: dict | None = None):
+        payload = self._audit_metadata(metadata)
+        if event_type in LIVE_AUDIT_THROTTLED_EVENTS:
+            now = time.time()
+            throttle_key = (
+                event_type,
+                severity,
+                payload.get("reason"),
+                payload.get("backend") or payload.get("effective_backend"),
+                payload.get("fallback"),
+            )
+            last_seen = self.audit_event_last_seen.get(throttle_key)
+            if last_seen and now - last_seen < LIVE_AUDIT_THROTTLE_SECONDS:
+                return
+            self.audit_event_last_seen[throttle_key] = now
         create_event(
             category="live",
             event_type=event_type,
@@ -292,7 +313,7 @@ class StreamInstance:
             target_type="camera",
             target_id=self.camera_id,
             target_name=self._camera_name(),
-            metadata=self._audit_metadata(metadata),
+            metadata=payload,
         )
 
     def _set_state_locked(self, status: str, transition: str, failure_reason: str | None = None):
