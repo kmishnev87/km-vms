@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
-import { apiFetch, apiFetchBlob, canDeleteRecordings, getAuthToken } from "../../lib/api";
+import { apiFetch, canDeleteRecordings, getAuthToken } from "../../lib/api";
 
 const PAGE_SIZE = 30;
 const TEXT = {
@@ -326,20 +326,17 @@ export default function RecordingsPage() {
     setSelectedPaths((prev) => Array.from(new Set([...prev, ...visiblePaths])));
   }
 
-  async function handleDownload(item) {
+  function handleDownload(item) {
     try {
       setError("");
-      const { blob, filename } = await apiFetchBlob(
-        `/recordings/download?path=${encodeURIComponent(item.path)}`
-      );
-      const url = URL.createObjectURL(blob);
+      const token = getAuthToken();
+      const url = `/api/recordings/download?path=${encodeURIComponent(item.path)}&token=${encodeURIComponent(token)}`;
       const a = document.createElement("a");
       a.href = url;
-      a.download = filename || item.filename || "recording.mp4";
+      a.download = item.filename || "recording.mp4";
       document.body.appendChild(a);
       a.click();
       a.remove();
-      URL.revokeObjectURL(url);
     } catch (err) {
       setError(err.message);
     }

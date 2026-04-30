@@ -87,7 +87,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("live", "POST", "/live/stop-all", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("recordings", "GET", "/recordings/cameras", PERMISSION_VIEW_RECORDINGS, "require_permission"),
     EndpointPermission("recordings", "GET", "/recordings", PERMISSION_VIEW_RECORDINGS, "require_permission"),
-    EndpointPermission("recordings", "GET", "/recordings/download", PERMISSION_VIEW_RECORDINGS, "require_permission"),
+    EndpointPermission("recordings", "GET", "/recordings/download", PERMISSION_VIEW_RECORDINGS, "token/header user permission check"),
     EndpointPermission("recordings", "GET", "/recordings/stream", PERMISSION_VIEW_RECORDINGS, "token user permission check"),
     EndpointPermission("recordings", "DELETE", "/recordings", PERMISSION_DELETE_RECORDINGS, "require_permission"),
     EndpointPermission("recordings", "POST", "/recordings/bulk-delete", PERMISSION_DELETE_RECORDINGS, "require_permission"),

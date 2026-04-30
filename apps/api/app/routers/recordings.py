@@ -71,6 +71,15 @@ def authorize_recording_token(token: str | None, db: Session) -> None:
         raise HTTPException(status_code=403, detail=FORBIDDEN_DETAIL)
 
 
+def authorize_recording_request(request: Request, token: str | None, db: Session) -> None:
+    raw_token = token
+    if not raw_token:
+        auth = request.headers.get("authorization") or ""
+        if auth.lower().startswith("bearer "):
+            raw_token = auth[7:].strip()
+    authorize_recording_token(raw_token, db)
+
+
 def human_size(size_bytes: int) -> str:
     units = ["B", "KB", "MB", "GB", "TB"]
     value = float(size_bytes)
@@ -250,9 +259,12 @@ def list_recordings(
 
 @router.get("/download")
 def download_recording(
+    request: Request,
     path: str = Query(...),
-    current_user: User = Depends(require_permission("view_recordings")),
+    token: str | None = Query(default=None),
+    db: Session = Depends(get_db),
 ):
+    authorize_recording_request(request, token, db)
     file_path = safe_resolve_relative(path)
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Файл не найден")

@@ -39,8 +39,6 @@ const TEXT = {
   missing: "\u041a\u0430\u043c\u0435\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430",
   resize: "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0430\u0437\u043c\u0435\u0440",
   find: "\u041d\u0430\u0439\u0442\u0438",
-  fullscreen: "\u041d\u0430 \u0432\u0435\u0441\u044c \u044d\u043a\u0440\u0430\u043d",
-  exitFullscreen: "\u0412\u0435\u0440\u043d\u0443\u0442\u044c \u0432 workspace",
   duplicate: "\u041a\u0430\u043c\u0435\u0440\u0430 \u0443\u0436\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0430",
 };
 
@@ -883,15 +881,6 @@ export default function ChronologyPage() {
                     <div className="chronologyTileTitle">{camera?.name || TEXT.camera}</div>
                     <button
                       type="button"
-                      className="chronologyTileButton chronologyFullscreenButton"
-                      title={fullscreenTileId === tile.id ? TEXT.exitFullscreen : TEXT.fullscreen}
-                      onPointerDown={(event) => event.stopPropagation()}
-                      onClick={() => setFullscreenTileId((prev) => (prev === tile.id ? null : tile.id))}
-                    >
-                      {fullscreenTileId === tile.id ? "\u29c9" : "\u26f6"}
-                    </button>
-                    <button
-                      type="button"
                       className="chronologyTileButton"
                       title={TEXT.close}
                       onPointerDown={(event) => event.stopPropagation()}
@@ -901,7 +890,13 @@ export default function ChronologyPage() {
                     </button>
                   </div>
 
-                  <div className="chronologyTileVideo">
+                  <div
+                    className="chronologyTileVideo"
+                    onDoubleClick={(event) => {
+                      event.stopPropagation();
+                      setFullscreenTileId((prev) => (prev === tile.id ? null : tile.id));
+                    }}
+                  >
                     {camera ? (
                       <ArchiveTilePlayer
                         playback={playback}

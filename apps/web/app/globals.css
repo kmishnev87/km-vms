@@ -2365,7 +2365,7 @@ textarea {
   width: 114px;
   text-align: center;
   justify-self: center;
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .cameraPrimary {
@@ -2382,9 +2382,9 @@ textarea {
 .cameraSecondary {
   width: 100%;
   max-width: 100%;
-  margin-top: 3px;
+  margin-top: -2px;
   font-size: 9px;
-  line-height: 1.35;
+  line-height: 1.05;
   color: #64748b;
   text-align: left;
   display: block;
@@ -5285,7 +5285,7 @@ textarea {
   height: 34px;
   flex: 0 0 34px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px 30px;
+  grid-template-columns: minmax(0, 1fr) 30px;
   align-items: center;
   gap: 6px;
   padding: 4px 5px 4px 8px;
@@ -5317,10 +5317,6 @@ textarea {
 
 .chronologyTileButton:hover {
   background: rgba(239, 68, 68, 0.7);
-}
-
-.chronologyFullscreenButton:hover {
-  background: rgba(37, 99, 235, 0.72);
 }
 
 .chronologyTile.fullscreen {
