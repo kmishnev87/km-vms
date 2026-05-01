@@ -92,6 +92,20 @@ def segment_relative_path(segment: RecordingSegment) -> str | None:
     return None
 
 
+def segment_media_metadata(segment: RecordingSegment, file_path: Path) -> dict[str, str | None]:
+    extension = (segment.file_extension or file_path.suffix or "").lower()
+    if extension and not extension.startswith("."):
+        extension = f".{extension}"
+    media_type = segment.mime_type
+    if not media_type:
+        media_type, _ = mimetypes.guess_type(str(file_path))
+    return {
+        "container_format": segment.container_format or extension.lstrip(".") or None,
+        "file_extension": extension or None,
+        "mime_type": media_type or "application/octet-stream",
+    }
+
+
 def resolve_segment_file(segment: RecordingSegment, require_exists: bool = True) -> Path:
     rel_path = segment_relative_path(segment)
     if not rel_path:
@@ -237,6 +251,7 @@ def collect_recording_files(db: Session, camera_name: Optional[str] = None) -> l
 
         size_bytes = int(segment.size_bytes or file_path.stat().st_size)
         started_at = segment.started_at or segment.created_at
+        media_metadata = segment_media_metadata(segment, file_path)
         items.append(
             {
                 "camera": segment_camera_name(segment, cameras.get(segment.camera_id)),
@@ -249,6 +264,9 @@ def collect_recording_files(db: Session, camera_name: Optional[str] = None) -> l
                 "status": segment.status,
                 "ownership": segment.ownership,
                 "source": segment.source,
+                "container_format": media_metadata["container_format"],
+                "file_extension": media_metadata["file_extension"],
+                "mime_type": media_metadata["mime_type"],
             }
         )
 
@@ -258,7 +276,7 @@ def collect_recording_files(db: Session, camera_name: Optional[str] = None) -> l
     return items
 
 
-def stream_video(request: Request, file_path: Path):
+def stream_video(request: Request, file_path: Path, media_type_override: str | None = None):
     file_size = os.path.getsize(file_path)
     range_header = request.headers.get("range")
 
@@ -281,8 +299,10 @@ def stream_video(request: Request, file_path: Path):
     if start >= file_size or end >= file_size or start > end:
         raise HTTPException(status_code=416, detail="Range Not Satisfiable")
 
-    media_type, _ = mimetypes.guess_type(str(file_path))
-    media_type = media_type or "video/mp4"
+    media_type = media_type_override
+    if not media_type:
+        media_type, _ = mimetypes.guess_type(str(file_path))
+    media_type = media_type or "application/octet-stream"
 
     def iterfile():
         with open(file_path, "rb") as f:
@@ -344,12 +364,12 @@ def download_recording(
     authorize_recording_request(request, token, db)
     segment = get_finalized_segment_by_path(db, path)
     file_path = resolve_segment_file(segment)
+    media_metadata = segment_media_metadata(segment, file_path)
 
-    media_type, _ = mimetypes.guess_type(str(file_path))
     return FileResponse(
         path=file_path,
         filename=file_path.name,
-        media_type=media_type or "application/octet-stream",
+        media_type=media_metadata["mime_type"] or "application/octet-stream",
     )
 
 
@@ -363,7 +383,8 @@ def stream_recording(
     authorize_recording_token(token, db)
     segment = get_finalized_segment_by_path(db, path)
     file_path = resolve_segment_file(segment)
-    return stream_video(request, file_path)
+    media_metadata = segment_media_metadata(segment, file_path)
+    return stream_video(request, file_path, media_metadata["mime_type"])
 
 
 @router.delete("")

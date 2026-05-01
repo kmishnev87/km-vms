@@ -68,6 +68,20 @@ def _resolve_segment_path(segment: RecordingSegment, require_exists: bool = True
     return target
 
 
+def _segment_media_metadata(segment: RecordingSegment, file_path: Path) -> dict[str, str | None]:
+    extension = (segment.file_extension or file_path.suffix or "").lower()
+    if extension and not extension.startswith("."):
+        extension = f".{extension}"
+    media_type = segment.mime_type
+    if not media_type:
+        media_type, _ = mimetypes.guess_type(str(file_path))
+    return {
+        "container_format": segment.container_format or extension.lstrip(".") or None,
+        "file_extension": extension or None,
+        "mime_type": media_type or "application/octet-stream",
+    }
+
+
 def _validate_token(token: str, db: Session):
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
@@ -169,7 +183,7 @@ def chronology_playback(
             continue
 
         try:
-            _resolve_segment_path(segment)
+            file_path = _resolve_segment_path(segment)
         except HTTPException:
             return {
                 "camera_id": camera_id,
@@ -181,6 +195,7 @@ def chronology_playback(
 
         rel_path = _safe_storage_relative_path(segment.relative_path)
         offset_sec = int((target_dt - start_dt).total_seconds())
+        media_metadata = _segment_media_metadata(segment, file_path)
         return {
             "camera_id": camera_id,
             "has_video": True,
@@ -189,6 +204,9 @@ def chronology_playback(
             "offset_sec": offset_sec,
             "file_start": start_dt.isoformat(),
             "file_end": end_dt.isoformat(),
+            "container_format": media_metadata["container_format"],
+            "file_extension": media_metadata["file_extension"],
+            "mime_type": media_metadata["mime_type"],
         }
 
     return {
@@ -307,5 +325,5 @@ def chronology_file(
         raise HTTPException(status_code=404, detail="Recording metadata not found")
 
     file_path = _resolve_segment_path(segment)
-    media_type, _ = mimetypes.guess_type(str(file_path))
-    return FileResponse(file_path, media_type=media_type or "application/octet-stream", filename=file_path.name)
+    media_metadata = _segment_media_metadata(segment, file_path)
+    return FileResponse(file_path, media_type=media_metadata["mime_type"] or "application/octet-stream", filename=file_path.name)

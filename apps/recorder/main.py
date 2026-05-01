@@ -36,6 +36,12 @@ SEGMENT_STATUS_FINALIZED = "finalized"
 SEGMENT_STATUS_FAILED = "failed"
 SEGMENT_STATUS_STALE_WRITING = "stale_writing"
 STORAGE_NAMESPACE = "kmvms/recordings"
+RECORDING_FORMATS = {"mkv", "mp4"}
+DEFAULT_RECORDING_FORMAT = "mkv"
+FORMAT_METADATA = {
+    "mkv": {"container_format": "mkv", "file_extension": ".mkv", "mime_type": "video/x-matroska", "segment_format": "matroska"},
+    "mp4": {"container_format": "mp4", "file_extension": ".mp4", "mime_type": "video/mp4", "segment_format": "mp4"},
+}
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -96,6 +102,7 @@ class RecordingJob:
     current_output_path: str | None = None
     db_job_id: str | None = None
     source_stream: str | None = None
+    recording_format: str = DEFAULT_RECORDING_FORMAT
     segment_baseline_paths: set[str] = field(default_factory=set)
     known_segment_paths: set[str] = field(default_factory=set)
     config_signature: tuple[Any, ...] | None = None
@@ -321,6 +328,9 @@ def ensure_recording_metadata_schema() -> None:
                     source VARCHAR(50) DEFAULT 'recorder' NOT NULL,
                     checksum VARCHAR(128) NULL,
                     storage_namespace VARCHAR(255) NULL,
+                    container_format VARCHAR(32) NULL,
+                    file_extension VARCHAR(16) NULL,
+                    mime_type VARCHAR(100) NULL,
                     integrity_status VARCHAR(100) NULL,
                     integrity_error TEXT NULL,
                     last_integrity_check_at TIMESTAMP NULL,
@@ -347,6 +357,9 @@ def ensure_recording_metadata_schema() -> None:
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'recorder' NOT NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS checksum VARCHAR(128) NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS storage_namespace VARCHAR(255) NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS container_format VARCHAR(32) NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS file_extension VARCHAR(16) NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS mime_type VARCHAR(100) NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS integrity_status VARCHAR(100) NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS integrity_error TEXT NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS last_integrity_check_at TIMESTAMP NULL"))
@@ -546,10 +559,44 @@ def current_segment_dir(camera_id: int, job_id: str) -> Path:
     return path
 
 
-def build_segment_pattern(camera_id: int, camera_name: str, job_id: str) -> str:
+def normalize_recording_format(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in RECORDING_FORMATS else DEFAULT_RECORDING_FORMAT
+
+
+def read_recording_format() -> str:
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(text("SELECT recording_format FROM system_settings ORDER BY id ASC LIMIT 1")).first()
+    except Exception as exc:
+        log_event("warning", "recording_format_read_failed", error=redact_text(str(exc)), fallback=DEFAULT_RECORDING_FORMAT)
+        return DEFAULT_RECORDING_FORMAT
+
+    raw_value = row.recording_format if row else None
+    recording_format = normalize_recording_format(raw_value)
+    if raw_value is not None and str(raw_value or "").strip().lower() not in RECORDING_FORMATS:
+        log_event("warning", "recording_format_invalid_fallback", value=redact_text(str(raw_value)), fallback=recording_format)
+    return recording_format
+
+
+def format_metadata(recording_format: str) -> dict[str, str]:
+    return FORMAT_METADATA[normalize_recording_format(recording_format)]
+
+
+def path_format_metadata(file_path: Path) -> dict[str, str]:
+    suffix = file_path.suffix.lower()
+    if suffix == ".mp4":
+        return FORMAT_METADATA["mp4"]
+    if suffix == ".mkv":
+        return FORMAT_METADATA["mkv"]
+    return {"container_format": suffix.lstrip(".") or "unknown", "file_extension": suffix, "mime_type": "application/octet-stream", "segment_format": "unknown"}
+
+
+def build_segment_pattern(camera_id: int, camera_name: str, job_id: str, recording_format: str) -> str:
     dir_path = current_segment_dir(camera_id, job_id)
     safe_camera = safe_name(camera_name)
-    return str(dir_path / f"camera_{int(camera_id)}_{safe_camera}-%Y-%m-%d-%H-%M-%S.mp4")
+    extension = format_metadata(recording_format)["file_extension"]
+    return str(dir_path / f"camera_{int(camera_id)}_{safe_camera}-%Y-%m-%d-%H-%M-%S{extension}")
 
 
 def segment_prefix(camera_id: int, camera_name: str) -> str:
@@ -620,6 +667,7 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
         return
 
     started_at = parse_segment_start_time(file_path)
+    media_metadata = path_format_metadata(file_path)
     with engine.begin() as conn:
         existing = conn.execute(
             text(
@@ -661,6 +709,9 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                     ownership,
                     source,
                     storage_namespace,
+                    container_format,
+                    file_extension,
+                    mime_type,
                     integrity_status,
                     cleanup_candidate,
                     reconciliation_status,
@@ -683,6 +734,9 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                     :ownership,
                     :source,
                     :storage_namespace,
+                    :container_format,
+                    :file_extension,
+                    :mime_type,
                     :integrity_status,
                     FALSE,
                     :reconciliation_status,
@@ -705,6 +759,9 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                 "ownership": OWNERSHIP_KM_VMS,
                 "source": METADATA_SOURCE_RECORDER,
                 "storage_namespace": STORAGE_NAMESPACE,
+                "container_format": media_metadata["container_format"],
+                "file_extension": media_metadata["file_extension"],
+                "mime_type": media_metadata["mime_type"],
                 "integrity_status": SEGMENT_STATUS_WRITING,
                 "reconciliation_status": "pending",
             },
@@ -733,6 +790,7 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
     started_at = parse_segment_start_time(file_path)
     ended_at = datetime.fromtimestamp(stat.st_mtime)
     duration_sec = max(int((ended_at - started_at).total_seconds()), 0)
+    media_metadata = path_format_metadata(file_path)
     with engine.begin() as conn:
         result = conn.execute(
             text(
@@ -751,6 +809,9 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
                     file_size_verified_at = NOW(),
                     file_mtime = :file_mtime,
                     content_probe_status = :content_probe_status,
+                    container_format = :container_format,
+                    file_extension = :file_extension,
+                    mime_type = :mime_type,
                     cleanup_candidate = FALSE,
                     cleanup_reason = NULL,
                     reconciliation_status = :reconciliation_status,
@@ -777,6 +838,9 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
                 "integrity_status": "ok_owned_finalized",
                 "file_mtime": ended_at,
                 "content_probe_status": "stat_ok",
+                "container_format": media_metadata["container_format"],
+                "file_extension": media_metadata["file_extension"],
+                "mime_type": media_metadata["mime_type"],
                 "reconciliation_status": "ok_owned_finalized",
             },
         )
@@ -942,7 +1006,7 @@ def choose_input_url(row) -> str | None:
     return None
 
 
-def camera_signature(row) -> tuple[Any, ...]:
+def camera_signature(row, recording_format: str) -> tuple[Any, ...]:
     return (
         row.name,
         row.storage_folder_name,
@@ -954,6 +1018,7 @@ def camera_signature(row) -> tuple[Any, ...]:
         row.recording_mode,
         row.default_record_stream,
         int(row.segment_minutes or 5),
+        normalize_recording_format(recording_format),
     )
 
 
@@ -966,9 +1031,11 @@ def ffmpeg_cmd(camera, job: RecordingJob) -> tuple[list[str], str] | tuple[None,
     segment_seconds = max(segment_minutes, 1) * 60
     if not job.db_job_id:
         raise RuntimeError("recording job metadata is required before building segment path")
-    segment_pattern = build_segment_pattern(camera.id, camera.name, job.db_job_id)
+    recording_format = normalize_recording_format(job.recording_format)
+    media_metadata = format_metadata(recording_format)
+    segment_pattern = build_segment_pattern(camera.id, camera.name, job.db_job_id, recording_format)
 
-    return [
+    cmd = [
         "ffmpeg",
         "-hide_banner",
         "-nostdin",
@@ -983,10 +1050,12 @@ def ffmpeg_cmd(camera, job: RecordingJob) -> tuple[list[str], str] | tuple[None,
         "-segment_time", str(segment_seconds),
         "-reset_timestamps", "1",
         "-strftime", "1",
-        "-segment_format", "mp4",
-        "-movflags", "+faststart",
-        segment_pattern,
-    ], segment_pattern
+        "-segment_format", media_metadata["segment_format"],
+    ]
+    if recording_format == "mp4":
+        cmd.extend(["-movflags", "+faststart"])
+    cmd.append(segment_pattern)
+    return cmd, segment_pattern
 
 
 def mark_camera_status(camera_id: int, status: str, last_error: str | None = None) -> None:
@@ -1038,7 +1107,7 @@ def get_or_create_job(row) -> RecordingJob:
             folder_name=row.storage_folder_name,
             recording_mode=row.recording_mode,
             enabled=bool(row.enabled),
-            config_signature=camera_signature(row),
+            config_signature=camera_signature(row, DEFAULT_RECORDING_FORMAT),
         )
         jobs[row.id] = job
     else:
@@ -1219,7 +1288,7 @@ def start_camera(row) -> None:
     job.current_output_path = output_pattern
     job.segment_baseline_paths = capture_segment_baseline(output_pattern, job.camera_id, job.camera_name)
     job.known_segment_paths.clear()
-    job.config_signature = camera_signature(row)
+    job.config_signature = camera_signature(row, job.recording_format)
     update_camera_status_from_job(job)
     update_recording_job(job, state=RecorderState.STARTING)
 
@@ -1263,13 +1332,13 @@ def start_camera(row) -> None:
     start_stderr_reader(job)
     update_camera_status_from_job(job)
     update_recording_job(job, state=RecorderState.RECORDING, ffmpeg_pid=job.pid)
-    log_event("info", "recording_started", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid, output_pattern=job.current_output_path)
+    log_event("info", "recording_started", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid, output_pattern=job.current_output_path, recording_format=job.recording_format)
     write_audit_event(
         event_type="recording_started",
         message=f"Recorder started recording camera {job.camera_name}",
         camera_id=job.camera_id,
         camera_name=job.camera_name,
-        metadata={"pid": job.pid, "state": job.state, "output_pattern": job.current_output_path},
+        metadata={"pid": job.pid, "state": job.state, "output_pattern": job.current_output_path, "recording_format": job.recording_format},
     )
 
 
@@ -1347,6 +1416,7 @@ def retention_ready(row, job: RecordingJob) -> bool:
 def sync_cameras() -> None:
     db = SessionLocal()
     try:
+        effective_recording_format = read_recording_format()
         rows = db.execute(
             text(
                 """
@@ -1377,7 +1447,8 @@ def sync_cameras() -> None:
         for row in rows:
             seen_ids.add(row.id)
             job = get_or_create_job(row)
-            desired_signature = camera_signature(row)
+            job.recording_format = effective_recording_format
+            desired_signature = camera_signature(row, effective_recording_format)
 
             if not row.enabled:
                 job.retry_count = 0
@@ -1411,7 +1482,7 @@ def sync_cameras() -> None:
                 sync_segment_metadata_for_job(job)
 
             if job.config_signature and job.config_signature != desired_signature and job.process and job.process.poll() is None:
-                log_event("info", "recording_config_changed_restart", camera_id=job.camera_id, camera_name=job.camera_name)
+                log_event("info", "recording_config_changed_restart", camera_id=job.camera_id, camera_name=job.camera_name, recording_format=effective_recording_format)
                 stop_camera(row.id, "config_changed")
                 job.config_signature = desired_signature
 
