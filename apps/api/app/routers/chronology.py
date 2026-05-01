@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import mimetypes
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -20,6 +22,23 @@ router = APIRouter(prefix="/chronology", tags=["chronology"])
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
 SEGMENT_STATUS_FINALIZED = "finalized"
+PROBLEM_INTEGRITY_STATUSES = {
+    "missing_file",
+    "orphan_metadata",
+    "orphan_file",
+    "pre_metadata_km_vms_file",
+    "legacy_archive_file",
+    "foreign_file",
+    "unknown_file",
+    "zero_size_file",
+    "partial_file",
+    "corrupted_file",
+    "stale_writing_segment",
+    "invalid_path",
+    "path_outside_storage",
+    "unreadable_file",
+    "storage_unavailable",
+}
 
 
 def _storage_root() -> Path:
@@ -76,6 +95,10 @@ def _finalized_segments_query(db: Session):
         RecordingSegment.source == RECORDER_SOURCE,
         RecordingSegment.status == SEGMENT_STATUS_FINALIZED,
         RecordingSegment.relative_path.isnot(None),
+        or_(
+            RecordingSegment.integrity_status.is_(None),
+            ~RecordingSegment.integrity_status.in_(PROBLEM_INTEGRITY_STATUSES),
+        ),
     )
 
 
@@ -284,4 +307,5 @@ def chronology_file(
         raise HTTPException(status_code=404, detail="Recording metadata not found")
 
     file_path = _resolve_segment_path(segment)
-    return FileResponse(file_path, media_type="video/mp4", filename=file_path.name)
+    media_type, _ = mimetypes.guess_type(str(file_path))
+    return FileResponse(file_path, media_type=media_type or "application/octet-stream", filename=file_path.name)

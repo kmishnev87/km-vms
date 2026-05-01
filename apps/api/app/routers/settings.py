@@ -28,6 +28,7 @@ from app.routers.recordings import collect_recording_files
 from app.services.audit_log import create_event, events_as_text, list_events, request_ip, request_user_agent, serialize_event
 from app.services.hardware import get_hardware_capabilities, invalidate_hardware_capabilities
 from app.services.live_engine_v2 import manager as live_manager
+from app.services.recording_reconciliation import reconciliation_diagnostics
 from app.services.system_settings import (
     get_system_settings,
     serialize_settings,
@@ -549,6 +550,7 @@ def build_log_archive(
         )
         write_json(bundle, "system/settings.json", serialize_settings(get_system_settings(db)))
         write_json(bundle, "storage/status.json", storage_diagnostics())
+        write_json(bundle, "storage/recording_integrity_summary.json", reconciliation_diagnostics(db))
         write_json(bundle, "hardware/capabilities.json", get_hardware_capabilities())
         write_json(bundle, "cameras/cameras.json", camera_diagnostics(db))
         live_status = live_manager.status()

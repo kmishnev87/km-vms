@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import String, Integer, DateTime, BigInteger, ForeignKey, Text
+from sqlalchemy import String, Integer, DateTime, BigInteger, Boolean, ForeignKey, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -55,6 +55,17 @@ class RecordingSegment(Base):
     ownership: Mapped[str] = mapped_column(String(50), default="KM VMS", index=True)
     source: Mapped[str] = mapped_column(String(50), default="recorder")
     checksum: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    storage_namespace: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    integrity_status: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    integrity_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_integrity_check_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    file_size_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    file_mtime: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    content_probe_status: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    cleanup_candidate: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)
+    cleanup_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reconciliation_status: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    reconciliation_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finalized_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

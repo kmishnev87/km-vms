@@ -27,6 +27,23 @@ CHUNK_SIZE = 1024 * 1024
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
 SEGMENT_STATUS_FINALIZED = "finalized"
+PROBLEM_INTEGRITY_STATUSES = {
+    "missing_file",
+    "orphan_metadata",
+    "orphan_file",
+    "pre_metadata_km_vms_file",
+    "legacy_archive_file",
+    "foreign_file",
+    "unknown_file",
+    "zero_size_file",
+    "partial_file",
+    "corrupted_file",
+    "stale_writing_segment",
+    "invalid_path",
+    "path_outside_storage",
+    "unreadable_file",
+    "storage_unavailable",
+}
 
 
 class BulkDeleteRequest(BaseModel):
@@ -92,6 +109,10 @@ def finalized_segments_query(db: Session):
         RecordingSegment.source == RECORDER_SOURCE,
         RecordingSegment.status == SEGMENT_STATUS_FINALIZED,
         RecordingSegment.relative_path.isnot(None),
+        or_(
+            RecordingSegment.integrity_status.is_(None),
+            ~RecordingSegment.integrity_status.in_(PROBLEM_INTEGRITY_STATUSES),
+        ),
     )
 
 
