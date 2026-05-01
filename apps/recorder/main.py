@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import re
@@ -26,6 +27,7 @@ STOP_TIMEOUT_SECONDS = 15
 STDERR_TAIL_LINES = 80
 MAX_ERROR_LENGTH = 2000
 BACKOFF_STEPS_SECONDS = (10, 20, 30, 60, 120)
+STARTUP_CONFIRM_SECONDS = 5
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -54,6 +56,7 @@ ERROR_FFMPEG_NOT_FOUND = "ffmpeg_not_found"
 ERROR_STORAGE_UNAVAILABLE = "storage_unavailable"
 ERROR_PERMISSION_DENIED = "permission_denied"
 ERROR_PROCESS_CRASHED = "process_crashed"
+ERROR_PROCESS_START_FAILED = "process_start_failed"
 ERROR_DUPLICATE_PROCESS = "duplicate_process_prevented"
 ERROR_UNKNOWN_FFMPEG = "unknown_ffmpeg_error"
 
@@ -340,6 +343,10 @@ def mark_camera_status(camera_id: int, status: str, last_error: str | None = Non
                     last_error = :last_error,
                     updated_at = NOW()
                 WHERE id = :camera_id
+                  AND (
+                      status IS DISTINCT FROM :status
+                      OR last_error IS DISTINCT FROM :last_error
+                  )
                 """
             ),
             {
@@ -419,13 +426,23 @@ def classify_error(message: str | None, exit_code: int | None = None) -> str:
         return ERROR_NETWORK_TIMEOUT
     if "permission denied" in text_value:
         return ERROR_PERMISSION_DENIED
-    if "no such file" in text_value or "invalid data" in text_value or "invalid argument" in text_value:
-        return ERROR_INVALID_RTSP
     if "storage" in text_value or "read-only file system" in text_value or "no space left" in text_value:
         return ERROR_STORAGE_UNAVAILABLE
+    if "mount" in text_value or "not a directory" in text_value or "directory nonexistent" in text_value:
+        return ERROR_STORAGE_UNAVAILABLE
+    if "no such file" in text_value or "invalid data" in text_value or "invalid argument" in text_value:
+        return ERROR_INVALID_RTSP
     if exit_code is not None:
         return ERROR_PROCESS_CRASHED
     return ERROR_UNKNOWN_FFMPEG
+
+
+def classify_preflight_error(exc: Exception) -> str:
+    if isinstance(exc, PermissionError):
+        return ERROR_PERMISSION_DENIED
+    if isinstance(exc, OSError) and exc.errno in {errno.EROFS, errno.ENOSPC, errno.ENOENT, errno.ENOTDIR}:
+        return ERROR_STORAGE_UNAVAILABLE
+    return classify_error(str(exc))
 
 
 def schedule_retry(job: RecordingJob, error: str, error_type: str, exit_code: int | None = None) -> None:
@@ -461,6 +478,41 @@ def can_retry(job: RecordingJob) -> bool:
     return bool(job.next_retry_at and job.next_retry_at <= time.time())
 
 
+def handle_start_failure(
+    job: RecordingJob,
+    *,
+    event: str,
+    error: str,
+    error_type: str,
+    exit_code: int | None = None,
+) -> None:
+    job.process = None
+    job.pid = None
+    log_event(
+        "error",
+        event,
+        camera_id=job.camera_id,
+        camera_name=job.camera_name,
+        error_type=error_type,
+        error=error,
+    )
+    schedule_retry(job, error, error_type, exit_code=exit_code)
+
+
+def handle_retention_failure(job: RecordingJob, exc: Exception) -> None:
+    error = redact_text(str(exc))
+    error_type = classify_preflight_error(exc)
+    log_event(
+        "error",
+        "retention_storage_precheck_failed",
+        camera_id=job.camera_id,
+        camera_name=job.camera_name,
+        error_type=error_type,
+        error=error,
+    )
+    schedule_retry(job, error, error_type)
+
+
 def start_camera(row) -> None:
     job = get_or_create_job(row)
     proc = job.process
@@ -477,19 +529,25 @@ def start_camera(row) -> None:
         )
         return
 
-    cmd, output_pattern = ffmpeg_cmd(row)
+    try:
+        cmd, output_pattern = ffmpeg_cmd(row)
+    except Exception as exc:
+        error = redact_text(str(exc))
+        handle_start_failure(
+            job,
+            event="recording_preflight_failed",
+            error=error,
+            error_type=classify_preflight_error(exc),
+        )
+        return
+
     if not cmd:
         error = "recording input URL is not configured"
-        job.set_state(RecorderState.ERROR, error=error, error_type=ERROR_INVALID_RTSP)
-        update_camera_status_from_job(job)
-        log_event("error", "invalid_input_or_rtsp_error", camera_id=job.camera_id, camera_name=job.camera_name, error_type=ERROR_INVALID_RTSP)
-        write_audit_event(
-            event_type="invalid_input_or_rtsp_error",
-            severity="error",
-            message=f"Recorder cannot start camera {job.camera_name}: input URL is not configured",
-            camera_id=job.camera_id,
-            camera_name=job.camera_name,
-            metadata={"error_type": ERROR_INVALID_RTSP},
+        handle_start_failure(
+            job,
+            event="invalid_input_or_rtsp_error",
+            error=error,
+            error_type=ERROR_INVALID_RTSP,
         )
         return
 
@@ -508,28 +566,24 @@ def start_camera(row) -> None:
         )
     except FileNotFoundError as exc:
         error = redact_text(str(exc))
-        job.process = None
-        job.pid = None
-        job.set_state(RecorderState.ERROR, error=error, error_type=ERROR_FFMPEG_NOT_FOUND)
-        update_camera_status_from_job(job)
-        log_event("error", "ffmpeg_start_failed", camera_id=job.camera_id, camera_name=job.camera_name, error_type=ERROR_FFMPEG_NOT_FOUND)
-        write_audit_event(
-            event_type="invalid_input_or_rtsp_error",
-            severity="error",
-            message=f"Recorder cannot start camera {job.camera_name}: ffmpeg not found",
-            camera_id=job.camera_id,
-            camera_name=job.camera_name,
-            metadata={"error_type": ERROR_FFMPEG_NOT_FOUND},
+        handle_start_failure(
+            job,
+            event="ffmpeg_start_failed",
+            error=error,
+            error_type=ERROR_FFMPEG_NOT_FOUND,
         )
         return
     except Exception as exc:
         error = redact_text(str(exc))
         error_type = classify_error(error)
-        job.process = None
-        job.pid = None
-        job.set_state(RecorderState.ERROR, error=error, error_type=error_type)
-        update_camera_status_from_job(job)
-        log_event("error", "ffmpeg_start_failed", camera_id=job.camera_id, camera_name=job.camera_name, error_type=error_type)
+        if error_type == ERROR_UNKNOWN_FFMPEG:
+            error_type = ERROR_PROCESS_START_FAILED
+        handle_start_failure(
+            job,
+            event="ffmpeg_start_failed",
+            error=error,
+            error_type=error_type,
+        )
         return
 
     job.process = proc
@@ -537,9 +591,6 @@ def start_camera(row) -> None:
     job.started_at = time.time()
     job.stopped_at = None
     job.last_exit_code = None
-    job.next_retry_at = None
-    job.last_error = None
-    job.last_error_type = None
     job.stderr_tail.clear()
     job.set_state(RecorderState.RECORDING)
     start_stderr_reader(job)
@@ -633,6 +684,20 @@ def enforce_retention(camera_id: int, folder_name: str, retention_days: int, sto
             log_event("warning", "retention_delete_failed", camera_id=camera_id, path=str(oldest), error=str(exc))
 
 
+def retention_ready(row, job: RecordingJob) -> bool:
+    try:
+        enforce_retention(
+            row.id,
+            row.storage_folder_name,
+            int(row.retention_days or 30),
+            int(row.storage_quota_gb or 50),
+        )
+    except Exception as exc:
+        handle_retention_failure(job, exc)
+        return False
+    return True
+
+
 def sync_cameras() -> None:
     db = SessionLocal()
     try:
@@ -668,13 +733,6 @@ def sync_cameras() -> None:
             job = get_or_create_job(row)
             desired_signature = camera_signature(row)
 
-            enforce_retention(
-                row.id,
-                row.storage_folder_name,
-                int(row.retention_days or 30),
-                int(row.storage_quota_gb or 50),
-            )
-
             if not row.enabled:
                 job.retry_count = 0
                 job.next_retry_at = None
@@ -695,13 +753,16 @@ def sync_cameras() -> None:
                     update_camera_status_from_job(job)
                 continue
 
+            if job.state == RecorderState.RESTARTING and not can_retry(job):
+                continue
+
+            if not retention_ready(row, job):
+                continue
+
             if job.config_signature and job.config_signature != desired_signature and job.process and job.process.poll() is None:
                 log_event("info", "recording_config_changed_restart", camera_id=job.camera_id, camera_name=job.camera_name)
                 stop_camera(row.id, "config_changed")
                 job.config_signature = desired_signature
-
-            if job.state == RecorderState.RESTARTING and not can_retry(job):
-                continue
 
             if job.state == RecorderState.RESTARTING and can_retry(job):
                 start_camera(row)
@@ -759,6 +820,26 @@ def check_children() -> None:
         schedule_retry(job, error_text, error_type, exit_code=exit_code)
 
 
+def confirm_recording_startups() -> None:
+    for job in list(jobs.values()):
+        proc = job.process
+        if job.state != RecorderState.RECORDING or not proc or not job.started_at:
+            continue
+        if proc.poll() is not None:
+            continue
+        if time.time() - job.started_at < STARTUP_CONFIRM_SECONDS:
+            continue
+        if not (job.retry_count or job.next_retry_at or job.last_error or job.last_error_type):
+            continue
+
+        job.retry_count = 0
+        job.next_retry_at = None
+        job.last_error = None
+        job.last_error_type = None
+        update_camera_status_from_job(job)
+        log_event("info", "recording_start_confirmed", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid)
+
+
 def active_jobs_status() -> list[dict[str, Any]]:
     return [job.status_payload() for job in sorted(jobs.values(), key=lambda item: item.camera_id)]
 
@@ -777,6 +858,7 @@ log_event("info", "service_started", storage_root=str(STORAGE_ROOT))
 while running:
     try:
         check_children()
+        confirm_recording_startups()
         sync_cameras()
     except Exception as exc:
         log_event("error", "loop_error", error=str(exc))
