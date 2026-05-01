@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import jwt
@@ -12,39 +11,41 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.permissions import user_has_permission
 from app.models.camera import Camera
+from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL, get_db, require_permission
 
 router = APIRouter(prefix="/chronology", tags=["chronology"])
 
-FILE_TS_RE = re.compile(r"-(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})\.mp4$", re.IGNORECASE)
+OWNERSHIP_KM_VMS = "KM VMS"
+RECORDER_SOURCE = "recorder"
+SEGMENT_STATUS_FINALIZED = "finalized"
 
 
-def _parse_file_start(path: Path) -> datetime | None:
-    match = FILE_TS_RE.search(path.name)
-    if not match:
-        return None
+def _storage_root() -> Path:
+    return Path(settings.storage_root)
+
+
+def _safe_storage_relative_path(relative_path: str) -> str:
+    if not relative_path:
+        raise HTTPException(status_code=400, detail="Empty path")
+
+    root = _storage_root().resolve()
+    target = (root / relative_path).resolve()
     try:
-        return datetime.strptime(match.group(1), "%Y-%m-%d-%H-%M-%S")
-    except Exception:
-        return None
+        return target.relative_to(root).as_posix()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid path")
 
 
-def _camera_root(camera: Camera) -> Path:
-    return Path(settings.storage_root) / camera.storage_folder_name
+def _resolve_segment_path(segment: RecordingSegment, require_exists: bool = True) -> Path:
+    if not segment.relative_path:
+        raise HTTPException(status_code=404, detail="Recording metadata has no file path")
 
-
-def _safe_relative_path(root: Path, file_path: Path) -> str:
-    return file_path.resolve().relative_to(root.resolve()).as_posix()
-
-
-def _resolve_camera_file(camera: Camera, rel_path: str) -> Path:
-    root = _camera_root(camera).resolve()
-    target = (root / rel_path).resolve()
-    if root not in target.parents and target != root:
-        raise HTTPException(status_code=400, detail="Некорректный путь")
-    if not target.exists() or not target.is_file():
-        raise HTTPException(status_code=404, detail="Файл не найден")
+    rel_path = _safe_storage_relative_path(segment.relative_path)
+    target = (_storage_root() / rel_path).resolve()
+    if require_exists and (not target.exists() or not target.is_file()):
+        raise HTTPException(status_code=404, detail="Recording file not found")
     return target
 
 
@@ -52,60 +53,49 @@ def _validate_token(token: str, db: Session):
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
     except Exception:
-        raise HTTPException(status_code=401, detail="Недействительный токен")
+        raise HTTPException(status_code=401, detail="Invalid token")
 
     username = payload.get("sub")
     user = db.query(User).filter(User.username == username).first() if username else None
     if not user or not getattr(user, "is_active", True):
-        raise HTTPException(status_code=401, detail="Пользователь не найден")
+        raise HTTPException(status_code=401, detail="User not found")
     if not user_has_permission(user.role, "view_timeline"):
         raise HTTPException(status_code=403, detail=FORBIDDEN_DETAIL)
 
 
-def _build_camera_files(camera: Camera):
-    root = _camera_root(camera)
-    if not root.exists():
-        return []
-
-    files = []
-    for path in root.rglob("*.mp4"):
-        start_dt = _parse_file_start(path)
-        if start_dt is None:
-            continue
-
-        try:
-            stat = path.stat()
-            mtime = datetime.fromtimestamp(stat.st_mtime)
-        except Exception:
-            mtime = start_dt
-
-        files.append((start_dt, mtime, path))
-
-    files.sort(key=lambda x: x[0])
-    return files
+def _parse_ts(raw: str, field_name: str) -> datetime:
+    try:
+        return datetime.fromisoformat(raw)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
 
 
-def _build_file_intervals(files):
-    intervals = []
+def _finalized_segments_query(db: Session):
+    return db.query(RecordingSegment).filter(
+        RecordingSegment.ownership == OWNERSHIP_KM_VMS,
+        RecordingSegment.source == RECORDER_SOURCE,
+        RecordingSegment.status == SEGMENT_STATUS_FINALIZED,
+        RecordingSegment.relative_path.isnot(None),
+    )
 
-    for idx, (start_dt, mtime_dt, path) in enumerate(files):
-        next_start = files[idx + 1][0] if idx + 1 < len(files) else None
 
-        end_candidates = []
-        if next_start and next_start > start_dt:
-            end_candidates.append(next_start)
-        if mtime_dt > start_dt:
-            end_candidates.append(mtime_dt)
+def _segment_end(segment: RecordingSegment) -> datetime | None:
+    if segment.ended_at and segment.ended_at > segment.started_at:
+        return segment.ended_at
+    if segment.finalized_at and segment.finalized_at > segment.started_at:
+        return segment.finalized_at
+    if segment.duration_sec and segment.duration_sec > 0:
+        return segment.started_at + timedelta(seconds=int(segment.duration_sec))
+    return None
 
-        if end_candidates:
-            end_dt = min(end_candidates)
-        else:
-            end_dt = start_dt
 
-        if end_dt > start_dt:
-            intervals.append((start_dt, end_dt, path))
-
-    return intervals
+def _segment_interval(segment: RecordingSegment) -> tuple[datetime, datetime] | None:
+    if not segment.started_at:
+        return None
+    end_dt = _segment_end(segment)
+    if not end_dt or end_dt <= segment.started_at:
+        return None
+    return segment.started_at, end_dt
 
 
 def _merge_ranges(ranges: list[tuple[datetime, datetime]], gap_tolerance_sec: int = 2):
@@ -136,52 +126,54 @@ def chronology_playback(
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id).first()
     if not camera:
-        raise HTTPException(status_code=404, detail="Камера не найдена")
+        raise HTTPException(status_code=404, detail="Camera not found")
 
-    try:
-        target_dt = datetime.fromisoformat(ts)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Некорректная дата/время")
+    target_dt = _parse_ts(ts, "timestamp")
+    segments = (
+        _finalized_segments_query(db)
+        .filter(RecordingSegment.camera_id == camera_id, RecordingSegment.started_at <= target_dt)
+        .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
+        .all()
+    )
 
-    files = _build_camera_files(camera)
-    if not files:
+    for segment in segments:
+        interval = _segment_interval(segment)
+        if not interval:
+            continue
+
+        start_dt, end_dt = interval
+        if not (start_dt <= target_dt < end_dt):
+            continue
+
+        try:
+            _resolve_segment_path(segment)
+        except HTTPException:
+            return {
+                "camera_id": camera_id,
+                "has_video": False,
+                "file_url": None,
+                "rel_path": None,
+                "offset_sec": 0,
+            }
+
+        rel_path = _safe_storage_relative_path(segment.relative_path)
+        offset_sec = int((target_dt - start_dt).total_seconds())
         return {
             "camera_id": camera_id,
-            "has_video": False,
-            "file_url": None,
-            "rel_path": None,
-            "offset_sec": 0,
+            "has_video": True,
+            "file_url": f"/api/chronology/file?camera_id={camera_id}&rel_path={rel_path}",
+            "rel_path": rel_path,
+            "offset_sec": offset_sec,
+            "file_start": start_dt.isoformat(),
+            "file_end": end_dt.isoformat(),
         }
-
-    intervals = _build_file_intervals(files)
-
-    chosen = None
-    for start_dt, end_dt, path in intervals:
-        if start_dt <= target_dt < end_dt:
-            chosen = (start_dt, end_dt, path)
-            break
-
-    if not chosen:
-        return {
-            "camera_id": camera_id,
-            "has_video": False,
-            "file_url": None,
-            "rel_path": None,
-            "offset_sec": 0,
-        }
-
-    chosen_start, chosen_end, chosen_path = chosen
-    offset_sec = int((target_dt - chosen_start).total_seconds())
-    rel_path = _safe_relative_path(_camera_root(camera), chosen_path)
 
     return {
         "camera_id": camera_id,
-        "has_video": True,
-        "file_url": f"/api/chronology/file?camera_id={camera_id}&rel_path={rel_path}",
-        "rel_path": rel_path,
-        "offset_sec": offset_sec,
-        "file_start": chosen_start.isoformat(),
-        "file_end": chosen_end.isoformat(),
+        "has_video": False,
+        "file_url": None,
+        "rel_path": None,
+        "offset_sec": 0,
     }
 
 
@@ -196,55 +188,60 @@ def chronology_ranges(
     try:
         parsed_ids = [int(x.strip()) for x in camera_ids.split(",") if x.strip()]
     except Exception:
-        raise HTTPException(status_code=400, detail="Некорректный список camera_ids")
+        raise HTTPException(status_code=400, detail="Invalid camera_ids")
 
     if not parsed_ids:
-        raise HTTPException(status_code=400, detail="Не переданы camera_ids")
+        raise HTTPException(status_code=400, detail="camera_ids required")
 
-    try:
-        range_from = datetime.fromisoformat(from_ts)
-        range_to = datetime.fromisoformat(to_ts)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Некорректный диапазон времени")
-
+    range_from = _parse_ts(from_ts, "from")
+    range_to = _parse_ts(to_ts, "to")
     if range_to <= range_from:
-        raise HTTPException(status_code=400, detail="Параметр to должен быть больше from")
+        raise HTTPException(status_code=400, detail="to must be greater than from")
 
-    cameras = (
-        db.query(Camera)
-        .filter(Camera.id.in_(parsed_ids))
-        .all()
-    )
+    cameras = db.query(Camera).filter(Camera.id.in_(parsed_ids)).all()
     camera_map = {camera.id: camera for camera in cameras}
-
     result = {}
 
     for camera_id in parsed_ids:
         camera = camera_map.get(camera_id)
         if not camera:
-          result[str(camera_id)] = {
-              "camera_id": camera_id,
-              "camera_name": None,
-              "ranges": [],
-          }
-          continue
+            result[str(camera_id)] = {
+                "camera_id": camera_id,
+                "camera_name": None,
+                "ranges": [],
+            }
+            continue
 
-        files = _build_camera_files(camera)
-        intervals = _build_file_intervals(files)
+        segments = (
+            _finalized_segments_query(db)
+            .filter(
+                RecordingSegment.camera_id == camera_id,
+                RecordingSegment.started_at < range_to,
+            )
+            .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
+            .all()
+        )
 
         clipped = []
-        for start_dt, end_dt, _path in intervals:
+        for segment in segments:
+            interval = _segment_interval(segment)
+            if not interval:
+                continue
+            try:
+                _resolve_segment_path(segment)
+            except HTTPException:
+                continue
+
+            start_dt, end_dt = interval
             if end_dt <= range_from or start_dt >= range_to:
                 continue
 
             clip_start = max(start_dt, range_from)
             clip_end = min(end_dt, range_to)
-
             if clip_end > clip_start:
                 clipped.append((clip_start, clip_end))
 
         merged = _merge_ranges(clipped, gap_tolerance_sec=2)
-
         result[str(camera_id)] = {
             "camera_id": camera_id,
             "camera_name": camera.name,
@@ -273,9 +270,18 @@ def chronology_file(
 ):
     _validate_token(token, db)
 
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
-    if not camera:
-        raise HTTPException(status_code=404, detail="Камера не найдена")
+    normalized_path = _safe_storage_relative_path(rel_path)
+    segment = (
+        _finalized_segments_query(db)
+        .filter(
+            RecordingSegment.camera_id == camera_id,
+            RecordingSegment.relative_path == normalized_path,
+        )
+        .order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
+        .first()
+    )
+    if not segment:
+        raise HTTPException(status_code=404, detail="Recording metadata not found")
 
-    file_path = _resolve_camera_file(camera, rel_path)
+    file_path = _resolve_segment_path(segment)
     return FileResponse(file_path, media_type="video/mp4", filename=file_path.name)

@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
@@ -16,9 +17,27 @@ from app.routers.deps import require_permission
 from app.routers.settings import router as settings_router
 from app.routers.storage import router as storage_router
 from app.routers.users import router as users_router
+from app.services.audit_log import redact_text
 from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration, ensure_system_settings
 from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine_v2 import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
+
+
+class AccessLogRedactionFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = redact_text(record.msg)
+        if isinstance(record.args, tuple):
+            record.args = tuple(redact_text(arg) if isinstance(arg, str) else arg for arg in record.args)
+        elif isinstance(record.args, dict):
+            record.args = {
+                key: redact_text(value) if isinstance(value, str) else value
+                for key, value in record.args.items()
+            }
+        return True
+
+
+logging.getLogger("uvicorn.access").addFilter(AccessLogRedactionFilter())
 
 app = FastAPI(
     title="TNAS VMS API",
