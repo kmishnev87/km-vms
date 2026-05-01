@@ -12,6 +12,7 @@ from app.services.system_settings import default_timezone
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     migrate_user_table()
+    migrate_recording_metadata_tables()
 
 
 def migrate_user_table() -> None:
@@ -26,6 +27,44 @@ def migrate_user_table() -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL"))
         if "last_login_at" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP NULL"))
+
+
+def migrate_recording_metadata_tables() -> None:
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        if inspector.has_table("recording_segments"):
+            columns = {column["name"] for column in inspector.get_columns("recording_segments")}
+            additions = {
+                "job_id": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS job_id VARCHAR(36) NULL",
+                "camera_name_snapshot": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS camera_name_snapshot VARCHAR(255) NULL",
+                "camera_folder_snapshot": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS camera_folder_snapshot VARCHAR(255) NULL",
+                "relative_path": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS relative_path VARCHAR(1024) NULL",
+                "error_message": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS error_message TEXT NULL",
+                "ownership": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS ownership VARCHAR(50) DEFAULT 'KM VMS' NOT NULL",
+                "source": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'recorder' NOT NULL",
+                "checksum": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS checksum VARCHAR(128) NULL",
+                "finalized_at": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMP NULL",
+                "created_at": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL",
+                "updated_at": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL",
+            }
+            for column, statement in additions.items():
+                if column not in columns:
+                    conn.execute(text(statement))
+
+            conn.execute(text("ALTER TABLE recording_segments ALTER COLUMN ended_at DROP NOT NULL"))
+            conn.execute(text("ALTER TABLE recording_segments ALTER COLUMN duration_sec SET DEFAULT 0"))
+            conn.execute(text("ALTER TABLE recording_segments ALTER COLUMN size_bytes SET DEFAULT 0"))
+
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_job_id ON recording_segments (job_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_status ON recording_segments (status)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_ownership ON recording_segments (ownership)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_relative_path ON recording_segments (relative_path)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_job_relative_path ON recording_segments (job_id, relative_path)"))
+
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_camera_id ON recording_jobs (camera_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_state ON recording_jobs (state)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_started_at ON recording_jobs (started_at)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_ownership ON recording_jobs (ownership)"))
 
 
 def ensure_system_settings(db: Session) -> SystemSettings:

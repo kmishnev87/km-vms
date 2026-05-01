@@ -5,6 +5,7 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import threading
 import time
@@ -28,6 +29,11 @@ STDERR_TAIL_LINES = 80
 MAX_ERROR_LENGTH = 2000
 BACKOFF_STEPS_SECONDS = (10, 20, 30, 60, 120)
 STARTUP_CONFIRM_SECONDS = 5
+OWNERSHIP_KM_VMS = "KM VMS"
+METADATA_SOURCE_RECORDER = "recorder"
+SEGMENT_STATUS_WRITING = "writing"
+SEGMENT_STATUS_FINALIZED = "finalized"
+SEGMENT_STATUS_FAILED = "failed"
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -36,6 +42,7 @@ STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+RECORDER_INSTANCE_ID = os.getenv("RECORDER_INSTANCE_ID") or f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
 
 
 class RecorderState:
@@ -85,6 +92,10 @@ class RecordingJob:
     last_retry_at: float | None = None
     next_retry_at: float | None = None
     current_output_path: str | None = None
+    db_job_id: str | None = None
+    source_stream: str | None = None
+    segment_baseline_paths: set[str] = field(default_factory=set)
+    known_segment_paths: set[str] = field(default_factory=set)
     config_signature: tuple[Any, ...] | None = None
     stderr_tail: deque[str] = field(default_factory=lambda: deque(maxlen=STDERR_TAIL_LINES))
     stderr_thread: threading.Thread | None = None
@@ -256,6 +267,246 @@ def write_audit_event(
         log_event("warning", "audit_write_failed", event_type=event_type, error=str(exc))
 
 
+def ensure_recording_metadata_schema() -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS recording_jobs (
+                    id VARCHAR(36) PRIMARY KEY,
+                    camera_id INTEGER NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
+                    camera_name_snapshot VARCHAR(255) NULL,
+                    camera_folder_snapshot VARCHAR(255) NULL,
+                    state VARCHAR(50) NOT NULL,
+                    source_stream VARCHAR(20) NULL,
+                    input_fingerprint VARCHAR(255) NULL,
+                    recorder_instance_id VARCHAR(255) NULL,
+                    started_at TIMESTAMP NOT NULL,
+                    stopped_at TIMESTAMP NULL,
+                    stop_reason TEXT NULL,
+                    last_error TEXT NULL,
+                    last_error_type VARCHAR(100) NULL,
+                    ffmpeg_pid INTEGER NULL,
+                    last_exit_code INTEGER NULL,
+                    created_by VARCHAR(50) NOT NULL DEFAULT 'KM VMS',
+                    ownership VARCHAR(50) NOT NULL DEFAULT 'KM VMS',
+                    source VARCHAR(50) NOT NULL DEFAULT 'recorder',
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS recording_segments (
+                    id SERIAL PRIMARY KEY,
+                    job_id VARCHAR(36) NULL REFERENCES recording_jobs(id) ON DELETE SET NULL,
+                    camera_id INTEGER NOT NULL REFERENCES cameras(id) ON DELETE CASCADE,
+                    camera_name_snapshot VARCHAR(255) NULL,
+                    camera_folder_snapshot VARCHAR(255) NULL,
+                    file_path VARCHAR(1024) NOT NULL,
+                    relative_path VARCHAR(1024) NULL,
+                    started_at TIMESTAMP NOT NULL,
+                    ended_at TIMESTAMP NULL,
+                    duration_sec INTEGER DEFAULT 0 NOT NULL,
+                    size_bytes BIGINT DEFAULT 0 NOT NULL,
+                    stream_type VARCHAR(20) DEFAULT 'main' NOT NULL,
+                    status VARCHAR(50) DEFAULT 'ready' NOT NULL,
+                    error_message TEXT NULL,
+                    ownership VARCHAR(50) DEFAULT 'KM VMS' NOT NULL,
+                    source VARCHAR(50) DEFAULT 'recorder' NOT NULL,
+                    checksum VARCHAR(128) NULL,
+                    finalized_at TIMESTAMP NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS job_id VARCHAR(36) NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS camera_name_snapshot VARCHAR(255) NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS camera_folder_snapshot VARCHAR(255) NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS relative_path VARCHAR(1024) NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS error_message TEXT NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS ownership VARCHAR(50) DEFAULT 'KM VMS' NOT NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'recorder' NOT NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS checksum VARCHAR(128) NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS finalized_at TIMESTAMP NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ALTER COLUMN ended_at DROP NOT NULL"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_camera_id ON recording_jobs (camera_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_state ON recording_jobs (state)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_started_at ON recording_jobs (started_at)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_ownership ON recording_jobs (ownership)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_job_id ON recording_segments (job_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_status ON recording_segments (status)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_ownership ON recording_segments (ownership)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_relative_path ON recording_segments (relative_path)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_job_relative_path ON recording_segments (job_id, relative_path)"))
+
+
+def selected_source_stream(row) -> str:
+    preferred = (getattr(row, "default_record_stream", None) or DEFAULT_RECORD_STREAM).lower()
+    return "sub" if preferred == "sub" else "main"
+
+
+def input_fingerprint(row) -> str:
+    input_url = choose_input_url(row)
+    if not input_url:
+        return "missing_input"
+    sanitized = redact_text(input_url)
+    match = re.match(r"^([a-z][a-z0-9+.-]*://)?([^/?#]+)([^?#]*)", sanitized, flags=re.IGNORECASE)
+    if not match:
+        return "configured_input"
+    scheme = (match.group(1) or "").rstrip(":/")
+    host = match.group(2).split("@")[-1]
+    path = match.group(3) or ""
+    return truncate_error(f"{scheme}:{host}{path}" if scheme else f"{host}{path}")[:255]
+
+
+def create_recording_job(row, job: RecordingJob) -> str:
+    if job.db_job_id:
+        return job.db_job_id
+
+    job_id = str(uuid.uuid4())
+    job.db_job_id = job_id
+    job.source_stream = selected_source_stream(row)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO recording_jobs (
+                    id,
+                    camera_id,
+                    camera_name_snapshot,
+                    camera_folder_snapshot,
+                    state,
+                    source_stream,
+                    input_fingerprint,
+                    recorder_instance_id,
+                    started_at,
+                    created_by,
+                    ownership,
+                    source,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :id,
+                    :camera_id,
+                    :camera_name,
+                    :camera_folder,
+                    :state,
+                    :source_stream,
+                    :input_fingerprint,
+                    :recorder_instance_id,
+                    NOW(),
+                    :created_by,
+                    :ownership,
+                    :source,
+                    NOW(),
+                    NOW()
+                )
+                """
+            ),
+            {
+                "id": job_id,
+                "camera_id": job.camera_id,
+                "camera_name": redact_text(job.camera_name),
+                "camera_folder": job.folder_name,
+                "state": RecorderState.STARTING,
+                "source_stream": job.source_stream,
+                "input_fingerprint": input_fingerprint(row),
+                "recorder_instance_id": RECORDER_INSTANCE_ID,
+                "created_by": OWNERSHIP_KM_VMS,
+                "ownership": OWNERSHIP_KM_VMS,
+                "source": METADATA_SOURCE_RECORDER,
+            },
+        )
+    log_event("info", "recording_job_created", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job_id)
+    return job_id
+
+
+def update_recording_job(
+    job: RecordingJob,
+    *,
+    state: str | None = None,
+    stop_reason: str | None = None,
+    stopped: bool = False,
+    last_error: str | None = None,
+    last_error_type: str | None = None,
+    ffmpeg_pid: int | None = None,
+    last_exit_code: int | None = None,
+) -> None:
+    if not job.db_job_id:
+        return
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE recording_jobs
+                SET state = COALESCE(:state, state),
+                    stopped_at = CASE WHEN :stopped THEN NOW() ELSE stopped_at END,
+                    stop_reason = COALESCE(:stop_reason, stop_reason),
+                    last_error = COALESCE(:last_error, last_error),
+                    last_error_type = COALESCE(:last_error_type, last_error_type),
+                    ffmpeg_pid = COALESCE(:ffmpeg_pid, ffmpeg_pid),
+                    last_exit_code = COALESCE(:last_exit_code, last_exit_code),
+                    updated_at = NOW()
+                WHERE id = :id
+                """
+            ),
+            {
+                "id": job.db_job_id,
+                "state": state,
+                "stopped": stopped,
+                "stop_reason": stop_reason,
+                "last_error": truncate_error(redact_text(last_error)) if last_error else None,
+                "last_error_type": last_error_type,
+                "ffmpeg_pid": ffmpeg_pid,
+                "last_exit_code": last_exit_code,
+            },
+        )
+    log_event("info", "recording_job_updated", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, state=state)
+
+
+def close_recording_job(job: RecordingJob, *, state: str, reason: str, error: str | None = None) -> None:
+    update_recording_job(
+        job,
+        state=state,
+        stop_reason=reason,
+        stopped=True,
+        last_error=error,
+        last_error_type=job.last_error_type,
+        last_exit_code=job.last_exit_code,
+    )
+    job.db_job_id = None
+    job.segment_baseline_paths.clear()
+    job.known_segment_paths.clear()
+
+
+def clear_recording_job_error(job: RecordingJob) -> None:
+    if not job.db_job_id:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE recording_jobs
+                SET last_error = NULL,
+                    last_error_type = NULL,
+                    updated_at = NOW()
+                WHERE id = :id
+                """
+            ),
+            {"id": job.db_job_id},
+        )
+
+
 def camera_archive_dir(folder_name: str) -> Path:
     path = STORAGE_ROOT / folder_name
     path.mkdir(parents=True, exist_ok=True)
@@ -273,6 +524,303 @@ def build_segment_pattern(camera_name: str, folder_name: str) -> str:
     dir_path = current_segment_dir(folder_name)
     safe_camera = safe_name(camera_name)
     return str(dir_path / f"{safe_camera}-%Y-%m-%d-%H-%M-%S.mp4")
+
+
+def segment_prefix(camera_name: str) -> str:
+    return f"{safe_name(camera_name)}-"
+
+
+def expected_segment_dir(output_pattern: str | None) -> Path | None:
+    if not output_pattern:
+        return None
+    return Path(output_pattern).parent
+
+
+def storage_relative_path(path: Path) -> str | None:
+    try:
+        return path.resolve().relative_to(STORAGE_ROOT.resolve()).as_posix()
+    except Exception:
+        return None
+
+
+def capture_segment_baseline(output_pattern: str | None, camera_name: str) -> set[str]:
+    dir_path = expected_segment_dir(output_pattern)
+    if not dir_path or not dir_path.exists():
+        return set()
+    prefix = segment_prefix(camera_name)
+    baseline: set[str] = set()
+    for file_path in dir_path.glob(f"{prefix}*.mp4"):
+        rel_path = storage_relative_path(file_path)
+        if rel_path:
+            baseline.add(rel_path)
+    return baseline
+
+
+def parse_segment_start_time(file_path: Path) -> datetime:
+    match = re.search(r"(\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2})(?=\.mp4$)", file_path.name, flags=re.IGNORECASE)
+    if match:
+        try:
+            return datetime.strptime(match.group(1), "%Y-%m-%d-%H-%M-%S")
+        except ValueError:
+            pass
+    try:
+        return datetime.fromtimestamp(file_path.stat().st_mtime)
+    except Exception:
+        return datetime.utcnow()
+
+
+def discover_job_segments(job: RecordingJob) -> list[Path]:
+    dir_path = expected_segment_dir(job.current_output_path)
+    if not dir_path or not dir_path.exists():
+        return []
+    prefix = segment_prefix(job.camera_name)
+    files = [path for path in dir_path.glob(f"{prefix}*.mp4") if path.is_file()]
+    return sorted(files, key=lambda path: (parse_segment_start_time(path), path.name))
+
+
+def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> None:
+    if not job.db_job_id:
+        return
+    rel_path = storage_relative_path(file_path)
+    if not rel_path or rel_path in job.segment_baseline_paths:
+        return
+    if rel_path in job.known_segment_paths:
+        return
+
+    try:
+        stat = file_path.stat()
+    except Exception as exc:
+        log_event("warning", "metadata_write_failed", camera_id=job.camera_id, camera_name=job.camera_name, path=str(file_path), error=str(exc))
+        return
+
+    started_at = parse_segment_start_time(file_path)
+    with engine.begin() as conn:
+        existing = conn.execute(
+            text(
+                """
+                SELECT id
+                FROM recording_segments
+                WHERE (job_id = :job_id AND relative_path = :relative_path)
+                   OR (relative_path = :relative_path AND ownership = :ownership AND source = :source)
+                LIMIT 1
+                """
+            ),
+            {
+                "job_id": job.db_job_id,
+                "relative_path": rel_path,
+                "ownership": OWNERSHIP_KM_VMS,
+                "source": METADATA_SOURCE_RECORDER,
+            },
+        ).first()
+        if existing:
+            job.known_segment_paths.add(rel_path)
+            return
+
+        conn.execute(
+            text(
+                """
+                INSERT INTO recording_segments (
+                    job_id,
+                    camera_id,
+                    camera_name_snapshot,
+                    camera_folder_snapshot,
+                    file_path,
+                    relative_path,
+                    started_at,
+                    ended_at,
+                    duration_sec,
+                    size_bytes,
+                    stream_type,
+                    status,
+                    ownership,
+                    source,
+                    created_at,
+                    updated_at
+                )
+                VALUES (
+                    :job_id,
+                    :camera_id,
+                    :camera_name,
+                    :camera_folder,
+                    :file_path,
+                    :relative_path,
+                    :started_at,
+                    NULL,
+                    0,
+                    :size_bytes,
+                    :stream_type,
+                    :status,
+                    :ownership,
+                    :source,
+                    NOW(),
+                    NOW()
+                )
+                """
+            ),
+            {
+                "job_id": job.db_job_id,
+                "camera_id": job.camera_id,
+                "camera_name": redact_text(job.camera_name),
+                "camera_folder": job.folder_name,
+                "file_path": str(file_path),
+                "relative_path": rel_path,
+                "started_at": started_at,
+                "size_bytes": max(int(stat.st_size), 0),
+                "stream_type": job.source_stream or DEFAULT_RECORD_STREAM,
+                "status": SEGMENT_STATUS_WRITING,
+                "ownership": OWNERSHIP_KM_VMS,
+                "source": METADATA_SOURCE_RECORDER,
+            },
+        )
+    job.known_segment_paths.add(rel_path)
+    log_event("info", "segment_detected", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, size_bytes=stat.st_size)
+
+
+def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
+    if not job.db_job_id:
+        return False
+    rel_path = storage_relative_path(file_path)
+    if not rel_path:
+        return False
+    if rel_path in job.segment_baseline_paths or rel_path not in job.known_segment_paths:
+        return False
+    try:
+        stat = file_path.stat()
+    except Exception as exc:
+        mark_segment_failed(job, rel_path, f"segment stat failed: {exc}")
+        return False
+    if stat.st_size <= 0:
+        mark_segment_failed(job, rel_path, "segment file is empty")
+        return False
+
+    started_at = parse_segment_start_time(file_path)
+    ended_at = datetime.fromtimestamp(stat.st_mtime)
+    duration_sec = max(int((ended_at - started_at).total_seconds()), 0)
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                UPDATE recording_segments
+                SET status = :status,
+                    ended_at = :ended_at,
+                    finalized_at = NOW(),
+                    duration_sec = :duration_sec,
+                    size_bytes = :size_bytes,
+                    error_message = NULL,
+                    updated_at = NOW()
+                WHERE job_id = :job_id
+                  AND relative_path = :relative_path
+                  AND ownership = :ownership
+                  AND source = :source
+                  AND status = :writing
+                """
+            ),
+            {
+                "job_id": job.db_job_id,
+                "relative_path": rel_path,
+                "ownership": OWNERSHIP_KM_VMS,
+                "source": METADATA_SOURCE_RECORDER,
+                "writing": SEGMENT_STATUS_WRITING,
+                "status": SEGMENT_STATUS_FINALIZED,
+                "ended_at": ended_at,
+                "duration_sec": duration_sec,
+                "size_bytes": int(stat.st_size),
+            },
+        )
+    if result.rowcount <= 0:
+        return False
+    log_event("info", "segment_finalized", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, size_bytes=stat.st_size, duration_sec=duration_sec)
+    return True
+
+
+def mark_segment_failed(job: RecordingJob, rel_path: str, error: str) -> None:
+    if not job.db_job_id:
+        return
+    if rel_path in job.segment_baseline_paths or rel_path not in job.known_segment_paths:
+        return
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                UPDATE recording_segments
+                SET status = :status,
+                    ended_at = COALESCE(ended_at, NOW()),
+                    error_message = :error_message,
+                    updated_at = NOW()
+                WHERE job_id = :job_id
+                  AND relative_path = :relative_path
+                  AND ownership = :ownership
+                  AND source = :source
+                  AND status = :writing
+                """
+            ),
+            {
+                "job_id": job.db_job_id,
+                "relative_path": rel_path,
+                "ownership": OWNERSHIP_KM_VMS,
+                "source": METADATA_SOURCE_RECORDER,
+                "writing": SEGMENT_STATUS_WRITING,
+                "status": SEGMENT_STATUS_FAILED,
+                "error_message": truncate_error(redact_text(error)),
+            },
+        )
+    if result.rowcount <= 0:
+        return
+    log_event("warning", "segment_failed", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, error=error)
+
+
+def sync_segment_metadata_for_job(job: RecordingJob) -> None:
+    if not job.db_job_id:
+        return
+    try:
+        files = discover_job_segments(job)
+        for file_path in files:
+            create_segment_metadata_if_needed(job, file_path)
+        for file_path in files[:-1]:
+            finalize_segment_path(job, file_path)
+    except Exception as exc:
+        log_event("warning", "metadata_update_failed", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, error=str(exc))
+
+
+def finalize_segments_for_job(job: RecordingJob) -> None:
+    if not job.db_job_id:
+        return
+    sync_segment_metadata_for_job(job)
+    for file_path in discover_job_segments(job):
+        finalize_segment_path(job, file_path)
+
+
+def mark_segments_failed_for_job(job: RecordingJob, error: str) -> None:
+    if not job.db_job_id:
+        return
+    sync_segment_metadata_for_job(job)
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                UPDATE recording_segments
+                SET status = :status,
+                    ended_at = COALESCE(ended_at, NOW()),
+                    error_message = :error_message,
+                    updated_at = NOW()
+                WHERE job_id = :job_id
+                  AND ownership = :ownership
+                  AND source = :source
+                  AND status = :writing
+                """
+            ),
+            {
+                "job_id": job.db_job_id,
+                "ownership": OWNERSHIP_KM_VMS,
+                "source": METADATA_SOURCE_RECORDER,
+                "writing": SEGMENT_STATUS_WRITING,
+                "status": SEGMENT_STATUS_FAILED,
+                "error_message": truncate_error(redact_text(error)),
+            },
+        )
+    if result.rowcount <= 0:
+        return
+    log_event("warning", "segment_failed", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, error=error)
 
 
 def choose_input_url(row) -> str | None:
@@ -454,6 +1002,7 @@ def schedule_retry(job: RecordingJob, error: str, error_type: str, exit_code: in
     job.next_retry_at = time.time() + backoff
     job.set_state(RecorderState.RESTARTING, error=error, error_type=error_type)
     update_camera_status_from_job(job)
+    update_recording_job(job, state=RecorderState.RESTARTING, last_error=error, last_error_type=error_type, last_exit_code=exit_code)
     log_event(
         "warning",
         "retry_scheduled",
@@ -488,6 +1037,7 @@ def handle_start_failure(
 ) -> None:
     job.process = None
     job.pid = None
+    update_recording_job(job, state=RecorderState.RESTARTING, last_error=error, last_error_type=error_type, last_exit_code=exit_code)
     log_event(
         "error",
         event,
@@ -510,6 +1060,7 @@ def handle_retention_failure(job: RecordingJob, exc: Exception) -> None:
         error_type=error_type,
         error=error,
     )
+    update_recording_job(job, state=RecorderState.RESTARTING, last_error=error, last_error_type=error_type)
     schedule_retry(job, error, error_type)
 
 
@@ -528,6 +1079,11 @@ def start_camera(row) -> None:
             metadata={"pid": job.pid},
         )
         return
+
+    try:
+        create_recording_job(row, job)
+    except Exception as exc:
+        log_event("warning", "metadata_write_failed", camera_id=job.camera_id, camera_name=job.camera_name, error=str(exc))
 
     try:
         cmd, output_pattern = ffmpeg_cmd(row)
@@ -553,8 +1109,11 @@ def start_camera(row) -> None:
 
     job.set_state(RecorderState.STARTING)
     job.current_output_path = output_pattern
+    job.segment_baseline_paths = capture_segment_baseline(output_pattern, job.camera_name)
+    job.known_segment_paths.clear()
     job.config_signature = camera_signature(row)
     update_camera_status_from_job(job)
+    update_recording_job(job, state=RecorderState.STARTING)
 
     try:
         proc = subprocess.Popen(
@@ -595,6 +1154,7 @@ def start_camera(row) -> None:
     job.set_state(RecorderState.RECORDING)
     start_stderr_reader(job)
     update_camera_status_from_job(job)
+    update_recording_job(job, state=RecorderState.RECORDING, ffmpeg_pid=job.pid)
     log_event("info", "recording_started", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid, output_pattern=job.current_output_path)
     write_audit_event(
         event_type="recording_started",
@@ -628,6 +1188,8 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     if job.stderr_thread and job.stderr_thread.is_alive():
         job.stderr_thread.join(timeout=1)
 
+    finalize_segments_for_job(job)
+
     job.process = None
     job.pid = None
     job.stopped_at = time.time()
@@ -639,6 +1201,7 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     else:
         job.set_state(RecorderState.STOPPED)
     update_camera_status_from_job(job)
+    close_recording_job(job, state=job.state, reason=reason)
     log_event("info", "recording_stopped", camera_id=job.camera_id, camera_name=job.camera_name, reason=reason, exit_code=job.last_exit_code)
     write_audit_event(
         event_type=audit_event,
@@ -653,35 +1216,9 @@ def enforce_retention(camera_id: int, folder_name: str, retention_days: int, sto
     root = camera_archive_dir(folder_name)
     if not root.exists():
         return
-
-    files = sorted([p for p in root.rglob("*.mp4") if p.is_file()], key=lambda p: p.stat().st_mtime)
-
-    if retention_days and retention_days > 0:
-        cutoff = time.time() - (retention_days * 86400)
-        for file_path in list(files):
-            try:
-                if file_path.stat().st_mtime < cutoff:
-                    file_path.unlink(missing_ok=True)
-            except Exception as exc:
-                log_event("warning", "retention_delete_failed", camera_id=camera_id, path=str(file_path), error=str(exc))
-        files = sorted([p for p in root.rglob("*.mp4") if p.is_file()], key=lambda p: p.stat().st_mtime)
-
-    quota_bytes = max(int(storage_quota_gb), 50) * 1024 * 1024 * 1024
-    total = 0
-    for file_path in files:
-        try:
-            total += file_path.stat().st_size
-        except Exception:
-            pass
-
-    while total > quota_bytes and files:
-        oldest = files.pop(0)
-        try:
-            size = oldest.stat().st_size
-            oldest.unlink(missing_ok=True)
-            total -= size
-        except Exception as exc:
-            log_event("warning", "retention_delete_failed", camera_id=camera_id, path=str(oldest), error=str(exc))
+    if not root.is_dir():
+        raise NotADirectoryError(str(root))
+    root.stat()
 
 
 def retention_ready(row, job: RecordingJob) -> bool:
@@ -741,6 +1278,7 @@ def sync_cameras() -> None:
                 else:
                     job.set_state(RecorderState.DISABLED)
                     update_camera_status_from_job(job)
+                    close_recording_job(job, state=RecorderState.DISABLED, reason="camera_disabled")
                 continue
 
             if row.recording_mode != "always":
@@ -751,6 +1289,7 @@ def sync_cameras() -> None:
                 else:
                     job.set_state(RecorderState.IDLE)
                     update_camera_status_from_job(job)
+                    close_recording_job(job, state=RecorderState.IDLE, reason="recording_mode_idle")
                 continue
 
             if job.state == RecorderState.RESTARTING and not can_retry(job):
@@ -758,6 +1297,9 @@ def sync_cameras() -> None:
 
             if not retention_ready(row, job):
                 continue
+
+            if job.process and job.process.poll() is None:
+                sync_segment_metadata_for_job(job)
 
             if job.config_signature and job.config_signature != desired_signature and job.process and job.process.poll() is None:
                 log_event("info", "recording_config_changed_restart", camera_id=job.camera_id, camera_name=job.camera_name)
@@ -797,6 +1339,7 @@ def check_children() -> None:
 
         error_text = stderr_tail_text(job) or "ffmpeg stopped unexpectedly"
         error_type = classify_error(error_text, exit_code)
+        mark_segments_failed_for_job(job, error_text)
         job.process = None
         job.pid = None
         job.stopped_at = time.time()
@@ -837,6 +1380,7 @@ def confirm_recording_startups() -> None:
         job.last_error = None
         job.last_error_type = None
         update_camera_status_from_job(job)
+        clear_recording_job_error(job)
         log_event("info", "recording_start_confirmed", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid)
 
 
@@ -852,6 +1396,12 @@ def shutdown_handler(signum, frame) -> None:
 
 signal.signal(signal.SIGTERM, shutdown_handler)
 signal.signal(signal.SIGINT, shutdown_handler)
+
+try:
+    ensure_recording_metadata_schema()
+    log_event("info", "metadata_schema_ready")
+except Exception as exc:
+    log_event("error", "metadata_schema_failed", error=str(exc))
 
 log_event("info", "service_started", storage_root=str(STORAGE_ROOT))
 
