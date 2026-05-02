@@ -51,15 +51,6 @@ const PREVIEW_SENSITIVE_FIELDS = new Set([
   "onvif_channel_id",
 ]);
 
-function getStatusBadge(camera) {
-  if (!camera.enabled) return { text: "Отключена", cls: "warn" };
-  if (camera.status === "recording") return { text: "Идёт запись", cls: "ok" };
-  if (camera.status === "error") return { text: "Ошибка", cls: "err" };
-  if (camera.status === "created" || camera.status === "enabled") return { text: "Включена", cls: "ok" };
-  if (camera.status === "disabled") return { text: "Отключена", cls: "warn" };
-  return { text: camera.status || "Неизвестно", cls: "warn" };
-}
-
 function prettyRtspValue(value) {
   if (!value) return "";
   if (value.toLowerCase().startsWith("rtsp://")) {
@@ -85,9 +76,66 @@ function normalizeCameraError(message) {
   return text;
 }
 
+function normalizeRuntimeError(message) {
+  const text = String(message || "").trim();
+  if (!text) return "";
+  if (text.includes("401") || text.toLowerCase().includes("auth")) {
+    return "Ошибка подключения: проверьте логин и пароль камеры.";
+  }
+  if (text.toLowerCase().includes("timeout")) {
+    return "Камера не отвечает: проверьте сеть и RTSP path.";
+  }
+  if (text.toLowerCase().includes("storage")) {
+    return "Запись недоступна: хранилище недоступно.";
+  }
+  if (text.toLowerCase().includes("ffmpeg")) {
+    return "Запись недоступна: ошибка видеопроцесса.";
+  }
+  if (text.length > 140) {
+    return "Запись недоступна: проверьте параметры камеры и хранилище.";
+  }
+  return text;
+}
+
+function getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable) {
+  if (!camera.enabled || runtime?.enabled === false || camera.status === "disabled") {
+    return { text: "Отключена", cls: "warn" };
+  }
+
+  if (storageAvailable === false) {
+    return { text: "Ошибка", cls: "err" };
+  }
+
+  if (!recorderStatus) {
+    if (camera.status === "error") return { text: "Ошибка", cls: "err" };
+    return { text: "Статус неизвестен", cls: "warn" };
+  }
+
+  const runtimeError = normalizeRuntimeError(runtime?.last_error || runtime?.camera_last_error || recorderStatus?.last_error);
+  const jobState = String(runtime?.job_state || camera.status || "").toLowerCase();
+
+  if (recorderStatus?.heartbeat?.status === "stale_or_unavailable") {
+    return { text: "Статус неизвестен", cls: "warn" };
+  }
+
+  if (runtimeError || jobState === "error") {
+    return { text: "Ошибка", cls: "err" };
+  }
+  if (jobState === "restarting") return { text: "Перезапуск", cls: "warn" };
+  if (jobState === "starting") return { text: "Запускается", cls: "warn" };
+  if (jobState === "stopping") return { text: "Останавливается", cls: "warn" };
+  if (jobState === "recording") return { text: "Идёт запись", cls: "ok" };
+  if (runtime?.recording_mode && runtime.recording_mode !== "always") {
+    return { text: "Ожидание записи", cls: "warn" };
+  }
+
+  return { text: "Ожидание записи", cls: "warn" };
+}
+
 export default function CamerasPage() {
   const [cameras, setCameras] = useState([]);
   const [storage, setStorage] = useState(null);
+  const [recorderStatus, setRecorderStatus] = useState(null);
   const [showEditor, setShowEditor] = useState(false);
   const [editorMode, setEditorMode] = useState("create");
   const [editingCameraId, setEditingCameraId] = useState(null);
@@ -107,21 +155,24 @@ export default function CamerasPage() {
 
   async function load() {
     try {
-      const [cams, st] = await Promise.all([
+      const [cams, st, recorder] = await Promise.all([
         apiFetch("/cameras"),
         apiFetch("/storage/status"),
+        apiFetch("/system/recorder/status").catch(() => null),
       ]);
       setCameras(cams);
       setStorage(st);
+      setRecorderStatus(recorder);
     } catch (err) {
       setError(normalizeCameraError(err.message));
     }
   }
 
   const storagePathChecks = storage?.storage_path_checks || {};
-  const storageRoot = storage?.storage_root || "...";
   const storageAvailable = storagePathChecks.path_exists ?? storage?.storage_root_exists;
-  const storageWritable = storagePathChecks.writable ?? storage?.storage_root_writable;
+  const recorderCameraMap = new Map(
+    (recorderStatus?.camera_recording_states || []).map((item) => [String(item.camera_id), item])
+  );
 
   useEffect(() => {
     load();
@@ -432,24 +483,13 @@ export default function CamerasPage() {
 
       {error && !showEditor ? <div className="badge err" style={{ marginBottom: 14 }}>{error}</div> : null}
 
-      <div className="card" style={{ marginBottom: 18 }}>
-        <div className="toolbar">
-          <div className="badge">Хранилище: {storageRoot}</div>
-          <div className={`badge ${storageAvailable ? "ok" : "err"}`}>
-            {storageAvailable ? "Каталог доступен" : "Каталог недоступен"}
-          </div>
-          <div className={`badge ${storageWritable ? "ok" : "err"}`}>
-            {storageWritable ? "Есть запись" : "Нет записи"}
-          </div>
-        </div>
-      </div>
-
       <div className="cameraCards">
         {!cameras.length ? (
           <div className="card">Камеры ещё не добавлены.</div>
         ) : (
           cameras.map((camera) => {
-            const badge = getStatusBadge(camera);
+            const runtime = recorderCameraMap.get(String(camera.id));
+            const badge = getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable);
             return (
               <div className="cameraCard card" key={camera.id}>
                 <div className="cameraCardGrid">
@@ -506,7 +546,9 @@ export default function CamerasPage() {
 
                     <div className="cameraField">
                       <div className="cameraFieldLabel">Статус</div>
-                      <div><span className={`badge ${badge.cls}`}>{badge.text}</span></div>
+                      <div className="cameraStatusStack">
+                        <span className={`badge ${badge.cls}`}>{badge.text}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -712,8 +754,8 @@ export default function CamerasPage() {
                         <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 10 }}>
                           <div><strong>Видео:</strong> {profile.video?.codec || "-"}, {profile.video?.width || "-"}x{profile.video?.height || "-"}, fps {profile.video?.fps || "-"}</div>
                           <div><strong>Аудио:</strong> {profile.audio?.codec || "нет"}</div>
-                          <div><strong>RTSP (камера):</strong> {profile.raw_stream_uri || "-"}</div>
-                          <div><strong>RTSP (для нашей системы):</strong> {profile.stream_uri || "-"}</div>
+                          <div><strong>RTSP (камера):</strong> {profile.raw_stream_uri ? "Поток камеры получен" : "-"}</div>
+                          <div><strong>RTSP (для нашей системы):</strong> {profile.stream_uri ? "Поток для системы готов" : "-"}</div>
                         </div>
                         <div className="toolbar">
                           <button className="button secondary small" onClick={() => useProfileAsMain(profile)}>

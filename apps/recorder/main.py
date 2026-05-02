@@ -624,13 +624,12 @@ def path_format_metadata(file_path: Path) -> dict[str, str]:
 
 def build_segment_pattern(camera_id: int, camera_name: str, job_id: str, recording_format: str) -> str:
     dir_path = current_segment_dir(camera_id, job_id)
-    safe_camera = safe_name(camera_name)
     extension = format_metadata(recording_format)["file_extension"]
-    return str(dir_path / f"camera_{int(camera_id)}_{safe_camera}-%Y-%m-%d-%H-%M-%S{extension}")
+    return str(dir_path / f"{segment_prefix(camera_id, camera_name)}%Y-%m-%d-%H-%M-%S{extension}")
 
 
 def segment_prefix(camera_id: int, camera_name: str) -> str:
-    return f"camera_{int(camera_id)}_{safe_name(camera_name)}-"
+    return f"{safe_name(camera_name)}-"
 
 
 def expected_segment_dir(output_pattern: str | None) -> Path | None:

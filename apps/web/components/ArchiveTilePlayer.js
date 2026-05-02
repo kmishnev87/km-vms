@@ -13,6 +13,23 @@ export default function ArchiveTilePlayer({
   const videoRef = useRef(null);
   const [status, setStatus] = useState("idle");
 
+  const containerFormat = String(playback?.containerFormat || playback?.fileExtension || "").toLowerCase();
+  const isUnsupportedDirectPlayback = Boolean(playback?.hasVideo) && (
+    containerFormat.includes("mkv") ||
+    containerFormat.includes("matroska") ||
+    String(playback?.mimeType || "").toLowerCase().includes("matroska")
+  );
+
+  function buildDownloadUrl() {
+    const token = getAuthToken();
+    if (!token || !playback?.cameraId || !playback?.relPath) return "";
+    return (
+      `/api/chronology/file?camera_id=${playback.cameraId}` +
+      `&rel_path=${encodeURIComponent(playback.relPath)}` +
+      `&token=${encodeURIComponent(token)}`
+    );
+  }
+
   function toggleFullscreen() {
     if (!allowFullscreen) return;
 
@@ -50,6 +67,12 @@ export default function ArchiveTilePlayer({
     if (!hasVideo || !cameraId || !relPath) {
       hardReset();
       setStatus("empty");
+      return;
+    }
+
+    if (isUnsupportedDirectPlayback) {
+      hardReset();
+      setStatus("unsupported");
       return;
     }
 
@@ -110,7 +133,7 @@ export default function ArchiveTilePlayer({
       video.removeEventListener("loadedmetadata", handleLoaded);
       video.removeEventListener("error", handleError);
     };
-  }, [playback?.playbackKey]);
+  }, [playback?.playbackKey, isUnsupportedDirectPlayback]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -168,6 +191,19 @@ export default function ArchiveTilePlayer({
       {status === "error" ? (
         <div className="archiveCenterHint archiveCenterHintError">
           Не удалось загрузить архив
+        </div>
+      ) : null}
+
+      {status === "unsupported" ? (
+        <div className="archiveCenterHint archiveCenterHintError archiveCenterHintInteractive">
+          <div>
+            <div>Формат MKV может не воспроизводиться в браузере.</div>
+            {buildDownloadUrl() ? (
+              <a className="archiveDownloadLink" href={buildDownloadUrl()} download>
+                Скачать файл
+              </a>
+            ) : null}
+          </div>
         </div>
       ) : null}
     </div>

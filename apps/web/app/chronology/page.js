@@ -531,6 +531,9 @@ export default function ChronologyPage() {
       const relPath = hasVideo ? (response?.rel_path || null) : null;
       const offsetSec = hasVideo ? Number(response?.offset_sec || 0) : 0;
       const cameraId = hasVideo ? String(tile.cameraId) : null;
+      const containerFormat = hasVideo ? String(response?.container_format || "").toLowerCase() : "";
+      const fileExtension = hasVideo ? String(response?.file_extension || "").toLowerCase() : "";
+      const mimeType = hasVideo ? String(response?.mime_type || "").toLowerCase() : "";
 
       const sameSource =
         !forceReload &&
@@ -544,9 +547,12 @@ export default function ChronologyPage() {
         cameraId,
         relPath,
         offsetSec,
+        containerFormat,
+        fileExtension,
+        mimeType,
         playbackKey: sameSource
           ? prev.playbackKey
-          : `${tile.id}-${cameraId || "empty"}-${relPath || "empty"}-${offsetSec}-${Date.now()}`,
+          : `${tile.id}-${cameraId || "empty"}-${relPath || "empty"}-${offsetSec}-${containerFormat || fileExtension || "unknown"}-${Date.now()}`,
       };
     } catch (_) {
       return {

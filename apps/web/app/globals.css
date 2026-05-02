@@ -1967,6 +1967,10 @@ textarea {
   width: 150px;
 }
 
+.recordingsSpacerCol {
+  width: 105px;
+}
+
 .recordingsFileCol {
   width: auto;
 }
@@ -2001,6 +2005,11 @@ textarea {
   font-size: 12px;
 }
 
+.recordingsTable thead th > * {
+  margin-left: auto;
+  margin-right: auto;
+}
+
 .recordingsSortButton {
   display: inline-flex;
   align-items: center;
@@ -2016,7 +2025,30 @@ textarea {
   font-weight: 700;
 }
 
-.recordingsSortButton span {
+.recordingsDateHeader,
+.recordingsSizeHeader {
+  text-align: center !important;
+}
+
+.recordingsSizeHeader .recordingsSortButton {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  width: 100%;
+}
+
+.recordingsSizeHeader .recordingsSortLabel {
+  grid-column: 2;
+  justify-self: center;
+}
+
+.recordingsSizeHeader .recordingsSortIcon {
+  grid-column: 3;
+  justify-self: start;
+  margin-left: 6px;
+}
+
+.recordingsSortButton span,
+.recordingsSortIcon {
   color: #94a3b8;
   font-size: 12px;
 }
@@ -2038,6 +2070,21 @@ textarea {
   max-width: 0;
 }
 
+.recordingsFilenameCell {
+  text-align: left;
+}
+
+.recordingsSpacerHeader,
+.recordingsSpacerCell {
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+
+.recordingsTable td.recordingsDateCell,
+.recordingsTable td.recordingsSizeCell {
+  text-align: center;
+}
+
 .recordingsCameraCell {
   white-space: nowrap;
   overflow: hidden;
@@ -2051,6 +2098,7 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
+  vertical-align: middle;
 }
 
 .recordingsActions {
@@ -2090,6 +2138,20 @@ textarea {
 .recordingsIconButton:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.recordingPlaybackNotice {
+  display: flex;
+  min-height: 260px;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #991b1b;
+  text-align: center;
+  font-weight: 700;
 }
 
 .recordingsEmptyCell {
@@ -2349,6 +2411,15 @@ textarea {
   min-height: 34px;
   align-items: center;
   justify-content: center;
+}
+
+.cameraStatusStack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
 }
 
 .cameraNameField {
@@ -4438,6 +4509,27 @@ textarea {
   font-weight: 700;
 }
 
+.archiveCenterHintInteractive {
+  pointer-events: auto;
+  padding: 14px;
+  line-height: 1.45;
+}
+
+.archiveDownloadLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .chronologyTimelineCenterLine {
   position: absolute;
   top: 0;
@@ -5347,6 +5439,10 @@ textarea {
 
 .chronologyTileVideo .archiveCenterHint {
   pointer-events: none;
+}
+
+.chronologyTileVideo .archiveCenterHintInteractive {
+  pointer-events: auto;
 }
 
 .chronologyMissing {

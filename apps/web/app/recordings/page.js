@@ -32,6 +32,8 @@ const TEXT = {
   openEmbeddedViewer: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0432\u0441\u0442\u0440\u043e\u0435\u043d\u043d\u044b\u0439 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
   viewRecord: "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440 \u0437\u0430\u043f\u0438\u0441\u0438",
   close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
+  unsupportedPlayback: "Формат MKV может не воспроизводиться в браузере. Скачайте файл.",
+  playbackError: "Не удалось воспроизвести запись в браузере. Скачайте файл.",
 };
 
 const ICONS = {
@@ -162,6 +164,38 @@ function buildPageList(currentPage, pageCount) {
   return result;
 }
 
+function summarizeDeleteResult(result) {
+  if (!result || typeof result !== "object") return "Операция выполнена.";
+  const deleted = Number(result.deleted_count || 0);
+  const skipped = Number(result.skipped_count || 0);
+  const failed = Number(result.failed_count || 0);
+  const notFound = Number(result.not_found_count || 0);
+  return `Удалено: ${deleted}; пропущено: ${skipped + notFound}; ошибок: ${failed}.`;
+}
+
+function normalizeRecordingError(message) {
+  const text = String(message || "").trim();
+  if (!text) return "Не удалось выполнить действие. Повторите попытку.";
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text);
+      return summarizeDeleteResult(parsed?.detail || parsed);
+    } catch (_) {
+      return "Не удалось выполнить действие. Проверьте состояние записи и повторите попытку.";
+    }
+  }
+  if (text.includes("Recording file not found")) return "Файл записи отсутствует.";
+  if (text.includes("metadata")) return "Метаданные записи недоступны.";
+  if (text.includes("Invalid path")) return "Путь записи недоступен.";
+  if (text.length > 180) return "Не удалось выполнить действие. Проверьте состояние записи и повторите попытку.";
+  return text;
+}
+
+function isDirectPlaybackUnsupported(item) {
+  const value = `${item?.container_format || ""} ${item?.file_extension || ""} ${item?.mime_type || ""}`.toLowerCase();
+  return value.includes("mkv") || value.includes("matroska");
+}
+
 export default function RecordingsPage() {
   const [cameras, setCameras] = useState([]);
   const [selectedCamera, setSelectedCamera] = useState("__all__");
@@ -172,6 +206,7 @@ export default function RecordingsPage() {
   const [sortDir, setSortDir] = useState("desc");
   const [currentPage, setCurrentPage] = useState(1);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
@@ -179,6 +214,8 @@ export default function RecordingsPage() {
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerTitle, setViewerTitle] = useState("");
   const [viewerUrl, setViewerUrl] = useState("");
+  const [viewerItem, setViewerItem] = useState(null);
+  const [viewerPlaybackError, setViewerPlaybackError] = useState(false);
 
   const requestIdRef = useRef(0);
   const dangerMenuRef = useRef(null);
@@ -206,11 +243,12 @@ export default function RecordingsPage() {
   async function initialLoad() {
     try {
       setError("");
+      setNotice("");
       const me = await apiFetch("/auth/me");
       setCurrentUser(me);
       await loadCameras();
     } catch (err) {
-      setError(err.message);
+      setError(normalizeRecordingError(err.message));
     }
   }
 
@@ -219,7 +257,7 @@ export default function RecordingsPage() {
   }, []);
 
   useEffect(() => {
-    loadRecordings(selectedCamera).catch((err) => setError(err.message));
+    loadRecordings(selectedCamera).catch((err) => setError(normalizeRecordingError(err.message)));
   }, [selectedCamera]);
 
   useEffect(() => {
@@ -242,9 +280,10 @@ export default function RecordingsPage() {
   async function refresh() {
     try {
       setError("");
+      setNotice("");
       await Promise.all([loadCameras(), loadRecordings(selectedCamera)]);
     } catch (err) {
-      setError(err.message);
+      setError(normalizeRecordingError(err.message));
     }
   }
 
@@ -329,6 +368,7 @@ export default function RecordingsPage() {
   function handleDownload(item) {
     try {
       setError("");
+      setNotice("");
       const token = getAuthToken();
       const url = `/api/recordings/download?path=${encodeURIComponent(item.path)}&token=${encodeURIComponent(token)}`;
       const a = document.createElement("a");
@@ -338,26 +378,33 @@ export default function RecordingsPage() {
       a.click();
       a.remove();
     } catch (err) {
-      setError(err.message);
+      setError(normalizeRecordingError(err.message));
     }
   }
 
   function handleWatch(item) {
     try {
       setError("");
+      setNotice("");
       const token = getAuthToken();
-      const url = `/api/recordings/stream?path=${encodeURIComponent(item.path)}&token=${encodeURIComponent(token)}`;
+      const url = isDirectPlaybackUnsupported(item)
+        ? ""
+        : `/api/recordings/stream?path=${encodeURIComponent(item.path)}&token=${encodeURIComponent(token)}`;
       setViewerTitle(item.filename);
       setViewerUrl(url);
+      setViewerItem(item);
+      setViewerPlaybackError(false);
       setViewerOpen(true);
     } catch (err) {
-      setError(err.message);
+      setError(normalizeRecordingError(err.message));
     }
   }
 
   function closeViewer() {
     setViewerTitle("");
     setViewerUrl("");
+    setViewerItem(null);
+    setViewerPlaybackError(false);
     setViewerOpen(false);
   }
 
@@ -366,13 +413,15 @@ export default function RecordingsPage() {
     if (!window.confirm(`\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u044c "${item.filename}"?`)) return;
     try {
       setError("");
+      setNotice("");
       setBusy(true);
-      await apiFetch(`/recordings?path=${encodeURIComponent(item.path)}`, {
+      const result = await apiFetch(`/recordings?path=${encodeURIComponent(item.path)}`, {
         method: "DELETE",
       });
       await refresh();
+      setNotice(summarizeDeleteResult(result));
     } catch (err) {
-      setError(err.message);
+      setError(normalizeRecordingError(err.message));
     } finally {
       setBusy(false);
     }
@@ -385,15 +434,17 @@ export default function RecordingsPage() {
 
     try {
       setError("");
+      setNotice("");
       setBusy(true);
-      await apiFetch("/recordings/bulk-delete", {
+      const result = await apiFetch("/recordings/bulk-delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ paths: selectedPaths }),
       });
       await refresh();
+      setNotice(summarizeDeleteResult(result));
     } catch (err) {
-      setError(err.message);
+      setError(normalizeRecordingError(err.message));
     } finally {
       setBusy(false);
     }
@@ -407,13 +458,15 @@ export default function RecordingsPage() {
     try {
       setDangerMenuOpen(false);
       setError("");
+      setNotice("");
       setBusy(true);
-      await apiFetch(`/recordings/by-camera?camera=${encodeURIComponent(selectedCamera)}`, {
+      const result = await apiFetch(`/recordings/by-camera?camera=${encodeURIComponent(selectedCamera)}`, {
         method: "DELETE",
       });
       await refresh();
+      setNotice(summarizeDeleteResult(result));
     } catch (err) {
-      setError(err.message);
+      setError(normalizeRecordingError(err.message));
     } finally {
       setBusy(false);
     }
@@ -426,11 +479,13 @@ export default function RecordingsPage() {
     try {
       setDangerMenuOpen(false);
       setError("");
+      setNotice("");
       setBusy(true);
-      await apiFetch("/recordings/all?confirm=true&confirmation_text=DELETE_ALL_RECORDINGS", { method: "DELETE" });
+      const result = await apiFetch("/recordings/all?confirm=true&confirmation_text=DELETE_ALL_RECORDINGS", { method: "DELETE" });
       await refresh();
+      setNotice(summarizeDeleteResult(result));
     } catch (err) {
-      setError(err.message);
+      setError(normalizeRecordingError(err.message));
     } finally {
       setBusy(false);
     }
@@ -449,6 +504,11 @@ export default function RecordingsPage() {
       {error ? (
         <div className="badge err recordingsErrorBadge">
           {error}
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="badge ok recordingsErrorBadge">
+          {notice}
         </div>
       ) : null}
 
@@ -553,6 +613,7 @@ export default function RecordingsPage() {
             <colgroup>
               <col className="recordingsSelectCol" />
               <col className="recordingsCameraCol" />
+              <col className="recordingsSpacerCol" />
               <col className="recordingsFileCol" />
               <col className="recordingsDateCol" />
               <col className="recordingsSizeCol" />
@@ -570,32 +631,17 @@ export default function RecordingsPage() {
                     />
                   ) : null}
                 </th>
-                <th>
-                  <button
-                    className={`recordingsSortButton ${sortBy === SORT_OPTIONS.camera.key ? "active" : ""}`}
-                    onClick={() => handleSort(SORT_OPTIONS.camera.key)}
-                  >
-                    {TEXT.camera}
-                    <span>{sortBy === SORT_OPTIONS.camera.key ? (sortDir === "asc" ? ICONS.up : ICONS.down) : ICONS.sort}</span>
-                  </button>
-                </th>
+                <th>{TEXT.camera}</th>
+                <th className="recordingsSpacerHeader" aria-hidden="true"></th>
                 <th>{TEXT.file}</th>
-                <th>
-                  <button
-                    className={`recordingsSortButton ${sortBy === SORT_OPTIONS.created_at.key ? "active" : ""}`}
-                    onClick={() => handleSort(SORT_OPTIONS.created_at.key)}
-                  >
-                    {TEXT.createdAt}
-                    <span>{sortBy === SORT_OPTIONS.created_at.key ? (sortDir === "asc" ? ICONS.up : ICONS.down) : ICONS.sort}</span>
-                  </button>
-                </th>
-                <th>
+                <th className="recordingsDateHeader">{TEXT.createdAt}</th>
+                <th className="recordingsSizeHeader">
                   <button
                     className={`recordingsSortButton ${sortBy === SORT_OPTIONS.size_bytes.key ? "active" : ""}`}
                     onClick={() => handleSort(SORT_OPTIONS.size_bytes.key)}
                   >
-                    {TEXT.size}
-                    <span>{sortBy === SORT_OPTIONS.size_bytes.key ? (sortDir === "asc" ? ICONS.up : ICONS.down) : ICONS.sort}</span>
+                    <span className="recordingsSortLabel">{TEXT.size}</span>
+                    <span className="recordingsSortIcon">{sortBy === SORT_OPTIONS.size_bytes.key ? (sortDir === "asc" ? ICONS.up : ICONS.down) : ICONS.sort}</span>
                   </button>
                 </th>
                 <th className="recordingsActionsHeader">{TEXT.actions}</th>
@@ -615,6 +661,7 @@ export default function RecordingsPage() {
                     ) : null}
                   </td>
                   <td className="recordingsCameraCell">{item.camera}</td>
+                  <td className="recordingsSpacerCell" aria-hidden="true"></td>
                   <td className="recordingsFilenameCell">
                     <button
                       className="linkButton recordingsFileLink"
@@ -624,8 +671,8 @@ export default function RecordingsPage() {
                       {item.filename}
                     </button>
                   </td>
-                  <td>{item.created_at || "-"}</td>
-                  <td>{item.size_human}</td>
+                  <td className="recordingsDateCell">{item.created_at || "-"}</td>
+                  <td className="recordingsSizeCell">{item.size_human}</td>
                   <td>
                     <div className="recordingsActions">
                       <button
@@ -662,7 +709,7 @@ export default function RecordingsPage() {
 
               {!paginatedItems.length ? (
                 <tr>
-                  <td colSpan="6" className="recordingsEmptyCell">
+                  <td colSpan="7" className="recordingsEmptyCell">
                     {TEXT.noRecords}
                   </td>
                 </tr>
@@ -722,16 +769,32 @@ export default function RecordingsPage() {
 
             <div style={{ marginBottom: 14, color: "#475569" }}>{viewerTitle}</div>
 
-            <video
-              key={viewerUrl}
-              src={viewerUrl}
-              controls
-              autoPlay
-              preload="metadata"
-              className="recordingVideo"
-            />
+            {isDirectPlaybackUnsupported(viewerItem) ? (
+              <div className="recordingPlaybackNotice">
+                {TEXT.unsupportedPlayback}
+              </div>
+            ) : viewerPlaybackError ? (
+              <div className="recordingPlaybackNotice">
+                {TEXT.playbackError}
+              </div>
+            ) : (
+              <video
+                key={viewerUrl}
+                src={viewerUrl}
+                controls
+                autoPlay
+                preload="metadata"
+                className="recordingVideo"
+                onError={() => setViewerPlaybackError(true)}
+              />
+            )}
 
             <div className="actions">
+              {viewerItem ? (
+                <button className="button secondary" onClick={() => handleDownload(viewerItem)}>
+                  {TEXT.download}
+                </button>
+              ) : null}
               <button className="button secondary" onClick={closeViewer}>
                 {TEXT.close}
               </button>
