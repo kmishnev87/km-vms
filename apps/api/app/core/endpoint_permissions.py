@@ -59,7 +59,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("diagnostics", "POST", "/settings/bug-report", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("hardware", "GET", "/hardware/capabilities", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("hardware", "POST", "/hardware/rescan", PERMISSION_MANAGE_SETTINGS, "require_permission"),
-    EndpointPermission("storage", "GET", "/storage/status", PERMISSION_MANAGE_SETTINGS, "require_permission"),
+    EndpointPermission("storage", "GET", "/storage/status", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only Storage Monitoring summary; owner/admin only."),
     EndpointPermission("storage", "GET", "/storage/reconciliation/summary", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("storage", "POST", "/storage/reconcile", PERMISSION_MANAGE_SETTINGS, "require_permission", "Non-destructive dry_run/apply_safe reconciliation; deletion is forbidden."),
     EndpointPermission("system", "GET", "/", PUBLIC, "public route", "Minimal service name/status."),

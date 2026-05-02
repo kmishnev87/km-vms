@@ -29,6 +29,7 @@ from app.services.audit_log import create_event, events_as_text, list_events, re
 from app.services.hardware import get_hardware_capabilities, invalidate_hardware_capabilities
 from app.services.live_engine_v2 import manager as live_manager
 from app.services.recording_reconciliation import reconciliation_diagnostics
+from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.system_settings import (
     get_system_settings,
     serialize_settings,
@@ -550,6 +551,7 @@ def build_log_archive(
         )
         write_json(bundle, "system/settings.json", serialize_settings(get_system_settings(db)))
         write_json(bundle, "storage/status.json", storage_diagnostics())
+        write_json(bundle, "storage/storage_monitoring_summary.json", build_storage_monitoring_summary(db))
         write_json(bundle, "storage/recording_integrity_summary.json", reconciliation_diagnostics(db))
         write_json(bundle, "hardware/capabilities.json", get_hardware_capabilities())
         write_json(bundle, "cameras/cameras.json", camera_diagnostics(db))

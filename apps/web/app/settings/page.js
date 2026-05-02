@@ -43,9 +43,7 @@ const TEXT = {
     hostPath: "Путь на сервере",
     hostPathUnknown: "Определяется в docker-compose",
     validate: "Тест",
-    recording: "Запись",
-    balanced: "Баланс",
-    balancedHelp: "Рекомендуемый режим. Сейчас используется MKV.",
+    recording: "Формат записи",
     compatibility: "Макс. совместимость",
     compatibilityHelp: "Сейчас используется MP4. Удобнее для плееров.",
     reliability: "Макс. надежность",
@@ -171,9 +169,7 @@ const TEXT = {
     hostPath: "Server path",
     hostPathUnknown: "Defined in docker-compose",
     validate: "Test",
-    recording: "Recording",
-    balanced: "Balanced",
-    balancedHelp: "Recommended mode. Current mapping: MKV.",
+    recording: "Recording format",
     compatibility: "Maximum compatibility",
     compatibilityHelp: "Current mapping: MP4. Easier to open in players.",
     reliability: "Maximum reliability",
@@ -447,7 +443,7 @@ function recordingFormatForProfile(profile) {
 }
 
 function profileFromFormat(format) {
-  return format === "mp4" ? "compatibility" : "balanced";
+  return format === "mp4" ? "compatibility" : "reliability";
 }
 
 function offsetFromTimezone(timezone) {
@@ -678,10 +674,9 @@ export default function SettingsPage() {
 
   const selectedHardware = draft?.hardware_preferred_backend || "auto";
   const profileHelp = {
-    balanced: t.balancedHelp,
     compatibility: t.compatibilityHelp,
     reliability: t.reliabilityHelp,
-  }[draft?.recordingProfile || "balanced"];
+  }[draft?.recordingProfile || "reliability"];
 
   const hardwareSummary = useMemo(() => (
     HARDWARE_OPTIONS.map((backend) => ({
@@ -1021,7 +1016,6 @@ export default function SettingsPage() {
                   </div>
                   <div className="settingsRowControl">
                     <select id="settings-recording" className="select settingsSelect" value={draft.recordingProfile} onChange={(event) => patch("recordingProfile", event.target.value)} disabled={saving}>
-                      <option value="balanced">{t.balanced}</option>
                       <option value="reliability">{t.reliability}</option>
                       <option value="compatibility">{t.compatibility}</option>
                     </select>

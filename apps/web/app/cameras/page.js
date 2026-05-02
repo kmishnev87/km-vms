@@ -118,6 +118,11 @@ export default function CamerasPage() {
     }
   }
 
+  const storagePathChecks = storage?.storage_path_checks || {};
+  const storageRoot = storage?.storage_root || "...";
+  const storageAvailable = storagePathChecks.path_exists ?? storage?.storage_root_exists;
+  const storageWritable = storagePathChecks.writable ?? storage?.storage_root_writable;
+
   useEffect(() => {
     load();
     const timer = setInterval(load, 5000);
@@ -429,12 +434,12 @@ export default function CamerasPage() {
 
       <div className="card" style={{ marginBottom: 18 }}>
         <div className="toolbar">
-          <div className="badge">Хранилище: {storage?.storage_root || "..."}</div>
-          <div className={`badge ${storage?.storage_root_exists ? "ok" : "err"}`}>
-            {storage?.storage_root_exists ? "Каталог доступен" : "Каталог недоступен"}
+          <div className="badge">Хранилище: {storageRoot}</div>
+          <div className={`badge ${storageAvailable ? "ok" : "err"}`}>
+            {storageAvailable ? "Каталог доступен" : "Каталог недоступен"}
           </div>
-          <div className={`badge ${storage?.storage_root_writable ? "ok" : "err"}`}>
-            {storage?.storage_root_writable ? "Есть запись" : "Нет записи"}
+          <div className={`badge ${storageWritable ? "ok" : "err"}`}>
+            {storageWritable ? "Есть запись" : "Нет записи"}
           </div>
         </div>
       </div>
@@ -457,7 +462,7 @@ export default function CamerasPage() {
                         {"\u270e"}
                       </button>
                       <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? "Отключить" : "Включить"} aria-label={camera.enabled ? "Отключить" : "Включить"}>
-                        {camera.enabled ? "\u2713" : "\u23fb"}
+                        {camera.enabled ? "\u23fb" : "\u2713"}
                       </button>
                       <button className="cameraIconButton danger" onClick={() => openDeleteModal(camera)} title="Удалить" aria-label="Удалить">
                         {"\ud83d\uddd1"}
