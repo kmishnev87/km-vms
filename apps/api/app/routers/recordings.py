@@ -20,6 +20,7 @@ from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL, require_permission
+from app.services.recording_retention import build_retention_plan, execute_segments, preview_segments, run_retention
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
@@ -27,6 +28,7 @@ CHUNK_SIZE = 1024 * 1024
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
 SEGMENT_STATUS_FINALIZED = "finalized"
+DELETE_ALL_CONFIRMATION_TEXT = "DELETE_ALL_RECORDINGS"
 PROBLEM_INTEGRITY_STATUSES = {
     "missing_file",
     "orphan_metadata",
@@ -48,6 +50,17 @@ PROBLEM_INTEGRITY_STATUSES = {
 
 class BulkDeleteRequest(BaseModel):
     paths: list[str]
+
+
+class RetentionDryRunRequest(BaseModel):
+    camera_id: int | None = None
+
+
+class RetentionRunRequest(BaseModel):
+    confirm: bool = False
+    camera_id: int | None = None
+    max_candidates: int | None = None
+    max_bytes: int | None = None
 
 
 def storage_root() -> Path:
@@ -336,6 +349,42 @@ def list_recording_cameras(
     return {"items": collect_camera_names(db)}
 
 
+@router.post("/retention/dry-run")
+def retention_dry_run(
+    payload: RetentionDryRunRequest | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("delete_recordings")),
+):
+    camera_id = payload.camera_id if payload else None
+    return build_retention_plan(db, camera_id=camera_id)
+
+
+@router.get("/retention/plan")
+def retention_plan(
+    camera_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("delete_recordings")),
+):
+    return build_retention_plan(db, camera_id=camera_id)
+
+
+@router.post("/retention/run")
+def retention_run(
+    payload: RetentionRunRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("delete_recordings")),
+):
+    if not payload.confirm:
+        raise HTTPException(status_code=409, detail="Retention run requires confirm=true")
+    return run_retention(
+        db,
+        actor=current_user,
+        camera_id=payload.camera_id,
+        max_candidates=payload.max_candidates,
+        max_bytes=payload.max_bytes,
+    )
+
+
 @router.get("")
 def list_recordings(
     camera: Optional[str] = Query(default=None),
@@ -394,16 +443,17 @@ def delete_recording(
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
     segment = get_finalized_segment_by_path(db, path)
-    file_path = resolve_segment_file(segment)
-
-    try:
-        file_path.unlink()
-    except OSError as exc:
-        raise HTTPException(status_code=409, detail=f"Could not delete recording file: {exc}") from exc
-
-    db.delete(segment)
-    db.commit()
-    return {"ok": True}
+    result = execute_segments(
+        db,
+        [segment],
+        actor=current_user,
+        operation="manual_single_delete",
+        reason="manual_delete",
+        max_candidates=1,
+    )
+    if result["failed_count"]:
+        raise HTTPException(status_code=409, detail=result)
+    return result
 
 
 @router.post("/bulk-delete")
@@ -412,20 +462,29 @@ def bulk_delete_recordings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
-    deleted = 0
+    segments: list[RecordingSegment] = []
+    result_not_found = 0
     for rel in payload.paths:
         try:
-            segment = get_finalized_segment_by_path(db, rel)
-            file_path = resolve_segment_file(segment)
-            file_path.unlink()
-            db.delete(segment)
-            db.commit()
-            deleted += 1
-        except (HTTPException, OSError):
-            db.rollback()
-            continue
+            segments.append(get_finalized_segment_by_path(db, rel))
+        except HTTPException:
+            result_not_found += 1
 
-    return {"ok": True, "deleted": deleted}
+    result = execute_segments(
+        db,
+        segments,
+        actor=current_user,
+        operation="manual_bulk_delete",
+        reason="manual_bulk_delete",
+        max_candidates=max(len(payload.paths), 1),
+    )
+    result["requested_count"] = len(payload.paths)
+    result["not_found_count"] += result_not_found
+    result["skipped_count"] += result_not_found
+    for _ in range(result_not_found):
+        result["items"].append({"segment_id": None, "camera_id": None, "relative_path": None, "action": "skipped", "reason": "metadata_not_found", "error": None, "size_bytes": 0})
+
+    return result
 
 
 @router.delete("/by-camera")
@@ -437,37 +496,40 @@ def delete_recordings_by_camera(
     if not camera:
         raise HTTPException(status_code=400, detail="Camera is required")
 
-    deleted = 0
-    for segment in apply_camera_filter(finalized_segments_query(db), db, camera).all():
-        try:
-            file_path = resolve_segment_file(segment)
-            file_path.unlink()
-            db.delete(segment)
-            db.commit()
-            deleted += 1
-        except (HTTPException, OSError):
-            db.rollback()
-            continue
-
-    return {"ok": True, "deleted": deleted}
+    segments = apply_camera_filter(finalized_segments_query(db), db, camera).all()
+    return execute_segments(
+        db,
+        segments,
+        actor=current_user,
+        operation="manual_delete_by_camera",
+        reason="manual_delete_by_camera",
+        max_candidates=max(len(segments), 1),
+    )
 
 
 @router.delete("/all")
 def delete_all_recordings(
+    dry_run: bool = Query(False),
+    confirm: bool = Query(False),
+    confirmation_text: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
-    deleted = 0
-
-    for segment in finalized_segments_query(db).all():
-        try:
-            file_path = resolve_segment_file(segment)
-            file_path.unlink()
-            db.delete(segment)
-            db.commit()
-            deleted += 1
-        except (HTTPException, OSError):
-            db.rollback()
-            continue
-
-    return {"ok": True, "deleted": deleted}
+    segments = finalized_segments_query(db).all()
+    if dry_run:
+        return preview_segments(
+            db,
+            segments,
+            operation="manual_delete_all_preview",
+            reason="manual_delete_all",
+        )
+    if not confirm or confirmation_text != DELETE_ALL_CONFIRMATION_TEXT:
+        raise HTTPException(status_code=409, detail=f"Delete all recordings requires confirm=true and confirmation_text={DELETE_ALL_CONFIRMATION_TEXT}")
+    return execute_segments(
+        db,
+        segments,
+        actor=current_user,
+        operation="manual_delete_all",
+        reason="manual_delete_all",
+        max_candidates=max(len(segments), 1),
+    )

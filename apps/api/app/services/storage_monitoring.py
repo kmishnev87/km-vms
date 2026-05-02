@@ -17,6 +17,7 @@ from app.services.recording_storage import KMVMS_RECORDINGS_NAMESPACE, VIDEO_EXT
 
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
+SEGMENT_STATUS_DELETED = "deleted"
 SCAN_MODE_METADATA_ONLY = "metadata_only"
 SCAN_MODE_NAMESPACE_BOUNDED = "namespace_bounded"
 MAX_NAMESPACE_FILES = 1000
@@ -286,11 +287,15 @@ def build_storage_monitoring_summary(db: Session, *, include_namespace_observati
     owned_problem_count = 0
     owned_archive_size = 0
     skipped_foreign_metadata = 0
+    deleted_metadata_rows = 0
 
     segments = db.query(RecordingSegment).order_by(RecordingSegment.id.asc()).all()
     for segment in segments:
         if not _is_kmvms_owned(segment):
             skipped_foreign_metadata += 1
+            continue
+        if segment.status == SEGMENT_STATUS_DELETED:
+            deleted_metadata_rows += 1
             continue
 
         row = camera_usage.setdefault(segment.camera_id, _empty_camera_usage(cameras.get(segment.camera_id)))
@@ -387,6 +392,7 @@ def build_storage_monitoring_summary(db: Session, *, include_namespace_observati
             "kmvms_owned_missing_file_count": int(owned_missing_count),
             "kmvms_owned_problem_file_count": int(owned_problem_count),
             "skipped_foreign_metadata_rows": int(skipped_foreign_metadata),
+            "deleted_metadata_rows_excluded": int(deleted_metadata_rows),
         },
         "camera_usage": sorted(camera_usage.values(), key=lambda item: item.get("camera_id") or 0),
         "segment_status_counts": dict(status_counts),

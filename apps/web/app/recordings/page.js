@@ -427,7 +427,7 @@ export default function RecordingsPage() {
       setDangerMenuOpen(false);
       setError("");
       setBusy(true);
-      await apiFetch("/recordings/all", { method: "DELETE" });
+      await apiFetch("/recordings/all?confirm=true&confirmation_text=DELETE_ALL_RECORDINGS", { method: "DELETE" });
       await refresh();
     } catch (err) {
       setError(err.message);
