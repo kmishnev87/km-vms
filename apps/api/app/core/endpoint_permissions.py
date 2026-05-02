@@ -55,6 +55,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("settings", "GET", "/settings", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("settings", "PATCH", "/settings", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("settings", "POST", "/settings/storage/validate", PERMISSION_MANAGE_SETTINGS, "require_permission"),
+    EndpointPermission("diagnostics", "GET", "/system/recorder/status", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Recorder liveness, jobs, storage, retention, and segment diagnostics."),
     EndpointPermission("diagnostics", "GET", "/settings/logs/archive", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("diagnostics", "POST", "/settings/bug-report", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("hardware", "GET", "/hardware/capabilities", PERMISSION_MANAGE_SETTINGS, "require_permission"),

@@ -120,6 +120,7 @@ def test_endpoint_permission_contract_is_explicit_and_reviewable():
     assert decision("/health", "GET").decision == PUBLIC
     assert decision("/system/status", "GET").decision == PUBLIC
     assert decision("/system/info", "GET").decision == "manage_settings"
+    assert decision("/system/recorder/status", "GET").decision == "run_diagnostics"
     assert decision("/settings/logs/archive", "GET").decision == "run_diagnostics"
     assert decision("/settings/bug-report", "POST").decision == "run_diagnostics"
 
@@ -231,8 +232,10 @@ def test_diagnostic_archive_audit_contract_is_time_based():
 
 
 def test_diagnostic_archive_permissions_are_limited_to_diagnostics_permission():
+    assert decision("/system/recorder/status", "GET").decision == "run_diagnostics"
     assert decision("/settings/logs/archive", "GET").decision == "run_diagnostics"
     assert decision("/settings/bug-report", "POST").decision == "run_diagnostics"
+    assert decision("/system/recorder/status", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/settings/logs/archive", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/settings/bug-report", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
 

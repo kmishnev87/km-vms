@@ -51,6 +51,7 @@ STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 RECORDER_INSTANCE_ID = os.getenv("RECORDER_INSTANCE_ID") or f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
+RECORDER_STARTED_AT = time.time()
 
 
 class RecorderState:
@@ -394,6 +395,26 @@ def ensure_recording_metadata_schema() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_integrity_status ON recording_segments (integrity_status)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_reconciliation_status ON recording_segments (reconciliation_status)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_deleted_at ON recording_segments (deleted_at)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS recorder_runtime_status (
+                    recorder_instance_id VARCHAR(255) PRIMARY KEY,
+                    service_status VARCHAR(50) NOT NULL,
+                    loop_state VARCHAR(100) NULL,
+                    started_at TIMESTAMP NULL,
+                    heartbeat_at TIMESTAMP NOT NULL,
+                    active_jobs_count INTEGER DEFAULT 0 NOT NULL,
+                    recording_cameras_count INTEGER DEFAULT 0 NOT NULL,
+                    failed_cameras_count INTEGER DEFAULT 0 NOT NULL,
+                    last_error TEXT NULL,
+                    last_exit_code INTEGER NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recorder_runtime_status_heartbeat_at ON recorder_runtime_status (heartbeat_at)"))
 
 
 def selected_source_stream(row) -> str:
@@ -1577,6 +1598,74 @@ def active_jobs_status() -> list[dict[str, Any]]:
     return [job.status_payload() for job in sorted(jobs.values(), key=lambda item: item.camera_id)]
 
 
+def write_recorder_heartbeat(loop_state: str = "loop") -> None:
+    try:
+        rows = list(jobs.values())
+        active_count = sum(1 for job in rows if job.state in {RecorderState.STARTING, RecorderState.RECORDING, RecorderState.STOPPING, RecorderState.RESTARTING})
+        recording_count = sum(1 for job in rows if job.state == RecorderState.RECORDING)
+        failed_count = sum(1 for job in rows if job.state in {RecorderState.ERROR, RecorderState.RESTARTING} or bool(job.last_error))
+        last_error_job = next((job for job in sorted(rows, key=lambda item: item.last_state_change_at, reverse=True) if job.last_error), None)
+        last_exit_code = next((job.last_exit_code for job in sorted(rows, key=lambda item: item.last_state_change_at, reverse=True) if job.last_exit_code is not None), None)
+        service_status = "error" if failed_count and recording_count == 0 else ("degraded" if failed_count else "healthy")
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO recorder_runtime_status (
+                        recorder_instance_id,
+                        service_status,
+                        loop_state,
+                        started_at,
+                        heartbeat_at,
+                        active_jobs_count,
+                        recording_cameras_count,
+                        failed_cameras_count,
+                        last_error,
+                        last_exit_code,
+                        updated_at
+                    )
+                    VALUES (
+                        :recorder_instance_id,
+                        :service_status,
+                        :loop_state,
+                        to_timestamp(:started_at),
+                        NOW(),
+                        :active_jobs_count,
+                        :recording_cameras_count,
+                        :failed_cameras_count,
+                        :last_error,
+                        :last_exit_code,
+                        NOW()
+                    )
+                    ON CONFLICT (recorder_instance_id) DO UPDATE
+                    SET service_status = EXCLUDED.service_status,
+                        loop_state = EXCLUDED.loop_state,
+                        started_at = EXCLUDED.started_at,
+                        heartbeat_at = EXCLUDED.heartbeat_at,
+                        active_jobs_count = EXCLUDED.active_jobs_count,
+                        recording_cameras_count = EXCLUDED.recording_cameras_count,
+                        failed_cameras_count = EXCLUDED.failed_cameras_count,
+                        last_error = EXCLUDED.last_error,
+                        last_exit_code = EXCLUDED.last_exit_code,
+                        updated_at = NOW()
+                    """
+                ),
+                {
+                    "recorder_instance_id": RECORDER_INSTANCE_ID,
+                    "service_status": service_status,
+                    "loop_state": loop_state,
+                    "started_at": RECORDER_STARTED_AT,
+                    "active_jobs_count": active_count,
+                    "recording_cameras_count": recording_count,
+                    "failed_cameras_count": failed_count,
+                    "last_error": truncate_error(redact_text(last_error_job.last_error)) if last_error_job else None,
+                    "last_exit_code": last_exit_code,
+                },
+            )
+    except Exception as exc:
+        log_event("warning", "recorder_heartbeat_write_failed", error=redact_text(str(exc)))
+
+
 def shutdown_handler(signum, frame) -> None:
     global running
     running = False
@@ -1600,11 +1689,14 @@ while running:
         check_children()
         confirm_recording_startups()
         sync_cameras()
+        write_recorder_heartbeat("loop")
     except Exception as exc:
         log_event("error", "loop_error", error=str(exc))
+        write_recorder_heartbeat("loop_error")
     time.sleep(LOOP_INTERVAL_SECONDS)
 
 log_event("info", "shutdown_started", active_jobs=active_jobs_status())
+write_recorder_heartbeat("shutdown")
 
 for camera_id in list(jobs.keys()):
     stop_camera(camera_id, "shutdown")

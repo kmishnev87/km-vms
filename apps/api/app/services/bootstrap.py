@@ -13,6 +13,7 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     migrate_user_table()
     migrate_recording_metadata_tables()
+    migrate_recorder_runtime_status()
 
 
 def migrate_user_table() -> None:
@@ -86,6 +87,30 @@ def migrate_recording_metadata_tables() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_state ON recording_jobs (state)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_started_at ON recording_jobs (started_at)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_ownership ON recording_jobs (ownership)"))
+
+
+def migrate_recorder_runtime_status() -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS recorder_runtime_status (
+                    recorder_instance_id VARCHAR(255) PRIMARY KEY,
+                    service_status VARCHAR(50) NOT NULL,
+                    loop_state VARCHAR(100) NULL,
+                    started_at TIMESTAMP NULL,
+                    heartbeat_at TIMESTAMP NOT NULL,
+                    active_jobs_count INTEGER DEFAULT 0 NOT NULL,
+                    recording_cameras_count INTEGER DEFAULT 0 NOT NULL,
+                    failed_cameras_count INTEGER DEFAULT 0 NOT NULL,
+                    last_error TEXT NULL,
+                    last_exit_code INTEGER NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recorder_runtime_status_heartbeat_at ON recorder_runtime_status (heartbeat_at)"))
 
 
 def ensure_system_settings(db: Session) -> SystemSettings:
