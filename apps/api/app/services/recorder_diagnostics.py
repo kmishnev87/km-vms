@@ -13,6 +13,8 @@ from app.models.recording import RecordingJob, RecordingSegment
 from app.services.audit_log import redact_text, serialize_event
 from app.services.recording_retention import retention_diagnostics
 from app.services.storage_monitoring import build_storage_monitoring_summary
+from app.services.storage_contract import recording_format_contract, storage_contract
+from app.services.system_settings import get_system_settings
 
 
 ACTIVE_JOB_STATES = {"starting", "recording", "stopping", "restarting"}
@@ -312,6 +314,8 @@ def build_recorder_status(db: Session) -> dict[str, Any]:
     storage_state = _storage_state(storage_summary)
     retention_summary = retention_diagnostics(db)
     retention_state = _retention_state(retention_summary)
+    system_settings = get_system_settings(db)
+    format_contract = recording_format_contract(system_settings.recording_format)
     health, health_reasons = _health_from(
         heartbeat=heartbeat,
         heartbeat_age_seconds=heartbeat_age_seconds,
@@ -333,6 +337,9 @@ def build_recorder_status(db: Session) -> dict[str, Any]:
             **heartbeat,
             "age_seconds": heartbeat_age_seconds,
         },
+        "storage_contract": storage_contract(db_storage_path=system_settings.storage_path),
+        "recording_format_contract": format_contract,
+        "effective_recording_format": format_contract["recording_format"],
         "active_jobs": job_summary.get("recent_jobs", []),
         "job_summary": job_summary,
         "camera_recording_states": camera_states,
@@ -374,6 +381,9 @@ def _system_runtime_from_status(status: dict[str, Any]) -> dict[str, Any]:
             "last_segment_age_seconds": status["last_segment_age_seconds"],
         },
         "storage": status["storage_state"],
+        "storage_contract": status.get("storage_contract"),
+        "recording_format_contract": status.get("recording_format_contract"),
+        "effective_recording_format": status.get("effective_recording_format"),
         "retention": status["retention_status"],
     }
 
@@ -389,6 +399,8 @@ def build_system_runtime_status(db: Session) -> dict[str, Any]:
     segment_summary = _segment_summary(db, now)
     storage_state = _storage_state(build_storage_monitoring_summary(db, include_namespace_observations=False))
     retention_state = _retention_state(retention_diagnostics(db))
+    system_settings = get_system_settings(db)
+    format_contract = recording_format_contract(system_settings.recording_format)
     health, health_reasons = _health_from(
         heartbeat=heartbeat,
         heartbeat_age_seconds=heartbeat_age_seconds,
@@ -411,6 +423,9 @@ def build_system_runtime_status(db: Session) -> dict[str, Any]:
             "last_segment_age_seconds": segment_summary.get("last_segment_age_seconds"),
             "storage_state": storage_state,
             "retention_status": retention_state,
+            "storage_contract": storage_contract(db_storage_path=system_settings.storage_path),
+            "recording_format_contract": format_contract,
+            "effective_recording_format": format_contract["recording_format"],
         }
     )
 

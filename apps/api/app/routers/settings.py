@@ -33,12 +33,14 @@ from app.services.recording_retention import retention_diagnostics
 from app.services.recorder_diagnostics import build_recorder_archive_payloads, build_recorder_status, build_system_runtime_status
 from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.system_settings import (
+    active_recording_jobs_count,
     get_system_settings,
     serialize_settings,
     update_system_settings,
     validate_settings_payload,
     validate_storage_path,
 )
+from app.services.storage_contract import storage_contract
 
 router = APIRouter(tags=["settings"])
 
@@ -121,7 +123,10 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db)):
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
-    storage_check = validate_storage_path(settings_data["storage_path"], create=True)
+    requested_storage_path = settings_data.get("storage_path")
+    settings_data["storage_path"] = settings.storage_root
+
+    storage_check = validate_storage_path(settings.storage_root, create=True)
     if not storage_check["ok"]:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"storage": storage_check})
 
@@ -145,7 +150,12 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db)):
     return {
         "ok": True,
         "settings": serialize_settings(system),
-        "storage_validation": storage_check,
+        "storage_validation": {
+            **storage_check,
+            "requested_storage_path": requested_storage_path,
+            "effective_storage_path": settings.storage_root,
+            "setup_storage_path_behavior": "requested_path_is_not_runtime_source_of_truth",
+        },
     }
 
 
@@ -168,6 +178,20 @@ def patch_settings(
     data = payload.model_dump(exclude_unset=True)
     data.pop("storage_path", None)
     previous = serialize_settings(get_system_settings(db))
+    if (
+        "recording_format" in data
+        and str(data.get("recording_format") or "").strip().lower() != previous.get("recording_format")
+    ):
+        active_count = active_recording_jobs_count(db)
+        if active_count:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "recording_format_change_blocked_active_recordings",
+                    "active_recording_jobs_count": active_count,
+                    "active_change_behavior": "blocked_while_active_recording_jobs_exist",
+                },
+            )
     try:
         system = update_system_settings(db, data)
     except ValueError as exc:
@@ -179,7 +203,7 @@ def patch_settings(
         ("language", "settings.language_changed", "язык", "language"),
         ("timezone", "settings.timezone_changed", "часовой пояс", "timezone"),
         ("hardware_preferred_backend", "settings.hardware_backend_changed", "аппаратное ускорение", "hardware backend"),
-        ("recording_format", "settings.recording_profile_changed", "профиль записи", "recording profile"),
+        ("recording_format", "settings.recording_format_changed", "формат записи", "recording format"),
     ]
     changed = {}
     for key, event_type, label_ru, label_en in setting_events:
@@ -193,7 +217,12 @@ def patch_settings(
                 message_ru=f"{current_user.username} изменил {label_ru}: {previous.get(key)} → {current.get(key)}",
                 message_en=f"{current_user.username} changed {label_en}: {previous.get(key)} -> {current.get(key)}",
                 target_type="settings",
-                metadata={"field": key, "old": previous.get(key), "new": current.get(key)},
+                metadata={
+                    "field": key,
+                    "old": previous.get(key),
+                    "new": current.get(key),
+                    "recording_format_contract": current.get("recording_format_contract") if key == "recording_format" else None,
+                },
                 ip_address=request_ip(request),
                 user_agent=request_user_agent(request),
             )
@@ -315,6 +344,7 @@ def storage_diagnostics() -> dict:
     previews = Path(settings.storage_previews)
     exports = Path(settings.storage_exports)
     return {
+        "storage_contract": storage_contract(),
         "storage_root": str(root),
         "storage_root_exists": root.exists(),
         "storage_root_writable": os.access(root, os.W_OK) if root.exists() else False,

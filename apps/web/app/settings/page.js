@@ -332,6 +332,10 @@ function settingsDraftFromApi(data) {
     language: data?.language === "en" ? "en" : "ru",
     storage_path: data?.storage_path || "",
     storage_host_path: data?.storage_host_path || "",
+    storage_root: data?.storage_root || data?.container_runtime_storage_root || "",
+    storage_recordings_path: data?.storage_recordings_path || data?.container_recordings_namespace_root || "",
+    storage_namespace: data?.storage_namespace || "",
+    storage_change_requires: data?.storage_change_requires || "",
     recordingProfile: profileFromFormat(data?.recording_format),
     hardware_preferred_backend: data?.hardware_preferred_backend || null,
   };
@@ -1001,7 +1005,9 @@ export default function SettingsPage() {
                   <div className="settingsRowText">
                     <label htmlFor="settings-storage">{t.storage}<InfoTip text={t.tooltips.storage} /></label>
                     <span>{t.storageText}</span>
-                    <small>{draft.storage_path || ""}</small>
+                    <small>{draft.storage_root || draft.storage_path || ""}</small>
+                    {draft.storage_recordings_path ? <small>{draft.storage_recordings_path}</small> : null}
+                    {draft.storage_change_requires ? <small>{draft.storage_change_requires}</small> : null}
                   </div>
                   <div className="settingsRowControl">
                     <input id="settings-storage" className="input settingsInput" value={draft.storage_host_path || t.hostPathUnknown} readOnly disabled />

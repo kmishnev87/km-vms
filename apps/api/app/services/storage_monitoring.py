@@ -14,6 +14,7 @@ from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.services.audit_log import redact_text
 from app.services.recording_storage import KMVMS_RECORDINGS_NAMESPACE, VIDEO_EXTENSIONS
+from app.services.storage_contract import storage_contract
 
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
@@ -369,6 +370,10 @@ def build_storage_monitoring_summary(db: Session, *, include_namespace_observati
         "ok": status == "available",
         "available": status == "available",
         "checked_at": checked_at,
+        "storage_contract": storage_contract(),
+        "container_runtime_storage_root": str(root),
+        "container_recordings_namespace_root": str(root / KMVMS_RECORDINGS_NAMESPACE),
+        "storage_namespace": KMVMS_RECORDINGS_NAMESPACE,
         "storage_root": str(root),
         "kmvms_namespace_root": str(root / KMVMS_RECORDINGS_NAMESPACE),
         "scan_mode": namespace_observations.get("scan_mode") or SCAN_MODE_METADATA_ONLY,

@@ -12,7 +12,9 @@ const COPY = {
     timezone: "\u0427\u0430\u0441\u043e\u0432\u043e\u0439 \u043f\u043e\u044f\u0441",
     language: "\u042f\u0437\u044b\u043a",
     storage: "\u041f\u0443\u0442\u044c \u0445\u0440\u0430\u043d\u0438\u043b\u0438\u0449\u0430",
+    storageHelp: "\u041f\u0443\u0442\u044c \u0430\u0440\u0445\u0438\u0432\u0430 \u0432\u043d\u0443\u0442\u0440\u0438 \u043a\u043e\u043d\u0442\u0435\u0439\u043d\u0435\u0440\u0430. \u0425\u043e\u0441\u0442-\u043f\u0443\u0442\u044c \u0438 mount \u0437\u0430\u0434\u0430\u044e\u0442\u0441\u044f \u0432 deploy/docker; \u044d\u0442\u043e \u043f\u043e\u043b\u0435 \u043d\u0435 \u043c\u0435\u043d\u044f\u0435\u0442 runtime root.",
     format: "\u0424\u043e\u0440\u043c\u0430\u0442 \u0437\u0430\u043f\u0438\u0441\u0438",
+    formatHelp: "MKV = \u043d\u0430\u0434\u0435\u0436\u043d\u043e\u0441\u0442\u044c, MP4 = \u0441\u043e\u0432\u043c\u0435\u0441\u0442\u0438\u043c\u043e\u0441\u0442\u044c.",
     submit: "\u0417\u0430\u0432\u0435\u0440\u0448\u0438\u0442\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0443",
     busy: "\u0421\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u043c...",
   },
@@ -24,7 +26,9 @@ const COPY = {
     timezone: "Timezone",
     language: "Language",
     storage: "Storage path",
+    storageHelp: "Container archive path. Host path and mount are controlled by deploy/docker; this field does not change runtime root.",
     format: "Recording format",
+    formatHelp: "MKV = reliability, MP4 = compatibility.",
     submit: "Finish setup",
     busy: "Saving...",
   },
@@ -112,10 +116,12 @@ export default function SetupPage() {
               <option value="mkv">MKV</option>
               <option value="mp4">MP4</option>
             </select>
+            <small>{t.formatHelp}</small>
           </label>
           <label className="settingsField settingsFull">
             <span>{t.storage}</span>
-            <input className="input" value={form.storage_path} onChange={(e) => patch("storage_path", e.target.value)} />
+            <input className="input" value={form.storage_path} readOnly disabled />
+            <small>{t.storageHelp}</small>
           </label>
         </div>
 

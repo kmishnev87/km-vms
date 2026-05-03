@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import os
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -9,11 +8,17 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.recording import RecordingJob
 from app.models.system_settings import SystemSettings
+from app.services.storage_contract import (
+    RECORDING_FORMATS,
+    recording_format_contract,
+    storage_contract,
+)
 
 LANGUAGES = {"ru", "en"}
-RECORDING_FORMATS = {"mkv", "mp4"}
 HARDWARE_BACKENDS = {"auto", "cpu", "qsv", "vaapi", "nvenc", "amf"}
+ACTIVE_RECORDING_JOB_STATES = {"starting", "recording", "stopping", "restarting"}
 
 
 def default_timezone() -> str:
@@ -39,14 +44,18 @@ def get_system_settings(db: Session) -> SystemSettings:
 
 
 def serialize_settings(row: SystemSettings) -> dict:
-    storage_host_path = os.getenv("STORAGE_HOST_ROOT") or os.getenv("SURVEILLANCE_ROOT") or None
+    contract = storage_contract(db_storage_path=row.storage_path)
+    format_contract = recording_format_contract(row.recording_format)
     return {
         "system_initialized": row.system_initialized,
         "timezone": row.timezone,
         "language": row.language,
         "storage_path": row.storage_path,
-        "storage_host_path": storage_host_path,
+        "storage_contract": contract,
+        **contract,
         "recording_format": row.recording_format,
+        "recording_profile": format_contract["recording_profile"],
+        "recording_format_contract": format_contract,
         "hardware_preferred_backend": row.hardware_preferred_backend,
         "created_at": row.created_at,
         "updated_at": row.updated_at,
@@ -110,10 +119,21 @@ def update_system_settings(db: Session, payload: dict) -> SystemSettings:
     return row
 
 
+def active_recording_jobs_count(db: Session) -> int:
+    return (
+        db.query(RecordingJob)
+        .filter(RecordingJob.state.in_(ACTIVE_RECORDING_JOB_STATES))
+        .count()
+    )
+
+
 def validate_storage_path(path_value: str, create: bool = True) -> dict:
     path = Path(str(path_value or "").strip())
     result = {
         "path": str(path),
+        "path_role": "container_runtime_or_reference_path",
+        "runtime_storage_source": "settings.storage_root_env",
+        "host_mount_note": "Host storage path is deploy-managed; this validation does not remount host storage.",
         "exists": False,
         "created": False,
         "writable": False,
