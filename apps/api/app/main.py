@@ -18,6 +18,7 @@ from app.routers.settings import router as settings_router
 from app.routers.storage import router as storage_router
 from app.routers.users import router as users_router
 from app.services.audit_log import redact_text
+from app.services.automatic_retention import start_automatic_retention_worker, stop_automatic_retention_worker
 from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration, ensure_system_settings
 from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine_v2 import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
@@ -69,11 +70,13 @@ def startup():
         db.close()
 
     refresh_hardware_capabilities()
+    start_automatic_retention_worker()
     start_cleanup_worker()
 
 
 @app.on_event("shutdown")
 def shutdown():
+    stop_automatic_retention_worker()
     stop_cleanup_worker()
     stop_all_streams()
 

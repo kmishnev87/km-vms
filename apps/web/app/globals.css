@@ -2706,6 +2706,13 @@ textarea {
   gap: 10px 12px;
 }
 
+.cameraStreamPolicyGrid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
 .cameraStreamField {
   min-width: 0;
 }
@@ -2720,6 +2727,16 @@ textarea {
 
 .cameraStreamField.third {
   grid-column: span 4;
+}
+
+.cameraStreamField.policy {
+  min-width: 0;
+}
+
+.cameraStreamField.policy .input,
+.cameraStreamField.policy .select {
+  width: 100%;
+  min-height: 42px;
 }
 
 .cameraModalSection,
@@ -3324,6 +3341,10 @@ textarea {
     grid-column: span 6;
   }
 
+  .cameraStreamPolicyGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .pageHeader {
     flex-direction: column;
   }
@@ -3489,6 +3510,10 @@ textarea {
   .cameraStreamField.compact,
   .cameraStreamField.third {
     grid-column: 1 / -1;
+  }
+
+  .cameraStreamPolicyGrid {
+    grid-template-columns: 1fr;
   }
 
   .cameraSettingsHead {

@@ -26,9 +26,9 @@ class CameraBase(BaseModel):
     default_live_stream: str = "sub"
     default_record_stream: str = "main"
 
-    segment_minutes: int = 5
-    retention_days: int = 30
-    storage_quota_gb: int = 50
+    segment_minutes: int = Field(default=5, ge=1)
+    retention_days: int = Field(default=30, ge=1)
+    storage_quota_gb: int = Field(default=50, ge=1)
     preview_token: str | None = None
 
 
@@ -60,9 +60,9 @@ class CameraUpdate(BaseModel):
     default_live_stream: str | None = None
     default_record_stream: str | None = None
 
-    segment_minutes: int | None = None
-    retention_days: int | None = None
-    storage_quota_gb: int | None = None
+    segment_minutes: int | None = Field(default=None, ge=1)
+    retention_days: int | None = Field(default=None, ge=1)
+    storage_quota_gb: int | None = Field(default=None, ge=1)
 
     status: str | None = None
     last_error: str | None = None

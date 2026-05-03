@@ -1027,70 +1027,68 @@ export default function CamerasPage() {
                       <div className="formLabel">RTSP Sub Path / URL</div>
                       <input className="input" value={form.rtsp_sub_url} onChange={(e) => patch("rtsp_sub_url", e.target.value)} />
                     </div>
-                    {form.protocol === "onvif" ? (
-                      <>
-                        <div className="cameraStreamField compact">
-                          <div className="formLabel">RTSP reachable host</div>
-                          <input className="input" value={form.rtsp_host} onChange={(e) => patch("rtsp_host", e.target.value)} />
-                        </div>
-                        <div className="cameraStreamField compact">
-                          <div className="formLabel">RTSP reachable port</div>
-                          <input className="input" type="number" min="1" value={form.rtsp_port} onChange={(e) => patch("rtsp_port", e.target.value)} />
-                        </div>
-                      </>
-                    ) : null}
-                    <div className="cameraStreamField compact">
-                      <div className="formLabel">RTSP Transport</div>
-                      <select className="select" value={form.rtsp_transport} onChange={(e) => patch("rtsp_transport", e.target.value)}>
-                        <option value="tcp">TCP</option>
-                        <option value="udp">UDP</option>
-                      </select>
-                    </div>
-                    <div className="cameraStreamField compact">
-                      <div className="formLabel">Поток для записи</div>
-                      <select className="select" value={form.default_record_stream} onChange={(e) => patch("default_record_stream", e.target.value)}>
-                        {formStreamOptions.map((stream) => (
-                          <option key={stream.key} value={stream.key}>{stream.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="cameraStreamField compact">
-                      <div className="formLabel">Поток для онлайн</div>
-                      <select className="select" value={form.default_live_stream} onChange={(e) => patch("default_live_stream", e.target.value)}>
-                        {formStreamOptions.map((stream) => (
-                          <option key={stream.key} value={stream.key}>{stream.label}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="cameraStreamField compact">
-                      <div className="formLabel">Режим записи</div>
-                      <select className="select" value={form.recording_mode} onChange={(e) => patch("recording_mode", e.target.value)}>
-                        <option value="always">Постоянно</option>
-                      </select>
-                    </div>
-                    <div className="cameraStreamField third">
-                      <div className="formLabel">Длительность сегмента</div>
-                      <select className="select" value={form.segment_minutes} onChange={(e) => patch("segment_minutes", e.target.value)}>
-                        <option value="5">5 минут</option>
-                        <option value="15">15 минут</option>
-                        <option value="30">30 минут</option>
-                        <option value="45">45 минут</option>
-                        <option value="60">60 минут</option>
-                        <option value="120">120 минут</option>
-                      </select>
-                    </div>
-                    <div className="cameraStreamField third">
-                      <div className="formLabel">Срок хранения</div>
-                      <select className="select" value={form.retention_days} onChange={(e) => patch("retention_days", e.target.value)}>
-                        <option value="7">7 дней</option>
-                        <option value="14">14 дней</option>
-                        <option value="21">21 день</option>
-                        <option value="30">30 дней</option>
-                      </select>
-                    </div>
-                    <div className="cameraStreamField third">
-                      <div className="formLabel">Лимит архива (ГБ)</div>
-                      <input className="input" type="number" min="1" value={form.storage_quota_gb} onChange={(e) => patch("storage_quota_gb", e.target.value)} />
+                    <div className="cameraStreamPolicyGrid">
+                      <div className="cameraStreamField policy">
+                        <div className="formLabel">RTSP reachable host</div>
+                        <input className="input" value={form.rtsp_host} onChange={(e) => patch("rtsp_host", e.target.value)} />
+                      </div>
+                      <div className="cameraStreamField policy">
+                        <div className="formLabel">RTSP reachable port</div>
+                        <input className="input" type="number" min="1" value={form.rtsp_port} onChange={(e) => patch("rtsp_port", e.target.value)} />
+                      </div>
+                      <div className="cameraStreamField policy">
+                        <div className="formLabel">RTSP Transport</div>
+                        <select className="select" value={form.rtsp_transport} onChange={(e) => patch("rtsp_transport", e.target.value)}>
+                          <option value="tcp">TCP</option>
+                          <option value="udp">UDP</option>
+                        </select>
+                      </div>
+                      <div className="cameraStreamField policy">
+                        <div className="formLabel">Поток для записи</div>
+                        <select className="select" value={form.default_record_stream} onChange={(e) => patch("default_record_stream", e.target.value)}>
+                          {formStreamOptions.map((stream) => (
+                            <option key={stream.key} value={stream.key}>{stream.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="cameraStreamField policy">
+                        <div className="formLabel">Поток для онлайн</div>
+                        <select className="select" value={form.default_live_stream} onChange={(e) => patch("default_live_stream", e.target.value)}>
+                          {formStreamOptions.map((stream) => (
+                            <option key={stream.key} value={stream.key}>{stream.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="cameraStreamField policy">
+                        <div className="formLabel">Режим записи</div>
+                        <select className="select" value={form.recording_mode} onChange={(e) => patch("recording_mode", e.target.value)}>
+                          <option value="always">Постоянно</option>
+                        </select>
+                      </div>
+                      <div className="cameraStreamField policy">
+                        <div className="formLabel">Длительность сегмента</div>
+                        <select className="select" value={form.segment_minutes} onChange={(e) => patch("segment_minutes", e.target.value)}>
+                          <option value="5">5 минут</option>
+                          <option value="15">15 минут</option>
+                          <option value="30">30 минут</option>
+                          <option value="45">45 минут</option>
+                          <option value="60">60 минут</option>
+                          <option value="120">120 минут</option>
+                        </select>
+                      </div>
+                      <div className="cameraStreamField policy">
+                        <div className="formLabel">Срок хранения</div>
+                        <select className="select" value={form.retention_days} onChange={(e) => patch("retention_days", e.target.value)}>
+                          <option value="7">7 дней</option>
+                          <option value="14">14 дней</option>
+                          <option value="21">21 день</option>
+                          <option value="30">30 дней</option>
+                        </select>
+                      </div>
+                      <div className="cameraStreamField policy">
+                        <div className="formLabel">Лимит архива (ГБ)</div>
+                        <input className="input" type="number" min="1" value={form.storage_quota_gb} onChange={(e) => patch("storage_quota_gb", e.target.value)} />
+                      </div>
                     </div>
                   </div>
                 </section>

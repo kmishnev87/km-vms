@@ -409,7 +409,7 @@ def create_camera(
         default_record_stream=payload.default_record_stream,
         segment_minutes=payload.segment_minutes,
         retention_days=payload.retention_days,
-        storage_quota_gb=max(payload.storage_quota_gb, 50),
+        storage_quota_gb=payload.storage_quota_gb,
         status="created",
         last_error=None,
     )
@@ -671,9 +671,6 @@ def update_camera(
         existing = db.query(Camera).filter(Camera.name == data["name"]).first()
         if existing and existing.id != camera.id:
             raise HTTPException(status_code=400, detail="Камера с таким именем уже существует")
-
-    if "storage_quota_gb" in data and data["storage_quota_gb"] is not None:
-        data["storage_quota_gb"] = max(int(data["storage_quota_gb"]), 50)
 
     existing_password = decrypt_text(camera.password_encrypted)
     password_for_rtsp = data.get("password") if data.get("password") else existing_password

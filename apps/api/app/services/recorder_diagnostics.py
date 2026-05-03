@@ -292,6 +292,7 @@ def _retention_state(retention_summary: dict[str, Any]) -> dict[str, Any]:
         "deleted_segments_count": int(retention_summary.get("deleted_segments_count") or 0),
         "policy_count": len(retention_summary.get("policies") or []),
         "concurrency_guard": retention_summary.get("concurrency_guard"),
+        "automatic_retention": retention_summary.get("automatic_retention"),
     }
 
 

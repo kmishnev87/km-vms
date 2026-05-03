@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -28,6 +29,19 @@ DEFAULT_MAX_CANDIDATES = 100
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024 * 1024
 HARD_MAX_CANDIDATES = 1000
 HARD_MAX_BYTES = 100 * 1024 * 1024 * 1024
+AUTO_RETENTION_DEFAULT_MAX_CANDIDATES = 25
+AUTO_RETENTION_DEFAULT_MAX_BYTES = 1 * 1024 * 1024 * 1024
+AUTO_RETENTION_STATE_LOCK = threading.Lock()
+AUTO_RETENTION_STATE: dict = {
+    "enabled": True,
+    "running": False,
+    "last_started_at": None,
+    "last_finished_at": None,
+    "last_status": "never_run",
+    "last_error": None,
+    "last_summary": None,
+    "run_count": 0,
+}
 PROBLEM_INTEGRITY_STATUSES = {
     "missing_file",
     "orphan_metadata",
@@ -624,6 +638,8 @@ def run_retention(
     camera_id: int | None = None,
     max_candidates: int | None = None,
     max_bytes: int | None = None,
+    operation: str = "retention_run",
+    reason: str = "retention_policy",
 ) -> dict:
     try:
         with RetentionApplyLock():
@@ -633,16 +649,210 @@ def run_retention(
                 db,
                 (segment for segment, _reason in candidates),
                 actor=actor,
-                operation="retention_run",
-                reason="retention_policy",
+                operation=operation,
+                reason=reason,
                 max_candidates=max_candidates,
                 max_bytes=max_bytes,
             )
     except RuntimeError as exc:
-        result = _base_result("retention_run", dry_run=False)
+        result = _base_result(operation, dry_run=False)
         _add_item(result, _item(None, action="skipped", reason=str(exc) or "concurrency_lock"))
         result["ok"] = False
         return _finish(result)
+
+
+def _retention_summary(result: dict) -> dict:
+    return {
+        "ok": bool(result.get("ok")),
+        "operation": result.get("operation"),
+        "requested_count": int(result.get("requested_count") or 0),
+        "planned_count": int(result.get("planned_count") or 0),
+        "deleted_count": int(result.get("deleted_count") or 0),
+        "skipped_count": int(result.get("skipped_count") or 0),
+        "failed_count": int(result.get("failed_count") or 0),
+        "bytes_freed": int(result.get("bytes_freed") or 0),
+        "limit_applied": result.get("limit_applied"),
+        "limit_exceeded": bool(result.get("limit_exceeded")),
+        "bounded_requested_count": int(result.get("bounded_requested_count") or 0),
+        "bounded_executed_count": int(result.get("bounded_executed_count") or 0),
+        "bounded_skipped_due_to_limit_count": int(result.get("bounded_skipped_due_to_limit_count") or 0),
+        "oversized_single_segment_progress": bool(result.get("oversized_single_segment_progress")),
+        "reason_counts": dict(result.get("reason_counts") or {}),
+        "warnings": list(result.get("warnings") or []),
+    }
+
+
+def automatic_retention_status() -> dict:
+    with AUTO_RETENTION_STATE_LOCK:
+        return dict(AUTO_RETENTION_STATE)
+
+
+def _set_automatic_retention_state(**updates) -> None:
+    with AUTO_RETENTION_STATE_LOCK:
+        AUTO_RETENTION_STATE.update(updates)
+
+
+def _automatic_retention_bounded_subset(
+    db: Session,
+    *,
+    max_candidates: int,
+    max_bytes: int,
+) -> tuple[list[RecordingSegment], dict]:
+    candidates, _policy_summary = _policy_candidates(db)
+    active_job_ids = _active_job_ids(db)
+    executable: list[tuple[RecordingSegment, int]] = []
+    skipped_items: list[dict] = []
+    for segment, _policy_reason in candidates:
+        ok, item_reason, file_path, size = validate_segment_for_deletion(segment, active_job_ids=active_job_ids)
+        if ok and file_path is not None:
+            executable.append((segment, size))
+        else:
+            skipped_items.append(_item(segment, action="skipped", reason=item_reason, size_bytes=size))
+
+    selected: list[RecordingSegment] = []
+    selected_bytes = 0
+    oversized_single_segment_progress = False
+    for segment, size in executable:
+        if len(selected) >= max_candidates:
+            break
+        next_bytes = selected_bytes + int(size or 0)
+        if next_bytes <= max_bytes:
+            selected.append(segment)
+            selected_bytes = next_bytes
+            continue
+        if not selected:
+            selected.append(segment)
+            selected_bytes = next_bytes
+            oversized_single_segment_progress = True
+        break
+
+    metadata = {
+        "bounded_requested_count": len(executable),
+        "bounded_executed_count": len(selected),
+        "bounded_skipped_due_to_limit_count": max(0, len(executable) - len(selected)),
+        "bounded_selected_bytes": selected_bytes,
+        "oversized_single_segment_progress": oversized_single_segment_progress,
+        "bounded_safety_skipped_items": skipped_items,
+    }
+    return selected, metadata
+
+
+def run_automatic_retention_once(
+    db: Session,
+    *,
+    max_candidates: int | None = None,
+    max_bytes: int | None = None,
+) -> dict:
+    max_candidates = min(int(max_candidates or AUTO_RETENTION_DEFAULT_MAX_CANDIDATES), HARD_MAX_CANDIDATES)
+    max_bytes = min(int(max_bytes or AUTO_RETENTION_DEFAULT_MAX_BYTES), HARD_MAX_BYTES)
+    started_at = _now()
+    with AUTO_RETENTION_STATE_LOCK:
+        if AUTO_RETENTION_STATE.get("running"):
+            result = _base_result("retention_auto_run", dry_run=False)
+            _add_item(result, _item(None, action="skipped", reason="automatic_retention_already_running"))
+            result["ok"] = False
+            result = _finish(result)
+            result["ok"] = False
+            AUTO_RETENTION_STATE["last_status"] = "skipped_concurrent"
+            AUTO_RETENTION_STATE["last_summary"] = _retention_summary(result)
+            return result
+        AUTO_RETENTION_STATE.update(
+            {
+                "enabled": True,
+                "running": True,
+                "last_started_at": _iso(started_at),
+                "last_error": None,
+            }
+        )
+
+    try:
+        _audit(
+            db,
+            None,
+            event_type="retention.auto_run_started",
+            message="Automatic retention run started",
+            metadata={"max_candidates": max_candidates, "max_bytes": max_bytes},
+        )
+        try:
+            with RetentionApplyLock():
+                selected, bounded = _automatic_retention_bounded_subset(
+                    db,
+                    max_candidates=max_candidates,
+                    max_bytes=max_bytes,
+                )
+                effective_max_bytes = max_bytes
+                if bounded["oversized_single_segment_progress"]:
+                    effective_max_bytes = max(max_bytes, int(bounded["bounded_selected_bytes"] or 0))
+                result = execute_segments(
+                    db,
+                    selected,
+                    actor=None,
+                    operation="retention_auto_run",
+                    reason="automatic_retention_policy",
+                    max_candidates=max_candidates,
+                    max_bytes=effective_max_bytes,
+                )
+                safety_skipped_items = bounded.pop("bounded_safety_skipped_items", [])
+                result.update(bounded)
+                for item in safety_skipped_items:
+                    _add_item(result, item)
+                if bounded["oversized_single_segment_progress"]:
+                    result["warnings"].append("oversized_single_segment_progress")
+                if bounded["bounded_skipped_due_to_limit_count"]:
+                    result["warnings"].append("bounded_progress_remaining_candidates")
+                result["limit_applied"] = {
+                    "max_candidates": max_candidates,
+                    "max_bytes": max_bytes,
+                    "effective_max_bytes": effective_max_bytes,
+                }
+        except RuntimeError as exc:
+            result = _base_result("retention_auto_run", dry_run=False)
+            _add_item(result, _item(None, action="skipped", reason=str(exc) or "concurrency_lock"))
+            result["ok"] = False
+            result = _finish(result)
+            result["ok"] = False
+        summary = _retention_summary(result)
+        _audit(
+            db,
+            None,
+            event_type="retention.auto_run_completed",
+            severity="error" if result.get("failed_count") else "info",
+            message="Automatic retention run completed",
+            metadata=summary,
+        )
+        _set_automatic_retention_state(
+            running=False,
+            last_finished_at=_iso(_now()),
+            last_status="ok" if result.get("ok") else "completed_with_warnings",
+            last_error=None,
+            last_summary=summary,
+            run_count=int(automatic_retention_status().get("run_count") or 0) + 1,
+        )
+        return result
+    except Exception as exc:
+        db.rollback()
+        error = redact_text(str(exc))[:1000]
+        result = _base_result("retention_auto_run", dry_run=False)
+        _add_item(result, _item(None, action="failed", reason="automatic_retention_exception", error=error))
+        result["ok"] = False
+        result = _finish(result)
+        _audit(
+            db,
+            None,
+            event_type="retention.auto_run_failed",
+            severity="error",
+            message="Automatic retention run failed",
+            metadata={"error": error},
+        )
+        _set_automatic_retention_state(
+            running=False,
+            last_finished_at=_iso(_now()),
+            last_status="failed",
+            last_error=error,
+            last_summary=_retention_summary(result),
+            run_count=int(automatic_retention_status().get("run_count") or 0) + 1,
+        )
+        return result
 
 
 def retention_diagnostics(db: Session) -> dict:
@@ -666,6 +876,7 @@ def retention_diagnostics(db: Session) -> dict:
             "stale_after_seconds": RETENTION_LOCK_STALE_AFTER_SECONDS,
             "stale_behavior": "fail_closed_manual_recovery_required",
         },
+        "automatic_retention": automatic_retention_status(),
         "policies": [
             {
                 "camera_id": camera.id,

@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     live_cleanup_interval_seconds: int = 10
     live_start_timeout_seconds: int = 20
     live_max_concurrent_transcodes: int | None = 0
+    automatic_retention_enabled: bool = True
+    automatic_retention_interval_seconds: int = 3600
+    automatic_retention_max_candidates: int = 25
+    automatic_retention_max_bytes: int = 1 * 1024 * 1024 * 1024
 
     admin_username: str = "admin"
     admin_password: str = "Admin_Change_Me_2026"
