@@ -14,6 +14,8 @@ const initialForm = {
   password: "",
   rtsp_main_url: "",
   rtsp_sub_url: "",
+  rtsp_host: "",
+  rtsp_port: 554,
   rtsp_transport: "tcp",
   onvif_path: "",
   onvif_profile_token: "",
@@ -29,12 +31,12 @@ const initialForm = {
 
 const initialOnvifConfig = {
   codec: "",
-  width: "",
-  height: "",
+  resolution: "",
   fps: "",
   bitrate: "",
   iframe_interval: "",
   quality: "",
+  supported: {},
 };
 
 const PREVIEW_SENSITIVE_FIELDS = new Set([
@@ -45,6 +47,8 @@ const PREVIEW_SENSITIVE_FIELDS = new Set([
   "password",
   "rtsp_main_url",
   "rtsp_sub_url",
+  "rtsp_host",
+  "rtsp_port",
   "rtsp_transport",
   "onvif_path",
   "onvif_profile_token",
@@ -62,6 +66,164 @@ function prettyRtspValue(value) {
     }
   }
   return value;
+}
+
+function rtspHostFromValue(value) {
+  if (!value || !String(value).toLowerCase().startsWith("rtsp://")) return "";
+  try {
+    return new URL(value).hostname || "";
+  } catch {
+    return "";
+  }
+}
+
+function rtspPortFromValue(value) {
+  if (!value || !String(value).toLowerCase().startsWith("rtsp://")) return "";
+  try {
+    return new URL(value).port || "";
+  } catch {
+    return "";
+  }
+}
+
+function profileResolution(profile) {
+  const width = profile?.video?.width;
+  const height = profile?.video?.height;
+  return width && height ? `${width}x${height}` : "-";
+}
+
+function hasValue(value) {
+  return value !== undefined && value !== null && value !== "";
+}
+
+function writableSettings(supported = {}) {
+  return Object.values(supported || {}).filter((item) => item?.writable);
+}
+
+function canApplyOnvifSettings(config, profileToken) {
+  return Boolean(profileToken && writableSettings(config?.supported).length);
+}
+
+function profileSettingMeta(supported = {}, key) {
+  return supported?.[key] || { readable: false, writable: false, options: [], range: null };
+}
+
+function profileSettingDisplayValue(config, key) {
+  const value = config?.[key];
+  if (value === undefined || value === null || value === "") return "";
+  return String(value);
+}
+
+function profileSettingState(meta, value) {
+  if (meta?.writable) return "editable";
+  if (meta?.readable || value) return "readonly";
+  return "unavailable";
+}
+
+function configVideo(profile) {
+  const current = profile?.current || profile?.settings || profile?.config || {};
+  const video = profile?.video || {};
+  return {
+    codec: current.codec || video.codec,
+    resolution: current.resolution || profileResolution(profile),
+    fps: current.fps || video.fps,
+    bitrate: current.bitrate || video.bitrate_limit,
+    iframe_interval: current.iframe_interval || video.encoding_interval,
+    quality: current.quality || video.quality,
+  };
+}
+
+function profileVideoSummary(profile) {
+  const video = configVideo(profile);
+  const parts = [];
+  if (hasValue(video.codec)) parts.push(video.codec);
+  if (hasValue(video.resolution) && video.resolution !== "-") parts.push(video.resolution);
+  if (hasValue(video.fps)) parts.push(`fps ${video.fps}`);
+  if (parts.length) return `ONVIF video: ${parts.join(" · ")}`;
+  if (profile?.rtsp_probe?.video) {
+    const probe = profile.rtsp_probe.video;
+    const probeParts = [];
+    if (hasValue(probe.codec)) probeParts.push(probe.codec);
+    if (hasValue(probe.width) && hasValue(probe.height)) probeParts.push(`${probe.width}x${probe.height}`);
+    if (hasValue(probe.fps)) probeParts.push(`fps ${probe.fps}`);
+    if (probeParts.length) return `RTSP probe video: ${probeParts.join(" · ")}`;
+  }
+  return "Video parameters unavailable";
+}
+
+function profileAudioSummary(profile) {
+  const audio = profile?.audio || profile?.rtsp_probe?.audio;
+  if (!audio) return "Audio: none";
+  const parts = [];
+  if (hasValue(audio.codec)) parts.push(audio.codec);
+  if (hasValue(audio.channels)) parts.push(`channels ${audio.channels}`);
+  if (hasValue(audio.sample_rate)) parts.push(`sample_rate ${audio.sample_rate}`);
+  return parts.length ? `Audio: ${parts.join(" · ")}` : "Audio: none";
+}
+
+function profileConfigWarning(profile) {
+  const warnings = profile?.warnings || [];
+  if (profile?.video_config_state === "unavailable" || warnings.some((item) => String(item).includes("video_encoder"))) {
+    return "ONVIF video config unavailable";
+  }
+  return "";
+}
+
+function profileByToken(data, token) {
+  return (data?.profiles || []).find((item) => item.token === token) || null;
+}
+
+function configFromResult(result) {
+  return {
+    codec: result.config?.codec || "",
+    resolution: result.config?.resolution || (result.config?.width && result.config?.height ? `${result.config.width}x${result.config.height}` : ""),
+    fps: result.config?.fps || "",
+    bitrate: result.config?.bitrate || "",
+    iframe_interval: result.config?.iframe_interval || "",
+    quality: result.config?.quality || "",
+    supported: result.supported || {},
+  };
+}
+
+function mergeProfileConfig(profile, result) {
+  if (!profile || profile.token !== result?.profile_token) return profile;
+  const current = configFromResult(result);
+  const resolution = current.resolution || profileResolution(profile);
+  const [width, height] = resolution && resolution.includes("x") ? resolution.split("x") : [null, null];
+  return {
+    ...profile,
+    settings: current,
+    current,
+    supported: result.supported || {},
+    video: {
+      ...(profile.video || {}),
+      codec: current.codec || profile.video?.codec,
+      width: width ? Number(width) : profile.video?.width,
+      height: height ? Number(height) : profile.video?.height,
+      fps: current.fps || profile.video?.fps,
+      bitrate_limit: current.bitrate || profile.video?.bitrate_limit,
+      encoding_interval: current.iframe_interval || profile.video?.encoding_interval,
+      quality: current.quality || profile.video?.quality,
+    },
+  };
+}
+
+function cameraPayloadFromForm(source, editingCameraId) {
+  const payload = {
+    ...source,
+    camera_id: editingCameraId || null,
+    port: Number(source.port),
+    segment_minutes: Number(source.segment_minutes),
+    retention_days: Number(source.retention_days),
+    storage_quota_gb: Number(source.storage_quota_gb),
+  };
+  if (String(payload.protocol || "rtsp").toLowerCase() === "onvif") {
+    payload.rtsp_port = source.rtsp_port ? Number(source.rtsp_port) : null;
+  } else {
+    delete payload.rtsp_host;
+    delete payload.rtsp_port;
+  }
+  return payload;
 }
 
 function normalizeCameraError(message) {
@@ -148,6 +310,8 @@ export default function CamerasPage() {
   const [onvifData, setOnvifData] = useState(null);
   const [onvifConfigBusy, setOnvifConfigBusy] = useState(false);
   const [onvifConfig, setOnvifConfig] = useState(initialOnvifConfig);
+  const [selectedOnvifProfileToken, setSelectedOnvifProfileToken] = useState("");
+  const [onvifStatus, setOnvifStatus] = useState("");
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [cameraToDelete, setCameraToDelete] = useState(null);
@@ -195,6 +359,32 @@ export default function CamerasPage() {
     setOnvifConfig((prev) => ({ ...prev, [key]: value }));
   }
 
+  function updateProfileConfigState(result) {
+    if (!result?.profile_token) return;
+    setOnvifData((prev) => {
+      if (!prev?.profiles) return prev;
+      return {
+        ...prev,
+        profiles: prev.profiles.map((profile) => mergeProfileConfig(profile, result)),
+      };
+    });
+  }
+
+  function updateProfileProbeState(profileToken, result) {
+    if (!profileToken || !result) return;
+    setOnvifData((prev) => {
+      if (!prev?.profiles) return prev;
+      return {
+        ...prev,
+        profiles: prev.profiles.map((profile) => (
+          profile.token === profileToken
+            ? { ...profile, rtsp_probe: { video: result.video || null, audio: result.audio || null, format: result.format || null } }
+            : profile
+        )),
+      };
+    });
+  }
+
   function openCreate() {
     setEditorMode("create");
     setEditingCameraId(null);
@@ -203,6 +393,8 @@ export default function CamerasPage() {
     setTestResult(null);
     setOnvifData(null);
     setOnvifConfig(initialOnvifConfig);
+    setSelectedOnvifProfileToken("");
+    setOnvifStatus("");
     setShowEditor(true);
   }
 
@@ -219,6 +411,8 @@ export default function CamerasPage() {
       password: "",
       rtsp_main_url: prettyRtspValue(camera.rtsp_main_url || ""),
       rtsp_sub_url: prettyRtspValue(camera.rtsp_sub_url || ""),
+      rtsp_host: camera.rtsp_reachable_host || rtspHostFromValue(camera.rtsp_main_url || camera.rtsp_sub_url || "") || camera.host || "",
+      rtsp_port: camera.rtsp_reachable_port || rtspPortFromValue(camera.rtsp_main_url || camera.rtsp_sub_url || "") || 554,
       rtsp_transport: camera.rtsp_transport || "tcp",
       onvif_path: camera.onvif_path || "",
       onvif_profile_token: camera.onvif_profile_token || "",
@@ -234,6 +428,8 @@ export default function CamerasPage() {
     setTestResult(null);
     setOnvifData(null);
     setOnvifConfig(initialOnvifConfig);
+    setSelectedOnvifProfileToken(camera.onvif_profile_token || "");
+    setOnvifStatus("");
     setShowEditor(true);
   }
 
@@ -249,19 +445,12 @@ export default function CamerasPage() {
     setDeleteFiles(false);
   }
 
-  async function runTest() {
+  async function runTest(formOverride = form) {
     setError("");
     setTesting(true);
     setTestResult(null);
     try {
-      const payload = {
-        ...form,
-        camera_id: editingCameraId || null,
-        port: Number(form.port),
-        storage_quota_gb: Number(form.storage_quota_gb),
-        segment_minutes: Number(form.segment_minutes),
-        retention_days: Number(form.retention_days),
-      };
+      const payload = cameraPayloadFromForm(formOverride, editingCameraId);
       const result = await apiFetch("/cameras/test", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -271,9 +460,12 @@ export default function CamerasPage() {
       if (result.preview_token) {
         patch("preview_token", result.preview_token);
       }
+      updateProfileProbeState(formOverride.onvif_profile_token || selectedOnvifProfileToken, result);
+      return result;
     } catch (err) {
       setError(normalizeCameraError(err.message));
       setTestResult(null);
+      return null;
     } finally {
       setTesting(false);
     }
@@ -281,6 +473,7 @@ export default function CamerasPage() {
 
   async function loadOnvifProfiles() {
     setError("");
+    setOnvifStatus("");
     setOnvifBusy(true);
     setOnvifData(null);
     try {
@@ -288,6 +481,8 @@ export default function CamerasPage() {
         camera_id: editingCameraId || null,
         host: form.host,
         port: Number(form.port || 80),
+        rtsp_host: form.rtsp_host || form.host,
+        rtsp_port: form.rtsp_port ? Number(form.rtsp_port) : null,
         username: form.username,
         password: form.password,
       };
@@ -297,6 +492,31 @@ export default function CamerasPage() {
         headers: { "Content-Type": "application/json" },
       });
       setOnvifData(result);
+      const mainToken = result.suggested_main_profile_token || result.profiles?.[0]?.token || "";
+      const subToken = result.suggested_sub_profile_token || "";
+      const mainProfile = profileByToken(result, mainToken);
+      const subProfile = profileByToken(result, subToken);
+      const nextForm = {
+        ...form,
+        rtsp_host: form.rtsp_host || result.rtsp_reachable?.host || form.host,
+        rtsp_port: form.rtsp_port || result.rtsp_reachable?.port || 554,
+        onvif_profile_token: mainToken,
+        rtsp_main_url: mainProfile?.stream_path || prettyRtspValue(mainProfile?.stream_uri || form.rtsp_main_url),
+        rtsp_sub_url: subProfile?.stream_path || prettyRtspValue(subProfile?.stream_uri || form.rtsp_sub_url),
+        default_record_stream: "main",
+        default_live_stream: subProfile ? "sub" : form.default_live_stream,
+      };
+      setForm(nextForm);
+      setSelectedOnvifProfileToken(mainToken);
+      if (mainToken) {
+        await loadOnvifProfileConfig(mainToken);
+      }
+      if (mainProfile?.rtsp_ready && nextForm.rtsp_host && nextForm.rtsp_main_url) {
+        await runTest(nextForm);
+        setOnvifStatus("Main поток выбран и проверен через RTSP reachable endpoint.");
+      } else {
+        setOnvifStatus("Профили загружены. Для автотеста укажи RTSP reachable host/port и путь Main потока.");
+      }
     } catch (err) {
       setError(normalizeCameraError(err.message));
       setOnvifData(null);
@@ -307,20 +527,28 @@ export default function CamerasPage() {
 
   function useProfileAsMain(profile) {
     patch("onvif_profile_token", profile.token || "");
-    patch("rtsp_main_url", prettyRtspValue(profile.stream_uri || ""));
+    patch("rtsp_main_url", profile.stream_path || prettyRtspValue(profile.stream_uri || ""));
     patch("default_record_stream", "main");
   }
 
   function useProfileAsSub(profile) {
-    patch("rtsp_sub_url", prettyRtspValue(profile.stream_uri || ""));
+    patch("rtsp_sub_url", profile.stream_path || prettyRtspValue(profile.stream_uri || ""));
     if (!form.onvif_profile_token) {
       patch("onvif_profile_token", profile.token || "");
     }
     patch("default_live_stream", "sub");
   }
 
-  async function loadOnvifProfileConfig() {
-    if (!form.onvif_profile_token) {
+  async function selectOnvifProfile(profile) {
+    const token = profile?.token || "";
+    setSelectedOnvifProfileToken(token);
+    if (token) {
+      await loadOnvifProfileConfig(token);
+    }
+  }
+
+  async function loadOnvifProfileConfig(profileToken = selectedOnvifProfileToken || form.onvif_profile_token) {
+    if (!profileToken) {
       setError("Сначала выбери ONVIF профиль");
       return;
     }
@@ -336,29 +564,26 @@ export default function CamerasPage() {
           port: Number(form.port),
           username: form.username,
           password: form.password,
-          profile_token: form.onvif_profile_token,
+          profile_token: profileToken,
         }),
         headers: { "Content-Type": "application/json" },
       });
 
-      setOnvifConfig({
-        codec: result.config?.codec || "",
-        width: result.config?.width || "",
-        height: result.config?.height || "",
-        fps: result.config?.fps || "",
-        bitrate: result.config?.bitrate || "",
-        iframe_interval: result.config?.iframe_interval || "",
-        quality: result.config?.quality || "",
-      });
+      setSelectedOnvifProfileToken(profileToken);
+      setOnvifConfig(configFromResult(result));
+      updateProfileConfigState(result);
+      return result;
     } catch (err) {
       setError(normalizeCameraError(err.message));
+      return null;
     } finally {
       setOnvifConfigBusy(false);
     }
   }
 
   async function applyOnvifProfileConfig() {
-    if (!form.onvif_profile_token) {
+    const profileToken = selectedOnvifProfileToken || form.onvif_profile_token;
+    if (!profileToken) {
       setError("Сначала выбери ONVIF профиль");
       return;
     }
@@ -366,6 +591,19 @@ export default function CamerasPage() {
     setError("");
     setOnvifConfigBusy(true);
     try {
+      const supported = onvifConfig.supported || {};
+      const config = {};
+      if (supported.codec?.writable && onvifConfig.codec) config.codec = onvifConfig.codec;
+      if (supported.resolution?.writable && onvifConfig.resolution) config.resolution = onvifConfig.resolution;
+      if (supported.fps?.writable && onvifConfig.fps) config.fps = Number(onvifConfig.fps);
+      if (supported.bitrate?.writable && onvifConfig.bitrate) config.bitrate = Number(onvifConfig.bitrate);
+      if (supported.iframe_interval?.writable && onvifConfig.iframe_interval) config.iframe_interval = Number(onvifConfig.iframe_interval);
+      if (supported.quality?.writable && onvifConfig.quality !== "") config.quality = Number(onvifConfig.quality);
+      if (!Object.keys(config).length) {
+        setError("No writable ONVIF settings available for the selected profile.");
+        return;
+      }
+
       await apiFetch("/cameras/onvif/update_profile", {
         method: "POST",
         body: JSON.stringify({
@@ -374,22 +612,13 @@ export default function CamerasPage() {
           port: Number(form.port),
           username: form.username,
           password: form.password,
-          profile_token: form.onvif_profile_token,
-          config: {
-            codec: onvifConfig.codec,
-            width: onvifConfig.width ? Number(onvifConfig.width) : null,
-            height: onvifConfig.height ? Number(onvifConfig.height) : null,
-            fps: onvifConfig.fps ? Number(onvifConfig.fps) : null,
-            bitrate: onvifConfig.bitrate ? Number(onvifConfig.bitrate) : null,
-            iframe_interval: onvifConfig.iframe_interval ? Number(onvifConfig.iframe_interval) : null,
-            quality: onvifConfig.quality !== "" ? Number(onvifConfig.quality) : null,
-          },
+          profile_token: profileToken,
+          config,
         }),
         headers: { "Content-Type": "application/json" },
       });
 
-      await loadOnvifProfileConfig();
-      await runTest();
+      await loadOnvifProfileConfig(profileToken);
     } catch (err) {
       setError(normalizeCameraError(err.message));
     } finally {
@@ -401,13 +630,7 @@ export default function CamerasPage() {
     setError("");
     setBusy(true);
     try {
-      const payload = {
-        ...form,
-        port: Number(form.port),
-        segment_minutes: Number(form.segment_minutes),
-        retention_days: Number(form.retention_days),
-        storage_quota_gb: Number(form.storage_quota_gb),
-      };
+      const payload = cameraPayloadFromForm(form, editingCameraId);
 
       if (!payload.password) delete payload.password;
 
@@ -431,6 +654,8 @@ export default function CamerasPage() {
       setTestResult(null);
       setOnvifData(null);
       setOnvifConfig(initialOnvifConfig);
+      setSelectedOnvifProfileToken("");
+      setOnvifStatus("");
       await load();
     } catch (err) {
       setError(normalizeCameraError(err.message));
@@ -469,6 +694,66 @@ export default function CamerasPage() {
       setBusy(false);
     }
   }
+
+  const canApplySelectedOnvifSettings = canApplyOnvifSettings(onvifConfig, selectedOnvifProfileToken);
+
+  function renderProfileSettingSlot(slot) {
+    const meta = profileSettingMeta(onvifConfig.supported, slot.key);
+    const value = profileSettingDisplayValue(onvifConfig, slot.key);
+    const state = profileSettingState(meta, value);
+    const hasOptions = Array.isArray(meta.options) && meta.options.length > 0;
+    const range = meta.range;
+    const statusText = state === "editable" ? "Доступно для записи" : state === "readonly" ? "Только чтение" : "Недоступно";
+
+    let control = null;
+    if (state === "editable" && hasOptions) {
+      control = (
+        <select className="select cameraSettingControl" value={value} onChange={(e) => patchOnvifConfig(slot.key, e.target.value)}>
+          {meta.options.map((item) => (
+            <option key={item} value={item}>{item}</option>
+          ))}
+        </select>
+      );
+    } else if (state === "editable") {
+      control = (
+        <input
+          className="input cameraSettingControl"
+          value={value}
+          type={slot.numeric ? "number" : "text"}
+          min={range?.min ?? undefined}
+          max={range?.max ?? undefined}
+          onChange={(e) => patchOnvifConfig(slot.key, e.target.value)}
+        />
+      );
+    } else {
+      control = <div className="cameraSettingValue">{value || slot.empty}</div>;
+    }
+
+    return (
+      <div className={`cameraSettingSlot ${state}`} key={slot.key}>
+        <div className="cameraSettingSlotHead">
+          <span>{slot.label}</span>
+          <em>{statusText}</em>
+        </div>
+        {control}
+        {state === "editable" && range ? <div className="cameraSettingHint">Диапазон: {range.min ?? "?"} - {range.max ?? "?"}</div> : null}
+        {state === "unavailable" ? <div className="cameraSettingHint">{slot.unavailable}</div> : null}
+      </div>
+    );
+  }
+
+  const profileSettingSlots = [
+    { key: "codec", label: "Кодек / сжатие", empty: "Не получено", unavailable: "Камера не отдала список кодеков." },
+    { key: "encode_strategy", label: "Стратегия кодирования", empty: "Не получено", unavailable: "Не возвращается стандартным ONVIF ответом." },
+    { key: "resolution", label: "Разрешение", empty: "Не получено", unavailable: "Камера не отдала варианты разрешения." },
+    { key: "fps", label: "Частота кадров", empty: "Не получено", unavailable: "Диапазон FPS не получен.", numeric: true },
+    { key: "bitrate_type", label: "Тип битрейта", empty: "Не получено", unavailable: "CBR/VBR не возвращается этой камерой." },
+    { key: "quality", label: "Качество VBR", empty: "Не получено", unavailable: "Диапазон качества не получен.", numeric: true },
+    { key: "bitrate", label: "Макс. битрейт", empty: "Не получено", unavailable: "Диапазон битрейта не получен.", numeric: true },
+    { key: "iframe_interval", label: "Интервал I-кадров", empty: "Не получено", unavailable: "Диапазон GOP/I-frame не получен.", numeric: true },
+    { key: "codec_profile", label: "Профиль кодека", empty: "Не получено", unavailable: "Профиль кодека не возвращается." },
+    { key: "audio_codec", label: "Аудио", empty: "Не получено", unavailable: "ONVIF encoder audio options не получены." },
+  ];
 
   return (
     <Layout>
@@ -561,137 +846,132 @@ export default function CamerasPage() {
 
       {showEditor ? (
         <div className="modalBackdrop">
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modalWide cameraEditorModal" onClick={(e) => e.stopPropagation()}>
             <div className="modalHeader">
-              <h2 style={{ margin: 0 }}>
-                {editorMode === "create" ? "Добавить камеру" : "Редактировать камеру"}
-              </h2>
+              <div className="cameraModalTitleBlock">
+                <h2>{editorMode === "create" ? "Добавить камеру" : "Редактировать камеру"}</h2>
+                <p>Подключение, тест и параметры записи</p>
+              </div>
               <button className="iconCloseButton" onClick={() => setShowEditor(false)} aria-label="Закрыть">×</button>
             </div>
 
             {error ? <div className="cameraModalError">{error}</div> : null}
 
-            <div className="formGrid">
-              <div>
-                <div className="formLabel">Имя камеры</div>
-                <input className="input" value={form.name} onChange={(e) => patch("name", e.target.value)} />
+            <div className="cameraEditorGrid">
+              <div className="cameraEditorColumn">
+                <section className="cameraModalSection">
+                  <h3>1. Подключение</h3>
+                  <div className="formGrid">
+                    <div>
+                      <div className="formLabel">Имя камеры</div>
+                      <input className="input" value={form.name} onChange={(e) => patch("name", e.target.value)} />
+                    </div>
+                    <div>
+                      <div className="formLabel">Протокол</div>
+                      <select className="select" value={form.protocol} onChange={(e) => patch("protocol", e.target.value)}>
+                        <option value="rtsp">RTSP</option>
+                        <option value="onvif">ONVIF</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="formLabel">{form.protocol === "onvif" ? "ONVIF Host / IP" : "IP / Host"}</div>
+                      <input className="input" value={form.host} onChange={(e) => patch("host", e.target.value)} />
+                    </div>
+                    <div>
+                      <div className="formLabel">{form.protocol === "onvif" ? "ONVIF Port" : "RTSP Port"}</div>
+                      <input className="input" value={form.port} onChange={(e) => patch("port", e.target.value)} />
+                    </div>
+                    <div>
+                      <div className="formLabel">Логин</div>
+                      <input className="input" value={form.username} onChange={(e) => patch("username", e.target.value)} />
+                    </div>
+                    <div>
+                      <div className="formLabel">Пароль {editorMode === "edit" ? "(оставь пустым, если не менять)" : ""}</div>
+                      <input className="input" type="password" value={form.password} onChange={(e) => patch("password", e.target.value)} />
+                    </div>
+                  </div>
+                </section>
+
+                <section className="cameraModalSection">
+                  <h3>2. Потоки и запись</h3>
+                  <div className="formGrid">
+                    {form.protocol === "onvif" ? <div>
+                      <div className="formLabel">RTSP Reachable Host</div>
+                      <input className="input" value={form.rtsp_host} onChange={(e) => patch("rtsp_host", e.target.value)} />
+                    </div> : null}
+                    {form.protocol === "onvif" ? <div>
+                      <div className="formLabel">RTSP Port</div>
+                      <input className="input" value={form.rtsp_port} onChange={(e) => patch("rtsp_port", e.target.value)} />
+                    </div> : null}
+                    <div>
+                      <div className="formLabel">RTSP Main Path / URL</div>
+                      <input className="input" value={form.rtsp_main_url} onChange={(e) => patch("rtsp_main_url", e.target.value)} />
+                    </div>
+                    <div>
+                      <div className="formLabel">RTSP Sub Path / URL</div>
+                      <input className="input" value={form.rtsp_sub_url} onChange={(e) => patch("rtsp_sub_url", e.target.value)} />
+                    </div>
+                    <div>
+                      <div className="formLabel">RTSP Transport</div>
+                      <select className="select" value={form.rtsp_transport} onChange={(e) => patch("rtsp_transport", e.target.value)}>
+                        <option value="tcp">TCP</option>
+                        <option value="udp">UDP</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="formLabel">Режим записи</div>
+                      <select className="select" value={form.recording_mode} onChange={(e) => patch("recording_mode", e.target.value)}>
+                        <option value="always">Постоянно</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="formLabel">Поток для live</div>
+                      <select className="select" value={form.default_live_stream} onChange={(e) => patch("default_live_stream", e.target.value)}>
+                        <option value="sub">Sub</option>
+                        <option value="main">Main</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="formLabel">Поток для записи</div>
+                      <select className="select" value={form.default_record_stream} onChange={(e) => patch("default_record_stream", e.target.value)}>
+                        <option value="main">Main</option>
+                        <option value="sub">Sub</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="formLabel">Длительность сегмента</div>
+                      <select className="select" value={form.segment_minutes} onChange={(e) => patch("segment_minutes", e.target.value)}>
+                        <option value="5">5 минут</option>
+                        <option value="15">15 минут</option>
+                        <option value="30">30 минут</option>
+                        <option value="45">45 минут</option>
+                        <option value="60">60 минут</option>
+                        <option value="120">120 минут</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="formLabel">Срок хранения</div>
+                      <select className="select" value={form.retention_days} onChange={(e) => patch("retention_days", e.target.value)}>
+                        <option value="7">7 дней</option>
+                        <option value="14">14 дней</option>
+                        <option value="21">21 день</option>
+                        <option value="30">30 дней</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="formLabel">Лимит архива (ГБ, минимум 50)</div>
+                      <input className="input" type="number" min="50" value={form.storage_quota_gb} onChange={(e) => patch("storage_quota_gb", e.target.value)} />
+                    </div>
+                  </div>
+                </section>
               </div>
 
-              <div>
-                <div className="formLabel">Протокол</div>
-                <select className="select" value={form.protocol} onChange={(e) => patch("protocol", e.target.value)}>
-                  <option value="rtsp">RTSP</option>
-                  <option value="onvif">ONVIF</option>
-                </select>
-              </div>
-
-              <div>
-                <div className="formLabel">IP / Хост</div>
-                <input className="input" value={form.host} onChange={(e) => patch("host", e.target.value)} />
-              </div>
-
-              <div>
-                <div className="formLabel">Порт</div>
-                <input className="input" value={form.port} onChange={(e) => patch("port", e.target.value)} />
-              </div>
-
-              <div>
-                <div className="formLabel">Логин</div>
-                <input className="input" value={form.username} onChange={(e) => patch("username", e.target.value)} />
-              </div>
-
-              <div>
-                <div className="formLabel">Пароль {editorMode === "edit" ? "(оставь пустым, если не менять)" : ""}</div>
-                <input className="input" type="password" value={form.password} onChange={(e) => patch("password", e.target.value)} />
-              </div>
-
-              <div className="full">
-                <div className="formLabel">RTSP Main Path / URL</div>
-                <input className="input" value={form.rtsp_main_url} onChange={(e) => patch("rtsp_main_url", e.target.value)} />
-              </div>
-
-              <div className="full">
-                <div className="formLabel">RTSP Sub Path / URL</div>
-                <input className="input" value={form.rtsp_sub_url} onChange={(e) => patch("rtsp_sub_url", e.target.value)} />
-              </div>
-
-              <div>
-                <div className="formLabel">RTSP Transport</div>
-                <select className="select" value={form.rtsp_transport} onChange={(e) => patch("rtsp_transport", e.target.value)}>
-                  <option value="tcp">TCP</option>
-                  <option value="udp">UDP</option>
-                </select>
-              </div>
-
-              <div>
-                <div className="formLabel">Режим записи</div>
-                <select className="select" value={form.recording_mode} onChange={(e) => patch("recording_mode", e.target.value)}>
-                  <option value="always">Постоянно</option>
-                </select>
-              </div>
-
-              <div>
-                <div className="formLabel">Поток для live</div>
-                <select className="select" value={form.default_live_stream} onChange={(e) => patch("default_live_stream", e.target.value)}>
-                  <option value="sub">Sub</option>
-                  <option value="main">Main</option>
-                </select>
-              </div>
-
-              <div>
-                <div className="formLabel">Поток для записи</div>
-                <select className="select" value={form.default_record_stream} onChange={(e) => patch("default_record_stream", e.target.value)}>
-                  <option value="main">Main</option>
-                  <option value="sub">Sub</option>
-                </select>
-              </div>
-
-              <div>
-                <div className="formLabel">Длительность сегмента</div>
-                <select className="select" value={form.segment_minutes} onChange={(e) => patch("segment_minutes", e.target.value)}>
-                  <option value="5">5 минут</option>
-                  <option value="15">15 минут</option>
-                  <option value="30">30 минут</option>
-                  <option value="45">45 минут</option>
-                  <option value="60">60 минут</option>
-                  <option value="120">120 минут</option>
-                </select>
-              </div>
-
-              <div>
-                <div className="formLabel">Срок хранения</div>
-                <select className="select" value={form.retention_days} onChange={(e) => patch("retention_days", e.target.value)}>
-                  <option value="7">7 дней</option>
-                  <option value="14">14 дней</option>
-                  <option value="21">21 день</option>
-                  <option value="30">30 дней</option>
-                </select>
-              </div>
-
-              <div>
-                <div className="formLabel">Лимит архива (ГБ, минимум 50)</div>
-                <input className="input" type="number" min="50" value={form.storage_quota_gb} onChange={(e) => patch("storage_quota_gb", e.target.value)} />
-              </div>
-
-              <div className="full">
-                <div className="formLabel">ONVIF Path</div>
-                <input className="input" value={form.onvif_path} onChange={(e) => patch("onvif_path", e.target.value)} />
-              </div>
-
-              <div>
-                <div className="formLabel">ONVIF Profile Token</div>
-                <input className="input" value={form.onvif_profile_token} onChange={(e) => patch("onvif_profile_token", e.target.value)} />
-              </div>
-
-              <div>
-                <div className="formLabel">ONVIF Channel ID</div>
-                <input className="input" value={form.onvif_channel_id} onChange={(e) => patch("onvif_channel_id", e.target.value)} />
-              </div>
-            </div>
-
-            <div className="card" style={{ marginTop: 18 }}>
-              <div className="toolbar" style={{ marginBottom: 12 }}>
-                <button className="button secondary small" onClick={runTest} disabled={testing}>
+              <aside className="cameraPreviewPanel">
+                <div className="cameraPreviewHead">
+                  <h3>Предпросмотр и тест</h3>
+                </div>
+                <div className="toolbar cameraPreviewActions">
+                  <button className="button secondary small" onClick={() => runTest()} disabled={testing}>
                   {testing ? "Тестируем..." : "Тест"}
                 </button>
 
@@ -700,7 +980,7 @@ export default function CamerasPage() {
                     {onvifBusy ? "Читаем ONVIF..." : "ONVIF профили"}
                   </button>
                 ) : null}
-              </div>
+                </div>
 
               {testResult ? (
                 <div className="cameraTestResult">
@@ -723,106 +1003,76 @@ export default function CamerasPage() {
                   </div>
                 </div>
               ) : (
-                <div style={{ color: "#64748b", fontSize: 14, marginBottom: form.protocol === "onvif" ? 16 : 0 }}>
+                <div className="cameraPreviewEmpty">
                   Нажми «Тест», чтобы проверить подключение и получить параметры потока.
                 </div>
               )}
+                {onvifStatus ? <div className="cameraModalNote">{onvifStatus}</div> : null}
+              </aside>
+            </div>
 
-              {form.protocol === "onvif" && onvifData ? (
-                <div>
-                  <div style={{ marginBottom: 12, fontSize: 14, lineHeight: 1.7 }}>
+              <section className="cameraModalSection cameraOnvifSection">
+                <h3>3. ONVIF</h3>
+                  {form.protocol === "onvif" && onvifData ? <div className="cameraDeviceInfo">
                     <div><strong>Производитель:</strong> {onvifData.device?.manufacturer || "-"}</div>
                     <div><strong>Модель:</strong> {onvifData.device?.model || "-"}</div>
                     <div><strong>Прошивка:</strong> {onvifData.device?.firmware || "-"}</div>
                     <div><strong>Серийный номер:</strong> {onvifData.device?.serial_number || "-"}</div>
-                  </div>
+                  </div> : null}
 
-                  <div style={{ display: "grid", gap: 12 }}>
+                  {form.protocol === "onvif" && onvifData ? <div className="cameraProfileGrid">
                     {onvifData.profiles?.map((profile) => (
                       <div
                         key={profile.token}
-                        style={{
-                          border: "1px solid #e5e7eb",
-                          borderRadius: 14,
-                          padding: 14,
-                          background: "#fff",
-                        }}
+                        role="button"
+                        tabIndex={0}
+                        className={`cameraProfileCard ${selectedOnvifProfileToken === profile.token ? "selected" : ""} ${form.onvif_profile_token === profile.token ? "main" : ""}`}
+                        onClick={() => selectOnvifProfile(profile)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") selectOnvifProfile(profile); }}
                       >
-                        <div style={{ fontWeight: 700, marginBottom: 8 }}>
-                          {profile.name || "Профиль"} {profile.token ? `(${profile.token})` : ""}
+                        <div className="cameraProfileHead">
+                          <span>{profile.name || "Профиль"}</span>
+                          <span>{profile.token || "-"}</span>
                         </div>
-                        <div style={{ fontSize: 14, lineHeight: 1.7, marginBottom: 10 }}>
-                          <div><strong>Видео:</strong> {profile.video?.codec || "-"}, {profile.video?.width || "-"}x{profile.video?.height || "-"}, fps {profile.video?.fps || "-"}</div>
-                          <div><strong>Аудио:</strong> {profile.audio?.codec || "нет"}</div>
-                          <div><strong>RTSP (камера):</strong> {profile.raw_stream_uri ? "Поток камеры получен" : "-"}</div>
-                          <div><strong>RTSP (для нашей системы):</strong> {profile.stream_uri ? "Поток для системы готов" : "-"}</div>
+                        <div className="cameraProfileMeta">
+                          <div>{profileVideoSummary(profile)}</div>
+                          <div>{profileAudioSummary(profile)}</div>
+                          {profileConfigWarning(profile) ? <div>{profileConfigWarning(profile)}</div> : null}
+                          <div>{profile.rtsp_ready ? "RTSP path готов" : "RTSP path не получен"}</div>
                         </div>
-                        <div className="toolbar">
-                          <button className="button secondary small" onClick={() => useProfileAsMain(profile)}>
+                        <div className="toolbar cameraProfileActions">
+                          <span className="button secondary small" onClick={(e) => { e.stopPropagation(); useProfileAsMain(profile); }}>
                             Использовать как Main
-                          </button>
-                          <button className="button secondary small" onClick={() => useProfileAsSub(profile)}>
+                          </span>
+                          <span className="button secondary small" onClick={(e) => { e.stopPropagation(); useProfileAsSub(profile); }}>
                             Использовать как Sub
-                          </button>
+                          </span>
                         </div>
                       </div>
                     ))}
-                  </div>
-                </div>
-              ) : null}
-            </div>
+                  </div> : (
+                    <div className="cameraEmptyState">
+                      {form.protocol === "onvif" ? "Загрузите ONVIF профили, чтобы выбрать Main/Sub и прочитать настройки профиля." : "ONVIF профили доступны только для камер с протоколом ONVIF."}
+                    </div>
+                  )}
+              </section>
 
             {form.protocol === "onvif" ? (
-              <div className="card" style={{ marginTop: 18 }}>
-                <div className="toolbar" style={{ marginBottom: 12 }}>
-                  <button className="button secondary small" onClick={loadOnvifProfileConfig} disabled={onvifConfigBusy}>
-                    {onvifConfigBusy ? "Читаем настройки..." : "Загрузить настройки профиля"}
-                  </button>
-                  <button className="button secondary small" onClick={applyOnvifProfileConfig} disabled={onvifConfigBusy}>
-                    {onvifConfigBusy ? "Применяем..." : "Применить настройки"}
+              <section className="cameraModalSection cameraProfileSettingsSection">
+                <div className="cameraSettingsHead">
+                  <div>
+                    <h3>Настройки выбранного профиля</h3>
+                    <p>Редактируются только параметры, которые камера отдала как writable.</p>
+                  </div>
+                  <button className="button secondary small" onClick={applyOnvifProfileConfig} disabled={onvifConfigBusy || !canApplySelectedOnvifSettings}>
+                    {onvifConfigBusy ? "Применяем..." : "Применить настройки профиля"}
                   </button>
                 </div>
 
-                <div className="formGrid">
-                  <div>
-                    <div className="formLabel">Кодек</div>
-                    <select className="select" value={onvifConfig.codec} onChange={(e) => patchOnvifConfig("codec", e.target.value)}>
-                      <option value="">Не менять</option>
-                      <option value="H264">H264</option>
-                      <option value="H265">H265</option>
-                      <option value="JPEG">JPEG</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <div className="formLabel">Разрешение</div>
-                    <div className="toolbar">
-                      <input className="input" placeholder="Ширина" value={onvifConfig.width} onChange={(e) => patchOnvifConfig("width", e.target.value)} />
-                      <input className="input" placeholder="Высота" value={onvifConfig.height} onChange={(e) => patchOnvifConfig("height", e.target.value)} />
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="formLabel">Частота кадров, к/с</div>
-                    <input className="input" value={onvifConfig.fps} onChange={(e) => patchOnvifConfig("fps", e.target.value)} />
-                  </div>
-
-                  <div>
-                    <div className="formLabel">Макс. битрейт</div>
-                    <input className="input" value={onvifConfig.bitrate} onChange={(e) => patchOnvifConfig("bitrate", e.target.value)} />
-                  </div>
-
-                  <div>
-                    <div className="formLabel">Интервал I кадров</div>
-                    <input className="input" value={onvifConfig.iframe_interval} onChange={(e) => patchOnvifConfig("iframe_interval", e.target.value)} />
-                  </div>
-
-                  <div>
-                    <div className="formLabel">Качество</div>
-                    <input className="input" value={onvifConfig.quality} onChange={(e) => patchOnvifConfig("quality", e.target.value)} />
-                  </div>
+                <div className="cameraSettingsGrid">
+                  {profileSettingSlots.map(renderProfileSettingSlot)}
                 </div>
-              </div>
+              </section>
             ) : null}
 
             <div className="actions">

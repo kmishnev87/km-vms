@@ -1,4 +1,5 @@
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from sqlalchemy import String, Integer, Boolean, DateTime, Text
 from sqlalchemy.orm import Mapped, mapped_column
@@ -52,3 +53,29 @@ class Camera(Base):
         if preview_path.exists():
             return f"{settings.camera_preview_url(self.id)}?v={preview_path.stat().st_mtime_ns}"
         return None
+
+    @property
+    def rtsp_reachable_host(self) -> str | None:
+        for value in (self.rtsp_main_url, self.rtsp_sub_url):
+            if not value:
+                continue
+            try:
+                parsed = urlsplit(str(value))
+                if parsed.scheme.lower().startswith("rtsp") and parsed.hostname:
+                    return parsed.hostname
+            except Exception:
+                continue
+        return self.host
+
+    @property
+    def rtsp_reachable_port(self) -> int | None:
+        for value in (self.rtsp_main_url, self.rtsp_sub_url):
+            if not value:
+                continue
+            try:
+                parsed = urlsplit(str(value))
+                if parsed.scheme.lower().startswith("rtsp") and parsed.port:
+                    return int(parsed.port)
+            except Exception:
+                continue
+        return self.port

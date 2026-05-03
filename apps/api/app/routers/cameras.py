@@ -16,7 +16,7 @@ from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
-from app.services.audit_log import create_event, request_ip, request_user_agent
+from app.services.audit_log import create_event, redact_text, request_ip, request_user_agent
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.onvif_service import (
     fetch_onvif_profiles,
@@ -26,6 +26,20 @@ from app.services.onvif_service import (
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 viewer_router = APIRouter(prefix="/viewer/cameras", tags=["viewer-cameras"])
+
+
+def safe_onvif_error(exc: Exception) -> str:
+    text = redact_text(str(exc) if exc else "")
+    lower = text.lower()
+    if "auth" in lower or "401" in lower or "forbidden" in lower:
+        return "ONVIF service is reachable, but authentication failed. Check camera ONVIF credentials."
+    if "connection refused" in lower or "failed to establish" in lower or "newconnectionerror" in lower:
+        return "ONVIF service is not reachable on the selected host and port."
+    if "timeout" in lower or "timed out" in lower:
+        return "ONVIF service did not respond in time. Check ONVIF host, port, and network access."
+    if len(text) > 180 or "traceback" in lower or "envelope" in lower or "soap" in lower:
+        return "ONVIF operation failed. Check camera ONVIF service, permissions, and profile support."
+    return text or "ONVIF operation failed."
 
 
 def assemble_rtsp_url(
@@ -91,15 +105,24 @@ def get_camera_credentials(
 
 
 def build_test_url(payload: dict, db: Session | None = None) -> str | None:
-    host = payload.get("host")
-    port = payload.get("port") or 554
+    protocol = str(payload.get("protocol") or "rtsp").lower()
+    if protocol == "rtsp":
+        host = payload.get("host")
+        port = payload.get("port") or 554
+    else:
+        host = payload.get("rtsp_host") or payload.get("host")
+        port = payload.get("rtsp_port") or payload.get("port") or 554
     username = payload.get("username")
     password = payload.get("password")
 
     if db is not None:
         creds = get_camera_credentials(db, payload)
-        host = creds["host"] or host
-        port = creds["port"] or port
+        if protocol == "rtsp":
+            host = creds["host"] or host
+            port = creds["port"] or port
+        else:
+            host = payload.get("rtsp_host") or creds["host"] or host
+            port = payload.get("rtsp_port") or creds["port"] or port
         username = creds["username"] or username
         password = creds["password"] or password
 
@@ -144,13 +167,15 @@ def onvif_profiles(
             port=int(port),
             username=str(username),
             password=str(password),
+            rtsp_host=str(payload.get("rtsp_host") or host),
+            rtsp_port=int(payload["rtsp_port"]) if payload.get("rtsp_port") else None,
         )
         return {
             "ok": True,
             **data,
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=safe_onvif_error(e))
 
 
 @router.post("/onvif/profile_config")
@@ -160,17 +185,19 @@ def onvif_profile_config(
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
     creds = get_camera_credentials(db, payload)
+    if not creds["host"] or not creds["username"] or not creds["password"] or not payload.get("profile_token"):
+        raise HTTPException(status_code=400, detail="ONVIF profile settings require host, credentials, and profile token.")
 
     try:
         return get_onvif_profile_config(
             host=str(creds["host"]),
-            port=int(creds["port"]),
+            port=int(creds["port"] or 80),
             username=str(creds["username"]),
             password=str(creds["password"]),
             profile_token=str(payload["profile_token"]),
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=safe_onvif_error(e))
 
 
 @router.post("/onvif/update_profile")
@@ -180,18 +207,20 @@ def update_onvif_profile_route(
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
     creds = get_camera_credentials(db, payload)
+    if not creds["host"] or not creds["username"] or not creds["password"] or not payload.get("profile_token"):
+        raise HTTPException(status_code=400, detail="ONVIF profile update requires host, credentials, and profile token.")
 
     try:
         return update_onvif_profile(
             host=str(creds["host"]),
-            port=int(creds["port"]),
+            port=int(creds["port"] or 80),
             username=str(creds["username"]),
             password=str(creds["password"]),
             profile_token=str(payload["profile_token"]),
             config=payload["config"],
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=safe_onvif_error(e))
 
 
 @router.get("", response_model=list[CameraResponse])
@@ -325,16 +354,22 @@ def create_camera(
     folder_name = build_unique_folder_name(db, payload.name)
     ensure_camera_folder(folder_name)
 
+    rtsp_host = payload.rtsp_host or payload.host
+    rtsp_port = payload.rtsp_port or payload.port
+    if str(payload.protocol or "rtsp").lower() == "rtsp":
+        rtsp_host = payload.host
+        rtsp_port = payload.port
+
     rtsp_main_url = assemble_rtsp_url(
-        payload.host,
-        payload.port,
+        rtsp_host,
+        rtsp_port,
         payload.username,
         payload.password,
         payload.rtsp_main_url,
     )
     rtsp_sub_url = assemble_rtsp_url(
-        payload.host,
-        payload.port,
+        rtsp_host,
+        rtsp_port,
         payload.username,
         payload.password,
         payload.rtsp_sub_url,
@@ -491,8 +526,15 @@ def update_camera(
     existing_password = decrypt_text(camera.password_encrypted)
     password_for_rtsp = data.get("password") if data.get("password") else existing_password
     username_for_rtsp = data.get("username", camera.username)
-    host_for_rtsp = data.get("host", camera.host)
-    port_for_rtsp = data.get("port", camera.port)
+    next_protocol = str(data.get("protocol", camera.protocol or "rtsp")).lower()
+    if next_protocol == "rtsp":
+        data.pop("rtsp_host", None)
+        data.pop("rtsp_port", None)
+        host_for_rtsp = data.get("host", camera.host)
+        port_for_rtsp = data.get("port", camera.port)
+    else:
+        host_for_rtsp = data.pop("rtsp_host", None) or data.get("host", camera.rtsp_reachable_host or camera.host)
+        port_for_rtsp = data.pop("rtsp_port", None) or data.get("port", camera.rtsp_reachable_port or camera.port)
 
     if "rtsp_main_url" in data and data["rtsp_main_url"] is not None:
         data["rtsp_main_url"] = assemble_rtsp_url(

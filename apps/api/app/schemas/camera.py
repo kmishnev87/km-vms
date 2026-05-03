@@ -14,6 +14,8 @@ class CameraBase(BaseModel):
 
     rtsp_main_url: str | None = None
     rtsp_sub_url: str | None = None
+    rtsp_host: str | None = None
+    rtsp_port: int | None = None
     rtsp_transport: str | None = None
 
     onvif_path: str | None = None
@@ -46,6 +48,8 @@ class CameraUpdate(BaseModel):
 
     rtsp_main_url: str | None = None
     rtsp_sub_url: str | None = None
+    rtsp_host: str | None = None
+    rtsp_port: int | None = None
     rtsp_transport: str | None = None
 
     onvif_path: str | None = None
@@ -76,6 +80,8 @@ class CameraResponse(BaseModel):
     username: str | None
     rtsp_main_url: str | None
     rtsp_sub_url: str | None
+    rtsp_reachable_host: str | None = None
+    rtsp_reachable_port: int | None = None
     rtsp_transport: str | None
     onvif_path: str | None
     onvif_profile_token: str | None

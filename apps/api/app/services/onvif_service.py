@@ -3,6 +3,13 @@ from urllib.parse import quote, urlparse, urlsplit, urlunparse, urlunsplit
 
 from onvif import ONVIFCamera
 
+MEDIA_XADDR_KEYS = (
+    "media",
+    "media2",
+    "http://www.onvif.org/ver10/media/wsdl",
+    "http://www.onvif.org/ver20/media/wsdl",
+)
+
 
 def wsdl_dir():
     import onvif
@@ -49,6 +56,34 @@ def inject_auth_to_rtsp(
 
     netloc = f"{userinfo}{host}{port}"
     return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+
+
+def rtsp_path_from_uri(uri: str | None) -> str | None:
+    if not uri:
+        return None
+    parts = urlsplit(str(uri))
+    if not parts.scheme.lower().startswith("rtsp"):
+        return None
+    query = f"?{parts.query}" if parts.query else ""
+    fragment = f"#{parts.fragment}" if parts.fragment else ""
+    value = f"{parts.path or ''}{query}{fragment}"
+    return value or None
+
+
+def rtsp_display_uri(
+    uri: str | None,
+    override_host: str | None = None,
+    override_port: int | None = None,
+) -> str | None:
+    if not uri:
+        return None
+    parts = urlsplit(str(uri))
+    if not parts.scheme.lower().startswith("rtsp"):
+        return None
+    host = override_host or parts.hostname or ""
+    port_value = override_port if override_port is not None else parts.port
+    port = f":{int(port_value)}" if port_value else ""
+    return urlunsplit((parts.scheme, f"{host}{port}", parts.path, parts.query, parts.fragment))
 
 
 def _rewrite_xaddr(xaddr: str | None, host: str, port: int, fallback_path: str):
@@ -102,6 +137,12 @@ def _try_force_service_address(service, address: str):
     return False, errors
 
 
+def _set_media_xaddr(cam, address: str):
+    if hasattr(cam, "xaddrs") and isinstance(cam.xaddrs, dict):
+        for key in MEDIA_XADDR_KEYS:
+            cam.xaddrs[key] = address
+
+
 def _prepare_camera(host: str, port: int, username: str, password: str):
     cam = ONVIFCamera(host, int(port), username, password, wsdl_dir())
 
@@ -137,10 +178,8 @@ def _prepare_camera(host: str, port: int, username: str, password: str):
         if item and item not in uniq:
             uniq.append(item)
 
-    if hasattr(cam, "xaddrs") and isinstance(cam.xaddrs, dict):
-        if uniq:
-            cam.xaddrs["media"] = uniq[0]
-            cam.xaddrs["media2"] = uniq[0]
+    if uniq:
+        _set_media_xaddr(cam, uniq[0])
 
     return cam, uniq
 
@@ -150,9 +189,7 @@ def _get_media_service(cam, candidates: list[str]):
 
     for address in candidates:
         try:
-            if hasattr(cam, "xaddrs") and isinstance(cam.xaddrs, dict):
-                cam.xaddrs["media"] = address
-                cam.xaddrs["media2"] = address
+            _set_media_xaddr(cam, address)
 
             service = cam.create_media_service()
             _try_force_service_address(service, address)
@@ -171,29 +208,67 @@ def _find_profile(media, profile_token):
     return next((p for p in profiles if getattr(p, "token", None) == profile_token), None)
 
 
-def _get_video_encoder_config_from_profile(media, profile):
+def _get_video_encoder_config_with_state(media, profile):
     vec = _safe_attr(profile, "VideoEncoderConfiguration")
     if not vec:
-        return None
+        return None, "missing_video_encoder_configuration"
 
     token = _safe_attr(vec, "token")
     if not token:
-        return vec
+        return vec, None
 
     try:
-        return media.GetVideoEncoderConfiguration({"ConfigurationToken": token})
-    except Exception:
-        return vec
+        return media.GetVideoEncoderConfiguration({"ConfigurationToken": token}), None
+    except Exception as e:
+        return vec, f"video_encoder_configuration_read_failed: {e.__class__.__name__}"
 
 
-def _profile_to_dict(profile, media, username, password, host, port):
-    cfg = _get_video_encoder_config_from_profile(media, profile)
+def _get_video_encoder_config_from_profile(media, profile):
+    cfg, _ = _get_video_encoder_config_with_state(media, profile)
+    return cfg
+
+
+def _profile_score(item: dict, prefer_sub: bool = False) -> tuple:
+    name = f"{item.get('name') or ''} {item.get('token') or ''}".lower()
+    video = item.get("video") or {}
+    width = int(video.get("width") or 0)
+    height = int(video.get("height") or 0)
+    fps = int(video.get("fps") or 0)
+    pixels = width * height
+    main_hint = any(value in name for value in ("main", "primary", "stream1", "profile1", "high"))
+    sub_hint = any(value in name for value in ("sub", "secondary", "stream2", "profile2", "low"))
+
+    if prefer_sub:
+        return (1 if sub_hint else 0, -pixels if pixels else 0, -fps if fps else 0, item.get("name") or "")
+    return (1 if main_hint else 0, pixels, fps, item.get("name") or "")
+
+
+def _suggest_profiles(profiles: list[dict]) -> tuple[str | None, str | None]:
+    if not profiles:
+        return None, None
+
+    main = max(profiles, key=lambda item: _profile_score(item, prefer_sub=False))
+    if len(profiles) == 1:
+        return main.get("token"), main.get("token")
+
+    sub_candidates = [item for item in profiles if item.get("token") != main.get("token")]
+    sub = max(sub_candidates, key=lambda item: _profile_score(item, prefer_sub=True)) if sub_candidates else main
+    return main.get("token"), sub.get("token")
+
+
+def _profile_to_dict(profile, media, username, password, host, port, rtsp_host=None, rtsp_port=None):
+    cfg, cfg_warning = _get_video_encoder_config_with_state(media, profile)
     rc = _safe_attr(cfg, "RateControl")
     res = _safe_attr(cfg, "Resolution")
     audio_cfg = _safe_attr(profile, "AudioEncoderConfiguration")
 
     raw_uri = None
     fixed_uri = None
+    stream_path = None
+    rtsp_ready = False
+    warnings = []
+    if cfg_warning:
+        warnings.append(cfg_warning)
     try:
         stream_resp = media.GetStreamUri({
             "StreamSetup": {
@@ -203,13 +278,16 @@ def _profile_to_dict(profile, media, username, password, host, port):
             "ProfileToken": profile.token,
         })
         raw_uri = _safe_attr(stream_resp, "Uri")
-        fixed_uri = inject_auth_to_rtsp(
+        stream_path = rtsp_path_from_uri(raw_uri)
+        fixed_uri = rtsp_display_uri(
             raw_uri,
-            username,
-            password,
-            override_host=host,
-            override_port=port,
+            override_host=rtsp_host or host,
+            override_port=rtsp_port,
         )
+        rtsp_ready = bool(stream_path and (rtsp_host or host))
+        parsed = urlsplit(str(raw_uri)) if raw_uri else None
+        if parsed and parsed.hostname and rtsp_host and parsed.hostname != rtsp_host:
+            warnings.append("camera_returned_different_rtsp_host")
     except Exception:
         raw_uri = None
         fixed_uri = None
@@ -231,12 +309,17 @@ def _profile_to_dict(profile, media, username, password, host, port):
             "sample_rate": _safe_attr(audio_cfg, "SampleRate"),
             "channels": _safe_attr(audio_cfg, "Channels"),
         },
-        "raw_stream_uri": raw_uri,
+        "raw_stream_uri": rtsp_display_uri(raw_uri),
         "stream_uri": fixed_uri,
+        "stream_path": stream_path,
+        "rtsp_ready": rtsp_ready,
+        "rtsp_host_source": "user_reachable" if rtsp_host else "onvif_host_fallback",
+        "video_config_state": "ok" if cfg and not cfg_warning else "unavailable",
+        "warnings": warnings,
     }
 
 
-def fetch_onvif_profiles(host, port, username, password):
+def fetch_onvif_profiles(host, port, username, password, rtsp_host=None, rtsp_port=None):
     cam, media_candidates = _prepare_camera(host, port, username, password)
     dev = cam.devicemgmt
     media, selected_media_xaddr = _get_media_service(cam, media_candidates)
@@ -246,9 +329,11 @@ def fetch_onvif_profiles(host, port, username, password):
 
     result = []
     for p in profiles:
-        item = _profile_to_dict(p, media, username, password, host, port)
+        item = _profile_to_dict(p, media, username, password, host, port, rtsp_host=rtsp_host, rtsp_port=rtsp_port)
         item["media_service_xaddr"] = selected_media_xaddr
         result.append(item)
+
+    suggested_main, suggested_sub = _suggest_profiles(result)
 
     return {
         "device": {
@@ -258,8 +343,77 @@ def fetch_onvif_profiles(host, port, username, password):
             "serial_number": _safe_attr(info, "SerialNumber"),
         },
         "profiles": result,
+        "suggested_main_profile_token": suggested_main,
+        "suggested_sub_profile_token": suggested_sub,
+        "rtsp_reachable": {
+            "host": rtsp_host or host,
+            "port": rtsp_port,
+            "source": "user_reachable" if rtsp_host else "onvif_host_fallback",
+        },
         "media_service_xaddr": selected_media_xaddr,
     }
+
+
+def _as_list(value):
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def _range_meta(value):
+    if value is None:
+        return None
+    minimum = _safe_attr(value, "Min")
+    maximum = _safe_attr(value, "Max")
+    if minimum is None and maximum is None:
+        return None
+    return {"min": minimum, "max": maximum}
+
+
+def _encoding_options(options, encoding):
+    if not options or not encoding:
+        return None
+    candidates = [str(encoding), str(encoding).upper(), str(encoding).lower()]
+    for candidate in candidates:
+        direct = _safe_attr(options, candidate)
+        if direct is not None:
+            return direct
+    return None
+
+
+def _resolution_options(encoding_options):
+    result = []
+    for item in _as_list(_safe_attr(encoding_options, "ResolutionsAvailable")):
+        width = _safe_attr(item, "Width")
+        height = _safe_attr(item, "Height")
+        if width and height:
+            value = f"{width}x{height}"
+            if value not in result:
+                result.append(value)
+    return result
+
+
+def _field_meta(name: str, value, readable: bool = True, writable: bool = False, options=None, value_range=None):
+    return {
+        "name": name,
+        "value": value,
+        "readable": bool(readable),
+        "writable": bool(writable),
+        "options": options or [],
+        "range": value_range,
+    }
+
+
+def _encoder_options(media, cfg):
+    token = _safe_attr(cfg, "token")
+    if not token:
+        return None
+    try:
+        return media.GetVideoEncoderConfigurationOptions({"ConfigurationToken": token})
+    except Exception:
+        return None
 
 
 def get_onvif_profile_config(host, port, username, password, profile_token):
@@ -281,15 +435,46 @@ def get_onvif_profile_config(host, port, username, password, profile_token):
                 "codec": None,
                 "width": None,
                 "height": None,
+                "resolution": None,
                 "fps": None,
                 "bitrate": None,
                 "iframe_interval": None,
                 "quality": None,
             },
+            "supported": {},
         }
 
     rc = _safe_attr(cfg, "RateControl")
     res = _safe_attr(cfg, "Resolution")
+    resolution = f"{_safe_attr(res, 'Width')}x{_safe_attr(res, 'Height')}" if res else None
+    options = _encoder_options(media, cfg)
+    encoding = _safe_attr(cfg, "Encoding")
+    encoding_options = _encoding_options(options, encoding)
+    codec_options = [
+        codec
+        for codec in ("H264", "H265", "JPEG", "MPEG4")
+        if _encoding_options(options, codec) is not None
+    ]
+    if encoding and encoding not in codec_options:
+        codec_options.insert(0, encoding)
+
+    resolution_options = _resolution_options(encoding_options)
+    fps_range = _range_meta(_safe_attr(encoding_options, "FrameRateRange"))
+    bitrate_range = _range_meta(_safe_attr(encoding_options, "BitrateRange"))
+    iframe_range = (
+        _range_meta(_safe_attr(encoding_options, "GovLengthRange"))
+        or _range_meta(_safe_attr(encoding_options, "EncodingIntervalRange"))
+    )
+    quality_range = _range_meta(_safe_attr(options, "QualityRange"))
+
+    supported = {
+        "codec": _field_meta("codec", encoding, bool(encoding), bool(codec_options), codec_options),
+        "resolution": _field_meta("resolution", resolution, bool(resolution), bool(resolution_options), resolution_options),
+        "fps": _field_meta("fps", _safe_attr(rc, "FrameRateLimit"), _safe_attr(rc, "FrameRateLimit") is not None, bool(fps_range), value_range=fps_range),
+        "bitrate": _field_meta("bitrate", _safe_attr(rc, "BitrateLimit"), _safe_attr(rc, "BitrateLimit") is not None, bool(bitrate_range), value_range=bitrate_range),
+        "iframe_interval": _field_meta("iframe_interval", _safe_attr(rc, "EncodingInterval"), _safe_attr(rc, "EncodingInterval") is not None, bool(iframe_range), value_range=iframe_range),
+        "quality": _field_meta("quality", _safe_attr(cfg, "Quality"), _safe_attr(cfg, "Quality") is not None, bool(quality_range), value_range=quality_range),
+    }
 
     return {
         "profile_token": profile_token,
@@ -299,11 +484,13 @@ def get_onvif_profile_config(host, port, username, password, profile_token):
             "codec": _safe_attr(cfg, "Encoding"),
             "width": _safe_attr(res, "Width"),
             "height": _safe_attr(res, "Height"),
+            "resolution": resolution,
             "fps": _safe_attr(rc, "FrameRateLimit"),
             "bitrate": _safe_attr(rc, "BitrateLimit"),
             "iframe_interval": _safe_attr(rc, "EncodingInterval"),
             "quality": _safe_attr(cfg, "Quality"),
         },
+        "supported": supported,
     }
 
 
@@ -321,6 +508,12 @@ def update_onvif_profile(host, port, username, password, profile_token, config):
 
     if config.get("codec"):
         cfg.Encoding = str(config["codec"])
+
+    resolution = config.get("resolution")
+    if resolution and "x" in str(resolution).lower():
+        width_value, height_value = str(resolution).lower().split("x", 1)
+        config["width"] = int(width_value.strip())
+        config["height"] = int(height_value.strip())
 
     if config.get("width") and config.get("height"):
         if not getattr(cfg, "Resolution", None):
