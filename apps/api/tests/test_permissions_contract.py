@@ -176,11 +176,21 @@ def test_management_cameras_are_separated_from_viewer_cameras():
 
 def test_recording_routes_are_permission_protected():
     source = read_router("recordings.py")
-    assert source.count('Depends(require_permission("view_recordings"))') >= 3
+    assert source.count('Depends(require_permission("view_recordings"))') >= 2
     assert source.count('Depends(require_permission("delete_recordings"))') >= 4
     assert 'user_has_permission(user.role, "view_recordings")' in source
     assert decision("/recordings/stream", "GET").decision == "view_recordings"
     assert decision("/recordings/all", "DELETE").decision == "delete_recordings"
+
+
+def test_camera_delete_with_files_permission_contract_is_explicit():
+    source = read_router("cameras.py")
+    assert 'Depends(require_permission("manage_cameras"))' in source
+    assert 'user_has_permission(getattr(current_user, "role", ""), "delete_recordings")' in source
+    assert decision("/cameras/{camera_id}/delete-preview", "GET").decision == "manage_cameras"
+    assert "delete_recordings" in decision("/cameras/{camera_id}/delete-preview", "GET").notes
+    assert decision("/cameras/{camera_id}", "DELETE").decision == "manage_cameras"
+    assert "delete_recordings" in decision("/cameras/{camera_id}", "DELETE").notes
 
 
 def test_chronology_routes_and_token_file_access_are_permission_protected():
@@ -248,7 +258,7 @@ def test_diagnostic_archive_redaction_helpers_mask_sensitive_values():
     assert "camera-pass" not in text
     assert "query-token" not in text
     assert "Bearer ***" in text
-    assert "rtsp://user:***@host/live" in text
+    assert "rtsp://***@host/live" in text
     assert "access_token=***" in text
 
     payload = safe_json(

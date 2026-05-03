@@ -131,6 +131,19 @@ def _item(
     }
 
 
+def _segment_audit_ref(segment: RecordingSegment | None) -> dict:
+    if segment is None:
+        return {"segment_id": None, "camera_id": None, "path_name": None}
+    path_name = None
+    if segment.relative_path:
+        path_name = Path(str(segment.relative_path).replace("\\", "/")).name[:160]
+    return {
+        "segment_id": segment.id,
+        "camera_id": segment.camera_id,
+        "path_name": path_name,
+    }
+
+
 def _add_item(result: dict, item: dict) -> None:
     result["items"].append(item)
     camera_key = str(item.get("camera_id") or "unknown")
@@ -427,9 +440,47 @@ def _audit(
         message_en=message,
         target_type="recording_segment" if segment else "recording_retention",
         target_id=segment.id if segment else None,
-        target_name=segment.relative_path if segment else None,
+        target_name=f"segment:{segment.id}" if segment else None,
         metadata=metadata or {},
     )
+
+
+def _recover_deleted_segment_metadata(
+    db: Session,
+    segment: RecordingSegment,
+    *,
+    actor: User | None,
+    reason: str,
+    source: str,
+    error: str,
+) -> bool:
+    try:
+        db.rollback()
+        fresh = db.get(RecordingSegment, segment.id)
+        if fresh is None:
+            return False
+        _mark_deleted(db, fresh, actor=actor, reason=f"{reason}:metadata_recovery_after_file_delete", source=source)
+        db.commit()
+        _audit(
+            db,
+            actor,
+            event_type="recordings.metadata_recovered_after_file_delete" if source.startswith("manual") else "retention.metadata_recovered_after_file_delete",
+            severity="warning",
+            message=f"Recording metadata recovered after file deletion for segment {fresh.id}",
+            segment=fresh,
+            metadata={
+                **_segment_audit_ref(fresh),
+                "reason": "metadata_update_failed_recovered",
+                "error": error,
+            },
+        )
+        return True
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return False
 
 
 def execute_segments(
@@ -480,9 +531,9 @@ def execute_segments(
                 actor,
                 event_type="recordings.delete_failed" if operation.startswith("manual") else "retention.deletion_failed",
                 severity="error",
-                message=f"Recording deletion failed: {segment.relative_path}",
+                message=f"Recording deletion failed for segment {segment.id}",
                 segment=segment,
-                metadata={"reason": "delete_failed", "relative_path": segment.relative_path, "error": str(exc)},
+                metadata={**_segment_audit_ref(segment), "reason": "delete_failed", "error": str(exc)},
             )
             continue
 
@@ -494,21 +545,29 @@ def execute_segments(
                 db,
                 actor,
                 event_type="recordings.deleted_segment" if operation.startswith("manual") else "retention.deleted_segment",
-                message=f"Recording segment deleted: {segment.relative_path}",
+                message=f"Recording segment deleted: {segment.id}",
                 segment=segment,
-                metadata={"reason": reason, "relative_path": segment.relative_path, "bytes_freed": size},
+                metadata={**_segment_audit_ref(segment), "reason": reason, "bytes_freed": size},
             )
         except Exception as exc:
-            db.rollback()
-            _add_item(result, _item(segment, action="failed", reason="metadata_update_failed", error=str(exc), size_bytes=size))
+            recovered = _recover_deleted_segment_metadata(
+                db,
+                segment,
+                actor=actor,
+                reason=reason,
+                source=operation,
+                error=str(exc),
+            )
+            failure_reason = "metadata_update_failed_recovered" if recovered else "metadata_update_failed"
+            _add_item(result, _item(segment, action="failed", reason=failure_reason, error=str(exc), size_bytes=size))
             _audit(
                 db,
                 actor,
                 event_type="recordings.delete_failed" if operation.startswith("manual") else "retention.deletion_failed",
                 severity="error",
-                message=f"Recording metadata update failed after file deletion: {segment.relative_path}",
+                message=f"Recording metadata update failed after file deletion for segment {segment.id}",
                 segment=segment,
-                metadata={"reason": "metadata_update_failed", "relative_path": segment.relative_path, "error": str(exc)},
+                metadata={**_segment_audit_ref(segment), "reason": failure_reason, "error": str(exc)},
             )
 
     _audit(
