@@ -35,6 +35,8 @@ function detectStreams(camera) {
 
 function defaultStream(camera) {
   const streams = detectStreams(camera);
+  const preferred = String(camera?.default_live_stream || "").toLowerCase();
+  if (streams.some((item) => item.key === preferred)) return preferred;
   if (streams.some((item) => item.key === "sub")) return "sub";
   return streams[0]?.key || "main";
 }
@@ -179,6 +181,11 @@ export default function LivePage() {
     const bounds = workspaceBounds();
     if (!bounds) return;
     const normalizedCameraId = String(cameraId || "");
+    const camera = cameraMap.get(normalizedCameraId);
+    const streams = detectStreams(camera);
+    const selectedStream = streams.some((item) => item.key === stream)
+      ? stream
+      : defaultStream(camera);
 
     const minWPct = MIN_TILE_W / Math.max(bounds.width, 1);
     const minHPct = MIN_TILE_H / Math.max(bounds.height, 1);
@@ -196,9 +203,9 @@ export default function LivePage() {
       return [
         ...prev,
         {
-          id: `${cameraId}-${stream}-${Date.now()}`,
+          id: `${cameraId}-${selectedStream}-${Date.now()}`,
           cameraId: normalizedCameraId,
-          stream,
+          stream: selectedStream,
           xPct,
           yPct,
           wPct,
@@ -257,7 +264,8 @@ export default function LivePage() {
   function handleDrop(event) {
     event.preventDefault();
     const cameraId = event.dataTransfer.getData("application/x-camera-id");
-    const stream = event.dataTransfer.getData("application/x-camera-stream") || "sub";
+    const camera = cameraMap.get(String(cameraId || ""));
+    const stream = event.dataTransfer.getData("application/x-camera-stream") || defaultStream(camera);
     if (cameraId) addTile(cameraId, stream, event.clientX, event.clientY);
   }
 
