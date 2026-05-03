@@ -344,17 +344,19 @@ function getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable
 
   const runtimeError = normalizeRuntimeError(runtime?.last_error || runtime?.camera_last_error || recorderStatus?.last_error);
   const jobState = String(runtime?.job_state || camera.status || "").toLowerCase();
+  const currentFailure = runtime?.current_failure === true;
 
   if (recorderStatus?.heartbeat?.status === "stale_or_unavailable") {
     return { text: "Статус неизвестен", cls: "warn" };
   }
 
-  if (runtimeError || jobState === "error") {
-    return { text: "Ошибка", cls: "err" };
-  }
   if (jobState === "restarting") return { text: "Перезапуск", cls: "warn" };
   if (jobState === "starting") return { text: "Запускается", cls: "warn" };
   if (jobState === "stopping") return { text: "Останавливается", cls: "warn" };
+  if (jobState === "recording" && !currentFailure) return { text: "Идёт запись", cls: "ok" };
+  if (currentFailure || runtimeError || jobState === "error") {
+    return { text: "Ошибка", cls: "err" };
+  }
   if (jobState === "recording") return { text: "Идёт запись", cls: "ok" };
   if (runtime?.recording_mode && runtime.recording_mode !== "always") {
     return { text: "Ожидание записи", cls: "warn" };

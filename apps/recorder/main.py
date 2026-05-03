@@ -65,6 +65,24 @@ class RecorderState:
     DISABLED = "disabled"
 
 
+UNSET = object()
+ERROR_CLEARING_STATES = {
+    RecorderState.STARTING,
+    RecorderState.RECORDING,
+    RecorderState.STOPPING,
+    RecorderState.STOPPED,
+    RecorderState.IDLE,
+    RecorderState.DISABLED,
+}
+EXIT_CODE_CLEARING_STATES = {
+    RecorderState.STARTING,
+    RecorderState.RECORDING,
+    RecorderState.STOPPED,
+    RecorderState.IDLE,
+    RecorderState.DISABLED,
+}
+
+
 ERROR_INVALID_RTSP = "invalid_rtsp"
 ERROR_NETWORK_TIMEOUT = "network_timeout"
 ERROR_AUTH_FAILED = "auth_failed"
@@ -116,8 +134,14 @@ class RecordingJob:
         self.state = state
         if error is not None:
             self.last_error = truncate_error(redact_text(error))
+        elif state in ERROR_CLEARING_STATES:
+            self.last_error = None
         if error_type is not None:
             self.last_error_type = error_type
+        elif state in ERROR_CLEARING_STATES:
+            self.last_error_type = None
+        if state in EXIT_CODE_CLEARING_STATES and error is None:
+            self.last_exit_code = None
 
     def status_payload(self) -> dict[str, Any]:
         return {
@@ -503,15 +527,20 @@ def update_recording_job(
     job: RecordingJob,
     *,
     state: str | None = None,
-    stop_reason: str | None = None,
+    stop_reason: Any = UNSET,
     stopped: bool = False,
-    last_error: str | None = None,
-    last_error_type: str | None = None,
-    ffmpeg_pid: int | None = None,
-    last_exit_code: int | None = None,
+    last_error: Any = UNSET,
+    last_error_type: Any = UNSET,
+    ffmpeg_pid: Any = UNSET,
+    last_exit_code: Any = UNSET,
 ) -> None:
     if not job.db_job_id:
         return
+    sanitized_last_error = (
+        truncate_error(redact_text(last_error))
+        if last_error is not UNSET and last_error
+        else None
+    )
 
     with engine.begin() as conn:
         conn.execute(
@@ -520,11 +549,11 @@ def update_recording_job(
                 UPDATE recording_jobs
                 SET state = COALESCE(:state, state),
                     stopped_at = CASE WHEN :stopped THEN NOW() ELSE stopped_at END,
-                    stop_reason = COALESCE(:stop_reason, stop_reason),
-                    last_error = COALESCE(:last_error, last_error),
-                    last_error_type = COALESCE(:last_error_type, last_error_type),
-                    ffmpeg_pid = COALESCE(:ffmpeg_pid, ffmpeg_pid),
-                    last_exit_code = COALESCE(:last_exit_code, last_exit_code),
+                    stop_reason = CASE WHEN :stop_reason_set THEN :stop_reason ELSE stop_reason END,
+                    last_error = CASE WHEN :last_error_set THEN :last_error ELSE last_error END,
+                    last_error_type = CASE WHEN :last_error_type_set THEN :last_error_type ELSE last_error_type END,
+                    ffmpeg_pid = CASE WHEN :ffmpeg_pid_set THEN :ffmpeg_pid ELSE ffmpeg_pid END,
+                    last_exit_code = CASE WHEN :last_exit_code_set THEN :last_exit_code ELSE last_exit_code END,
                     updated_at = NOW()
                 WHERE id = :id
                 """
@@ -533,25 +562,32 @@ def update_recording_job(
                 "id": job.db_job_id,
                 "state": state,
                 "stopped": stopped,
-                "stop_reason": stop_reason,
-                "last_error": truncate_error(redact_text(last_error)) if last_error else None,
-                "last_error_type": last_error_type,
-                "ffmpeg_pid": ffmpeg_pid,
-                "last_exit_code": last_exit_code,
+                "stop_reason_set": stop_reason is not UNSET,
+                "stop_reason": None if stop_reason is UNSET else stop_reason,
+                "last_error_set": last_error is not UNSET,
+                "last_error": sanitized_last_error,
+                "last_error_type_set": last_error_type is not UNSET,
+                "last_error_type": None if last_error_type is UNSET else last_error_type,
+                "ffmpeg_pid_set": ffmpeg_pid is not UNSET,
+                "ffmpeg_pid": None if ffmpeg_pid is UNSET else ffmpeg_pid,
+                "last_exit_code_set": last_exit_code is not UNSET,
+                "last_exit_code": None if last_exit_code is UNSET else last_exit_code,
             },
         )
     log_event("info", "recording_job_updated", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, state=state)
 
 
 def close_recording_job(job: RecordingJob, *, state: str, reason: str, error: str | None = None) -> None:
+    has_current_error = bool(error)
     update_recording_job(
         job,
         state=state,
         stop_reason=reason,
         stopped=True,
-        last_error=error,
-        last_error_type=job.last_error_type,
-        last_exit_code=job.last_exit_code,
+        last_error=error if has_current_error else None,
+        last_error_type=job.last_error_type if has_current_error else None,
+        ffmpeg_pid=None,
+        last_exit_code=job.last_exit_code if has_current_error else None,
     )
     job.db_job_id = None
     job.segment_baseline_paths.clear()
@@ -568,6 +604,7 @@ def clear_recording_job_error(job: RecordingJob) -> None:
                 UPDATE recording_jobs
                 SET last_error = NULL,
                     last_error_type = NULL,
+                    last_exit_code = NULL,
                     updated_at = NOW()
                 WHERE id = :id
                 """
@@ -1275,6 +1312,15 @@ def start_camera(row) -> None:
     proc = job.process
     if proc and proc.poll() is None:
         job.set_state(RecorderState.RECORDING)
+        update_camera_status_from_job(job)
+        update_recording_job(
+            job,
+            state=RecorderState.RECORDING,
+            ffmpeg_pid=job.pid,
+            last_error=None,
+            last_error_type=None,
+            last_exit_code=None,
+        )
         log_event("warning", "duplicate_process_prevented", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid)
         write_audit_event(
             event_type="duplicate_process_prevented",
@@ -1319,7 +1365,13 @@ def start_camera(row) -> None:
     job.known_segment_paths.clear()
     job.config_signature = camera_signature(row, job.recording_format)
     update_camera_status_from_job(job)
-    update_recording_job(job, state=RecorderState.STARTING)
+    update_recording_job(
+        job,
+        state=RecorderState.STARTING,
+        last_error=None,
+        last_error_type=None,
+        last_exit_code=None,
+    )
 
     try:
         proc = subprocess.Popen(
@@ -1360,7 +1412,14 @@ def start_camera(row) -> None:
     job.set_state(RecorderState.RECORDING)
     start_stderr_reader(job)
     update_camera_status_from_job(job)
-    update_recording_job(job, state=RecorderState.RECORDING, ffmpeg_pid=job.pid)
+    update_recording_job(
+        job,
+        state=RecorderState.RECORDING,
+        ffmpeg_pid=job.pid,
+        last_error=None,
+        last_error_type=None,
+        last_exit_code=None,
+    )
     log_event("info", "recording_started", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid, output_pattern=job.current_output_path, recording_format=job.recording_format)
     write_audit_event(
         event_type="recording_started",
@@ -1588,6 +1647,7 @@ def confirm_recording_startups() -> None:
         job.next_retry_at = None
         job.last_error = None
         job.last_error_type = None
+        job.last_exit_code = None
         update_camera_status_from_job(job)
         clear_recording_job_error(job)
         log_event("info", "recording_start_confirmed", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid)
@@ -1602,9 +1662,15 @@ def write_recorder_heartbeat(loop_state: str = "loop") -> None:
         rows = list(jobs.values())
         active_count = sum(1 for job in rows if job.state in {RecorderState.STARTING, RecorderState.RECORDING, RecorderState.STOPPING, RecorderState.RESTARTING})
         recording_count = sum(1 for job in rows if job.state == RecorderState.RECORDING)
-        failed_count = sum(1 for job in rows if job.state in {RecorderState.ERROR, RecorderState.RESTARTING} or bool(job.last_error))
-        last_error_job = next((job for job in sorted(rows, key=lambda item: item.last_state_change_at, reverse=True) if job.last_error), None)
-        last_exit_code = next((job.last_exit_code for job in sorted(rows, key=lambda item: item.last_state_change_at, reverse=True) if job.last_exit_code is not None), None)
+        current_failure_jobs = [
+            job
+            for job in rows
+            if job.state in {RecorderState.ERROR, RecorderState.RESTARTING}
+            or (bool(job.last_error) and job.state not in ERROR_CLEARING_STATES)
+        ]
+        failed_count = len(current_failure_jobs)
+        last_error_job = next((job for job in sorted(current_failure_jobs, key=lambda item: item.last_state_change_at, reverse=True) if job.last_error), None)
+        last_exit_code = next((job.last_exit_code for job in sorted(current_failure_jobs, key=lambda item: item.last_state_change_at, reverse=True) if job.last_exit_code is not None), None)
         service_status = "error" if failed_count and recording_count == 0 else ("degraded" if failed_count else "healthy")
         with engine.begin() as conn:
             conn.execute(

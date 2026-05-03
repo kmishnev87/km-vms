@@ -19,6 +19,7 @@ from app.services.system_settings import get_system_settings
 
 ACTIVE_JOB_STATES = {"starting", "recording", "stopping", "restarting"}
 FAILED_JOB_STATES = {"error", "restarting"}
+HEALTHY_NEUTRAL_JOB_STATES = {"starting", "recording", "stopping", "stopped", "idle", "disabled"}
 SEGMENT_STATUS_DELETED = "deleted"
 HEARTBEAT_STALE_SECONDS = 90
 MAX_RECENT_ITEMS = 50
@@ -138,26 +139,52 @@ def _job_summary(db: Session) -> dict[str, Any]:
 
 def _camera_recording_states(db: Session) -> list[dict[str, Any]]:
     cameras = db.query(Camera).order_by(Camera.id.asc()).all()
-    latest_jobs = {
-        job.camera_id: job
-        for job in db.query(RecordingJob).order_by(RecordingJob.updated_at.asc().nullsfirst(), RecordingJob.started_at.asc()).all()
-    }
-    return [
-        {
+    latest_jobs: dict[int, RecordingJob] = {}
+
+    def job_rank(job: RecordingJob) -> tuple[int, datetime]:
+        state = str(job.state or "")
+        if state in {"starting", "recording", "stopping", "restarting"}:
+            priority = 3
+        elif state == "error":
+            priority = 2
+        else:
+            priority = 1
+        timestamp = job.updated_at or job.started_at or job.created_at or datetime.min
+        return priority, timestamp
+
+    for job in db.query(RecordingJob).order_by(RecordingJob.camera_id.asc()).all():
+        current = latest_jobs.get(job.camera_id)
+        if current is None or job_rank(job) >= job_rank(current):
+            latest_jobs[job.camera_id] = job
+
+    rows = []
+    for camera in cameras:
+        job = latest_jobs.get(camera.id)
+        job_state = job.state if job else None
+        job_last_error = _compact_error(job.last_error) if job else None
+        camera_last_error = _compact_error(camera.last_error)
+        has_healthy_current_job = job_state in HEALTHY_NEUTRAL_JOB_STATES
+        current_failure = (
+            job_state in FAILED_JOB_STATES
+            or (job_state not in HEALTHY_NEUTRAL_JOB_STATES and bool(job_last_error))
+            or (not has_healthy_current_job and (camera.status == "error" or bool(camera_last_error)))
+        )
+        rows.append({
             "camera_id": camera.id,
             "camera_name": camera.name,
             "enabled": bool(camera.enabled),
             "recording_mode": camera.recording_mode,
             "camera_status": camera.status,
-            "camera_last_error": _compact_error(camera.last_error),
-            "job_state": latest_jobs.get(camera.id).state if latest_jobs.get(camera.id) else None,
-            "job_id": latest_jobs.get(camera.id).id if latest_jobs.get(camera.id) else None,
-            "job_updated_at": _iso(latest_jobs.get(camera.id).updated_at) if latest_jobs.get(camera.id) else None,
-            "last_exit_code": latest_jobs.get(camera.id).last_exit_code if latest_jobs.get(camera.id) else None,
-            "last_error": _compact_error(latest_jobs.get(camera.id).last_error) if latest_jobs.get(camera.id) else None,
-        }
-        for camera in cameras
-    ]
+            "camera_last_error": camera_last_error,
+            "job_state": job_state,
+            "job_id": job.id if job else None,
+            "job_updated_at": _iso(job.updated_at) if job else None,
+            "last_exit_code": job.last_exit_code if job else None,
+            "last_error": job_last_error,
+            "current_failure": bool(current_failure),
+            "stale_error_ignored": bool((job_last_error or camera_last_error) and not current_failure),
+        })
+    return rows
 
 
 def _segment_summary(db: Session, now: datetime) -> dict[str, Any]:
@@ -278,7 +305,7 @@ def _health_from(
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
     enabled_always = [item for item in camera_states if item["enabled"] and item["recording_mode"] == "always"]
-    failed_cameras = [item for item in camera_states if item.get("job_state") in FAILED_JOB_STATES or item.get("camera_last_error") or item.get("last_error")]
+    failed_cameras = [item for item in camera_states if item.get("current_failure")]
 
     if not heartbeat.get("available"):
         reasons.append(str(heartbeat.get("reason") or "heartbeat_unavailable"))
@@ -344,7 +371,7 @@ def build_recorder_status(db: Session) -> dict[str, Any]:
         "job_summary": job_summary,
         "camera_recording_states": camera_states,
         "cameras_recording_count": sum(1 for item in camera_states if item.get("job_state") == "recording"),
-        "failed_cameras_count": sum(1 for item in camera_states if item.get("job_state") in FAILED_JOB_STATES or item.get("last_error")),
+        "failed_cameras_count": sum(1 for item in camera_states if item.get("current_failure")),
         "retrying_cameras_count": sum(1 for item in camera_states if item.get("job_state") == "restarting"),
         "last_segment_time": segment_summary.get("last_segment_time"),
         "last_segment_age_seconds": segment_summary.get("last_segment_age_seconds"),
@@ -417,7 +444,7 @@ def build_system_runtime_status(db: Session) -> dict[str, Any]:
             "heartbeat": {"age_seconds": heartbeat_age_seconds},
             "job_summary": job_summary,
             "cameras_recording_count": sum(1 for item in camera_states if item.get("job_state") == "recording"),
-            "failed_cameras_count": sum(1 for item in camera_states if item.get("job_state") in FAILED_JOB_STATES or item.get("last_error")),
+        "failed_cameras_count": sum(1 for item in camera_states if item.get("current_failure")),
             "retrying_cameras_count": sum(1 for item in camera_states if item.get("job_state") == "restarting"),
             "last_segment_time": segment_summary.get("last_segment_time"),
             "last_segment_age_seconds": segment_summary.get("last_segment_age_seconds"),
