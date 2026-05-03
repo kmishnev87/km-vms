@@ -82,6 +82,8 @@ def get_camera_credentials(
     password = payload.get("password")
     host = payload.get("host")
     port = payload.get("port")
+    rtsp_host = payload.get("rtsp_host")
+    rtsp_port = payload.get("rtsp_port")
 
     if camera_id:
         camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
@@ -94,11 +96,17 @@ def get_camera_credentials(
                 username = camera.username
             if not password:
                 password = decrypt_text(camera.password_encrypted)
+            if not rtsp_host:
+                rtsp_host = camera.rtsp_reachable_host
+            if not rtsp_port:
+                rtsp_port = camera.rtsp_reachable_port
 
     return {
         "camera_id": camera_id,
         "host": host,
         "port": port,
+        "rtsp_host": rtsp_host,
+        "rtsp_port": rtsp_port,
         "username": username,
         "password": password,
     }
@@ -111,7 +119,7 @@ def build_test_url(payload: dict, db: Session | None = None) -> str | None:
         port = payload.get("port") or 554
     else:
         host = payload.get("rtsp_host") or payload.get("host")
-        port = payload.get("rtsp_port") or payload.get("port") or 554
+        port = payload.get("rtsp_port") or 554
     username = payload.get("username")
     password = payload.get("password")
 
@@ -121,8 +129,8 @@ def build_test_url(payload: dict, db: Session | None = None) -> str | None:
             host = creds["host"] or host
             port = creds["port"] or port
         else:
-            host = payload.get("rtsp_host") or creds["host"] or host
-            port = payload.get("rtsp_port") or creds["port"] or port
+            host = payload.get("rtsp_host") or creds["rtsp_host"] or host
+            port = payload.get("rtsp_port") or creds["rtsp_port"] or port
         username = creds["username"] or username
         password = creds["password"] or password
 
@@ -167,8 +175,8 @@ def onvif_profiles(
             port=int(port),
             username=str(username),
             password=str(password),
-            rtsp_host=str(payload.get("rtsp_host") or host),
-            rtsp_port=int(payload["rtsp_port"]) if payload.get("rtsp_port") else None,
+            rtsp_host=str(creds["rtsp_host"] or host),
+            rtsp_port=int(creds["rtsp_port"] or 554),
         )
         return {
             "ok": True,
@@ -355,7 +363,7 @@ def create_camera(
     ensure_camera_folder(folder_name)
 
     rtsp_host = payload.rtsp_host or payload.host
-    rtsp_port = payload.rtsp_port or payload.port
+    rtsp_port = payload.rtsp_port or 554
     if str(payload.protocol or "rtsp").lower() == "rtsp":
         rtsp_host = payload.host
         rtsp_port = payload.port
@@ -534,7 +542,7 @@ def update_camera(
         port_for_rtsp = data.get("port", camera.port)
     else:
         host_for_rtsp = data.pop("rtsp_host", None) or data.get("host", camera.rtsp_reachable_host or camera.host)
-        port_for_rtsp = data.pop("rtsp_port", None) or data.get("port", camera.rtsp_reachable_port or camera.port)
+        port_for_rtsp = data.pop("rtsp_port", None) or camera.rtsp_reachable_port or 554
 
     if "rtsp_main_url" in data and data["rtsp_main_url"] is not None:
         data["rtsp_main_url"] = assemble_rtsp_url(

@@ -78,4 +78,6 @@ class Camera(Base):
                     return int(parsed.port)
             except Exception:
                 continue
+        if str(self.protocol or "").lower() == "onvif":
+            return 554
         return self.port

@@ -367,9 +367,13 @@ def _range_meta(value):
         return None
     minimum = _safe_attr(value, "Min")
     maximum = _safe_attr(value, "Max")
-    if minimum is None and maximum is None:
+    step = _safe_attr(value, "Step")
+    if minimum is None and maximum is None and step is None:
         return None
-    return {"min": minimum, "max": maximum}
+    result = {"min": minimum, "max": maximum}
+    if step is not None:
+        result["step"] = step
+    return result
 
 
 def _encoding_options(options, encoding):
@@ -403,6 +407,82 @@ def _field_meta(name: str, value, readable: bool = True, writable: bool = False,
         "writable": bool(writable),
         "options": options or [],
         "range": value_range,
+    }
+
+
+def _value_in_range(name: str, value, value_range: dict | None) -> None:
+    if not value_range:
+        return
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be numeric")
+    minimum = value_range.get("min")
+    maximum = value_range.get("max")
+    if minimum is not None and numeric < float(minimum):
+        raise ValueError(f"{name} is below supported range")
+    if maximum is not None and numeric > float(maximum):
+        raise ValueError(f"{name} is above supported range")
+    step = value_range.get("step")
+    if step not in (None, 0, "0"):
+        base = float(minimum or 0)
+        step_value = float(step)
+        offset = (numeric - base) / step_value
+        if abs(offset - round(offset)) > 1e-9:
+            raise ValueError(f"{name} does not match supported step")
+
+
+def _validate_profile_config_request(config: dict, supported: dict) -> dict:
+    allowed = {"codec", "resolution", "fps", "bitrate", "iframe_interval", "quality"}
+    requested = {key: value for key, value in (config or {}).items() if value not in (None, "")}
+    unknown = sorted(set(requested) - allowed)
+    if unknown:
+        raise ValueError(f"Unsupported ONVIF setting requested: {', '.join(unknown)}")
+
+    validated = {}
+    for key, value in requested.items():
+        meta = supported.get(key) or {}
+        if not meta.get("writable"):
+            raise ValueError(f"ONVIF setting is not writable: {key}")
+        options = [str(item) for item in (meta.get("options") or [])]
+        if options and str(value) not in options:
+            raise ValueError(f"ONVIF setting value is not supported: {key}")
+        _value_in_range(key, value, meta.get("range"))
+        validated[key] = value
+    if not validated:
+        raise ValueError("No writable ONVIF settings were requested")
+    return validated
+
+
+def _supported_video_fields(media, cfg) -> dict:
+    rc = _safe_attr(cfg, "RateControl")
+    res = _safe_attr(cfg, "Resolution")
+    resolution = f"{_safe_attr(res, 'Width')}x{_safe_attr(res, 'Height')}" if res else None
+    options = _encoder_options(media, cfg)
+    encoding = _safe_attr(cfg, "Encoding")
+    encoding_options = _encoding_options(options, encoding)
+    codec_options = [
+        codec
+        for codec in ("H264", "H265", "JPEG", "MPEG4")
+        if _encoding_options(options, codec) is not None
+    ]
+
+    resolution_options = _resolution_options(encoding_options)
+    fps_range = _range_meta(_safe_attr(encoding_options, "FrameRateRange"))
+    bitrate_range = _range_meta(_safe_attr(encoding_options, "BitrateRange"))
+    iframe_range = (
+        _range_meta(_safe_attr(encoding_options, "GovLengthRange"))
+        or _range_meta(_safe_attr(encoding_options, "EncodingIntervalRange"))
+    )
+    quality_range = _range_meta(_safe_attr(options, "QualityRange"))
+
+    return {
+        "codec": _field_meta("codec", encoding, bool(encoding), bool(codec_options), codec_options),
+        "resolution": _field_meta("resolution", resolution, bool(resolution), bool(resolution_options), resolution_options),
+        "fps": _field_meta("fps", _safe_attr(rc, "FrameRateLimit"), _safe_attr(rc, "FrameRateLimit") is not None, bool(fps_range), value_range=fps_range),
+        "bitrate": _field_meta("bitrate", _safe_attr(rc, "BitrateLimit"), _safe_attr(rc, "BitrateLimit") is not None, bool(bitrate_range), value_range=bitrate_range),
+        "iframe_interval": _field_meta("iframe_interval", _safe_attr(rc, "EncodingInterval"), _safe_attr(rc, "EncodingInterval") is not None, bool(iframe_range), value_range=iframe_range),
+        "quality": _field_meta("quality", _safe_attr(cfg, "Quality"), _safe_attr(cfg, "Quality") is not None, bool(quality_range), value_range=quality_range),
     }
 
 
@@ -447,34 +527,7 @@ def get_onvif_profile_config(host, port, username, password, profile_token):
     rc = _safe_attr(cfg, "RateControl")
     res = _safe_attr(cfg, "Resolution")
     resolution = f"{_safe_attr(res, 'Width')}x{_safe_attr(res, 'Height')}" if res else None
-    options = _encoder_options(media, cfg)
-    encoding = _safe_attr(cfg, "Encoding")
-    encoding_options = _encoding_options(options, encoding)
-    codec_options = [
-        codec
-        for codec in ("H264", "H265", "JPEG", "MPEG4")
-        if _encoding_options(options, codec) is not None
-    ]
-    if encoding and encoding not in codec_options:
-        codec_options.insert(0, encoding)
-
-    resolution_options = _resolution_options(encoding_options)
-    fps_range = _range_meta(_safe_attr(encoding_options, "FrameRateRange"))
-    bitrate_range = _range_meta(_safe_attr(encoding_options, "BitrateRange"))
-    iframe_range = (
-        _range_meta(_safe_attr(encoding_options, "GovLengthRange"))
-        or _range_meta(_safe_attr(encoding_options, "EncodingIntervalRange"))
-    )
-    quality_range = _range_meta(_safe_attr(options, "QualityRange"))
-
-    supported = {
-        "codec": _field_meta("codec", encoding, bool(encoding), bool(codec_options), codec_options),
-        "resolution": _field_meta("resolution", resolution, bool(resolution), bool(resolution_options), resolution_options),
-        "fps": _field_meta("fps", _safe_attr(rc, "FrameRateLimit"), _safe_attr(rc, "FrameRateLimit") is not None, bool(fps_range), value_range=fps_range),
-        "bitrate": _field_meta("bitrate", _safe_attr(rc, "BitrateLimit"), _safe_attr(rc, "BitrateLimit") is not None, bool(bitrate_range), value_range=bitrate_range),
-        "iframe_interval": _field_meta("iframe_interval", _safe_attr(rc, "EncodingInterval"), _safe_attr(rc, "EncodingInterval") is not None, bool(iframe_range), value_range=iframe_range),
-        "quality": _field_meta("quality", _safe_attr(cfg, "Quality"), _safe_attr(cfg, "Quality") is not None, bool(quality_range), value_range=quality_range),
-    }
+    supported = _supported_video_fields(media, cfg)
 
     return {
         "profile_token": profile_token,
@@ -506,6 +559,9 @@ def update_onvif_profile(host, port, username, password, profile_token, config):
     if not cfg:
         raise Exception("Не удалось получить VideoEncoderConfiguration")
 
+    supported = _supported_video_fields(media, cfg)
+    config = _validate_profile_config_request(config or {}, supported)
+
     if config.get("codec"):
         cfg.Encoding = str(config["codec"])
 
@@ -521,16 +577,17 @@ def update_onvif_profile(host, port, username, password, profile_token, config):
         cfg.Resolution.Width = int(config["width"])
         cfg.Resolution.Height = int(config["height"])
 
-    if not getattr(cfg, "RateControl", None):
+    rate_control_fields = {"fps", "bitrate", "iframe_interval"}
+    if rate_control_fields.intersection(config) and not getattr(cfg, "RateControl", None):
         raise Exception("Камера не отдала RateControl в ONVIF-конфиге")
 
-    if config.get("fps"):
+    if config.get("fps") and getattr(cfg, "RateControl", None):
         cfg.RateControl.FrameRateLimit = int(config["fps"])
 
-    if config.get("bitrate"):
+    if config.get("bitrate") and getattr(cfg, "RateControl", None):
         cfg.RateControl.BitrateLimit = int(config["bitrate"])
 
-    if config.get("iframe_interval"):
+    if config.get("iframe_interval") and getattr(cfg, "RateControl", None):
         cfg.RateControl.EncodingInterval = int(config["iframe_interval"])
 
     if config.get("quality") not in (None, ""):

@@ -117,6 +117,15 @@ function normalizeCameraStreamDefaults(source) {
   };
 }
 
+function rtspReachableHost(source) {
+  return String(source?.rtsp_host || source?.host || "").trim();
+}
+
+function rtspReachablePort(source) {
+  const value = Number(source?.rtsp_port || 0);
+  return value || 554;
+}
+
 function writableSettings(supported = {}) {
   return Object.values(supported || {}).filter((item) => item?.writable);
 }
@@ -135,7 +144,12 @@ function profileSettingDisplayValue(config, key) {
   return String(value);
 }
 
-function profileSettingState(meta, value) {
+function profileSettingState(meta, value, requiresOptions = false) {
+  const hasOptions = Array.isArray(meta?.options) && meta.options.length > 0;
+  if (requiresOptions && !hasOptions) {
+    if (meta?.readable || value) return "readonly";
+    return "unavailable";
+  }
   if (meta?.writable) return "editable";
   if (meta?.readable || value) return "readonly";
   return "unavailable";
@@ -272,8 +286,8 @@ function cameraPayloadFromForm(source, editingCameraId) {
     storage_quota_gb: Number(normalizedSource.storage_quota_gb),
   };
   if (protocol === "onvif") {
-    payload.rtsp_host = normalizedSource.rtsp_host || normalizedSource.host;
-    payload.rtsp_port = Number(normalizedSource.rtsp_port || normalizedSource.port || 554);
+    payload.rtsp_host = rtspReachableHost(normalizedSource);
+    payload.rtsp_port = rtspReachablePort(normalizedSource);
   } else {
     delete payload.rtsp_host;
     delete payload.rtsp_port;
@@ -420,13 +434,10 @@ export default function CamerasPage() {
 
       if (key === "protocol" && value === "onvif") {
         next.rtsp_host = prev.host || "";
-        next.rtsp_port = prev.port || 554;
+        next.rtsp_port = prev.rtsp_port || 554;
       }
-      if (prev.protocol === "onvif" && key === "host") {
+      if (prev.protocol === "onvif" && key === "host" && (!prev.rtsp_host || prev.rtsp_host === prev.host)) {
         next.rtsp_host = value;
-      }
-      if (prev.protocol === "onvif" && key === "port") {
-        next.rtsp_port = value;
       }
 
       return normalizeCameraStreamDefaults(next);
@@ -562,8 +573,8 @@ export default function CamerasPage() {
         camera_id: editingCameraId || null,
         host: form.host,
         port: Number(form.port || 80),
-        rtsp_host: form.host,
-        rtsp_port: Number(form.rtsp_port || form.port || 554),
+        rtsp_host: rtspReachableHost(form),
+        rtsp_port: rtspReachablePort(form),
         username: form.username,
         password: form.password,
       };
@@ -579,8 +590,8 @@ export default function CamerasPage() {
       const subProfile = profileByToken(result, subToken);
       const nextForm = normalizeCameraStreamDefaults({
         ...form,
-        rtsp_host: result.rtsp_reachable?.host || form.host,
-        rtsp_port: result.rtsp_reachable?.port || form.rtsp_port || form.port || 554,
+        rtsp_host: result.rtsp_reachable?.host || rtspReachableHost(form),
+        rtsp_port: result.rtsp_reachable?.port || rtspReachablePort(form),
         onvif_profile_token: mainToken,
         rtsp_main_url: mainProfile?.stream_path || prettyRtspValue(mainProfile?.stream_uri || form.rtsp_main_url),
         rtsp_sub_url: subProfile?.stream_path || prettyRtspValue(subProfile?.stream_uri || form.rtsp_sub_url),
@@ -696,7 +707,7 @@ export default function CamerasPage() {
     try {
       const supported = onvifConfig.supported || {};
       const config = {};
-      if (supported.codec?.writable && onvifConfig.codec) config.codec = onvifConfig.codec;
+      if (supported.codec?.writable && supported.codec?.options?.length && onvifConfig.codec) config.codec = onvifConfig.codec;
       if (supported.resolution?.writable && onvifConfig.resolution) config.resolution = onvifConfig.resolution;
       if (supported.fps?.writable && onvifConfig.fps) config.fps = Number(onvifConfig.fps);
       if (supported.bitrate?.writable && onvifConfig.bitrate) config.bitrate = Number(onvifConfig.bitrate);
@@ -804,7 +815,7 @@ export default function CamerasPage() {
   function renderProfileSettingSlot(slot) {
     const meta = profileSettingMeta(onvifConfig.supported, slot.key);
     const value = profileSettingDisplayValue(onvifConfig, slot.key);
-    const state = profileSettingState(meta, value);
+    const state = profileSettingState(meta, value, slot.requiresOptions);
     const hasOptions = Array.isArray(meta.options) && meta.options.length > 0;
     const range = meta.range;
     const statusText = state === "editable" ? "Доступно для записи" : state === "readonly" ? "Только чтение" : "Недоступно";
@@ -847,7 +858,7 @@ export default function CamerasPage() {
   }
 
   const profileSettingSlots = [
-    { key: "codec", label: "Кодек / сжатие", empty: "Не получено", unavailable: "Камера не отдала список кодеков." },
+    { key: "codec", label: "Кодек / сжатие", empty: "Не получено", unavailable: "Камера не отдала список кодеков.", requiresOptions: true },
     { key: "encode_strategy", label: "Стратегия кодирования", empty: "Не получено", unavailable: "Не возвращается стандартным ONVIF ответом." },
     { key: "resolution", label: "Разрешение", empty: "Не получено", unavailable: "Камера не отдала варианты разрешения." },
     { key: "fps", label: "Частота кадров", empty: "Не получено", unavailable: "Диапазон FPS не получен.", numeric: true },
@@ -1014,6 +1025,18 @@ export default function CamerasPage() {
                       <div className="formLabel">RTSP Sub Path / URL</div>
                       <input className="input" value={form.rtsp_sub_url} onChange={(e) => patch("rtsp_sub_url", e.target.value)} />
                     </div>
+                    {form.protocol === "onvif" ? (
+                      <>
+                        <div className="cameraStreamField compact">
+                          <div className="formLabel">RTSP reachable host</div>
+                          <input className="input" value={form.rtsp_host} onChange={(e) => patch("rtsp_host", e.target.value)} />
+                        </div>
+                        <div className="cameraStreamField compact">
+                          <div className="formLabel">RTSP reachable port</div>
+                          <input className="input" type="number" min="1" value={form.rtsp_port} onChange={(e) => patch("rtsp_port", e.target.value)} />
+                        </div>
+                      </>
+                    ) : null}
                     <div className="cameraStreamField compact">
                       <div className="formLabel">RTSP Transport</div>
                       <select className="select" value={form.rtsp_transport} onChange={(e) => patch("rtsp_transport", e.target.value)}>
