@@ -353,7 +353,21 @@ def _policy_candidates(db: Session, *, camera_id: int | None = None) -> tuple[li
     return candidates, policy_summary
 
 
-def build_retention_plan(db: Session, *, camera_id: int | None = None) -> dict:
+def build_retention_plan(
+    db: Session,
+    *,
+    camera_id: int | None = None,
+    actor: User | None = None,
+    write_audit: bool = False,
+) -> dict:
+    if write_audit:
+        _audit(
+            db,
+            actor,
+            event_type="retention.dry_run_started",
+            message="Retention dry-run started",
+            metadata={"camera_id": camera_id},
+        )
     result = _base_result("retention_dry_run", dry_run=True)
     candidates, policy_summary = _policy_candidates(db, camera_id=camera_id)
     active_job_ids = _active_job_ids(db)
@@ -384,7 +398,17 @@ def build_retention_plan(db: Session, *, camera_id: int | None = None) -> dict:
             _add_reason_count(result, reason)
             _add_item(result, _item(segment, action="skipped", reason=reason, size_bytes=size))
     result["estimated_freed_bytes"] = result["bytes_freed"]
-    return _finish(result)
+    finished = _finish(result)
+    if write_audit:
+        _audit(
+            db,
+            actor,
+            event_type="retention.dry_run_completed",
+            severity="warning" if finished.get("failed_count") or finished.get("warnings") else "info",
+            message="Retention dry-run completed",
+            metadata=_retention_summary(finished),
+        )
+    return finished
 
 
 class RetentionApplyLock:
@@ -444,10 +468,11 @@ def _audit(
     segment: RecordingSegment | None = None,
     metadata: dict | None = None,
 ) -> None:
+    category = "retention" if event_type.startswith("retention.") else "records"
     create_event(
         db=db,
         actor=actor,
-        category="records",
+        category=category,
         event_type=event_type,
         severity=severity,
         message_ru=message,
@@ -530,7 +555,17 @@ def execute_segments(
         result["warnings"].append("limit_exceeded")
         for segment, _path, size in planned:
             _add_item(result, _item(segment, action="skipped", reason="limit_exceeded", size_bytes=size))
-        return _finish(result)
+        finished = _finish(result)
+        if not operation.startswith("manual") and not operation.startswith("retention_auto"):
+            _audit(
+                db,
+                actor,
+                event_type="retention.apply_completed",
+                severity="warning",
+                message=f"{operation} completed with retention limits",
+                metadata=_retention_summary(finished),
+            )
+        return finished
 
     result["planned_count"] = len(planned)
     result["candidates_count"] = len(planned)
@@ -555,14 +590,15 @@ def execute_segments(
             _mark_deleted(db, segment, actor=actor, reason=reason, source=operation)
             db.commit()
             _add_item(result, _item(segment, action="deleted", reason=reason, size_bytes=size))
-            _audit(
-                db,
-                actor,
-                event_type="recordings.deleted_segment" if operation.startswith("manual") else "retention.deleted_segment",
-                message=f"Recording segment deleted: {segment.id}",
-                segment=segment,
-                metadata={**_segment_audit_ref(segment), "reason": reason, "bytes_freed": size},
-            )
+            if operation.startswith("manual"):
+                _audit(
+                    db,
+                    actor,
+                    event_type="recordings.deleted_segment",
+                    message=f"Recording segment deleted: {segment.id}",
+                    segment=segment,
+                    metadata={**_segment_audit_ref(segment), "reason": reason, "bytes_freed": size},
+                )
         except Exception as exc:
             recovered = _recover_deleted_segment_metadata(
                 db,
@@ -584,20 +620,31 @@ def execute_segments(
                 metadata={**_segment_audit_ref(segment), "reason": failure_reason, "error": str(exc)},
             )
 
-    _audit(
-        db,
-        actor,
-        event_type="recordings.bulk_delete_completed" if operation.startswith("manual") else "retention.run_completed",
-        message=f"{operation} completed",
-        metadata={
-            "operation": operation,
-            "deleted_count": result["deleted_count"],
-            "skipped_count": result["skipped_count"],
-            "failed_count": result["failed_count"],
-            "bytes_freed": result["bytes_freed"],
-        },
-    )
-    return _finish(result)
+    finished = _finish(result)
+    if operation.startswith("manual"):
+        _audit(
+            db,
+            actor,
+            event_type="recordings.bulk_delete_completed",
+            message=f"{operation} completed",
+            metadata={
+                "operation": operation,
+                "deleted_count": finished["deleted_count"],
+                "skipped_count": finished["skipped_count"],
+                "failed_count": finished["failed_count"],
+                "bytes_freed": finished["bytes_freed"],
+            },
+        )
+    elif not operation.startswith("retention_auto"):
+        _audit(
+            db,
+            actor,
+            event_type="retention.apply_completed",
+            severity="error" if finished.get("failed_count") else "info",
+            message=f"{operation} completed",
+            metadata=_retention_summary(finished),
+        )
+    return finished
 
 
 def preview_segments(
@@ -644,7 +691,18 @@ def run_retention(
     try:
         with RetentionApplyLock():
             candidates, _policy_summary = _policy_candidates(db, camera_id=camera_id)
-            _audit(db, actor, event_type="retention.run_started", message="Retention run started")
+            _audit(
+                db,
+                actor,
+                event_type="retention.apply_started",
+                message="Retention apply started",
+                metadata={
+                    "camera_id": camera_id,
+                    "max_candidates": max_candidates,
+                    "max_bytes": max_bytes,
+                    "candidate_count": len(candidates),
+                },
+            )
             return execute_segments(
                 db,
                 (segment for segment, _reason in candidates),
@@ -658,10 +716,30 @@ def run_retention(
         result = _base_result(operation, dry_run=False)
         _add_item(result, _item(None, action="skipped", reason=str(exc) or "concurrency_lock"))
         result["ok"] = False
-        return _finish(result)
+        finished = _finish(result)
+        _audit(
+            db,
+            actor,
+            event_type="retention.apply_failed",
+            severity="error",
+            message="Retention apply failed",
+            metadata=_retention_summary(finished),
+        )
+        return finished
 
 
 def _retention_summary(result: dict) -> dict:
+    item_reason_counts: dict[str, int] = {}
+    skipped_reason_counts: dict[str, int] = {}
+    failed_reason_counts: dict[str, int] = {}
+    for item in result.get("items") or []:
+        reason = str(item.get("reason") or "unknown")
+        action = str(item.get("action") or "unknown")
+        item_reason_counts[reason] = int(item_reason_counts.get(reason) or 0) + 1
+        if action == "skipped":
+            skipped_reason_counts[reason] = int(skipped_reason_counts.get(reason) or 0) + 1
+        if action == "failed":
+            failed_reason_counts[reason] = int(failed_reason_counts.get(reason) or 0) + 1
     return {
         "ok": bool(result.get("ok")),
         "operation": result.get("operation"),
@@ -678,6 +756,10 @@ def _retention_summary(result: dict) -> dict:
         "bounded_skipped_due_to_limit_count": int(result.get("bounded_skipped_due_to_limit_count") or 0),
         "oversized_single_segment_progress": bool(result.get("oversized_single_segment_progress")),
         "reason_counts": dict(result.get("reason_counts") or {}),
+        "item_reason_counts": item_reason_counts,
+        "skipped_reason_counts": skipped_reason_counts,
+        "failed_reason_counts": failed_reason_counts,
+        "observability": dict(result.get("observability") or {}),
         "warnings": list(result.get("warnings") or []),
     }
 

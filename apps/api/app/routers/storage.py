@@ -20,7 +20,7 @@ def storage_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    return build_storage_monitoring_summary(db)
+    return build_storage_monitoring_summary(db, write_audit=True, audit_actor=current_user)
 
 
 @router.get("/reconciliation/summary")

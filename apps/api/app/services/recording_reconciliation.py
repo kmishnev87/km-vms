@@ -36,6 +36,7 @@ DRY_RUN_MODE = "dry_run"
 STALE_WRITING_AFTER = timedelta(minutes=10)
 MAX_SAMPLE_ITEMS = 100
 MEDIA_PROBE_TIMEOUT_SEC = 5
+_LAST_CLEANUP_CANDIDATES_COUNT: int | None = None
 
 
 @dataclass(frozen=True)
@@ -288,45 +289,89 @@ def _apply_segment_classification(db: Session, segment: RecordingSegment, classi
     return changed
 
 
+def _reconciliation_audit_metadata(summary: dict) -> dict:
+    counts = dict(summary.get("counts") or {})
+    cleanup_candidates_count = int(
+        counts.get("orphan_file", 0)
+        + counts.get("pre_metadata_km_vms_file", 0)
+        + counts.get("legacy_archive_file", 0)
+    )
+    return {
+        "mode": summary.get("mode"),
+        "storage_namespace": summary.get("storage_namespace"),
+        "total_metadata_rows_checked": int(summary.get("total_metadata_rows_checked") or 0),
+        "updated_metadata_count": int(summary.get("updated_metadata_count") or 0),
+        "deleted_files_count": int(summary.get("deleted_files_count") or 0),
+        "deleted_product_metadata_count": int(summary.get("deleted_product_metadata_count") or 0),
+        "cleanup_candidates_count": cleanup_candidates_count,
+        "counts": counts,
+    }
+
+
+def _audit_reconciliation(db: Session, *, actor, event_type: str, severity: str, message: str, metadata: dict) -> None:
+    create_event(
+        db=db,
+        actor=actor,
+        category="reconciliation",
+        event_type=event_type,
+        severity=severity,
+        message_ru=message,
+        message_en=message,
+        target_type="recording_reconciliation",
+        metadata=metadata,
+    )
+
+
 def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, write_audit: bool = True) -> dict:
+    global _LAST_CLEANUP_CANDIDATES_COUNT
     mode = APPLY_SAFE_MODE if mode == APPLY_SAFE_MODE else DRY_RUN_MODE
     apply_safe = mode == APPLY_SAFE_MODE
+    if write_audit:
+        _audit_reconciliation(
+            db,
+            actor=actor,
+            event_type="reconciliation.apply_started" if apply_safe else "reconciliation.scan_started",
+            severity="info",
+            message=f"Recorder PRO reconciliation {mode} started",
+            metadata={"mode": mode, "apply_safe": apply_safe},
+        )
     counts = _empty_counts()
     samples: dict[str, list[dict]] = defaultdict(list)
     updated_metadata = 0
     checked_paths: set[str] = set()
-
-    segments = db.query(RecordingSegment).order_by(RecordingSegment.id.asc()).all()
-    active_job_ids = {
-        str(job_id)
-        for (job_id,) in db.query(RecordingJob.id)
-        .filter(RecordingJob.state.in_(("starting", "recording", "stopping", "restarting")))
-        .distinct()
-        .all()
-    }
-
-    for segment in segments:
-        if segment.ownership != OWNERSHIP_KM_VMS or segment.source != RECORDER_SOURCE:
-            counts["skipped"] += 1
-            continue
-        rel_path, classification = _classify_segment(segment, active_job_ids)
-        counts[classification.name] += 1
-        if rel_path:
-            checked_paths.add(rel_path)
-        if len(samples[classification.name]) < MAX_SAMPLE_ITEMS:
-            samples[classification.name].append(
-                {
-                    "segment_id": segment.id,
-                    "camera_id": segment.camera_id,
-                    "relative_path": rel_path,
-                    "status": segment.status,
-                    "error": classification.error,
-                }
-            )
-        if apply_safe and _apply_segment_classification(db, segment, classification):
-            updated_metadata += 1
+    segments: list[RecordingSegment] = []
 
     try:
+        segments = db.query(RecordingSegment).order_by(RecordingSegment.id.asc()).all()
+        active_job_ids = {
+            str(job_id)
+            for (job_id,) in db.query(RecordingJob.id)
+            .filter(RecordingJob.state.in_(("starting", "recording", "stopping", "restarting")))
+            .distinct()
+            .all()
+        }
+
+        for segment in segments:
+            if segment.ownership != OWNERSHIP_KM_VMS or segment.source != RECORDER_SOURCE:
+                counts["skipped"] += 1
+                continue
+            rel_path, classification = _classify_segment(segment, active_job_ids)
+            counts[classification.name] += 1
+            if rel_path:
+                checked_paths.add(rel_path)
+            if len(samples[classification.name]) < MAX_SAMPLE_ITEMS:
+                samples[classification.name].append(
+                    {
+                        "segment_id": segment.id,
+                        "camera_id": segment.camera_id,
+                        "relative_path": rel_path,
+                        "status": segment.status,
+                        "error": classification.error,
+                    }
+                )
+            if apply_safe and _apply_segment_classification(db, segment, classification):
+                updated_metadata += 1
+
         for path in _iter_storage_video_files():
             try:
                 rel_path = relative_to_storage(path)
@@ -348,6 +393,15 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
     except Exception as exc:
         counts["storage_unavailable"] += 1
         samples["storage_unavailable"].append({"error": redact_text(str(exc))})
+        if write_audit:
+            _audit_reconciliation(
+                db,
+                actor=actor,
+                event_type="reconciliation.apply_failed" if apply_safe else "reconciliation.scan_failed",
+                severity="error",
+                message=f"Recorder PRO reconciliation {mode} failed",
+                metadata={"mode": mode, "error": redact_text(str(exc))},
+            )
 
     if apply_safe:
         db.commit()
@@ -367,23 +421,30 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
 
     if write_audit:
         severity = "warning" if any(counts[key] for key in counts if key not in {"ok_owned_finalized"}) else "info"
-        create_event(
+        metadata = _reconciliation_audit_metadata(summary)
+        _audit_reconciliation(
             db=db,
             actor=actor,
-            category="diagnostics",
-            event_type="recordings.reconciliation",
+            event_type="reconciliation.apply_completed" if apply_safe else "reconciliation.scan_completed",
             severity=severity,
-            message_ru=f"Recorder PRO reconciliation {mode}: {dict(counts)}",
-            message_en=f"Recorder PRO reconciliation {mode}: {dict(counts)}",
-            target_type="recording_reconciliation",
-            metadata={
-                "mode": mode,
-                "counts": dict(counts),
-                "updated_metadata_count": updated_metadata,
-                "deleted_files_count": 0,
-                "deleted_product_metadata_count": 0,
-            },
+            message=f"Recorder PRO reconciliation {mode} completed",
+            metadata=metadata,
         )
+        current_cleanup = int(metadata["cleanup_candidates_count"])
+        if _LAST_CLEANUP_CANDIDATES_COUNT is not None and _LAST_CLEANUP_CANDIDATES_COUNT != current_cleanup:
+            _audit_reconciliation(
+                db=db,
+                actor=actor,
+                event_type="reconciliation.cleanup_candidates_changed",
+                severity="warning" if current_cleanup else "info",
+                message="Recorder PRO reconciliation cleanup candidates changed",
+                metadata={
+                    "previous_cleanup_candidates_count": _LAST_CLEANUP_CANDIDATES_COUNT,
+                    "current_cleanup_candidates_count": current_cleanup,
+                    "mode": mode,
+                },
+            )
+        _LAST_CLEANUP_CANDIDATES_COUNT = current_cleanup
         db.commit()
 
     return summary

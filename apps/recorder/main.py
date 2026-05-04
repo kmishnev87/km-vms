@@ -196,8 +196,9 @@ def redact_text(value: str | None) -> str:
     text_value = str(value)
     text_value = re.sub(r"(rtsp://[^:\s/@]+):([^@\s]+)@", r"\1:***@", text_value, flags=re.IGNORECASE)
     text_value = re.sub(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1***", text_value, flags=re.IGNORECASE)
-    text_value = re.sub(r"([?&](?:token|access_token)=)[^&\s]+", r"\1***", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"([?&](?:token|access_token|refresh_token|media_token)=)[^&\s]+", r"\1***", text_value, flags=re.IGNORECASE)
     text_value = re.sub(r"(postgresql(?:\+\w+)?://[^:\s/@]+):([^@\s]+)@", r"\1:***@", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"((?:Cookie|Set-Cookie):\s*)[^\r\n;]+", r"\1***", text_value, flags=re.IGNORECASE)
     return text_value
 
 
@@ -205,7 +206,7 @@ def sanitize_metadata(value: Any) -> Any:
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
-            if re.search(r"(password|secret|token|authorization|jwt|encryption_key|key)", str(key), re.IGNORECASE):
+            if re.search(r"(password|secret|token|authorization|jwt|encryption_key|key|credential|cookie)", str(key), re.IGNORECASE):
                 result[str(key)] = "***"
             else:
                 result[str(key)] = sanitize_metadata(item)
@@ -272,7 +273,7 @@ def write_audit_event(
                         NULL,
                         'recorder',
                         'system',
-                        'system',
+                        'recorder',
                         :event_type,
                         :severity,
                         :message_ru,
@@ -958,6 +959,14 @@ def mark_segment_failed(job: RecordingJob, rel_path: str, error: str) -> None:
     if result.rowcount <= 0:
         return
     log_event("warning", "segment_failed", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, error=error)
+    write_audit_event(
+        event_type="segment_failed",
+        severity="warning",
+        message=f"Recorder segment failed for camera {job.camera_name}",
+        camera_id=job.camera_id,
+        camera_name=job.camera_name,
+        metadata={"job_id": job.db_job_id, "error_type": classify_error(error), "segment_name": Path(rel_path).name},
+    )
 
 
 def sync_segment_metadata_for_job(job: RecordingJob) -> None:
@@ -1019,6 +1028,14 @@ def mark_segments_failed_for_job(job: RecordingJob, error: str) -> None:
     if result.rowcount <= 0:
         return
     log_event("warning", "segment_failed", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, error=error)
+    write_audit_event(
+        event_type="segment_summary",
+        severity="warning",
+        message=f"Recorder marked failed segments for camera {job.camera_name}",
+        camera_id=job.camera_id,
+        camera_name=job.camera_name,
+        metadata={"job_id": job.db_job_id, "failed_count": int(result.rowcount), "error_type": classify_error(error)},
+    )
 
 
 def mark_stale_writing_segments_on_startup() -> None:
@@ -1055,6 +1072,12 @@ def mark_stale_writing_segments_on_startup() -> None:
             )
         if result.rowcount:
             log_event("warning", "stale_writing_segments_marked", count=result.rowcount)
+            write_audit_event(
+                event_type="stale_writing_detected",
+                severity="warning",
+                message="Recorder detected stale writing segments on startup",
+                metadata={"stale_writing_count": int(result.rowcount)},
+            )
     except Exception as exc:
         log_event("warning", "stale_writing_reconciliation_failed", error=str(exc))
 
@@ -1257,12 +1280,18 @@ def schedule_retry(job: RecordingJob, error: str, error_type: str, exit_code: in
         next_retry_at=iso_ts(job.next_retry_at),
     )
     write_audit_event(
-        event_type="retry_scheduled",
+        event_type="backoff_entered",
         severity="warning",
         message=f"Recorder scheduled retry for camera {job.camera_name}: {error_type}",
         camera_id=job.camera_id,
         camera_name=job.camera_name,
-        metadata={"error_type": error_type, "exit_code": exit_code, "retry_count": job.retry_count, "next_retry_at": iso_ts(job.next_retry_at)},
+        metadata={
+            "error_type": error_type,
+            "exit_code": exit_code,
+            "retry_count": job.retry_count,
+            "backoff_seconds": backoff,
+            "next_retry_at": iso_ts(job.next_retry_at),
+        },
     )
 
 
@@ -1288,6 +1317,14 @@ def handle_start_failure(
         camera_name=job.camera_name,
         error_type=error_type,
         error=error,
+    )
+    write_audit_event(
+        event_type="ffmpeg_start_failed",
+        severity="error",
+        message=f"Recorder failed to start FFmpeg for camera {job.camera_name}: {error_type}",
+        camera_id=job.camera_id,
+        camera_name=job.camera_name,
+        metadata={"error_type": error_type, "exit_code": exit_code},
     )
     schedule_retry(job, error, error_type, exit_code=exit_code)
 
@@ -1422,11 +1459,11 @@ def start_camera(row) -> None:
     )
     log_event("info", "recording_started", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid, output_pattern=job.current_output_path, recording_format=job.recording_format)
     write_audit_event(
-        event_type="recording_started",
+        event_type="camera_started",
         message=f"Recorder started recording camera {job.camera_name}",
         camera_id=job.camera_id,
         camera_name=job.camera_name,
-        metadata={"pid": job.pid, "state": job.state, "output_pattern": job.current_output_path, "recording_format": job.recording_format},
+        metadata={"pid": job.pid, "state": job.state, "recording_format": job.recording_format},
     )
 
 
@@ -1469,7 +1506,7 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     close_recording_job(job, state=job.state, reason=reason)
     log_event("info", "recording_stopped", camera_id=job.camera_id, camera_name=job.camera_name, reason=reason, exit_code=job.last_exit_code)
     write_audit_event(
-        event_type=audit_event,
+        event_type="camera_stopped" if audit_event == "recording_stopped" else audit_event,
         message=f"Recorder stopped recording camera {job.camera_name}: {reason}",
         camera_id=job.camera_id,
         camera_name=job.camera_name,
@@ -1571,6 +1608,13 @@ def sync_cameras() -> None:
 
             if job.config_signature and job.config_signature != desired_signature and job.process and job.process.poll() is None:
                 log_event("info", "recording_config_changed_restart", camera_id=job.camera_id, camera_name=job.camera_name, recording_format=effective_recording_format)
+                write_audit_event(
+                    event_type="camera_restarted",
+                    message=f"Recorder restarted camera {job.camera_name}: config_changed",
+                    camera_id=job.camera_id,
+                    camera_name=job.camera_name,
+                    metadata={"reason": "config_changed", "recording_format": effective_recording_format},
+                )
                 stop_camera(row.id, "config_changed")
                 job.config_signature = desired_signature
 
@@ -1651,6 +1695,13 @@ def confirm_recording_startups() -> None:
         update_camera_status_from_job(job)
         clear_recording_job_error(job)
         log_event("info", "recording_start_confirmed", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid)
+        write_audit_event(
+            event_type="recovery_succeeded",
+            message=f"Recorder recovery succeeded for camera {job.camera_name}",
+            camera_id=job.camera_id,
+            camera_name=job.camera_name,
+            metadata={"pid": job.pid, "state": job.state},
+        )
 
 
 def active_jobs_status() -> list[dict[str, Any]]:
@@ -1748,6 +1799,11 @@ except Exception as exc:
     log_event("error", "metadata_schema_failed", error=str(exc))
 
 log_event("info", "service_started", storage_root=str(STORAGE_ROOT))
+write_audit_event(
+    event_type="service_started",
+    message="Recorder service started",
+    metadata={"recorder_instance_id": RECORDER_INSTANCE_ID},
+)
 
 while running:
     try:
@@ -1767,3 +1823,8 @@ for camera_id in list(jobs.keys()):
     stop_camera(camera_id, "shutdown")
 
 log_event("info", "stopped")
+write_audit_event(
+    event_type="service_stopped",
+    message="Recorder service stopped",
+    metadata={"recorder_instance_id": RECORDER_INSTANCE_ID},
+)

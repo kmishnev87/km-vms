@@ -24,12 +24,21 @@ CATEGORIES = {
     "security",
     "diagnostics",
     "system",
+    "recorder",
+    "storage",
+    "retention",
+    "reconciliation",
 }
 SEVERITIES = {"info", "warning", "error", "security"}
-SENSITIVE_KEY_RE = re.compile(r"(password|password_hash|secret|token|authorization|jwt|encryption_key|key)", re.IGNORECASE)
+SENSITIVE_KEY_RE = re.compile(
+    r"(password|password_hash|secret|token|authorization|jwt|encryption_key|key|credential|cookie)",
+    re.IGNORECASE,
+)
 RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://[^:\s/@]+):([^@\s]+)@", re.IGNORECASE)
 BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
-TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token|media_token)=)[^&\s]+", re.IGNORECASE)
+TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token|refresh_token|media_token)=)[^&\s]+", re.IGNORECASE)
+COOKIE_RE = re.compile(r"((?:Cookie|Set-Cookie):\s*)[^\r\n;]+", re.IGNORECASE)
+POSTGRES_CREDENTIALS_RE = re.compile(r"(postgresql(?:\+\w+)?://[^:\s/@]+):([^@\s]+)@", re.IGNORECASE)
 
 
 def request_ip(request) -> str | None:
@@ -53,8 +62,10 @@ def redact_text(value: str | None) -> str:
     if value is None:
         return ""
     text = RTSP_CREDENTIALS_RE.sub(r"\1:***@", str(value))
+    text = POSTGRES_CREDENTIALS_RE.sub(r"\1:***@", text)
     text = BEARER_RE.sub(r"\1***", text)
     text = TOKEN_QUERY_RE.sub(r"\1***", text)
+    text = COOKIE_RE.sub(r"\1***", text)
     return text
 
 
@@ -62,10 +73,13 @@ def sanitize_metadata(value: Any) -> Any:
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
-            if SENSITIVE_KEY_RE.search(str(key)):
-                result[str(key)] = "***"
+            key_text = str(key)
+            if key_text == "credential_changed":
+                result[key_text] = sanitize_metadata(item)
+            elif SENSITIVE_KEY_RE.search(key_text):
+                result[key_text] = "***"
             else:
-                result[str(key)] = sanitize_metadata(item)
+                result[key_text] = sanitize_metadata(item)
         return result
     if isinstance(value, list):
         return [sanitize_metadata(item) for item in value]

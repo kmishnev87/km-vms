@@ -340,7 +340,7 @@ def retention_dry_run(
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
     camera_id = payload.camera_id if payload else None
-    return build_retention_plan(db, camera_id=camera_id)
+    return build_retention_plan(db, camera_id=camera_id, actor=current_user, write_audit=True)
 
 
 @router.get("/retention/plan")

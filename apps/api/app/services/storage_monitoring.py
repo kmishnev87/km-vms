@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 import os
 import shutil
+import threading
 import time
 
 from sqlalchemy.orm import Session
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
-from app.services.audit_log import redact_text
+from app.services.audit_log import create_event, redact_text
 from app.services.recording_storage import KMVMS_RECORDINGS_NAMESPACE, VIDEO_EXTENSIONS
 from app.services.storage_contract import storage_contract
 
@@ -25,6 +26,8 @@ MAX_NAMESPACE_FILES = 1000
 MAX_NAMESPACE_DIRS = 300
 MAX_SCAN_SECONDS = 3.0
 MAX_SAMPLE_ITEMS = 50
+_STORAGE_AUDIT_LOCK = threading.Lock()
+_LAST_STORAGE_AUDIT_STATE: dict[str, dict] = {}
 
 
 def _utc_now() -> str:
@@ -98,6 +101,79 @@ def _path_checks(root: Path) -> dict:
         "status": status,
         "storage_root_realpath": _safe_realpath(root),
     }
+
+
+def _storage_audit_state(summary: dict) -> dict:
+    checks = summary.get("storage_path_checks") or {}
+    return {
+        "status": summary.get("status"),
+        "available": bool(summary.get("available")),
+        "readable": bool(checks.get("readable")),
+        "writable": bool(checks.get("writable")),
+        "reason": checks.get("last_error"),
+        "storage_namespace": summary.get("storage_namespace"),
+        "storage_root": summary.get("container_runtime_storage_root"),
+    }
+
+
+def _storage_transition_event(previous: dict | None, current: dict) -> tuple[str | None, str]:
+    if previous is None:
+        if current["status"] == "unavailable":
+            return "storage.unavailable", "error"
+        if not current["writable"]:
+            return "storage.unwritable", "warning"
+        return None, "info"
+    if bool(previous.get("available")) != bool(current.get("available")):
+        return ("storage.available", "info") if current["available"] else ("storage.unavailable", "error")
+    if bool(previous.get("writable")) != bool(current.get("writable")):
+        return ("storage.writable", "info") if current["writable"] else ("storage.unwritable", "warning")
+    if previous.get("status") != current.get("status"):
+        return "storage.status_transition", "warning" if current.get("status") == "degraded" else "info"
+    return None, "info"
+
+
+def _maybe_audit_storage_transition(db: Session, summary: dict, *, actor=None) -> None:
+    current = _storage_audit_state(summary)
+    state_key = str(current.get("storage_root") or "default")
+    with _STORAGE_AUDIT_LOCK:
+        previous = _LAST_STORAGE_AUDIT_STATE.get(state_key)
+        if previous == current:
+            return
+        event_type, severity = _storage_transition_event(previous, current)
+        _LAST_STORAGE_AUDIT_STATE[state_key] = dict(current)
+    if not event_type:
+        return
+    metadata = {
+        "previous_status": previous.get("status") if previous else None,
+        "current_status": current.get("status"),
+        "previous_writable": previous.get("writable") if previous else None,
+        "current_writable": current.get("writable"),
+        "readable": current.get("readable"),
+        "writable": current.get("writable"),
+        "available": current.get("available"),
+        "reason": current.get("reason"),
+        "storage_namespace": current.get("storage_namespace"),
+        "storage_root": current.get("storage_root"),
+        "checked_at": summary.get("checked_at"),
+        "capacity": summary.get("capacity"),
+    }
+    create_event(
+        db=db,
+        actor=actor,
+        category="storage",
+        event_type=event_type,
+        severity=severity,
+        message_ru=f"Storage status transition: {metadata['previous_status']} -> {metadata['current_status']}",
+        message_en=f"Storage status transition: {metadata['previous_status']} -> {metadata['current_status']}",
+        target_type="storage",
+        target_id=current.get("storage_namespace"),
+        metadata=metadata,
+    )
+
+
+def reset_storage_audit_state() -> None:
+    with _STORAGE_AUDIT_LOCK:
+        _LAST_STORAGE_AUDIT_STATE.clear()
 
 
 def _capacity(root: Path) -> tuple[dict, str | None]:
@@ -253,7 +329,13 @@ def _observe_namespace(root: Path, owned_paths: set[str]) -> dict:
     return observations
 
 
-def build_storage_monitoring_summary(db: Session, *, include_namespace_observations: bool = True) -> dict:
+def build_storage_monitoring_summary(
+    db: Session,
+    *,
+    include_namespace_observations: bool = True,
+    write_audit: bool = False,
+    audit_actor=None,
+) -> dict:
     root = _storage_root_path()
     checked_at = _utc_now()
     warnings: list[str] = []
@@ -365,7 +447,7 @@ def build_storage_monitoring_summary(db: Session, *, include_namespace_observati
         "note": "Not a retention planner, not a deletion dry-run, no files are deleted or auto-owned.",
     }
 
-    return {
+    summary = {
         "status": status,
         "ok": status == "available",
         "available": status == "available",
@@ -418,3 +500,6 @@ def build_storage_monitoring_summary(db: Session, *, include_namespace_observati
         "cleanup_candidates_summary": cleanup_candidates_summary,
         "namespace_observations": namespace_observations,
     }
+    if write_audit:
+        _maybe_audit_storage_transition(db, summary, actor=audit_actor)
+    return summary
