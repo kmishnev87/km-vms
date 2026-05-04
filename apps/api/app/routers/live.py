@@ -4,18 +4,18 @@ import re
 from pathlib import Path
 from typing import Literal, Optional
 
-import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.permissions import user_has_permission
+from app.core.permissions import PERMISSION_VIEW_LIVE
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.user import User
-from app.routers.deps import FORBIDDEN_DETAIL, require_permission
+from app.routers.deps import require_permission
+from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 from app.services.live_engine_v2 import manager
 
 router = APIRouter(prefix="/live", tags=["live"])
@@ -41,32 +41,18 @@ def _get_camera(db: Session, camera_id: int) -> Camera:
     return camera
 
 
-def _authorize_live_request(request: Request, token: Optional[str], db: Session) -> User:
-    raw_token = token
+def _live_media_resource(camera_id: int, stream: str) -> dict:
+    return {"camera_id": int(camera_id), "stream": str(stream)}
 
-    if not raw_token:
-        auth = request.headers.get("authorization", "")
-        if auth.lower().startswith("bearer "):
-            raw_token = auth[7:].strip()
 
-    if not raw_token:
-        raise HTTPException(status_code=401, detail="Требуется авторизация")
-
-    try:
-        payload = jwt.decode(raw_token, settings.jwt_secret, algorithms=["HS256"])
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Недействительный токен")
-
-    username = payload.get("sub")
-    if not username:
-        raise HTTPException(status_code=401, detail="Недействительный токен")
-
-    user = db.query(User).filter(User.username == username).first()
-    if not user or not getattr(user, "is_active", True):
-        raise HTTPException(status_code=401, detail="Пользователь не найден")
-    if not user_has_permission(user.role, "view_live"):
-        raise HTTPException(status_code=403, detail=FORBIDDEN_DETAIL)
-    return user
+def _authorize_live_media_token(media_token: Optional[str], camera_id: int, stream: str, db: Session) -> User:
+    return validate_media_token(
+        db,
+        token=media_token,
+        scope="live",
+        resource=_live_media_resource(camera_id, stream),
+        permission=PERMISSION_VIEW_LIVE,
+    )
 
 
 def _validate_hls_filename(filename: str):
@@ -149,7 +135,7 @@ def _hls_debug_payload(camera_id: int, stream: str) -> dict:
     }
 
 
-def _serve_live_playlist(camera_id: int, stream: str, token: Optional[str]) -> Response:
+def _serve_live_playlist(camera_id: int, stream: str, media_token: str) -> Response:
     playlist = manager.get_playlist_file(camera_id, stream)
     if not playlist.exists() or playlist.stat().st_size <= 0:
         raise HTTPException(
@@ -164,7 +150,7 @@ def _serve_live_playlist(camera_id: int, stream: str, token: Optional[str]) -> R
     lines = []
     for line in playlist_text.splitlines():
         if line.endswith(".ts"):
-            line = f"/api/live/{camera_id}/{stream}/{line}?token={token or ''}"
+            line = f"/api/live/{camera_id}/{stream}/{line}?media_token={media_token}"
         lines.append(line)
 
     return Response(
@@ -267,6 +253,21 @@ def live_debug_all(
     return manager.debug(camera_id=camera_id, stream=stream)
 
 
+@router.post("/media-token")
+def issue_live_media_token(
+    payload: LiveViewerPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("view_live")),
+):
+    _get_camera(db, payload.camera_id)
+    token, expires_at = create_media_token(
+        user=current_user,
+        scope="live",
+        resource=_live_media_resource(payload.camera_id, payload.stream),
+    )
+    return media_token_response(token, expires_at)
+
+
 @router.get("/debug/{camera_id}/{stream}")
 def live_debug_stream(
     camera_id: int,
@@ -283,12 +284,12 @@ def live_playlist(
     request: Request,
     camera_id: int,
     stream: StreamKey,
-    token: Optional[str] = Query(default=None),
+    media_token: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    _authorize_live_request(request, token, db)
+    _authorize_live_media_token(media_token, camera_id, stream, db)
     _get_camera(db, camera_id)
-    return _serve_live_playlist(camera_id, stream, token)
+    return _serve_live_playlist(camera_id, stream, media_token or "")
 
 
 @router.get("/{camera_id}/{stream}/{filename}")
@@ -297,15 +298,15 @@ def live_segment(
     camera_id: int,
     stream: StreamKey,
     filename: str,
-    token: Optional[str] = Query(default=None),
+    media_token: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    _authorize_live_request(request, token, db)
+    _authorize_live_media_token(media_token, camera_id, stream, db)
     _get_camera(db, camera_id)
     _validate_hls_filename(filename)
 
     if filename == "index.m3u8":
-        return _serve_live_playlist(camera_id, stream, token)
+        return _serve_live_playlist(camera_id, stream, media_token or "")
 
     file_path = manager.get_segment_file(camera_id, stream, filename)
     if not Path(file_path).exists():

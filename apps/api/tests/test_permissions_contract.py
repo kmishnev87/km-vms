@@ -176,10 +176,11 @@ def test_management_cameras_are_separated_from_viewer_cameras():
 
 def test_recording_routes_are_permission_protected():
     source = read_router("recordings.py")
-    assert source.count('Depends(require_permission("view_recordings"))') >= 2
+    assert source.count('Depends(require_permission("view_recordings"))') >= 3
     assert source.count('Depends(require_permission("delete_recordings"))') >= 4
-    assert 'user_has_permission(user.role, "view_recordings")' in source
+    assert 'validate_media_token(' in source
     assert decision("/recordings/stream", "GET").decision == "view_recordings"
+    assert decision("/recordings/media-token", "POST").decision == "view_recordings"
     assert decision("/recordings/all", "DELETE").decision == "delete_recordings"
 
 
@@ -195,19 +196,21 @@ def test_camera_delete_with_files_permission_contract_is_explicit():
 
 def test_chronology_routes_and_token_file_access_are_permission_protected():
     source = read_router("chronology.py")
-    assert source.count('Depends(require_permission("view_timeline"))') >= 2
-    assert 'user_has_permission(user.role, "view_timeline")' in source
-    assert "FORBIDDEN_DETAIL" in source
+    assert source.count('Depends(require_permission("view_timeline"))') >= 3
+    assert 'validate_media_token(' in source
+    assert 'scope="chronology"' in source
     assert decision("/chronology/file", "GET").decision == "view_timeline"
+    assert decision("/chronology/media-token", "POST").decision == "view_timeline"
 
 
 def test_live_routes_are_permission_protected():
     source = read_router("live.py")
-    assert source.count('Depends(require_permission("view_live"))') >= 4
+    assert source.count('Depends(require_permission("view_live"))') >= 5
     assert source.count('Depends(require_permission("manage_settings"))') >= 4
-    assert 'user_has_permission(user.role, "view_live")' in source
-    assert "FORBIDDEN_DETAIL" in source
+    assert 'validate_media_token(' in source
+    assert 'scope="live"' in source
     assert decision("/live/{camera_id}/{stream}/index.m3u8", "GET").decision == "view_live"
+    assert decision("/live/media-token", "POST").decision == "view_live"
     assert decision("/live/debug", "GET").decision == "manage_settings"
     assert decision("/live/stop-all", "POST").decision == "manage_settings"
 

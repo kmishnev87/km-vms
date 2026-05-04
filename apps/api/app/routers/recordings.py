@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
@@ -14,12 +13,13 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.permissions import user_has_permission
+from app.core.permissions import PERMISSION_VIEW_RECORDINGS
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
-from app.routers.deps import FORBIDDEN_DETAIL, require_permission
+from app.routers.deps import require_permission
+from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 from app.services.recording_retention import build_retention_plan, execute_segments, preview_segments, run_retention
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
@@ -61,6 +61,11 @@ class RetentionRunRequest(BaseModel):
     camera_id: int | None = None
     max_candidates: int | None = None
     max_bytes: int | None = None
+
+
+class RecordingMediaTokenRequest(BaseModel):
+    path: str
+    action: str = "stream"
 
 
 def storage_root() -> Path:
@@ -175,29 +180,8 @@ def apply_camera_filter(query, db: Session, camera_name: str | None):
     return query.filter(or_(*filters))
 
 
-def authorize_recording_token(token: str | None, db: Session) -> None:
-    if not token:
-        raise HTTPException(status_code=401, detail="Authorization required")
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    username = payload.get("sub")
-    user = db.query(User).filter(User.username == username).first() if username else None
-    if not user or not getattr(user, "is_active", True):
-        raise HTTPException(status_code=401, detail="User not found")
-    if not user_has_permission(user.role, "view_recordings"):
-        raise HTTPException(status_code=403, detail=FORBIDDEN_DETAIL)
-
-
-def authorize_recording_request(request: Request, token: str | None, db: Session) -> None:
-    raw_token = token
-    if not raw_token:
-        auth = request.headers.get("authorization") or ""
-        if auth.lower().startswith("bearer "):
-            raw_token = auth[7:].strip()
-    authorize_recording_token(raw_token, db)
+def recording_media_resource(path: str, action: str) -> dict:
+    return {"path": relative_to_storage(safe_resolve_relative(path)), "action": action}
 
 
 def human_size(size_bytes: int) -> str:
@@ -403,14 +387,39 @@ def list_recordings(
     }
 
 
+@router.post("/media-token")
+def issue_recording_media_token(
+    payload: RecordingMediaTokenRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("view_recordings")),
+):
+    action = str(payload.action or "stream").strip().lower()
+    if action not in {"stream", "download"}:
+        raise HTTPException(status_code=422, detail="Unsupported recording media action")
+    segment = get_finalized_segment_by_path(db, payload.path)
+    resolve_segment_file(segment)
+    token, expires_at = create_media_token(
+        user=current_user,
+        scope="recording",
+        resource=recording_media_resource(payload.path, action),
+    )
+    return media_token_response(token, expires_at)
+
+
 @router.get("/download")
 def download_recording(
     request: Request,
     path: str = Query(...),
-    token: str | None = Query(default=None),
+    media_token: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    authorize_recording_request(request, token, db)
+    validate_media_token(
+        db,
+        token=media_token,
+        scope="recording",
+        resource=recording_media_resource(path, "download"),
+        permission=PERMISSION_VIEW_RECORDINGS,
+    )
     segment = get_finalized_segment_by_path(db, path)
     file_path = resolve_segment_file(segment)
     media_metadata = segment_media_metadata(segment, file_path)
@@ -426,10 +435,16 @@ def download_recording(
 def stream_recording(
     request: Request,
     path: str = Query(...),
-    token: str | None = Query(default=None),
+    media_token: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    authorize_recording_token(token, db)
+    validate_media_token(
+        db,
+        token=media_token,
+        scope="recording",
+        resource=recording_media_resource(path, "stream"),
+        permission=PERMISSION_VIEW_RECORDINGS,
+    )
     segment = get_finalized_segment_by_path(db, path)
     file_path = resolve_segment_file(segment)
     media_metadata = segment_media_metadata(segment, file_path)

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
-import { apiFetch, canDeleteRecordings, getAuthToken } from "../../lib/api";
+import { apiFetch, canDeleteRecordings, issueRecordingMediaToken } from "../../lib/api";
 
 const PAGE_SIZE = 30;
 const TEXT = {
@@ -32,8 +32,8 @@ const TEXT = {
   openEmbeddedViewer: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u0432\u0441\u0442\u0440\u043e\u0435\u043d\u043d\u044b\u0439 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
   viewRecord: "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440 \u0437\u0430\u043f\u0438\u0441\u0438",
   close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
-  unsupportedPlayback: "Формат MKV может не воспроизводиться в браузере. Скачайте файл.",
-  playbackError: "Не удалось воспроизвести запись в браузере. Скачайте файл.",
+  unsupportedPlayback: "???????????? MKV ?????????? ???? ???????????????????????????????? ?? ????????????????. ???????????????? ????????.",
+  playbackError: "???? ?????????????? ?????????????????????????? ???????????? ?? ????????????????. ???????????????? ????????.",
 };
 
 const ICONS = {
@@ -165,29 +165,29 @@ function buildPageList(currentPage, pageCount) {
 }
 
 function summarizeDeleteResult(result) {
-  if (!result || typeof result !== "object") return "Операция выполнена.";
+  if (!result || typeof result !== "object") return "???????????????? ??????????????????.";
   const deleted = Number(result.deleted_count || 0);
   const skipped = Number(result.skipped_count || 0);
   const failed = Number(result.failed_count || 0);
   const notFound = Number(result.not_found_count || 0);
-  return `Удалено: ${deleted}; пропущено: ${skipped + notFound}; ошибок: ${failed}.`;
+  return `??????????????: ${deleted}; ??????????????????: ${skipped + notFound}; ????????????: ${failed}.`;
 }
 
 function normalizeRecordingError(message) {
   const text = String(message || "").trim();
-  if (!text) return "Не удалось выполнить действие. Повторите попытку.";
+  if (!text) return "???? ?????????????? ?????????????????? ????????????????. ?????????????????? ??????????????.";
   if (text.startsWith("{") || text.startsWith("[")) {
     try {
       const parsed = JSON.parse(text);
       return summarizeDeleteResult(parsed?.detail || parsed);
     } catch (_) {
-      return "Не удалось выполнить действие. Проверьте состояние записи и повторите попытку.";
+      return "???? ?????????????? ?????????????????? ????????????????. ?????????????????? ?????????????????? ???????????? ?? ?????????????????? ??????????????.";
     }
   }
-  if (text.includes("Recording file not found")) return "Файл записи отсутствует.";
-  if (text.includes("metadata")) return "Метаданные записи недоступны.";
-  if (text.includes("Invalid path")) return "Путь записи недоступен.";
-  if (text.length > 180) return "Не удалось выполнить действие. Проверьте состояние записи и повторите попытку.";
+  if (text.includes("Recording file not found")) return "???????? ???????????? ??????????????????????.";
+  if (text.includes("metadata")) return "???????????????????? ???????????? ????????????????????.";
+  if (text.includes("Invalid path")) return "???????? ???????????? ????????????????????.";
+  if (text.length > 180) return "???? ?????????????? ?????????????????? ????????????????. ?????????????????? ?????????????????? ???????????? ?? ?????????????????? ??????????????.";
   return text;
 }
 
@@ -216,9 +216,13 @@ export default function RecordingsPage() {
   const [viewerUrl, setViewerUrl] = useState("");
   const [viewerItem, setViewerItem] = useState(null);
   const [viewerPlaybackError, setViewerPlaybackError] = useState(false);
+  const [viewerRefreshAttempted, setViewerRefreshAttempted] = useState(false);
 
   const requestIdRef = useRef(0);
   const dangerMenuRef = useRef(null);
+  const viewerVideoRef = useRef(null);
+  const viewerRestoreStateRef = useRef(null);
+  const viewerRefreshInFlightRef = useRef(false);
   const canDelete = canDeleteRecordings(currentUser);
 
   async function loadCameras() {
@@ -365,12 +369,12 @@ export default function RecordingsPage() {
     setSelectedPaths((prev) => Array.from(new Set([...prev, ...visiblePaths])));
   }
 
-  function handleDownload(item) {
+  async function handleDownload(item) {
     try {
       setError("");
       setNotice("");
-      const token = getAuthToken();
-      const url = `/api/recordings/download?path=${encodeURIComponent(item.path)}&token=${encodeURIComponent(token)}`;
+      const mediaToken = await issueRecordingMediaToken(item.path, "download");
+      const url = `/api/recordings/download?path=${encodeURIComponent(item.path)}&media_token=${encodeURIComponent(mediaToken)}`;
       const a = document.createElement("a");
       a.href = url;
       a.download = item.filename || "recording.mp4";
@@ -382,18 +386,20 @@ export default function RecordingsPage() {
     }
   }
 
-  function handleWatch(item) {
+  async function handleWatch(item) {
     try {
       setError("");
       setNotice("");
-      const token = getAuthToken();
       const url = isDirectPlaybackUnsupported(item)
         ? ""
-        : `/api/recordings/stream?path=${encodeURIComponent(item.path)}&token=${encodeURIComponent(token)}`;
+        : await buildRecordingStreamUrl(item);
       setViewerTitle(item.filename);
       setViewerUrl(url);
       setViewerItem(item);
       setViewerPlaybackError(false);
+      setViewerRefreshAttempted(false);
+      viewerRestoreStateRef.current = null;
+      viewerRefreshInFlightRef.current = false;
       setViewerOpen(true);
     } catch (err) {
       setError(normalizeRecordingError(err.message));
@@ -405,7 +411,73 @@ export default function RecordingsPage() {
     setViewerUrl("");
     setViewerItem(null);
     setViewerPlaybackError(false);
+    setViewerRefreshAttempted(false);
+    viewerRestoreStateRef.current = null;
+    viewerRefreshInFlightRef.current = false;
     setViewerOpen(false);
+  }
+
+  async function refreshViewerUrlAfterMediaError() {
+    if (
+      !viewerItem ||
+      viewerRefreshAttempted ||
+      viewerRefreshInFlightRef.current ||
+      isDirectPlaybackUnsupported(viewerItem)
+    ) {
+      if (viewerRefreshInFlightRef.current) return;
+      setViewerPlaybackError(true);
+      return;
+    }
+
+    const video = viewerVideoRef.current;
+    viewerRestoreStateRef.current = {
+      currentTime: Number(video?.currentTime || 0),
+      playbackRate: Number(video?.playbackRate || 1),
+      playIntent: Boolean(video && !video.paused && !video.ended),
+    };
+
+    try {
+      viewerRefreshInFlightRef.current = true;
+      setViewerRefreshAttempted(true);
+      const url = await buildRecordingStreamUrl(viewerItem);
+      setViewerUrl(url);
+      setViewerPlaybackError(false);
+    } catch (_) {
+      viewerRestoreStateRef.current = null;
+      setViewerPlaybackError(true);
+    } finally {
+      viewerRefreshInFlightRef.current = false;
+    }
+  }
+
+  function restoreViewerPlaybackState() {
+    const video = viewerVideoRef.current;
+    const restoreState = viewerRestoreStateRef.current;
+    if (!video || !restoreState) return;
+
+    viewerRestoreStateRef.current = null;
+
+    const targetTime = Math.max(0, Number(restoreState.currentTime || 0));
+    const duration = Number(video.duration || 0);
+    const safeTime = Number.isFinite(duration) && duration > 0
+      ? Math.min(targetTime, Math.max(0, duration - 0.25))
+      : targetTime;
+
+    try {
+      video.currentTime = safeTime;
+    } catch (_) {}
+
+    try {
+      video.playbackRate = Number(restoreState.playbackRate || 1);
+    } catch (_) {}
+
+    if (restoreState.playIntent) {
+      video.play().catch(() => {});
+    } else {
+      try {
+        video.pause();
+      } catch (_) {}
+    }
   }
 
   async function handleDeleteOne(item) {
@@ -780,12 +852,15 @@ export default function RecordingsPage() {
             ) : (
               <video
                 key={viewerUrl}
+                ref={viewerVideoRef}
                 src={viewerUrl}
                 controls
                 autoPlay
                 preload="metadata"
                 className="recordingVideo"
-                onError={() => setViewerPlaybackError(true)}
+                onLoadedMetadata={restoreViewerPlaybackState}
+                onCanPlay={restoreViewerPlaybackState}
+                onError={refreshViewerUrlAfterMediaError}
               />
             )}
 
@@ -806,3 +881,7 @@ export default function RecordingsPage() {
     </Layout>
   );
 }
+  async function buildRecordingStreamUrl(item) {
+    const mediaToken = await issueRecordingMediaToken(item.path, "stream");
+    return `/api/recordings/stream?path=${encodeURIComponent(item.path)}&media_token=${encodeURIComponent(mediaToken)}`;
+  }

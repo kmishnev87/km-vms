@@ -1,10 +1,10 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "/api";
 const TOKEN_KEY = "token";
 const TOKEN_EXPIRES_KEY = "token_expires_at";
-const FORBIDDEN_RU = "Раздел недоступен. Ограничены права пользователя.";
+const FORBIDDEN_RU = "???????????? ????????????????????. ???????????????????? ?????????? ????????????????????????.";
 const FORBIDDEN_EN = "Section unavailable. User permissions are limited.";
 const LEGACY_FORBIDDEN_TEXT = ["Insufficient", "permissions"].join(" ");
-const LEGACY_FORBIDDEN_RU = "Ограничены права пользователя";
+const LEGACY_FORBIDDEN_RU = "???????????????????? ?????????? ????????????????????????";
 
 export function forbiddenMessage(language = "ru") {
   return language === "en" ? FORBIDDEN_EN : FORBIDDEN_RU;
@@ -86,7 +86,7 @@ function normalizeErrorDetail(response, detail) {
   ) {
     return forbiddenMessage(currentUiLanguage());
   }
-  return detail || "Ошибка запроса";
+  return detail || "???????????? ??????????????";
 }
 
 export async function apiFetch(path, options = {}) {
@@ -149,4 +149,57 @@ export async function apiFetchBlob(path, options = {}) {
   const filename = match ? match[1] : null;
 
   return { blob, filename };
+}
+
+export async function issueRecordingMediaToken(path, action = "stream") {
+  const data = await issueRecordingMediaTokenInfo(path, action);
+  return data.mediaToken;
+}
+
+export async function issueRecordingMediaTokenInfo(path, action = "stream") {
+  const data = await apiFetch("/recordings/media-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, action }),
+  });
+  return {
+    mediaToken: data?.media_token || "",
+    expiresAt: data?.expires_at || null,
+    expiresIn: Number(data?.expires_in || 0),
+  };
+}
+
+export async function issueChronologyMediaToken(cameraId, relPath) {
+  const data = await issueChronologyMediaTokenInfo(cameraId, relPath);
+  return data.mediaToken;
+}
+
+export async function issueChronologyMediaTokenInfo(cameraId, relPath) {
+  const data = await apiFetch(
+    `/chronology/media-token?camera_id=${encodeURIComponent(cameraId)}&rel_path=${encodeURIComponent(relPath)}`,
+    { method: "POST" }
+  );
+  return {
+    mediaToken: data?.media_token || "",
+    expiresAt: data?.expires_at || null,
+    expiresIn: Number(data?.expires_in || 0),
+  };
+}
+
+export async function issueLiveMediaToken(cameraId, stream) {
+  const data = await issueLiveMediaTokenInfo(cameraId, stream);
+  return data.mediaToken;
+}
+
+export async function issueLiveMediaTokenInfo(cameraId, stream) {
+  const data = await apiFetch("/live/media-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ camera_id: Number(cameraId), stream }),
+  });
+  return {
+    mediaToken: data?.media_token || "",
+    expiresAt: data?.expires_at || null,
+    expiresIn: Number(data?.expires_in || 0),
+  };
 }

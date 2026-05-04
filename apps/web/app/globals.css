@@ -41,11 +41,11 @@ textarea {
 
 .topNav {
   width: 100%;
-  min-height: 60px;
-  height: 60px;
+  min-height: 66px;
+  height: 66px;
   background: #ffffff;
   border-bottom: 1px solid #dbe3ef;
-  padding: 7px 0;
+  padding: 6px 0;
   overflow-x: auto;
   overflow-y: hidden;
   white-space: nowrap;
@@ -122,9 +122,9 @@ textarea {
 }
 
 .topNavItem {
-  height: 44px;
-  width: 46px;
-  min-width: 46px;
+  height: 52px;
+  width: 54px;
+  min-width: 54px;
   border: 1px solid transparent;
   border-radius: 10px;
   padding: 0;
@@ -144,19 +144,20 @@ textarea {
 }
 
 .topNavItem:hover {
-  background: #f1f5f9;
+  background: transparent;
+  border-color: #dbeafe;
 }
 
 .topNavItem.active {
-  border-color: #bfdbfe;
-  background: #eff6ff;
+  border-color: transparent;
+  background: transparent;
   color: #1d4ed8;
-  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.08);
+  box-shadow: inset 0 -3px 0 rgba(37, 99, 235, 0.28);
 }
 
 .topNavIconImage {
-  width: 30px;
-  height: 30px;
+  width: 42px;
+  height: 42px;
   display: block;
   object-fit: contain;
 }
@@ -197,11 +198,14 @@ textarea {
   min-height: 132px;
   border: 1px solid #dbe3ef;
   border-radius: 14px;
-  background: #ffffff;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.7) 34%, rgba(255, 255, 255, 0.18) 70%, rgba(255, 255, 255, 0.02) 100%),
+    url("/assets/backgrounds/dashboard/header.jpg") center right / 100% 100% no-repeat,
+    #ffffff;
   padding: 24px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 20px;
 }
 
@@ -211,28 +215,11 @@ textarea {
 }
 
 .dashboardHeader::after {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: min(56%, 620px);
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.62) 58%, rgba(255, 255, 255, 0) 100%);
-  z-index: 1;
-  pointer-events: none;
+  content: none;
 }
 
 .dashboardHeaderImage {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: min(62%, 760px);
-  height: 108%;
-  object-fit: cover;
-  object-position: center right;
-  border-radius: 0 14px 14px 0;
-  opacity: 1;
-  filter: saturate(1.08) contrast(1.03);
-  z-index: 0;
+  display: none;
 }
 
 .dashboardTitle {
@@ -258,10 +245,14 @@ textarea {
 .dashboardCard {
   position: relative;
   overflow: hidden;
-  min-height: 230px;
+  min-height: 248px;
   border: 1px solid #dbe3ef;
   border-radius: 14px;
-  background: #ffffff;
+  background-color: #ffffff;
+  background-image: var(--dashboard-card-bg);
+  background-repeat: no-repeat;
+  background-position: right center;
+  background-size: cover;
   padding: 16px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 24px;
@@ -271,9 +262,21 @@ textarea {
   transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
 }
 
+.dashboardCard::before {
+  content: none;
+}
+
+.dashboardCard::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.34) 48%, rgba(255, 255, 255, 0.05) 100%);
+  pointer-events: none;
+}
+
 .dashboardCard > * {
   position: relative;
-  z-index: 1;
+  z-index: 2;
 }
 
 .dashboardCard:hover {
@@ -283,10 +286,10 @@ textarea {
 }
 
 .dashboardCardIcon {
-  width: 112px;
-  height: 112px;
-  border-radius: 18px;
-  background: #eff6ff;
+  width: 128px;
+  height: 128px;
+  border-radius: 0;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -294,8 +297,8 @@ textarea {
 }
 
 .dashboardCardIcon img {
-  width: 92px;
-  height: 92px;
+  width: 128px;
+  height: 128px;
   object-fit: contain;
   display: block;
 }
@@ -461,7 +464,7 @@ textarea {
   position: absolute;
   inset: 0;
   z-index: 0;
-  background: url("/icons/nav/settings-bg.png") center center / cover no-repeat;
+  background: url("/assets/backgrounds/settings/settings-bg.jpg") center center / cover no-repeat;
 }
 
 .settingsPage::after {
@@ -882,7 +885,7 @@ textarea {
   width: var(--settings-row-icon);
   height: var(--settings-row-icon);
   border-radius: var(--settings-radius);
-  background: #f1f5f9;
+  background: rgba(241, 245, 249, 0.72);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -890,8 +893,8 @@ textarea {
 }
 
 .settingsRowIcon img {
-  max-width: 40px;
-  max-height: 40px;
+  max-width: 42px;
+  max-height: 42px;
   object-fit: contain;
   display: block;
 }
@@ -3521,9 +3524,9 @@ textarea {
   }
 
   .topNav {
-    height: 54px;
-    min-height: 54px;
-    padding: 6px 0;
+    height: 58px;
+    min-height: 58px;
+    padding: 5px 0;
   }
 
   .topNavInner {
@@ -3538,9 +3541,9 @@ textarea {
   }
 
   .topNavItem {
-    height: 38px;
-    width: 40px;
-    min-width: 40px;
+    height: 46px;
+    width: 48px;
+    min-width: 48px;
   }
 
   .topNavButton {
@@ -3548,8 +3551,8 @@ textarea {
   }
 
   .topNavIconImage {
-    width: 26px;
-    height: 26px;
+    width: 36px;
+    height: 36px;
   }
 
   .mainContent {
@@ -3578,17 +3581,17 @@ textarea {
   }
 
   .dashboardCard {
-    min-height: 190px;
+    min-height: 206px;
   }
 
   .dashboardCardIcon {
-    width: 88px;
-    height: 88px;
+    width: 96px;
+    height: 96px;
   }
 
   .dashboardCardIcon img {
-    width: 72px;
-    height: 72px;
+    width: 96px;
+    height: 96px;
   }
 
   .card {

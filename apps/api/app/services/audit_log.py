@@ -29,7 +29,7 @@ SEVERITIES = {"info", "warning", "error", "security"}
 SENSITIVE_KEY_RE = re.compile(r"(password|password_hash|secret|token|authorization|jwt|encryption_key|key)", re.IGNORECASE)
 RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://[^:\s/@]+):([^@\s]+)@", re.IGNORECASE)
 BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
-TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token)=)[^&\s]+", re.IGNORECASE)
+TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token|media_token)=)[^&\s]+", re.IGNORECASE)
 
 
 def request_ip(request) -> str | None:

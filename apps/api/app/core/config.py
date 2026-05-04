@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     app_env: str = "production"
     app_host: str = "0.0.0.0"
     app_port: int = 8000
+    cors_allowed_origins: str = ""
 
     database_url: str
     jwt_secret: str
@@ -54,6 +55,19 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value.strip().lower() in {"", "0", "none", "null", "unlimited", "off"}:
             return 0
         return value
+
+    def cors_origins(self) -> list[str]:
+        raw = str(self.cors_allowed_origins or "").strip()
+        if raw:
+            return [item.strip() for item in raw.split(",") if item.strip()]
+        if str(self.app_env or "").lower() in {"dev", "development", "local", "test"}:
+            return [
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:8088",
+                "http://127.0.0.1:8088",
+            ]
+        return []
 
     def camera_preview_path(self, camera_id: int) -> Path:
         return Path(self.storage_previews) / "camera-previews" / f"{int(camera_id)}.jpg"

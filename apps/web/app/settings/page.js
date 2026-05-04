@@ -548,8 +548,8 @@ export default function SettingsPage() {
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
   const languageIcon = lang === "en"
-    ? "/icons/nav/language-icon_ENG.png"
-    : "/icons/nav/language-icon_RU.png";
+    ? "/assets/icons/ui/language-en.png"
+    : "/assets/icons/ui/language-ru.png";
 
   useEffect(() => {
     load();
@@ -952,7 +952,7 @@ export default function SettingsPage() {
         <div className="settingsWorkspace">
           <div className="pageHeader settingsHeader">
             <div className="settingsTitleBlock">
-              <img src="/icons/nav/settings-icon.png" alt="" />
+              <img src="/assets/icons/ui/settings.png" alt="" />
               <div>
                 <h1 className="pageTitle">{t.title}</h1>
                 <div className="pageSubtitle">{t.subtitle}</div>
@@ -988,7 +988,7 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="settingsRow">
-                  <div className="settingsRowIcon"><img src="/icons/nav/timezone-icon.png" alt="" /></div>
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/timezone.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label htmlFor="settings-timezone">{t.timezone}<InfoTip text={t.tooltips.timezone} /></label>
                     <span>{t.timezoneHelp}</span>
@@ -1001,7 +1001,7 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="settingsRow">
-                  <div className="settingsRowIcon"><img src="/icons/nav/storage-icon.png" alt="" /></div>
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/storage.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label htmlFor="settings-storage">{t.storage}<InfoTip text={t.tooltips.storage} /></label>
                     <span>{t.storageText}</span>
@@ -1015,7 +1015,7 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="settingsRow">
-                  <div className="settingsRowIcon"><img src="/icons/nav/records.png" alt="" /></div>
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/recordings.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label htmlFor="settings-recording">{t.recording}<InfoTip text={t.tooltips.recording} /></label>
                     <span>{profileHelp} {t.mapsTo}: {recordingFormatForProfile(draft.recordingProfile).toUpperCase()}.</span>
@@ -1029,7 +1029,7 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="settingsRow settingsRowHardware">
-                  <div className="settingsRowIcon"><img src="/icons/nav/hardware-icon.png" alt="" /></div>
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/hardware.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label htmlFor="settings-hardware">{t.hardware}<InfoTip text={t.tooltips.hardware} /></label>
                     <span>{hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.</span>
@@ -1064,7 +1064,7 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="settingsRow">
-                  <div className="settingsRowIcon"><img src="/icons/nav/security-icon.png" alt="" /></div>
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/security.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label>{t.security}<InfoTip text={t.tooltips.security} /></label>
                     <span>{t.securityText}</span>
@@ -1077,7 +1077,7 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="settingsRow">
-                  <div className="settingsRowIcon"><img src="/icons/nav/users-icon.png" alt="" /></div>
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/users.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label>{t.users}<InfoTip text={t.tooltips.users} /></label>
                     <span>{t.usersText}</span>

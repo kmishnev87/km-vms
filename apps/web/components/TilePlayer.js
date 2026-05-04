@@ -2,11 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
-import { apiFetch, getAuthToken } from "../lib/api";
+import { apiFetch, issueLiveMediaTokenInfo } from "../lib/api";
 
 const READY_POLL_INTERVAL_MS = 700;
 const READY_TIMEOUT_MS = 210000;
 const VIEWER_TOUCH_INTERVAL_MS = 15000;
+const MEDIA_TOKEN_REFRESH_SAFETY_MS = 45000;
+const MEDIA_TOKEN_MIN_REFRESH_MS = 30000;
 
 const TEXT = {
   noToken: "\u041d\u0435\u0442 \u0442\u043e\u043a\u0435\u043d\u0430 \u0430\u0432\u0442\u043e\u0440\u0438\u0437\u0430\u0446\u0438\u0438",
@@ -43,6 +45,9 @@ export default function TilePlayer({ cameraId, stream }) {
   const wrapRef = useRef(null);
   const hlsRef = useRef(null);
   const retryTimerRef = useRef(null);
+  const mediaTokenRefreshTimerRef = useRef(null);
+  const mediaTokenRefreshInFlightRef = useRef(null);
+  const nativeHlsCleanupRef = useRef(null);
   const touchTimerRef = useRef(null);
   const viewerIdRef = useRef(null);
 
@@ -53,6 +58,18 @@ export default function TilePlayer({ cameraId, stream }) {
     if (retryTimerRef.current) {
       clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
+    }
+    if (mediaTokenRefreshTimerRef.current) {
+      clearTimeout(mediaTokenRefreshTimerRef.current);
+      mediaTokenRefreshTimerRef.current = null;
+    }
+    mediaTokenRefreshInFlightRef.current = null;
+
+    if (nativeHlsCleanupRef.current) {
+      try {
+        nativeHlsCleanupRef.current();
+      } catch (_) {}
+      nativeHlsCleanupRef.current = null;
     }
 
     if (hlsRef.current) {
@@ -170,11 +187,68 @@ export default function TilePlayer({ cameraId, stream }) {
       );
     }
 
-    function buildPlaylistUrl(token) {
-      return `/api/live/${sourceKey.cameraId}/${sourceKey.stream}/index.m3u8?token=${encodeURIComponent(token)}`;
+    async function buildPlaylistUrl() {
+      const tokenInfo = await issueLiveMediaTokenInfo(sourceKey.cameraId, sourceKey.stream);
+      return {
+        url: `/api/live/${sourceKey.cameraId}/${sourceKey.stream}/index.m3u8?media_token=${encodeURIComponent(tokenInfo.mediaToken)}`,
+        expiresIn: tokenInfo.expiresIn,
+      };
     }
 
-    function continueWaitingForReady(token, message) {
+    async function refreshPlaylistSource() {
+      if (cancelled) return false;
+      if (mediaTokenRefreshInFlightRef.current) {
+        try {
+          await mediaTokenRefreshInFlightRef.current;
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+
+      mediaTokenRefreshInFlightRef.current = (async () => {
+        const next = await buildPlaylistUrl();
+        if (cancelled) return;
+        if (hlsRef.current) {
+          hlsRef.current.loadSource(next.url);
+        } else if (videoRef.current) {
+          const video = videoRef.current;
+          const wasPaused = video.paused;
+          video.src = next.url;
+          video.load();
+          if (!wasPaused) video.play().catch(() => {});
+        }
+        scheduleMediaTokenRefresh(next.expiresIn);
+      })();
+
+      try {
+        await mediaTokenRefreshInFlightRef.current;
+        return true;
+      } catch (_) {
+        return false;
+      } finally {
+        if (mediaTokenRefreshInFlightRef.current) {
+          mediaTokenRefreshInFlightRef.current = null;
+        }
+      }
+    }
+
+    function scheduleMediaTokenRefresh(expiresIn) {
+      if (mediaTokenRefreshTimerRef.current) {
+        clearTimeout(mediaTokenRefreshTimerRef.current);
+        mediaTokenRefreshTimerRef.current = null;
+      }
+      const ttlMs = Math.max(0, Number(expiresIn || 0) * 1000);
+      const delay = Math.max(MEDIA_TOKEN_MIN_REFRESH_MS, ttlMs - MEDIA_TOKEN_REFRESH_SAFETY_MS);
+      mediaTokenRefreshTimerRef.current = setTimeout(async () => {
+        const refreshed = await refreshPlaylistSource();
+        if (!cancelled && !refreshed) {
+          failWithMessage(TEXT.failedPlay);
+        }
+      }, delay);
+    }
+
+    function continueWaitingForReady(message) {
       if (cancelled) return;
 
       setStatus("waiting");
@@ -184,7 +258,7 @@ export default function TilePlayer({ cameraId, stream }) {
 
         const readyState = await waitForReady();
         if (readyState.ready) {
-          await attachPlayer(buildPlaylistUrl(token));
+          await attachPlayer(await buildPlaylistUrl());
           return;
         }
 
@@ -194,7 +268,7 @@ export default function TilePlayer({ cameraId, stream }) {
         }
 
         if (isStillStarting(readyState)) {
-          continueWaitingForReady(token, message);
+          continueWaitingForReady(message);
           return;
         }
 
@@ -202,9 +276,10 @@ export default function TilePlayer({ cameraId, stream }) {
       }, READY_POLL_INTERVAL_MS);
     }
 
-    async function attachPlayer(src) {
+    async function attachPlayer(playlist) {
       const video = videoRef.current;
       if (!video) return;
+      let authRefreshFailures = 0;
 
       destroyPlayer();
 
@@ -227,18 +302,34 @@ export default function TilePlayer({ cameraId, stream }) {
 
         hls.on(Hls.Events.MEDIA_ATTACHED, () => {
           if (!cancelled) {
-            hls.loadSource(src);
+            hls.loadSource(playlist.url);
+            scheduleMediaTokenRefresh(playlist.expiresIn);
           }
         });
 
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           if (cancelled) return;
+          authRefreshFailures = 0;
           setStatus("playing");
           setError("");
           video.play().catch(() => {});
         });
 
-        hls.on(Hls.Events.ERROR, (_event, data) => {
+        hls.on(Hls.Events.ERROR, async (_event, data) => {
+          if (cancelled) return;
+          const statusCode = Number(data?.response?.code || data?.networkDetails?.status || 0);
+          if (data?.type === Hls.ErrorTypes.NETWORK_ERROR && (statusCode === 401 || statusCode === 403)) {
+            if (authRefreshFailures >= 3) {
+              failWithMessage(TEXT.failedPlay);
+              return;
+            }
+            authRefreshFailures += 1;
+            const refreshed = await refreshPlaylistSource();
+            if (!cancelled && !refreshed) {
+              failWithMessage(TEXT.failedPlay);
+            }
+            return;
+          }
           if (cancelled || !data?.fatal) return;
           failWithMessage(TEXT.failedPlay);
         });
@@ -248,23 +339,37 @@ export default function TilePlayer({ cameraId, stream }) {
       }
 
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = src;
+        let nativeRefreshFailures = 0;
+        video.src = playlist.url;
+        scheduleMediaTokenRefresh(playlist.expiresIn);
 
         const onLoaded = () => {
           if (cancelled) return;
           setStatus("playing");
           setError("");
+          nativeRefreshFailures = 0;
           video.play().catch(() => {});
         };
 
-        const onError = () => {
-          if (!cancelled) {
+        const onError = async () => {
+          if (cancelled) return;
+          if (nativeRefreshFailures >= 3) {
+            failWithMessage(TEXT.failedPlay);
+            return;
+          }
+          nativeRefreshFailures += 1;
+          const refreshed = await refreshPlaylistSource();
+          if (!cancelled && !refreshed) {
             failWithMessage(TEXT.failedPlay);
           }
         };
 
-        video.addEventListener("loadedmetadata", onLoaded, { once: true });
-        video.addEventListener("error", onError, { once: true });
+        video.addEventListener("loadedmetadata", onLoaded);
+        video.addEventListener("error", onError);
+        nativeHlsCleanupRef.current = () => {
+          video.removeEventListener("loadedmetadata", onLoaded);
+          video.removeEventListener("error", onError);
+        };
         video.load();
         return;
       }
@@ -275,14 +380,6 @@ export default function TilePlayer({ cameraId, stream }) {
 
     async function startPlayback() {
       if (!sourceKey.cameraId || !sourceKey.stream) return;
-
-      const token = getAuthToken();
-
-      if (!token) {
-        setStatus("error");
-        setError(TEXT.noToken);
-        return;
-      }
 
       setStatus("loading");
       setError("");
@@ -313,14 +410,14 @@ export default function TilePlayer({ cameraId, stream }) {
             return;
           }
           if (isStillStarting(readyState)) {
-            continueWaitingForReady(token, TEXT.failedStart);
+            continueWaitingForReady(TEXT.failedStart);
             return;
           }
           failWithMessage(TEXT.failedStart);
           return;
         }
 
-        const src = buildPlaylistUrl(token);
+        const src = await buildPlaylistUrl();
         if (!cancelled) {
           await attachPlayer(src);
         }

@@ -4,18 +4,18 @@ import mimetypes
 from datetime import datetime, timedelta
 from pathlib import Path
 
-import jwt
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.permissions import user_has_permission
+from app.core.permissions import PERMISSION_VIEW_TIMELINE, user_has_permission
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL, get_db, require_permission
+from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 
 router = APIRouter(prefix="/chronology", tags=["chronology"])
 
@@ -80,20 +80,6 @@ def _segment_media_metadata(segment: RecordingSegment, file_path: Path) -> dict[
         "file_extension": extension or None,
         "mime_type": media_type or "application/octet-stream",
     }
-
-
-def _validate_token(token: str, db: Session):
-    try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-    username = payload.get("sub")
-    user = db.query(User).filter(User.username == username).first() if username else None
-    if not user or not getattr(user, "is_active", True):
-        raise HTTPException(status_code=401, detail="User not found")
-    if not user_has_permission(user.role, "view_timeline"):
-        raise HTTPException(status_code=403, detail=FORBIDDEN_DETAIL)
 
 
 def _parse_ts(raw: str, field_name: str) -> datetime:
@@ -302,14 +288,52 @@ def chronology_ranges(
     }
 
 
+def _chronology_media_resource(camera_id: int, rel_path: str) -> dict:
+    return {"camera_id": int(camera_id), "rel_path": _safe_storage_relative_path(rel_path)}
+
+
+@router.post("/media-token")
+def issue_chronology_media_token(
+    camera_id: int = Query(...),
+    rel_path: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("view_timeline")),
+):
+    normalized_path = _safe_storage_relative_path(rel_path)
+    segment = (
+        _finalized_segments_query(db)
+        .filter(
+            RecordingSegment.camera_id == camera_id,
+            RecordingSegment.relative_path == normalized_path,
+        )
+        .order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
+        .first()
+    )
+    if not segment:
+        raise HTTPException(status_code=404, detail="Recording metadata not found")
+    _resolve_segment_path(segment)
+    token, expires_at = create_media_token(
+        user=current_user,
+        scope="chronology",
+        resource=_chronology_media_resource(camera_id, normalized_path),
+    )
+    return media_token_response(token, expires_at)
+
+
 @router.get("/file")
 def chronology_file(
     camera_id: int = Query(...),
     rel_path: str = Query(...),
-    token: str = Query(...),
+    media_token: str = Query(...),
     db: Session = Depends(get_db),
 ):
-    _validate_token(token, db)
+    validate_media_token(
+        db,
+        token=media_token,
+        scope="chronology",
+        resource=_chronology_media_resource(camera_id, rel_path),
+        permission=PERMISSION_VIEW_TIMELINE,
+    )
 
     normalized_path = _safe_storage_relative_path(rel_path)
     segment = (

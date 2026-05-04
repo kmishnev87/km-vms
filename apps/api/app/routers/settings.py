@@ -56,7 +56,7 @@ DIAGNOSTIC_MODES = {"normal", "extended"}
 SENSITIVE_KEY_RE = re.compile(r"(password|secret|token|authorization|encryption_key|jwt)", re.IGNORECASE)
 RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://)([^@\s/]+)@", re.IGNORECASE)
 BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
-TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token)=)[^&\s]+", re.IGNORECASE)
+TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token|media_token)=)[^&\s]+", re.IGNORECASE)
 DOCKER_SOCKET = Path("/var/run/docker.sock")
 
 
@@ -91,13 +91,15 @@ class StorageValidateRequest(BaseModel):
 @router.get("/system/status")
 def system_status(db: Session = Depends(get_db)):
     system = get_system_settings(db)
-    return {
+    payload = {
         "initialized": system.system_initialized,
         "setup_required": not system.system_initialized,
         "language": system.language,
         "timezone": system.timezone,
-        "runtime": build_system_runtime_status(db),
     }
+    if not system.system_initialized:
+        payload["runtime"] = {"available": False, "setup_required": True}
+    return payload
 
 
 @router.get("/system/recorder/status")
