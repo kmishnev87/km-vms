@@ -6,6 +6,7 @@ import uuid
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
@@ -31,7 +32,7 @@ CATEGORIES = {
 }
 SEVERITIES = {"info", "warning", "error", "security"}
 SENSITIVE_KEY_RE = re.compile(
-    r"(password|password_hash|secret|token|authorization|jwt|encryption_key|key|credential|cookie)",
+    r"(password|password_hash|secret|token|authorization|jwt|encryption_key|key|credential|cookie|raw_body|request_body)",
     re.IGNORECASE,
 )
 RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://[^:\s/@]+):([^@\s]+)@", re.IGNORECASE)
@@ -181,6 +182,42 @@ def serialize_event(event: AuditEvent) -> dict:
     }
 
 
+def audit_summary(events: list[AuditEvent]) -> dict:
+    by_category: dict[str, int] = {}
+    by_severity: dict[str, int] = {}
+    highlighted = []
+    for event in events:
+        by_category[event.category or "system"] = by_category.get(event.category or "system", 0) + 1
+        by_severity[event.severity or "info"] = by_severity.get(event.severity or "info", 0) + 1
+        if event.category == "security" or event.severity in {"warning", "error", "security"}:
+            highlighted.append(
+                {
+                    "created_at": event.created_at.isoformat() + "Z" if event.created_at else None,
+                    "category": event.category,
+                    "severity": event.severity,
+                    "event_type": event.event_type,
+                    "message": redact_text(event.message_en or event.message_ru or ""),
+                    "target_type": event.target_type,
+                    "target_id": event.target_id,
+                    "target_name": redact_text(event.target_name) if event.target_name else None,
+                }
+            )
+    return {
+        "total": len(events),
+        "by_category": dict(sorted(by_category.items())),
+        "by_severity": dict(sorted(by_severity.items())),
+        "recent_security_warning_error": highlighted[:50],
+        "redaction": {
+            "metadata_sanitized": True,
+            "text_redaction": True,
+            "raw_tokens_included": False,
+            "raw_authorization_headers_included": False,
+            "raw_cookies_included": False,
+            "raw_rtsp_credentials_included": False,
+        },
+    }
+
+
 def list_events(
     db: Session,
     *,
@@ -188,7 +225,15 @@ def list_events(
     offset: int = 0,
     category: str | None = None,
     severity: str | None = None,
+    event_type: str | None = None,
+    actor: str | None = None,
+    target: str | None = None,
+    target_type: str | None = None,
+    target_id: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
     since_minutes: int | None = None,
+    q: str | None = None,
 ) -> list[AuditEvent]:
     limit = max(1, min(int(limit or 50), 2000))
     offset = max(0, int(offset or 0))
@@ -197,8 +242,48 @@ def list_events(
         query = query.filter(AuditEvent.category == category)
     if severity:
         query = query.filter(AuditEvent.severity == severity)
+    if event_type:
+        query = query.filter(AuditEvent.event_type == event_type)
+    if actor:
+        actor_value = f"%{redact_text(actor).strip()[:120]}%"
+        query = query.filter(
+            or_(
+                AuditEvent.actor_username.ilike(actor_value),
+                AuditEvent.actor_role.ilike(actor_value),
+            )
+        )
+    if target:
+        target_value = f"%{redact_text(target).strip()[:120]}%"
+        query = query.filter(
+            or_(
+                AuditEvent.target_type.ilike(target_value),
+                AuditEvent.target_id.ilike(target_value),
+                AuditEvent.target_name.ilike(target_value),
+            )
+        )
+    if target_type:
+        query = query.filter(AuditEvent.target_type == target_type)
+    if target_id:
+        query = query.filter(AuditEvent.target_id == str(target_id))
+    if date_from:
+        query = query.filter(AuditEvent.created_at >= date_from)
+    if date_to:
+        query = query.filter(AuditEvent.created_at <= date_to)
     if since_minutes is not None:
         query = query.filter(AuditEvent.created_at >= datetime.utcnow() - timedelta(minutes=since_minutes))
+    if q:
+        q_value = f"%{redact_text(q).strip()[:120]}%"
+        query = query.filter(
+            or_(
+                AuditEvent.event_type.ilike(q_value),
+                AuditEvent.message_ru.ilike(q_value),
+                AuditEvent.message_en.ilike(q_value),
+                AuditEvent.actor_username.ilike(q_value),
+                AuditEvent.target_type.ilike(q_value),
+                AuditEvent.target_id.ilike(q_value),
+                AuditEvent.target_name.ilike(q_value),
+            )
+        )
     return query.order_by(AuditEvent.created_at.desc()).offset(offset).limit(limit).all()
 
 

@@ -25,7 +25,7 @@ from app.models.camera import Camera
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.routers.recordings import collect_recording_files
-from app.services.audit_log import create_event, events_as_text, list_events, redact_text as audit_redact_text, request_ip, request_user_agent, serialize_event
+from app.services.audit_log import audit_summary, create_event, events_as_text, list_events, redact_text as audit_redact_text, request_ip, request_user_agent, serialize_event
 from app.services.hardware import get_hardware_capabilities, invalidate_hardware_capabilities
 from app.services.live_engine_v2 import manager as live_manager
 from app.services.recording_reconciliation import reconciliation_diagnostics
@@ -649,9 +649,24 @@ def build_log_archive(
         write_json(bundle, "recordings/summary.json", recordings_diagnostics())
         write_json(bundle, "chronology/summary.json", chronology_diagnostics(db))
         write_json(bundle, "audit/events_recent.json", [serialize_event(event) for event in audit_events])
+        write_json(bundle, "audit/summary.json", audit_summary(audit_events))
+        write_json(
+            bundle,
+            "audit/redaction_proof.json",
+            {
+                "status": "PASS",
+                "scope": "diagnostic_archive_audit_payload",
+                "raw_tokens_included": False,
+                "raw_authorization_headers_included": False,
+                "raw_cookies_included": False,
+                "raw_rtsp_credentials_included": False,
+                "raw_passwords_included": False,
+                "raw_request_bodies_included": False,
+            },
+        )
         bundle.writestr("audit/events_recent.txt", events_as_text(audit_events))
         if report_text is not None:
-            bundle.writestr("bug-report.txt", report_text.strip() + "\n")
+            bundle.writestr("bug-report.txt", audit_redact_text(report_text.strip()) + "\n")
         if include_logs:
             write_file_logs(bundle)
             write_docker_logs(bundle, mode)

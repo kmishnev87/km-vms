@@ -14,6 +14,33 @@ const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
 });
 
 const HARDWARE_OPTIONS = ["auto", "qsv", "amf", "nvenc", "cpu", "vaapi"];
+const AUDIT_CATEGORIES = ["auth", "users", "settings", "cameras", "live", "records", "chronology", "security", "diagnostics", "system", "recorder", "storage", "retention", "reconciliation"];
+const AUDIT_SEVERITIES = ["info", "warning", "error", "security"];
+const AUDIT_LIMIT = 50;
+const AUDIT_LABELS = {
+  category: {
+    auth: { ru: "Авторизация", en: "Auth" },
+    users: { ru: "Пользователи", en: "Users" },
+    settings: { ru: "Настройки", en: "Settings" },
+    cameras: { ru: "Камеры", en: "Cameras" },
+    live: { ru: "Live", en: "Live" },
+    records: { ru: "Записи", en: "Records" },
+    chronology: { ru: "Хронология", en: "Chronology" },
+    security: { ru: "Безопасность", en: "Security" },
+    diagnostics: { ru: "Диагностика", en: "Diagnostics" },
+    system: { ru: "Система", en: "System" },
+    recorder: { ru: "Recorder", en: "Recorder" },
+    storage: { ru: "Хранилище", en: "Storage" },
+    retention: { ru: "Retention", en: "Retention" },
+    reconciliation: { ru: "Reconciliation", en: "Reconciliation" },
+  },
+  severity: {
+    info: { ru: "Инфо", en: "Info" },
+    warning: { ru: "Предупреждение", en: "Warning" },
+    error: { ru: "Ошибка", en: "Error" },
+    security: { ru: "Security", en: "Security" },
+  },
+};
 const BACKEND_LABELS = {
   auto: { ru: "Автоматический режим", en: "Automatic mode" },
   qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV" },
@@ -69,6 +96,23 @@ const TEXT = {
     journalLoading: "Загрузка журнала...",
     journalError: "Журнал событий недоступен.",
     journalSystemActor: "system",
+    journalFilters: "Фильтры",
+    journalCategory: "Категория",
+    journalSeverity: "Важность",
+    journalActor: "Actor",
+    journalTarget: "Target",
+    journalSince: "Период",
+    journalSearch: "Поиск",
+    journalAll: "Все",
+    journalApply: "Применить",
+    journalLoadMore: "Загрузить ещё",
+    journalMetadata: "Metadata",
+    journalEventType: "Тип события",
+    journalTargetEmpty: "без target",
+    journalSince60: "1 час",
+    journalSince360: "6 часов",
+    journalSince1440: "24 часа",
+    journalSinceAll: "Любое время",
     reportSendingPending: "Отправка отчётов будет подключена после реализации backend-отправки.",
     diagnosticArchiveReady: "Диагностический архив создан, прикреплён и скачан.",
     diagnosticArchiveQuestion: "Какой лог снять?",
@@ -195,6 +239,23 @@ const TEXT = {
     journalLoading: "Loading journal...",
     journalError: "Event journal is unavailable.",
     journalSystemActor: "system",
+    journalFilters: "Filters",
+    journalCategory: "Category",
+    journalSeverity: "Severity",
+    journalActor: "Actor",
+    journalTarget: "Target",
+    journalSince: "Period",
+    journalSearch: "Search",
+    journalAll: "All",
+    journalApply: "Apply",
+    journalLoadMore: "Load more",
+    journalMetadata: "Metadata",
+    journalEventType: "Event type",
+    journalTargetEmpty: "no target",
+    journalSince60: "1 hour",
+    journalSince360: "6 hours",
+    journalSince1440: "24 hours",
+    journalSinceAll: "Any time",
     reportSendingPending: "Report sending will be connected after backend sending is implemented.",
     diagnosticArchiveReady: "Diagnostic archive created, attached and downloaded.",
     diagnosticArchiveQuestion: "Which log should be collected?",
@@ -382,6 +443,34 @@ function auditMessage(event, lang) {
     : event?.message_ru || event?.message_en || "";
 }
 
+function auditLabel(kind, value, lang) {
+  if (!value) return "";
+  return AUDIT_LABELS[kind]?.[value]?.[lang] || value;
+}
+
+function auditTarget(event, t) {
+  const parts = [event?.target_type, event?.target_name || event?.target_id].filter(Boolean);
+  return parts.length ? parts.join(": ") : t.journalTargetEmpty;
+}
+
+function safeMetadataRows(metadata) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return [];
+  return Object.entries(metadata).slice(0, 8).map(([key, value]) => {
+    let rendered;
+    if (value && typeof value === "object") {
+      rendered = JSON.stringify(value);
+    } else if (value === null || value === undefined) {
+      rendered = "-";
+    } else {
+      rendered = String(value);
+    }
+    return {
+      key: String(key).slice(0, 48),
+      value: rendered.length > 160 ? `${rendered.slice(0, 157)}...` : rendered,
+    };
+  });
+}
+
 function parseErrorDetail(message) {
   if (!message) return null;
   try {
@@ -536,6 +625,9 @@ export default function SettingsPage() {
   const [diagnosticChoiceOpen, setDiagnosticChoiceOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
   const [auditEvents, setAuditEvents] = useState([]);
+  const [auditOffset, setAuditOffset] = useState(0);
+  const [auditHasMore, setAuditHasMore] = useState(false);
+  const [auditFilters, setAuditFilters] = useState({ category: "", severity: "", actor: "", target: "", since: "1440", q: "" });
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState("");
   const [bugReportText, setBugReportText] = useState("");
@@ -567,7 +659,7 @@ export default function SettingsPage() {
     if (securityModalOpen) {
       loadAuditEvents();
     }
-  }, [securityModalOpen]);
+  }, [securityModalOpen, auditFilters]);
 
   function showToast(nextToast) {
     setToast(nextToast);
@@ -606,18 +698,39 @@ export default function SettingsPage() {
     }
   }
 
-  async function loadAuditEvents() {
+  function auditQuery(offset = 0) {
+    const params = new URLSearchParams();
+    params.set("limit", String(AUDIT_LIMIT));
+    params.set("offset", String(offset));
+    if (auditFilters.category) params.set("category", auditFilters.category);
+    if (auditFilters.severity) params.set("severity", auditFilters.severity);
+    if (auditFilters.actor.trim()) params.set("actor", auditFilters.actor.trim());
+    if (auditFilters.target.trim()) params.set("target", auditFilters.target.trim());
+    if (auditFilters.since) params.set("since_minutes", auditFilters.since);
+    if (auditFilters.q.trim()) params.set("q", auditFilters.q.trim());
+    return `/audit/events?${params.toString()}`;
+  }
+
+  async function loadAuditEvents(offset = 0) {
     setAuditLoading(true);
     setAuditError("");
     try {
-      const data = await apiFetch("/audit/events?limit=50");
-      setAuditEvents(Array.isArray(data?.items) ? data.items : []);
+      const data = await apiFetch(auditQuery(offset));
+      const items = Array.isArray(data?.items) ? data.items : [];
+      setAuditEvents(offset > 0 ? (current) => [...current, ...items] : items);
+      setAuditOffset(offset + items.length);
+      setAuditHasMore(items.length === AUDIT_LIMIT);
     } catch (err) {
-      setAuditEvents([]);
+      if (offset === 0) setAuditEvents([]);
       setAuditError(humanErrorText(String(err?.message || ""), t.journalError || "Event journal is unavailable."));
     } finally {
       setAuditLoading(false);
     }
+  }
+
+  function patchAuditFilter(key, value) {
+    setAuditOffset(0);
+    setAuditFilters((current) => ({ ...current, [key]: value }));
   }
 
   function patch(key, value) {
@@ -1259,24 +1372,90 @@ export default function SettingsPage() {
                 <div className="settingsSecurityModalSectionHead">
                   <h3>{t.logJournal}</h3>
                 </div>
+                <div className="settingsAuditFilters" aria-label={t.journalFilters}>
+                  <label>
+                    <span>{t.journalCategory}</span>
+                    <select className="select" value={auditFilters.category} onChange={(event) => patchAuditFilter("category", event.target.value)}>
+                      <option value="">{t.journalAll}</option>
+                      {AUDIT_CATEGORIES.map((category) => (
+                        <option key={category} value={category}>{auditLabel("category", category, lang)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>{t.journalSeverity}</span>
+                    <select className="select" value={auditFilters.severity} onChange={(event) => patchAuditFilter("severity", event.target.value)}>
+                      <option value="">{t.journalAll}</option>
+                      {AUDIT_SEVERITIES.map((severity) => (
+                        <option key={severity} value={severity}>{auditLabel("severity", severity, lang)}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>{t.journalSince}</span>
+                    <select className="select" value={auditFilters.since} onChange={(event) => patchAuditFilter("since", event.target.value)}>
+                      <option value="60">{t.journalSince60}</option>
+                      <option value="360">{t.journalSince360}</option>
+                      <option value="1440">{t.journalSince1440}</option>
+                      <option value="">{t.journalSinceAll}</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>{t.journalActor}</span>
+                    <input className="input" value={auditFilters.actor} onChange={(event) => patchAuditFilter("actor", event.target.value)} />
+                  </label>
+                  <label>
+                    <span>{t.journalTarget}</span>
+                    <input className="input" value={auditFilters.target} onChange={(event) => patchAuditFilter("target", event.target.value)} />
+                  </label>
+                  <label>
+                    <span>{t.journalSearch}</span>
+                    <input className="input" value={auditFilters.q} onChange={(event) => patchAuditFilter("q", event.target.value)} />
+                  </label>
+                </div>
                 {auditLoading ? (
                   <div className="settingsJournalEmpty">{t.journalLoading || "Loading journal..."}</div>
                 ) : auditError ? (
                   <div className="settingsJournalEmpty error">{auditError}</div>
                 ) : auditEvents.length ? (
-                  <div className="settingsAuditList">
-                    {auditEvents.map((event) => (
-                      <article className={`settingsAuditItem severity-${event.severity || "info"}`} key={event.id}>
-                        <div className="settingsAuditMeta">
-                          <time>{formatAuditTimestamp(event.created_at, lang)}</time>
-                          <span>{event.actor_username || t.journalSystemActor || "system"}</span>
-                          <span>{event.category}</span>
-                          <span>{event.severity}</span>
-                        </div>
-                        <div className="settingsAuditMessage">{auditMessage(event, lang)}</div>
-                      </article>
-                    ))}
-                  </div>
+                  <>
+                    <div className="settingsAuditList">
+                      {auditEvents.map((event) => {
+                        const metadataRows = safeMetadataRows(event.metadata);
+                        return (
+                          <article className={`settingsAuditItem severity-${event.severity || "info"} category-${event.category || "system"}`} key={event.id}>
+                            <div className="settingsAuditMeta">
+                              <time>{formatAuditTimestamp(event.created_at, lang)}</time>
+                              <span>{event.actor_username || t.journalSystemActor || "system"}</span>
+                              <span>{auditLabel("category", event.category, lang)}</span>
+                              <span>{auditLabel("severity", event.severity, lang)}</span>
+                              <span>{auditTarget(event, t)}</span>
+                            </div>
+                            <div className="settingsAuditMessage">{auditMessage(event, lang) || event.event_type}</div>
+                            <div className="settingsAuditEventType">{t.journalEventType}: {event.event_type}</div>
+                            {metadataRows.length ? (
+                              <details className="settingsAuditMetadata">
+                                <summary>{t.journalMetadata}</summary>
+                                <dl>
+                                  {metadataRows.map((row) => (
+                                    <div key={row.key}>
+                                      <dt>{row.key}</dt>
+                                      <dd>{row.value}</dd>
+                                    </div>
+                                  ))}
+                                </dl>
+                              </details>
+                            ) : null}
+                          </article>
+                        );
+                      })}
+                    </div>
+                    {auditHasMore ? (
+                      <button type="button" className="button secondary small settingsAuditLoadMore" onClick={() => loadAuditEvents(auditOffset)} disabled={auditLoading}>
+                        {t.journalLoadMore}
+                      </button>
+                    ) : null}
+                  </>
                 ) : (
                   <div className="settingsJournalEmpty">{t.journalEmpty}</div>
                 )}
