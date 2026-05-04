@@ -5,6 +5,7 @@ from app.core.config import settings
 from app.core.permissions import ROLE_OWNER
 from app.db.session import Base, engine
 from app.models import SystemSettings, User
+from app.services.audit_log import create_event
 from app.services.system_settings import default_timezone
 
 
@@ -151,9 +152,28 @@ def ensure_active_owner_fallback(db: Session) -> None:
     if fallback is None:
         return
 
+    previous_role = fallback.role
     fallback.role = ROLE_OWNER
     db.add(fallback)
     db.commit()
+    create_event(
+        db=db,
+        actor=None,
+        category="system",
+        event_type="system.owner_fallback_promoted",
+        severity="security",
+        message_ru="Bootstrap promoted first active user to owner",
+        message_en="Bootstrap promoted first active user to owner",
+        target_type="user",
+        target_id=fallback.id,
+        target_name=fallback.username,
+        metadata={
+            "previous_role": previous_role,
+            "new_role": ROLE_OWNER,
+            "reason": "initialized_system_without_active_owner",
+            "system_initialized": True,
+        },
+    )
 
 
 def ensure_admin(db: Session) -> None:

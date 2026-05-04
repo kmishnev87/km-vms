@@ -25,7 +25,7 @@ from app.models.camera import Camera
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.routers.recordings import collect_recording_files
-from app.services.audit_log import create_event, events_as_text, list_events, request_ip, request_user_agent, serialize_event
+from app.services.audit_log import create_event, events_as_text, list_events, redact_text as audit_redact_text, request_ip, request_user_agent, serialize_event
 from app.services.hardware import get_hardware_capabilities, invalidate_hardware_capabilities
 from app.services.live_engine_v2 import manager as live_manager
 from app.services.recording_reconciliation import reconciliation_diagnostics
@@ -110,19 +110,38 @@ def system_recorder_status(
     return build_recorder_status(db)
 
 
+def audit_setup_failed(db: Session, request: Request, reason: str, status_code: int) -> None:
+    create_event(
+        db=db,
+        actor=None,
+        category="system",
+        event_type="system.setup_failed",
+        severity="warning",
+        message_ru=f"System setup failed: {reason}",
+        message_en=f"System setup failed: {reason}",
+        target_type="system_setup",
+        metadata={"reason": reason, "status_code": status_code},
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+
+
 @router.post("/setup", status_code=status.HTTP_201_CREATED)
-def setup(payload: SetupRequest, db: Session = Depends(get_db)):
+def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request = None):
     system = get_system_settings(db)
     if system.system_initialized:
+        audit_setup_failed(db, request, "already_initialized", status.HTTP_409_CONFLICT)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System is already initialized")
 
     username = payload.username.strip()
     if db.query(User).filter(User.username == username).first():
+        audit_setup_failed(db, request, "user_already_exists", status.HTTP_409_CONFLICT)
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
 
     try:
         settings_data = validate_settings_payload(payload.model_dump(), partial=False)
     except ValueError as exc:
+        audit_setup_failed(db, request, "invalid_settings_payload", status.HTTP_422_UNPROCESSABLE_ENTITY)
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
     requested_storage_path = settings_data.get("storage_path")
@@ -130,6 +149,7 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db)):
 
     storage_check = validate_storage_path(settings.storage_root, create=True)
     if not storage_check["ok"]:
+        audit_setup_failed(db, request, "storage_validation_failed", status.HTTP_422_UNPROCESSABLE_ENTITY)
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"storage": storage_check})
 
     admin = User(
@@ -148,6 +168,28 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db)):
     db.add(system)
     db.commit()
     db.refresh(system)
+    create_event(
+        db=db,
+        actor=admin,
+        category="system",
+        event_type="system.setup_completed",
+        message_ru=f"System setup completed by {admin.username}",
+        message_en=f"System setup completed by {admin.username}",
+        target_type="system_setup",
+        target_id=system.id,
+        metadata={
+            "previous_state": {"system_initialized": False},
+            "current_state": {"system_initialized": True},
+            "owner_user_id": admin.id,
+            "owner_role": admin.role,
+            "timezone": system.timezone,
+            "language": system.language,
+            "recording_format": system.recording_format,
+            "setup_storage_path_behavior": "requested_path_is_not_runtime_source_of_truth",
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
 
     return {
         "ok": True,
@@ -645,10 +687,10 @@ def download_log_archive(
             category="diagnostics",
             event_type="diagnostics.archive_failed",
             severity="error",
-            message_ru=f"Не удалось создать диагностический архив: {exc}",
-            message_en=f"Failed to create diagnostic archive: {exc}",
+            message_ru=f"Failed to create diagnostic archive: {type(exc).__name__}",
+            message_en=f"Failed to create diagnostic archive: {type(exc).__name__}",
             target_type="diagnostic_archive",
-            metadata={"mode": mode, "error": str(exc)},
+            metadata={"mode": mode, "error_type": type(exc).__name__, "error": audit_redact_text(str(exc))[:300]},
             ip_address=request_ip(request),
             user_agent=request_user_agent(request),
         )
@@ -657,7 +699,7 @@ def download_log_archive(
         db=db,
         actor=current_user,
         category="diagnostics",
-        event_type="diagnostics.archive_created_extended" if mode == "extended" else "diagnostics.archive_created",
+        event_type="diagnostics.archive_created",
         message_ru=f"{current_user.username} создал {'расширенный' if mode == 'extended' else 'обычный'} диагностический архив",
         message_en=f"{current_user.username} created {'extended' if mode == 'extended' else 'normal'} diagnostic archive",
         target_type="diagnostic_archive",
@@ -685,11 +727,11 @@ def create_bug_report(
         db=db,
         actor=current_user,
         category="diagnostics",
-        event_type="diagnostics.archive_requested",
-        message_ru=f"{current_user.username} запросил диагностический архив: bug_report",
-        message_en=f"{current_user.username} requested diagnostic archive: bug_report",
+        event_type="diagnostics.bug_report_requested",
+        message_ru=f"{current_user.username} requested bug report archive",
+        message_en=f"{current_user.username} requested bug report archive",
         target_type="diagnostic_archive",
-        metadata={"mode": "bug_report", "include_logs": payload.include_logs},
+        metadata={"artifact_kind": "bug_report", "include_logs": payload.include_logs, "report_text_length": len(payload.text or "")},
         ip_address=request_ip(request),
         user_agent=request_user_agent(request),
     )
@@ -700,12 +742,12 @@ def create_bug_report(
             db=db,
             actor=current_user,
             category="diagnostics",
-            event_type="diagnostics.archive_failed",
+            event_type="diagnostics.bug_report_failed",
             severity="error",
-            message_ru=f"Не удалось создать диагностический архив: {exc}",
-            message_en=f"Failed to create diagnostic archive: {exc}",
+            message_ru=f"Failed to create bug report archive: {type(exc).__name__}",
+            message_en=f"Failed to create bug report archive: {type(exc).__name__}",
             target_type="diagnostic_archive",
-            metadata={"mode": "bug_report", "error": str(exc)},
+            metadata={"artifact_kind": "bug_report", "error_type": type(exc).__name__, "error": audit_redact_text(str(exc))[:300]},
             ip_address=request_ip(request),
             user_agent=request_user_agent(request),
         )
@@ -714,11 +756,11 @@ def create_bug_report(
         db=db,
         actor=current_user,
         category="diagnostics",
-        event_type="diagnostics.archive_created",
-        message_ru=f"{current_user.username} создал обычный диагностический архив",
-        message_en=f"{current_user.username} created normal diagnostic archive",
+        event_type="diagnostics.bug_report_created",
+        message_ru=f"{current_user.username} created bug report archive",
+        message_en=f"{current_user.username} created bug report archive",
         target_type="diagnostic_archive",
-        metadata={"mode": "bug_report", "include_logs": payload.include_logs},
+        metadata={"artifact_kind": "bug_report", "include_logs": payload.include_logs, "report_text_length": len(payload.text or "")},
         ip_address=request_ip(request),
         user_agent=request_user_agent(request),
     )

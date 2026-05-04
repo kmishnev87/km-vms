@@ -419,6 +419,8 @@ def download_recording(
         scope="recording",
         resource=recording_media_resource(path, "download"),
         permission=PERMISSION_VIEW_RECORDINGS,
+        request=request,
+        media_area="recordings",
     )
     segment = get_finalized_segment_by_path(db, path)
     file_path = resolve_segment_file(segment)
@@ -444,6 +446,8 @@ def stream_recording(
         scope="recording",
         resource=recording_media_resource(path, "stream"),
         permission=PERMISSION_VIEW_RECORDINGS,
+        request=request,
+        media_area="recordings",
     )
     segment = get_finalized_segment_by_path(db, path)
     file_path = resolve_segment_file(segment)

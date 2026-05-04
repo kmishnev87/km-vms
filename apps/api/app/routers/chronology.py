@@ -4,7 +4,7 @@ import mimetypes
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -326,6 +326,7 @@ def chronology_file(
     rel_path: str = Query(...),
     media_token: str = Query(...),
     db: Session = Depends(get_db),
+    request: Request = None,
 ):
     validate_media_token(
         db,
@@ -333,6 +334,8 @@ def chronology_file(
         scope="chronology",
         resource=_chronology_media_resource(camera_id, rel_path),
         permission=PERMISSION_VIEW_TIMELINE,
+        request=request,
+        media_area="chronology",
     )
 
     normalized_path = _safe_storage_relative_path(rel_path)

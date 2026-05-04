@@ -45,13 +45,15 @@ def _live_media_resource(camera_id: int, stream: str) -> dict:
     return {"camera_id": int(camera_id), "stream": str(stream)}
 
 
-def _authorize_live_media_token(media_token: Optional[str], camera_id: int, stream: str, db: Session) -> User:
+def _authorize_live_media_token(media_token: Optional[str], camera_id: int, stream: str, db: Session, request: Request | None = None) -> User:
     return validate_media_token(
         db,
         token=media_token,
         scope="live",
         resource=_live_media_resource(camera_id, stream),
         permission=PERMISSION_VIEW_LIVE,
+        request=request,
+        media_area="live",
     )
 
 
@@ -287,7 +289,7 @@ def live_playlist(
     media_token: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    _authorize_live_media_token(media_token, camera_id, stream, db)
+    _authorize_live_media_token(media_token, camera_id, stream, db, request)
     _get_camera(db, camera_id)
     return _serve_live_playlist(camera_id, stream, media_token or "")
 
@@ -301,7 +303,7 @@ def live_segment(
     media_token: Optional[str] = Query(default=None),
     db: Session = Depends(get_db),
 ):
-    _authorize_live_media_token(media_token, camera_id, stream, db)
+    _authorize_live_media_token(media_token, camera_id, stream, db, request)
     _get_camera(db, camera_id)
     _validate_hls_filename(filename)
 

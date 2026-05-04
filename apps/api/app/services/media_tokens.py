@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.core.permissions import user_has_permission
 from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL
+from app.services.security_audit import audit_security_denied
 
 MEDIA_TOKEN_TYPE = "media"
 MEDIA_TOKEN_EXPIRES_SECONDS = 300
@@ -60,26 +61,103 @@ def validate_media_token(
     scope: str,
     resource: dict[str, Any],
     permission: str,
+    request=None,
+    media_area: str | None = None,
 ) -> User:
     if not token:
+        audit_security_denied(
+            db=db,
+            request=request,
+            event_type="security.media_token_denied",
+            reason="missing",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            required_permission=permission,
+            metadata={"media_area": media_area or scope, "required_scope": scope, "resource_keys": sorted(resource.keys())},
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Media token required")
     try:
         payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
     except jwt.ExpiredSignatureError:
+        audit_security_denied(
+            db=db,
+            request=request,
+            event_type="security.media_token_denied",
+            reason="expired",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            required_permission=permission,
+            metadata={"media_area": media_area or scope, "required_scope": scope, "resource_keys": sorted(resource.keys())},
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Media token expired")
+    except jwt.InvalidSignatureError:
+        audit_security_denied(
+            db=db,
+            request=request,
+            event_type="security.media_token_denied",
+            reason="invalid_signature",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            required_permission=permission,
+            metadata={"media_area": media_area or scope, "required_scope": scope, "resource_keys": sorted(resource.keys())},
+        )
+        raise _invalid_token()
     except jwt.InvalidTokenError:
+        audit_security_denied(
+            db=db,
+            request=request,
+            event_type="security.media_token_denied",
+            reason="malformed",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            required_permission=permission,
+            metadata={"media_area": media_area or scope, "required_scope": scope, "resource_keys": sorted(resource.keys())},
+        )
         raise _invalid_token()
 
     if payload.get("typ") != MEDIA_TOKEN_TYPE or payload.get("scope") != scope:
+        audit_security_denied(
+            db=db,
+            request=request,
+            event_type="security.media_token_denied",
+            reason="wrong_scope",
+            status_code=status.HTTP_403_FORBIDDEN,
+            required_permission=permission,
+            metadata={"media_area": media_area or scope, "required_scope": scope, "resource_keys": sorted(resource.keys())},
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
     if not _resource_matches(payload.get("resource") or {}, resource):
+        audit_security_denied(
+            db=db,
+            request=request,
+            event_type="security.media_token_denied",
+            reason="forbidden_target",
+            status_code=status.HTTP_403_FORBIDDEN,
+            required_permission=permission,
+            metadata={"media_area": media_area or scope, "required_scope": scope, "resource_keys": sorted(resource.keys())},
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
 
     username = payload.get("sub")
     user = db.query(User).filter(User.username == username).first() if username else None
     if not user or not getattr(user, "is_active", True):
+        audit_security_denied(
+            db=db,
+            request=request,
+            event_type="security.media_token_denied",
+            reason="user_not_found_or_inactive",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            required_permission=permission,
+            metadata={"media_area": media_area or scope, "required_scope": scope, "resource_keys": sorted(resource.keys())},
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
     if not user_has_permission(user.role, permission):
+        audit_security_denied(
+            db=db,
+            actor=user,
+            request=request,
+            event_type="security.media_token_denied",
+            reason="missing_permission",
+            status_code=status.HTTP_403_FORBIDDEN,
+            required_permission=permission,
+            metadata={"media_area": media_area or scope, "required_scope": scope, "resource_keys": sorted(resource.keys())},
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
     return user
 
