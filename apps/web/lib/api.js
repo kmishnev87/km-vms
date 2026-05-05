@@ -51,15 +51,22 @@ export function getAuthToken() {
   return persisted || sessionStorage.getItem(TOKEN_KEY) || "";
 }
 
+function dispatchAuthChanged() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("km-vms-auth-changed"));
+}
+
 export function saveAuthToken(token, { persistent = false, expiresAt = null } = {}) {
   if (typeof window === "undefined") return;
   clearAuthToken();
   if (persistent) {
     localStorage.setItem(TOKEN_KEY, token);
     if (expiresAt) localStorage.setItem(TOKEN_EXPIRES_KEY, expiresAt);
+    dispatchAuthChanged();
     return;
   }
   sessionStorage.setItem(TOKEN_KEY, token);
+  dispatchAuthChanged();
 }
 
 export function clearAuthToken() {
@@ -68,6 +75,7 @@ export function clearAuthToken() {
   localStorage.removeItem(TOKEN_EXPIRES_KEY);
   sessionStorage.removeItem(TOKEN_KEY);
   sessionStorage.removeItem(TOKEN_EXPIRES_KEY);
+  dispatchAuthChanged();
 }
 
 function makeHeaders(extra = {}) {

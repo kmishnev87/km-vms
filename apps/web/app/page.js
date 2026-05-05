@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../components/Layout";
 import OperatorProblemBanners from "../components/OperatorProblemBanners";
-import { apiFetch, canAccessPath, getAuthToken } from "../lib/api";
+import { canAccessPath, getAuthToken } from "../lib/api";
+import { useCurrentUser } from "../lib/currentUser";
 
 const DASHBOARD_ITEMS = [
   {
@@ -55,7 +56,7 @@ export default function HomePage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
   const [language, setLanguage] = useState("ru");
-  const [currentUser, setCurrentUser] = useState(null);
+  const { currentUser, status: currentUserStatus } = useCurrentUser();
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -73,10 +74,6 @@ export default function HomePage() {
           router.replace("/login");
           return;
         }
-        return apiFetch("/auth/me");
-      })
-      .then((user) => {
-        if (user) setCurrentUser(user);
         setReady(true);
       })
       .catch(() => {
@@ -84,12 +81,15 @@ export default function HomePage() {
           router.replace("/login");
           return;
         }
-        apiFetch("/auth/me")
-          .then((user) => setCurrentUser(user))
-          .catch(() => setCurrentUser(null))
-          .finally(() => setReady(true));
+        setReady(true);
       });
   }, [router]);
+
+  useEffect(() => {
+    if (currentUserStatus === "no_token" || currentUserStatus === "denied") {
+      router.replace("/login");
+    }
+  }, [currentUserStatus, router]);
 
   if (!ready) return null;
   const visibleItems = currentUser ? DASHBOARD_ITEMS.filter((item) => canAccessPath(currentUser, item.href)) : [];
@@ -106,7 +106,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        <OperatorProblemBanners className="dashboardWarnings" limit={6} currentUser={currentUser} showOverview />
+        <OperatorProblemBanners className="dashboardWarnings" limit={6} showOverview />
 
         <section className="dashboardGrid" aria-label="Основные разделы">
           {visibleItems.map((item) => (

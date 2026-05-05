@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { apiFetch, canAccessPath, clearAuthToken, getAuthToken } from "../lib/api";
+import { useCurrentUser } from "../lib/currentUser";
 
 const items = [
   { href: "/cameras", label: "\u041a\u0430\u043c\u0435\u0440\u044b", iconSrc: "/assets/icons/ui/camera.png" },
@@ -16,8 +17,7 @@ export default function Layout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
   const [language, setLanguage] = useState("ru");
-  const [username, setUsername] = useState("");
-  const [currentUser, setCurrentUser] = useState(null);
+  const { currentUser, status: currentUserStatus } = useCurrentUser();
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -39,19 +39,6 @@ export default function Layout({ children }) {
         if (!getAuthToken()) router.replace("/login");
       });
   }, [router]);
-
-  useEffect(() => {
-    if (!getAuthToken()) return;
-    apiFetch("/auth/me")
-      .then((user) => {
-        setCurrentUser(user);
-        setUsername(user?.full_name || user?.username || "");
-      })
-      .catch(() => {
-        setCurrentUser(null);
-        setUsername("");
-      });
-  }, []);
 
   useEffect(() => {
     function onLanguage(event) {
@@ -82,15 +69,21 @@ export default function Layout({ children }) {
     router.push("/login");
   }
 
+  const username = currentUser?.full_name || currentUser?.username || "";
   const visibleItems = currentUser ? items.filter((item) => canAccessPath(currentUser, item.href)) : [];
   const canOpenSettings = currentUser ? canAccessPath(currentUser, "/settings") : false;
 
   useEffect(() => {
-    if (!currentUser || pathname === "/login" || pathname === "/setup") return;
+    if (pathname === "/login" || pathname === "/setup") return;
+    if (!getAuthToken() || currentUserStatus === "no_token" || currentUserStatus === "denied") {
+      router.replace("/login");
+      return;
+    }
+    if (!currentUser) return;
     if (pathname !== "/" && !canAccessPath(currentUser, pathname)) {
       router.replace("/live");
     }
-  }, [currentUser, pathname, router]);
+  }, [currentUser, currentUserStatus, pathname, router]);
 
   return (
     <div className="layoutShell">

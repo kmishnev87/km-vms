@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import { apiFetch, canDeleteRecordings, issueRecordingMediaToken } from "../../lib/api";
+import { useCurrentUser } from "../../lib/currentUser";
 
 const PAGE_SIZE = 30;
 const TEXT = {
@@ -209,7 +210,7 @@ export default function RecordingsPage() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
-  const [currentUser, setCurrentUser] = useState(null);
+  const { currentUser } = useCurrentUser();
 
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewerTitle, setViewerTitle] = useState("");
@@ -248,8 +249,6 @@ export default function RecordingsPage() {
     try {
       setError("");
       setNotice("");
-      const me = await apiFetch("/auth/me");
-      setCurrentUser(me);
       await loadCameras();
     } catch (err) {
       setError(normalizeRecordingError(err.message));

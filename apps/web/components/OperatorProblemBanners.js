@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { apiFetch, canAccessPath } from "../lib/api";
+import { useCurrentUser } from "../lib/currentUser";
 import {
   buildDashboardStatusSummary,
   buildOperatorWarnings,
@@ -35,6 +36,9 @@ export default function OperatorProblemBanners({
 }) {
   const [runtimeStatus, setRuntimeStatus] = useState(null);
   const [accessDenied, setAccessDenied] = useState(false);
+  const sharedCurrentUser = useCurrentUser();
+  const effectiveCurrentUser = currentUser === undefined ? sharedCurrentUser.currentUser : currentUser;
+  const currentUserReady = currentUser !== undefined || !sharedCurrentUser.loading;
 
   useEffect(() => {
     let cancelled = false;
@@ -61,19 +65,17 @@ export default function OperatorProblemBanners({
     }
 
     async function start() {
-      let user = currentUser;
-      if (user === undefined) {
-        try {
-          user = await apiFetch("/auth/me");
-        } catch (error) {
-          if (!cancelled && shouldStopRuntimeStatusPolling(error)) {
-            setAccessDenied(true);
-          }
-          return;
+      if (!currentUserReady) return;
+
+      if (!effectiveCurrentUser) {
+        if (!cancelled) {
+          setRuntimeStatus(null);
+          setAccessDenied(true);
         }
+        return;
       }
 
-      if (!userCanReadRuntimeStatus(user)) {
+      if (!userCanReadRuntimeStatus(effectiveCurrentUser)) {
         if (!cancelled) {
           setRuntimeStatus(null);
           setAccessDenied(true);
@@ -92,7 +94,7 @@ export default function OperatorProblemBanners({
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [currentUser]);
+  }, [currentUserReady, effectiveCurrentUser]);
 
   const warnings = useMemo(
     () => buildOperatorWarnings(runtimeStatus, { domains: domains || undefined, limit }),
@@ -140,7 +142,7 @@ export default function OperatorProblemBanners({
                     <strong>{item.title}</strong>
                     <small>{item.affected_count ? `Затронуто: ${item.affected_count}` : item.message}</small>
                   </div>
-                  <ActionLink action={item.action} currentUser={currentUser} />
+                  <ActionLink action={item.action} currentUser={effectiveCurrentUser} />
                 </div>
               ))}
             </div>
@@ -166,7 +168,7 @@ export default function OperatorProblemBanners({
                 <div className="operatorWarningMeta">Затронуто: {item.affected_count}</div>
               ) : null}
               {item.action_hint ? <div className="operatorWarningHint">{item.action_hint}</div> : null}
-              <ActionLink action={item.action} currentUser={currentUser} />
+              <ActionLink action={item.action} currentUser={effectiveCurrentUser} />
             </article>
           ))}
         </div>
