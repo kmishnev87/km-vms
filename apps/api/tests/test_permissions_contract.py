@@ -120,6 +120,7 @@ def test_endpoint_permission_contract_is_explicit_and_reviewable():
     assert decision("/health", "GET").decision == PUBLIC
     assert decision("/system/status", "GET").decision == PUBLIC
     assert decision("/system/info", "GET").decision == "manage_settings"
+    assert decision("/system/runtime/status", "GET").decision == "run_diagnostics"
     assert decision("/system/recorder/status", "GET").decision == "run_diagnostics"
     assert decision("/settings/logs/archive", "GET").decision == "run_diagnostics"
     assert decision("/settings/bug-report", "POST").decision == "run_diagnostics"
@@ -219,6 +220,7 @@ def test_settings_hardware_storage_users_and_system_info_are_permission_protecte
     assert decision("/audit/events", "GET").decision == "manage_settings"
     assert 'Depends(require_permission("manage_settings"))' in read_router("settings.py")
     assert 'Depends(require_permission("run_diagnostics"))' in read_router("settings.py")
+    assert decision("/system/runtime/status", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert 'Depends(require_permission("manage_settings"))' in read_router("hardware.py")
     assert 'Depends(require_permission("manage_settings"))' in read_router("storage.py")
     assert 'Depends(require_permission("manage_users"))' in read_router("users.py")

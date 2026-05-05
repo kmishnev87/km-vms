@@ -32,12 +32,16 @@ def _utc_now() -> datetime:
 def _iso(value: datetime | None) -> str | None:
     if value is None:
         return None
+    if isinstance(value, str):
+        return value if value.endswith("Z") else value + "Z"
     return value.isoformat() + "Z"
 
 
 def _age_seconds(value: datetime | None, now: datetime) -> int | None:
     if value is None:
         return None
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.removesuffix("Z"))
     return max(0, int((now - value).total_seconds()))
 
 

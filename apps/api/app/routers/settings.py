@@ -31,6 +31,7 @@ from app.services.live_engine_v2 import manager as live_manager
 from app.services.recording_reconciliation import reconciliation_diagnostics
 from app.services.recording_retention import retention_diagnostics
 from app.services.recorder_diagnostics import build_recorder_archive_payloads, build_recorder_status, build_system_runtime_status
+from app.services.system_runtime_status import build_operator_runtime_status
 from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.system_settings import (
     active_recording_jobs_count,
@@ -108,6 +109,14 @@ def system_recorder_status(
     current_user: User = Depends(require_permission("run_diagnostics")),
 ):
     return build_recorder_status(db)
+
+
+@router.get("/system/runtime/status")
+def system_runtime_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics")),
+):
+    return build_operator_runtime_status(db)
 
 
 def audit_setup_failed(db: Session, request: Request, reason: str, status_code: int) -> None:
