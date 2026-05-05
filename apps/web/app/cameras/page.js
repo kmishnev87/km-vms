@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Layout from "../../components/Layout";
+import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { apiFetch } from "../../lib/api";
 
 const initialForm = {
@@ -882,6 +883,8 @@ export default function CamerasPage() {
         </div>
         <button className="button" onClick={openCreate}>Добавить камеру</button>
       </div>
+
+      <OperatorProblemBanners domains={["cameras", "recorder"]} className="pageWarnings" limit={4} />
 
       {error && !showEditor ? <div className="badge err" style={{ marginBottom: 14 }}>{error}</div> : null}
 

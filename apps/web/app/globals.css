@@ -242,6 +242,85 @@ textarea {
   gap: 12px;
 }
 
+.operatorWarnings {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 16px 0 18px;
+}
+
+.operatorWarning {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-left: 4px solid #f59e0b;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+.operatorWarning-error {
+  border-left-color: #dc2626;
+}
+
+.operatorWarningTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.operatorWarningSeverity {
+  color: #991b1b;
+}
+
+.operatorWarning-warning .operatorWarningSeverity {
+  color: #92400e;
+}
+
+.operatorWarningDomain {
+  color: #475569;
+}
+
+.operatorWarningTitle {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.operatorWarningMessage,
+.operatorWarningHint,
+.operatorWarningMeta {
+  margin-top: 5px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.operatorWarningHint {
+  color: #334155;
+  font-weight: 700;
+}
+
+.dashboardWarnings {
+  margin-top: -2px;
+}
+
+.pageWarnings,
+.settingsWarnings {
+  margin-top: 0;
+}
+
+.liveWorkspaceWarnings {
+  margin: 0 0 12px;
+}
+
 .dashboardCard {
   position: relative;
   overflow: hidden;

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
+import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import TilePlayer from "../../components/TilePlayer";
 import { apiFetch } from "../../lib/api";
 
@@ -372,6 +373,7 @@ export default function LivePage() {
 
   return (
     <Layout>
+      <OperatorProblemBanners domains={["live"]} className="liveWorkspaceWarnings" limit={3} />
       <div className="liveWorkspaceShell">
         <aside className="liveWorkspaceCameraPanel">
           <div className="liveWorkspacePanelHeader">

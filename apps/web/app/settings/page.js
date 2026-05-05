@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
+import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { apiFetch, apiFetchBlob, clearAuthToken, forbiddenMessage } from "../../lib/api";
 
 const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
@@ -1082,6 +1083,13 @@ export default function SettingsPage() {
               </button>
             </div>
           </div>
+
+          <OperatorProblemBanners
+            domains={["storage", "retention", "reconciliation", "recorder"]}
+            className="settingsWarnings"
+            limit={5}
+            currentUser={currentUser}
+          />
 
           {!draft ? null : (
             <div className="settingsReferenceLayout">

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../components/Layout";
+import OperatorProblemBanners from "../components/OperatorProblemBanners";
 import { apiFetch, canAccessPath, getAuthToken } from "../lib/api";
 
 const DASHBOARD_ITEMS = [
@@ -104,6 +105,8 @@ export default function HomePage() {
             </div>
           </div>
         </section>
+
+        <OperatorProblemBanners className="dashboardWarnings" limit={6} currentUser={currentUser} />
 
         <section className="dashboardGrid" aria-label="Основные разделы">
           {visibleItems.map((item) => (
