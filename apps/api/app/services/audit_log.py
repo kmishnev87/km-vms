@@ -9,6 +9,7 @@ from typing import Any
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core.sanitization import redact_text
 from app.db.session import SessionLocal
 from app.models.audit_event import AuditEvent
 
@@ -35,11 +36,6 @@ SENSITIVE_KEY_RE = re.compile(
     r"(password|password_hash|secret|token|authorization|jwt|encryption_key|key|credential|cookie|raw_body|request_body)",
     re.IGNORECASE,
 )
-RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://[^:\s/@]+):([^@\s]+)@", re.IGNORECASE)
-BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
-TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token|refresh_token|media_token)=)[^&\s]+", re.IGNORECASE)
-COOKIE_RE = re.compile(r"((?:Cookie|Set-Cookie):\s*)[^\r\n;]+", re.IGNORECASE)
-POSTGRES_CREDENTIALS_RE = re.compile(r"(postgresql(?:\+\w+)?://[^:\s/@]+):([^@\s]+)@", re.IGNORECASE)
 
 
 def request_ip(request) -> str | None:
@@ -57,17 +53,6 @@ def request_user_agent(request) -> str | None:
         return None
     value = request.headers.get("user-agent")
     return value[:1000] if value else None
-
-
-def redact_text(value: str | None) -> str:
-    if value is None:
-        return ""
-    text = RTSP_CREDENTIALS_RE.sub(r"\1:***@", str(value))
-    text = POSTGRES_CREDENTIALS_RE.sub(r"\1:***@", text)
-    text = BEARER_RE.sub(r"\1***", text)
-    text = TOKEN_QUERY_RE.sub(r"\1***", text)
-    text = COOKIE_RE.sub(r"\1***", text)
-    return text
 
 
 def sanitize_metadata(value: Any) -> Any:

@@ -19,13 +19,14 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.permissions import ROLE_OWNER
+from app.core.sanitization import redact_text as audit_redact_text
 from app.core.security import hash_password
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.routers.recordings import collect_recording_files
-from app.services.audit_log import audit_summary, create_event, events_as_text, list_events, redact_text as audit_redact_text, request_ip, request_user_agent, serialize_event
+from app.services.audit_log import audit_summary, create_event, events_as_text, list_events, request_ip, request_user_agent, serialize_event
 from app.services.hardware import get_hardware_capabilities, invalidate_hardware_capabilities
 from app.services.live_engine_v2 import manager as live_manager
 from app.services.recording_reconciliation import reconciliation_diagnostics

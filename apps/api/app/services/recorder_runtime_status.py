@@ -7,9 +7,9 @@ from typing import Any
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 
+from app.core.sanitization import redact_text
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
-from app.services.audit_log import redact_text
 
 ACTIVE_JOB_STATES = {"starting", "recording", "stopping", "restarting"}
 FAILED_JOB_STATES = {"error", "restarting"}

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.permissions import user_has_permission
+from app.core.sanitization import redact_text
 from app.core.security import encrypt_text, decrypt_text
 from app.db.session import get_db
 from app.models.camera import Camera
@@ -17,7 +18,7 @@ from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
-from app.services.audit_log import create_event, redact_text, request_ip, request_user_agent
+from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.onvif_service import (
     fetch_onvif_profiles,

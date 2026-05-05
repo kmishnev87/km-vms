@@ -12,10 +12,11 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.sanitization import redact_text
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
 from app.models.user import User
-from app.services.audit_log import create_event, redact_text
+from app.services.audit_log import create_event
 from app.services.recording_storage import is_kmvms_namespace_relative, safe_resolve_relative
 
 OWNERSHIP_KM_VMS = "KM VMS"

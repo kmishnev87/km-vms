@@ -92,13 +92,31 @@ def add_job(
 
 
 def test_shared_recorder_runtime_status_import_boundary():
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    core_dir = app_dir / "core"
     services_dir = Path(__file__).resolve().parents[1] / "app" / "services"
+    main_source = (app_dir / "main.py").read_text(encoding="utf-8")
     system_runtime_source = (services_dir / "system_runtime_status.py").read_text(encoding="utf-8")
     shared_source = (services_dir / "recorder_runtime_status.py").read_text(encoding="utf-8")
+    sanitization_source = (core_dir / "sanitization.py").read_text(encoding="utf-8")
+    non_audit_consumers = [
+        app_dir / "main.py",
+        services_dir / "recorder_runtime_status.py",
+        services_dir / "recording_reconciliation.py",
+        services_dir / "recording_retention.py",
+        services_dir / "storage_monitoring.py",
+        app_dir / "routers" / "cameras.py",
+    ]
 
     assert "app.services.recorder_diagnostics" not in system_runtime_source
     assert "system_runtime_status" not in shared_source
     assert "recorder_diagnostics" not in shared_source
+    assert "app.services.audit_log import redact_text" not in main_source
+    assert "app.services.audit_log" not in sanitization_source
+    for path in non_audit_consumers:
+        source = path.read_text(encoding="utf-8")
+        assert "app.services.audit_log import redact_text" not in source
+        assert "redact_text as audit_redact_text" not in source
 
 
 def test_recording_job_with_stale_error_is_not_current_failure(db):

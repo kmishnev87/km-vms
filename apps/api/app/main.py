@@ -5,6 +5,7 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
+from app.core.sanitization import redact_text
 from app.db.session import SessionLocal
 from app.routers.audit import router as audit_router
 from app.routers.auth import router as auth_router
@@ -17,7 +18,6 @@ from app.routers.deps import require_permission
 from app.routers.settings import router as settings_router
 from app.routers.storage import router as storage_router
 from app.routers.users import router as users_router
-from app.services.audit_log import redact_text
 from app.services.automatic_retention import start_automatic_retention_worker, stop_automatic_retention_worker
 from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration, ensure_system_settings
 from app.services.hardware import refresh_hardware_capabilities

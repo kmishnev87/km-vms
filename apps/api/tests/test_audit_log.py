@@ -1,3 +1,4 @@
+from app.core.sanitization import redact_text as shared_redact_text
 from app.services.audit_log import create_event, redact_text, sanitize_metadata
 
 
@@ -38,6 +39,22 @@ def test_audit_text_redaction_masks_tokens_and_rtsp_credentials():
     assert "Bearer ***" in redacted
     assert "rtsp://user:***@host/live" in redacted
     assert "access_token=***" in redacted
+
+
+def test_audit_redact_text_compatibility_alias_matches_shared_sanitization():
+    values = [
+        None,
+        "",
+        "normal text",
+        "rtsp://user:pass@host/live",
+        "Authorization: Bearer sample-token",
+        "http://host/path?access_token=query-token",
+        "Cookie: sessionid=session-token; other=1",
+        "postgresql://user:pass@db/app",
+    ]
+
+    for value in values:
+        assert redact_text(value) == shared_redact_text(value)
 
 
 def test_noop_camera_update_audit_event_is_skipped_before_persistence():

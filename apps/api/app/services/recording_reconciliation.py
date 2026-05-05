@@ -12,7 +12,8 @@ from typing import Iterable
 from sqlalchemy.orm import Session
 
 from app.models.recording import RecordingJob, RecordingSegment
-from app.services.audit_log import create_event, redact_text
+from app.core.sanitization import redact_text
+from app.services.audit_log import create_event
 from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
     VIDEO_EXTENSIONS,
