@@ -68,6 +68,21 @@ const TEXT = {
     timezoneHelp: "Определяет время интерфейса, архива и хронологии.",
     storage: "Хранилище",
     storageText: "Путь архива внутри контейнера. Серверный путь задаётся в docker-compose.",
+    autoFreeSpace: "Автоосвобождение места",
+    autoFreeSpaceHelp: "Выкл.: система предупреждает о нехватке места и не удаляет записи автоматически. Вкл.: при свободном месте ниже 5% сервер может удалить самые старые owned записи, которые прошли безопасные metadata-проверки.",
+    autoFreeSpaceCritical: "Ниже 1% свободного места запись может быть временно остановлена для защиты диска. Это не разрешает удаление без включённого opt-in.",
+    autoFreeSpaceThresholds: "Пороги: предупреждение ниже 10%, автоочистка ниже 5%, критическая защита ниже 1%.",
+    retentionWorkflow: "Retention workflow",
+    retentionWorkflowText: "Предпросмотр показывает кандидатов на удаление по retention days и quota без удаления файлов.",
+    retentionDryRun: "Предпросмотр",
+    retentionApply: "Удалить по плану",
+    retentionConfirm: "Подтверждаю необратимое удаление найденных retention-кандидатов",
+    retentionEmpty: "Кандидатов нет.",
+    retentionPreviewReady: "Кандидаты: {count}; объём: {bytes}.",
+    retentionResultReady: "Удалено: {deleted}; пропущено: {skipped}; ошибки: {failed}; освобождено: {bytes}.",
+    retentionBlocked: "Блокеры",
+    retentionByCamera: "По камерам",
+    retentionReasons: "Причины",
     hostPath: "Путь на сервере",
     hostPathUnknown: "Определяется в docker-compose",
     validate: "Тест",
@@ -158,6 +173,8 @@ const TEXT = {
       saveOkText: "Изменения успешно применены",
       storageOkTitle: "Хранилище доступно",
       storageOkText: "Свободно: {free}",
+      retentionOkTitle: "Retention проверен",
+      retentionApplyTitle: "Retention выполнен",
       hardwareOkTitle: "Аппаратные возможности проверены",
       hardwareOkText: "Доступно: {modes}",
       hardwareFallbackTitle: "Режим изменён",
@@ -211,6 +228,21 @@ const TEXT = {
     timezoneHelp: "Defines interface time, archive timestamps, and chronology.",
     storage: "Storage",
     storageText: "Archive path inside the container. The server path is defined in docker-compose.",
+    autoFreeSpace: "Auto free-space cleanup",
+    autoFreeSpaceHelp: "Off: the system warns about low disk space and does not delete recordings automatically. On: below 5% free space the server may delete the oldest owned recordings that pass metadata safety checks.",
+    autoFreeSpaceCritical: "Below 1% free space recording may be temporarily suspended to protect the disk. This does not allow deletion without opt-in enabled.",
+    autoFreeSpaceThresholds: "Thresholds: warning below 10%, auto cleanup below 5%, critical protection below 1%.",
+    retentionWorkflow: "Retention workflow",
+    retentionWorkflowText: "Preview shows retention-days and quota deletion candidates without deleting files.",
+    retentionDryRun: "Preview",
+    retentionApply: "Delete by plan",
+    retentionConfirm: "I confirm irreversible deletion of the listed retention candidates",
+    retentionEmpty: "No candidates.",
+    retentionPreviewReady: "Candidates: {count}; size: {bytes}.",
+    retentionResultReady: "Deleted: {deleted}; skipped: {skipped}; failed: {failed}; freed: {bytes}.",
+    retentionBlocked: "Blockers",
+    retentionByCamera: "By camera",
+    retentionReasons: "Reasons",
     hostPath: "Server path",
     hostPathUnknown: "Defined in docker-compose",
     validate: "Test",
@@ -301,6 +333,8 @@ const TEXT = {
       saveOkText: "Changes applied successfully",
       storageOkTitle: "Storage available",
       storageOkText: "Free: {free}",
+      retentionOkTitle: "Retention preview ready",
+      retentionApplyTitle: "Retention applied",
       hardwareOkTitle: "Hardware capabilities checked",
       hardwareOkText: "Available: {modes}",
       hardwareFallbackTitle: "Mode changed",
@@ -398,6 +432,11 @@ function settingsDraftFromApi(data) {
     storage_recordings_path: data?.storage_recordings_path || data?.container_recordings_namespace_root || "",
     storage_namespace: data?.storage_namespace || "",
     storage_change_requires: data?.storage_change_requires || "",
+    auto_free_space_cleanup_enabled: Boolean(data?.auto_free_space_cleanup_enabled),
+    auto_free_space_warning_threshold_percent: data?.auto_free_space_warning_threshold_percent ?? 10,
+    auto_free_space_cleanup_threshold_percent: data?.auto_free_space_cleanup_threshold_percent ?? 5,
+    auto_free_space_critical_threshold_percent: data?.auto_free_space_critical_threshold_percent ?? 1,
+    recording_suspended_by_low_disk: Boolean(data?.recording_suspended_by_low_disk),
     recordingProfile: profileFromFormat(data?.recording_format),
     hardware_preferred_backend: data?.hardware_preferred_backend || null,
   };
@@ -409,6 +448,7 @@ function payloadFromDraft(draft) {
     language: draft.language,
     recording_format: recordingFormatForProfile(draft.recordingProfile),
     hardware_preferred_backend: draft.hardware_preferred_backend || null,
+    auto_free_space_cleanup_enabled: Boolean(draft.auto_free_space_cleanup_enabled),
   };
 }
 
@@ -631,13 +671,17 @@ export default function SettingsPage() {
   const [auditFilters, setAuditFilters] = useState({ category: "", severity: "", actor: "", target: "", since: "1440", q: "" });
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState("");
+  const [retentionPreview, setRetentionPreview] = useState(null);
+  const [retentionResult, setRetentionResult] = useState(null);
+  const [retentionBusy, setRetentionBusy] = useState(false);
+  const [retentionConfirmed, setRetentionConfirmed] = useState(false);
   const [bugReportText, setBugReportText] = useState("");
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
   const toastTimerRef = useRef(null);
   const lang = languageOf(draft || savedDraft);
   const t = TEXT[lang] || TEXT.ru;
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
-  const anyBusy = saving || hardwareChecking;
+  const anyBusy = saving || hardwareChecking || retentionBusy;
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
   const languageIcon = lang === "en"
@@ -818,6 +862,73 @@ export default function SettingsPage() {
     patch("language", nextLanguage);
     localStorage.setItem("km_vms_language", nextLanguage);
     window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextLanguage }));
+  }
+
+  function reasonEntries(source) {
+    const counts = source?.reason_counts || source?.observability || {};
+    return Object.entries(counts)
+      .filter(([, value]) => Number(value) > 0)
+      .slice(0, 6);
+  }
+
+  function cameraRows(source) {
+    return Object.values(source?.per_camera || {})
+      .filter((row) => Number(row?.bytes_freed || row?.deleted_count || row?.skipped_count || row?.failed_count) > 0)
+      .slice(0, 6);
+  }
+
+  function retentionSummaryText(source, mode = "preview") {
+    if (!source) return "";
+    if (mode === "result") {
+      return t.retentionResultReady
+        .replace("{deleted}", String(source.deleted_count || 0))
+        .replace("{skipped}", String(source.skipped_count || 0))
+        .replace("{failed}", String(source.failed_count || 0))
+        .replace("{bytes}", formatBytes(source.bytes_freed || 0));
+    }
+    return t.retentionPreviewReady
+      .replace("{count}", String(source.planned_count || 0))
+      .replace("{bytes}", formatBytes(source.estimated_freed_bytes ?? source.bytes_freed ?? 0));
+  }
+
+  async function runRetentionPreview() {
+    if (retentionBusy) return;
+    setRetentionBusy(true);
+    setRetentionResult(null);
+    setRetentionConfirmed(false);
+    try {
+      const preview = await apiFetch("/recordings/retention/dry-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      setRetentionPreview(preview);
+      showToast({ variant: "success", title: t.toasts.retentionOkTitle, text: retentionSummaryText(preview) });
+    } catch (err) {
+      showToast(normalizedError(err, lang));
+    } finally {
+      setRetentionBusy(false);
+    }
+  }
+
+  async function applyRetentionPlan() {
+    if (retentionBusy || !retentionPreview?.planned_count || !retentionConfirmed) return;
+    setRetentionBusy(true);
+    try {
+      const result = await apiFetch("/recordings/retention/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      setRetentionResult(result);
+      setRetentionPreview(null);
+      setRetentionConfirmed(false);
+      showToast({ variant: "success", title: t.toasts.retentionApplyTitle, text: retentionSummaryText(result, "result") });
+    } catch (err) {
+      showToast(normalizedError(err, lang));
+    } finally {
+      setRetentionBusy(false);
+    }
   }
 
   async function openUsersModal() {
@@ -1132,6 +1243,57 @@ export default function SettingsPage() {
                   </div>
                   <div className="settingsRowControl">
                     <input id="settings-storage" className="input settingsInput" value={draft.storage_host_path || t.hostPathUnknown} readOnly disabled />
+                  </div>
+                </div>
+
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/storage.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label htmlFor="settings-auto-free-space">{t.autoFreeSpace}</label>
+                    <span>{t.autoFreeSpaceHelp}</span>
+                    <small>{t.autoFreeSpaceThresholds}</small>
+                    <small>{t.autoFreeSpaceCritical}</small>
+                    {draft.recording_suspended_by_low_disk ? <small>{lang === "en" ? "Recording is currently suspended by critical low-disk protection." : "Запись сейчас остановлена критической защитой диска."}</small> : null}
+                  </div>
+                  <div className="settingsRowControl settingsRowControlMeta">
+                    <label className="settingsModalCheck">
+                      <input
+                        id="settings-auto-free-space"
+                        type="checkbox"
+                        checked={Boolean(draft.auto_free_space_cleanup_enabled)}
+                        onChange={(event) => patch("auto_free_space_cleanup_enabled", event.target.checked)}
+                        disabled={saving}
+                      />
+                      <span>{draft.auto_free_space_cleanup_enabled ? "ON" : "OFF"}</span>
+                    </label>
+                  </div>
+                </div>
+
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/recordings.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label>{t.retentionWorkflow}</label>
+                    <span>{t.retentionWorkflowText}</span>
+                    {retentionPreview ? <small>{retentionSummaryText(retentionPreview)}</small> : <small>{t.retentionEmpty}</small>}
+                    {retentionPreview && reasonEntries(retentionPreview).length ? (
+                      <small>{t.retentionBlocked}: {reasonEntries(retentionPreview).map(([key, value]) => `${key}: ${value}`).join(", ")}</small>
+                    ) : null}
+                    {retentionPreview && cameraRows(retentionPreview).length ? (
+                      <small>{t.retentionByCamera}: {cameraRows(retentionPreview).map((row) => `${row.camera_id || "-"}: ${formatBytes(row.bytes_freed || 0)}`).join(", ")}</small>
+                    ) : null}
+                    {retentionResult ? <small>{retentionSummaryText(retentionResult, "result")}</small> : null}
+                  </div>
+                  <div className="settingsRowControl settingsRowControlMeta">
+                    <button className="button secondary small settingsUsersAddButton" onClick={runRetentionPreview} disabled={retentionBusy || saving}>
+                      {retentionBusy ? t.checking : t.retentionDryRun}
+                    </button>
+                    <label className="settingsModalCheck">
+                      <input type="checkbox" checked={retentionConfirmed} onChange={(event) => setRetentionConfirmed(event.target.checked)} disabled={!retentionPreview?.planned_count || retentionBusy || saving} />
+                      <span>{t.retentionConfirm}</span>
+                    </label>
+                    <button className="button small dangerButton" onClick={applyRetentionPlan} disabled={!retentionPreview?.planned_count || !retentionConfirmed || retentionBusy || saving}>
+                      {t.retentionApply}
+                    </button>
                   </div>
                 </div>
 

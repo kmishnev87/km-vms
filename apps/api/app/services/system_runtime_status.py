@@ -10,6 +10,7 @@ from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.services.live_engine_v2 import manager as live_manager
 from app.services.recording_retention import automatic_retention_status
+from app.services.recording_retention import apply_critical_low_disk_protection, auto_free_space_status
 from app.services.recorder_runtime_status import (
     ACTIVE_JOB_STATES,
     HEARTBEAT_STALE_SECONDS,
@@ -41,6 +42,10 @@ SAFE_REASON_CODES = {
     "storage_unwritable",
     "storage_unreadable",
     "storage_low_space",
+    "storage_cleanup_threshold",
+    "storage_critical_low_space",
+    "auto_free_space_cleanup_disabled",
+    "critical_low_disk_recording_suspended",
     "storage_unknown",
     "retention_never_run",
     "retention_failed",
@@ -350,6 +355,7 @@ def _storage_severity_and_reasons(summary: dict[str, Any], usage_percent: float 
     readable = bool(checks.get("readable"))
     writable = bool(checks.get("writable"))
     capacity = _as_dict(summary.get("capacity"))
+    policy = _as_dict(summary.get("auto_free_space_policy"))
     free_percent = None if usage_percent is None else max(0.0, 100.0 - usage_percent)
 
     if status == "unavailable" or not available:
@@ -359,12 +365,21 @@ def _storage_severity_and_reasons(summary: dict[str, Any], usage_percent: float 
         _append_reason(reasons, "storage_unreadable")
     if not writable:
         _append_reason(reasons, "storage_unwritable")
+    if policy.get("state") == "critical":
+        _append_reason(reasons, "storage_critical_low_space")
+        _append_reason(reasons, "critical_low_disk_recording_suspended")
+        if not policy.get("auto_free_space_cleanup_enabled"):
+            _append_reason(reasons, "auto_free_space_cleanup_disabled")
+    elif policy.get("state") == "cleanup_threshold":
+        _append_reason(reasons, "storage_cleanup_threshold")
+        if not policy.get("auto_free_space_cleanup_enabled"):
+            _append_reason(reasons, "auto_free_space_cleanup_disabled")
     if free_percent is not None and free_percent < LOW_SPACE_WARNING_PERCENT:
         _append_reason(reasons, "storage_low_space")
     if capacity.get("filesystem_probe_status") not in {None, "ok"}:
         _append_reason(reasons, "storage_unknown")
 
-    if "storage_unreadable" in reasons:
+    if "storage_unreadable" in reasons or "storage_critical_low_space" in reasons:
         return "error", reasons
     if reasons or status == "degraded":
         return "warning", reasons
@@ -377,6 +392,7 @@ def _storage_severity_and_reasons(summary: dict[str, Any], usage_percent: float 
 def _build_storage_domain(storage_summary: dict[str, Any]) -> dict[str, Any]:
     checks = _as_dict(storage_summary.get("storage_path_checks"))
     capacity = _as_dict(storage_summary.get("capacity"))
+    policy = _as_dict(storage_summary.get("auto_free_space_policy"))
     owned = _as_dict(storage_summary.get("owned_archive"))
     reconciliation = _as_dict(storage_summary.get("reconciliation_summary"))
     usage_percent = _usage_percent(capacity)
@@ -403,6 +419,7 @@ def _build_storage_domain(storage_summary: dict[str, Any]) -> dict[str, Any]:
             "available_bytes": capacity.get("available_bytes"),
             "usage_percent": usage_percent,
         },
+        "auto_free_space_policy": policy,
         "namespace_status": "available" if bool(storage_summary.get("available")) else "unknown",
         "problem_counts": problem_counts,
         "summary": {
@@ -440,6 +457,7 @@ def _normalize_retention_status(value: Any) -> str:
 
 def _build_retention_domain(db: Session, now: datetime) -> dict[str, Any]:
     state = automatic_retention_status()
+    free_space_state = auto_free_space_status()
     policy_count = db.query(Camera).filter(Camera.retention_days.isnot(None)).count()
     deleted_segments_count = db.query(RecordingSegment).filter(RecordingSegment.status == SEGMENT_STATUS_DELETED).count()
     last_status = state.get("last_status")
@@ -484,7 +502,11 @@ def _build_retention_domain(db: Session, now: datetime) -> dict[str, Any]:
             "failed_count": int((state.get("last_summary") or {}).get("failed_count") or 0),
             "skipped_count": int((state.get("last_summary") or {}).get("skipped_count") or 0),
             "deleted_count": int((state.get("last_summary") or {}).get("deleted_count") or 0),
+            "auto_free_space_run_count": int(free_space_state.get("run_count") or 0),
+            "auto_free_space_deleted_count": int((free_space_state.get("last_summary") or {}).get("deleted_count") or 0),
+            "auto_free_space_bytes_freed": int((free_space_state.get("last_summary") or {}).get("bytes_freed") or 0),
         },
+        "auto_free_space_cleanup": free_space_state,
         "reason_codes": reasons,
         "evidence_status": "fresh" if running or normalized_status in {"success", "warning", "failed"} else "missing",
         "source": "automatic_retention_status_memory",
@@ -548,6 +570,7 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     live_domain, live_by_camera = _build_live_domain(cameras)
     cameras_domain = _build_camera_domain(db, now, cameras, recorder_states, live_by_camera)
     storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=False, write_audit=False)
+    storage_summary["auto_free_space_policy"] = apply_critical_low_disk_protection(db, storage_summary)
     storage_domain = _build_storage_domain(storage_summary)
     retention_domain = _build_retention_domain(db, now)
     reconciliation_domain = _build_reconciliation_domain(storage_summary)

@@ -16,5 +16,7 @@ class SystemSettings(Base):
     storage_path: Mapped[str] = mapped_column(String(1024), default="/storage/archive")
     recording_format: Mapped[str] = mapped_column(String(16), default="mkv")
     hardware_preferred_backend: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    auto_free_space_cleanup_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    recording_suspended_by_low_disk: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

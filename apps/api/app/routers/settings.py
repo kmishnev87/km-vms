@@ -78,6 +78,7 @@ class SettingsUpdateRequest(BaseModel):
     storage_path: str | None = None
     recording_format: str | None = None
     hardware_preferred_backend: str | None = None
+    auto_free_space_cleanup_enabled: bool | None = None
 
 
 class BugReportRequest(BaseModel):
@@ -258,6 +259,7 @@ def patch_settings(
         ("timezone", "settings.timezone_changed", "часовой пояс", "timezone"),
         ("hardware_preferred_backend", "settings.hardware_backend_changed", "аппаратное ускорение", "hardware backend"),
         ("recording_format", "settings.recording_format_changed", "формат записи", "recording format"),
+        ("auto_free_space_cleanup_enabled", "settings.auto_free_space_cleanup_changed", "автоосвобождение места", "auto free-space cleanup"),
     ]
     changed = {}
     for key, event_type, label_ru, label_en in setting_events:

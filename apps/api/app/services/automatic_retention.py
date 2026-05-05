@@ -5,7 +5,7 @@ import threading
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.services.recording_retention import run_automatic_retention_once
+from app.services.recording_retention import run_auto_free_space_cleanup_once, run_automatic_retention_once
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,9 @@ def run_automatic_retention_cycle() -> dict:
     max_candidates, max_bytes = automatic_retention_bounds()
     db = SessionLocal()
     try:
-        return run_automatic_retention_once(db, max_candidates=max_candidates, max_bytes=max_bytes)
+        retention_result = run_automatic_retention_once(db, max_candidates=max_candidates, max_bytes=max_bytes)
+        auto_free_space_result = run_auto_free_space_cleanup_once(db, max_candidates=max_candidates, max_bytes=max_bytes)
+        return {"retention": retention_result, "auto_free_space_cleanup": auto_free_space_result}
     finally:
         db.close()
 

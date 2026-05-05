@@ -501,6 +501,9 @@ def build_storage_monitoring_summary(
         "cleanup_candidates_summary": cleanup_candidates_summary,
         "namespace_observations": namespace_observations,
     }
+    from app.services.recording_retention import low_disk_policy_status
+
+    summary["auto_free_space_policy"] = low_disk_policy_status(db, summary)
     if write_audit:
         _maybe_audit_storage_transition(db, summary, actor=audit_actor)
     return summary

@@ -19,6 +19,9 @@ from app.services.storage_contract import (
 LANGUAGES = {"ru", "en"}
 HARDWARE_BACKENDS = {"auto", "cpu", "qsv", "vaapi", "nvenc", "amf"}
 ACTIVE_RECORDING_JOB_STATES = {"starting", "recording", "stopping", "restarting"}
+AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT = 10.0
+AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT = 5.0
+AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT = 1.0
 
 
 def default_timezone() -> str:
@@ -36,6 +39,8 @@ def get_system_settings(db: Session) -> SystemSettings:
         language="ru",
         storage_path=settings.storage_root,
         recording_format="mkv",
+        auto_free_space_cleanup_enabled=False,
+        recording_suspended_by_low_disk=False,
     )
     db.add(row)
     db.commit()
@@ -57,6 +62,11 @@ def serialize_settings(row: SystemSettings) -> dict:
         "recording_profile": format_contract["recording_profile"],
         "recording_format_contract": format_contract,
         "hardware_preferred_backend": row.hardware_preferred_backend,
+        "auto_free_space_cleanup_enabled": bool(getattr(row, "auto_free_space_cleanup_enabled", False)),
+        "auto_free_space_warning_threshold_percent": AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT,
+        "auto_free_space_cleanup_threshold_percent": AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT,
+        "auto_free_space_critical_threshold_percent": AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT,
+        "recording_suspended_by_low_disk": bool(getattr(row, "recording_suspended_by_low_disk", False)),
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
@@ -103,6 +113,9 @@ def validate_settings_payload(payload: dict, partial: bool = False) -> dict:
         if normalized and normalized not in HARDWARE_BACKENDS:
             raise ValueError("hardware_preferred_backend is invalid")
         data["hardware_preferred_backend"] = None if normalized in {"", "auto"} else normalized
+
+    if "auto_free_space_cleanup_enabled" in payload:
+        data["auto_free_space_cleanup_enabled"] = bool(payload.get("auto_free_space_cleanup_enabled"))
 
     return data
 

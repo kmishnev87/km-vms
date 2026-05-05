@@ -12,8 +12,21 @@ from app.services.system_settings import default_timezone
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     migrate_user_table()
+    migrate_system_settings_table()
     migrate_recording_metadata_tables()
     migrate_recorder_runtime_status()
+
+
+def migrate_system_settings_table() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("system_settings"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("system_settings")}
+    with engine.begin() as conn:
+        if "auto_free_space_cleanup_enabled" not in columns:
+            conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_free_space_cleanup_enabled BOOLEAN DEFAULT FALSE NOT NULL"))
+        if "recording_suspended_by_low_disk" not in columns:
+            conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS recording_suspended_by_low_disk BOOLEAN DEFAULT FALSE NOT NULL"))
 
 
 def migrate_user_table() -> None:
@@ -125,6 +138,8 @@ def ensure_system_settings(db: Session) -> SystemSettings:
         language="ru",
         storage_path=settings.storage_root,
         recording_format="mkv",
+        auto_free_space_cleanup_enabled=False,
+        recording_suspended_by_low_disk=False,
     )
     db.add(row)
     db.commit()

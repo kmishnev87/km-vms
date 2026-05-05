@@ -200,3 +200,22 @@ def test_serialized_settings_expose_ui_storage_and_format_contract(db):
         "reliability": "mkv",
         "compatibility": "mp4",
     }
+
+
+def test_auto_free_space_setting_defaults_off_and_patches_explicitly(db):
+    initial = serialize_settings(get_system_settings(db))
+    assert initial["auto_free_space_cleanup_enabled"] is False
+    assert initial["auto_free_space_warning_threshold_percent"] == 10.0
+    assert initial["auto_free_space_cleanup_threshold_percent"] == 5.0
+    assert initial["auto_free_space_critical_threshold_percent"] == 1.0
+
+    result = patch_settings(
+        SettingsUpdateRequest(auto_free_space_cleanup_enabled=True),
+        FakeRequest(),
+        db=db,
+        current_user=actor("owner"),
+    )
+
+    refreshed = get_system_settings(db)
+    assert refreshed.auto_free_space_cleanup_enabled is True
+    assert result["auto_free_space_cleanup_enabled"] is True

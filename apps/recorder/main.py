@@ -439,6 +439,8 @@ def ensure_recording_metadata_schema() -> None:
                 """
             )
         )
+        conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_free_space_cleanup_enabled BOOLEAN DEFAULT FALSE NOT NULL"))
+        conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS recording_suspended_by_low_disk BOOLEAN DEFAULT FALSE NOT NULL"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recorder_runtime_status_heartbeat_at ON recorder_runtime_status (heartbeat_at)"))
 
 
@@ -645,6 +647,16 @@ def read_recording_format() -> str:
     if raw_value is not None and str(raw_value or "").strip().lower() not in RECORDING_FORMATS:
         log_event("warning", "recording_format_invalid_fallback", value=redact_text(str(raw_value)), fallback=recording_format)
     return recording_format
+
+
+def read_recording_suspended_by_low_disk() -> bool:
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(text("SELECT recording_suspended_by_low_disk FROM system_settings ORDER BY id ASC LIMIT 1")).first()
+    except Exception as exc:
+        log_event("warning", "low_disk_suspend_read_failed", error=redact_text(str(exc)))
+        return False
+    return bool(row and row.recording_suspended_by_low_disk)
 
 
 def format_metadata(recording_format: str) -> dict[str, str]:
@@ -1542,6 +1554,7 @@ def sync_cameras() -> None:
     db = SessionLocal()
     try:
         effective_recording_format = read_recording_format()
+        low_disk_recording_suspended = read_recording_suspended_by_low_disk()
         rows = db.execute(
             text(
                 """
@@ -1584,6 +1597,17 @@ def sync_cameras() -> None:
                     job.set_state(RecorderState.DISABLED)
                     update_camera_status_from_job(job)
                     close_recording_job(job, state=RecorderState.DISABLED, reason="camera_disabled")
+                continue
+
+            if low_disk_recording_suspended and row.recording_mode == "always":
+                job.retry_count = 0
+                job.next_retry_at = None
+                if job.process and job.process.poll() is None:
+                    stop_camera(row.id, "critical_low_disk_recording_suspended", audit_event="critical_low_disk_recording_suspended")
+                else:
+                    job.set_state(RecorderState.IDLE)
+                    update_camera_status_from_job(job)
+                    close_recording_job(job, state=RecorderState.IDLE, reason="critical_low_disk_recording_suspended")
                 continue
 
             if row.recording_mode != "always":

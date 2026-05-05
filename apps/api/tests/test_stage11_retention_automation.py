@@ -17,16 +17,21 @@ from app.db.session import Base
 from app.models.audit_event import AuditEvent
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
+from app.models.system_settings import SystemSettings
 from app.routers.cameras import create_camera, update_camera
 from app.routers.chronology import chronology_playback
 from app.routers.recordings import collect_recording_files
 from app.schemas.camera import CameraCreate, CameraUpdate
 from app.services.recording_retention import (
+    AUTO_FREE_SPACE_STATE,
+    AUTO_FREE_SPACE_STATE_LOCK,
     AUTO_RETENTION_STATE,
     AUTO_RETENTION_STATE_LOCK,
     build_retention_plan,
     execute_segments,
     retention_diagnostics,
+    low_disk_policy_status,
+    run_auto_free_space_cleanup_once,
     run_automatic_retention_once,
 )
 
@@ -61,6 +66,17 @@ def db():
         with AUTO_RETENTION_STATE_LOCK:
             AUTO_RETENTION_STATE.update(
                 {
+                    "running": False,
+                    "last_status": "never_run",
+                    "last_error": None,
+                    "last_summary": None,
+                    "run_count": 0,
+                }
+            )
+        with AUTO_FREE_SPACE_STATE_LOCK:
+            AUTO_FREE_SPACE_STATE.update(
+                {
+                    "enabled": False,
                     "running": False,
                     "last_status": "never_run",
                     "last_error": None,
@@ -169,6 +185,37 @@ def add_segment(
     db.commit()
     db.refresh(segment)
     return segment, path
+
+
+def add_system_settings(db, *, auto_free_space_cleanup_enabled=False):
+    row = SystemSettings(
+        system_initialized=True,
+        timezone="UTC",
+        language="en",
+        storage_path=settings.storage_root,
+        recording_format="mkv",
+        auto_free_space_cleanup_enabled=auto_free_space_cleanup_enabled,
+        recording_suspended_by_low_disk=False,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def storage_summary(total, free):
+    return {
+        "status": "available",
+        "available": True,
+        "capacity": {
+            "total_bytes": total,
+            "used_bytes": total - free,
+            "free_bytes": free,
+            "available_bytes": free,
+            "filesystem_probe_status": "ok",
+        },
+        "storage_path_checks": {"readable": True, "writable": True},
+    }
 
 
 def test_create_camera_with_one_gb_quota_persists_without_clamp(db):
@@ -369,3 +416,91 @@ def test_automatic_retention_diagnostics_and_audit_summary(db):
     assert diagnostics["automatic_retention"]["last_summary"]["deleted_count"] == 1
     assert "retention.auto_run_started" in event_types
     assert "retention.auto_run_completed" in event_types
+
+
+def test_low_disk_auto_free_space_default_off_warns_but_does_not_delete(db):
+    system = add_system_settings(db, auto_free_space_cleanup_enabled=False)
+    camera = add_camera(db, retention_days=30, storage_quota_gb=50)
+    segment, path = add_segment(db, camera, name="stage1_low_disk_disabled", days_ago=2)
+
+    result = run_auto_free_space_cleanup_once(
+        db,
+        storage_summary=storage_summary(1000, 40),
+        max_candidates=10,
+        max_bytes=1024 * 1024,
+    )
+
+    db.refresh(segment)
+    db.refresh(system)
+    assert result["deleted_count"] == 0
+    assert result["items"][0]["reason"] == "auto_free_space_cleanup_disabled"
+    assert segment.status == "finalized"
+    assert path.exists()
+    assert system.recording_suspended_by_low_disk is False
+
+
+def test_critical_low_disk_sets_recording_suspend_without_deletion_when_opt_in_off(db):
+    system = add_system_settings(db, auto_free_space_cleanup_enabled=False)
+    camera = add_camera(db, retention_days=30, storage_quota_gb=50)
+    segment, path = add_segment(db, camera, name="stage1_low_disk_critical_disabled", days_ago=2)
+
+    result = run_auto_free_space_cleanup_once(
+        db,
+        storage_summary=storage_summary(1000, 5),
+        max_candidates=10,
+        max_bytes=1024 * 1024,
+    )
+
+    db.refresh(segment)
+    db.refresh(system)
+    assert result["low_disk_policy"]["state"] == "critical"
+    assert result["low_disk_policy"]["critical_recording_suspend_required"] is True
+    assert result["deleted_count"] == 0
+    assert system.recording_suspended_by_low_disk is True
+    assert segment.status == "finalized"
+    assert path.exists()
+
+
+def test_low_disk_auto_free_space_enabled_deletes_oldest_owned_metadata_safe_segment(db):
+    add_system_settings(db, auto_free_space_cleanup_enabled=True)
+    camera = add_camera(db, retention_days=30, storage_quota_gb=50)
+    oldest, oldest_path = add_segment(db, camera, name="stage1_low_disk_oldest", days_ago=5, apparent_size=20)
+    newer, newer_path = add_segment(db, camera, name="stage1_low_disk_newer", days_ago=2, apparent_size=20)
+    problem, problem_path = add_segment(db, camera, name="stage1_low_disk_problem", days_ago=6, apparent_size=20, integrity_status="corrupted_file")
+
+    result = run_auto_free_space_cleanup_once(
+        db,
+        storage_summary=storage_summary(1000, 40),
+        max_candidates=1,
+        max_bytes=100,
+    )
+
+    db.refresh(oldest)
+    db.refresh(newer)
+    db.refresh(problem)
+    assert result["operation"] == "retention_auto_free_space"
+    assert result["deleted_count"] == 1
+    assert result["low_disk_policy"]["cleanup_allowed"] is True
+    assert oldest.status == "deleted"
+    assert newer.status == "finalized"
+    assert problem.status == "finalized"
+    assert not oldest_path.exists()
+    assert newer_path.exists()
+    assert problem_path.exists()
+    assert all("relative_path" not in item for item in result["items"])
+
+
+def test_low_disk_policy_thresholds_are_percent_based_and_strict(db):
+    add_system_settings(db, auto_free_space_cleanup_enabled=True)
+
+    at_warning = low_disk_policy_status(db, storage_summary(1000, 100))
+    below_warning = low_disk_policy_status(db, storage_summary(1000, 99))
+    below_cleanup = low_disk_policy_status(db, storage_summary(1000, 49))
+    below_critical = low_disk_policy_status(db, storage_summary(1000, 9))
+
+    assert at_warning["state"] == "ok"
+    assert below_warning["state"] == "warning"
+    assert below_cleanup["state"] == "cleanup_threshold"
+    assert below_cleanup["cleanup_allowed"] is True
+    assert below_critical["state"] == "critical"
+    assert below_critical["critical_recording_suspend_required"] is True

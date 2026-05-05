@@ -18,6 +18,12 @@ from app.models.recording import RecordingJob, RecordingSegment
 from app.models.user import User
 from app.services.audit_log import create_event
 from app.services.recording_storage import is_kmvms_namespace_relative, safe_resolve_relative
+from app.services.system_settings import (
+    AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT,
+    AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT,
+    AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT,
+    get_system_settings,
+)
 
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
@@ -39,6 +45,18 @@ AUTO_RETENTION_STATE: dict = {
     "last_started_at": None,
     "last_finished_at": None,
     "last_status": "never_run",
+    "last_error": None,
+    "last_summary": None,
+    "run_count": 0,
+}
+AUTO_FREE_SPACE_STATE_LOCK = threading.Lock()
+AUTO_FREE_SPACE_STATE: dict = {
+    "enabled": False,
+    "running": False,
+    "last_started_at": None,
+    "last_finished_at": None,
+    "last_status": "never_run",
+    "last_trigger": None,
     "last_error": None,
     "last_summary": None,
     "run_count": 0,
@@ -135,10 +153,13 @@ def _item(
     error: str | None = None,
     size_bytes: int = 0,
 ) -> dict:
+    path_name = None
+    if segment and segment.relative_path:
+        path_name = Path(str(segment.relative_path).replace("\\", "/")).name[:160]
     return {
         "segment_id": segment.id if segment else None,
         "camera_id": segment.camera_id if segment else None,
-        "relative_path": (segment.relative_path if segment else None),
+        "path_name": path_name,
         "action": action,
         "reason": reason,
         "error": redact_text(error) if error else None,
@@ -194,6 +215,107 @@ def _segment_size(segment: RecordingSegment, file_path: Path | None) -> int:
         except OSError:
             return int(segment.size_bytes or 0)
     return int(segment.size_bytes or 0)
+
+
+def _free_percent(capacity: dict | None) -> float | None:
+    capacity = capacity or {}
+    total = capacity.get("total_bytes")
+    free = capacity.get("free_bytes")
+    if not total or free is None:
+        return None
+    try:
+        return round((int(free) / int(total)) * 100, 4)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def low_disk_policy_status(db: Session, storage_summary: dict | None = None) -> dict:
+    if storage_summary is None:
+        from app.services.storage_monitoring import build_storage_monitoring_summary
+
+        storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=False, write_audit=False)
+    system = get_system_settings(db)
+    capacity = storage_summary.get("capacity") or {}
+    free_percent = _free_percent(capacity)
+    cleanup_enabled = bool(getattr(system, "auto_free_space_cleanup_enabled", False))
+    if free_percent is None:
+        state = "capacity_unknown"
+    elif free_percent < AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT:
+        state = "critical"
+    elif free_percent < AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT:
+        state = "cleanup_threshold"
+    elif free_percent < AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT:
+        state = "warning"
+    else:
+        state = "ok"
+    return {
+        "state": state,
+        "free_percent": free_percent,
+        "free_bytes": capacity.get("free_bytes"),
+        "total_bytes": capacity.get("total_bytes"),
+        "warning_threshold_percent": AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT,
+        "cleanup_threshold_percent": AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT,
+        "critical_threshold_percent": AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT,
+        "auto_free_space_cleanup_enabled": cleanup_enabled,
+        "cleanup_allowed": bool(cleanup_enabled and free_percent is not None and free_percent < AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT),
+        "critical_recording_suspend_required": bool(free_percent is not None and free_percent < AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT),
+        "recording_suspended_by_low_disk": bool(getattr(system, "recording_suspended_by_low_disk", False)),
+    }
+
+
+def update_low_disk_recording_suspend(
+    db: Session,
+    *,
+    should_suspend: bool,
+    actor: User | None = None,
+    reason: str,
+    policy: dict,
+) -> bool:
+    system = get_system_settings(db)
+    current = bool(getattr(system, "recording_suspended_by_low_disk", False))
+    if current == should_suspend:
+        return False
+    system.recording_suspended_by_low_disk = should_suspend
+    system.updated_at = _now()
+    db.add(system)
+    db.commit()
+    create_event(
+        db=db,
+        actor=actor,
+        category="storage",
+        event_type="storage.critical_low_disk_recording_suspended" if should_suspend else "storage.critical_low_disk_recording_resumed",
+        severity="error" if should_suspend else "info",
+        message_ru="Recording suspended by critical low disk protection" if should_suspend else "Recording resumed after critical low disk protection",
+        message_en="Recording suspended by critical low disk protection" if should_suspend else "Recording resumed after critical low disk protection",
+        target_type="storage",
+        metadata={
+            "reason": reason,
+            "free_percent": policy.get("free_percent"),
+            "free_bytes": policy.get("free_bytes"),
+            "total_bytes": policy.get("total_bytes"),
+            "critical_threshold_percent": policy.get("critical_threshold_percent"),
+            "auto_free_space_cleanup_enabled": policy.get("auto_free_space_cleanup_enabled"),
+        },
+    )
+    return True
+
+
+def apply_critical_low_disk_protection(db: Session, storage_summary: dict | None = None, *, actor: User | None = None) -> dict:
+    policy = low_disk_policy_status(db, storage_summary)
+    if policy["free_percent"] is None:
+        policy["recording_suspend_changed"] = False
+        return policy
+    should_suspend = bool(policy["critical_recording_suspend_required"])
+    changed = update_low_disk_recording_suspend(
+        db,
+        should_suspend=should_suspend,
+        actor=actor,
+        reason="critical_low_disk" if should_suspend else "free_space_recovered",
+        policy=policy,
+    )
+    policy["recording_suspend_changed"] = changed
+    policy["recording_suspended_by_low_disk"] = should_suspend
+    return policy
 
 
 def validate_segment_for_deletion(
@@ -770,6 +892,11 @@ def automatic_retention_status() -> dict:
         return dict(AUTO_RETENTION_STATE)
 
 
+def auto_free_space_status() -> dict:
+    with AUTO_FREE_SPACE_STATE_LOCK:
+        return dict(AUTO_FREE_SPACE_STATE)
+
+
 def _set_automatic_retention_state(**updates) -> None:
     with AUTO_RETENTION_STATE_LOCK:
         AUTO_RETENTION_STATE.update(updates)
@@ -818,6 +945,230 @@ def _automatic_retention_bounded_subset(
         "bounded_safety_skipped_items": skipped_items,
     }
     return selected, metadata
+
+
+def _auto_free_space_bounded_subset(
+    db: Session,
+    *,
+    max_candidates: int,
+    max_bytes: int,
+    target_bytes: int | None,
+) -> tuple[list[RecordingSegment], dict]:
+    active_job_ids = _active_job_ids(db)
+    executable: list[tuple[RecordingSegment, int]] = []
+    skipped_items: list[dict] = []
+    for segment in _eligible_segments_query(db).all():
+        ok, item_reason, file_path, size = validate_segment_for_deletion(segment, active_job_ids=active_job_ids)
+        if ok and file_path is not None:
+            executable.append((segment, int(size or 0)))
+        else:
+            skipped_items.append(_item(segment, action="skipped", reason=item_reason, size_bytes=size))
+
+    selected: list[RecordingSegment] = []
+    selected_bytes = 0
+    oversized_single_segment_progress = False
+    target_bytes = max(0, int(target_bytes or 0))
+    for segment, size in executable:
+        if len(selected) >= max_candidates:
+            break
+        next_bytes = selected_bytes + int(size or 0)
+        if next_bytes <= max_bytes:
+            selected.append(segment)
+            selected_bytes = next_bytes
+        elif not selected:
+            selected.append(segment)
+            selected_bytes = next_bytes
+            oversized_single_segment_progress = True
+        else:
+            break
+        if target_bytes and selected_bytes >= target_bytes:
+            break
+
+    metadata = {
+        "bounded_requested_count": len(executable),
+        "bounded_executed_count": len(selected),
+        "bounded_skipped_due_to_limit_count": max(0, len(executable) - len(selected)),
+        "bounded_selected_bytes": selected_bytes,
+        "target_bytes": target_bytes,
+        "oversized_single_segment_progress": oversized_single_segment_progress,
+        "bounded_safety_skipped_items": skipped_items,
+    }
+    return selected, metadata
+
+
+def _set_auto_free_space_state(**updates) -> None:
+    with AUTO_FREE_SPACE_STATE_LOCK:
+        AUTO_FREE_SPACE_STATE.update(updates)
+
+
+def _target_bytes_for_cleanup(policy: dict) -> int | None:
+    total = policy.get("total_bytes")
+    free = policy.get("free_bytes")
+    if not total or free is None:
+        return None
+    try:
+        threshold_bytes = int((float(policy["cleanup_threshold_percent"]) / 100.0) * int(total))
+        return max(0, threshold_bytes - int(free))
+    except (TypeError, ValueError):
+        return None
+
+
+def run_auto_free_space_cleanup_once(
+    db: Session,
+    *,
+    storage_summary: dict | None = None,
+    actor: User | None = None,
+    max_candidates: int | None = None,
+    max_bytes: int | None = None,
+) -> dict:
+    max_candidates = min(int(max_candidates or AUTO_RETENTION_DEFAULT_MAX_CANDIDATES), HARD_MAX_CANDIDATES)
+    max_bytes = min(int(max_bytes or AUTO_RETENTION_DEFAULT_MAX_BYTES), HARD_MAX_BYTES)
+    if storage_summary is None:
+        from app.services.storage_monitoring import build_storage_monitoring_summary
+
+        storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=False, write_audit=False)
+    policy = apply_critical_low_disk_protection(db, storage_summary, actor=actor)
+    trigger = "critical_low_disk" if policy["state"] == "critical" else "low_disk"
+    started_at = _now()
+
+    with AUTO_FREE_SPACE_STATE_LOCK:
+        if AUTO_FREE_SPACE_STATE.get("running"):
+            result = _base_result("retention_auto_free_space", dry_run=False)
+            _add_item(result, _item(None, action="skipped", reason="auto_free_space_already_running"))
+            result["ok"] = False
+            result["low_disk_policy"] = policy
+            result = _finish(result)
+            result["ok"] = False
+            AUTO_FREE_SPACE_STATE["last_status"] = "skipped_concurrent"
+            AUTO_FREE_SPACE_STATE["last_summary"] = _retention_summary(result)
+            return result
+        AUTO_FREE_SPACE_STATE.update(
+            {
+                "enabled": bool(policy["auto_free_space_cleanup_enabled"]),
+                "running": True,
+                "last_started_at": _iso(started_at),
+                "last_trigger": trigger,
+                "last_error": None,
+            }
+        )
+
+    result = _base_result("retention_auto_free_space", dry_run=False)
+    result["low_disk_policy"] = policy
+    result["limit_applied"] = {"max_candidates": max_candidates, "max_bytes": max_bytes}
+    try:
+        if policy["free_percent"] is None:
+            _add_item(result, _item(None, action="skipped", reason="capacity_unknown"))
+            result["ok"] = False
+            return_result = _finish(result)
+        elif not policy["auto_free_space_cleanup_enabled"]:
+            _add_item(result, _item(None, action="skipped", reason="auto_free_space_cleanup_disabled"))
+            return_result = _finish(result)
+        elif not policy["cleanup_allowed"]:
+            _add_item(result, _item(None, action="skipped", reason="cleanup_threshold_not_reached"))
+            return_result = _finish(result)
+        else:
+            _audit(
+                db,
+                actor,
+                event_type="retention.auto_free_space_started",
+                severity="error" if trigger == "critical_low_disk" else "warning",
+                message="Automatic free-space cleanup started",
+                metadata={
+                    "trigger": trigger,
+                    "free_percent": policy.get("free_percent"),
+                    "free_bytes": policy.get("free_bytes"),
+                    "total_bytes": policy.get("total_bytes"),
+                    "cleanup_threshold_percent": policy.get("cleanup_threshold_percent"),
+                    "critical_threshold_percent": policy.get("critical_threshold_percent"),
+                    "max_candidates": max_candidates,
+                    "max_bytes": max_bytes,
+                },
+            )
+            with RetentionApplyLock():
+                selected, bounded = _auto_free_space_bounded_subset(
+                    db,
+                    max_candidates=max_candidates,
+                    max_bytes=max_bytes,
+                    target_bytes=_target_bytes_for_cleanup(policy),
+                )
+                if not selected:
+                    _add_item(result, _item(None, action="skipped", reason="no_safe_cleanup_candidates"))
+                    return_result = _finish(result)
+                else:
+                    effective_max_bytes = max_bytes
+                    if bounded["oversized_single_segment_progress"]:
+                        effective_max_bytes = max(max_bytes, int(bounded["bounded_selected_bytes"] or 0))
+                    return_result = execute_segments(
+                        db,
+                        selected,
+                        actor=actor,
+                        operation="retention_auto_free_space",
+                        reason=trigger,
+                        max_candidates=max_candidates,
+                        max_bytes=effective_max_bytes,
+                    )
+                    safety_skipped_items = bounded.pop("bounded_safety_skipped_items", [])
+                    return_result.update(bounded)
+                    return_result["low_disk_policy"] = policy
+                    for item in safety_skipped_items:
+                        _add_item(return_result, item)
+                    if bounded["oversized_single_segment_progress"]:
+                        return_result["warnings"].append("oversized_single_segment_progress")
+                    if bounded["bounded_skipped_due_to_limit_count"]:
+                        return_result["warnings"].append("bounded_progress_remaining_candidates")
+                    return_result["limit_applied"] = {
+                        "max_candidates": max_candidates,
+                        "max_bytes": max_bytes,
+                        "effective_max_bytes": effective_max_bytes,
+                    }
+            _audit(
+                db,
+                actor,
+                event_type="retention.auto_free_space_completed",
+                severity="error" if return_result.get("failed_count") else ("warning" if trigger == "low_disk" else "error"),
+                message="Automatic free-space cleanup completed",
+                metadata={**_retention_summary(return_result), "trigger": trigger, "low_disk_policy": policy},
+            )
+
+        summary = _retention_summary(return_result)
+        _set_auto_free_space_state(
+            enabled=bool(policy["auto_free_space_cleanup_enabled"]),
+            running=False,
+            last_finished_at=_iso(_now()),
+            last_status="ok" if return_result.get("ok") else "completed_with_warnings",
+            last_error=None,
+            last_summary=summary,
+            last_trigger=trigger,
+            run_count=int(auto_free_space_status().get("run_count") or 0) + 1,
+        )
+        return return_result
+    except Exception as exc:
+        db.rollback()
+        error = redact_text(str(exc))[:1000]
+        result = _base_result("retention_auto_free_space", dry_run=False)
+        result["low_disk_policy"] = policy
+        _add_item(result, _item(None, action="failed", reason="auto_free_space_exception", error=error))
+        result["ok"] = False
+        result = _finish(result)
+        _audit(
+            db,
+            actor,
+            event_type="retention.auto_free_space_failed",
+            severity="error",
+            message="Automatic free-space cleanup failed",
+            metadata={"error": error, "trigger": trigger},
+        )
+        _set_auto_free_space_state(
+            enabled=bool(policy["auto_free_space_cleanup_enabled"]),
+            running=False,
+            last_finished_at=_iso(_now()),
+            last_status="failed",
+            last_error=error,
+            last_summary=_retention_summary(result),
+            last_trigger=trigger,
+            run_count=int(auto_free_space_status().get("run_count") or 0) + 1,
+        )
+        return result
 
 
 def run_automatic_retention_once(
@@ -960,6 +1311,8 @@ def retention_diagnostics(db: Session) -> dict:
             "stale_behavior": "fail_closed_manual_recovery_required",
         },
         "automatic_retention": automatic_retention_status(),
+        "auto_free_space_cleanup": auto_free_space_status(),
+        "auto_free_space_policy": low_disk_policy_status(db),
         "policies": [
             {
                 "camera_id": camera.id,
