@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.services.live_engine_v2 import manager as live_manager
+from app.services.recording_retention import automatic_retention_status
 from app.services.recorder_diagnostics import (
     ACTIVE_JOB_STATES,
     HEARTBEAT_STALE_SECONDS,
@@ -21,6 +22,7 @@ from app.services.recorder_diagnostics import (
     _segment_summary,
     _utc_now,
 )
+from app.services.storage_monitoring import build_storage_monitoring_summary
 
 SEVERITIES = ("ok", "warning", "error", "unknown")
 SAFE_REASON_CODES = {
@@ -35,8 +37,29 @@ SAFE_REASON_CODES = {
     "unknown_status",
     "camera_unreachable",
     "not_applicable",
+    "storage_unavailable",
+    "storage_unwritable",
+    "storage_unreadable",
+    "storage_low_space",
+    "storage_unknown",
+    "retention_never_run",
+    "retention_failed",
+    "retention_completed_with_warnings",
+    "retention_unknown",
+    "retention_policy_risk",
+    "reconciliation_never_run",
+    "reconciliation_failed",
+    "reconciliation_problems_found",
+    "cleanup_candidates_present",
+    "reconciliation_unknown",
+    "not_implemented",
 }
 RECORDING_STALE_GRACE_SECONDS = 60
+LOW_SPACE_WARNING_PERCENT = 10.0
+RETENTION_SUCCESS_STATUSES = {"ok", "completed", "success", "completed_successfully", "succeeded"}
+RETENTION_WARNING_STATUSES = {"completed_with_warnings", "skipped_concurrent", "warning", "warnings"}
+RETENTION_FAILURE_STATUSES = {"failed", "error"}
+RETENTION_NO_EVIDENCE_STATUSES = {"", "never_run", "not_run", "none", "null"}
 
 
 def _severity_rank(value: str) -> int:
@@ -304,26 +327,247 @@ def _build_camera_domain(
     return {"severity": _rollup([item["severity"] for item in items]), "summary": summary, "items": items}
 
 
+def _usage_percent(capacity: dict[str, Any]) -> float | None:
+    total = capacity.get("total_bytes")
+    used = capacity.get("used_bytes")
+    if not total or used is None:
+        return None
+    try:
+        return round((int(used) / int(total)) * 100, 2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _storage_severity_and_reasons(summary: dict[str, Any], usage_percent: float | None) -> tuple[str, list[str]]:
+    checks = summary.get("storage_path_checks") or {}
+    reasons: list[str] = []
+    status = str(summary.get("status") or "unknown")
+    available = bool(summary.get("available"))
+    readable = bool(checks.get("readable"))
+    writable = bool(checks.get("writable"))
+    capacity = summary.get("capacity") or {}
+    free_percent = None if usage_percent is None else max(0.0, 100.0 - usage_percent)
+
+    if status == "unavailable" or not available:
+        _append_reason(reasons, "storage_unavailable")
+        return "error", reasons
+    if not readable:
+        _append_reason(reasons, "storage_unreadable")
+    if not writable:
+        _append_reason(reasons, "storage_unwritable")
+    if free_percent is not None and free_percent < LOW_SPACE_WARNING_PERCENT:
+        _append_reason(reasons, "storage_low_space")
+    if capacity.get("filesystem_probe_status") not in {None, "ok"}:
+        _append_reason(reasons, "storage_unknown")
+
+    if "storage_unreadable" in reasons:
+        return "error", reasons
+    if reasons or status == "degraded":
+        return "warning", reasons
+    if status == "available":
+        return "ok", reasons
+    _append_reason(reasons, "storage_unknown")
+    return "unknown", reasons
+
+
+def _build_storage_domain(storage_summary: dict[str, Any]) -> dict[str, Any]:
+    checks = storage_summary.get("storage_path_checks") or {}
+    capacity = storage_summary.get("capacity") or {}
+    owned = storage_summary.get("owned_archive") or {}
+    reconciliation = storage_summary.get("reconciliation_summary") or {}
+    usage_percent = _usage_percent(capacity)
+    severity, reasons = _storage_severity_and_reasons(storage_summary, usage_percent)
+    problem_counts = {
+        "missing_file_count": int(reconciliation.get("missing_file_count") or 0),
+        "invalid_path_count": int(reconciliation.get("invalid_path_count") or 0),
+        "path_outside_storage_count": int(reconciliation.get("path_outside_storage_count") or 0),
+        "problem_file_count": int(owned.get("kmvms_owned_problem_file_count") or 0),
+    }
+    if any(problem_counts.values()) and severity == "ok":
+        severity = "warning"
+
+    return {
+        "status": str(storage_summary.get("status") or "unknown"),
+        "severity": severity,
+        "available": bool(storage_summary.get("available")),
+        "readable": bool(checks.get("readable")),
+        "writable": bool(checks.get("writable")),
+        "capacity": {
+            "total_bytes": capacity.get("total_bytes"),
+            "used_bytes": capacity.get("used_bytes"),
+            "free_bytes": capacity.get("free_bytes"),
+            "available_bytes": capacity.get("available_bytes"),
+            "usage_percent": usage_percent,
+        },
+        "namespace_status": "available" if bool(storage_summary.get("available")) else "unknown",
+        "problem_counts": problem_counts,
+        "summary": {
+            "segments_count": int(owned.get("kmvms_owned_segments_count") or 0),
+            "existing_file_count": int(owned.get("kmvms_owned_existing_file_count") or 0),
+            "missing_file_count": problem_counts["missing_file_count"],
+            "problem_file_count": problem_counts["problem_file_count"],
+        },
+        "reason_codes": reasons,
+        "evidence_status": "fresh",
+        "source": "storage_monitoring_metadata_summary",
+        "last_checked_at": storage_summary.get("checked_at"),
+    }
+
+
+def _retention_last_run_age_seconds(state: dict[str, Any], now: datetime) -> int | None:
+    value = state.get("last_finished_at") or state.get("last_started_at")
+    if not value:
+        return None
+    return _age_seconds(value, now)
+
+
+def _normalize_retention_status(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in RETENTION_SUCCESS_STATUSES:
+        return "success"
+    if normalized in RETENTION_WARNING_STATUSES:
+        return "warning"
+    if normalized in RETENTION_FAILURE_STATUSES:
+        return "failed"
+    if normalized in RETENTION_NO_EVIDENCE_STATUSES:
+        return "no_evidence"
+    return "unknown"
+
+
+def _build_retention_domain(db: Session, now: datetime) -> dict[str, Any]:
+    state = automatic_retention_status()
+    policy_count = db.query(Camera).filter(Camera.retention_days.isnot(None)).count()
+    deleted_segments_count = db.query(RecordingSegment).filter(RecordingSegment.status == SEGMENT_STATUS_DELETED).count()
+    last_status = state.get("last_status")
+    normalized_status = _normalize_retention_status(last_status)
+    running = bool(state.get("running"))
+    enabled = state.get("enabled")
+    reasons: list[str] = []
+
+    if running:
+        severity = "ok"
+    elif normalized_status == "failed":
+        severity = "error"
+        _append_reason(reasons, "retention_failed")
+    elif normalized_status == "warning":
+        severity = "warning"
+        _append_reason(reasons, "retention_completed_with_warnings")
+    elif normalized_status == "success":
+        severity = "ok"
+    elif normalized_status == "no_evidence" and policy_count:
+        severity = "unknown"
+        _append_reason(reasons, "retention_never_run")
+    else:
+        severity = "unknown"
+        _append_reason(reasons, "retention_unknown")
+
+    if policy_count <= 0:
+        _append_reason(reasons, "retention_policy_risk")
+
+    return {
+        "status": str(last_status or ("running" if running else "unknown")),
+        "severity": severity,
+        "enabled": enabled if enabled is not None else None,
+        "running": running,
+        "last_status": last_status,
+        "last_started_at": state.get("last_started_at"),
+        "last_finished_at": state.get("last_finished_at"),
+        "last_run_age_seconds": _retention_last_run_age_seconds(state, now),
+        "policy_count": int(policy_count),
+        "deleted_segments_count": int(deleted_segments_count),
+        "summary": {
+            "run_count": int(state.get("run_count") or 0),
+            "failed_count": int((state.get("last_summary") or {}).get("failed_count") or 0),
+            "skipped_count": int((state.get("last_summary") or {}).get("skipped_count") or 0),
+            "deleted_count": int((state.get("last_summary") or {}).get("deleted_count") or 0),
+        },
+        "reason_codes": reasons,
+        "evidence_status": "fresh" if running or normalized_status in {"success", "warning", "failed"} else "missing",
+        "source": "automatic_retention_status_memory",
+    }
+
+
+def _build_reconciliation_domain(storage_summary: dict[str, Any]) -> dict[str, Any]:
+    raw_reconciliation = storage_summary.get("reconciliation_summary")
+    raw_cleanup = storage_summary.get("cleanup_candidates_summary")
+    has_reconciliation_evidence = isinstance(raw_reconciliation, dict)
+    has_cleanup_evidence = isinstance(raw_cleanup, dict)
+    has_status_friendly_evidence = has_reconciliation_evidence and has_cleanup_evidence
+    reconciliation = raw_reconciliation if has_reconciliation_evidence else {}
+    cleanup = raw_cleanup if has_cleanup_evidence else {}
+    missing = int(reconciliation.get("missing_file_count") or 0)
+    orphan = int(reconciliation.get("orphan_file_count") or 0)
+    path_outside = int(reconciliation.get("path_outside_storage_count") or 0)
+    invalid = int(reconciliation.get("invalid_path_count") or 0)
+    cleanup_count = int(cleanup.get("count") or 0)
+    scan_limited = bool(storage_summary.get("scan_limited"))
+    partial = bool(storage_summary.get("partial"))
+    reasons: list[str] = []
+
+    if not has_status_friendly_evidence:
+        severity = "unknown"
+        _append_reason(reasons, "no_evidence")
+        _append_reason(reasons, "reconciliation_unknown")
+    elif missing or orphan or path_outside or invalid:
+        severity = "error" if path_outside else "warning"
+        _append_reason(reasons, "reconciliation_problems_found")
+    elif cleanup_count:
+        severity = "warning"
+        _append_reason(reasons, "cleanup_candidates_present")
+    elif partial or scan_limited:
+        severity = "warning"
+        _append_reason(reasons, "reconciliation_unknown")
+    else:
+        severity = "ok"
+
+    return {
+        "status": "no_evidence" if not has_status_friendly_evidence else ("problems_found" if reasons else "ok"),
+        "severity": severity,
+        "missing_file_count": missing,
+        "orphan_file_count": orphan,
+        "path_outside_storage_count": path_outside,
+        "problem_file_count": missing + orphan + path_outside + invalid,
+        "cleanup_candidate_count": cleanup_count,
+        "scan_limited": scan_limited,
+        "partial": partial,
+        "reason_codes": reasons,
+        "evidence_status": "fresh" if has_status_friendly_evidence else "missing",
+        "source": "storage_monitoring_metadata_reconciliation_counts" if has_status_friendly_evidence else "reconciliation_evidence_missing",
+        "last_checked_at": storage_summary.get("checked_at"),
+    }
+
+
 def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     now = _utc_now()
     cameras = db.query(Camera).order_by(Camera.id.asc()).all()
     recorder_domain, _camera_states, recorder_states = _build_recorder_domain(db, now)
     live_domain, live_by_camera = _build_live_domain(cameras)
     cameras_domain = _build_camera_domain(db, now, cameras, recorder_states, live_by_camera)
-    domain_severities = [cameras_domain["severity"], live_domain["severity"], recorder_domain["severity"]]
+    storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=False, write_audit=False)
+    storage_domain = _build_storage_domain(storage_summary)
+    retention_domain = _build_retention_domain(db, now)
+    reconciliation_domain = _build_reconciliation_domain(storage_summary)
+    domain_severities = [
+        cameras_domain["severity"],
+        live_domain["severity"],
+        recorder_domain["severity"],
+        storage_domain["severity"],
+        retention_domain["severity"],
+        reconciliation_domain["severity"],
+    ]
     severity = _rollup(domain_severities)
     problem_count = sum(
         domain["summary"].get("error_count", 0)
         for domain in (cameras_domain, live_domain)
-    ) + (1 if recorder_domain["severity"] == "error" else 0)
+    ) + sum(1 for domain in (recorder_domain, storage_domain, retention_domain, reconciliation_domain) if domain["severity"] == "error")
     warning_count = sum(
         domain["summary"].get("warning_count", 0)
         for domain in (cameras_domain, live_domain)
-    ) + (1 if recorder_domain["severity"] == "warning" else 0)
+    ) + sum(1 for domain in (recorder_domain, storage_domain, retention_domain, reconciliation_domain) if domain["severity"] == "warning")
     unknown_count = sum(
         domain["summary"].get("unknown_count", 0)
         for domain in (cameras_domain, live_domain)
-    ) + (1 if recorder_domain["severity"] == "unknown" else 0)
+    ) + sum(1 for domain in (recorder_domain, storage_domain, retention_domain, reconciliation_domain) if domain["severity"] == "unknown")
 
     return {
         "generated_at": _iso(now),
@@ -343,10 +587,16 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
                 for reason in item.get("reason_codes", [])
             }
             | set(recorder_domain.get("safe_reason_codes") or [])
+            | set(storage_domain.get("reason_codes") or [])
+            | set(retention_domain.get("reason_codes") or [])
+            | set(reconciliation_domain.get("reason_codes") or [])
         ),
         "domains": {
             "cameras": cameras_domain,
             "live": live_domain,
             "recorder": recorder_domain,
+            "storage": storage_domain,
+            "retention": retention_domain,
+            "reconciliation": reconciliation_domain,
         },
     }

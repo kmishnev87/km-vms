@@ -15,6 +15,7 @@ from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
 from app.routers.settings import system_status
 from app.services import system_runtime_status as runtime_status
+from app.services.recording_retention import AUTO_RETENTION_STATE
 from app.services.system_runtime_status import build_operator_runtime_status
 
 
@@ -23,6 +24,7 @@ def db():
     tmp = tempfile.TemporaryDirectory(prefix="stage20_runtime_status_")
     original_storage_root = settings.storage_root
     settings.storage_root = str(Path(tmp.name) / "storage")
+    Path(settings.storage_root).mkdir(parents=True, exist_ok=True)
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
@@ -59,6 +61,19 @@ def db():
 @pytest.fixture(autouse=True)
 def no_live_evidence(monkeypatch):
     monkeypatch.setattr(runtime_status.live_manager, "status", lambda: [])
+    AUTO_RETENTION_STATE.clear()
+    AUTO_RETENTION_STATE.update(
+        {
+            "enabled": True,
+            "running": False,
+            "last_started_at": None,
+            "last_finished_at": None,
+            "last_status": "never_run",
+            "last_error": None,
+            "last_summary": None,
+            "run_count": 0,
+        }
+    )
 
 
 def add_camera(
@@ -135,6 +150,32 @@ def add_segment(db, camera, *, age_seconds=30):
     return segment
 
 
+def add_owned_segment(db, camera, *, relative_path="camera/file.mkv", status="ready", finalized_age_seconds=30):
+    root = Path(settings.storage_root)
+    target = root / relative_path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"stage3 video bytes")
+    now = datetime.utcnow()
+    segment = RecordingSegment(
+        camera_id=camera.id,
+        camera_name_snapshot=camera.name,
+        camera_folder_snapshot=camera.storage_folder_name,
+        file_path=str(target),
+        relative_path=relative_path,
+        started_at=now - timedelta(seconds=finalized_age_seconds + 10),
+        ended_at=now - timedelta(seconds=finalized_age_seconds),
+        finalized_at=now - timedelta(seconds=finalized_age_seconds),
+        duration_sec=10,
+        size_bytes=18,
+        status=status,
+        ownership="KM VMS",
+        source="recorder",
+    )
+    db.add(segment)
+    db.commit()
+    return segment
+
+
 def add_heartbeat(db, *, service_status="healthy", age_seconds=1, active_jobs=1, recording_cameras=1, failed_cameras=0):
     now = datetime.utcnow()
     db.execute(
@@ -182,7 +223,7 @@ def test_runtime_status_domains_summary_and_disabled_camera_not_error(db):
     payload = build_operator_runtime_status(db)
     camera_item = payload["domains"]["cameras"]["items"][0]
 
-    assert set(payload["domains"]) == {"cameras", "live", "recorder"}
+    assert set(payload["domains"]) == {"cameras", "live", "recorder", "storage", "retention", "reconciliation"}
     assert payload["severity"] in {"ok", "warning", "error", "unknown"}
     assert camera_item["severity"] == "ok"
     assert camera_item["reason_codes"] == ["disabled"]
@@ -277,3 +318,265 @@ def test_live_failed_state_maps_to_safe_reason_code_without_raw_error(db, monkey
     assert live_item["safe_failure_reason"] == "camera_unreachable"
     assert "super-secret" not in rendered(payload)
     assert "rtsp://" not in rendered(payload)
+
+
+def test_storage_domain_available_readable_writable_maps_to_ok_without_paths(db):
+    camera = add_camera(db)
+    add_owned_segment(db, camera)
+
+    payload = build_operator_runtime_status(db)
+    storage = payload["domains"]["storage"]
+
+    assert storage["severity"] == "ok"
+    assert storage["available"] is True
+    assert storage["readable"] is True
+    assert storage["writable"] is True
+    assert storage["capacity"]["total_bytes"] is not None
+    assert storage["summary"]["existing_file_count"] == 1
+    assert storage["evidence_status"] == "fresh"
+    assert str(settings.storage_root) not in rendered(storage)
+    assert "camera/file.mkv" not in rendered(storage)
+
+
+def test_storage_domain_unavailable_maps_to_error_without_raw_path(db):
+    settings.storage_root = str(Path(settings.storage_root) / "missing-root")
+
+    payload = build_operator_runtime_status(db)
+    storage = payload["domains"]["storage"]
+
+    assert storage["severity"] == "error"
+    assert storage["available"] is False
+    assert "storage_unavailable" in storage["reason_codes"]
+    assert settings.storage_root not in rendered(storage)
+
+
+def test_retention_no_evidence_is_unknown_and_failed_state_is_error(db):
+    camera = add_camera(db)
+    payload = build_operator_runtime_status(db)
+    retention = payload["domains"]["retention"]
+
+    assert retention["severity"] == "unknown"
+    assert "retention_never_run" in retention["reason_codes"]
+    assert retention["policy_count"] == 1
+
+    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": "failed", "last_error": "/secret/path"})
+    failed_payload = build_operator_runtime_status(db)
+    failed = failed_payload["domains"]["retention"]
+
+    assert failed["severity"] == "error"
+    assert "retention_failed" in failed["reason_codes"]
+    assert "/secret/path" not in rendered(failed_payload)
+    assert camera.name in rendered(failed_payload)
+
+
+@pytest.mark.parametrize("last_status", ["ok", "completed", "success", "completed_successfully", "succeeded"])
+def test_retention_success_statuses_map_to_ok(db, last_status):
+    add_camera(db)
+    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": last_status, "run_count": 1})
+
+    payload = build_operator_runtime_status(db)
+    retention = payload["domains"]["retention"]
+
+    assert retention["severity"] == "ok"
+    assert retention["evidence_status"] == "fresh"
+    assert retention["reason_codes"] == []
+
+
+@pytest.mark.parametrize("last_status", ["completed_with_warnings", "skipped_concurrent"])
+def test_retention_warning_statuses_map_to_warning(db, last_status):
+    add_camera(db)
+    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": last_status, "run_count": 1})
+
+    payload = build_operator_runtime_status(db)
+    retention = payload["domains"]["retention"]
+
+    assert retention["severity"] == "warning"
+    assert "retention_completed_with_warnings" in retention["reason_codes"]
+    assert retention["evidence_status"] == "fresh"
+
+
+def test_retention_missing_and_unsupported_statuses_do_not_fake_ok(db):
+    add_camera(db)
+    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": None, "run_count": 0})
+
+    missing_payload = build_operator_runtime_status(db)
+    missing = missing_payload["domains"]["retention"]
+
+    assert missing["severity"] == "unknown"
+    assert missing["evidence_status"] == "missing"
+    assert "retention_never_run" in missing["reason_codes"]
+
+    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": "mystery_status", "run_count": 1})
+    unsupported_payload = build_operator_runtime_status(db)
+    unsupported = unsupported_payload["domains"]["retention"]
+
+    assert unsupported["severity"] == "unknown"
+    assert unsupported["evidence_status"] == "missing"
+    assert "retention_unknown" in unsupported["reason_codes"]
+
+
+def test_reconciliation_problem_counts_map_to_warning_without_samples_or_paths(db):
+    camera = add_camera(db)
+    add_owned_segment(db, camera, relative_path="missing/missing.mkv")
+    missing = db.query(RecordingSegment).first()
+    Path(settings.storage_root, missing.relative_path).unlink()
+
+    payload = build_operator_runtime_status(db)
+    reconciliation = payload["domains"]["reconciliation"]
+
+    assert reconciliation["severity"] == "warning"
+    assert reconciliation["missing_file_count"] == 1
+    assert reconciliation["problem_file_count"] == 1
+    assert "reconciliation_problems_found" in reconciliation["reason_codes"]
+    assert "missing/missing.mkv" not in rendered(reconciliation)
+    assert "samples" not in rendered(reconciliation)
+
+
+def test_reconciliation_missing_evidence_is_unknown_not_fresh(db, monkeypatch):
+    def fake_storage_summary(db_arg, *, include_namespace_observations=True, write_audit=False, audit_actor=None):
+        return {
+            "status": "available",
+            "available": True,
+            "checked_at": "2026-05-05T00:00:00Z",
+            "storage_path_checks": {"readable": True, "writable": True},
+            "capacity": {"total_bytes": 100, "used_bytes": 50, "free_bytes": 50, "available_bytes": 50, "filesystem_probe_status": "ok"},
+            "owned_archive": {},
+            "scan_limited": False,
+            "partial": False,
+        }
+
+    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
+    payload = build_operator_runtime_status(db)
+    reconciliation = payload["domains"]["reconciliation"]
+
+    assert reconciliation["severity"] == "unknown"
+    assert reconciliation["status"] == "no_evidence"
+    assert reconciliation["evidence_status"] == "missing"
+    assert reconciliation["source"] == "reconciliation_evidence_missing"
+    assert "no_evidence" in reconciliation["reason_codes"]
+    assert "reconciliation_unknown" in reconciliation["reason_codes"]
+
+
+@pytest.mark.parametrize(
+    "reconciliation_summary, cleanup_candidates_summary",
+    [
+        (None, None),
+        (None, {"count": 0}),
+        ({}, None),
+        ("not-a-dict", {}),
+        ({}, ["not-a-dict"]),
+        ("not-a-dict", ["not-a-dict"]),
+    ],
+)
+def test_reconciliation_invalid_evidence_shape_is_unknown_not_fresh(
+    db,
+    monkeypatch,
+    reconciliation_summary,
+    cleanup_candidates_summary,
+):
+    def fake_storage_summary(db_arg, *, include_namespace_observations=True, write_audit=False, audit_actor=None):
+        return {
+            "status": "available",
+            "available": True,
+            "checked_at": "2026-05-05T00:00:00Z",
+            "storage_path_checks": {"readable": True, "writable": True},
+            "capacity": {"total_bytes": 100, "used_bytes": 50, "free_bytes": 50, "available_bytes": 50, "filesystem_probe_status": "ok"},
+            "owned_archive": {},
+            "reconciliation_summary": reconciliation_summary,
+            "cleanup_candidates_summary": cleanup_candidates_summary,
+            "scan_limited": False,
+            "partial": False,
+        }
+
+    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
+    payload = build_operator_runtime_status(db)
+    reconciliation = payload["domains"]["reconciliation"]
+
+    assert reconciliation["severity"] == "unknown"
+    assert reconciliation["status"] == "no_evidence"
+    assert reconciliation["evidence_status"] == "missing"
+    assert reconciliation["source"] == "reconciliation_evidence_missing"
+    assert "no_evidence" in reconciliation["reason_codes"]
+    assert "reconciliation_unknown" in reconciliation["reason_codes"]
+
+
+def test_reconciliation_explicit_zero_evidence_can_be_ok(db, monkeypatch):
+    def fake_storage_summary(db_arg, *, include_namespace_observations=True, write_audit=False, audit_actor=None):
+        return {
+            "status": "available",
+            "available": True,
+            "checked_at": "2026-05-05T00:00:00Z",
+            "storage_path_checks": {"readable": True, "writable": True},
+            "capacity": {"total_bytes": 100, "used_bytes": 50, "free_bytes": 50, "available_bytes": 50, "filesystem_probe_status": "ok"},
+            "owned_archive": {},
+            "reconciliation_summary": {
+                "missing_file_count": 0,
+                "orphan_file_count": 0,
+                "path_outside_storage_count": 0,
+                "invalid_path_count": 0,
+            },
+            "cleanup_candidates_summary": {"count": 0},
+            "scan_limited": False,
+            "partial": False,
+        }
+
+    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
+    payload = build_operator_runtime_status(db)
+    reconciliation = payload["domains"]["reconciliation"]
+
+    assert reconciliation["severity"] == "ok"
+    assert reconciliation["status"] == "ok"
+    assert reconciliation["evidence_status"] == "fresh"
+    assert reconciliation["reason_codes"] == []
+
+
+def test_reconciliation_cleanup_candidates_map_to_warning(db, monkeypatch):
+    def fake_storage_summary(db_arg, *, include_namespace_observations=True, write_audit=False, audit_actor=None):
+        return {
+            "status": "available",
+            "available": True,
+            "checked_at": "2026-05-05T00:00:00Z",
+            "storage_path_checks": {"readable": True, "writable": True},
+            "capacity": {"total_bytes": 100, "used_bytes": 50, "free_bytes": 50, "available_bytes": 50, "filesystem_probe_status": "ok"},
+            "owned_archive": {},
+            "reconciliation_summary": {},
+            "cleanup_candidates_summary": {"count": 2},
+            "scan_limited": False,
+            "partial": False,
+        }
+
+    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
+    payload = build_operator_runtime_status(db)
+    reconciliation = payload["domains"]["reconciliation"]
+
+    assert reconciliation["severity"] == "warning"
+    assert reconciliation["cleanup_candidate_count"] == 2
+    assert "cleanup_candidates_present" in reconciliation["reason_codes"]
+
+
+def test_stage3_aggregate_has_no_audit_side_effects_and_no_diagnostic_archive_builder(db, monkeypatch):
+    called = {"storage": None}
+
+    def fake_storage_summary(db_arg, *, include_namespace_observations=True, write_audit=False, audit_actor=None):
+        called["storage"] = {
+            "include_namespace_observations": include_namespace_observations,
+            "write_audit": write_audit,
+        }
+        return {
+            "status": "available",
+            "available": True,
+            "checked_at": "2026-05-05T00:00:00Z",
+            "storage_path_checks": {"readable": True, "writable": True},
+            "capacity": {"total_bytes": 100, "used_bytes": 50, "free_bytes": 50, "available_bytes": 50, "filesystem_probe_status": "ok"},
+            "owned_archive": {},
+            "reconciliation_summary": {},
+            "cleanup_candidates_summary": {},
+            "scan_limited": False,
+            "partial": False,
+        }
+
+    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
+    payload = build_operator_runtime_status(db)
+
+    assert called["storage"] == {"include_namespace_observations": False, "write_audit": False}
+    assert payload["domains"]["storage"]["source"] == "storage_monitoring_metadata_summary"
