@@ -13,7 +13,8 @@ from app.core.config import settings
 from app.db.session import Base
 from app.models.camera import Camera
 from app.models.recording import RecordingJob
-from app.services.recorder_diagnostics import _camera_recording_states, _health_from, build_recorder_status
+from app.services.recorder_diagnostics import _health_from, build_recorder_status
+from app.services.recorder_runtime_status import list_camera_recording_states
 
 
 @pytest.fixture
@@ -90,6 +91,16 @@ def add_job(
     return job
 
 
+def test_shared_recorder_runtime_status_import_boundary():
+    services_dir = Path(__file__).resolve().parents[1] / "app" / "services"
+    system_runtime_source = (services_dir / "system_runtime_status.py").read_text(encoding="utf-8")
+    shared_source = (services_dir / "recorder_runtime_status.py").read_text(encoding="utf-8")
+
+    assert "app.services.recorder_diagnostics" not in system_runtime_source
+    assert "system_runtime_status" not in shared_source
+    assert "recorder_diagnostics" not in shared_source
+
+
 def test_recording_job_with_stale_error_is_not_current_failure(db):
     camera = add_camera(db, last_error="old camera error")
     add_job(
@@ -102,7 +113,7 @@ def test_recording_job_with_stale_error_is_not_current_failure(db):
         last_exit_code=183,
     )
 
-    state = _camera_recording_states(db)[0]
+    state = list_camera_recording_states(db)[0]
     status = build_recorder_status(db)
 
     assert state["job_state"] == "recording"
@@ -124,7 +135,7 @@ def test_restarting_job_remains_current_failure(db):
         last_exit_code=183,
     )
 
-    state = _camera_recording_states(db)[0]
+    state = list_camera_recording_states(db)[0]
     status = build_recorder_status(db)
 
     assert state["current_failure"] is True
@@ -152,7 +163,7 @@ def test_newer_healthy_job_overrides_older_errored_job(db):
         updated_delta_seconds=60,
     )
 
-    state = _camera_recording_states(db)[0]
+    state = list_camera_recording_states(db)[0]
 
     assert state["job_id"] == "stage201_new_recording"
     assert state["job_state"] == "recording"
@@ -170,7 +181,7 @@ def test_disabled_stale_error_is_not_current_failure(db):
         last_exit_code=255,
     )
 
-    state = _camera_recording_states(db)[0]
+    state = list_camera_recording_states(db)[0]
     status = build_recorder_status(db)
 
     assert state["job_state"] == "disabled"

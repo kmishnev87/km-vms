@@ -10,17 +10,17 @@ from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.services.live_engine_v2 import manager as live_manager
 from app.services.recording_retention import automatic_retention_status
-from app.services.recorder_diagnostics import (
+from app.services.recorder_runtime_status import (
     ACTIVE_JOB_STATES,
     HEARTBEAT_STALE_SECONDS,
     SEGMENT_STATUS_DELETED,
-    _age_seconds,
-    _camera_recording_states,
-    _iso,
-    _job_summary,
-    _read_heartbeat,
-    _segment_summary,
-    _utc_now,
+    age_seconds as _age_seconds,
+    iso_or_none as _iso,
+    list_camera_recording_states as _camera_recording_states,
+    read_recorder_heartbeat as _read_heartbeat,
+    summarize_recorder_jobs as _job_summary,
+    summarize_recorder_segments as _segment_summary,
+    utc_now as _utc_now,
 )
 from app.services.storage_monitoring import build_storage_monitoring_summary
 
@@ -338,14 +338,18 @@ def _usage_percent(capacity: dict[str, Any]) -> float | None:
         return None
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _storage_severity_and_reasons(summary: dict[str, Any], usage_percent: float | None) -> tuple[str, list[str]]:
-    checks = summary.get("storage_path_checks") or {}
+    checks = _as_dict(summary.get("storage_path_checks"))
     reasons: list[str] = []
     status = str(summary.get("status") or "unknown")
     available = bool(summary.get("available"))
     readable = bool(checks.get("readable"))
     writable = bool(checks.get("writable"))
-    capacity = summary.get("capacity") or {}
+    capacity = _as_dict(summary.get("capacity"))
     free_percent = None if usage_percent is None else max(0.0, 100.0 - usage_percent)
 
     if status == "unavailable" or not available:
@@ -371,10 +375,10 @@ def _storage_severity_and_reasons(summary: dict[str, Any], usage_percent: float 
 
 
 def _build_storage_domain(storage_summary: dict[str, Any]) -> dict[str, Any]:
-    checks = storage_summary.get("storage_path_checks") or {}
-    capacity = storage_summary.get("capacity") or {}
-    owned = storage_summary.get("owned_archive") or {}
-    reconciliation = storage_summary.get("reconciliation_summary") or {}
+    checks = _as_dict(storage_summary.get("storage_path_checks"))
+    capacity = _as_dict(storage_summary.get("capacity"))
+    owned = _as_dict(storage_summary.get("owned_archive"))
+    reconciliation = _as_dict(storage_summary.get("reconciliation_summary"))
     usage_percent = _usage_percent(capacity)
     severity, reasons = _storage_severity_and_reasons(storage_summary, usage_percent)
     problem_counts = {
