@@ -11,10 +11,63 @@ const SEVERITY_PRIORITY = {
   error: 0,
   warning: 1,
   info: 2,
+  ok: 3,
+  unknown: 4,
 };
 
 const MAX_BANNERS = 8;
+const MAX_DRILLDOWN_ROWS = 6;
 const RUNTIME_STATUS_PERMISSION = "run_diagnostics";
+
+export const DOMAIN_LABELS_RU = {
+  cameras: "Камеры",
+  live: "Онлайн",
+  recorder: "Запись",
+  storage: "Хранилище",
+  retention: "Хранение",
+  reconciliation: "Целостность архива",
+};
+
+const SEVERITY_LABELS_RU = {
+  error: "Ошибка",
+  warning: "Предупреждение",
+  info: "Информация",
+  ok: "Работает",
+  unknown: "Нет данных",
+};
+
+const ACTIONS = {
+  cameras: {
+    href: "/cameras",
+    label: "Открыть камеры",
+    hint: "Проверьте настройки камер, сеть и параметры записи.",
+  },
+  live: {
+    href: "/live",
+    label: "Открыть онлайн",
+    hint: "Проверьте активный онлайн-просмотр и доступность камеры.",
+  },
+  recorder: {
+    href: "/settings",
+    label: "Открыть настройки",
+    hint: "Проверьте сервис записи и диагностический архив в настройках.",
+  },
+  storage: {
+    href: "/settings",
+    label: "Открыть хранилище",
+    hint: "Проверьте настройки хранилища и доступность архива.",
+  },
+  retention: {
+    href: "/settings",
+    label: "Открыть хранение",
+    hint: "Проверьте правила хранения и состояние обслуживания архива.",
+  },
+  reconciliation: {
+    href: "/settings",
+    label: "Открыть диагностику",
+    hint: "Проверьте целостность архива через диагностику и журнал.",
+  },
+};
 
 export function userCanReadRuntimeStatus(user) {
   return Array.isArray(user?.permissions) && user.permissions.includes(RUNTIME_STATUS_PERMISSION);
@@ -51,12 +104,28 @@ function countFrom(value) {
   return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
+function domainLabel(domain) {
+  return DOMAIN_LABELS_RU[domain] || "Система";
+}
+
+function severityLabel(severity) {
+  return SEVERITY_LABELS_RU[severity] || SEVERITY_LABELS_RU.unknown;
+}
+
+function actionFor(domain) {
+  return ACTIONS[domain] || null;
+}
+
 function pushBanner(items, banner) {
   if (!banner?.id || !banner?.domain || !banner?.severity) return;
+  const action = actionFor(banner.domain);
   items.push({
     affected_count: 0,
     reason_codes: [],
-    action_hint: "",
+    action_hint: action?.hint || "",
+    action: action || null,
+    domain_label: domainLabel(banner.domain),
+    severity_label: severityLabel(banner.severity),
     ...banner,
   });
 }
@@ -118,7 +187,7 @@ function storageWarnings(domain, items) {
       title: "Заканчивается место в архиве",
       message: "Свободное место ниже безопасного порога.",
       reason_codes: reasons,
-      action_hint: "Проверьте retention-политику и настройки хранилища.",
+      action_hint: "Проверьте правила хранения и настройки хранилища.",
     });
   }
 }
@@ -131,10 +200,10 @@ function recorderWarnings(domain, items) {
       id: "recorder-stale",
       domain: "recorder",
       severity: "error",
-      title: "Recorder не подтверждает работу",
-      message: "Сервис записи не прислал актуальный heartbeat или сообщил ошибку.",
+      title: "Сервис записи не подтверждает работу",
+      message: "Сервис записи не прислал актуальный heartbeat или сообщил об ошибке.",
       reason_codes: reasons,
-      action_hint: "Проверьте сервис recorder и состояние текущих jobs.",
+      action_hint: "Проверьте сервис записи и состояние текущих задач.",
     });
     return;
   }
@@ -143,7 +212,7 @@ function recorderWarnings(domain, items) {
       id: "recorder-warning",
       domain: "recorder",
       severity: "warning",
-      title: "Recorder работает с предупреждениями",
+      title: "Запись работает с предупреждениями",
       message: "Часть записей может быть в состоянии retry или failed.",
       reason_codes: reasons,
       action_hint: "Проверьте состояние записи камер.",
@@ -199,11 +268,11 @@ function liveWarnings(domain, items) {
       id: "live-stream-errors",
       domain: "live",
       severity: "error",
-      title: "Live-поток недоступен",
-      message: `${failed.length} активных live-потоков завершились ошибкой или недоступны.`,
+      title: "Онлайн-поток недоступен",
+      message: `${failed.length} активных онлайн-потоков завершились ошибкой или недоступны.`,
       affected_count: failed.length,
       reason_codes: Array.from(new Set(failed.flatMap((item) => asArray(item.reason_codes)))),
-      action_hint: "Проверьте live-просмотр и доступность камеры.",
+      action_hint: "Проверьте онлайн-просмотр и доступность камеры.",
     });
   }
   if (starting.length) {
@@ -211,11 +280,11 @@ function liveWarnings(domain, items) {
       id: "live-stream-starting",
       domain: "live",
       severity: "warning",
-      title: "Live-поток долго запускается",
-      message: `${starting.length} активных live-потоков ещё не готовы к просмотру.`,
+      title: "Онлайн-поток долго запускается",
+      message: `${starting.length} активных онлайн-потоков ещё не готовы к просмотру.`,
       affected_count: starting.length,
       reason_codes: Array.from(new Set(starting.flatMap((item) => asArray(item.reason_codes)))),
-      action_hint: "Проверьте live-просмотр, если поток не появится.",
+      action_hint: "Проверьте онлайн-просмотр, если поток не появится.",
     });
   }
 }
@@ -227,10 +296,10 @@ function retentionWarnings(domain, items) {
       id: "retention-failed",
       domain: "retention",
       severity: "error",
-      title: "Retention завершился ошибкой",
+      title: "Обслуживание хранения завершилось ошибкой",
       message: "Автоматическое обслуживание архива не смогло завершиться штатно.",
       reason_codes: reasons,
-      action_hint: "Проверьте retention-политику и состояние архива.",
+      action_hint: "Проверьте правила хранения и состояние архива.",
     });
     return;
   }
@@ -239,8 +308,8 @@ function retentionWarnings(domain, items) {
       id: "retention-warning",
       domain: "retention",
       severity: "warning",
-      title: "Retention требует внимания",
-      message: "Последний запуск retention завершился с предупреждениями или политика требует проверки.",
+      title: "Хранение требует внимания",
+      message: "Последний запуск обслуживания завершился с предупреждениями или политика требует проверки.",
       reason_codes: reasons,
       action_hint: "Проверьте правила хранения записей.",
     });
@@ -256,10 +325,10 @@ function reconciliationWarnings(domain, items) {
       domain: "reconciliation",
       severity: domain.path_outside_storage_count > 0 ? "error" : "warning",
       title: "Найдены проблемы целостности архива",
-      message: "Reconciliation нашёл расхождения между метаданными и файлами архива.",
+      message: "Проверка архива нашла расхождения между метаданными и файлами.",
       affected_count: countFrom(domain.problem_file_count),
       reason_codes: reasons,
-      action_hint: "Проверьте reconciliation summary перед действиями с архивом.",
+      action_hint: "Проверьте диагностику целостности архива перед действиями с архивом.",
     });
   }
   if (reasons.includes("cleanup_candidates_present")) {
@@ -289,4 +358,70 @@ export function buildOperatorWarnings(runtimeStatus, options = {}) {
   if (include.has("reconciliation")) reconciliationWarnings(asObject(domains.reconciliation), items);
 
   return sortAndBound(items, options.limit || MAX_BANNERS);
+}
+
+function domainSeverity(domain) {
+  const severity = String(asObject(domain).severity || "unknown");
+  return severity in SEVERITY_PRIORITY ? severity : "unknown";
+}
+
+function isLiveDomainNeutral(domain) {
+  const data = asObject(domain);
+  const items = asArray(data.items);
+  if (!items.length && ["ok", "unknown"].includes(domainSeverity(data))) return true;
+  return items.every((item) => {
+    const reasons = asArray(item.reason_codes);
+    if (reasons.includes("not_applicable") || reasons.includes("not_requested")) return true;
+    if (!item.running && !item.ready && item.state === "unknown" && reasons.includes("no_evidence")) return true;
+    return item.severity === "ok";
+  });
+}
+
+function effectiveDomainSeverity(domainName, domain) {
+  if (domainName === "live" && isLiveDomainNeutral(domain)) return "ok";
+  const severity = domainSeverity(domain);
+  return severity === "info" ? "ok" : severity;
+}
+
+export function buildDashboardStatusSummary(runtimeStatus, options = {}) {
+  const domains = asObject(runtimeStatus?.domains);
+  const warnings = buildOperatorWarnings(runtimeStatus, { limit: options.limit || MAX_BANNERS });
+  const rows = Object.keys(DOMAIN_PRIORITY).map((domainName) => {
+    const domain = asObject(domains[domainName]);
+    const severity = effectiveDomainSeverity(domainName, domain);
+    const domainWarnings = warnings.filter((item) => item.domain === domainName);
+    const affectedCount = domainWarnings.reduce(
+      (sum, item) => sum + countFrom(item.affected_count || (item.severity !== "ok" ? 1 : 0)),
+      0
+    );
+    return {
+      domain: domainName,
+      label: domainLabel(domainName),
+      severity,
+      severity_label: severityLabel(severity),
+      affected_count: affectedCount,
+      problem_count: domainWarnings.length,
+      action: actionFor(domainName),
+    };
+  });
+  const problemRows = rows.filter((row) => ["error", "warning"].includes(row.severity) || row.problem_count > 0);
+  const globalSeverity = warnings.some((item) => item.severity === "error") || problemRows.some((row) => row.severity === "error")
+    ? "error"
+    : warnings.some((item) => item.severity === "warning") || problemRows.some((row) => row.severity === "warning")
+      ? "warning"
+      : "ok";
+
+  return {
+    severity: globalSeverity,
+    severity_label: severityLabel(globalSeverity),
+    title: globalSeverity === "ok" ? "Система работает штатно" : "Требуется внимание оператора",
+    summary: globalSeverity === "ok"
+      ? "Критичных предупреждений по камерам, записи, архиву и обслуживанию нет."
+      : "Проблемы сгруппированы по доменам без технических подробностей и секретов.",
+    problem_count: warnings.length,
+    affected_domains: problemRows.length,
+    rows,
+    problems: warnings.slice(0, options.problemLimit || MAX_DRILLDOWN_ROWS),
+    diagnostics_hint: "Журнал и диагностический архив доступны в разделе «Настройки» при наличии прав.",
+  };
 }

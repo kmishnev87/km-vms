@@ -12,40 +12,40 @@ const DASHBOARD_ITEMS = [
     href: "/cameras",
     iconSrc: "/assets/icons/dashboard/camera.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/camera.svg",
-    title: "\u041a\u0430\u043c\u0435\u0440\u044b",
-    description: "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u043a\u0430\u043c\u0435\u0440, RTSP-\u0430\u0434\u0440\u0435\u0441\u043e\u0432 \u0438 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u043e\u0432.",
+    title: "Камеры",
+    description: "Настройка камер, RTSP-адресов и параметров.",
   },
   {
     href: "/recordings",
     iconSrc: "/assets/icons/dashboard/recordings.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/recordings.svg",
-    title: "\u0417\u0430\u043f\u0438\u0441\u0438",
-    description: "\u041f\u043e\u0438\u0441\u043a, \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440 \u0438 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u0430\u0440\u0445\u0438\u0432\u043d\u044b\u043c\u0438 \u0444\u0430\u0439\u043b\u0430\u043c\u0438.",
+    title: "Записи",
+    description: "Поиск, просмотр и управление архивными файлами.",
   },
   {
     href: "/live",
     iconSrc: "/assets/icons/dashboard/live.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/live.svg",
-    title: "\u041e\u043d\u043b\u0430\u0439\u043d",
-    description: "\u0416\u0438\u0432\u043e\u0439 \u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440 \u043a\u0430\u043c\u0435\u0440 \u0432 \u0441\u0432\u043e\u0431\u043e\u0434\u043d\u043e\u043c workspace.",
+    title: "Онлайн",
+    description: "Живой просмотр камер в свободном workspace.",
   },
   {
     href: "/chronology",
     iconSrc: "/assets/icons/dashboard/chronology.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/chronology.svg",
-    title: "\u0425\u0440\u043e\u043d\u043e\u043b\u043e\u0433\u0438\u044f",
-    description: "\u0421\u0438\u043d\u0445\u0440\u043e\u043d\u043d\u044b\u0439 \u0430\u0440\u0445\u0438\u0432 \u043a\u0430\u043c\u0435\u0440 \u0441 \u043e\u0431\u0449\u0435\u0439 \u0432\u0440\u0435\u043c\u0435\u043d\u043d\u043e\u0439 \u0442\u043e\u0447\u043a\u043e\u0439.",
+    title: "Хронология",
+    description: "Синхронный архив камер с общей временной точкой.",
   },
   {
     href: "/settings",
     iconSrc: "/assets/icons/dashboard/settings.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/settings.svg",
     title: {
-      ru: "\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438",
+      ru: "Настройки",
       en: "Settings",
     },
     description: {
-      ru: "\u041a\u043e\u043d\u0444\u0438\u0433\u0443\u0440\u0430\u0446\u0438\u044f \u0441\u0438\u0441\u0442\u0435\u043c\u044b \u0438 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u0430\u043c\u0438.",
+      ru: "Конфигурация системы и управление параметрами.",
       en: "System configuration and settings management.",
     },
   },
@@ -106,7 +106,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        <OperatorProblemBanners className="dashboardWarnings" limit={6} currentUser={currentUser} />
+        <OperatorProblemBanners className="dashboardWarnings" limit={6} currentUser={currentUser} showOverview />
 
         <section className="dashboardGrid" aria-label="Основные разделы">
           {visibleItems.map((item) => (

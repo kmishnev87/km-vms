@@ -7,14 +7,16 @@ import { dirname, resolve } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const source = fs
   .readFileSync(resolve(__dirname, "../lib/operatorWarnings.js"), "utf8")
+  .replaceAll("export const ", "const ")
   .replaceAll("export function ", "function ");
 const context = {};
 vm.runInNewContext(
-  `${source}\nthis.buildOperatorWarnings = buildOperatorWarnings;\nthis.userCanReadRuntimeStatus = userCanReadRuntimeStatus;\nthis.isRuntimeStatusAccessDenied = isRuntimeStatusAccessDenied;\nthis.shouldStopRuntimeStatusPolling = shouldStopRuntimeStatusPolling;`,
+  `${source}\nthis.buildOperatorWarnings = buildOperatorWarnings;\nthis.buildDashboardStatusSummary = buildDashboardStatusSummary;\nthis.userCanReadRuntimeStatus = userCanReadRuntimeStatus;\nthis.isRuntimeStatusAccessDenied = isRuntimeStatusAccessDenied;\nthis.shouldStopRuntimeStatusPolling = shouldStopRuntimeStatusPolling;`,
   context
 );
 const {
   buildOperatorWarnings,
+  buildDashboardStatusSummary,
   userCanReadRuntimeStatus,
   isRuntimeStatusAccessDenied,
   shouldStopRuntimeStatusPolling,
@@ -68,6 +70,25 @@ assert.deepEqual(
   []
 );
 
+const neutralOverview = buildDashboardStatusSummary(runtime({
+  cameras: { severity: "ok", items: [] },
+  live: {
+    severity: "unknown",
+    items: [
+      { severity: "unknown", state: "unknown", running: false, ready: false, reason_codes: ["no_evidence"] },
+      { severity: "ok", reason_codes: ["not_requested"] },
+    ],
+  },
+  recorder: { severity: "ok" },
+  storage: { severity: "ok" },
+  retention: { severity: "ok" },
+  reconciliation: { severity: "ok" },
+}));
+assert.equal(neutralOverview.severity, "ok");
+assert.equal(neutralOverview.problem_count, 0);
+assert.equal(neutralOverview.rows.find((row) => row.domain === "live").severity, "ok");
+assert.equal(JSON.stringify(neutralOverview).includes("Онлайн"), true);
+
 assert.deepEqual(
   ids({
     live: {
@@ -111,6 +132,26 @@ const rendered = JSON.stringify(buildOperatorWarnings(runtime({
 assert.equal(rendered.includes(["rt", "sp://"].join("")), false);
 assert.equal(rendered.includes(["se", "cret"].join("")), false);
 assert.equal(rendered.includes(["ff", "mpeg"].join("")), false);
+
+const warningOverview = buildDashboardStatusSummary(runtime({
+  storage: { severity: "warning", reason_codes: ["storage_low_space"] },
+  cameras: {
+    items: [
+      { severity: "error", reason_codes: ["recording_failed"] },
+      { severity: "ok", reason_codes: ["disabled"] },
+    ],
+  },
+  live: { items: [{ severity: "ok", reason_codes: ["not_applicable"] }] },
+}));
+assert.equal(warningOverview.severity, "error");
+assert.equal(warningOverview.problem_count, 2);
+assert.equal(
+  JSON.stringify(warningOverview.problems.map((item) => [item.domain_label, item.action?.href]).slice(0, 2)),
+  JSON.stringify([["Камеры", "/cameras"], ["Хранилище", "/settings"]])
+);
+assert.equal(JSON.stringify(warningOverview).includes("rtsp://"), false);
+assert.equal(JSON.stringify(warningOverview).includes("Authorization"), false);
+assert.equal(JSON.stringify(warningOverview).includes("debug"), false);
 
 assert.equal(userCanReadRuntimeStatus({ permissions: ["run_diagnostics"] }), true);
 assert.equal(userCanReadRuntimeStatus({ permissions: ["view_live"] }), false);
