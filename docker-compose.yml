@@ -1,9 +1,9 @@
-name: tnas-vms
+name: ${COMPOSE_PROJECT_NAME:-tnas-vms}
 
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: vms-postgres
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: vms
@@ -22,7 +22,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: vms-redis
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-redis
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     environment:
@@ -41,7 +41,7 @@ services:
     build:
       context: ./apps/api
       dockerfile: Dockerfile
-    container_name: vms-api
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-api
     restart: unless-stopped
     depends_on:
       postgres:
@@ -98,7 +98,7 @@ services:
     build:
       context: ./apps/recorder
       dockerfile: Dockerfile
-    container_name: vms-recorder
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-recorder
     restart: unless-stopped
     depends_on:
       api:
@@ -121,7 +121,7 @@ services:
     build:
       context: ./apps/web
       dockerfile: Dockerfile
-    container_name: vms-web
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-web
     restart: unless-stopped
     depends_on:
       api:
@@ -134,7 +134,7 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
-    container_name: vms-nginx
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-nginx
     restart: unless-stopped
     depends_on:
       web:
