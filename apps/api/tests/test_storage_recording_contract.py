@@ -157,7 +157,8 @@ def db():
         tmp.cleanup()
 
 
-def test_settings_serialization_distinguishes_runtime_storage_contract(db):
+def test_settings_serialization_distinguishes_runtime_storage_contract(db, monkeypatch):
+    monkeypatch.setenv("STORAGE_HOST_ROOT", "/mnt/km-vms-archive")
     row = SystemSettings(
         system_initialized=True,
         timezone="UTC",
@@ -171,6 +172,9 @@ def test_settings_serialization_distinguishes_runtime_storage_contract(db):
     data = serialize_settings(row)
 
     assert data["storage_path"] == "/legacy/display/path"
+    assert data["archive_host_path"] == "/mnt/km-vms-archive"
+    assert data["archive_primary_path"] == "/mnt/km-vms-archive"
+    assert data["archive_primary_path_source"] == "host_bind_env"
     assert data["storage_root"] == settings.storage_root
     assert data["container_runtime_storage_root"] == settings.storage_root
     assert data["storage_namespace"] == KMVMS_RECORDINGS_NAMESPACE
@@ -178,6 +182,19 @@ def test_settings_serialization_distinguishes_runtime_storage_contract(db):
     assert data["storage_editable"] is False
     assert data["storage_change_requires"] == "installer_or_deploy_remount"
     assert data["storage_contract"]["db_storage_path"] == "/legacy/display/path"
+
+
+def test_public_system_status_after_initialization_does_not_expose_host_path(db, monkeypatch):
+    from app.routers.settings import system_status
+
+    monkeypatch.setenv("STORAGE_HOST_ROOT", "/mnt/private-km-vms-archive")
+    db.add(SystemSettings(system_initialized=True, timezone="UTC", language="en", storage_path="/storage/archive"))
+    db.commit()
+
+    response = system_status(db)
+
+    assert response == {"initialized": True, "setup_required": False, "language": "en", "timezone": "UTC"}
+    assert "/mnt/private-km-vms-archive" not in str(response)
 
 
 def test_patch_settings_ignores_storage_path_as_runtime_mutation(db):

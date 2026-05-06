@@ -58,6 +58,7 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       STORAGE_ROOT: /storage/archive
       STORAGE_HOST_ROOT: ${SURVEILLANCE_ROOT:-}
+      STORAGE_INSTALL_CONTROL: /install-control
       STORAGE_PREVIEWS: /storage/previews
       STORAGE_EXPORTS: /storage/exports
       DEFAULT_LIVE_STREAM: sub
@@ -79,6 +80,7 @@ services:
       ADMIN_FULL_NAME: ${ADMIN_FULL_NAME}
     volumes:
       - ${SURVEILLANCE_ROOT}:/storage/archive
+      - ./data/install-control:/install-control
       - ./data/previews:/storage/previews
       - ./data/exports:/storage/exports
       - /var/run/docker.sock:/var/run/docker.sock

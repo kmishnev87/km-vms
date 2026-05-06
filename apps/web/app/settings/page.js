@@ -68,7 +68,8 @@ const TEXT = {
     timezone: "Часовой пояс",
     timezoneHelp: "Определяет время интерфейса, архива и хронологии.",
     storage: "Хранилище",
-    storageText: "Путь архива внутри контейнера. Серверный путь задаётся в docker-compose.",
+    storageText: "Основной путь архива на сервере. Контейнерный путь показан как техническая деталь.",
+    storageContainerPath: "Технический путь Docker",
     storageOperationsOpen: "Открыть экран хранилища",
     autoFreeSpace: "Автоосвобождение места",
     autoFreeSpaceHelp: "Выкл.: система предупреждает о нехватке места и не удаляет записи автоматически. Вкл.: при свободном месте ниже 5% сервер может удалить самые старые owned записи, которые прошли безопасные metadata-проверки.",
@@ -251,7 +252,8 @@ const TEXT = {
     timezone: "Timezone",
     timezoneHelp: "Defines interface time, archive timestamps, and chronology.",
     storage: "Storage",
-    storageText: "Archive path inside the container. The server path is defined in docker-compose.",
+    storageText: "Primary archive path on the server. The container path is shown as a technical detail.",
+    storageContainerPath: "Technical Docker path",
     storageOperationsOpen: "Open Storage Operations",
     autoFreeSpace: "Auto free-space cleanup",
     autoFreeSpaceHelp: "Off: the system warns about low disk space and does not delete recordings automatically. On: below 5% free space the server may delete the oldest owned recordings that pass metadata safety checks.",
@@ -474,6 +476,8 @@ function settingsDraftFromApi(data) {
     timezone: data?.timezone || "UTC",
     language: data?.language === "en" ? "en" : "ru",
     storage_path: data?.storage_path || "",
+    archive_primary_path: data?.archive_primary_path || data?.storage_host_path || data?.storage_root || data?.storage_path || "",
+    archive_host_path: data?.archive_host_path || data?.storage_host_path || "",
     storage_host_path: data?.storage_host_path || "",
     storage_root: data?.storage_root || data?.container_runtime_storage_root || "",
     storage_recordings_path: data?.storage_recordings_path || data?.container_recordings_namespace_root || "",
@@ -1358,7 +1362,8 @@ export default function SettingsPage() {
                   <div className="settingsRowText">
                     <label htmlFor="settings-storage">{t.storage}<InfoTip text={t.tooltips.storage} /></label>
                     <span>{t.storageText}</span>
-                    <small>{draft.storage_root || draft.storage_path || ""}</small>
+                    <small>{draft.archive_primary_path || draft.storage_host_path || draft.storage_root || draft.storage_path || ""}</small>
+                    {draft.storage_root ? <small>{t.storageContainerPath}: {draft.storage_root}</small> : null}
                     {draft.storage_recordings_path ? <small>{draft.storage_recordings_path}</small> : null}
                     {draft.storage_change_requires ? <small>{draft.storage_change_requires}</small> : null}
                   </div>

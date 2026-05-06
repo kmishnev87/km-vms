@@ -131,6 +131,7 @@ export default function StorageOperationsPage() {
   }, [canOpenStorage, currentUser, currentUserStatus, language, loadStatus]);
 
   const operations = status?.storage_operations || {};
+  const storageContract = status?.storage_contract || {};
   const capacity = operations.capacity || {};
   const pathHealth = operations.path_health || {};
   const namespace = operations.namespace_health || {};
@@ -252,6 +253,14 @@ export default function StorageOperationsPage() {
             </section>
 
             <div className="storageOpsGrid">
+              <Section title="Путь архива">
+                <div className="storageOpsStats">
+                  <Stat label="NAS/server" value={storageContract.archive_primary_path || storageContract.archive_host_path || storageContract.storage_host_path || "-"} />
+                  <Stat label="Docker" value={storageContract.storage_container_path || storageContract.container_runtime_storage_root || status?.container_runtime_storage_root || "/storage/archive"} />
+                  <Stat label="Источник" value={storageContract.archive_primary_path_source || "-"} />
+                </div>
+              </Section>
+
               <Section title="Ёмкость">
                 <div className="storageOpsCapacityBar" aria-label="Использование хранилища">
                   <span style={{ width: `${Math.max(0, Math.min(100, usagePercent))}%` }} />

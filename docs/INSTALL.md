@@ -52,7 +52,30 @@ The generated environment includes the compose/backend variables used by the cur
 
 The compose file keeps the existing production-compatible default project identity and `vms-*` container names. Disposable installs use explicit `--project-name` / `COMPOSE_PROJECT_NAME` and `KM_VMS_CONTAINER_PREFIX` values for isolation.
 
-Stage 1 uses `<app-dir>/data/archive` as a provisional host archive mount when the user has not selected a storage root. The stable container archive path remains `/storage/archive`. Rich storage discovery and folder selection are deferred to Stage 2.
+Stage 1 uses `<app-dir>/data/archive` as a provisional host archive mount when the user has not selected a storage root. The stable container archive path remains `/storage/archive`.
+
+## Storage Discovery And Selection
+
+Stage 2 adds host-side storage discovery for setup mode. The installer runs:
+
+```sh
+sh scripts/km-vms-storage-discovery.sh --app-dir "$HOME/km-vms"
+```
+
+The helper writes a sanitized, non-secret snapshot to `<app-dir>/data/install-control/storage-discovery.json`. Setup mode reads that snapshot, shows NAS/server host paths as the primary user-facing choice with capacity/writable/safety details, and keeps `/storage/archive` as the stable container bind path.
+
+The setup page only accepts a single folder name under a discovered host candidate. Absolute paths, separators, traversal, control characters, dangerous system paths, pseudo filesystems, and non-empty unmarked folders are rejected server-side. The selected folder receives `.km-vms-storage-root.json` after a write/delete probe succeeds.
+
+After choosing storage in setup mode, apply the host bind mount with:
+
+```sh
+sh scripts/km-vms-storage-apply.sh --app-dir "$HOME/km-vms"
+sh scripts/km-vms-restart.sh --app-dir "$HOME/km-vms"
+```
+
+The apply helper reads `<app-dir>/data/install-control/storage-selection.json`, revalidates the selected single child folder on the host, blocks symlink/path escapes and non-empty unmarked folders, writes the KM VMS marker only after a write/delete probe, updates only `SURVEILLANCE_ROOT` in `.env`, creates a `.env.stage2-storage.bak` backup, and does not print secrets. Do not use broad `chmod`/`chown` on storage roots and do not point KM VMS at a folder containing foreign archive files unless it already has the KM VMS marker.
+
+After restart, authorized settings/storage screens show the selected NAS/server host archive path as the primary archive path. `/storage/archive` remains the secondary Docker/container path used by the API and recorder containers.
 
 ## Setup Mode
 
@@ -94,6 +117,5 @@ sh scripts/install.sh --app-dir /tmp/km-vms-stage1-install-test --http-port 1808
 
 ## Future Stages
 
-Stage 2 will add storage discovery and folder selection.
 Stage 3 will add the full first-run wizard.
 Stage 4 will add restart, upgrade, rollback, and validation hardening.

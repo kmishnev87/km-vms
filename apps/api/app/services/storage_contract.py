@@ -31,6 +31,9 @@ def storage_contract(*, db_storage_path: str | None = None) -> dict:
     namespace_root = str(Path(settings.storage_root) / KMVMS_RECORDINGS_NAMESPACE)
     host_path = os.getenv("STORAGE_HOST_ROOT") or os.getenv("SURVEILLANCE_ROOT") or None
     return {
+        "archive_host_path": host_path,
+        "archive_primary_path": host_path or runtime_root,
+        "archive_primary_path_source": "host_bind_env" if host_path else "container_runtime_fallback",
         "host_storage_path": host_path,
         "storage_host_path": host_path,
         "container_runtime_storage_root": runtime_root,

@@ -43,6 +43,12 @@ from app.services.system_settings import (
     validate_storage_path,
 )
 from app.services.storage_contract import storage_contract
+from app.services.setup_storage import (
+    build_preview as build_setup_storage_preview,
+    discovery_snapshot as setup_storage_discovery_snapshot,
+    persist_selection as persist_setup_storage_selection,
+    validate_and_mark as validate_setup_storage_folder,
+)
 
 router = APIRouter(tags=["settings"])
 
@@ -91,6 +97,11 @@ class StorageValidateRequest(BaseModel):
     create: bool = True
 
 
+class SetupStorageSelectionRequest(BaseModel):
+    candidate_id: str = Field(min_length=1, max_length=200)
+    folder_name: str = Field(min_length=1, max_length=100)
+
+
 @router.get("/system/status")
 def system_status(db: Session = Depends(get_db)):
     system = get_system_settings(db)
@@ -103,6 +114,45 @@ def system_status(db: Session = Depends(get_db)):
     if not system.system_initialized:
         payload["runtime"] = {"available": False, "setup_required": True}
     return payload
+
+
+def require_setup_mode(db: Session) -> None:
+    system = get_system_settings(db)
+    if system.system_initialized:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System is already initialized")
+
+
+@router.get("/setup/storage/discovery")
+def setup_storage_discovery(db: Session = Depends(get_db)):
+    require_setup_mode(db)
+    return setup_storage_discovery_snapshot()
+
+
+@router.post("/setup/storage/preview")
+def setup_storage_preview(payload: SetupStorageSelectionRequest, db: Session = Depends(get_db)):
+    require_setup_mode(db)
+    try:
+        return build_setup_storage_preview(payload.candidate_id, payload.folder_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+
+@router.post("/setup/storage/validate")
+def setup_storage_validate(payload: SetupStorageSelectionRequest, db: Session = Depends(get_db)):
+    require_setup_mode(db)
+    try:
+        return validate_setup_storage_folder(payload.candidate_id, payload.folder_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+
+
+@router.post("/setup/storage/apply")
+def setup_storage_apply(payload: SetupStorageSelectionRequest, db: Session = Depends(get_db)):
+    require_setup_mode(db)
+    try:
+        return persist_setup_storage_selection(payload.candidate_id, payload.folder_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
 
 @router.get("/system/recorder/status")

@@ -315,7 +315,7 @@ write_env() {
   env_file="$APP_DIR/.env"
   [ ! -e "$env_file" ] || fail ".env already exists; refusing to overwrite: $env_file"
   archive_dir="$APP_DIR/data/archive"
-  mkdir -p "$archive_dir" "$APP_DIR/data/previews" "$APP_DIR/data/exports"
+  mkdir -p "$archive_dir" "$APP_DIR/data/previews" "$APP_DIR/data/exports" "$APP_DIR/data/install-control"
   pg_secret=$(random_secret)
   jwt_secret=$(random_secret)
   enc_secret=$(random_secret)
@@ -327,6 +327,7 @@ write_env() {
     printf 'JWT_SECRET=%s\n' "$jwt_secret"
     printf 'ENCRYPTION_KEY=%s\n' "$enc_secret"
     printf 'SURVEILLANCE_ROOT=%s\n' "$archive_dir"
+    printf 'STORAGE_INSTALL_CONTROL=%s\n' "$APP_DIR/data/install-control"
     printf 'HTTP_PORT=%s\n' "$HTTP_PORT"
     printf 'API_PORT=%s\n' "$API_PORT"
     printf 'COMPOSE_PROJECT_NAME=%s\n' "$PROJECT_NAME"
@@ -522,9 +523,11 @@ fi
 
 [ -f "$APP_DIR/docker-compose.yml" ] || fail "Project acquisition did not produce docker-compose.yml."
 [ -f "$APP_DIR/deploy/nginx/default.conf" ] || fail "Project acquisition is incomplete: deploy/nginx/default.conf is missing."
+[ -f "$APP_DIR/scripts/km-vms-storage-discovery.sh" ] || fail "Project acquisition is incomplete: scripts/km-vms-storage-discovery.sh is missing."
 
 write_env
 write_metadata
+sh "$APP_DIR/scripts/km-vms-storage-discovery.sh" --app-dir "$APP_DIR" >/dev/null
 
 (
   cd "$APP_DIR"

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     encryption_key: str
 
     storage_root: str = "/storage/archive"
+    storage_install_control: str = "/install-control"
     storage_previews: str = "/storage/previews"
     storage_exports: str = "/storage/exports"
 
