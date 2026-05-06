@@ -11,6 +11,7 @@ from typing import Iterable
 
 from sqlalchemy.orm import Session
 
+from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
 from app.core.sanitization import redact_text
 from app.services.audit_log import create_event
@@ -35,9 +36,51 @@ STATUS_STALE_WRITING = "stale_writing"
 APPLY_SAFE_MODE = "apply_safe"
 DRY_RUN_MODE = "dry_run"
 STALE_WRITING_AFTER = timedelta(minutes=10)
-MAX_SAMPLE_ITEMS = 100
+MAX_SAMPLE_ITEMS = 20
 MEDIA_PROBE_TIMEOUT_SEC = 5
 _LAST_CLEANUP_CANDIDATES_COUNT: int | None = None
+REVIEW_ONLY_CLEANUP_CLASSES = {
+    "orphan_file",
+    "pre_metadata_km_vms_file",
+    "legacy_archive_file",
+}
+PROBLEM_CLASSES = {
+    "missing_file",
+    "orphan_metadata",
+    "orphan_file",
+    "pre_metadata_km_vms_file",
+    "legacy_archive_file",
+    "foreign_file",
+    "unknown_file",
+    "zero_size_file",
+    "partial_file",
+    "corrupted_file",
+    "stale_writing_segment",
+    "invalid_path",
+    "path_outside_storage",
+    "unreadable_file",
+    "storage_unavailable",
+    "skipped",
+}
+CLASSIFICATION_LABELS_RU = {
+    "ok_owned_finalized": "owned запись в порядке",
+    "missing_file": "файл отсутствует",
+    "orphan_metadata": "запись без файла / осиротевшая запись",
+    "orphan_file": "файл без записи в базе",
+    "pre_metadata_km_vms_file": "старый файл KM VMS без новых метаданных",
+    "legacy_archive_file": "старый архивный файл",
+    "foreign_file": "чужой файл",
+    "unknown_file": "неизвестный файл",
+    "zero_size_file": "нулевой размер",
+    "partial_file": "частичный файл / запись ещё не завершена",
+    "corrupted_file": "повреждённый файл",
+    "stale_writing_segment": "зависшая запись",
+    "invalid_path": "некорректный путь",
+    "path_outside_storage": "путь вне хранилища",
+    "unreadable_file": "файл недоступен для чтения",
+    "storage_unavailable": "хранилище недоступно",
+    "skipped": "пропущено",
+}
 
 
 @dataclass(frozen=True)
@@ -244,11 +287,14 @@ def _looks_like_legacy_kmvms_file(rel_path: str) -> bool:
 
 
 def _classify_orphan_file(rel_path: str) -> Classification:
+    normalized = rel_path.replace("\\", "/").lower()
+    if normalized.startswith("legacy/") or "/legacy/" in normalized or normalized.startswith("archive/"):
+        return Classification("legacy_archive_file", cleanup_candidate=True, cleanup_reason="legacy archive file has no Recorder PRO metadata")
     if is_kmvms_namespace_relative(rel_path):
         return Classification("orphan_file", cleanup_candidate=True, cleanup_reason="file in KM VMS namespace has no recording metadata")
     if _looks_like_legacy_kmvms_file(rel_path):
         return Classification("pre_metadata_km_vms_file", cleanup_candidate=True, cleanup_reason="KM VMS-looking file has no Recorder PRO metadata")
-    if rel_path.lower().startswith("surveillance/") or "/surveillance/" in rel_path.lower():
+    if normalized.startswith("surveillance/") or "/surveillance/" in normalized:
         return Classification("foreign_file")
     return Classification("unknown_file")
 
@@ -261,8 +307,6 @@ def _apply_segment_classification(db: Session, segment: RecordingSegment, classi
         status = STATUS_CORRUPTED
     elif classification.name == "stale_writing_segment":
         status = STATUS_STALE_WRITING
-    elif classification.name in {"partial_file", "unreadable_file", "invalid_path", "path_outside_storage"} and segment.status == STATUS_WRITING:
-        status = STATUS_FAILED
 
     changed = False
     updates = {
@@ -306,6 +350,8 @@ def _reconciliation_audit_metadata(summary: dict) -> dict:
         "deleted_product_metadata_count": int(summary.get("deleted_product_metadata_count") or 0),
         "cleanup_candidates_count": cleanup_candidates_count,
         "counts": counts,
+        "scan_limited": bool(summary.get("scan_limited")),
+        "partial": bool(summary.get("partial")),
     }
 
 
@@ -321,6 +367,61 @@ def _audit_reconciliation(db: Session, *, actor, event_type: str, severity: str,
         target_type="recording_reconciliation",
         metadata=metadata,
     )
+
+
+def _safe_failure_error(exc: Exception) -> str:
+    text = redact_text(str(exc))
+    if "/" in text or "\\" in text:
+        return "storage scan failed"
+    return text or "storage scan failed"
+
+
+def _empty_camera_summary(camera: Camera | None, camera_id: int | None) -> dict:
+    return {
+        "camera_id": camera_id,
+        "camera_name": camera.name if camera else None,
+        "counts": _empty_counts(),
+        "problem_count": 0,
+    }
+
+
+def _status_from_counts(counts: Counter, failed: bool, partial: bool) -> str:
+    if failed:
+        return "failed" if not counts.get("storage_unavailable") else "storage_unavailable"
+    if partial:
+        return "partial"
+    if any(counts.get(key, 0) for key in PROBLEM_CLASSES if key != "skipped"):
+        return "problems_found"
+    if counts.get("skipped"):
+        return "warnings"
+    return "ok"
+
+
+def _cleanup_candidates_summary(counts: Counter, samples: dict[str, list[dict]]) -> dict:
+    classification_counts = {key: int(counts.get(key) or 0) for key in REVIEW_ONLY_CLEANUP_CLASSES}
+    total = int(sum(classification_counts.values()))
+    safe_samples = []
+    for key in REVIEW_ONLY_CLEANUP_CLASSES:
+        for item in samples.get(key, [])[:5]:
+            safe_samples.append(
+                {
+                    "classification": key,
+                    "relative_path": item.get("relative_path"),
+                    "cleanup_reason": item.get("cleanup_reason"),
+                }
+            )
+            if len(safe_samples) >= 10:
+                break
+        if len(safe_samples) >= 10:
+            break
+    return {
+        "count": total,
+        "classification_counts": classification_counts,
+        "review_only": True,
+        "deleted_files_count": 0,
+        "explanation": "Stage 2 marks cleanup candidates for review only; reconciliation does not delete, import, adopt, or auto-own files.",
+        "samples": safe_samples,
+    }
 
 
 def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, write_audit: bool = True) -> dict:
@@ -341,8 +442,13 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
     updated_metadata = 0
     checked_paths: set[str] = set()
     segments: list[RecordingSegment] = []
+    total_storage_files_scanned = 0
+    failed = False
+    failure_error = None
+    per_camera: dict[int | None, dict] = {}
 
     try:
+        cameras = {camera.id: camera for camera in db.query(Camera).order_by(Camera.id.asc()).all()}
         segments = db.query(RecordingSegment).order_by(RecordingSegment.id.asc()).all()
         active_job_ids = {
             str(job_id)
@@ -358,6 +464,10 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
                 continue
             rel_path, classification = _classify_segment(segment, active_job_ids)
             counts[classification.name] += 1
+            camera_summary = per_camera.setdefault(segment.camera_id, _empty_camera_summary(cameras.get(segment.camera_id), segment.camera_id))
+            camera_summary["counts"][classification.name] += 1
+            if classification.name in PROBLEM_CLASSES:
+                camera_summary["problem_count"] += 1
             if rel_path:
                 checked_paths.add(rel_path)
             if len(samples[classification.name]) < MAX_SAMPLE_ITEMS:
@@ -374,6 +484,7 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
                 updated_metadata += 1
 
         for path in _iter_storage_video_files():
+            total_storage_files_scanned += 1
             try:
                 rel_path = relative_to_storage(path)
             except Exception:
@@ -392,8 +503,13 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
                     }
                 )
     except Exception as exc:
+        failed = True
+        failure_error = _safe_failure_error(exc)
+        if apply_safe:
+            db.rollback()
+            updated_metadata = 0
         counts["storage_unavailable"] += 1
-        samples["storage_unavailable"].append({"error": redact_text(str(exc))})
+        samples["storage_unavailable"].append({"error": failure_error})
         if write_audit:
             _audit_reconciliation(
                 db,
@@ -401,26 +517,61 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
                 event_type="reconciliation.apply_failed" if apply_safe else "reconciliation.scan_failed",
                 severity="error",
                 message=f"Recorder PRO reconciliation {mode} failed",
-                metadata={"mode": mode, "error": redact_text(str(exc))},
+                metadata={"mode": mode, "error": failure_error, "deleted_files_count": 0},
             )
 
-    if apply_safe:
+    if apply_safe and not failed:
         db.commit()
 
+    cleanup_summary = _cleanup_candidates_summary(counts, samples)
+    apply_summary = {
+        "updated_metadata_count": int(updated_metadata),
+        "deleted_files_count": 0,
+        "deleted_product_metadata_count": 0,
+        "skipped_count": int(counts.get("skipped") or 0),
+        "reason_counts": {key: int(value) for key, value in counts.items() if value and key != "ok_owned_finalized"},
+        "warnings": [],
+        "errors": [failure_error] if failure_error else [],
+        "safe_metadata_fields_only": True,
+        "ownership_source_unchanged": True,
+        "orphan_foreign_unknown_pre_metadata_not_adopted": True,
+    }
+    status = _status_from_counts(counts, failed, partial=False)
     summary = {
-        "ok": True,
+        "ok": status == "ok",
         "mode": mode,
         "storage_namespace": KMVMS_RECORDINGS_NAMESPACE,
         "checked_at": datetime.utcnow().isoformat() + "Z",
+        "status": status,
+        "evidence_status": "failed" if failed else "fresh",
         "total_metadata_rows_checked": len(segments),
+        "total_storage_files_scanned": int(total_storage_files_scanned),
+        "scan_limited": False,
+        "partial": False,
+        "partial_reason": None,
         "updated_metadata_count": updated_metadata,
         "deleted_files_count": 0,
         "deleted_product_metadata_count": 0,
+        "skipped_count": int(counts.get("skipped") or 0),
         "counts": dict(counts),
+        "classification_counts": dict(counts),
+        "classification_labels_ru": CLASSIFICATION_LABELS_RU,
+        "cleanup_candidates": cleanup_summary,
+        "cleanup_candidates_summary": cleanup_summary,
+        "apply_safe_summary": apply_summary,
+        "per_camera": [
+            {
+                "camera_id": item["camera_id"],
+                "camera_name": item["camera_name"],
+                "counts": dict(item["counts"]),
+                "problem_count": int(item["problem_count"]),
+            }
+            for item in sorted(per_camera.values(), key=lambda row: row.get("camera_id") or 0)
+        ],
         "samples": dict(samples),
     }
 
-    if write_audit:
+    if write_audit and not failed:
         severity = "warning" if any(counts[key] for key in counts if key not in {"ok_owned_finalized"}) else "info"
         metadata = _reconciliation_audit_metadata(summary)
         _audit_reconciliation(
@@ -452,4 +603,26 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
 
 
 def reconciliation_diagnostics(db: Session) -> dict:
-    return reconcile_recordings(db, mode=DRY_RUN_MODE, write_audit=False)
+    summary = reconcile_recordings(db, mode=DRY_RUN_MODE, write_audit=False)
+    diagnostics = {
+        "checked_at": summary.get("checked_at"),
+        "mode": summary.get("mode"),
+        "status": summary.get("status"),
+        "evidence_status": summary.get("evidence_status"),
+        "storage_namespace": summary.get("storage_namespace"),
+        "total_metadata_rows_checked": summary.get("total_metadata_rows_checked"),
+        "total_storage_files_scanned": summary.get("total_storage_files_scanned"),
+        "scan_limited": bool(summary.get("scan_limited")),
+        "partial": bool(summary.get("partial")),
+        "partial_reason": summary.get("partial_reason"),
+        "classification_counts": dict(summary.get("classification_counts") or summary.get("counts") or {}),
+        "cleanup_candidates": {
+            key: value
+            for key, value in dict(summary.get("cleanup_candidates_summary") or {}).items()
+            if key != "samples"
+        },
+        "updated_metadata_count": int(summary.get("updated_metadata_count") or 0),
+        "deleted_files_count": 0,
+        "deleted_product_metadata_count": 0,
+    }
+    return diagnostics

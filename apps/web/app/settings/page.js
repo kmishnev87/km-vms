@@ -83,6 +83,28 @@ const TEXT = {
     retentionBlocked: "Блокеры",
     retentionByCamera: "По камерам",
     retentionReasons: "Причины",
+    reconciliationWorkflow: "Проверка архива",
+    reconciliationWorkflowText: "Dry-run проверяет архив без удаления файлов и показывает проблемы по классификациям.",
+    reconciliationDryRun: "Проверить",
+    reconciliationApply: "Apply-safe",
+    reconciliationConfirm: "Подтверждаю: файлы не удаляются, обновляются только безопасные metadata/status поля; orphan/foreign/unknown/pre-metadata файлы не удаляются и не импортируются",
+    reconciliationEmpty: "Проверка ещё не выполнялась.",
+    reconciliationPreviewReady: "Проблемы: {problems}; cleanup review: {cleanup}; metadata rows: {rows}.",
+    reconciliationResultReady: "Metadata обновлено: {updated}; удалено файлов: {deleted}; проблемы: {problems}.",
+    reconciliationDeletedFilesZero: "Stage 2 не удаляет файлы автоматически. Cleanup candidates показаны только для review.",
+    reconciliationClasses: {
+      missing_file: "файл отсутствует",
+      orphan_file: "файл без записи в базе",
+      orphan_metadata: "запись без файла / осиротевшая запись",
+      pre_metadata_km_vms_file: "старый файл KM VMS без новых метаданных",
+      legacy_archive_file: "legacy archive file / старый архивный файл",
+      partial_file: "частичный файл / запись ещё не завершена",
+      zero_size_file: "нулевой размер",
+      corrupted_file: "повреждённый файл",
+      stale_writing_segment: "зависшая запись",
+      foreign_file: "чужой файл",
+      unknown_file: "неизвестный файл",
+    },
     hostPath: "Путь на сервере",
     hostPathUnknown: "Определяется в docker-compose",
     validate: "Тест",
@@ -243,6 +265,28 @@ const TEXT = {
     retentionBlocked: "Blockers",
     retentionByCamera: "By camera",
     retentionReasons: "Reasons",
+    reconciliationWorkflow: "Archive integrity check",
+    reconciliationWorkflowText: "Dry-run scans the archive without deleting files and shows classification counts.",
+    reconciliationDryRun: "Scan",
+    reconciliationApply: "Apply-safe",
+    reconciliationConfirm: "I confirm: files will not be deleted, only safe metadata/status fields may be updated; orphan/foreign/unknown/pre-metadata files will not be removed or imported",
+    reconciliationEmpty: "No scan has been run yet.",
+    reconciliationPreviewReady: "Problems: {problems}; cleanup review: {cleanup}; metadata rows: {rows}.",
+    reconciliationResultReady: "Metadata updated: {updated}; deleted files: {deleted}; problems: {problems}.",
+    reconciliationDeletedFilesZero: "Stage 2 never deletes files automatically. Cleanup candidates are shown for review only.",
+    reconciliationClasses: {
+      missing_file: "missing file",
+      orphan_file: "file without DB record",
+      orphan_metadata: "metadata without file",
+      pre_metadata_km_vms_file: "old KM VMS file without new metadata",
+      legacy_archive_file: "legacy archive file",
+      partial_file: "partial / still writing",
+      zero_size_file: "zero-size",
+      corrupted_file: "corrupted file",
+      stale_writing_segment: "stale writing",
+      foreign_file: "foreign file",
+      unknown_file: "unknown file",
+    },
     hostPath: "Server path",
     hostPathUnknown: "Defined in docker-compose",
     validate: "Test",
@@ -675,13 +719,17 @@ export default function SettingsPage() {
   const [retentionResult, setRetentionResult] = useState(null);
   const [retentionBusy, setRetentionBusy] = useState(false);
   const [retentionConfirmed, setRetentionConfirmed] = useState(false);
+  const [reconciliationPreview, setReconciliationPreview] = useState(null);
+  const [reconciliationResult, setReconciliationResult] = useState(null);
+  const [reconciliationBusy, setReconciliationBusy] = useState(false);
+  const [reconciliationConfirmed, setReconciliationConfirmed] = useState(false);
   const [bugReportText, setBugReportText] = useState("");
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
   const toastTimerRef = useRef(null);
   const lang = languageOf(draft || savedDraft);
   const t = TEXT[lang] || TEXT.ru;
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
-  const anyBusy = saving || hardwareChecking || retentionBusy;
+  const anyBusy = saving || hardwareChecking || retentionBusy || reconciliationBusy;
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
   const languageIcon = lang === "en"
@@ -891,6 +939,40 @@ export default function SettingsPage() {
       .replace("{bytes}", formatBytes(source.estimated_freed_bytes ?? source.bytes_freed ?? 0));
   }
 
+  function reconciliationProblemCount(source) {
+    const counts = source?.classification_counts || source?.counts || {};
+    const ok = Number(counts.ok_owned_finalized || 0);
+    const skipped = Number(counts.skipped || 0);
+    const total = Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0);
+    return Math.max(0, total - ok - skipped);
+  }
+
+  function reconciliationCleanupCount(source) {
+    return Number(source?.cleanup_candidates_summary?.count ?? source?.cleanup_candidates?.count ?? 0);
+  }
+
+  function reconciliationClassRows(source) {
+    const counts = source?.classification_counts || source?.counts || {};
+    return Object.entries(t.reconciliationClasses || {})
+      .map(([key, label]) => ({ key, label, count: Number(counts[key] || 0) }))
+      .filter((row) => row.count > 0)
+      .slice(0, 10);
+  }
+
+  function reconciliationSummaryText(source, mode = "preview") {
+    if (!source) return "";
+    if (mode === "result") {
+      return t.reconciliationResultReady
+        .replace("{updated}", String(source.apply_safe_summary?.updated_metadata_count ?? source.updated_metadata_count ?? 0))
+        .replace("{deleted}", String(source.apply_safe_summary?.deleted_files_count ?? source.deleted_files_count ?? 0))
+        .replace("{problems}", String(reconciliationProblemCount(source)));
+    }
+    return t.reconciliationPreviewReady
+      .replace("{problems}", String(reconciliationProblemCount(source)))
+      .replace("{cleanup}", String(reconciliationCleanupCount(source)))
+      .replace("{rows}", String(source.total_metadata_rows_checked || 0));
+  }
+
   async function runRetentionPreview() {
     if (retentionBusy) return;
     setRetentionBusy(true);
@@ -928,6 +1010,42 @@ export default function SettingsPage() {
       showToast(normalizedError(err, lang));
     } finally {
       setRetentionBusy(false);
+    }
+  }
+
+  async function runReconciliationPreview() {
+    if (reconciliationBusy) return;
+    setReconciliationBusy(true);
+    setReconciliationResult(null);
+    setReconciliationConfirmed(false);
+    try {
+      const preview = await apiFetch("/storage/reconciliation/summary");
+      setReconciliationPreview(preview);
+      showToast({ variant: "success", title: t.reconciliationWorkflow, text: reconciliationSummaryText(preview) });
+    } catch (err) {
+      showToast(normalizedError(err, lang));
+    } finally {
+      setReconciliationBusy(false);
+    }
+  }
+
+  async function applyReconciliationSafe() {
+    if (reconciliationBusy || !reconciliationPreview || !reconciliationConfirmed) return;
+    setReconciliationBusy(true);
+    try {
+      const result = await apiFetch("/storage/reconcile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "apply_safe" }),
+      });
+      setReconciliationResult(result);
+      setReconciliationPreview(null);
+      setReconciliationConfirmed(false);
+      showToast({ variant: "success", title: t.reconciliationApply, text: reconciliationSummaryText(result, "result") });
+    } catch (err) {
+      showToast(normalizedError(err, lang));
+    } finally {
+      setReconciliationBusy(false);
     }
   }
 
@@ -1293,6 +1411,32 @@ export default function SettingsPage() {
                     </label>
                     <button className="button small dangerButton" onClick={applyRetentionPlan} disabled={!retentionPreview?.planned_count || !retentionConfirmed || retentionBusy || saving}>
                       {t.retentionApply}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/recordings.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label>{t.reconciliationWorkflow}</label>
+                    <span>{t.reconciliationWorkflowText}</span>
+                    {reconciliationPreview ? <small>{reconciliationSummaryText(reconciliationPreview)}</small> : <small>{t.reconciliationEmpty}</small>}
+                    {reconciliationClassRows(reconciliationPreview || reconciliationResult).length ? (
+                      <small>{reconciliationClassRows(reconciliationPreview || reconciliationResult).map((row) => `${row.label}: ${row.count}`).join(", ")}</small>
+                    ) : null}
+                    <small>{t.reconciliationDeletedFilesZero}</small>
+                    {reconciliationResult ? <small>{reconciliationSummaryText(reconciliationResult, "result")}</small> : null}
+                  </div>
+                  <div className="settingsRowControl settingsRowControlMeta">
+                    <button className="button secondary small settingsUsersAddButton" onClick={runReconciliationPreview} disabled={reconciliationBusy || saving}>
+                      {reconciliationBusy ? t.checking : t.reconciliationDryRun}
+                    </button>
+                    <label className="settingsModalCheck">
+                      <input type="checkbox" checked={reconciliationConfirmed} onChange={(event) => setReconciliationConfirmed(event.target.checked)} disabled={!reconciliationPreview || reconciliationBusy || saving} />
+                      <span>{t.reconciliationConfirm}</span>
+                    </label>
+                    <button className="button small" onClick={applyReconciliationSafe} disabled={!reconciliationPreview || !reconciliationConfirmed || reconciliationBusy || saving}>
+                      {t.reconciliationApply}
                     </button>
                   </div>
                 </div>
