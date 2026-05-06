@@ -243,6 +243,38 @@ def test_storage_diagnostics_include_consistent_contract_fields(db):
     assert summary["container_runtime_storage_root"] == settings.storage_root
     assert summary["storage_namespace"] == KMVMS_RECORDINGS_NAMESPACE
     assert summary["container_recordings_namespace_root"].endswith("kmvms/recordings")
+    operations = summary["storage_operations"]
+    assert operations["capacity"]["total_bytes"] == summary["capacity"]["total_bytes"]
+    if summary["capacity"]["total_bytes"] is None:
+        assert operations["capacity"]["usage_percent"] is None
+        assert operations["capacity"]["free_percent"] is None
+    else:
+        assert operations["capacity"]["usage_percent"] is not None
+        assert operations["capacity"]["free_percent"] is not None
+    assert isinstance(operations["path_health"]["readable"], bool)
+    assert isinstance(operations["path_health"]["writable"], bool)
+    assert isinstance(operations["path_health"]["available"], bool)
+    assert operations["low_disk_policy"]["warning_threshold_percent"] == 10.0
+    assert operations["low_disk_policy"]["cleanup_threshold_percent"] == 5.0
+    assert operations["low_disk_policy"]["critical_threshold_percent"] == 1.0
+    assert operations["low_disk_policy"]["auto_free_space_cleanup_enabled"] is False
+    assert operations["low_disk_policy"]["recording_suspended_by_low_disk"] is False
+    assert operations["recent_operations"]["available"] is False
+    assert settings.storage_root not in str(operations)
+
+
+def test_storage_status_route_is_read_only_and_does_not_write_audit(db, monkeypatch):
+    from app.routers import storage as storage_router
+
+    def fail_audit(*args, **kwargs):
+        raise AssertionError("storage status must not write audit from read-only refresh")
+
+    monkeypatch.setattr("app.services.storage_monitoring._maybe_audit_storage_transition", fail_audit)
+
+    result = storage_router.storage_status(db=db, current_user=actor("owner"))
+
+    assert result["storage_operations"]["low_disk_policy"]["warning_threshold_percent"] == 10.0
+    assert result["storage_operations"]["recent_operations"]["items"] == []
 
 
 def test_storage_validation_is_explicit_container_not_host_remount():

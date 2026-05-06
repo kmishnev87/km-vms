@@ -2116,6 +2116,244 @@ textarea {
   justify-self: end;
 }
 
+.storageOpsPage {
+  width: 100%;
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: 14px 12px 28px;
+}
+
+.storageOpsHeader {
+  align-items: center;
+}
+
+.storageOpsOverview,
+.storageOpsSection,
+.storageOpsState {
+  border: 1px solid #dbe3ef;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
+}
+
+.storageOpsOverview {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+}
+
+.storageOpsOverview strong {
+  display: block;
+  margin-top: 4px;
+  color: #0f172a;
+  font-size: 22px;
+  line-height: 1.15;
+}
+
+.storageOpsOverview p,
+.storageOpsNote {
+  margin: 8px 0 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.storageOpsEyebrow {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.storageOpsBadges,
+.storageOpsStats {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.storageOpsBadge,
+.storageOpsStat {
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.storageOpsBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 5px 9px;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.storageOpsBadge-ok,
+.storageOpsStat-ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.storageOpsBadge-error,
+.storageOpsStat-error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.storageOpsStat-warning {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.storageOpsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.storageOpsSection {
+  padding: 14px;
+  min-width: 0;
+}
+
+.storageOpsSectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.storageOpsSection h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.storageOpsStat {
+  display: grid;
+  gap: 4px;
+  min-width: 128px;
+  padding: 9px 10px;
+}
+
+.storageOpsStat span,
+.storageOpsSummaryRow span,
+.storageOpsTable span {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.storageOpsStat strong,
+.storageOpsSummaryRow strong {
+  color: inherit;
+  font-size: 15px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.storageOpsCapacityBar {
+  height: 12px;
+  margin-bottom: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.storageOpsCapacityBar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+}
+
+.storageOpsSummaryRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 9px;
+  margin-top: 9px;
+  border-top: 1px solid #edf2f7;
+}
+
+.storageOpsTableWrap {
+  overflow: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+.storageOpsTable {
+  width: 100%;
+  min-width: 840px;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.storageOpsTable th,
+.storageOpsTable td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf2f7;
+  text-align: left;
+  vertical-align: top;
+}
+
+.storageOpsTable th {
+  color: #64748b;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.storageOpsTable td {
+  color: #0f172a;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.storageOpsTable td strong,
+.storageOpsTable td span {
+  display: block;
+}
+
+.storageOpsEmpty,
+.storageOpsState {
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.storageOpsState {
+  padding: 18px;
+}
+
+.storageOpsState-error {
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.storageOpsRecent {
+  display: grid;
+  gap: 8px;
+}
+
+.storageOpsRecentItem {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+}
+
 .pageHeader {
   display: flex;
   align-items: flex-start;
@@ -3799,6 +4037,27 @@ textarea {
   .settingsStorageAction .button {
     width: 100%;
     max-width: none;
+  }
+
+  .storageOpsPage {
+    padding: 10px 8px 22px;
+  }
+
+  .storageOpsHeader,
+  .storageOpsOverview,
+  .storageOpsSectionHead,
+  .storageOpsSummaryRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .storageOpsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsStat {
+    min-width: min(100%, 150px);
+    flex: 1 1 140px;
   }
 
   .settingsHardwareOptions {

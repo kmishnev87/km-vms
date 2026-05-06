@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
@@ -68,6 +69,7 @@ const TEXT = {
     timezoneHelp: "Определяет время интерфейса, архива и хронологии.",
     storage: "Хранилище",
     storageText: "Путь архива внутри контейнера. Серверный путь задаётся в docker-compose.",
+    storageOperationsOpen: "Открыть экран хранилища",
     autoFreeSpace: "Автоосвобождение места",
     autoFreeSpaceHelp: "Выкл.: система предупреждает о нехватке места и не удаляет записи автоматически. Вкл.: при свободном месте ниже 5% сервер может удалить самые старые owned записи, которые прошли безопасные metadata-проверки.",
     autoFreeSpaceCritical: "Ниже 1% свободного места запись может быть временно остановлена для защиты диска. Это не разрешает удаление без включённого opt-in.",
@@ -250,6 +252,7 @@ const TEXT = {
     timezoneHelp: "Defines interface time, archive timestamps, and chronology.",
     storage: "Storage",
     storageText: "Archive path inside the container. The server path is defined in docker-compose.",
+    storageOperationsOpen: "Open Storage Operations",
     autoFreeSpace: "Auto free-space cleanup",
     autoFreeSpaceHelp: "Off: the system warns about low disk space and does not delete recordings automatically. On: below 5% free space the server may delete the oldest owned recordings that pass metadata safety checks.",
     autoFreeSpaceCritical: "Below 1% free space recording may be temporarily suspended to protect the disk. This does not allow deletion without opt-in enabled.",
@@ -1360,7 +1363,9 @@ export default function SettingsPage() {
                     {draft.storage_change_requires ? <small>{draft.storage_change_requires}</small> : null}
                   </div>
                   <div className="settingsRowControl">
-                    <input id="settings-storage" className="input settingsInput" value={draft.storage_host_path || t.hostPathUnknown} readOnly disabled />
+                    <Link className="button secondary small settingsUsersAddButton" href="/storage">
+                      {t.storageOperationsOpen}
+                    </Link>
                   </div>
                 </div>
 

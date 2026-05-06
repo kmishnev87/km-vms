@@ -22,6 +22,7 @@ export function canAccessPath(user, href) {
   if (href === "/chronology") return permissions.has("view_timeline");
   if (href === "/cameras") return permissions.has("manage_cameras");
   if (href === "/settings") return permissions.has("manage_settings");
+  if (href === "/storage") return permissions.has("manage_settings");
   return false;
 }
 

@@ -38,6 +38,19 @@ const DASHBOARD_ITEMS = [
     description: "Синхронный архив камер с общей временной точкой.",
   },
   {
+    href: "/storage",
+    iconSrc: "/assets/icons/ui/storage.png",
+    backgroundSrc: "/assets/backgrounds/dashboard-cards/settings.svg",
+    title: {
+      ru: "Хранилище",
+      en: "Storage",
+    },
+    description: {
+      ru: "Состояние архива, свободное место, retention и проверка целостности.",
+      en: "Archive state, free space, retention, and integrity checks.",
+    },
+  },
+  {
     href: "/settings",
     iconSrc: "/assets/icons/dashboard/settings.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/settings.svg",

@@ -147,7 +147,7 @@ assert.equal(warningOverview.severity, "error");
 assert.equal(warningOverview.problem_count, 2);
 assert.equal(
   JSON.stringify(warningOverview.problems.map((item) => [item.domain_label, item.action?.href]).slice(0, 2)),
-  JSON.stringify([["Камеры", "/cameras"], ["Хранилище", "/settings"]])
+  JSON.stringify([["Камеры", "/cameras"], ["Хранилище", "/storage"]])
 );
 assert.equal(JSON.stringify(warningOverview).includes("rtsp://"), false);
 assert.equal(JSON.stringify(warningOverview).includes("Authorization"), false);

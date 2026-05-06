@@ -203,6 +203,15 @@ def _capacity(root: Path) -> tuple[dict, str | None]:
         )
 
 
+def _capacity_percent(numerator: int | None, denominator: int | None) -> float | None:
+    if denominator in {None, 0} or numerator is None:
+        return None
+    try:
+        return round((int(numerator) / int(denominator)) * 100, 2)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
 def _empty_camera_usage(camera: Camera | None = None) -> dict:
     return {
         "camera_id": camera.id if camera else None,
@@ -328,6 +337,167 @@ def _observe_namespace(root: Path, owned_paths: set[str]) -> dict:
         observations["partial"] = True
         observations["partial_reason"] = "scan_error"
     return observations
+
+
+def _safe_last_summary(value: dict | None) -> dict:
+    value = value or {}
+    return {
+        "ok": value.get("ok"),
+        "operation": value.get("operation"),
+        "requested_count": int(value.get("requested_count") or 0),
+        "planned_count": int(value.get("planned_count") or 0),
+        "deleted_count": int(value.get("deleted_count") or 0),
+        "skipped_count": int(value.get("skipped_count") or 0),
+        "failed_count": int(value.get("failed_count") or 0),
+        "bytes_freed": int(value.get("bytes_freed") or 0),
+        "reason_counts": dict(value.get("reason_counts") or {}),
+        "item_reason_counts": dict(value.get("item_reason_counts") or {}),
+        "skipped_reason_counts": dict(value.get("skipped_reason_counts") or {}),
+        "failed_reason_counts": dict(value.get("failed_reason_counts") or {}),
+        "observability": dict(value.get("observability") or {}),
+        "warnings": list(value.get("warnings") or [])[:MAX_SAMPLE_ITEMS],
+    }
+
+
+def _safe_camera_usage(rows: list[dict] | None) -> list[dict]:
+    safe_rows = []
+    for row in rows or []:
+        safe_rows.append(
+            {
+                "camera_id": row.get("camera_id"),
+                "camera_name": row.get("camera_name"),
+                "recording_count": int(row.get("recording_count") or 0),
+                "segment_count": int(row.get("segment_count") or 0),
+                "existing_file_count": int(row.get("existing_file_count") or 0),
+                "missing_file_count": int(row.get("missing_file_count") or 0),
+                "problem_file_count": int(row.get("problem_file_count") or 0),
+                "size_bytes": int(row.get("size_bytes") or 0),
+                "oldest_recording_at": row.get("oldest_recording_at"),
+                "newest_recording_at": row.get("newest_recording_at"),
+                "status_counts": dict(row.get("status_counts") or {}),
+                "integrity_status_counts": dict(row.get("integrity_status_counts") or {}),
+                "reconciliation_status_counts": dict(row.get("reconciliation_status_counts") or {}),
+            }
+        )
+    return safe_rows
+
+
+def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
+    from app.services.recording_retention import automatic_retention_status, auto_free_space_status
+
+    capacity = summary.get("capacity") or {}
+    total = capacity.get("total_bytes")
+    used = capacity.get("used_bytes")
+    free = capacity.get("free_bytes")
+    policy = summary.get("auto_free_space_policy") or {}
+    retention = automatic_retention_status()
+    auto_cleanup = auto_free_space_status()
+    reconciliation = summary.get("reconciliation_summary") or {}
+    cleanup = summary.get("cleanup_candidates_summary") or {}
+    namespace = summary.get("namespace_observations") or {}
+    owned = summary.get("owned_archive") or {}
+    path_checks = summary.get("storage_path_checks") or {}
+
+    retention_last = _safe_last_summary(retention.get("last_summary"))
+    auto_last = _safe_last_summary(auto_cleanup.get("last_summary"))
+
+    return {
+        "checked_at": summary.get("checked_at"),
+        "status": summary.get("status") or "unknown",
+        "capacity": {
+            "total_bytes": total,
+            "used_bytes": used,
+            "free_bytes": free,
+            "available_bytes": capacity.get("available_bytes"),
+            "usage_percent": _capacity_percent(used, total),
+            "free_percent": _capacity_percent(free, total),
+            "filesystem_probe_status": capacity.get("filesystem_probe_status"),
+        },
+        "path_health": {
+            "available": bool(summary.get("available")),
+            "readable": bool(path_checks.get("readable")),
+            "writable": bool(path_checks.get("writable")),
+            "filesystem_probe_status": capacity.get("filesystem_probe_status"),
+            "status": path_checks.get("status"),
+            "reason": path_checks.get("last_error"),
+        },
+        "namespace_health": {
+            "storage_namespace": summary.get("storage_namespace"),
+            "namespace_exists": namespace.get("namespace_exists"),
+            "namespace_status": "available" if bool(namespace.get("namespace_exists")) or not summary.get("available") is False else "unknown",
+            "scan_mode": summary.get("scan_mode"),
+            "scan_limited": bool(summary.get("scan_limited")),
+            "partial": bool(summary.get("partial")),
+            "partial_reason": summary.get("partial_reason"),
+            "scanned_files": int(namespace.get("scanned_files") or 0),
+            "scanned_dirs": int(namespace.get("scanned_dirs") or 0),
+        },
+        "owned_archive": {
+            "size_bytes": int(owned.get("kmvms_owned_archive_size_bytes") or owned.get("kmvms_owned_archive_bytes") or 0),
+            "segments_count": int(owned.get("kmvms_owned_segments_count") or 0),
+            "existing_file_count": int(owned.get("kmvms_owned_existing_file_count") or 0),
+            "missing_file_count": int(owned.get("kmvms_owned_missing_file_count") or 0),
+            "problem_file_count": int(owned.get("kmvms_owned_problem_file_count") or 0),
+            "skipped_foreign_metadata_rows": int(owned.get("skipped_foreign_metadata_rows") or 0),
+            "deleted_metadata_rows_excluded": int(owned.get("deleted_metadata_rows_excluded") or 0),
+        },
+        "per_camera_usage": _safe_camera_usage(summary.get("camera_usage")),
+        "low_disk_policy": {
+            "state": policy.get("state") or "unknown",
+            "policy_state": "ON" if policy.get("auto_free_space_cleanup_enabled") else "OFF",
+            "auto_free_space_cleanup_enabled": bool(policy.get("auto_free_space_cleanup_enabled")),
+            "warning_threshold_percent": policy.get("warning_threshold_percent"),
+            "cleanup_threshold_percent": policy.get("cleanup_threshold_percent"),
+            "critical_threshold_percent": policy.get("critical_threshold_percent"),
+            "cleanup_allowed": bool(policy.get("cleanup_allowed")),
+            "critical_recording_suspend_required": bool(policy.get("critical_recording_suspend_required")),
+            "recording_suspended_by_low_disk": bool(policy.get("recording_suspended_by_low_disk")),
+            "free_percent": policy.get("free_percent"),
+            "free_bytes": policy.get("free_bytes"),
+        },
+        "auto_free_space_cleanup": {
+            "enabled": bool(auto_cleanup.get("enabled")),
+            "running": bool(auto_cleanup.get("running")),
+            "last_started_at": auto_cleanup.get("last_started_at"),
+            "last_finished_at": auto_cleanup.get("last_finished_at"),
+            "last_status": auto_cleanup.get("last_status") or "never_run",
+            "last_trigger": auto_cleanup.get("last_trigger"),
+            "last_error": redact_text(str(auto_cleanup.get("last_error") or "")) or None,
+            "run_count": int(auto_cleanup.get("run_count") or 0),
+            "last_summary": auto_last,
+        },
+        "retention": {
+            "enabled": retention.get("enabled"),
+            "running": bool(retention.get("running")),
+            "last_started_at": retention.get("last_started_at"),
+            "last_finished_at": retention.get("last_finished_at"),
+            "last_status": retention.get("last_status") or "never_run",
+            "last_error": redact_text(str(retention.get("last_error") or "")) or None,
+            "run_count": int(retention.get("run_count") or 0),
+            "last_summary": retention_last,
+        },
+        "reconciliation": {
+            "status": "problems_found" if any(int(reconciliation.get(key) or 0) for key in ("missing_file_count", "orphan_file_count", "invalid_path_count", "path_outside_storage_count")) else "ok",
+            "missing_file_count": int(reconciliation.get("missing_file_count") or 0),
+            "orphan_file_count": int(reconciliation.get("orphan_file_count") or 0),
+            "invalid_path_count": int(reconciliation.get("invalid_path_count") or 0),
+            "path_outside_storage_count": int(reconciliation.get("path_outside_storage_count") or 0),
+            "foreign_unknown_count": int(reconciliation.get("foreign_unknown_count") or 0),
+            "problem_file_count": int(
+                sum(int(reconciliation.get(key) or 0) for key in ("missing_file_count", "orphan_file_count", "invalid_path_count", "path_outside_storage_count"))
+            ),
+            "cleanup_candidate_count": int(cleanup.get("count") or 0),
+            "cleanup_review_only": True,
+            "scan_limited": bool(summary.get("scan_limited")),
+            "partial": bool(summary.get("partial")),
+            "last_checked_at": summary.get("checked_at"),
+        },
+        "recent_operations": {
+            "available": False,
+            "items": [],
+            "note": "No safe bounded operation history source is exposed in Stage 3; use current retention/reconciliation summaries.",
+        },
+    }
 
 
 def build_storage_monitoring_summary(
@@ -504,6 +674,7 @@ def build_storage_monitoring_summary(
     from app.services.recording_retention import low_disk_policy_status
 
     summary["auto_free_space_policy"] = low_disk_policy_status(db, summary)
+    summary["storage_operations"] = _build_storage_operations_summary(db, summary)
     if write_audit:
         _maybe_audit_storage_transition(db, summary, actor=audit_actor)
     return summary
