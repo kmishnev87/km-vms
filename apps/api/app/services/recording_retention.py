@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Iterable
 
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
 from app.core.sanitization import redact_text
@@ -17,7 +17,7 @@ from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
 from app.models.user import User
 from app.services.audit_log import create_event
-from app.services.recording_storage import is_kmvms_namespace_relative, safe_resolve_relative
+from app.services.recording_storage import is_kmvms_namespace_relative, resolve_segment_file_path, segment_relative_path
 from app.services.system_settings import (
     AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT,
     AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT,
@@ -98,10 +98,19 @@ def _safe_rel(segment: RecordingSegment) -> tuple[str | None, Path | None, str |
     if not segment.relative_path:
         return None, None, "missing_relative_path"
     try:
-        target = safe_resolve_relative(segment.relative_path)
+        db = object_session(segment)
+        if db is None:
+            return None, None, "db_session_missing"
+        target = resolve_segment_file_path(db, segment)
+        rel_path = segment_relative_path(db, segment)
     except ValueError as exc:
-        return None, None, str(exc) or "path_escape_attempt"
-    return segment.relative_path.replace("\\", "/").lstrip("/"), target, None
+        error = str(exc) or "path_escape_attempt"
+        if error == "path_outside_archive_root":
+            error = "path_outside_storage"
+        return None, None, error
+    except FileNotFoundError:
+        return segment.relative_path.replace("\\", "/").lstrip("/"), None, "file_missing"
+    return (rel_path or segment.relative_path).replace("\\", "/").lstrip("/"), target, None
 
 
 def _active_job_ids(db: Session) -> set[str]:

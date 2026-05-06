@@ -16,6 +16,7 @@ from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL, get_db, require_permission
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
+from app.services.recording_storage import resolve_segment_file_path
 
 router = APIRouter(prefix="/chronology", tags=["chronology"])
 
@@ -58,13 +59,17 @@ def _safe_storage_relative_path(relative_path: str) -> str:
 
 
 def _resolve_segment_path(segment: RecordingSegment, require_exists: bool = True) -> Path:
-    if not segment.relative_path:
-        raise HTTPException(status_code=404, detail="Recording metadata has no file path")
+    from sqlalchemy.orm import object_session
 
-    rel_path = _safe_storage_relative_path(segment.relative_path)
-    target = (_storage_root() / rel_path).resolve()
-    if require_exists and (not target.exists() or not target.is_file()):
+    db = object_session(segment)
+    if db is None:
+        raise HTTPException(status_code=500, detail="Recording metadata session unavailable")
+    try:
+        target = resolve_segment_file_path(db, segment, require_exists=require_exists)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Recording file not found")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Recording metadata has no file path")
     return target
 
 
@@ -179,7 +184,7 @@ def chronology_playback(
                 "offset_sec": 0,
             }
 
-        rel_path = _safe_storage_relative_path(segment.relative_path)
+        rel_path = segment.relative_path.replace("\\", "/").lstrip("/")
         offset_sec = int((target_dt - start_dt).total_seconds())
         media_metadata = _segment_media_metadata(segment, file_path)
         return {
@@ -289,7 +294,7 @@ def chronology_ranges(
 
 
 def _chronology_media_resource(camera_id: int, rel_path: str) -> dict:
-    return {"camera_id": int(camera_id), "rel_path": _safe_storage_relative_path(rel_path)}
+    return {"camera_id": int(camera_id), "rel_path": rel_path.replace("\\", "/").lstrip("/")}
 
 
 @router.post("/media-token")
@@ -299,7 +304,7 @@ def issue_chronology_media_token(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_timeline")),
 ):
-    normalized_path = _safe_storage_relative_path(rel_path)
+    normalized_path = rel_path.replace("\\", "/").lstrip("/")
     segment = (
         _finalized_segments_query(db)
         .filter(
@@ -338,7 +343,7 @@ def chronology_file(
         media_area="chronology",
     )
 
-    normalized_path = _safe_storage_relative_path(rel_path)
+    normalized_path = rel_path.replace("\\", "/").lstrip("/")
     segment = (
         _finalized_segments_query(db)
         .filter(

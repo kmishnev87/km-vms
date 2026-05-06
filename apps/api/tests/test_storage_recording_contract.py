@@ -1,6 +1,6 @@
 import sys
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.config import settings
 from app.db.session import Base
 from app.models.camera import Camera
-from app.models.recording import RecordingJob, RecordingSegment
+from app.models.recording import ArchiveRoot, RecordingJob, RecordingSegment
 from app.models.system_settings import SystemSettings
 from app.routers.settings import SettingsUpdateRequest, SetupRequest, patch_settings, setup
 from app.services.storage_contract import (
@@ -23,6 +23,15 @@ from app.services.storage_contract import (
     storage_contract,
 )
 from app.services.storage_monitoring import build_storage_monitoring_summary
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    active_archive_root,
+    ensure_archive_roots,
+    migration_preview,
+    resolve_segment_file_path,
+    root_status,
+    sanitize_archive_root_path,
+)
 from app.services import recording_reconciliation
 from app.services.recording_reconciliation import reconcile_recordings, reconciliation_diagnostics
 from app.services.system_settings import (
@@ -75,6 +84,7 @@ def add_segment(
     ownership="KM VMS",
     source="recorder",
     job_id=None,
+    archive_root_id=None,
     updated_at=None,
 ):
     now = datetime.utcnow()
@@ -93,6 +103,7 @@ def add_segment(
         status=status,
         ownership=ownership,
         source=source,
+        archive_root_id=archive_root_id,
         storage_namespace=KMVMS_RECORDINGS_NAMESPACE,
         container_format="mkv",
         file_extension=".mkv",
@@ -102,6 +113,23 @@ def add_segment(
     db.commit()
     db.refresh(segment)
     return segment
+
+
+def add_archive_root(db, root_path: Path, *, root_id="root_extra", active=False):
+    root = ArchiveRoot(
+        id=root_id,
+        label=root_id,
+        root_path=str(root_path),
+        storage_namespace=KMVMS_RECORDINGS_NAMESPACE,
+        is_active=active,
+        is_readable=True,
+        is_writable=True,
+        is_available=True,
+    )
+    db.add(root)
+    db.commit()
+    db.refresh(root)
+    return root
 
 
 @pytest.fixture
@@ -283,6 +311,109 @@ def test_storage_validation_is_explicit_container_not_host_remount():
     assert result["path_role"] == "container_runtime_or_reference_path"
     assert result["runtime_storage_source"] == "settings.storage_root_env"
     assert "does not remount host storage" in result["host_mount_note"]
+
+
+def test_archive_roots_bootstrap_backfills_default_root_and_is_idempotent(db):
+    camera = add_camera(db)
+    write_storage_file("kmvms/recordings/default.mkv", b"video")
+    original_updated_at = datetime.utcnow() - timedelta(hours=2)
+    segment = add_segment(db, camera, relative_path="kmvms/recordings/default.mkv", updated_at=original_updated_at)
+
+    roots = ensure_archive_roots(db)
+    db.refresh(segment)
+    assert [root.id for root in roots if root.is_active] == [DEFAULT_ARCHIVE_ROOT_ID]
+    assert segment.archive_root_id == DEFAULT_ARCHIVE_ROOT_ID
+    assert segment.updated_at == original_updated_at
+
+    second = ensure_archive_roots(db)
+    assert len(second) == 1
+    assert active_archive_root(db).id == DEFAULT_ARCHIVE_ROOT_ID
+
+
+def test_root_aware_resolver_keeps_old_segment_on_default_after_active_switch(db):
+    camera = add_camera(db)
+    default_file = write_storage_file("kmvms/recordings/default-old.mkv", b"old")
+    old_segment = add_segment(db, camera, relative_path="kmvms/recordings/default-old.mkv")
+    ensure_archive_roots(db)
+
+    new_root_path = Path(settings.storage_root).parent / "archive-new"
+    new_file = new_root_path / "kmvms/recordings/new-segment.mkv"
+    new_file.parent.mkdir(parents=True, exist_ok=True)
+    new_file.write_bytes(b"new")
+    add_archive_root(db, new_root_path, root_id="root_new", active=True)
+    db.query(ArchiveRoot).filter(ArchiveRoot.id == DEFAULT_ARCHIVE_ROOT_ID).update({ArchiveRoot.is_active: False})
+    new_segment = add_segment(db, camera, relative_path="kmvms/recordings/new-segment.mkv", archive_root_id="root_new")
+
+    assert resolve_segment_file_path(db, old_segment, require_exists=True) == default_file.resolve()
+    assert resolve_segment_file_path(db, new_segment, require_exists=True) == new_file.resolve()
+
+
+def test_default_archive_root_path_stays_stable_after_settings_storage_root_changes(db, monkeypatch):
+    camera = add_camera(db)
+    default_file = write_storage_file("kmvms/recordings/default-stable.mkv", b"old")
+    old_segment = add_segment(db, camera, relative_path="kmvms/recordings/default-stable.mkv")
+    roots = ensure_archive_roots(db)
+    default_root = next(root for root in roots if root.id == DEFAULT_ARCHIVE_ROOT_ID)
+    original_root_path = default_root.root_path
+
+    new_storage_root = Path(settings.storage_root).parent / "settings-new-root"
+    (new_storage_root / "kmvms/recordings").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "storage_root", str(new_storage_root))
+
+    ensure_archive_roots(db)
+    db.refresh(default_root)
+
+    assert default_root.root_path == original_root_path
+    assert resolve_segment_file_path(db, old_segment, require_exists=True) == default_file.resolve()
+
+
+def test_archive_root_validation_rejects_traversal_outside_base_and_surveillance(db):
+    base = Path(settings.storage_root).parent
+    assert sanitize_archive_root_path(str(base / "archive2")).name == "archive2"
+    with pytest.raises(ValueError, match="outside_approved"):
+        sanitize_archive_root_path(str(base.parent / "outside"))
+    with pytest.raises(ValueError, match="surveillance"):
+        sanitize_archive_root_path(str(base / "Surveillance"))
+
+
+def test_archive_root_status_requires_namespace_and_real_write_probe(db):
+    base = Path(settings.storage_root).parent
+    candidate = base / "archive-no-namespace"
+    candidate.mkdir(parents=True, exist_ok=True)
+
+    missing_namespace = root_status(candidate)
+    assert missing_namespace["exists"] is True
+    assert missing_namespace["namespace_exists"] is False
+    assert missing_namespace["writable"] is False
+    assert missing_namespace["available"] is False
+    assert missing_namespace["problem"] == "namespace_missing"
+
+    sanitized = sanitize_archive_root_path(str(candidate), allow_create=True)
+    ready = root_status(sanitized)
+    assert ready["namespace_exists"] is True
+    assert ready["writable"] is True
+    assert ready["problem"] is None
+
+
+def test_storage_status_and_migration_preview_are_root_aware_and_non_mutating(db):
+    camera = add_camera(db)
+    default_path = write_storage_file("kmvms/recordings/default-preview.mkv", b"old")
+    add_segment(db, camera, relative_path="kmvms/recordings/default-preview.mkv")
+    ensure_archive_roots(db)
+
+    new_root_path = Path(settings.storage_root).parent / "archive-target"
+    (new_root_path / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, new_root_path, root_id="root_target", active=False)
+
+    summary = build_storage_monitoring_summary(db, include_namespace_observations=False)
+    assert {root["id"] for root in summary["archive_roots"]} == {DEFAULT_ARCHIVE_ROOT_ID, "root_target"}
+    assert summary["storage_operations"]["archive_roots"]
+
+    preview = migration_preview(db, target_root_id="root_target")
+    assert preview["apply_available"] is False
+    assert preview["non_mutating"] is True
+    assert preview["total_would_move_count"] == 1
+    assert default_path.exists()
 
 
 def test_serialized_settings_expose_ui_storage_and_format_contract(db):

@@ -8,14 +8,22 @@ import shutil
 import threading
 import time
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
 from app.core.sanitization import redact_text
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.services.audit_log import create_event
-from app.services.recording_storage import KMVMS_RECORDINGS_NAMESPACE, VIDEO_EXTENSIONS
+from app.services.recording_storage import (
+    KMVMS_RECORDINGS_NAMESPACE,
+    VIDEO_EXTENSIONS,
+    archive_root_public_status,
+    list_archive_roots,
+    migration_preview,
+    resolve_segment_file_path,
+    root_usage,
+)
 from app.services.storage_contract import storage_contract
 
 OWNERSHIP_KM_VMS = "KM VMS"
@@ -253,11 +261,16 @@ def _is_kmvms_owned(segment: RecordingSegment) -> bool:
 
 
 def _safe_stat_segment(segment: RecordingSegment, root: Path) -> tuple[str | None, int | None, str | None, Path | None]:
-    rel_path, path_error, target = _segment_relative(segment, root)
-    if path_error:
-        return rel_path, None, path_error, target
-    if target is None:
-        return rel_path, None, "invalid_path", target
+    try:
+        db = object_session(segment)
+        if db is None:
+            return segment.relative_path, None, "db_session_missing", None
+        target = resolve_segment_file_path(db, segment)
+        rel_path = segment.relative_path
+    except FileNotFoundError:
+        return segment.relative_path, None, "missing_file", None
+    except Exception:
+        return segment.relative_path, None, "invalid_path", None
     if not target.exists():
         return rel_path, None, "missing_file", target
     if not target.is_file():
@@ -397,6 +410,8 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
     namespace = summary.get("namespace_observations") or {}
     owned = summary.get("owned_archive") or {}
     path_checks = summary.get("storage_path_checks") or {}
+    archive_roots = summary.get("archive_roots") or []
+    active_root = next((root for root in archive_roots if root.get("is_active")), None)
 
     retention_last = _safe_last_summary(retention.get("last_summary"))
     auto_last = _safe_last_summary(auto_cleanup.get("last_summary"))
@@ -421,6 +436,9 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             "status": path_checks.get("status"),
             "reason": path_checks.get("last_error"),
         },
+        "archive_roots": archive_roots,
+        "active_archive_root": active_root,
+        "migration_preview": summary.get("migration_preview"),
         "namespace_health": {
             "storage_namespace": summary.get("storage_namespace"),
             "namespace_exists": namespace.get("namespace_exists"),
@@ -508,6 +526,7 @@ def build_storage_monitoring_summary(
     audit_actor=None,
 ) -> dict:
     root = _storage_root_path()
+    archive_root_rows = list_archive_roots(db)
     checked_at = _utc_now()
     warnings: list[str] = []
     errors: list[str] = []
@@ -542,6 +561,11 @@ def build_storage_monitoring_summary(
     owned_archive_size = 0
     skipped_foreign_metadata = 0
     deleted_metadata_rows = 0
+    archive_roots = []
+    for root_row in archive_root_rows:
+        root_status = archive_root_public_status(root_row)
+        root_status.update(root_usage(db, root_row))
+        archive_roots.append(root_status)
 
     segments = db.query(RecordingSegment).order_by(RecordingSegment.id.asc()).all()
     for segment in segments:
@@ -670,6 +694,8 @@ def build_storage_monitoring_summary(
         },
         "cleanup_candidates_summary": cleanup_candidates_summary,
         "namespace_observations": namespace_observations,
+        "archive_roots": archive_roots,
+        "migration_preview": migration_preview(db),
     }
     from app.services.recording_retention import low_disk_policy_status
 

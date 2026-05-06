@@ -34,6 +34,24 @@ class RecordingJob(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class ArchiveRoot(Base):
+    __tablename__ = "archive_roots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    label: Mapped[str] = mapped_column(String(255), nullable=False)
+    root_path: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    storage_namespace: Mapped[str] = mapped_column(String(255), nullable=False, default="kmvms/recordings")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_readable: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_writable: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_available: Mapped[bool] = mapped_column(Boolean, default=True)
+    problem: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class RecordingSegment(Base):
     __tablename__ = "recording_segments"
 
@@ -54,6 +72,7 @@ class RecordingSegment(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     ownership: Mapped[str] = mapped_column(String(50), default="KM VMS", index=True)
     source: Mapped[str] = mapped_column(String(50), default="recorder")
+    archive_root_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("archive_roots.id", ondelete="SET NULL"), index=True, nullable=True)
     checksum: Mapped[str | None] = mapped_column(String(128), nullable=True)
     storage_namespace: Mapped[str | None] = mapped_column(String(255), nullable=True)
     container_format: Mapped[str | None] = mapped_column(String(32), nullable=True)

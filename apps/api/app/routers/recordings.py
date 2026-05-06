@@ -21,6 +21,7 @@ from app.models.user import User
 from app.routers.deps import require_permission
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 from app.services.recording_retention import build_retention_plan, execute_segments, preview_segments, run_retention
+from app.services.recording_storage import resolve_segment_file_path, segment_relative_path as root_segment_relative_path
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
@@ -98,16 +99,7 @@ def relative_to_storage(path: Path) -> str:
 
 
 def segment_relative_path(segment: RecordingSegment) -> str | None:
-    if segment.relative_path:
-        return relative_to_storage(safe_resolve_relative(segment.relative_path))
-
-    if segment.file_path:
-        file_path = Path(segment.file_path)
-        if not file_path.is_absolute():
-            file_path = storage_root() / file_path
-        return relative_to_storage(file_path)
-
-    return None
+    return segment.relative_path.replace("\\", "/").lstrip("/") if segment.relative_path else None
 
 
 def segment_media_metadata(segment: RecordingSegment, file_path: Path) -> dict[str, str | None]:
@@ -125,13 +117,17 @@ def segment_media_metadata(segment: RecordingSegment, file_path: Path) -> dict[s
 
 
 def resolve_segment_file(segment: RecordingSegment, require_exists: bool = True) -> Path:
-    rel_path = segment_relative_path(segment)
-    if not rel_path:
-        raise HTTPException(status_code=404, detail="Recording metadata has no file path")
+    from sqlalchemy.orm import object_session
 
-    file_path = safe_resolve_relative(rel_path)
-    if require_exists and (not file_path.exists() or not file_path.is_file()):
+    db = object_session(segment)
+    if db is None:
+        raise HTTPException(status_code=500, detail="Recording metadata session unavailable")
+    try:
+        file_path = resolve_segment_file_path(db, segment, require_exists=require_exists)
+    except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Recording file not found")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Recording metadata has no file path")
     return file_path
 
 
@@ -149,7 +145,7 @@ def finalized_segments_query(db: Session):
 
 
 def get_finalized_segment_by_path(db: Session, relative_path: str) -> RecordingSegment:
-    normalized_path = relative_to_storage(safe_resolve_relative(relative_path))
+    normalized_path = relative_path.replace("\\", "/").lstrip("/")
     segment = (
         finalized_segments_query(db)
         .filter(RecordingSegment.relative_path == normalized_path)
@@ -181,7 +177,7 @@ def apply_camera_filter(query, db: Session, camera_name: str | None):
 
 
 def recording_media_resource(path: str, action: str) -> dict:
-    return {"path": relative_to_storage(safe_resolve_relative(path)), "action": action}
+    return {"path": path.replace("\\", "/").lstrip("/"), "action": action}
 
 
 def human_size(size_bytes: int) -> str:

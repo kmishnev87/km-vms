@@ -1,0 +1,28 @@
+name: tnas-vms-pytest
+
+services:
+  backend-pytest:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile.test
+    working_dir: /workspace
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      APP_ENV: production
+      DATABASE_URL: sqlite:////tmp/kmvms-pytest/db.sqlite3
+      JWT_SECRET: kmvms-pytest-jwt-secret
+      ENCRYPTION_KEY: kmvms-pytest-encryption-key-32bytes
+      STORAGE_ROOT: /tmp/kmvms-pytest/archive
+      STORAGE_PREVIEWS: /tmp/kmvms-pytest/previews
+      STORAGE_EXPORTS: /tmp/kmvms-pytest/exports
+      STORAGE_HOST_ROOT: ""
+      SURVEILLANCE_ROOT: ""
+      ADMIN_USERNAME: pytest_admin
+      ADMIN_PASSWORD: pytest_admin_password
+      ADMIN_FULL_NAME: Pytest Admin
+      PYTEST_ADDOPTS: --cache-clear -p no:cacheprovider
+    volumes:
+      - .:/workspace:ro
+    tmpfs:
+      - /tmp/kmvms-pytest
+    command: ["pytest", "apps/api/tests"]

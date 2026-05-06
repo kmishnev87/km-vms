@@ -71,6 +71,9 @@ export default function StorageOperationsPage() {
   const [error, setError] = useState("");
   const [accessDenied, setAccessDenied] = useState(false);
   const [language, setLanguage] = useState("ru");
+  const [rootPath, setRootPath] = useState("");
+  const [rootAction, setRootAction] = useState("");
+  const [rootMessage, setRootMessage] = useState("");
   const { currentUser, status: currentUserStatus } = useCurrentUser();
 
   useEffect(() => {
@@ -137,8 +140,82 @@ export default function StorageOperationsPage() {
   const retention = operations.retention || {};
   const reconciliation = operations.reconciliation || {};
   const recent = operations.recent_operations || {};
+  const archiveRoots = operations.archive_roots || status?.archive_roots || [];
+  const migrationPreview = operations.migration_preview || status?.migration_preview || {};
   const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
   const usagePercent = Number(capacity.usage_percent || 0);
+
+  async function validateRoot() {
+    if (!rootPath.trim()) return;
+    setRootAction("validate");
+    setRootMessage("");
+    try {
+      const result = await apiFetch("/storage/archive-roots/validate", {
+        method: "POST",
+        body: JSON.stringify({ root_path: rootPath.trim(), create_namespace: false }),
+      });
+      setRootMessage(result.ok ? "Корень доступен для проверки." : `Проверка не пройдена: ${result.problem || "недоступно"}`);
+    } catch (err) {
+      setRootMessage(err?.message || "Проверка корня не выполнена");
+    } finally {
+      setRootAction("");
+    }
+  }
+
+  async function addRoot() {
+    if (!rootPath.trim()) return;
+    setRootAction("add");
+    setRootMessage("");
+    try {
+      await apiFetch("/storage/archive-roots", {
+        method: "POST",
+        body: JSON.stringify({ root_path: rootPath.trim(), label: "Archive root", make_active: false, confirm: false }),
+      });
+      setRootPath("");
+      setRootMessage("Корень добавлен как неактивный. Новые записи останутся на текущем активном корне до явного переключения.");
+      await loadStatus({ silent: true });
+    } catch (err) {
+      setRootMessage(err?.message || "Корень не добавлен");
+    } finally {
+      setRootAction("");
+    }
+  }
+
+  async function activateRoot(rootId) {
+    if (!rootId) return;
+    if (!window.confirm("Новые записи пойдут в выбранный активный корень. Старые записи останутся на своих корнях. Переключить?")) return;
+    setRootAction(`activate-${rootId}`);
+    setRootMessage("");
+    try {
+      await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}/activate`, {
+        method: "POST",
+        body: JSON.stringify({ confirm: true }),
+      });
+      setRootMessage("Активный корень переключен. Старые записи остаются связанными со своими прежними корнями.");
+      await loadStatus({ silent: true });
+    } catch (err) {
+      setRootMessage(err?.message || "Активный корень не переключен");
+    } finally {
+      setRootAction("");
+    }
+  }
+
+  async function refreshMigrationPreview() {
+    setRootAction("preview");
+    setRootMessage("");
+    try {
+      await apiFetch("/storage/migration/preview", {
+        method: "POST",
+        body: JSON.stringify({ target_root_id: null }),
+      });
+      setRootMessage("Предпросмотр миграции обновлен. Apply/перенос файлов в Stage 4.0 не выполняется.");
+      await loadStatus({ silent: true });
+    } catch (err) {
+      setRootMessage(err?.message || "Предпросмотр миграции не выполнен");
+    } finally {
+      setRootAction("");
+    }
+  }
 
   return (
     <Layout>
@@ -254,6 +331,50 @@ export default function StorageOperationsPage() {
                   <Stat label="Частично / ограничено" value={`${boolLabel(namespace.partial, language)} / ${boolLabel(namespace.scan_limited, language)}`} />
                 </div>
                 {namespace.partial_reason ? <SummaryRow label="Причина частичного сканирования" value={namespace.partial_reason} /> : null}
+              </Section>
+
+              <Section title="Корни архива">
+                <div className="storageOpsNote">Новые записи идут только в активный корень. Старые записи остаются видимыми через metadata своего корня; автоматический перенос файлов в этом Stage не выполняется.</div>
+                <div className="storageOpsStats">
+                  <Stat label="Корней" value={String(archiveRoots.length || 0)} />
+                  <Stat label="Активный" value={(archiveRoots.find((root) => root.is_active)?.label || archiveRoots.find((root) => root.is_active)?.id || "-")} />
+                  <Stat label="Preview-only миграция" value={migrationPreview.apply_available === false ? "Да" : "Нет"} />
+                </div>
+                <div className="storageOpsTableWrap">
+                  <table className="storageOpsTable">
+                    <thead>
+                      <tr><th>Корень</th><th>Состояние</th><th>Записи</th><th>Размер</th><th>Действие</th></tr>
+                    </thead>
+                    <tbody>
+                      {archiveRoots.map((root) => (
+                        <tr key={root.id}>
+                          <td><strong>{root.label || root.id}</strong><span>{root.is_active ? "активный" : "старый / неактивный"}</span></td>
+                          <td>{root.is_available ? "доступен" : (root.problem || "недоступен")}</td>
+                          <td>{root.segments_count || 0}</td>
+                          <td>{formatBytes(root.size_bytes)}</td>
+                          <td><button className="button secondary small" type="button" disabled={root.is_active || rootAction === `activate-${root.id}`} onClick={() => activateRoot(root.id)}>{rootAction === `activate-${root.id}` ? "Переключение..." : "Сделать активным"}</button></td>
+                        </tr>
+                      ))}
+                      {!archiveRoots.length ? <tr><td colSpan="5">Корни архива ещё не созданы bootstrap-проверкой.</td></tr> : null}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="storageOpsRootForm">
+                  <input className="input" value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="/storage/archive2" />
+                  <button className="button secondary small" type="button" onClick={validateRoot} disabled={!!rootAction || !rootPath.trim()}>{rootAction === "validate" ? "Проверка..." : "Проверить"}</button>
+                  <button className="button small" type="button" onClick={addRoot} disabled={!!rootAction || !rootPath.trim()}>{rootAction === "add" ? "Добавление..." : "Добавить"}</button>
+                </div>
+                {rootMessage ? <div className="storageOpsNote">{rootMessage}</div> : null}
+              </Section>
+
+              <Section title="Предпросмотр миграции">
+                <div className="storageOpsStats">
+                  <Stat label="Перенести" value={`${migrationPreview.total_would_move_count || 0} / ${formatBytes(migrationPreview.total_would_move_bytes)}`} />
+                  <Stat label="Останется" value={String(migrationPreview.total_would_stay_count || 0)} />
+                  <Stat label="Блокеры" value={String((migrationPreview.blockers || []).length)} tone={(migrationPreview.blockers || []).length ? "warning" : "neutral"} />
+                </div>
+                <div className="storageOpsNote">Это только dry-run preview: файлы не копируются, не перемещаются, не удаляются и не импортируются. Apply переноса вынесен в будущий отдельный Stage.</div>
+                <button className="button secondary small" type="button" onClick={() => refreshMigrationPreview()} disabled={!!rootAction}>{rootAction === "preview" ? "Расчет..." : "Обновить preview"}</button>
               </Section>
             </div>
 

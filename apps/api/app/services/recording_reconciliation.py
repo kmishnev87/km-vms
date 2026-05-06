@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from typing import Iterable
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
@@ -20,8 +20,10 @@ from app.services.recording_storage import (
     VIDEO_EXTENSIONS,
     is_kmvms_namespace_relative,
     is_video_file,
-    relative_to_storage,
-    safe_resolve_relative,
+    list_archive_roots,
+    relative_to_archive_root,
+    resolve_segment_file_path,
+    safe_resolve_relative_for_root,
     storage_root,
 )
 
@@ -126,16 +128,19 @@ def _safe_rel_for_segment(segment: RecordingSegment) -> tuple[str | None, str | 
         return None, "invalid_path", None
 
     try:
-        if segment.relative_path:
-            target = safe_resolve_relative(segment.relative_path)
-        else:
-            file_path = Path(segment.file_path)
-            target = file_path if file_path.is_absolute() else storage_root() / file_path
-            target = target.resolve()
-            target.relative_to(storage_root().resolve())
-        return relative_to_storage(target), None, target
+        db = object_session(segment)
+        if db is None:
+            return None, "db_session_missing", None
+        target = resolve_segment_file_path(db, segment)
+        from app.services.recording_storage import archive_root_for_segment
+
+        root = archive_root_for_segment(db, segment)
+        return relative_to_archive_root(target, root), None, target
     except ValueError as exc:
-        return None, str(exc) or "path_outside_storage", None
+        error = str(exc) or "path_outside_storage"
+        if error == "path_outside_archive_root":
+            error = "path_outside_storage"
+        return None, error, None
     except Exception as exc:
         return None, "invalid_path", None
 
@@ -266,11 +271,21 @@ def _classify_segment(segment: RecordingSegment, active_job_ids: set[str] | None
     )
 
 
-def _iter_storage_video_files() -> Iterable[Path]:
+def _iter_storage_video_files(db: Session | None = None) -> Iterable[tuple[object | None, Path]]:
+    if db is not None:
+        roots = list_archive_roots(db)
+        result = []
+        for root_row in roots:
+            root = Path(root_row.root_path)
+            if not root.exists():
+                continue
+            result.extend((root_row, path) for path in root.rglob("*") if is_video_file(path))
+        return result
+
     root = storage_root()
     if not root.exists():
         return []
-    return (path for path in root.rglob("*") if is_video_file(path))
+    return ((None, path) for path in root.rglob("*") if is_video_file(path))
 
 
 def _looks_like_legacy_kmvms_file(rel_path: str) -> bool:
@@ -440,7 +455,7 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
     counts = _empty_counts()
     samples: dict[str, list[dict]] = defaultdict(list)
     updated_metadata = 0
-    checked_paths: set[str] = set()
+    checked_paths: set[tuple[str, str]] = set()
     segments: list[RecordingSegment] = []
     total_storage_files_scanned = 0
     failed = False
@@ -448,6 +463,7 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
     per_camera: dict[int | None, dict] = {}
 
     try:
+        root_rows = list_archive_roots(db)
         cameras = {camera.id: camera for camera in db.query(Camera).order_by(Camera.id.asc()).all()}
         segments = db.query(RecordingSegment).order_by(RecordingSegment.id.asc()).all()
         active_job_ids = {
@@ -469,7 +485,7 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
             if classification.name in PROBLEM_CLASSES:
                 camera_summary["problem_count"] += 1
             if rel_path:
-                checked_paths.add(rel_path)
+                checked_paths.add((segment.archive_root_id or "default", rel_path))
             if len(samples[classification.name]) < MAX_SAMPLE_ITEMS:
                 samples[classification.name].append(
                     {
@@ -480,28 +496,40 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
                         "error": classification.error,
                     }
                 )
-            if apply_safe and _apply_segment_classification(db, segment, classification):
-                updated_metadata += 1
-
-        for path in _iter_storage_video_files():
+        per_root_counts: dict[str, Counter] = defaultdict(Counter)
+        for root_row, path in _iter_storage_video_files(db):
             total_storage_files_scanned += 1
             try:
-                rel_path = relative_to_storage(path)
+                if root_row is None:
+                    rel_path = path.resolve().relative_to(storage_root().resolve()).as_posix()
+                    root_id = "default"
+                else:
+                    rel_path = relative_to_archive_root(path, root_row)
+                    root_id = root_row.id
             except Exception:
                 counts["path_outside_storage"] += 1
                 continue
-            if rel_path in checked_paths:
+            if (root_id, rel_path) in checked_paths:
                 continue
             classification = _classify_orphan_file(rel_path)
             counts[classification.name] += 1
+            per_root_counts[root_id][classification.name] += 1
             if len(samples[classification.name]) < MAX_SAMPLE_ITEMS:
                 samples[classification.name].append(
                     {
+                        "archive_root_id": root_id,
                         "relative_path": rel_path,
                         "cleanup_candidate": classification.cleanup_candidate,
                         "cleanup_reason": classification.cleanup_reason,
                     }
                 )
+        if apply_safe:
+            for segment in segments:
+                if segment.ownership != OWNERSHIP_KM_VMS or segment.source != RECORDER_SOURCE:
+                    continue
+                _rel_path, classification = _classify_segment(segment, active_job_ids)
+                if _apply_segment_classification(db, segment, classification):
+                    updated_metadata += 1
     except Exception as exc:
         failed = True
         failure_error = _safe_failure_error(exc)
@@ -569,6 +597,8 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
             for item in sorted(per_camera.values(), key=lambda row: row.get("camera_id") or 0)
         ],
         "samples": dict(samples),
+        "archive_roots": root_statuses if "root_statuses" in locals() else [],
+        "per_root_counts": {root_id: dict(root_counts) for root_id, root_counts in (per_root_counts.items() if "per_root_counts" in locals() else [])},
     }
 
     if write_audit and not failed:

@@ -1,0 +1,21 @@
+.git
+Working folder
+data
+logs
+node_modules
+.next
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+coverage
+dist
+build
+*.tar.gz
+*.zip
+.env
+.env.*
+*.key
+*.pem
+*secret*
+*credential*

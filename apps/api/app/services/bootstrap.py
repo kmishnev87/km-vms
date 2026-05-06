@@ -13,6 +13,7 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     migrate_user_table()
     migrate_system_settings_table()
+    migrate_archive_roots()
     migrate_recording_metadata_tables()
     migrate_recorder_runtime_status()
 
@@ -56,6 +57,7 @@ def migrate_recording_metadata_tables() -> None:
                 "error_message": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS error_message TEXT NULL",
                 "ownership": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS ownership VARCHAR(50) DEFAULT 'KM VMS' NOT NULL",
                 "source": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'recorder' NOT NULL",
+                "archive_root_id": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS archive_root_id VARCHAR(36) NULL",
                 "checksum": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS checksum VARCHAR(128) NULL",
                 "storage_namespace": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS storage_namespace VARCHAR(255) NULL",
                 "container_format": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS container_format VARCHAR(32) NULL",
@@ -90,6 +92,7 @@ def migrate_recording_metadata_tables() -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_job_id ON recording_segments (job_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_status ON recording_segments (status)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_ownership ON recording_segments (ownership)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_archive_root_id ON recording_segments (archive_root_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_relative_path ON recording_segments (relative_path)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_job_relative_path ON recording_segments (job_id, relative_path)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_integrity_status ON recording_segments (integrity_status)"))
@@ -100,6 +103,32 @@ def migrate_recording_metadata_tables() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_state ON recording_jobs (state)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_started_at ON recording_jobs (started_at)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_jobs_ownership ON recording_jobs (ownership)"))
+
+
+def migrate_archive_roots() -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS archive_roots (
+                    id VARCHAR(36) PRIMARY KEY,
+                    label VARCHAR(255) NOT NULL,
+                    root_path VARCHAR(1024) NOT NULL UNIQUE,
+                    storage_namespace VARCHAR(255) NOT NULL DEFAULT 'kmvms/recordings',
+                    is_active BOOLEAN DEFAULT FALSE NOT NULL,
+                    is_readable BOOLEAN DEFAULT TRUE NOT NULL,
+                    is_writable BOOLEAN DEFAULT TRUE NOT NULL,
+                    is_available BOOLEAN DEFAULT TRUE NOT NULL,
+                    problem TEXT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    last_seen_at TIMESTAMP NULL,
+                    retired_at TIMESTAMP NULL
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_is_active ON archive_roots (is_active)"))
 
 
 def migrate_recorder_runtime_status() -> None:

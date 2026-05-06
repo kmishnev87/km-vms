@@ -2325,6 +2325,14 @@ textarea {
   display: block;
 }
 
+.storageOpsRootForm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+
 .storageOpsEmpty,
 .storageOpsState {
   color: #64748b;

@@ -36,6 +36,7 @@ SEGMENT_STATUS_FINALIZED = "finalized"
 SEGMENT_STATUS_FAILED = "failed"
 SEGMENT_STATUS_STALE_WRITING = "stale_writing"
 STORAGE_NAMESPACE = "kmvms/recordings"
+DEFAULT_ARCHIVE_ROOT_ID = "default"
 RECORDING_FORMATS = {"mkv", "mp4"}
 DEFAULT_RECORDING_FORMAT = "mkv"
 FORMAT_METADATA = {
@@ -124,6 +125,8 @@ class RecordingJob:
     recording_format: str = DEFAULT_RECORDING_FORMAT
     segment_baseline_paths: set[str] = field(default_factory=set)
     known_segment_paths: set[str] = field(default_factory=set)
+    archive_root_id: str = DEFAULT_ARCHIVE_ROOT_ID
+    archive_root_path: Path = STORAGE_ROOT
     config_signature: tuple[Any, ...] | None = None
     stderr_tail: deque[str] = field(default_factory=lambda: deque(maxlen=STDERR_TAIL_LINES))
     stderr_thread: threading.Thread | None = None
@@ -352,6 +355,7 @@ def ensure_recording_metadata_schema() -> None:
                     error_message TEXT NULL,
                     ownership VARCHAR(50) DEFAULT 'KM VMS' NOT NULL,
                     source VARCHAR(50) DEFAULT 'recorder' NOT NULL,
+                    archive_root_id VARCHAR(36) NULL,
                     checksum VARCHAR(128) NULL,
                     storage_namespace VARCHAR(255) NULL,
                     container_format VARCHAR(32) NULL,
@@ -385,6 +389,7 @@ def ensure_recording_metadata_schema() -> None:
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS error_message TEXT NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS ownership VARCHAR(50) DEFAULT 'KM VMS' NOT NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'recorder' NOT NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS archive_root_id VARCHAR(36) NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS checksum VARCHAR(128) NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS storage_namespace VARCHAR(255) NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS container_format VARCHAR(32) NULL"))
@@ -415,6 +420,7 @@ def ensure_recording_metadata_schema() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_job_id ON recording_segments (job_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_status ON recording_segments (status)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_ownership ON recording_segments (ownership)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_archive_root_id ON recording_segments (archive_root_id)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_relative_path ON recording_segments (relative_path)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_job_relative_path ON recording_segments (job_id, relative_path)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_integrity_status ON recording_segments (integrity_status)"))
@@ -442,6 +448,46 @@ def ensure_recording_metadata_schema() -> None:
         conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_free_space_cleanup_enabled BOOLEAN DEFAULT FALSE NOT NULL"))
         conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS recording_suspended_by_low_disk BOOLEAN DEFAULT FALSE NOT NULL"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recorder_runtime_status_heartbeat_at ON recorder_runtime_status (heartbeat_at)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS archive_roots (
+                    id VARCHAR(36) PRIMARY KEY,
+                    label VARCHAR(255) NOT NULL,
+                    root_path VARCHAR(1024) NOT NULL UNIQUE,
+                    storage_namespace VARCHAR(255) NOT NULL DEFAULT 'kmvms/recordings',
+                    is_active BOOLEAN DEFAULT FALSE NOT NULL,
+                    is_readable BOOLEAN DEFAULT TRUE NOT NULL,
+                    is_writable BOOLEAN DEFAULT TRUE NOT NULL,
+                    is_available BOOLEAN DEFAULT TRUE NOT NULL,
+                    problem TEXT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    last_seen_at TIMESTAMP NULL,
+                    retired_at TIMESTAMP NULL
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_is_active ON archive_roots (is_active)"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO archive_roots (
+                    id, label, root_path, storage_namespace, is_active, is_readable, is_writable, is_available, created_at, updated_at, last_seen_at
+                )
+                VALUES (
+                    :id, :label, :root_path, :namespace, TRUE, TRUE, TRUE, TRUE, NOW(), NOW(), NOW()
+                )
+                ON CONFLICT (id) DO NOTHING
+                """
+            ),
+            {"id": DEFAULT_ARCHIVE_ROOT_ID, "label": "Default archive", "root_path": str(STORAGE_ROOT), "namespace": STORAGE_NAMESPACE},
+        )
+        conn.execute(
+            text("UPDATE recording_segments SET archive_root_id = :default_root_id WHERE archive_root_id IS NULL"),
+            {"default_root_id": DEFAULT_ARCHIVE_ROOT_ID},
+        )
 
 
 def selected_source_stream(row) -> str:
@@ -616,15 +662,37 @@ def clear_recording_job_error(job: RecordingJob) -> None:
         )
 
 
-def kmvms_recordings_root() -> Path:
-    path = STORAGE_ROOT / STORAGE_NAMESPACE
+def active_archive_root() -> tuple[str, Path]:
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(
+                text(
+                    """
+                    SELECT id, root_path
+                    FROM archive_roots
+                    WHERE is_active = TRUE AND retired_at IS NULL
+                    ORDER BY updated_at DESC, id ASC
+                    LIMIT 1
+                    """
+                )
+            ).first()
+    except Exception as exc:
+        log_event("warning", "archive_root_read_failed", error=redact_text(str(exc)), fallback=DEFAULT_ARCHIVE_ROOT_ID)
+        return DEFAULT_ARCHIVE_ROOT_ID, STORAGE_ROOT
+    if not row:
+        return DEFAULT_ARCHIVE_ROOT_ID, STORAGE_ROOT
+    return str(row.id or DEFAULT_ARCHIVE_ROOT_ID), Path(str(row.root_path or STORAGE_ROOT))
+
+
+def kmvms_recordings_root(root: Path | None = None) -> Path:
+    path = (root or active_archive_root()[1]) / STORAGE_NAMESPACE
     path.mkdir(parents=True, exist_ok=True)
     return path
 
 
-def current_segment_dir(camera_id: int, job_id: str) -> Path:
+def current_segment_dir(camera_id: int, job_id: str, *, root: Path | None = None) -> Path:
     now = datetime.now()
-    path = kmvms_recordings_root() / f"camera_{int(camera_id)}" / f"job_{safe_name(job_id)}" / now.strftime("%Y") / now.strftime("%m") / now.strftime("%d")
+    path = kmvms_recordings_root(root) / f"camera_{int(camera_id)}" / f"job_{safe_name(job_id)}" / now.strftime("%Y") / now.strftime("%m") / now.strftime("%d")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -672,8 +740,8 @@ def path_format_metadata(file_path: Path) -> dict[str, str]:
     return {"container_format": suffix.lstrip(".") or "unknown", "file_extension": suffix, "mime_type": "application/octet-stream", "segment_format": "unknown"}
 
 
-def build_segment_pattern(camera_id: int, camera_name: str, job_id: str, recording_format: str) -> str:
-    dir_path = current_segment_dir(camera_id, job_id)
+def build_segment_pattern(camera_id: int, camera_name: str, job_id: str, recording_format: str, *, root: Path | None = None) -> str:
+    dir_path = current_segment_dir(camera_id, job_id, root=root)
     extension = format_metadata(recording_format)["file_extension"]
     return str(dir_path / f"{segment_prefix(camera_id, camera_name)}%Y-%m-%d-%H-%M-%S{extension}")
 
@@ -688,21 +756,21 @@ def expected_segment_dir(output_pattern: str | None) -> Path | None:
     return Path(output_pattern).parent
 
 
-def storage_relative_path(path: Path) -> str | None:
+def storage_relative_path(path: Path, *, root: Path | None = None) -> str | None:
     try:
-        return path.resolve().relative_to(STORAGE_ROOT.resolve()).as_posix()
+        return path.resolve().relative_to((root or STORAGE_ROOT).resolve()).as_posix()
     except Exception:
         return None
 
 
-def capture_segment_baseline(output_pattern: str | None, camera_id: int, camera_name: str) -> set[str]:
+def capture_segment_baseline(output_pattern: str | None, camera_id: int, camera_name: str, *, root: Path | None = None) -> set[str]:
     dir_path = expected_segment_dir(output_pattern)
     if not dir_path or not dir_path.exists():
         return set()
     prefix = segment_prefix(camera_id, camera_name)
     baseline: set[str] = set()
     for file_path in dir_path.glob(f"{prefix}*.*"):
-        rel_path = storage_relative_path(file_path)
+        rel_path = storage_relative_path(file_path, root=root)
         if rel_path:
             baseline.add(rel_path)
     return baseline
@@ -733,7 +801,7 @@ def discover_job_segments(job: RecordingJob) -> list[Path]:
 def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> None:
     if not job.db_job_id:
         return
-    rel_path = storage_relative_path(file_path)
+    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
     if not rel_path or rel_path in job.segment_baseline_paths:
         return
     if rel_path in job.known_segment_paths:
@@ -787,6 +855,7 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                     status,
                     ownership,
                     source,
+                    archive_root_id,
                     storage_namespace,
                     container_format,
                     file_extension,
@@ -812,6 +881,7 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                     :status,
                     :ownership,
                     :source,
+                    :archive_root_id,
                     :storage_namespace,
                     :container_format,
                     :file_extension,
@@ -837,6 +907,7 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                 "status": SEGMENT_STATUS_WRITING,
                 "ownership": OWNERSHIP_KM_VMS,
                 "source": METADATA_SOURCE_RECORDER,
+                "archive_root_id": job.archive_root_id,
                 "storage_namespace": STORAGE_NAMESPACE,
                 "container_format": media_metadata["container_format"],
                 "file_extension": media_metadata["file_extension"],
@@ -852,7 +923,7 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
 def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
     if not job.db_job_id:
         return False
-    rel_path = storage_relative_path(file_path)
+    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
     if not rel_path:
         return False
     if rel_path in job.segment_baseline_paths or rel_path not in job.known_segment_paths:
@@ -1134,7 +1205,16 @@ def ffmpeg_cmd(camera, job: RecordingJob) -> tuple[list[str], str] | tuple[None,
         raise RuntimeError("recording job metadata is required before building segment path")
     recording_format = normalize_recording_format(job.recording_format)
     media_metadata = format_metadata(recording_format)
-    segment_pattern = build_segment_pattern(camera.id, camera.name, job.db_job_id, recording_format)
+    root_id, root_path = active_archive_root()
+    if not root_path.exists() or not root_path.is_dir():
+        raise RuntimeError("active_archive_root_unavailable")
+    namespace_root = root_path / STORAGE_NAMESPACE
+    namespace_root.mkdir(parents=True, exist_ok=True)
+    if not os.access(namespace_root, os.W_OK):
+        raise PermissionError("active_archive_root_unwritable")
+    job.archive_root_id = root_id
+    job.archive_root_path = root_path
+    segment_pattern = build_segment_pattern(camera.id, camera.name, job.db_job_id, recording_format, root=root_path)
 
     cmd = [
         "ffmpeg",
@@ -1410,7 +1490,7 @@ def start_camera(row) -> None:
 
     job.set_state(RecorderState.STARTING)
     job.current_output_path = output_pattern
-    job.segment_baseline_paths = capture_segment_baseline(output_pattern, job.camera_id, job.camera_name)
+    job.segment_baseline_paths = capture_segment_baseline(output_pattern, job.camera_id, job.camera_name, root=job.archive_root_path)
     job.known_segment_paths.clear()
     job.config_signature = camera_signature(row, job.recording_format)
     update_camera_status_from_job(job)

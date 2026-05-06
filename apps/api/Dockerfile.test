@@ -1,0 +1,24 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/workspace/apps/api
+ENV TZ=Asia/Yekaterinburg
+
+WORKDIR /workspace
+
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates \
+      tzdata; \
+    ln -snf /usr/share/zoneinfo/$TZ /etc/localtime; \
+    echo $TZ > /etc/timezone; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY apps/api/requirements.txt /tmp/requirements.txt
+COPY apps/api/requirements-test.txt /tmp/requirements-test.txt
+
+RUN pip install --no-cache-dir -r /tmp/requirements-test.txt
+
+CMD ["pytest", "apps/api/tests"]
