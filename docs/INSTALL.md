@@ -119,6 +119,14 @@ Schema version and app/build version are separate values. Existing unversioned d
 
 The schema status is available to owner/admin users through the protected schema status API. Recorder startup remains a legacy schema SQL participant for recording/runtime tables, but it does not own, write or interpret schema version metadata in Stage 2.
 
+Stage 3 adds the API-owned deterministic migration runner contract on top of `schema_version_state` and `schema_migration_history`. The runner builds a read-only ordered plan before legacy `create_all` and manual compatibility ALTER can mask unsafe drift, classifies migrations as `metadata_only`, `additive_safe`, `risky_requires_backup`, or `manual_only`, and executes only eligible safe migrations through the controlled runner path.
+
+The current product schema is already at the accepted Stage 2 baseline, so Stage 3 does not register a real production schema migration. Runner behavior is validated with isolated test-only migration registries and disposable PostgreSQL scenarios. `risky_requires_backup` and `manual_only` migrations are planned but not executed before later safety stages. Existing live production adoption/version metadata remains deferred until Stage 4 backup-before-upgrade unless explicitly authorized. `APP_BUILD_VERSION` remains a temporary metadata value; installed build/release/source-channel versioning belongs to Stage 7.
+
+Startup integration is intentionally conservative in Stage 3: the pre-bootstrap runner hook is preflight/block-only for ready migration plans and does not auto-execute production migrations during startup before Stage 4 backup safety. Controlled execution exists as an internal runner path for eligible migrations, but production startup execution requires later backup/rollback safety work and explicit authorization.
+
+Legacy `Base.metadata.create_all` and narrow manual compatibility SQL remain temporarily for fresh install and historical compatibility. Future stages should move additional bounded schema changes under the ordered runner and keep recorder outside schema migration ownership.
+
 ## Development Source Mode
 
 For disposable validation before public GitHub raw files are available:

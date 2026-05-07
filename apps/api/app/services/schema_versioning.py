@@ -301,11 +301,11 @@ def _valid_history_rows(db: Session, row: SchemaVersionState) -> list[SchemaMigr
     return (
         db.query(SchemaMigrationHistory)
         .filter(
-            SchemaMigrationHistory.migration_id == CURRENT_MIGRATION_ID,
             SchemaMigrationHistory.source == row.source,
             SchemaMigrationHistory.baseline_id == row.baseline_id,
             SchemaMigrationHistory.schema_version == row.schema_version,
             SchemaMigrationHistory.target_version == row.schema_version,
+            SchemaMigrationHistory.status.in_(tuple(SAFE_STATUSES | {"applied"})),
         )
         .all()
     )

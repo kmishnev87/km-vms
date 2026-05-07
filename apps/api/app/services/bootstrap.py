@@ -6,12 +6,14 @@ from app.core.permissions import ROLE_OWNER
 from app.db.session import Base, engine
 from app.models import SystemSettings, User
 from app.services.audit_log import create_event
+from app.services.schema_migrations import validate_schema_migrations_pre_bootstrap
 from app.services.schema_versioning import ensure_schema_version_state, inspect_schema_shape, validate_schema_version_pre_bootstrap
 from app.services.system_settings import default_timezone
 
 
 def init_db() -> None:
     pre_bootstrap_shape = inspect_schema_shape(engine)
+    validate_schema_migrations_pre_bootstrap(engine)
     validate_schema_version_pre_bootstrap(engine, pre_bootstrap_shape)
     Base.metadata.create_all(bind=engine)
     migrate_user_table()
