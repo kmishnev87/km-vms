@@ -62,6 +62,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("settings", "POST", "/settings/storage/validate", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("diagnostics", "GET", "/system/runtime/status", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Operator camera/live/recorder runtime status aggregate."),
     EndpointPermission("diagnostics", "GET", "/system/recorder/status", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Recorder liveness, jobs, storage, retention, and segment diagnostics."),
+    EndpointPermission("system", "GET", "/system/schema/status", PERMISSION_MANAGE_SETTINGS, "require_permission", "Database schema version status; owner/admin only."),
     EndpointPermission("diagnostics", "GET", "/settings/logs/archive", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("diagnostics", "POST", "/settings/bug-report", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("hardware", "GET", "/hardware/capabilities", PERMISSION_MANAGE_SETTINGS, "require_permission"),

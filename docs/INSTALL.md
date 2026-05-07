@@ -111,6 +111,14 @@ sh scripts/km-vms-restart.sh --app-dir "$HOME/km-vms"
 
 The helper validates compose files, reuses existing `.env`, does not regenerate secrets, does not wipe database/storage, and does not create owner/settings.
 
+## Database Schema Versioning
+
+Stage 2 of Database / Backup / Upgrade Safety introduces API-owned schema version metadata. The API bootstrap keeps the existing `create_all` and manual compatibility ALTER flow for now, then records the current managed schema baseline and an immutable adoption/history event in DB metadata tables.
+
+Schema version and app/build version are separate values. Existing unversioned databases are adopted only after a bounded schema-shape classification. Known safe drift is reported, while unknown, future, downgrade or partial adoption states block automatic upgrade work. Stage 2 does not implement the deterministic migration runner, backup-before-upgrade, restore or rollback; those remain later stages.
+
+The schema status is available to owner/admin users through the protected schema status API. Recorder startup remains a legacy schema SQL participant for recording/runtime tables, but it does not own, write or interpret schema version metadata in Stage 2.
+
 ## Development Source Mode
 
 For disposable validation before public GitHub raw files are available:
@@ -125,5 +133,5 @@ sh scripts/install.sh --app-dir /tmp/km-vms-stage1-install-test --http-port 1808
 
 ## Future Stages
 
-Stage 3 will add the full first-run wizard.
-Stage 4 will add restart, upgrade, rollback, and validation hardening.
+Stage 3 will add deterministic ordered DB migrations on top of the schema version state.
+Stage 4+ will add backup-before-upgrade, restore/rollback validation, upgrade reports and safe update notification.

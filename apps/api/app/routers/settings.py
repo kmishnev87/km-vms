@@ -54,6 +54,7 @@ from app.services.setup_storage import (
     storage_confirmation_status as setup_storage_confirmation_status,
     validate_and_mark as validate_setup_storage_folder,
 )
+from app.services.schema_versioning import schema_version_status
 
 router = APIRouter(tags=["settings"])
 
@@ -177,6 +178,14 @@ def system_recorder_status(
     current_user: User = Depends(require_permission("run_diagnostics")),
 ):
     return build_recorder_status(db)
+
+
+@router.get("/system/schema/status")
+def system_schema_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    return schema_version_status(db)
 
 
 @router.get("/system/runtime/status")
