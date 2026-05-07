@@ -10,6 +10,8 @@ const COPY = {
     steps: ["Язык", "Владелец", "Хранилище", "Запись", "Проверка"],
     welcomeTitle: "Добро пожаловать",
     welcomeText: "Этот мастер выполняется один раз до входа в систему.",
+    systemName: "Имя системы",
+    systemNameHelp: "Несекретное имя продукта, которое отображается в настройках.",
     language: "Язык интерфейса",
     ownerTitle: "Владелец системы",
     username: "Логин владельца",
@@ -40,7 +42,7 @@ const COPY = {
     format: "Формат записи",
     formatHelp: "MKV = надежность, MP4 = совместимость.",
     reviewTitle: "Проверка перед завершением",
-    reviewNote: "System name отложен до Chapter 06 Stage 4.0.",
+    reviewNote: "Имя системы будет сохранено как несекретная настройка продукта.",
     back: "Назад",
     next: "Далее",
     submit: "Завершить настройку",
@@ -55,6 +57,8 @@ const COPY = {
     steps: ["Language", "Owner", "Storage", "Recording", "Review"],
     welcomeTitle: "Welcome",
     welcomeText: "This wizard runs once before the first sign-in.",
+    systemName: "System name",
+    systemNameHelp: "Non-secret product name shown in settings.",
     language: "Interface language",
     ownerTitle: "System owner",
     username: "Owner login",
@@ -85,7 +89,7 @@ const COPY = {
     format: "Recording format",
     formatHelp: "MKV = reliability, MP4 = compatibility.",
     reviewTitle: "Review before finish",
-    reviewNote: "System name is deferred to Chapter 06 Stage 4.0.",
+    reviewNote: "System name will be saved as a non-secret product setting.",
     back: "Back",
     next: "Next",
     submit: "Finish setup",
@@ -104,6 +108,7 @@ export default function SetupPage() {
   const [language, setLanguage] = useState("ru");
   const [form, setForm] = useState({
     username: "admin",
+    system_name: "KM VMS",
     password: "",
     password_confirm: "",
     timezone: "Asia/Yekaterinburg",
@@ -125,9 +130,10 @@ export default function SetupPage() {
 
   const t = COPY[language];
   const ownerValid = USERNAME_RE.test(form.username.trim()) && form.password.length >= 8 && form.password === form.password_confirm;
+  const systemNameValid = form.system_name.trim().length <= 80 && !/[\x00-\x1f]/.test(form.system_name);
   const storageReady = Boolean(storageState.confirmation?.ready && storageState.confirmation?.selected_host_path);
   const recordingValid = Boolean(form.timezone.trim()) && ["mkv", "mp4"].includes(form.recording_format);
-  const canAdvance = [true, ownerValid, storageReady, recordingValid, ownerValid && storageReady && recordingValid][step];
+  const canAdvance = [systemNameValid, ownerValid, storageReady, recordingValid, systemNameValid && ownerValid && storageReady && recordingValid][step];
 
   const selectedCandidate = useMemo(
     () => storageState.candidates.find((candidate) => candidate.id === storageState.candidateId),
@@ -216,6 +222,7 @@ export default function SetupPage() {
   }, []);
 
   function validateCurrentStep() {
+    if (step === 0 && !systemNameValid) return t.required;
     if (step === 1) {
       if (!USERNAME_RE.test(form.username.trim())) return t.invalidUsername;
       if (!form.password || !form.password_confirm) return t.required;
@@ -228,10 +235,10 @@ export default function SetupPage() {
 
   function canVisitStep(index) {
     if (index <= step) return true;
-    if (index === 1) return true;
+    if (index === 1) return systemNameValid;
     if (index === 2) return ownerValid;
     if (index === 3) return ownerValid && storageReady;
-    return ownerValid && storageReady && recordingValid;
+    return systemNameValid && ownerValid && storageReady && recordingValid;
   }
 
   function goToStep(index) {
@@ -290,7 +297,7 @@ export default function SetupPage() {
 
   async function submit(e) {
     e.preventDefault();
-    if (!ownerValid || !storageReady || !recordingValid) {
+    if (!systemNameValid || !ownerValid || !storageReady || !recordingValid) {
       setError(t.required);
       return;
     }
@@ -300,7 +307,7 @@ export default function SetupPage() {
       const response = await fetch("/api/setup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, username: form.username.trim(), storage_path: storageState.confirmation?.selected_host_path || "", language }),
+        body: JSON.stringify({ ...form, username: form.username.trim(), system_name: form.system_name.trim() || null, storage_path: storageState.confirmation?.selected_host_path || "", language }),
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
@@ -342,6 +349,11 @@ export default function SetupPage() {
             <section className="setupPane">
               <h2>{t.welcomeTitle}</h2>
               <p>{t.welcomeText}</p>
+              <label className="settingsField">
+                <span>{t.systemName}</span>
+                <input className="input" value={form.system_name} onChange={(e) => patch("system_name", e.target.value)} maxLength={80} />
+                <small>{t.systemNameHelp}</small>
+              </label>
               <label className="settingsField">
                 <span>{t.language}</span>
                 <select className="select" value={language} onChange={(e) => setLanguage(e.target.value)}>
@@ -448,6 +460,7 @@ export default function SetupPage() {
             <section className="setupPane">
               <h2>{t.reviewTitle}</h2>
               <div className="setupReviewGrid">
+                <span>{t.systemName}</span><strong>{form.system_name.trim() || "KM VMS"}</strong>
                 <span>{t.language}</span><strong>{language.toUpperCase()}</strong>
                 <span>{t.username}</span><strong>{form.username.trim()}</strong>
                 <span>{t.storagePreview}</span><strong>{storageState.confirmation?.selected_host_path || t.storageBlockedReady}</strong>

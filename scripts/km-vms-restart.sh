@@ -27,6 +27,13 @@ fail() {
 
 validate_compose_override() {
   override="$1"
+  if [ "$override" = "docker compose" ]; then
+    command_exists docker || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker was not found."
+    docker compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker compose is not available."
+    COMPOSE_KIND="plugin"
+    COMPOSE_BIN="docker"
+    return 0
+  fi
   case "$override" in
     *[\;\|\&\`\>\<\(\)]*|*'$('*|*'$'*|*" "*|*"	"*) fail "KM_VMS_DOCKER_COMPOSE contains unsafe characters or spaces." ;;
   esac
@@ -53,6 +60,21 @@ validate_compose_override() {
       return 0
       ;;
   esac
+}
+
+safe_project_name() {
+  value="$1"
+  [ -n "$value" ] || fail "Project name must not be empty."
+  case "$value" in
+    *[A-Z]*)
+      fail "Project name must be lowercase. Use: $(printf '%s' "$value" | tr 'A-Z' 'a-z')"
+      ;;
+  esac
+  if printf '%s' "$value" | grep -Eq '^[a-z][a-z0-9_-]*$'; then
+      printf '%s\n' "$value"
+      return 0
+  fi
+  fail "Project name must start with a lowercase letter and contain only lowercase letters, digits, dashes or underscores."
 }
 
 while [ "$#" -gt 0 ]; do
@@ -133,6 +155,7 @@ detect_compose
 
 set -- --env-file "$APP_DIR/.env"
 if [ -n "$PROJECT_NAME" ]; then
+  PROJECT_NAME=$(safe_project_name "$PROJECT_NAME")
   set -- "$@" --project-name "$PROJECT_NAME"
 fi
 

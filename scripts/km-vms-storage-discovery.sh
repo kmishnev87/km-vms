@@ -66,13 +66,13 @@ is_blocked_fstype() {
   esac
 }
 
-first=1
-df -Pk 2>/dev/null | awk 'NR > 1 {print $6 "|" $2 "|" $3 "|" $4}' | while IFS='|' read -r mount total_k used_k free_k; do
-  [ -n "$mount" ] || continue
-  fstype=""
-  if [ -r /proc/mounts ]; then
-    fstype=$(awk -v m="$mount" '$2 == m {print $3; exit}' /proc/mounts 2>/dev/null || true)
-  fi
+emit_candidate() {
+  mount="$1"
+  fstype="$2"
+  total="$3"
+  used="$4"
+  free="$5"
+  [ -n "$mount" ] || return 0
   safety="allowed"
   reason=""
   writable=false
@@ -88,9 +88,6 @@ df -Pk 2>/dev/null | awk 'NR > 1 {print $6 "|" $2 "|" $3 "|" $4}' | while IFS='|
   else
     writable=true
   fi
-  total=$((total_k * 1024))
-  used=$((used_k * 1024))
-  free=$((free_k * 1024))
   id=$(printf '%s' "$mount" | cksum | awk '{print "mount-" $1}')
   if [ "$first" = "1" ]; then
     first=0
@@ -99,15 +96,63 @@ df -Pk 2>/dev/null | awk 'NR > 1 {print $6 "|" $2 "|" $3 "|" $4}' | while IFS='|
   fi
   printf '    {"id":"%s","path":"%s","label":"%s","filesystem_type":"%s","total_bytes":%s,"used_bytes":%s,"free_bytes":%s,"writable":%s,"safety_status":"%s","reason":"%s","recommended":%s}' \
     "$(json_escape "$id")" "$(json_escape "$mount")" "$(json_escape "$mount")" "$(json_escape "$fstype")" \
-    "$total" "$used" "$free" "$writable" "$safety" "$(json_escape "$reason")" false >> "$CANDIDATES_TMP"
-done
+    "${total:-0}" "${used:-0}" "${free:-0}" "$writable" "$safety" "$(json_escape "$reason")" false >> "$CANDIDATES_TMP"
+}
+
+read_findmnt_json() {
+  command -v findmnt >/dev/null 2>&1 || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  findmnt --json -b -o TARGET,FSTYPE,SIZE,USED,AVAIL 2>/dev/null | python3 -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+def walk(items):
+    for item in items or []:
+        yield item
+        yield from walk(item.get("children") or [])
+
+for item in walk(payload.get("filesystems") or []):
+    target = item.get("target") or ""
+    if not target:
+        continue
+    fstype = item.get("fstype") or ""
+    total = int(item.get("size") or 0)
+    used = int(item.get("used") or 0)
+    free = int(item.get("avail") or 0)
+    print(f"{target}\t{fstype}\t{total}\t{used}\t{free}")
+'
+}
+
+first=1
+DISCOVERY_SOURCE="host-helper-df-proc-mounts"
+if read_findmnt_json > "$OUT.findmnt.$$"; then
+  DISCOVERY_SOURCE="host-helper-findmnt-json"
+  while IFS='	' read -r mount fstype total used free; do
+    emit_candidate "$mount" "$fstype" "$total" "$used" "$free"
+  done < "$OUT.findmnt.$$"
+else
+  df -Pk 2>/dev/null | awk 'NR > 1 {total=$2*1024; used=$3*1024; free=$4*1024; mount=$0; sub(/^([^ ]+[ ]+){5}/, "", mount); print mount "\t" total "\t" used "\t" free}' | while IFS='	' read -r mount total used free; do
+  [ -n "$mount" ] || continue
+  fstype=""
+  if [ -r /proc/mounts ]; then
+    fstype=$(awk -v m="$mount" '$2 == m {print $3; exit}' /proc/mounts 2>/dev/null || true)
+  fi
+  emit_candidate "$mount" "$fstype" "$total" "$used" "$free"
+  done
+fi
+rm -f "$OUT.findmnt.$$"
 
 created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
 {
   printf '{\n'
   printf '  "schema_version": 1,\n'
   printf '  "created_at": "%s",\n' "$(json_escape "$created_at")"
-  printf '  "discovery_source": "host-helper-df-proc-mounts",\n'
+  printf '  "discovery_source": "%s",\n' "$DISCOVERY_SOURCE"
   printf '  "host_visibility": true,\n'
   printf '  "candidates": [\n'
   if [ -f "$CANDIDATES_TMP" ]; then

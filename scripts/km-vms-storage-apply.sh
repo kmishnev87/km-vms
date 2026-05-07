@@ -2,6 +2,7 @@
 set -eu
 
 APP_DIR=""
+DOCKER_COMPOSE_BIN="${KM_VMS_DOCKER_COMPOSE:-${KMVMS_DOCKER_COMPOSE:-}}"
 
 usage() {
   cat <<'EOF'
@@ -59,10 +60,33 @@ json_escape() {
 }
 
 detect_compose() {
-  if [ -n "${KMVMS_DOCKER_COMPOSE:-}" ]; then
-    [ -x "$KMVMS_DOCKER_COMPOSE" ] || fail "KMVMS_DOCKER_COMPOSE is not executable"
+  if [ -n "$DOCKER_COMPOSE_BIN" ]; then
+    if [ "$DOCKER_COMPOSE_BIN" = "docker compose" ]; then
+      command -v docker >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker was not found"
+      docker compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker compose is not available"
+      COMPOSE_KIND="plugin"
+      COMPOSE_BIN="docker"
+      return 0
+    fi
+    case "$DOCKER_COMPOSE_BIN" in
+      *[\;\|\&\`\>\<\(\)]*|*'$('*|*'$'*|*" "*|*"	"*) fail "KM_VMS_DOCKER_COMPOSE contains unsafe characters or spaces" ;;
+    esac
+    if [ "$DOCKER_COMPOSE_BIN" = "docker" ]; then
+      command -v docker >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=docker but docker was not found"
+      docker compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=docker but docker compose is not available"
+      COMPOSE_KIND="plugin"
+      COMPOSE_BIN="docker"
+      return 0
+    fi
+    if [ "$DOCKER_COMPOSE_BIN" = "docker-compose" ]; then
+      command -v docker-compose >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=docker-compose but docker-compose was not found"
+      COMPOSE_KIND="standalone"
+      COMPOSE_BIN="docker-compose"
+      return 0
+    fi
+    [ -x "$DOCKER_COMPOSE_BIN" ] || fail "KM_VMS_DOCKER_COMPOSE must be docker, docker-compose, docker compose, or an executable path"
     COMPOSE_KIND="standalone"
-    COMPOSE_BIN="$KMVMS_DOCKER_COMPOSE"
+    COMPOSE_BIN="$DOCKER_COMPOSE_BIN"
     return 0
   fi
   if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
@@ -109,6 +133,7 @@ done
 [ -n "$APP_DIR" ] || fail "--app-dir is required"
 ENV_FILE="$APP_DIR/.env"
 SELECTION_FILE="$APP_DIR/data/install-control/storage-selection.json"
+STATUS_FILE="$APP_DIR/data/install-control/storage-apply-status.json"
 [ -f "$ENV_FILE" ] || fail ".env not found"
 [ -f "$SELECTION_FILE" ] || fail "storage-selection.json not found"
 
@@ -198,4 +223,16 @@ awk -v value="$selected_path" '
 chmod --reference="$ENV_FILE" "$tmp" 2>/dev/null || chmod 600 "$tmp" 2>/dev/null || true
 mv "$tmp" "$ENV_FILE"
 compose_config_check || fail "docker compose config failed after storage path apply"
-printf 'Storage host path applied. Restart KM VMS containers to use the new bind mount.\n'
+applied_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
+{
+  printf '{\n'
+  printf '  "schema_version": 1,\n'
+  printf '  "status": "applied_restart_required",\n'
+  printf '  "selected_host_path": "%s",\n' "$(json_escape "$selected_path")"
+  printf '  "container_archive_path": "/storage/archive",\n'
+  printf '  "applied_at": "%s",\n' "$(json_escape "$applied_at")"
+  printf '  "next_action": "restart_km_vms_containers"\n'
+  printf '}\n'
+} > "$STATUS_FILE"
+chmod 600 "$STATUS_FILE" 2>/dev/null || true
+printf 'Storage host path applied. Status: applied_restart_required. Restart KM VMS containers to use the new bind mount.\n'

@@ -25,6 +25,7 @@ from app.core.sanitization import redact_text as audit_redact_text
 from app.core.security import hash_password
 from app.db.session import get_db
 from app.models.camera import Camera
+from app.models.setup_lock import SetupLock
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.routers.recordings import collect_recording_files
@@ -78,6 +79,7 @@ class SetupRequest(BaseModel):
     username: str = Field(min_length=2, max_length=64)
     password: str = Field(min_length=8, max_length=256)
     password_confirm: str = Field(min_length=8, max_length=256)
+    system_name: str | None = Field(default=None, max_length=80)
     timezone: str
     language: str
     storage_path: str
@@ -86,6 +88,7 @@ class SetupRequest(BaseModel):
 
 
 class SettingsUpdateRequest(BaseModel):
+    system_name: str | None = Field(default=None, max_length=80)
     timezone: str | None = None
     language: str | None = None
     storage_path: str | None = None
@@ -209,6 +212,15 @@ def validate_setup_username(username: str) -> str:
     return value
 
 
+def acquire_setup_lock(db: Session) -> None:
+    db.add(SetupLock(name="first_run_setup"))
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System setup is already completed or in progress")
+
+
 @router.post("/setup", status_code=status.HTTP_201_CREATED)
 def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request = None):
     with SETUP_LOCK:
@@ -216,25 +228,30 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request
         if system.system_initialized:
             audit_setup_failed(db, request, "already_initialized", status.HTTP_409_CONFLICT)
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System is already initialized")
+        acquire_setup_lock(db)
 
         try:
             username = validate_setup_username(payload.username)
         except ValueError as exc:
+            db.rollback()
             audit_setup_failed(db, request, "invalid_username", status.HTTP_422_UNPROCESSABLE_ENTITY)
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
         if payload.password != payload.password_confirm:
+            db.rollback()
             audit_setup_failed(db, request, "password_confirmation_mismatch", status.HTTP_422_UNPROCESSABLE_ENTITY)
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="password_confirm does not match password")
 
         existing_user_count = db.query(User).count()
         if existing_user_count:
+            db.rollback()
             audit_setup_failed(db, request, "owner_already_exists", status.HTTP_409_CONFLICT)
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Initial owner already exists")
 
         try:
             settings_data = validate_settings_payload(payload.model_dump(exclude={"password_confirm"}), partial=False)
         except ValueError as exc:
+            db.rollback()
             audit_setup_failed(db, request, "invalid_settings_payload", status.HTTP_422_UNPROCESSABLE_ENTITY)
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
@@ -242,6 +259,7 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request
         try:
             storage_confirmation = require_setup_storage_confirmation()
         except ValueError as exc:
+            db.rollback()
             audit_setup_failed(db, request, "storage_confirmation_invalid", status.HTTP_422_UNPROCESSABLE_ENTITY)
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -251,6 +269,7 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request
 
         storage_check = validate_storage_path(settings.storage_root, create=True)
         if not storage_check["ok"]:
+            db.rollback()
             audit_setup_failed(db, request, "storage_validation_failed", status.HTTP_422_UNPROCESSABLE_ENTITY)
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"storage": storage_check})
 
@@ -305,6 +324,7 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request
             "owner_role": admin.role,
             "timezone": system.timezone,
             "language": system.language,
+            "system_name": system.system_name or "KM VMS",
             "recording_format": system.recording_format,
             "setup_storage_status": storage_confirmation["status"],
             "setup_storage_next_action": storage_confirmation["next_action"],

@@ -22,6 +22,7 @@ ACTIVE_RECORDING_JOB_STATES = {"starting", "recording", "stopping", "restarting"
 AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT = 10.0
 AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT = 5.0
 AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT = 1.0
+SYSTEM_NAME_MAX_LENGTH = 80
 
 
 def default_timezone() -> str:
@@ -35,6 +36,7 @@ def get_system_settings(db: Session) -> SystemSettings:
 
     row = SystemSettings(
         system_initialized=False,
+        system_name="KM VMS",
         timezone=default_timezone(),
         language="ru",
         storage_path=settings.storage_root,
@@ -53,6 +55,7 @@ def serialize_settings(row: SystemSettings) -> dict:
     format_contract = recording_format_contract(row.recording_format)
     return {
         "system_initialized": row.system_initialized,
+        "system_name": row.system_name or "KM VMS",
         "timezone": row.timezone,
         "language": row.language,
         "storage_path": row.storage_path,
@@ -94,6 +97,20 @@ def validate_settings_payload(payload: dict, partial: bool = False) -> dict:
         if language not in LANGUAGES:
             raise ValueError("language must be ru or en")
         data["language"] = language
+
+    if "system_name" in payload:
+        system_name = str(payload.get("system_name") or "").strip()
+        if not system_name:
+            data["system_name"] = None
+        else:
+            if len(system_name) > SYSTEM_NAME_MAX_LENGTH:
+                raise ValueError("system_name must be 1-80 characters")
+            if any(ord(char) < 32 for char in system_name):
+                raise ValueError("system_name contains control characters")
+            lowered = system_name.lower()
+            if any(marker in lowered for marker in ("password", "secret", "token", "jwt", "rtsp://")):
+                raise ValueError("system_name must not contain secret-like content")
+            data["system_name"] = system_name
 
     if "storage_path" in payload:
         storage_path = str(payload.get("storage_path") or "").strip()

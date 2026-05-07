@@ -27,7 +27,7 @@ wget -qO- https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/insta
 
 - Docker must already be installed.
 - Docker Compose plugin (`docker compose`) is preferred; `docker-compose` fallback is supported.
-- If Compose is installed outside `PATH`, set `KM_VMS_DOCKER_COMPOSE` to `docker`, `docker-compose`, or an executable compose path. Command strings with spaces or shell metacharacters are rejected.
+- If Compose is installed outside `PATH`, set `KM_VMS_DOCKER_COMPOSE` to `docker`, `docker-compose`, exact friendly alias `docker compose`, or an executable compose path. Other command strings with spaces or shell metacharacters are rejected; helpers do not use `eval` or `sh -c` for this value.
 - The current user must be allowed to run Docker commands.
 - The installer never installs Docker or packages automatically.
 
@@ -50,7 +50,7 @@ Secrets are not printed. Existing `.env` is preserved; overwrite is not implemen
 
 The generated environment includes the compose/backend variables used by the current product, including `SURVEILLANCE_ROOT`, `HTTP_PORT`, `API_PORT`, `NEXT_PUBLIC_API_BASE_URL`, `COMPOSE_PROJECT_NAME`, and `KM_VMS_CONTAINER_PREFIX`. If `KM_VMS_API_PORT` is not provided, the installer derives a non-default API port from the selected HTTP port so disposable installs do not collide with an existing stack.
 
-The compose file keeps the existing production-compatible default project identity and `vms-*` container names. Disposable installs use explicit `--project-name` / `COMPOSE_PROJECT_NAME` and `KM_VMS_CONTAINER_PREFIX` values for isolation.
+The compose file keeps the existing production-compatible default project identity and `vms-*` container names. Disposable installs use explicit `--project-name` / `COMPOSE_PROJECT_NAME` and `KM_VMS_CONTAINER_PREFIX` values for isolation. Project names must start with a lowercase letter and contain only lowercase letters, digits, dashes or underscores. Uppercase or unsafe names are rejected with a lowercase suggestion instead of being silently transformed.
 
 Stage 1 uses `<app-dir>/data/archive` as a provisional host archive mount when the user has not selected a storage root. The stable container archive path remains `/storage/archive`.
 
@@ -72,6 +72,14 @@ After choosing storage in setup mode, apply the host bind mount with:
 sh scripts/km-vms-storage-apply.sh --app-dir "$HOME/km-vms"
 sh scripts/km-vms-restart.sh --app-dir "$HOME/km-vms"
 ```
+
+`km-vms-storage-apply.sh` updates only `SURVEILLANCE_ROOT` in `.env`, writes a non-secret `data/install-control/storage-apply-status.json` status, validates compose config, and reports `applied_restart_required` until the stack is restarted. It does not print `.env`, regenerate secrets, create users/settings, delete DB/volumes/archive data, run `docker compose down -v`, or run `docker system prune`.
+
+Restart diagnostics:
+- validate config first: `KM_VMS_DOCKER_COMPOSE="docker compose" sh scripts/km-vms-restart.sh --app-dir "$HOME/km-vms" --project-name km-vms`;
+- missing `.env`, missing storage selection, Docker unreachable, bad compose override, invalid project name, unwritable selected storage and failed compose config are reported as explicit errors;
+- previous Git HEAD may be recorded in service artifacts as diagnostic context only;
+- full backup/restore/rollback belongs to the future Database / Backup / Upgrade Safety PRO chapter. For now, do not use `down -v`, do not prune Docker, and do not delete production DB, volumes, archive roots or recordings.
 
 The apply helper reads `<app-dir>/data/install-control/storage-selection.json`, revalidates the selected single child folder on the host, blocks symlink/path escapes and non-empty unmarked folders, writes the KM VMS marker only after a write/delete probe, updates only `SURVEILLANCE_ROOT` in `.env`, creates a `.env.stage2-storage.bak` backup, and does not print secrets. Do not use broad `chmod`/`chown` on storage roots and do not point KM VMS at a folder containing foreign archive files unless it already has the KM VMS marker.
 
@@ -111,7 +119,7 @@ For disposable validation before public GitHub raw files are available:
 sh scripts/install.sh --app-dir /tmp/km-vms-stage1-install-test --http-port 18088 --project-name km-vms-stage1-installer-test --source-dir /path/to/km-vms --yes
 ```
 
-`--source-dir` copies product source while excluding `.git`, `.env`, node build output, runtime data, logs, service artifacts, archives, and temporary installer test directories.
+`--source-dir` copies product source while excluding `.git`, `.env`, node build output, runtime data, logs, service artifacts, archives, temporary installer test directories, `.ssh`, `id_rsa`, `id_ed25519`, `*.pem`, `*.key`, `*.p12`, `*.pfx` and related secret/credential paths.
 
 `--source-dir` and `--app-dir` must be separate paths. The installer rejects equal paths, nested paths in either direction, dangerous source paths, and source trees missing expected KM VMS markers. Source-dir mode is only for development/testing validation; it is not the public default install path.
 

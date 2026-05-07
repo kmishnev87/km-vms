@@ -11,6 +11,7 @@ from app.core.config import settings
 CONTAINER_ARCHIVE_PATH = "/storage/archive"
 DISCOVERY_FILE = "storage-discovery.json"
 SELECTION_FILE = "storage-selection.json"
+APPLY_STATUS_FILE = "storage-apply-status.json"
 MARKER_FILE = ".km-vms-storage-root.json"
 FOLDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,79}$")
 READY_SELECTION_STATUSES = {"pending_host_helper_restart_required", "applied_restart_required", "active"}
@@ -107,9 +108,10 @@ def discovery_snapshot() -> dict:
 
 def storage_confirmation_status() -> dict:
     selection = _safe_read_json(install_control_dir() / SELECTION_FILE)
+    apply_state = _safe_read_json(install_control_dir() / APPLY_STATUS_FILE)
     selected_host_path = str(selection.get("selected_host_path") or "").strip()
     container_archive_path = str(selection.get("container_archive_path") or CONTAINER_ARCHIVE_PATH).strip()
-    apply_status = str(selection.get("apply_status") or "").strip()
+    apply_status = str(apply_state.get("status") or selection.get("apply_status") or "").strip()
     errors: list[str] = []
 
     if not selection:
@@ -146,6 +148,7 @@ def storage_confirmation_status() -> dict:
         "selected_host_path": selected_host_path or None,
         "container_archive_path": CONTAINER_ARCHIVE_PATH,
         "apply_status": apply_status or None,
+        "apply_state": apply_state if apply_state else None,
         "restart_required": apply_status in {"pending_host_helper_restart_required", "applied_restart_required"},
         "manual_action_required": apply_status != "active",
         "next_action": next_action,

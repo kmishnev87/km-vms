@@ -61,6 +61,8 @@ const TEXT = {
     cancel: "Отменить",
     dirty: "Есть несохранённые изменения",
     checking: "Проверка...",
+    systemName: "Имя системы",
+    systemNameHelp: "Несекретное имя продукта для админских экранов.",
     language: "Язык",
     languageHelp: "Язык интерфейса KM VMS.",
     russian: "Русский",
@@ -245,6 +247,8 @@ const TEXT = {
     cancel: "Cancel",
     dirty: "You have unsaved changes",
     checking: "Checking...",
+    systemName: "System name",
+    systemNameHelp: "Non-secret product name for admin screens.",
     language: "Language",
     languageHelp: "KM VMS interface language.",
     russian: "Русский",
@@ -473,6 +477,7 @@ function sortedUsersForTable(users) {
 
 function settingsDraftFromApi(data) {
   return {
+    system_name: data?.system_name || "KM VMS",
     timezone: data?.timezone || "UTC",
     language: data?.language === "en" ? "en" : "ru",
     storage_path: data?.storage_path || "",
@@ -495,6 +500,7 @@ function settingsDraftFromApi(data) {
 
 function payloadFromDraft(draft) {
   return {
+    system_name: draft.system_name?.trim() || null,
     timezone: timezoneValueForSettings(draft.timezone),
     language: draft.language,
     recording_format: recordingFormatForProfile(draft.recordingProfile),
@@ -1330,6 +1336,17 @@ export default function SettingsPage() {
           {!draft ? null : (
             <div className="settingsReferenceLayout">
               <section className="settingsPanel">
+                <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/settings.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label htmlFor="settings-system-name">{t.systemName}</label>
+                    <span>{t.systemNameHelp}</span>
+                  </div>
+                  <div className="settingsRowControl">
+                    <input id="settings-system-name" className="input settingsSelect" value={draft.system_name || ""} onChange={(event) => patch("system_name", event.target.value)} maxLength={80} disabled={saving} />
+                  </div>
+                </div>
+
                 <div className="settingsRow">
                   <div className="settingsRowIcon"><img src={languageIcon} alt="" /></div>
                   <div className="settingsRowText">

@@ -235,16 +235,18 @@ detect_compose() {
     COMPOSE_BIN="docker-compose"
     return 0
   fi
-  if [ -n "$DOCKER_COMPOSE_BIN" ] && [ -x "$DOCKER_COMPOSE_BIN" ] && "$DOCKER_COMPOSE_BIN" version >/dev/null 2>&1; then
-    COMPOSE_KIND="standalone"
-    COMPOSE_BIN="$DOCKER_COMPOSE_BIN"
-    return 0
-  fi
   fail "Docker Compose was not found. Install Docker with the compose plugin, or docker-compose."
 }
 
 validate_compose_override() {
   override="$1"
+  if [ "$override" = "docker compose" ]; then
+    command_exists docker || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker was not found."
+    docker compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker compose is not available."
+    COMPOSE_KIND="plugin"
+    COMPOSE_BIN="docker"
+    return 0
+  fi
   case "$override" in
     *[\;\|\&\`\>\<\(\)]*|*'$('*|*'$'*|*" "*|*"	"*) fail "KM_VMS_DOCKER_COMPOSE contains unsafe characters or spaces." ;;
   esac
@@ -292,10 +294,18 @@ check_docker() {
 }
 
 safe_project_name() {
-  value=$(printf '%s' "$1" | tr -c 'A-Za-z0-9_.-' '-')
-  value=$(printf '%s' "$value" | sed 's/^-*//;s/-*$//')
-  [ -n "$value" ] || value="$PROJECT_NAME_DEFAULT"
-  printf '%s\n' "$value"
+  value="$1"
+  [ -n "$value" ] || fail "Project name must not be empty."
+  case "$value" in
+    *[A-Z]*)
+      fail "Project name must be lowercase. Use: $(printf '%s' "$value" | tr 'A-Z' 'a-z')"
+      ;;
+  esac
+  if printf '%s' "$value" | grep -Eq '^[a-z][a-z0-9_-]*$'; then
+      printf '%s\n' "$value"
+      return 0
+  fi
+  fail "Project name must start with a lowercase letter and contain only lowercase letters, digits, dashes or underscores."
 }
 
 random_secret() {
@@ -406,6 +416,10 @@ copy_source_dir() {
       --exclude='./Current' --exclude='*/Current' \
       --exclude='*.zip' --exclude='*.tar' --exclude='*.tar.gz' --exclude='*.tgz' --exclude='*.rar' --exclude='*.7z' \
       --exclude='*.key' --exclude='*.pem' --exclude='*.crt' --exclude='*.csr' \
+      --exclude='./.ssh' --exclude='*/.ssh' \
+      --exclude='id_rsa' --exclude='*/id_rsa' \
+      --exclude='id_ed25519' --exclude='*/id_ed25519' \
+      --exclude='*.p12' --exclude='*.pfx' \
       --exclude='*secret*' --exclude='*Secret*' --exclude='*SECRET*' \
       --exclude='*credential*' --exclude='*Credential*' --exclude='*CREDENTIAL*' \
       --exclude='./credentials' --exclude='*/credentials' \
