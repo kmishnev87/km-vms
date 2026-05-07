@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 from datetime import datetime, timedelta
@@ -22,6 +23,7 @@ from app.services.storage_contract import (
     recording_format_contract,
     storage_contract,
 )
+from app.services.setup_storage import CONTAINER_ARCHIVE_PATH, SELECTION_FILE
 from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.recording_storage import (
     DEFAULT_ARCHIVE_ROOT_ID,
@@ -132,6 +134,27 @@ def add_archive_root(db, root_path: Path, *, root_id="root_extra", active=False)
     return root
 
 
+def write_setup_storage_selection(host_path: str) -> None:
+    control = Path(settings.storage_install_control)
+    control.mkdir(parents=True, exist_ok=True)
+    (control / SELECTION_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "selected_host_path": host_path,
+                "selected_mount_path": str(Path(host_path).parent),
+                "folder_name": Path(host_path).name,
+                "container_archive_path": CONTAINER_ARCHIVE_PATH,
+                "candidate_id": "stage3-storage-contract",
+                "selected_at": "2026-05-07T00:00:00Z",
+                "apply_status": "pending_host_helper_restart_required",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture
 def db():
     tmp = tempfile.TemporaryDirectory(prefix="stage2_storage_contract_")
@@ -139,9 +162,11 @@ def db():
     original_storage_root = settings.storage_root
     original_storage_previews = settings.storage_previews
     original_storage_exports = settings.storage_exports
+    original_control = settings.storage_install_control
     settings.storage_root = str(tmp_path / "archive")
     settings.storage_previews = str(tmp_path / "previews")
     settings.storage_exports = str(tmp_path / "exports")
+    settings.storage_install_control = str(tmp_path / "install-control")
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
@@ -154,6 +179,7 @@ def db():
         settings.storage_root = original_storage_root
         settings.storage_previews = original_storage_previews
         settings.storage_exports = original_storage_exports
+        settings.storage_install_control = original_control
         tmp.cleanup()
 
 
@@ -216,11 +242,13 @@ def test_patch_settings_ignores_storage_path_as_runtime_mutation(db):
 
 def test_setup_custom_storage_path_is_not_runtime_source_of_truth(db):
     custom_path = str(Path(settings.storage_root).parent / "custom-user-request")
+    write_setup_storage_selection(str(Path(settings.storage_root).parent / "selected-host-archive"))
 
     result = setup(
         SetupRequest(
             username="stage2_owner",
             password="stage2-password",
+            password_confirm="stage2-password",
             timezone="UTC",
             language="en",
             storage_path=custom_path,
@@ -238,7 +266,8 @@ def test_setup_custom_storage_path_is_not_runtime_source_of_truth(db):
     assert result["settings"]["storage_change_requires"] == "installer_or_deploy_remount"
     assert result["storage_validation"]["requested_storage_path"] == custom_path
     assert result["storage_validation"]["effective_storage_path"] == settings.storage_root
-    assert result["storage_validation"]["setup_storage_path_behavior"] == "requested_path_is_not_runtime_source_of_truth"
+    assert result["storage_validation"]["setup_storage_path_behavior"] == "stage2_selected_host_path_required_container_path_remains_internal"
+    assert result["storage_validation"]["storage_confirmation"]["selected_host_path"].endswith("selected-host-archive")
     assert not Path(custom_path).exists()
 
 

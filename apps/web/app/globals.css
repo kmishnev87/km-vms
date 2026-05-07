@@ -616,6 +616,11 @@ textarea {
   max-width: 860px;
 }
 
+.setupWizard {
+  display: grid;
+  gap: 14px;
+}
+
 .authTitle,
 .setupHeader h1 {
   margin: 0;
@@ -727,6 +732,118 @@ textarea {
 .setupLang {
   width: 86px;
   min-width: 86px;
+}
+
+.setupSteps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.setupStep {
+  min-width: 0;
+  min-height: 54px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  padding: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.setupStep:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.setupStep span {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #334155;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.setupStep strong {
+  min-width: 0;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.setupStep.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.setupStep.done {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.setupWizardBody {
+  min-height: 290px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 18px;
+}
+
+.setupPane {
+  display: grid;
+  gap: 14px;
+}
+
+.setupPane h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 21px;
+  line-height: 1.2;
+}
+
+.setupPane p {
+  margin: 0;
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.setupActionField {
+  align-self: end;
+}
+
+.setupReviewGrid {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.5fr) minmax(0, 1fr);
+  gap: 8px 12px;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.setupReviewGrid strong {
+  min-width: 0;
+  color: #0f172a;
+  overflow-wrap: anywhere;
+}
+
+.setupActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .settingsPage {
@@ -4024,6 +4141,10 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .setupSteps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .settingsRow {
     grid-template-columns: 48px minmax(0, 1fr);
   }
@@ -4192,6 +4313,32 @@ textarea {
 
   .cameraSettingsHead {
     flex-direction: column;
+  }
+
+  .setupPage {
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  .setupCard {
+    padding: 18px;
+  }
+
+  .setupHeader,
+  .setupActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .setupLang,
+  .setupActions .button {
+    width: 100%;
+  }
+
+  .setupSteps,
+  .settingsGrid,
+  .setupReviewGrid {
+    grid-template-columns: 1fr;
   }
 
   .topNav {

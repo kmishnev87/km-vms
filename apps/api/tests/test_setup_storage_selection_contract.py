@@ -19,6 +19,7 @@ from app.routers.settings import (
     setup_storage_apply,
     setup_storage_discovery,
     setup_storage_preview,
+    setup_storage_status,
     system_status,
 )
 from app.services.setup_storage import (
@@ -151,6 +152,13 @@ def test_preview_apply_write_pending_selection_without_secrets(db):
     assert selection["folder_name"] == "KM-VMS-Recordings"
     assert "password" not in json.dumps(selection).lower()
 
+    status_payload = setup_storage_status(db=session)
+    assert status_payload["ready"] is True
+    assert status_payload["selected_host_path"] == str(mount / "KM-VMS-Recordings")
+    assert status_payload["container_archive_path"] == CONTAINER_ARCHIVE_PATH
+    assert status_payload["status"] == "pending_host_helper_restart_required"
+    assert status_payload["next_action"] == "run_storage_apply_helper_and_restart"
+
 
 def test_non_empty_unmarked_folder_is_blocked(db):
     session, root = db
@@ -176,6 +184,10 @@ def test_setup_storage_endpoints_close_after_initialization(db):
 
     with pytest.raises(HTTPException) as exc:
         setup_storage_discovery(db=session)
+    assert exc.value.status_code == 409
+
+    with pytest.raises(HTTPException) as exc:
+        setup_storage_status(db=session)
     assert exc.value.status_code == 409
 
 

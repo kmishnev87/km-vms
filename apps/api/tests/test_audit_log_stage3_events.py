@@ -25,6 +25,7 @@ from app.routers.deps import get_current_user, require_permission
 from app.routers.settings import BugReportRequest, SetupRequest, create_bug_report, download_log_archive, setup
 from app.services import bootstrap
 from app.services.audit_log import events_as_text, serialize_event
+from app.services.setup_storage import CONTAINER_ARCHIVE_PATH, SELECTION_FILE
 from app.services.media_tokens import create_media_token, validate_media_token
 from app.services.security_audit import reset_security_audit_throttle
 
@@ -45,7 +46,9 @@ class FakeRequest:
 def db():
     tmp = tempfile.TemporaryDirectory(prefix="stage3_audit_events_")
     original_storage_root = settings.storage_root
+    original_control = settings.storage_install_control
     settings.storage_root = str(Path(tmp.name) / "archive")
+    settings.storage_install_control = str(Path(tmp.name) / "install-control")
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
@@ -57,6 +60,7 @@ def db():
         reset_security_audit_throttle()
         session.close()
         settings.storage_root = original_storage_root
+        settings.storage_install_control = original_control
         tmp.cleanup()
 
 
@@ -66,6 +70,28 @@ def add_user(db, username="stage3_user", role=ROLE_OWNER, active=True):
     db.commit()
     db.refresh(user)
     return user
+
+
+def write_setup_storage_selection() -> None:
+    selected = str(Path(settings.storage_install_control).parent / "host-archive")
+    control = Path(settings.storage_install_control)
+    control.mkdir(parents=True, exist_ok=True)
+    (control / SELECTION_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "selected_host_path": selected,
+                "selected_mount_path": str(Path(selected).parent),
+                "folder_name": Path(selected).name,
+                "container_archive_path": CONTAINER_ARCHIVE_PATH,
+                "candidate_id": "stage3-audit",
+                "selected_at": "2026-05-07T00:00:00Z",
+                "apply_status": "pending_host_helper_restart_required",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def audit_events(db):
@@ -220,6 +246,7 @@ def test_setup_completed_and_failed_events_are_safe(db):
     payload = SetupRequest(
         username="owner",
         password="plain-password-secret",
+        password_confirm="plain-password-secret",
         timezone="UTC",
         language="ru",
         storage_path="/requested",
@@ -234,6 +261,7 @@ def test_setup_completed_and_failed_events_are_safe(db):
     db.query(AuditEvent).delete()
     db.query(SystemSettings).delete()
     db.commit()
+    write_setup_storage_selection()
     response = setup(payload, db=db, request=FakeRequest())
     assert response["ok"] is True
     completed = audit_events(db)[0]

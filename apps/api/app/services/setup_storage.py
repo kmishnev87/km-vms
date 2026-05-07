@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +13,7 @@ DISCOVERY_FILE = "storage-discovery.json"
 SELECTION_FILE = "storage-selection.json"
 MARKER_FILE = ".km-vms-storage-root.json"
 FOLDER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,79}$")
+READY_SELECTION_STATUSES = {"pending_host_helper_restart_required", "applied_restart_required", "active"}
 BLOCKED_PATHS = {
     "/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc", "/run",
     "/sbin", "/sys", "/usr", "/var", "/root", "/tmp",
@@ -103,6 +105,62 @@ def discovery_snapshot() -> dict:
     }
 
 
+def storage_confirmation_status() -> dict:
+    selection = _safe_read_json(install_control_dir() / SELECTION_FILE)
+    selected_host_path = str(selection.get("selected_host_path") or "").strip()
+    container_archive_path = str(selection.get("container_archive_path") or CONTAINER_ARCHIVE_PATH).strip()
+    apply_status = str(selection.get("apply_status") or "").strip()
+    errors: list[str] = []
+
+    if not selection:
+        errors.append("storage_selection_missing")
+    if not selected_host_path:
+        errors.append("selected_host_path_missing")
+    elif selected_host_path == CONTAINER_ARCHIVE_PATH:
+        errors.append("selected_host_path_must_be_host_path")
+    elif not selected_host_path.startswith("/"):
+        errors.append("selected_host_path_must_be_absolute")
+    if container_archive_path != CONTAINER_ARCHIVE_PATH:
+        errors.append("container_archive_path_invalid")
+    if apply_status not in READY_SELECTION_STATUSES:
+        errors.append("storage_apply_status_not_ready")
+
+    ready = not errors
+    next_action = None
+    if apply_status == "pending_host_helper_restart_required":
+        next_action = "run_storage_apply_helper_and_restart"
+    elif apply_status == "applied_restart_required":
+        next_action = "restart_stack_to_activate_storage"
+    elif not ready:
+        next_action = "select_and_validate_storage"
+
+    safe_selection = deepcopy(selection)
+    for key in list(safe_selection):
+        if any(marker in str(key).lower() for marker in ("password", "secret", "token", "credential", "authorization")):
+            safe_selection.pop(key, None)
+
+    return {
+        "ready": ready,
+        "status": apply_status if apply_status in READY_SELECTION_STATUSES else ("unavailable" if not selection else "validation_failed"),
+        "allowed_statuses": sorted(READY_SELECTION_STATUSES),
+        "selected_host_path": selected_host_path or None,
+        "container_archive_path": CONTAINER_ARCHIVE_PATH,
+        "apply_status": apply_status or None,
+        "restart_required": apply_status in {"pending_host_helper_restart_required", "applied_restart_required"},
+        "manual_action_required": apply_status != "active",
+        "next_action": next_action,
+        "errors": errors,
+        "selection": safe_selection if selection else None,
+    }
+
+
+def require_storage_confirmation() -> dict:
+    status = storage_confirmation_status()
+    if not status["ready"]:
+        raise ValueError(",".join(status["errors"]) or "storage_confirmation_required")
+    return status
+
+
 def get_candidate(candidate_id: str) -> dict:
     for item in discovery_snapshot()["candidates"]:
         if item["id"] == candidate_id:
@@ -189,4 +247,4 @@ def persist_selection(candidate_id: str, folder_name: str) -> dict:
     tmp = control / f"{SELECTION_FILE}.tmp"
     tmp.write_text(json.dumps(selection, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(control / SELECTION_FILE)
-    return {**result, **selection}
+    return {**result, **selection, "storage_confirmation": storage_confirmation_status()}

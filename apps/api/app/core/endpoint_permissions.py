@@ -53,6 +53,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("settings", "GET", "/system/status", PUBLIC, "public route", "First-run setup status only."),
     EndpointPermission("settings", "POST", "/setup", PUBLIC, "public route", "Allowed only before initialization."),
     EndpointPermission("setup-storage", "GET", "/setup/storage/discovery", PUBLIC, "public route", "Allowed only before initialization; sanitized host snapshot only."),
+    EndpointPermission("setup-storage", "GET", "/setup/storage/status", PUBLIC, "public route", "Allowed only before initialization; selected host path status only."),
     EndpointPermission("setup-storage", "POST", "/setup/storage/preview", PUBLIC, "public route", "Allowed only before initialization; revalidates candidate server-side."),
     EndpointPermission("setup-storage", "POST", "/setup/storage/validate", PUBLIC, "public route", "Allowed only before initialization; creates selected child folder and marker only."),
     EndpointPermission("setup-storage", "POST", "/setup/storage/apply", PUBLIC, "public route", "Allowed only before initialization; writes non-secret pending selection for host helper."),

@@ -6,6 +6,7 @@ import os
 import re
 import socket
 import subprocess
+import threading
 import time
 import zipfile
 from datetime import datetime
@@ -15,6 +16,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -47,6 +49,8 @@ from app.services.setup_storage import (
     build_preview as build_setup_storage_preview,
     discovery_snapshot as setup_storage_discovery_snapshot,
     persist_selection as persist_setup_storage_selection,
+    require_storage_confirmation as require_setup_storage_confirmation,
+    storage_confirmation_status as setup_storage_confirmation_status,
     validate_and_mark as validate_setup_storage_folder,
 )
 
@@ -66,11 +70,14 @@ RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://)([^@\s/]+)@", re.IGNORECASE)
 BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
 TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token|media_token)=)[^&\s]+", re.IGNORECASE)
 DOCKER_SOCKET = Path("/var/run/docker.sock")
+SETUP_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+SETUP_LOCK = threading.Lock()
 
 
 class SetupRequest(BaseModel):
-    username: str = Field(min_length=2, max_length=100)
+    username: str = Field(min_length=2, max_length=64)
     password: str = Field(min_length=8, max_length=256)
+    password_confirm: str = Field(min_length=8, max_length=256)
     timezone: str
     language: str
     storage_path: str
@@ -126,6 +133,12 @@ def require_setup_mode(db: Session) -> None:
 def setup_storage_discovery(db: Session = Depends(get_db)):
     require_setup_mode(db)
     return setup_storage_discovery_snapshot()
+
+
+@router.get("/setup/storage/status")
+def setup_storage_status(db: Session = Depends(get_db)):
+    require_setup_mode(db)
+    return setup_storage_confirmation_status()
 
 
 @router.post("/setup/storage/preview")
@@ -187,48 +200,95 @@ def audit_setup_failed(db: Session, request: Request, reason: str, status_code: 
     )
 
 
+def validate_setup_username(username: str) -> str:
+    value = str(username or "").strip()
+    if len(value) < 2 or len(value) > 64:
+        raise ValueError("username must be 2-64 characters")
+    if not SETUP_USERNAME_RE.fullmatch(value):
+        raise ValueError("username may contain only letters, numbers, dots, dashes and underscores")
+    return value
+
+
 @router.post("/setup", status_code=status.HTTP_201_CREATED)
 def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request = None):
-    system = get_system_settings(db)
-    if system.system_initialized:
-        audit_setup_failed(db, request, "already_initialized", status.HTTP_409_CONFLICT)
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System is already initialized")
+    with SETUP_LOCK:
+        system = get_system_settings(db)
+        if system.system_initialized:
+            audit_setup_failed(db, request, "already_initialized", status.HTTP_409_CONFLICT)
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System is already initialized")
 
-    username = payload.username.strip()
-    if db.query(User).filter(User.username == username).first():
-        audit_setup_failed(db, request, "user_already_exists", status.HTTP_409_CONFLICT)
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="User already exists")
+        try:
+            username = validate_setup_username(payload.username)
+        except ValueError as exc:
+            audit_setup_failed(db, request, "invalid_username", status.HTTP_422_UNPROCESSABLE_ENTITY)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
-    try:
-        settings_data = validate_settings_payload(payload.model_dump(), partial=False)
-    except ValueError as exc:
-        audit_setup_failed(db, request, "invalid_settings_payload", status.HTTP_422_UNPROCESSABLE_ENTITY)
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+        if payload.password != payload.password_confirm:
+            audit_setup_failed(db, request, "password_confirmation_mismatch", status.HTTP_422_UNPROCESSABLE_ENTITY)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="password_confirm does not match password")
 
-    requested_storage_path = settings_data.get("storage_path")
-    settings_data["storage_path"] = settings.storage_root
+        existing_user_count = db.query(User).count()
+        if existing_user_count:
+            audit_setup_failed(db, request, "owner_already_exists", status.HTTP_409_CONFLICT)
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Initial owner already exists")
 
-    storage_check = validate_storage_path(settings.storage_root, create=True)
-    if not storage_check["ok"]:
-        audit_setup_failed(db, request, "storage_validation_failed", status.HTTP_422_UNPROCESSABLE_ENTITY)
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"storage": storage_check})
+        try:
+            settings_data = validate_settings_payload(payload.model_dump(exclude={"password_confirm"}), partial=False)
+        except ValueError as exc:
+            audit_setup_failed(db, request, "invalid_settings_payload", status.HTTP_422_UNPROCESSABLE_ENTITY)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
-    admin = User(
-        username=username,
-        full_name="Administrator",
-        password_hash=hash_password(payload.password),
-        role=ROLE_OWNER,
-        is_active=True,
-    )
-    db.add(admin)
+        requested_storage_path = settings_data.get("storage_path")
+        try:
+            storage_confirmation = require_setup_storage_confirmation()
+        except ValueError as exc:
+            audit_setup_failed(db, request, "storage_confirmation_invalid", status.HTTP_422_UNPROCESSABLE_ENTITY)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={"storage_confirmation": str(exc)},
+            )
+        settings_data["storage_path"] = settings.storage_root
 
-    for key, value in settings_data.items():
-        setattr(system, key, value)
-    system.system_initialized = True
-    system.updated_at = datetime.utcnow()
-    db.add(system)
-    db.commit()
-    db.refresh(system)
+        storage_check = validate_storage_path(settings.storage_root, create=True)
+        if not storage_check["ok"]:
+            audit_setup_failed(db, request, "storage_validation_failed", status.HTTP_422_UNPROCESSABLE_ENTITY)
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"storage": storage_check})
+
+        try:
+            if db.query(User).count():
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Initial owner already exists")
+            if get_system_settings(db).system_initialized:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="System is already initialized")
+
+            admin = User(
+                username=username,
+                full_name="Administrator",
+                password_hash=hash_password(payload.password),
+                role=ROLE_OWNER,
+                is_active=True,
+            )
+            db.add(admin)
+
+            for key, value in settings_data.items():
+                setattr(system, key, value)
+            system.system_initialized = True
+            system.updated_at = datetime.utcnow()
+            db.add(system)
+            db.commit()
+            db.refresh(system)
+            db.refresh(admin)
+        except HTTPException as exc:
+            db.rollback()
+            audit_setup_failed(db, request, "owner_already_exists", exc.status_code)
+            raise
+        except IntegrityError:
+            db.rollback()
+            audit_setup_failed(db, request, "owner_create_conflict", status.HTTP_409_CONFLICT)
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Initial owner already exists")
+        except Exception:
+            db.rollback()
+            audit_setup_failed(db, request, "setup_transaction_failed", status.HTTP_500_INTERNAL_SERVER_ERROR)
+            raise
     create_event(
         db=db,
         actor=admin,
@@ -246,7 +306,9 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request
             "timezone": system.timezone,
             "language": system.language,
             "recording_format": system.recording_format,
-            "setup_storage_path_behavior": "requested_path_is_not_runtime_source_of_truth",
+            "setup_storage_status": storage_confirmation["status"],
+            "setup_storage_next_action": storage_confirmation["next_action"],
+            "setup_storage_path_behavior": "stage2_selected_host_path_required_container_path_remains_internal",
         },
         ip_address=request_ip(request),
         user_agent=request_user_agent(request),
@@ -259,7 +321,13 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request
             **storage_check,
             "requested_storage_path": requested_storage_path,
             "effective_storage_path": settings.storage_root,
-            "setup_storage_path_behavior": "requested_path_is_not_runtime_source_of_truth",
+            "storage_confirmation": {
+                "status": storage_confirmation["status"],
+                "selected_host_path": storage_confirmation["selected_host_path"],
+                "container_archive_path": storage_confirmation["container_archive_path"],
+                "next_action": storage_confirmation["next_action"],
+            },
+            "setup_storage_path_behavior": "stage2_selected_host_path_required_container_path_remains_internal",
         },
     }
 
