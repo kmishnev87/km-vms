@@ -66,6 +66,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("system", "GET", "/system/schema/plan", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only deterministic migration plan; no migration execution."),
     EndpointPermission("system", "GET", "/system/backup/plan", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only backup-before-upgrade plan; no backup files created."),
     EndpointPermission("system", "POST", "/system/backup/create", PERMISSION_MANAGE_SETTINGS, "require_permission", "Creates a sensitive DB backup artifact; no backup download endpoint."),
+    EndpointPermission("diagnostics", "GET", "/system/upgrade/report", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Read-only sanitized upgrade/backup/restore report; no backup, restore or migration execution."),
     EndpointPermission("diagnostics", "GET", "/settings/logs/archive", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("diagnostics", "POST", "/settings/bug-report", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("hardware", "GET", "/hardware/capabilities", PERMISSION_MANAGE_SETTINGS, "require_permission"),

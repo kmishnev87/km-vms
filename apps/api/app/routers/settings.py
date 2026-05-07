@@ -57,6 +57,7 @@ from app.services.setup_storage import (
 from app.services.schema_migrations import build_migration_plan
 from app.services.schema_versioning import schema_version_status
 from app.services.backup_before_upgrade import BackupExecutionConfig, BackupSafetyBlocked, build_backup_plan, create_backup_before_upgrade
+from app.services.upgrade_report import build_upgrade_report, upgrade_report_text_summary
 
 router = APIRouter(tags=["settings"])
 
@@ -209,6 +210,14 @@ def system_backup_plan(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     return build_backup_plan(db)
+
+
+@router.get("/system/upgrade/report")
+def system_upgrade_report(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics")),
+):
+    return build_upgrade_report(db)
 
 
 @router.post("/system/backup/create")
@@ -857,6 +866,9 @@ def build_log_archive(
         write_json(bundle, "chronology/summary.json", chronology_diagnostics(db))
         write_json(bundle, "audit/events_recent.json", [serialize_event(event) for event in audit_events])
         write_json(bundle, "audit/summary.json", audit_summary(audit_events))
+        upgrade_report = build_upgrade_report(db)
+        write_json(bundle, "upgrade/report.json", upgrade_report)
+        bundle.writestr("upgrade/summary.txt", audit_redact_text(upgrade_report_text_summary(upgrade_report)) + "\n")
         write_json(
             bundle,
             "audit/redaction_proof.json",
