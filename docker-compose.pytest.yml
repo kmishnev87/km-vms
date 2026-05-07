@@ -1,6 +1,20 @@
 name: tnas-vms-pytest
 
 services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: kmvms_pytest
+      POSTGRES_USER: kmvms_pytest
+      POSTGRES_PASSWORD: kmvms_pytest_password
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kmvms_pytest -d kmvms_pytest"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
   backend-pytest:
     build:
       context: .
@@ -21,6 +35,11 @@ services:
       ADMIN_PASSWORD: pytest_admin_password
       ADMIN_FULL_NAME: Pytest Admin
       PYTEST_ADDOPTS: --cache-clear -p no:cacheprovider
+      KMVMS_STAGE2_POSTGRES_URL: ${KMVMS_STAGE2_POSTGRES_URL:-postgresql+psycopg://kmvms_pytest:kmvms_pytest_password@postgres-test:5432/kmvms_pytest}
+      KMVMS_STAGE3_POSTGRES_URL: ${KMVMS_STAGE3_POSTGRES_URL:-postgresql+psycopg://kmvms_pytest:kmvms_pytest_password@postgres-test:5432/kmvms_pytest}
+    depends_on:
+      postgres-test:
+        condition: service_healthy
     volumes:
       - .:/workspace:ro
     tmpfs:

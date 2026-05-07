@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.version import APP_BUILD_VERSION, APP_VERSION
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
+from app.services.backup_before_upgrade import backup_precondition_status
 from app.services.schema_versioning import (
     CURRENT_BASELINE_ID,
     CURRENT_SCHEMA_VERSION,
@@ -242,6 +243,8 @@ def build_migration_plan(
     registry: MigrationRegistry = PRODUCTION_MIGRATIONS,
     target_version: int | None = None,
     production_adoption_status: str = PRODUCTION_ADOPTION_DEFERRED,
+    backup_manifest_path: str | None = None,
+    manual_authorized: bool = False,
 ) -> dict[str, Any]:
     target = registry.target_version if target_version is None else target_version
     row, blocker = _raw_current_state_for_plan(db)
@@ -259,6 +262,12 @@ def build_migration_plan(
         "production_adoption_status": production_adoption_status,
         "recorder_metadata_owner": "api_bootstrap_only",
         "app_build_version_source": "temporary_stage2_metadata_source_deferred_to_stage7",
+        "backup_before_upgrade": {
+            "required": False,
+            "status": "not_required",
+            "restore_validation_status": "not_performed_stage5_deferred",
+            "production_backup_status": "production_backup_deferred",
+        },
         "mutates_database": False,
     }
     if blocker:
@@ -305,15 +314,43 @@ def build_migration_plan(
         )
         return base
 
-    blocked_risks = [item for item in pending if item.risk in {RISK_REQUIRES_BACKUP, RISK_MANUAL_ONLY}]
-    if blocked_risks:
+    manual_blocked = [item for item in pending if item.risk == RISK_MANUAL_ONLY]
+    backup_blocked = [item for item in pending if item.risk == RISK_REQUIRES_BACKUP]
+    if manual_blocked:
+        gate = backup_precondition_status(
+            manifest_path=backup_manifest_path,
+            required=True,
+            manual_only=True,
+            manual_authorized=manual_authorized,
+        )
+        base["backup_before_upgrade"] = {
+            "required": True,
+            "status": gate["status"],
+            "summary": gate["summary"],
+            "manual_authorization_required": True,
+            "restore_validation_status": "not_performed_stage5_deferred",
+            "production_backup_status": "production_backup_deferred",
+        }
         base.update(
             {
                 "status": "blocked",
-                "blocked_reason": "backup_or_manual_required",
-                "summary": "One or more pending migrations require backup safety or manual authorization.",
+                "blocked_reason": "manual_authorization_required",
+                "summary": gate["summary"],
             }
         )
+    elif backup_blocked:
+        gate = backup_precondition_status(manifest_path=backup_manifest_path, required=True)
+        base["backup_before_upgrade"] = {
+            "required": True,
+            "status": gate["status"],
+            "summary": gate["summary"],
+            "restore_validation_status": "not_performed_stage5_deferred",
+            "production_backup_status": "production_backup_deferred",
+        }
+        if gate["status"] == "satisfied":
+            base.update({"status": "ready", "summary": "Backup-required migrations are eligible for controlled runner execution."})
+        else:
+            base.update({"status": "blocked", "blocked_reason": "backup_required", "summary": gate["summary"]})
     else:
         base.update({"status": "ready", "summary": "Pending migrations are eligible for controlled runner execution."})
     return base
@@ -361,8 +398,16 @@ def execute_migration_plan(
     *,
     registry: MigrationRegistry = PRODUCTION_MIGRATIONS,
     target_version: int | None = None,
+    backup_manifest_path: str | None = None,
+    manual_authorized: bool = False,
 ) -> dict[str, Any]:
-    plan = build_migration_plan(db, registry=registry, target_version=target_version)
+    plan = build_migration_plan(
+        db,
+        registry=registry,
+        target_version=target_version,
+        backup_manifest_path=backup_manifest_path,
+        manual_authorized=manual_authorized,
+    )
     if plan["status"] == "current":
         return {**plan, "executed_migrations": []}
     if plan["status"] != "ready":
@@ -375,7 +420,11 @@ def execute_migration_plan(
 
     executed: list[str] = []
     for migration in registry.path(row.schema_version, target_version):
-        if migration.risk not in EXECUTABLE_RISKS:
+        if migration.risk == RISK_MANUAL_ONLY and not manual_authorized:
+            raise SchemaMigrationBlocked("manual_authorization_required", plan)
+        if migration.risk == RISK_REQUIRES_BACKUP and plan.get("backup_before_upgrade", {}).get("status") != "satisfied":
+            raise SchemaMigrationBlocked("backup_or_manual_required", plan)
+        if migration.risk not in EXECUTABLE_RISKS | {RISK_REQUIRES_BACKUP}:
             raise SchemaMigrationBlocked("backup_or_manual_required", plan)
         history = migration_history_status(db, migration)
         if history["status"] == HISTORY_APPLIED:
@@ -440,7 +489,16 @@ def execute_migration_plan(
             db.commit()
             raise SchemaMigrationBlocked("migration_failed", {**plan, "summary": safe_error}) from exc
 
-    return {**build_migration_plan(db, registry=registry, target_version=target_version), "executed_migrations": executed}
+    return {
+        **build_migration_plan(
+            db,
+            registry=registry,
+            target_version=target_version,
+            backup_manifest_path=backup_manifest_path,
+            manual_authorized=manual_authorized,
+        ),
+        "executed_migrations": executed,
+    }
 
 
 def validate_schema_migrations_pre_bootstrap(bind) -> None:

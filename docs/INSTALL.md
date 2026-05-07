@@ -121,9 +121,17 @@ The schema status is available to owner/admin users through the protected schema
 
 Stage 3 adds the API-owned deterministic migration runner contract on top of `schema_version_state` and `schema_migration_history`. The runner builds a read-only ordered plan before legacy `create_all` and manual compatibility ALTER can mask unsafe drift, classifies migrations as `metadata_only`, `additive_safe`, `risky_requires_backup`, or `manual_only`, and executes only eligible safe migrations through the controlled runner path.
 
-The current product schema is already at the accepted Stage 2 baseline, so Stage 3 does not register a real production schema migration. Runner behavior is validated with isolated test-only migration registries and disposable PostgreSQL scenarios. `risky_requires_backup` and `manual_only` migrations are planned but not executed before later safety stages. Existing live production adoption/version metadata remains deferred until Stage 4 backup-before-upgrade unless explicitly authorized. `APP_BUILD_VERSION` remains a temporary metadata value; installed build/release/source-channel versioning belongs to Stage 7.
+The current product schema is already at the accepted Stage 2 baseline, so Stage 3 does not register a real production schema migration. Runner behavior is validated with isolated test-only migration registries and disposable PostgreSQL scenarios. `risky_requires_backup` and `manual_only` migrations are planned but not executed before backup safety and manual authorization rules are satisfied. Existing live production adoption/version metadata remains deferred unless explicitly authorized. `APP_BUILD_VERSION` remains a temporary metadata value; installed build/release/source-channel versioning belongs to Stage 7.
 
-Startup integration is intentionally conservative in Stage 3: the pre-bootstrap runner hook is preflight/block-only for ready migration plans and does not auto-execute production migrations during startup before Stage 4 backup safety. Controlled execution exists as an internal runner path for eligible migrations, but production startup execution requires later backup/rollback safety work and explicit authorization.
+Stage 4 adds the backup-before-upgrade safety contract. The backend can build a read-only backup plan, create a controlled DB backup for PostgreSQL or file-backed SQLite/test DBs, write a manifest and sanitized metadata snapshot next to the backup artifact, and verify existence, size, checksum, recency and manifest consistency. DB backup artifacts are sensitive: they may contain users, password hashes, encrypted camera credentials, audit metadata and recording metadata. They must be stored outside the product Git tree, outside Working folder/service artifacts, outside archive/video folders, with restrictive permissions where the platform supports them. Video archive files and recordings are excluded from DB backup. Service/code/diagnostic archives must not include real DB dumps or backups.
+
+Production/runtime PostgreSQL backups are created by the API container using `pg_dump`; the production API image includes PostgreSQL client tooling for this path. The default runtime backup destination is the container path `KMVMS_DB_BACKUP_ROOT=/storage/backups/db`, mounted from the persistent host runtime directory `KMVMS_HOST_DB_BACKUP_ROOT=./data/backups/db`. The installer creates this host directory with restrictive permissions where supported. This directory is runtime data, is gitignored through `data/`, and must be excluded from code, service and diagnostic archives.
+
+The DB backup root must stay separate from `SURVEILLANCE_ROOT` and the video archive mount. Do not set `KMVMS_HOST_DB_BACKUP_ROOT` equal to or inside the selected archive root, and do not point `KMVMS_DB_BACKUP_ROOT` at `/storage/archive`, previews, exports, `/tmp`, Working folder, service artifacts or source-controlled code. Backup files are not recording segments and are outside retention, delete and reconciliation archive-data scope.
+
+Backup manifests record `restore_validation_status = not_performed_stage5_deferred`; Stage 4 verification is not restore validation. Stage 5 is responsible for restore/rollback validation. A valid recent backup manifest can satisfy the backup precondition for `risky_requires_backup` migration plans, but it does not make `manual_only` migrations automatic and does not enable production startup auto-execution. Production adoption/migration must still be explicitly authorized.
+
+Startup integration remains intentionally conservative: the pre-bootstrap runner hook is preflight/block-only for ready migration plans and does not auto-execute production migrations during startup. Controlled execution exists as an internal runner path for eligible migrations, but production startup execution requires later backup/rollback safety work and explicit authorization.
 
 Legacy `Base.metadata.create_all` and narrow manual compatibility SQL remain temporarily for fresh install and historical compatibility. Future stages should move additional bounded schema changes under the ordered runner and keep recorder outside schema migration ownership.
 
@@ -141,5 +149,6 @@ sh scripts/install.sh --app-dir /tmp/km-vms-stage1-install-test --http-port 1808
 
 ## Future Stages
 
-Stage 3 will add deterministic ordered DB migrations on top of the schema version state.
-Stage 4+ will add backup-before-upgrade, restore/rollback validation, upgrade reports and safe update notification.
+Stage 5 will validate restore/rollback.
+Stage 6 will add upgrade reports in diagnostics.
+Stage 7 will replace the temporary `APP_BUILD_VERSION` source and add safe update notification.

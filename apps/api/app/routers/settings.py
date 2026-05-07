@@ -56,6 +56,7 @@ from app.services.setup_storage import (
 )
 from app.services.schema_migrations import build_migration_plan
 from app.services.schema_versioning import schema_version_status
+from app.services.backup_before_upgrade import BackupExecutionConfig, BackupSafetyBlocked, build_backup_plan, create_backup_before_upgrade
 
 router = APIRouter(tags=["settings"])
 
@@ -102,6 +103,11 @@ class SettingsUpdateRequest(BaseModel):
 class BugReportRequest(BaseModel):
     text: str = Field(min_length=1, max_length=10000)
     include_logs: bool = True
+
+
+class BackupCreateRequest(BaseModel):
+    source: str = Field(default="manual_admin", pattern="^(pre_upgrade|pre_adoption|manual_admin|test)$")
+    backup_root: str | None = Field(default=None, max_length=1024)
 
 
 class StorageValidateRequest(BaseModel):
@@ -195,6 +201,39 @@ def system_schema_plan(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     return build_migration_plan(db)
+
+
+@router.get("/system/backup/plan")
+def system_backup_plan(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    return build_backup_plan(db)
+
+
+@router.post("/system/backup/create")
+def system_backup_create(
+    payload: BackupCreateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        config = BackupExecutionConfig(backup_root=Path(payload.backup_root) if payload.backup_root else None, source=payload.source)
+        result = create_backup_before_upgrade(db, config=config, migration_plan_summary=build_migration_plan(db))
+        return {
+            "backup_id": result["backup_id"],
+            "status": result["status"],
+            "db_backend": result["db_backend"],
+            "source": result["source"],
+            "backup_file_label": result["backup_file_label"],
+            "metadata_file_label": result["metadata_file_label"],
+            "file_size": result["file_size"],
+            "checksum_sha256": result["checksum_sha256"],
+            "restore_validation_status": result["restore_validation_status"],
+            "video_archive_files_included": False,
+        }
+    except BackupSafetyBlocked as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.diagnostics)
 
 
 @router.get("/system/runtime/status")

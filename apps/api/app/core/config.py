@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     encryption_key: str
 
     storage_root: str = "/storage/archive"
+    kmvms_db_backup_root: str = "/storage/backups/db"
     storage_install_control: str = "/install-control"
     storage_previews: str = "/storage/previews"
     storage_exports: str = "/storage/exports"

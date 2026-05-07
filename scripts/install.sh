@@ -325,7 +325,9 @@ write_env() {
   env_file="$APP_DIR/.env"
   [ ! -e "$env_file" ] || fail ".env already exists; refusing to overwrite: $env_file"
   archive_dir="$APP_DIR/data/archive"
-  mkdir -p "$archive_dir" "$APP_DIR/data/previews" "$APP_DIR/data/exports" "$APP_DIR/data/install-control"
+  backup_dir="$APP_DIR/data/backups/db"
+  mkdir -p "$archive_dir" "$backup_dir" "$APP_DIR/data/previews" "$APP_DIR/data/exports" "$APP_DIR/data/install-control"
+  chmod 700 "$backup_dir" 2>/dev/null || true
   pg_secret=$(random_secret)
   jwt_secret=$(random_secret)
   enc_secret=$(random_secret)
@@ -337,6 +339,8 @@ write_env() {
     printf 'JWT_SECRET=%s\n' "$jwt_secret"
     printf 'ENCRYPTION_KEY=%s\n' "$enc_secret"
     printf 'SURVEILLANCE_ROOT=%s\n' "$archive_dir"
+    printf 'KMVMS_HOST_DB_BACKUP_ROOT=%s\n' "$backup_dir"
+    printf 'KMVMS_DB_BACKUP_ROOT=/storage/backups/db\n'
     printf 'STORAGE_INSTALL_CONTROL=%s\n' "$APP_DIR/data/install-control"
     printf 'HTTP_PORT=%s\n' "$HTTP_PORT"
     printf 'API_PORT=%s\n' "$API_PORT"

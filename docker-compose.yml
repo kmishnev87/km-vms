@@ -57,6 +57,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       STORAGE_ROOT: /storage/archive
+      KMVMS_DB_BACKUP_ROOT: ${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
       STORAGE_HOST_ROOT: ${SURVEILLANCE_ROOT:-}
       STORAGE_INSTALL_CONTROL: /install-control
       STORAGE_PREVIEWS: /storage/previews
@@ -80,6 +81,7 @@ services:
       ADMIN_FULL_NAME: ${ADMIN_FULL_NAME}
     volumes:
       - ${SURVEILLANCE_ROOT}:/storage/archive
+      - ${KMVMS_HOST_DB_BACKUP_ROOT:-./data/backups/db}:${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
       - ./data/install-control:/install-control
       - ./data/previews:/storage/previews
       - ./data/exports:/storage/exports
