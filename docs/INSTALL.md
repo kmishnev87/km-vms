@@ -131,6 +131,8 @@ The DB backup root must stay separate from `SURVEILLANCE_ROOT` and the video arc
 
 Backup manifests record `restore_validation_status = not_performed_stage5_deferred`; Stage 4 verification is not restore validation. Stage 5 is responsible for restore/rollback validation. A valid recent backup manifest can satisfy the backup precondition for `risky_requires_backup` migration plans, but it does not make `manual_only` migrations automatic and does not enable production startup auto-execution. Production adoption/migration must still be explicitly authorized.
 
+Stage 5 adds restore validation for Stage 4 PostgreSQL custom-format DB backups. Restore validation is backend-owned and internal: it restores with `pg_restore` only into an explicitly disposable PostgreSQL target whose database name uses the Stage 5 disposable prefix, refuses the source/current/live database, refuses targets that already contain KM VMS product tables, validates owner login contract, users, cameras, settings, schema version/history, migration plan readability, recording/archive metadata and audit summary, then writes a separate restore-validation manifest. The original backup dump and manifest are not mutated. Video archive files are not restored by Stage 5; only DB metadata paths are validated.
+
 Startup integration remains intentionally conservative: the pre-bootstrap runner hook is preflight/block-only for ready migration plans and does not auto-execute production migrations during startup. Controlled execution exists as an internal runner path for eligible migrations, but production startup execution requires later backup/rollback safety work and explicit authorization.
 
 Legacy `Base.metadata.create_all` and narrow manual compatibility SQL remain temporarily for fresh install and historical compatibility. Future stages should move additional bounded schema changes under the ordered runner and keep recorder outside schema migration ownership.
@@ -149,6 +151,5 @@ sh scripts/install.sh --app-dir /tmp/km-vms-stage1-install-test --http-port 1808
 
 ## Future Stages
 
-Stage 5 will validate restore/rollback.
 Stage 6 will add upgrade reports in diagnostics.
 Stage 7 will replace the temporary `APP_BUILD_VERSION` source and add safe update notification.
