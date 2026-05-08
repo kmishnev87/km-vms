@@ -25,12 +25,19 @@ from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.onvif_service import (
+    build_onvif_health_contract,
+    check_onvif_events_feasibility,
     discover_onvif_devices,
+    execute_onvif_ptz_command,
     fetch_onvif_profiles,
     get_onvif_profile_config,
+    get_onvif_ptz_capabilities,
     probe_onvif_device,
     rtsp_path_from_uri,
     update_onvif_profile,
+    validate_ptz_command_payload,
+    ptz_validation_response,
+    ptz_command_limits,
 )
 from app.services.recording_retention import execute_segments, preview_segments
 
@@ -354,6 +361,57 @@ def apply_profile_assignments(data: dict, camera: Camera | None) -> dict:
     return data
 
 
+def get_active_camera_or_404(db: Session, camera_id: int) -> Camera:
+    camera = db.query(Camera).filter(Camera.id == int(camera_id), Camera.deleted_at.is_(None)).first()
+    if not camera:
+        raise HTTPException(status_code=404, detail={"code": "camera_not_active", "message": "Camera was not found or is no longer active."})
+    return camera
+
+
+def safe_camera_onvif_credentials(camera: Camera) -> dict:
+    if str(camera.protocol or "").lower() != "onvif":
+        return {
+            "ok": True,
+            "supported": False,
+            "source": "not_onvif",
+            "can_pan_tilt": False,
+            "can_zoom": False,
+            "can_stop": False,
+            "can_presets": False,
+            "limits": ptz_command_limits(),
+            "warnings": ["camera_protocol_is_not_onvif"],
+            "unsupported_reasons": ["not_onvif"],
+            "raw_secret_exposed": False,
+        }
+    password = decrypt_text(camera.password_encrypted)
+    if not camera.host or not camera.port or not camera.username or not password:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "camera_onvif_credentials_required",
+                "message": "ONVIF camera host, port, username and password are required for camera controls.",
+            },
+        )
+    return {
+        "host": camera.host,
+        "port": int(camera.port or 80),
+        "username": camera.username,
+        "password": password,
+    }
+
+
+def run_bounded_read_only_check(callable_obj, *, timeout_seconds: int = 8, **kwargs):
+    executor = ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(callable_obj, **kwargs)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FutureTimeout:
+        future.cancel()
+        raise TimeoutError("onvif_health_check_timeout")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
 def build_test_url(payload: dict, db: Session | None = None) -> str | None:
     protocol = str(payload.get("protocol") or "rtsp").lower()
     rtsp_main_url = payload.get("rtsp_main_url")
@@ -540,6 +598,237 @@ def update_onvif_profile_route(
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=safe_onvif_error(e))
+
+
+@router.get("/{camera_id}/onvif/ptz/capabilities")
+def onvif_ptz_capabilities(
+    camera_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_cameras")),
+):
+    camera = get_active_camera_or_404(db, camera_id)
+    creds = safe_camera_onvif_credentials(camera)
+    if creds.get("source") == "not_onvif":
+        return {
+            "camera_id": camera.id,
+            "camera_name": camera.name,
+            **creds,
+        }
+    try:
+        result = get_onvif_ptz_capabilities(**creds)
+        return {
+            "camera_id": camera.id,
+            "camera_name": camera.name,
+            **result,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {
+            "camera_id": camera.id,
+            "camera_name": camera.name,
+            "ok": True,
+            "supported": False,
+            "source": "unreachable",
+            "can_pan_tilt": False,
+            "can_zoom": False,
+            "can_stop": False,
+            "can_presets": False,
+            "limits": ptz_command_limits(),
+            "warnings": [onvif_error_code(e)],
+            "unsupported_reasons": ["onvif_ptz_capability_check_failed"],
+            "message": safe_onvif_error(e),
+            "raw_secret_exposed": False,
+        }
+
+
+@router.post("/{camera_id}/onvif/ptz/command")
+def onvif_ptz_command(
+    camera_id: int,
+    payload: dict,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_cameras")),
+):
+    camera = get_active_camera_or_404(db, camera_id)
+    try:
+        command = validate_ptz_command_payload(payload)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": str(e), "message": "PTZ command payload is invalid."},
+        )
+
+    if command["validation_only"]:
+        result = ptz_validation_response(command)
+    else:
+        creds = safe_camera_onvif_credentials(camera)
+        if creds.get("source") == "not_onvif":
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "camera_not_onvif", "message": "PTZ commands require an ONVIF camera."},
+            )
+        try:
+            result = execute_onvif_ptz_command(**creds, payload=payload)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": str(e), "message": "PTZ command payload is invalid."},
+            )
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": onvif_error_code(e), "message": safe_onvif_error(e)},
+            )
+
+    create_event(
+        db=db,
+        actor=current_user,
+        category="cameras",
+        event_type="cameras.ptz_command",
+        message_ru=f"{current_user.username} проверил PTZ команду для камеры {camera.name}",
+        message_en=f"{current_user.username} validated PTZ command for camera {camera.name}",
+        target_type="camera",
+        target_id=camera.id,
+        target_name=camera.name,
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+        metadata={
+            "action": result.get("action"),
+            "execution_mode": result.get("execution_mode"),
+            "executed": bool(result.get("executed")),
+            "physical_camera_mutated": bool(result.get("physical_camera_mutated")),
+            "duration_seconds": result.get("duration_seconds"),
+        },
+    )
+    return {
+        "camera_id": camera.id,
+        "camera_name": camera.name,
+        **result,
+    }
+
+
+@router.get("/{camera_id}/onvif/health")
+def onvif_health(
+    camera_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_cameras")),
+):
+    camera = get_active_camera_or_404(db, camera_id)
+    return build_onvif_health_contract(camera, check_performed=False)
+
+
+@router.post("/{camera_id}/onvif/health/check")
+def onvif_health_check(
+    camera_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_cameras")),
+):
+    camera = get_active_camera_or_404(db, camera_id)
+    checked_at = datetime.utcnow().isoformat() + "Z"
+    profiles_result = None
+    ptz_result = None
+    events_result = None
+    check_status = "not_checked"
+    reason_codes: list[str] = []
+
+    if str(camera.protocol or "").lower() != "onvif":
+        result = build_onvif_health_contract(camera, check_performed=True, checked_at=checked_at)
+        check_status = "unsupported"
+        reason_codes = ["not_onvif"]
+    else:
+        password = decrypt_text(camera.password_encrypted)
+        if not camera.host or not camera.port or not camera.username or not password:
+            result = build_onvif_health_contract(camera, password=None, check_performed=True, checked_at=checked_at)
+            check_status = "misconfigured"
+            reason_codes = ["onvif_credentials_required"]
+        else:
+            try:
+                profiles_result = run_bounded_read_only_check(
+                    fetch_onvif_profiles,
+                    host=str(camera.host),
+                    port=int(camera.port or 80),
+                    username=str(camera.username),
+                    password=str(password),
+                    rtsp_host=str(camera.rtsp_reachable_host or camera.host),
+                    rtsp_port=int(camera.rtsp_reachable_port or 554),
+                )
+                check_status = "reachable"
+            except Exception as exc:
+                reason_codes.append(onvif_error_code(exc))
+                profiles_result = None
+                check_status = "unreachable"
+
+            try:
+                ptz_result = run_bounded_read_only_check(
+                    get_onvif_ptz_capabilities,
+                    host=str(camera.host),
+                    port=int(camera.port or 80),
+                    username=str(camera.username),
+                    password=str(password),
+                )
+            except Exception as exc:
+                reason_codes.append(onvif_error_code(exc))
+                ptz_result = {
+                    "supported": False,
+                    "source": "unknown",
+                    "unsupported_reasons": ["ptz_check_failed"],
+                    "raw_secret_exposed": False,
+                }
+
+            try:
+                events_result = run_bounded_read_only_check(
+                    check_onvif_events_feasibility,
+                    host=str(camera.host),
+                    port=int(camera.port or 80),
+                    username=str(camera.username),
+                    password=str(password),
+                )
+            except Exception as exc:
+                reason_codes.append(onvif_error_code(exc))
+                events_result = {
+                    "events_supported": False,
+                    "events_status": "unknown",
+                    "reason_codes": ["events_feasibility_check_failed"],
+                    "limitations": ["feasibility_only_no_subscription_started"],
+                    "raw_secret_exposed": False,
+                }
+
+            result = build_onvif_health_contract(
+                camera,
+                password=password,
+                profiles_result=profiles_result,
+                ptz_result=ptz_result,
+                events_result=events_result,
+                check_performed=True,
+                checked_at=checked_at,
+            )
+            if reason_codes:
+                result["warnings"] = sorted(set(result.get("warnings", [])) | set(reason_codes))
+
+    create_event(
+        db=db,
+        actor=current_user,
+        category="cameras",
+        event_type="cameras.onvif_health_check",
+        message_ru=f"{current_user.username} выполнил ONVIF health check для камеры {camera.name}",
+        message_en=f"{current_user.username} ran ONVIF health check for camera {camera.name}",
+        target_type="camera",
+        target_id=camera.id,
+        target_name=camera.name,
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+        metadata={
+            "check_type": "onvif_health",
+            "status": check_status,
+            "reason_codes": sorted(set(reason_codes)),
+            "domains_checked": sorted(result.get("compatibility_matrix", {}).keys()),
+            "redaction_status": "sanitized",
+            "raw_secret_exposed": False,
+        },
+    )
+    return result
 
 
 @router.get("", response_model=list[CameraResponse])

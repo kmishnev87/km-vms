@@ -1,5 +1,6 @@
 from pathlib import Path
 import hashlib
+import time
 from urllib.parse import quote, urlparse, urlsplit, urlunparse, urlunsplit
 
 from onvif import ONVIFCamera
@@ -9,6 +10,34 @@ MEDIA_XADDR_KEYS = (
     "media2",
     "http://www.onvif.org/ver10/media/wsdl",
     "http://www.onvif.org/ver20/media/wsdl",
+)
+
+PTZ_MAX_DURATION_SECONDS = 2.0
+PTZ_MIN_DURATION_SECONDS = 0.1
+PTZ_MAX_SPEED = 0.35
+PTZ_MIN_SPEED = 0.01
+PTZ_DIRECTIONS = {
+    "left": (-1.0, 0.0),
+    "right": (1.0, 0.0),
+    "up": (0.0, 1.0),
+    "down": (0.0, -1.0),
+    "up_left": (-1.0, 1.0),
+    "up_right": (1.0, 1.0),
+    "down_left": (-1.0, -1.0),
+    "down_right": (1.0, -1.0),
+}
+PTZ_ZOOM_DIRECTIONS = {"in": 1.0, "out": -1.0}
+COMPATIBILITY_DOMAINS = (
+    "onvif_service",
+    "media_profiles",
+    "stream_uri",
+    "rtsp_reachable_override",
+    "main_sub_assignment",
+    "profile_config_options",
+    "ptz",
+    "events",
+    "recorder_contract",
+    "redaction",
 )
 
 
@@ -46,6 +75,10 @@ def _safe_number(value):
             return float(value)
         except (TypeError, ValueError):
             return None
+
+
+def _safe_bool(value) -> bool:
+    return bool(value) if value is not None else False
 
 
 def _candidate_id(host: str | None, port: int | None, source: str) -> str:
@@ -796,4 +829,569 @@ def update_onvif_profile(host, port, username, password, profile_token, config):
     return {
         "ok": True,
         "media_service_xaddr": selected_media_xaddr,
+    }
+
+
+def _ptz_limits() -> dict:
+    return {
+        "actions": ["stop", "move", "zoom"],
+        "directions": sorted(PTZ_DIRECTIONS),
+        "zoom_directions": sorted(PTZ_ZOOM_DIRECTIONS),
+        "duration_seconds": {
+            "min": PTZ_MIN_DURATION_SECONDS,
+            "max": PTZ_MAX_DURATION_SECONDS,
+            "required_for": ["move", "zoom"],
+        },
+        "speed": {
+            "min": PTZ_MIN_SPEED,
+            "max": PTZ_MAX_SPEED,
+            "default": 0.1,
+        },
+        "real_execution_requires": ["dry_run_false", "supported_ptz_camera", "bounded_duration", "automatic_stop"],
+    }
+
+
+def ptz_command_limits() -> dict:
+    return _ptz_limits()
+
+
+def _safe_range_axis(axis) -> dict | None:
+    value_range = _safe_attr(axis, "XRange") or _safe_attr(axis, "YRange")
+    return _range_meta(value_range)
+
+
+def _ptz_space_items(spaces, name: str) -> list[dict]:
+    result = []
+    for item in _as_list(_safe_attr(spaces, name)):
+        entry = {"uri": _safe_text(_safe_attr(item, "URI"), 180)}
+        x_range = _range_meta(_safe_attr(item, "XRange"))
+        y_range = _range_meta(_safe_attr(item, "YRange"))
+        if x_range:
+            entry["x"] = x_range
+        if y_range:
+            entry["y"] = y_range
+        result.append(entry)
+    return result
+
+
+def _normalize_ptz_node(node) -> dict:
+    spaces = _safe_attr(node, "SupportedPTZSpaces")
+    pan_tilt_spaces = (
+        _ptz_space_items(spaces, "ContinuousPanTiltVelocitySpace")
+        + _ptz_space_items(spaces, "RelativePanTiltTranslationSpace")
+        + _ptz_space_items(spaces, "AbsolutePanTiltPositionSpace")
+    )
+    zoom_spaces = (
+        _ptz_space_items(spaces, "ContinuousZoomVelocitySpace")
+        + _ptz_space_items(spaces, "RelativeZoomTranslationSpace")
+        + _ptz_space_items(spaces, "AbsoluteZoomPositionSpace")
+    )
+    return {
+        "token": _safe_text(_safe_attr(node, "token"), 120),
+        "name": _safe_text(_safe_attr(node, "Name"), 120),
+        "can_pan_tilt": bool(pan_tilt_spaces),
+        "can_zoom": bool(zoom_spaces),
+        "spaces": {
+            "pan_tilt": pan_tilt_spaces[:8],
+            "zoom": zoom_spaces[:8],
+        },
+    }
+
+
+def _prepare_ptz_context(host, port, username, password):
+    cam, media_candidates = _prepare_camera(host, port, username or "", password or "")
+    ptz = cam.create_ptz_service()
+    media, _selected_media_xaddr = _get_media_service(cam, media_candidates)
+    profiles = media.GetProfiles()
+    profile_token = _safe_attr(profiles[0], "token") if profiles else None
+    return cam, ptz, profile_token
+
+
+def get_onvif_ptz_capabilities(host, port, username, password) -> dict:
+    try:
+        _cam, ptz, profile_token = _prepare_ptz_context(host, port, username, password)
+    except Exception as exc:
+        text = str(exc).lower()
+        if "ptz" in text or "service" in text or "wsdl" in text:
+            return {
+                "ok": True,
+                "supported": False,
+                "source": "unsupported",
+                "can_pan_tilt": False,
+                "can_zoom": False,
+                "can_stop": False,
+                "can_presets": False,
+                "limits": _ptz_limits(),
+                "warnings": ["ptz_service_unavailable"],
+                "unsupported_reasons": ["ptz_service_unavailable"],
+                "raw_secret_exposed": False,
+            }
+        raise
+
+    nodes = []
+    warnings = []
+    try:
+        nodes = [_normalize_ptz_node(node) for node in _as_list(ptz.GetNodes())]
+    except Exception:
+        warnings.append("ptz_nodes_unavailable")
+
+    can_pan_tilt = any(item.get("can_pan_tilt") for item in nodes)
+    can_zoom = any(item.get("can_zoom") for item in nodes)
+    supported = bool(can_pan_tilt or can_zoom or profile_token)
+    return {
+        "ok": True,
+        "supported": supported,
+        "source": "onvif_ptz_service" if supported else "unsupported",
+        "can_pan_tilt": can_pan_tilt,
+        "can_zoom": can_zoom,
+        "can_stop": supported,
+        "can_presets": False,
+        "profile_token_available": bool(profile_token),
+        "nodes": nodes[:8],
+        "limits": _ptz_limits(),
+        "warnings": warnings,
+        "unsupported_reasons": [] if supported else ["ptz_capabilities_not_reported"],
+        "raw_secret_exposed": False,
+    }
+
+
+def _bounded_float(value, *, name: str, minimum: float, maximum: float, required: bool = True) -> float | None:
+    if value in (None, ""):
+        if required:
+            raise ValueError(f"{name}_required")
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name}_must_be_numeric")
+    if number < minimum or number > maximum:
+        raise ValueError(f"{name}_out_of_bounds")
+    return number
+
+
+def validate_ptz_command_payload(payload: dict | None) -> dict:
+    payload = payload or {}
+    action = str(payload.get("action") or "").strip().lower()
+    if action not in {"stop", "move", "zoom"}:
+        raise ValueError("unsupported_ptz_action")
+
+    validation_only = bool(payload.get("validation_only"))
+    dry_run = bool(payload.get("dry_run", True))
+    speed = _bounded_float(
+        payload.get("speed", _ptz_limits()["speed"]["default"]),
+        name="speed",
+        minimum=PTZ_MIN_SPEED,
+        maximum=PTZ_MAX_SPEED,
+        required=False,
+    )
+
+    command = {
+        "action": action,
+        "execution_mode": "validation_only" if validation_only else "dry_run" if dry_run else "execute_requested",
+        "validation_only": validation_only,
+        "dry_run": dry_run,
+        "speed": speed or _ptz_limits()["speed"]["default"],
+        "duration_seconds": None,
+        "direction": None,
+        "pan": 0.0,
+        "tilt": 0.0,
+        "zoom": 0.0,
+        "limits": _ptz_limits(),
+    }
+
+    if action == "stop":
+        return command
+
+    duration = _bounded_float(
+        payload.get("duration_seconds"),
+        name="duration_seconds",
+        minimum=PTZ_MIN_DURATION_SECONDS,
+        maximum=PTZ_MAX_DURATION_SECONDS,
+        required=True,
+    )
+    command["duration_seconds"] = duration
+
+    direction = str(payload.get("direction") or "").strip().lower()
+    if action == "move":
+        if direction not in PTZ_DIRECTIONS:
+            raise ValueError("unsupported_ptz_direction")
+        pan, tilt = PTZ_DIRECTIONS[direction]
+        command.update({
+            "direction": direction,
+            "pan": pan * command["speed"],
+            "tilt": tilt * command["speed"],
+        })
+    elif action == "zoom":
+        if direction not in PTZ_ZOOM_DIRECTIONS:
+            raise ValueError("unsupported_ptz_zoom_direction")
+        command.update({
+            "direction": direction,
+            "zoom": PTZ_ZOOM_DIRECTIONS[direction] * command["speed"],
+        })
+
+    return command
+
+
+def ptz_validation_response(command: dict, message: str = "PTZ command validated.") -> dict:
+    return {
+        "ok": True,
+        "action": command["action"],
+        "execution_mode": command["execution_mode"],
+        "payload_valid": True,
+        "camera_capability_checked": False,
+        "camera_supported": None,
+        "command_executable": False,
+        "executed": False,
+        "physical_camera_mutated": False,
+        "camera_stopped": False,
+        "duration_seconds": command.get("duration_seconds"),
+        "warnings": ["physical_execution_not_requested"],
+        "message": message,
+        "raw_secret_exposed": False,
+    }
+
+
+def compatibility_domain(status: str, reason_codes=None, evidence_level: str = "not_checked", **extra) -> dict:
+    return {
+        "status": status,
+        "reason_codes": list(reason_codes or []),
+        "evidence_level": evidence_level,
+        **extra,
+    }
+
+
+def camera_static_onvif_state(camera) -> dict:
+    protocol = str(getattr(camera, "protocol", "") or "").lower()
+    configured = bool(
+        protocol == "onvif"
+        and getattr(camera, "host", None)
+        and getattr(camera, "port", None)
+        and getattr(camera, "username", None)
+        and getattr(camera, "password_encrypted", None)
+    )
+    return {
+        "protocol": protocol,
+        "enabled": bool(getattr(camera, "enabled", False)),
+        "deleted": bool(getattr(camera, "deleted_at", None)),
+        "configured": configured,
+        "misconfigured": protocol == "onvif" and not configured,
+        "reason_codes": [] if configured else (["not_onvif"] if protocol != "onvif" else ["onvif_credentials_required"]),
+    }
+
+
+def summarize_main_sub_assignment(camera, profiles: list[dict] | None = None) -> dict:
+    profiles = profiles or []
+    main_path = rtsp_path_from_uri(getattr(camera, "rtsp_main_url", None)) or getattr(camera, "rtsp_main_url", None)
+    sub_path = rtsp_path_from_uri(getattr(camera, "rtsp_sub_url", None)) or getattr(camera, "rtsp_sub_url", None)
+    main_token = getattr(camera, "onvif_profile_token", None)
+    path_counts: dict[str, int] = {}
+    token_counts: dict[str, int] = {}
+    for profile in profiles:
+        token = str(profile.get("token") or "")
+        if token:
+            token_counts[token] = token_counts.get(token, 0) + 1
+        path = profile.get("stream_path") or rtsp_path_from_uri(profile.get("stream_uri"))
+        if path:
+            path_counts[path] = path_counts.get(path, 0) + 1
+
+    reason_codes = []
+    if main_token and token_counts.get(str(main_token), 0) == 1:
+        main_confidence = "token_exact"
+    elif main_path and path_counts.get(str(main_path), 0) == 1:
+        main_confidence = "path_unique"
+    elif main_path and path_counts.get(str(main_path), 0) > 1:
+        main_confidence = "path_ambiguous"
+        reason_codes.append("main_stream_path_not_unique")
+    elif main_token:
+        main_confidence = "token_unverified"
+        reason_codes.append("main_profile_token_not_seen")
+    else:
+        main_confidence = "not_configured"
+        reason_codes.append("main_stream_not_configured")
+
+    if sub_path and path_counts.get(str(sub_path), 0) == 1:
+        sub_confidence = "path_unique"
+    elif sub_path and path_counts.get(str(sub_path), 0) > 1:
+        sub_confidence = "path_ambiguous"
+        reason_codes.append("sub_stream_path_not_unique")
+    elif sub_path:
+        sub_confidence = "path_unverified"
+        reason_codes.append("sub_stream_path_not_seen")
+    else:
+        sub_confidence = "not_configured"
+        reason_codes.append("sub_stream_not_configured")
+
+    if main_path and sub_path and str(main_path) == str(sub_path):
+        reason_codes.append("main_sub_paths_identical")
+
+    status = "ok"
+    if any("ambiguous" in value for value in (main_confidence, sub_confidence)) or "main_sub_paths_identical" in reason_codes:
+        status = "warning"
+    elif reason_codes:
+        status = "unknown"
+
+    return {
+        "status": status,
+        "main_confidence": main_confidence,
+        "sub_confidence": sub_confidence,
+        "reason_codes": reason_codes,
+        "profile_count": len(profiles),
+    }
+
+
+def normalize_ptz_compatibility(ptz_result: dict | None) -> dict:
+    if not ptz_result:
+        return compatibility_domain("unknown", ["ptz_not_checked"])
+    if ptz_result.get("source") == "not_onvif":
+        return compatibility_domain("not_checked", ["not_onvif"], "static", supported=False)
+    if not ptz_result.get("supported"):
+        return compatibility_domain("unsupported", ptz_result.get("unsupported_reasons") or ["ptz_unsupported"], "real_runtime", supported=False)
+    nodes = ptz_result.get("nodes") or []
+    incomplete = bool(ptz_result.get("profile_token_available") and not nodes)
+    can_move = bool(ptz_result.get("can_pan_tilt") or ptz_result.get("can_zoom"))
+    if incomplete or not can_move:
+        return compatibility_domain(
+            "warning",
+            ["ptz_capability_incomplete"],
+            "real_runtime",
+            supported="partial",
+            can_pan_tilt=bool(ptz_result.get("can_pan_tilt")),
+            can_zoom=bool(ptz_result.get("can_zoom")),
+        )
+    return compatibility_domain(
+        "ok",
+        [],
+        "real_runtime",
+        supported=True,
+        can_pan_tilt=bool(ptz_result.get("can_pan_tilt")),
+        can_zoom=bool(ptz_result.get("can_zoom")),
+    )
+
+
+def check_onvif_events_feasibility(host, port, username, password) -> dict:
+    cam = ONVIFCamera(host, int(port), username or "", password or "", wsdl_dir())
+    services = []
+    try:
+        services = cam.devicemgmt.GetServices({"IncludeCapability": True}) or []
+    except Exception:
+        services = []
+
+    event_services = []
+    for service in services:
+        namespace = str(getattr(service, "Namespace", "") or "").lower()
+        xaddr = str(getattr(service, "XAddr", "") or "")
+        if "event" in namespace or "event" in xaddr.lower():
+            event_services.append(service)
+
+    if not event_services:
+        try:
+            caps = cam.devicemgmt.GetCapabilities({"Category": "Events"})
+            events = _safe_attr(caps, "Events")
+            if events:
+                event_services.append(events)
+        except Exception:
+            pass
+
+    if event_services:
+        return {
+            "events_supported": True,
+            "events_status": "supported",
+            "reason_codes": [],
+            "limitations": ["feasibility_only_no_subscription_started"],
+            "raw_secret_exposed": False,
+        }
+    return {
+        "events_supported": False,
+        "events_status": "unsupported",
+        "reason_codes": ["event_service_not_reported"],
+        "limitations": ["feasibility_only_no_subscription_started"],
+        "raw_secret_exposed": False,
+    }
+
+
+def build_onvif_health_contract(
+    camera,
+    *,
+    password: str | None = None,
+    profiles_result: dict | None = None,
+    ptz_result: dict | None = None,
+    events_result: dict | None = None,
+    check_performed: bool = False,
+    checked_at: str | None = None,
+) -> dict:
+    static = camera_static_onvif_state(camera)
+    protocol = static["protocol"]
+    effective_misconfigured = bool(static["misconfigured"] or (check_performed and protocol == "onvif" and password is None))
+    profiles = (profiles_result or {}).get("profiles") or []
+    assignment = summarize_main_sub_assignment(camera, profiles)
+    ptz_domain = normalize_ptz_compatibility(ptz_result)
+
+    if protocol != "onvif":
+        onvif_domain = compatibility_domain("unsupported", ["not_onvif"], "static")
+    elif effective_misconfigured:
+        onvif_domain = compatibility_domain("error", ["onvif_credentials_required"], "static")
+    elif check_performed and profiles_result:
+        onvif_domain = compatibility_domain("ok", [], "real_runtime")
+    elif check_performed:
+        onvif_domain = compatibility_domain("error", ["onvif_check_failed"], "real_runtime")
+    else:
+        onvif_domain = compatibility_domain("not_checked", ["explicit_check_required"])
+
+    if profiles_result:
+        media_domain = compatibility_domain("ok" if profiles else "warning", [] if profiles else ["profiles_empty"], "real_runtime", profile_count=len(profiles))
+        stream_status = "ok" if any(item.get("stream_path") for item in profiles) else "warning"
+        stream_domain = compatibility_domain(stream_status, [] if stream_status == "ok" else ["stream_uri_path_unavailable"], "real_runtime")
+        config_domain = compatibility_domain("ok", [], "real_runtime")
+    elif protocol == "onvif" and check_performed:
+        media_domain = compatibility_domain("error", ["profiles_unavailable"], "real_runtime", profile_count=0)
+        stream_domain = compatibility_domain("unknown", ["stream_uri_not_checked"], "real_runtime")
+        config_domain = compatibility_domain("unknown", ["profile_config_not_checked"], "not_checked")
+    else:
+        media_domain = compatibility_domain("not_checked", ["explicit_check_required"])
+        stream_domain = compatibility_domain("not_checked", ["explicit_check_required"])
+        config_domain = compatibility_domain("not_checked", ["explicit_check_required"])
+
+    if getattr(camera, "rtsp_host", None) or getattr(camera, "rtsp_port", None):
+        rtsp_domain = compatibility_domain("ok", [], "static", source="user_reachable_override")
+    elif getattr(camera, "rtsp_main_url", None) or getattr(camera, "rtsp_sub_url", None):
+        rtsp_domain = compatibility_domain("unknown", ["rtsp_url_configured_reachability_not_checked"], "static")
+    else:
+        rtsp_domain = compatibility_domain("not_checked", ["rtsp_not_configured_or_not_checked"])
+
+    if events_result:
+        events_status = events_result.get("events_status") or "unknown"
+        events_domain = compatibility_domain(
+            "ok" if events_status == "supported" else "unsupported",
+            events_result.get("reason_codes") or [],
+            "real_runtime",
+            events_supported=bool(events_result.get("events_supported")),
+            limitations=events_result.get("limitations") or [],
+        )
+    else:
+        events_domain = compatibility_domain("not_checked", ["events_feasibility_not_checked"])
+
+    recorder_domain = compatibility_domain(
+        "unknown",
+        ["recorder_runtime_not_queried_by_onvif_health"],
+        "static",
+        recording_mode=getattr(camera, "recording_mode", None),
+        default_record_stream=getattr(camera, "default_record_stream", None),
+    )
+    redaction_domain = compatibility_domain("ok", [], "static", raw_secret_exposed=False)
+
+    assignment_details = {key: value for key, value in assignment.items() if key not in {"status", "reason_codes"}}
+    domains = {
+        "onvif_service": onvif_domain,
+        "media_profiles": media_domain,
+        "stream_uri": stream_domain,
+        "rtsp_reachable_override": rtsp_domain,
+        "main_sub_assignment": compatibility_domain(
+            assignment["status"],
+            assignment["reason_codes"],
+            "real_runtime" if profiles_result else "static",
+            **assignment_details,
+        ),
+        "profile_config_options": config_domain,
+        "ptz": ptz_domain,
+        "events": events_domain,
+        "recorder_contract": recorder_domain,
+        "redaction": redaction_domain,
+    }
+
+    onvif_status = onvif_domain["status"]
+    if onvif_status == "ok":
+        onvif_availability = "reachable"
+    elif protocol != "onvif":
+        onvif_availability = "unsupported"
+    elif effective_misconfigured:
+        onvif_availability = "misconfigured"
+    elif check_performed:
+        onvif_availability = "unreachable"
+    else:
+        onvif_availability = "unknown"
+
+    return {
+        "ok": True,
+        "camera": {
+            "id": getattr(camera, "id", None),
+            "name": getattr(camera, "name", None),
+            "enabled": bool(getattr(camera, "enabled", False)),
+            "deleted": bool(getattr(camera, "deleted_at", None)),
+            "protocol": protocol,
+        },
+        "checked_at": checked_at,
+        "persisted_last_check": False,
+        "check_performed": bool(check_performed),
+        "availability": {
+            "onvif_status": onvif_availability,
+            "rtsp_status": "not_checked",
+            "recorder_status": "not_checked",
+            "live_status": "not_checked",
+        },
+        "onvif_configured": bool(static["configured"] and not effective_misconfigured),
+        "onvif_misconfigured": bool(effective_misconfigured),
+        "ptz_status": domains["ptz"]["status"],
+        "profile_summary": {
+            "profile_count": len(profiles),
+            "main_sub_assignment": assignment,
+        },
+        "event_service": {
+            "status": domains["events"]["status"],
+            "supported": domains["events"].get("events_supported"),
+            "limitations": domains["events"].get("limitations", []),
+        },
+        "compatibility_matrix": domains,
+        "warnings": sorted({reason for domain in domains.values() for reason in domain.get("reason_codes", []) if reason}),
+        "limitations": [
+            "no_background_polling",
+            "no_physical_camera_mutation",
+            "rtsp_and_recorder_status_are_separate_and_not_checked_here",
+        ],
+        "raw_secret_exposed": False,
+    }
+
+
+def execute_onvif_ptz_command(host, port, username, password, payload: dict) -> dict:
+    command = validate_ptz_command_payload(payload)
+    if command["validation_only"] or command["dry_run"]:
+        return ptz_validation_response(command)
+
+    _cam, ptz, profile_token = _prepare_ptz_context(host, port, username, password)
+    if not profile_token:
+        raise RuntimeError("ptz_profile_token_unavailable")
+
+    stopped = False
+    try:
+        if command["action"] == "stop":
+            ptz.Stop({"ProfileToken": profile_token, "PanTilt": True, "Zoom": True})
+            stopped = True
+        else:
+            velocity = {}
+            if command["action"] == "move":
+                velocity["PanTilt"] = {"x": command["pan"], "y": command["tilt"]}
+            if command["action"] == "zoom":
+                velocity["Zoom"] = {"x": command["zoom"]}
+            ptz.ContinuousMove({"ProfileToken": profile_token, "Velocity": velocity})
+            time.sleep(float(command["duration_seconds"]))
+            ptz.Stop({"ProfileToken": profile_token, "PanTilt": True, "Zoom": True})
+            stopped = True
+    finally:
+        if command["action"] != "stop" and not stopped:
+            try:
+                ptz.Stop({"ProfileToken": profile_token, "PanTilt": True, "Zoom": True})
+                stopped = True
+            except Exception:
+                stopped = False
+
+    return {
+        "ok": True,
+        "action": command["action"],
+        "execution_mode": "executed",
+        "executed": True,
+        "physical_camera_mutated": command["action"] != "stop",
+        "camera_stopped": stopped,
+        "duration_seconds": command.get("duration_seconds"),
+        "warnings": [] if stopped else ["stop_not_verified"],
+        "message": "PTZ command executed with bounded safety stop." if stopped else "PTZ command execution finished but stop could not be verified.",
+        "raw_secret_exposed": False,
     }
