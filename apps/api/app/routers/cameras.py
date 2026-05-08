@@ -29,6 +29,7 @@ from app.services.onvif_service import (
     fetch_onvif_profiles,
     get_onvif_profile_config,
     probe_onvif_device,
+    rtsp_path_from_uri,
     update_onvif_profile,
 )
 from app.services.recording_retention import execute_segments, preview_segments
@@ -251,6 +252,7 @@ def get_camera_credentials(
     db: Session,
     payload: dict,
 ):
+    camera = None
     camera_id = payload.get("camera_id")
     username = payload.get("username")
     password = payload.get("password")
@@ -293,6 +295,7 @@ def get_camera_credentials(
 
     return {
         "camera_id": camera_id,
+        "camera": camera,
         "host": host,
         "port": port,
         "rtsp_host": rtsp_host,
@@ -302,8 +305,59 @@ def get_camera_credentials(
     }
 
 
+def saved_stream_path(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.lower().startswith("rtsp://"):
+        return rtsp_path_from_uri(text)
+    return text if text.startswith("/") else f"/{text}"
+
+
+def profile_matches_stream(profile: dict, saved_value: str | None) -> bool:
+    saved_path = saved_stream_path(saved_value)
+    if not saved_path:
+        return False
+    profile_path = saved_stream_path(profile.get("stream_path") or profile.get("stream_uri"))
+    return bool(profile_path and profile_path == saved_path)
+
+
+def apply_profile_assignments(data: dict, camera: Camera | None) -> dict:
+    if not camera:
+        return data
+
+    main_token = str(camera.onvif_profile_token or "")
+    main_path = camera.rtsp_main_url
+    sub_path = camera.rtsp_sub_url
+    assignments = {
+        "main": {"profile_token": main_token or None, "stream_path": saved_stream_path(main_path)},
+        "sub": {"profile_token": None, "stream_path": saved_stream_path(sub_path)},
+        "default_live_stream": camera.default_live_stream,
+        "default_record_stream": camera.default_record_stream,
+    }
+
+    for profile in data.get("profiles") or []:
+        roles = []
+        token = str(profile.get("token") or "")
+        if (main_token and token == main_token) or profile_matches_stream(profile, main_path):
+            roles.append("main")
+            assignments["main"]["profile_token"] = token or assignments["main"]["profile_token"]
+        if profile_matches_stream(profile, sub_path):
+            roles.append("sub")
+            assignments["sub"]["profile_token"] = token or assignments["sub"]["profile_token"]
+        profile["assigned_roles"] = roles
+        profile["assigned_role"] = "_".join(roles) if roles else "unknown"
+
+    data["assignments"] = assignments
+    return data
+
+
 def build_test_url(payload: dict, db: Session | None = None) -> str | None:
     protocol = str(payload.get("protocol") or "rtsp").lower()
+    rtsp_main_url = payload.get("rtsp_main_url")
+    rtsp_sub_url = payload.get("rtsp_sub_url")
     if protocol == "rtsp":
         host = payload.get("host")
         port = payload.get("port") or 554
@@ -323,6 +377,10 @@ def build_test_url(payload: dict, db: Session | None = None) -> str | None:
             port = payload.get("rtsp_port") or creds["rtsp_port"] or port
         username = creds["username"] or username
         password = creds["password"] or password
+        camera = creds.get("camera")
+        if camera is not None:
+            rtsp_main_url = rtsp_main_url if rtsp_main_url not in (None, "") else camera.rtsp_main_url
+            rtsp_sub_url = rtsp_sub_url if rtsp_sub_url not in (None, "") else camera.rtsp_sub_url
 
     return (
         assemble_rtsp_url(
@@ -330,7 +388,7 @@ def build_test_url(payload: dict, db: Session | None = None) -> str | None:
             port,
             username,
             password,
-            payload.get("rtsp_main_url"),
+            rtsp_main_url,
         )
         or
         assemble_rtsp_url(
@@ -338,7 +396,7 @@ def build_test_url(payload: dict, db: Session | None = None) -> str | None:
             port,
             username,
             password,
-            payload.get("rtsp_sub_url"),
+            rtsp_sub_url,
         )
     )
 
@@ -368,6 +426,7 @@ def onvif_profiles(
             rtsp_host=str(creds["rtsp_host"] or host),
             rtsp_port=int(creds["rtsp_port"] or 554),
         )
+        data = apply_profile_assignments(data, creds.get("camera"))
         return {
             "ok": True,
             **data,

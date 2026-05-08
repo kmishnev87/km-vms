@@ -36,6 +36,18 @@ def _safe_text(value, max_length=160):
     return text[:max_length] or None
 
 
+def _safe_number(value):
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+
 def _candidate_id(host: str | None, port: int | None, source: str) -> str:
     raw = f"{source}:{host or ''}:{port or ''}".encode("utf-8")
     return hashlib.sha256(raw).hexdigest()[:16]
@@ -304,28 +316,53 @@ def _profile_to_dict(profile, media, username, password, host, port, rtsp_host=N
         raw_uri = None
         fixed_uri = None
 
+    codec = _safe_text(_safe_attr(cfg, "Encoding"), 40)
+    width = _safe_number(_safe_attr(res, "Width"))
+    height = _safe_number(_safe_attr(res, "Height"))
+    fps = _safe_number(_safe_attr(rc, "FrameRateLimit"))
+    bitrate = _safe_number(_safe_attr(rc, "BitrateLimit"))
+    encoding_interval = _safe_number(_safe_attr(rc, "EncodingInterval"))
+    quality = _safe_number(_safe_attr(cfg, "Quality"))
+
     return {
-        "token": _safe_attr(profile, "token"),
-        "name": _safe_attr(profile, "Name"),
+        "token": _safe_text(_safe_attr(profile, "token"), 255),
+        "name": _safe_text(_safe_attr(profile, "Name"), 255),
+        "suggested_role": "unknown",
+        "assigned_role": "unknown",
+        "assigned_roles": [],
         "video": {
-            "codec": _safe_attr(cfg, "Encoding"),
-            "width": _safe_attr(res, "Width"),
-            "height": _safe_attr(res, "Height"),
-            "fps": _safe_attr(rc, "FrameRateLimit"),
-            "quality": _safe_attr(cfg, "Quality"),
-            "bitrate_limit": _safe_attr(rc, "BitrateLimit"),
-            "encoding_interval": _safe_attr(rc, "EncodingInterval"),
+            "codec": codec,
+            "encoding": codec,
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "quality": quality,
+            "bitrate": bitrate,
+            "bitrate_limit": bitrate,
+            "max_bitrate": bitrate,
+            "bitrate_type": None,
+            "encoding_interval": encoding_interval,
+            "iframe_interval": encoding_interval,
+            "gop": encoding_interval,
+            "gov_length": encoding_interval,
+            "codec_profile": _safe_text(_safe_attr(cfg, "H264Profile") or _safe_attr(cfg, "Profile"), 80),
+            "encode_strategy": None,
         },
         "audio": {
-            "codec": _safe_attr(audio_cfg, "Encoding"),
-            "sample_rate": _safe_attr(audio_cfg, "SampleRate"),
-            "channels": _safe_attr(audio_cfg, "Channels"),
+            "codec": _safe_text(_safe_attr(audio_cfg, "Encoding"), 40),
+            "sample_rate": _safe_number(_safe_attr(audio_cfg, "SampleRate")),
+            "channels": _safe_number(_safe_attr(audio_cfg, "Channels")),
         },
-        "raw_stream_uri": rtsp_display_uri(raw_uri),
         "stream_uri": fixed_uri,
+        "display_endpoint": fixed_uri,
         "stream_path": stream_path,
         "rtsp_ready": rtsp_ready,
         "rtsp_host_source": "user_reachable" if rtsp_host else "onvif_host_fallback",
+        "rtsp_reachable": {
+            "host": _safe_text(rtsp_host or host, 255),
+            "port": int(rtsp_port) if rtsp_port else None,
+            "source": "user_reachable" if rtsp_host else "onvif_host_fallback",
+        },
         "video_config_state": "ok" if cfg and not cfg_warning else "unavailable",
         "warnings": warnings,
     }
@@ -346,6 +383,12 @@ def fetch_onvif_profiles(host, port, username, password, rtsp_host=None, rtsp_po
         result.append(item)
 
     suggested_main, suggested_sub = _suggest_profiles(result)
+    for item in result:
+        token = item.get("token")
+        if token and token == suggested_main:
+            item["suggested_role"] = "main"
+        elif token and token == suggested_sub:
+            item["suggested_role"] = "sub"
 
     return {
         "device": {

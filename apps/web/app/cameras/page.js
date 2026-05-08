@@ -243,6 +243,34 @@ function profileByToken(data, token) {
   return (data?.profiles || []).find((item) => item.token === token) || null;
 }
 
+function profileStreamValue(profile) {
+  return profile?.stream_path || prettyRtspValue(profile?.stream_uri || "");
+}
+
+function profileMatchesStream(profile, value) {
+  const left = profileStreamValue(profile);
+  const right = prettyRtspValue(value || "");
+  return Boolean(left && right && left === right);
+}
+
+function profileTokenSummary(profile) {
+  const token = String(profile?.token || "").trim();
+  if (!token) return "";
+  return token.length > 28 ? `${token.slice(0, 14)}...${token.slice(-8)}` : token;
+}
+
+function profileAssignmentSummary(profile, fallbackPath) {
+  if (!profile) {
+    return fallbackPath ? `Path: ${prettyRtspValue(fallbackPath)}` : "Не назначен";
+  }
+  const parts = [profileDisplayName(profile)];
+  const resolution = profileResolution(profile);
+  const token = profileTokenSummary(profile);
+  if (resolution) parts.push(resolution);
+  if (token) parts.push(`token ${token}`);
+  return parts.join(" / ");
+}
+
 function configFromResult(result) {
   return {
     codec: result.config?.codec || "",
@@ -773,7 +801,7 @@ export default function CamerasPage() {
     setForm((prev) => normalizeCameraStreamDefaults({
       ...prev,
       onvif_profile_token: token,
-      rtsp_main_url: profile.stream_path || prettyRtspValue(profile.stream_uri || ""),
+      rtsp_main_url: profileStreamValue(profile),
       default_record_stream: "main",
       preview_token: null,
     }));
@@ -790,7 +818,7 @@ export default function CamerasPage() {
     const name = profileDisplayName(profile);
     setForm((prev) => normalizeCameraStreamDefaults({
       ...prev,
-      rtsp_sub_url: profile.stream_path || prettyRtspValue(profile.stream_uri || ""),
+      rtsp_sub_url: profileStreamValue(profile),
       onvif_profile_token: prev.onvif_profile_token || token,
       default_live_stream: "sub",
       preview_token: null,
@@ -963,6 +991,12 @@ export default function CamerasPage() {
 
   const canApplySelectedOnvifSettings = canApplyOnvifSettings(onvifConfig, selectedOnvifProfileToken);
   const formStreamOptions = availableCameraStreams(form);
+  const onvifProfiles = onvifData?.profiles || [];
+  const selectedOnvifProfile = profileByToken(onvifData, selectedOnvifProfileToken || form.onvif_profile_token);
+  const assignedMainProfile = onvifProfiles.find((profile) => (
+    profile.token === form.onvif_profile_token || profileMatchesStream(profile, form.rtsp_main_url)
+  )) || null;
+  const assignedSubProfile = onvifProfiles.find((profile) => profileMatchesStream(profile, form.rtsp_sub_url)) || null;
 
   function renderProfileSettingSlot(slot) {
     const meta = profileSettingMeta(onvifConfig.supported, slot.key);
@@ -1384,11 +1418,11 @@ export default function CamerasPage() {
 
             {form.protocol === "onvif" ? (
               <section className="cameraProfileStrip">
-                  {onvifData ? <div className="cameraProfileGrid">
-                    {onvifData.profiles?.map((profile) => {
-                      const role = profileRole(profile, onvifData);
+                  {onvifData ? <div className="cameraProfileWorkspace">
+                    <div className="cameraProfileGrid">
+                    {onvifProfiles.map((profile) => {
                       const isMain = form.onvif_profile_token === profile.token;
-                      const isSub = form.rtsp_sub_url && (form.rtsp_sub_url === profile.stream_path || form.rtsp_sub_url === prettyRtspValue(profile.stream_uri || ""));
+                      const isSub = profileMatchesStream(profile, form.rtsp_sub_url);
                       const displayName = profileDisplayName(profile);
                       const tokenLabel = profile.token && profile.token !== displayName ? profile.token : "";
                       return (
@@ -1403,7 +1437,11 @@ export default function CamerasPage() {
                         <div className="cameraProfileChoice" aria-hidden="true"></div>
                         <div className="cameraProfileBody">
                           <div className="cameraProfileHead">
-                            <span title={displayName}>{displayName}</span>
+                            <span title={displayName}>
+                              {displayName}
+                              {isMain ? <em className="cameraProfileBadge main">Main</em> : null}
+                              {isSub ? <em className="cameraProfileBadge sub">Sub</em> : null}
+                            </span>
                             {tokenLabel ? <span title={tokenLabel}>{tokenLabel}</span> : null}
                           </div>
                           <div className="cameraProfileMeta">
@@ -1413,20 +1451,26 @@ export default function CamerasPage() {
                             <div className="cameraProfileReady">RTSP: {profile.rtsp_ready ? "Ready" : "Path missing"} <span>|</span> System: {profile.rtsp_ready ? "Ready" : "Check required"}</div>
                           </div>
                         </div>
-                        <div className="toolbar cameraProfileActions">
-                          {role === "main" ? (
-                            <button type="button" className={`button secondary small ${isMain ? "active" : ""}`} onClick={(e) => { e.stopPropagation(); useProfileAsMain(profile); }}>
-                              Использовать как Main
-                            </button>
-                          ) : null}
-                          {role === "sub" ? (
-                            <button type="button" className={`button secondary small ${isSub ? "active" : ""}`} onClick={(e) => { e.stopPropagation(); useProfileAsSub(profile); }}>
-                              Использовать как Sub
-                            </button>
-                          ) : null}
-                        </div>
                       </div>
                     );})}
+                    </div>
+                    <aside className="cameraProfileAssignPanel">
+                      <div className="cameraProfileAssignHead">
+                        <h3>Main / Sub</h3>
+                        <span>{selectedOnvifProfile ? profileDisplayName(selectedOnvifProfile) : "Профиль не выбран"}</span>
+                      </div>
+                      <div className="cameraProfileAssignActions">
+                        <button type="button" className="button secondary small" onClick={() => useProfileAsMain(selectedOnvifProfile)} disabled={!selectedOnvifProfile}>
+                          Использовать как Main
+                        </button>
+                        <div className="cameraProfileAssignedValue">{profileAssignmentSummary(assignedMainProfile, form.rtsp_main_url)}</div>
+                        <button type="button" className="button secondary small" onClick={() => useProfileAsSub(selectedOnvifProfile)} disabled={!selectedOnvifProfile}>
+                          Использовать как Sub
+                        </button>
+                        <div className="cameraProfileAssignedValue">{profileAssignmentSummary(assignedSubProfile, form.rtsp_sub_url)}</div>
+                      </div>
+                      {!selectedOnvifProfile ? <div className="cameraProfileAssignHint">Выбери профиль слева, затем назначь его как Main или Sub.</div> : null}
+                    </aside>
                   </div> : (
                     <div className="cameraEmptyState">
                       Загрузите ONVIF профили, чтобы выбрать Main/Sub и прочитать настройки профиля.
