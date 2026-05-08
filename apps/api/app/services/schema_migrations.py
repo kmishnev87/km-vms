@@ -261,7 +261,7 @@ def build_migration_plan(
         "blocked_reason": None,
         "production_adoption_status": production_adoption_status,
         "recorder_metadata_owner": "api_bootstrap_only",
-        "app_build_version_source": "temporary_stage2_metadata_source_deferred_to_stage7",
+        "app_build_version_source": "installed_build_metadata_or_development_fallback",
         "backup_before_upgrade": {
             "required": False,
             "status": "not_required",

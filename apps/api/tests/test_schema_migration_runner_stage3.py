@@ -341,11 +341,11 @@ def test_recorder_does_not_reference_schema_version_metadata_tables():
 
 
 def test_app_build_version_source_channel_work_remains_deferred():
-    assert APP_BUILD_VERSION == "9ec3401"
+    assert APP_BUILD_VERSION == "development"
     _engine, db = session_with_metadata()
     ensure_schema_version_state(db, pre_bootstrap_shape=shape_from_tables({}))
     plan = build_migration_plan(db)
-    assert plan["app_build_version_source"] == "temporary_stage2_metadata_source_deferred_to_stage7"
+    assert plan["app_build_version_source"] == "installed_build_metadata_or_development_fallback"
 
 
 def test_pre_create_all_runner_hook_blocks_existing_unversioned_schema_before_legacy_repair():

@@ -119,8 +119,9 @@ def test_upgrade_report_versions_migrations_and_warnings_are_safe(tmp_path):
     assert report["versions"]["app_version"] == APP_VERSION
     assert report["versions"]["app_build_version"] == APP_BUILD_VERSION
     assert report["versions"]["schema_version_is_app_version"] is False
-    assert report["versions"]["app_build_version_source"] == "temporary_app_build_version_source"
-    assert report["versions"]["app_build_version_limitation"].endswith("Stage 7.0")
+    assert report["versions"]["app_build_version_source"] == "development_fallback"
+    assert "development-only" in report["versions"]["app_build_version_limitation"]
+    assert report["versions"]["installed_build"]["status"] == "development_build"
     assert report["versions"]["current_schema_version"] == CURRENT_SCHEMA_VERSION
     assert report["versions"]["target_schema_version"] == CURRENT_SCHEMA_VERSION
     assert report["schema_migration_history"]["counts"]["failed"] == 1
@@ -133,7 +134,7 @@ def test_upgrade_report_versions_migrations_and_warnings_are_safe(tmp_path):
     assert report["redaction"]["redaction_status"] == "scoped_check_passed"
     assert report["redaction"]["redaction_scope"] == "upgrade_report_fields_only"
     assert "upgrade_report_json_fields" in report["redaction"]["checked_outputs"]
-    assert "app_build_version_temporary" in warning_codes
+    assert "installed_build_development_fallback" in warning_codes
     assert "production_adoption_deferred" in warning_codes
     assert "backup_status_source_unavailable" in warning_codes
     assert "restore_validation_status_source_unavailable" in warning_codes
@@ -279,7 +280,9 @@ def test_diagnostic_archive_includes_upgrade_report_and_excludes_forbidden_artif
     assert report["restore_validation"]["status"] == "restore_status_source_unavailable"
     assert report["redaction"]["redaction_scope"] == "upgrade_report_fields_only"
     assert report["diagnostic_archive"]["redaction_scope"] == "upgrade_report_fields_and_diagnostic_archive_upgrade_summary"
+    assert report["update_check"]["status"] == "not_configured"
     assert "production_restore_executed: false" in summary
+    assert "update_check_status: not_configured" in summary
     assert "backup_status_source: source_unavailable" in summary
     assert "restore_validation_status_source: source_unavailable" in summary
     for forbidden_name in names:

@@ -12,7 +12,7 @@ from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.version import APP_BUILD_VERSION, APP_VERSION
+from app.core.version import APP_BUILD_VERSION, APP_VERSION, installed_build_metadata
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
 from app.services.backup_before_upgrade import (
     DEFAULT_BACKUP_ROOT,
@@ -24,6 +24,7 @@ from app.services.backup_before_upgrade import (
 from app.services.restore_validation import backup_restore_validated
 from app.services.schema_migrations import PRODUCTION_ADOPTION_DEFERRED, build_migration_plan
 from app.services.schema_versioning import CURRENT_SCHEMA_VERSION, CURRENT_STATE_ID, schema_version_status
+from app.services.update_check import build_update_status
 
 
 REPORT_VERSION = "stage6.upgrade_report.v1"
@@ -132,11 +133,13 @@ def _history_summary(db: Session) -> dict[str, Any]:
 
 def _version_summary(db: Session, schema_status: dict[str, Any], history: dict[str, Any], migration_plan: dict[str, Any]) -> dict[str, Any]:
     row = db.get(SchemaVersionState, CURRENT_STATE_ID) if inspect(db.get_bind()).has_table("schema_version_state") else None
+    installed = installed_build_metadata()
     return {
-        "app_version": APP_VERSION,
-        "app_build_version": APP_BUILD_VERSION,
-        "app_build_version_source": "temporary_app_build_version_source",
-        "app_build_version_limitation": "replacement deferred to Chapter 07 Stage 7.0",
+        "app_version": installed.get("app_version") or APP_VERSION,
+        "app_build_version": installed.get("build_id") or APP_BUILD_VERSION,
+        "app_build_version_source": installed.get("metadata_source"),
+        "app_build_version_limitation": installed.get("limitation"),
+        "installed_build": installed,
         "schema_version_is_app_version": False,
         "previous_schema_version": history.get("previous_schema_version"),
         "current_schema_version": schema_status.get("schema_version"),
@@ -332,15 +335,16 @@ def build_upgrade_report(
     backup = _backup_summary(backup_manifest_path, restore_validation_manifest_path)
     production = _production_status(migration_plan)
 
-    warnings.append(
-        _warning(
-            "app_build_version_temporary",
-            "info",
-            "APP_BUILD_VERSION uses the temporary Stage 2 metadata source until Stage 7.",
-            stage_target="Stage 7.0",
-            evidence={"app_build_version_source": versions["app_build_version_source"]},
+    if versions["app_build_version_source"] == "development_fallback":
+        warnings.append(
+            _warning(
+                "installed_build_development_fallback",
+                "info",
+                "Installed build metadata file/env is not configured; update identity is development-only.",
+                stage_target="Stage 7.0",
+                evidence={"app_build_version_source": versions["app_build_version_source"]},
+            )
         )
-    )
     if production["production_adoption_deferred"]:
         warnings.append(
             _warning(
@@ -456,9 +460,10 @@ def build_upgrade_report(
             "backup_root_config": "process_config_read_only_no_probe",
             "backup_status": backup["backup_status_source"],
             "restore_validation_status": backup["restore_validation_status_source"],
+            "update_check": "cached_status_read_only_no_network",
         },
         "limitations": [
-            "APP_BUILD_VERSION source replacement is deferred to Chapter 07 Stage 7.0.",
+            "Diagnostic archive includes cached update status and does not trigger network update checks by default.",
             "Report generation does not execute backup, restore, migration or adoption.",
             "Report generation does not run backup-root marker/write probes by default.",
             "DB restore validation does not cover video archive file recovery.",
@@ -477,6 +482,7 @@ def build_upgrade_report(
             "startup_execution_policy": "preflight_block_only",
         },
         "production": production,
+        "update_check": build_update_status(db),
         "backup": backup,
         "restore_validation": {
             "status": backup["restore_validation_status"],
@@ -523,6 +529,7 @@ def upgrade_report_text_summary(report: dict[str, Any]) -> str:
     backup = report.get("backup", {})
     restore = report.get("restore_validation", {})
     migration = report.get("migration_runner", {})
+    update = report.get("update_check", {})
     warnings = report.get("warnings", [])
     return "\n".join(
         [
@@ -533,6 +540,8 @@ def upgrade_report_text_summary(report: dict[str, Any]) -> str:
             f"current_schema_version: {versions.get('current_schema_version')}",
             f"target_schema_version: {versions.get('target_schema_version')}",
             f"migration_runner_status: {migration.get('status')}",
+            f"update_check_status: {update.get('status')}",
+            f"update_source_status: {(update.get('source_channel') or {}).get('status')}",
             f"backup_status: {backup.get('status')}",
             f"backup_status_source: {backup.get('backup_status_source')}",
             f"restore_validation_status: {restore.get('status')}",

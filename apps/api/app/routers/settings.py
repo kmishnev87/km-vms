@@ -58,6 +58,7 @@ from app.services.schema_migrations import build_migration_plan
 from app.services.schema_versioning import schema_version_status
 from app.services.backup_before_upgrade import BackupExecutionConfig, BackupSafetyBlocked, build_backup_plan, create_backup_before_upgrade
 from app.services.upgrade_report import build_upgrade_report, upgrade_report_text_summary
+from app.services.update_check import UpdateCheckBlocked, build_update_status, run_update_check
 
 router = APIRouter(tags=["settings"])
 
@@ -218,6 +219,70 @@ def system_upgrade_report(
     current_user: User = Depends(require_permission("run_diagnostics")),
 ):
     return build_upgrade_report(db)
+
+
+@router.get("/system/update/status")
+def system_update_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    return build_update_status(db)
+
+
+@router.post("/system/update/check")
+def system_update_check(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    create_event(
+        db=db,
+        actor=current_user,
+        category="system",
+        event_type="system.update_check_requested",
+        severity="info",
+        message_ru="Requested safe product update check.",
+        message_en="Requested safe product update check.",
+        target_type="update_check",
+        metadata={"source": "trusted_config_only", "arbitrary_url_supported": False},
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    try:
+        result = run_update_check(db, manual=True)
+    except UpdateCheckBlocked as exc:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="system",
+            event_type="system.update_check_blocked",
+            severity="warning",
+            message_ru="Safe product update check was blocked.",
+            message_en="Safe product update check was blocked.",
+            target_type="update_check",
+            metadata={"status": exc.status, "summary": audit_redact_text(str(exc))[:300]},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS if exc.status == "manual_update_check_rate_limited" else status.HTTP_409_CONFLICT, detail=exc.diagnostics)
+    create_event(
+        db=db,
+        actor=current_user,
+        category="system",
+        event_type="system.update_check_completed",
+        severity="info" if result.get("status") not in {"failed", "blocked"} else "warning",
+        message_ru="Safe product update check completed.",
+        message_en="Safe product update check completed.",
+        target_type="update_check",
+        metadata={
+            "status": result.get("status"),
+            "classification": (result.get("classification") or {}).get("classification"),
+            "raw_manifest_exposed": False,
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    return result
 
 
 @router.post("/system/backup/create")
@@ -459,11 +524,11 @@ def patch_settings(
     if "hardware_preferred_backend" in data and system.hardware_preferred_backend != previous.get("hardware_preferred_backend"):
         invalidate_hardware_capabilities()
     setting_events = [
-        ("language", "settings.language_changed", "язык", "language"),
-        ("timezone", "settings.timezone_changed", "часовой пояс", "timezone"),
-        ("hardware_preferred_backend", "settings.hardware_backend_changed", "аппаратное ускорение", "hardware backend"),
-        ("recording_format", "settings.recording_format_changed", "формат записи", "recording format"),
-        ("auto_free_space_cleanup_enabled", "settings.auto_free_space_cleanup_changed", "автоосвобождение места", "auto free-space cleanup"),
+        ("language", "settings.language_changed", "????", "language"),
+        ("timezone", "settings.timezone_changed", "??????? ????", "timezone"),
+        ("hardware_preferred_backend", "settings.hardware_backend_changed", "?????????? ?????????", "hardware backend"),
+        ("recording_format", "settings.recording_format_changed", "?????? ??????", "recording format"),
+        ("auto_free_space_cleanup_enabled", "settings.auto_free_space_cleanup_changed", "???????????????? ?????", "auto free-space cleanup"),
     ]
     changed = {}
     for key, event_type, label_ru, label_en in setting_events:
@@ -474,7 +539,7 @@ def patch_settings(
                 actor=current_user,
                 category="settings",
                 event_type=event_type,
-                message_ru=f"{current_user.username} изменил {label_ru}: {previous.get(key)} → {current.get(key)}",
+                message_ru=f"{current_user.username} ??????? {label_ru}: {previous.get(key)} ? {current.get(key)}",
                 message_en=f"{current_user.username} changed {label_en}: {previous.get(key)} -> {current.get(key)}",
                 target_type="settings",
                 metadata={
@@ -492,7 +557,7 @@ def patch_settings(
             actor=current_user,
             category="settings",
             event_type="settings.saved",
-            message_ru=f"{current_user.username} сохранил настройки",
+            message_ru=f"{current_user.username} ???????? ?????????",
             message_en=f"{current_user.username} saved settings",
             target_type="settings",
             metadata={"changed": changed},
@@ -869,6 +934,7 @@ def build_log_archive(
         upgrade_report = build_upgrade_report(db)
         write_json(bundle, "upgrade/report.json", upgrade_report)
         bundle.writestr("upgrade/summary.txt", audit_redact_text(upgrade_report_text_summary(upgrade_report)) + "\n")
+        write_json(bundle, "update/status.json", build_update_status(db))
         write_json(
             bundle,
             "audit/redaction_proof.json",
@@ -905,7 +971,7 @@ def download_log_archive(
         actor=current_user,
         category="diagnostics",
         event_type="diagnostics.archive_requested",
-        message_ru=f"{current_user.username} запросил диагностический архив: {mode}",
+        message_ru=f"{current_user.username} ???????? ??????????????? ?????: {mode}",
         message_en=f"{current_user.username} requested diagnostic archive: {mode}",
         target_type="diagnostic_archive",
         metadata={"mode": mode},
@@ -934,7 +1000,7 @@ def download_log_archive(
         actor=current_user,
         category="diagnostics",
         event_type="diagnostics.archive_created",
-        message_ru=f"{current_user.username} создал {'расширенный' if mode == 'extended' else 'обычный'} диагностический архив",
+        message_ru=f"{current_user.username} ?????? {'???????????' if mode == 'extended' else '???????'} ??????????????? ?????",
         message_en=f"{current_user.username} created {'extended' if mode == 'extended' else 'normal'} diagnostic archive",
         target_type="diagnostic_archive",
         metadata={"mode": mode},

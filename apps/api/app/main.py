@@ -23,6 +23,7 @@ from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration
 from app.services.recording_storage import ensure_archive_roots
 from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine_v2 import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
+from app.services.update_check import run_startup_due_check
 
 
 class AccessLogRedactionFilter(logging.Filter):
@@ -68,6 +69,7 @@ def startup():
         ensure_archive_roots(db)
         ensure_owner_migration(db)
         ensure_admin(db)
+        run_startup_due_check(db)
     finally:
         db.close()
 

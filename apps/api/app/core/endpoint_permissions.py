@@ -67,6 +67,8 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("system", "GET", "/system/backup/plan", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only backup-before-upgrade plan; no backup files created."),
     EndpointPermission("system", "POST", "/system/backup/create", PERMISSION_MANAGE_SETTINGS, "require_permission", "Creates a sensitive DB backup artifact; no backup download endpoint."),
     EndpointPermission("diagnostics", "GET", "/system/upgrade/report", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Read-only sanitized upgrade/backup/restore report; no backup, restore or migration execution."),
+    EndpointPermission("system", "GET", "/system/update/status", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only safe update status; no network check or update apply."),
+    EndpointPermission("system", "POST", "/system/update/check", PERMISSION_MANAGE_SETTINGS, "require_permission", "Manual safe update check against trusted configured source only; no arbitrary URL, download, restart, migration, backup or restore."),
     EndpointPermission("diagnostics", "GET", "/settings/logs/archive", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("diagnostics", "POST", "/settings/bug-report", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("hardware", "GET", "/hardware/capabilities", PERMISSION_MANAGE_SETTINGS, "require_permission"),
