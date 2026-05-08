@@ -2,8 +2,12 @@ from pathlib import Path
 import shutil
 import subprocess
 import json
+import time
+import hashlib
+from datetime import datetime
 from uuid import uuid4
 from urllib.parse import quote, urlparse
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
@@ -21,8 +25,10 @@ from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.onvif_service import (
+    discover_onvif_devices,
     fetch_onvif_profiles,
     get_onvif_profile_config,
+    probe_onvif_device,
     update_onvif_profile,
 )
 from app.services.recording_retention import execute_segments, preview_segments
@@ -33,6 +39,34 @@ viewer_router = APIRouter(prefix="/viewer/cameras", tags=["viewer-cameras"])
 CAMERA_DELETE_FILES_REASON = "camera_delete_with_files"
 CAMERA_DELETE_NO_FILES_BLOCK_REASON = "recordings_exist_delete_files_false_requires_safe_policy"
 CAMERA_DELETE_UNSAFE_WITH_FILES_REASON = "camera_delete_with_files_requires_all_segments_safe"
+CAMERA_DELETE_NO_PERMISSION_REASON = "delete_recordings_permission_missing"
+PROOF_TTL_SECONDS = 15 * 60
+ONVIF_PROBE_PROOFS: dict[str, dict] = {}
+RTSP_TEST_PROOFS: dict[str, dict] = {}
+CONNECTION_SENSITIVE_FIELDS = {
+    "protocol",
+    "host",
+    "port",
+    "username",
+    "password",
+    "rtsp_main_url",
+    "rtsp_sub_url",
+    "rtsp_host",
+    "rtsp_port",
+    "rtsp_transport",
+    "onvif_path",
+    "onvif_profile_token",
+    "onvif_channel_id",
+}
+SECRET_METADATA_FIELDS = {
+    "password",
+    "password_encrypted",
+    "rtsp_main_url",
+    "rtsp_sub_url",
+    "preview_token",
+    "validation_token",
+    "onvif_probe_token",
+}
 
 
 def safe_onvif_error(exc: Exception) -> str:
@@ -47,6 +81,139 @@ def safe_onvif_error(exc: Exception) -> str:
     if len(text) > 180 or "traceback" in lower or "envelope" in lower or "soap" in lower:
         return "ONVIF operation failed. Check camera ONVIF service, permissions, and profile support."
     return text or "ONVIF operation failed."
+
+
+def onvif_error_code(exc: Exception) -> str:
+    text = redact_text(str(exc) if exc else "").lower()
+    if "auth" in text or "401" in text or "forbidden" in text:
+        return "wrong_credentials"
+    if "timeout" in text or "timed out" in text:
+        return "timeout"
+    if "connection refused" in text:
+        return "wrong_port_or_service_unavailable"
+    if "failed to establish" in text or "newconnectionerror" in text or "unreachable" in text:
+        return "wrong_ip_or_unreachable"
+    if "media service" in text:
+        return "media_service_unavailable"
+    if "profile" in text:
+        return "profiles_unavailable"
+    if "stream" in text:
+        return "stream_uri_unavailable"
+    if "wsdl" in text or "onvif" in text:
+        return "unsupported_onvif"
+    return "unknown_safe_error"
+
+
+def validation_fingerprint(payload: dict) -> dict:
+    protocol = str(payload.get("protocol") or "rtsp").lower()
+    rtsp_host = payload.get("rtsp_host") or (payload.get("host") if protocol == "onvif" else None)
+    rtsp_port = payload.get("rtsp_port") or (554 if protocol == "onvif" else None)
+    password = str(payload.get("password") or "")
+    return {
+        "protocol": protocol,
+        "host": str(payload.get("host") or ""),
+        "port": safe_int(payload.get("port"), 80 if protocol == "onvif" else 554),
+        "rtsp_host": str(rtsp_host or ""),
+        "rtsp_port": safe_int(rtsp_port, 0),
+        "username": str(payload.get("username") or ""),
+        "password_sha256": hashlib.sha256(password.encode("utf-8")).hexdigest() if password else "",
+        "rtsp_main_url": str(payload.get("rtsp_main_url") or ""),
+        "rtsp_sub_url": str(payload.get("rtsp_sub_url") or ""),
+        "rtsp_transport": str(payload.get("rtsp_transport") or ""),
+        "onvif_path": str(payload.get("onvif_path") or ""),
+        "onvif_profile_token": str(payload.get("onvif_profile_token") or ""),
+        "onvif_channel_id": str(payload.get("onvif_channel_id") or ""),
+        "default_live_stream": str(payload.get("default_live_stream") or ""),
+        "default_record_stream": str(payload.get("default_record_stream") or ""),
+    }
+
+
+def register_validation_proof(store: dict[str, dict], payload: dict) -> str:
+    token = uuid4().hex
+    store[token] = {"created_at": time.time(), "fingerprint": validation_fingerprint(payload)}
+    return token
+
+
+def register_onvif_probe_proof(payload: dict) -> str:
+    return register_validation_proof(ONVIF_PROBE_PROOFS, payload)
+
+
+def register_rtsp_test_proof(payload: dict) -> str:
+    return register_validation_proof(RTSP_TEST_PROOFS, payload)
+
+
+def store_has_valid_proof(store: dict[str, dict], token: str | None, payload: dict) -> bool:
+    proof = store.get(token or "")
+    if not proof:
+        return False
+    if time.time() - float(proof.get("created_at") or 0) > PROOF_TTL_SECONDS:
+        store.pop(token or "", None)
+        return False
+    return proof.get("fingerprint") == validation_fingerprint(payload)
+
+
+def has_valid_onboarding_proof(payload: dict) -> bool:
+    validation_token = safe_preview_token(payload.get("validation_token"))
+    if store_has_valid_proof(RTSP_TEST_PROOFS, validation_token, payload):
+        return True
+    token = safe_preview_token(payload.get("onvif_probe_token"))
+    return store_has_valid_proof(ONVIF_PROBE_PROOFS, token, payload)
+
+
+def require_save_gate(payload: dict, *, connection_sensitive_change: bool) -> bool:
+    if not connection_sensitive_change:
+        return False
+    if has_valid_onboarding_proof(payload):
+        return False
+    if bool(payload.get("manual_confirm_unverified")):
+        return True
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "camera_validation_required",
+            "message": "Camera connection must be tested/probed before saving, or explicitly saved as unverified.",
+            "manual_confirm_available": True,
+        },
+    )
+
+
+def safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def parse_bounded_int(value, *, field: str, default: int, minimum: int, maximum: int) -> int:
+    if value in (None, ""):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail={"code": f"invalid_{field}", "message": f"{field} must be an integer."})
+    if parsed < minimum or parsed > maximum:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": f"{field}_out_of_range", "message": f"{field} must be between {minimum} and {maximum}."},
+        )
+    return parsed
+
+
+def parse_port(value, *, field: str, default: int) -> int:
+    return parse_bounded_int(value, field=field, default=default, minimum=1, maximum=65535)
+
+
+def safe_changed_metadata(changed: dict) -> dict:
+    safe = {}
+    for key, value in changed.items():
+        if key in SECRET_METADATA_FIELDS:
+            safe[key] = {
+                "changed": True,
+                "value_redacted": True,
+            }
+        else:
+            safe[key] = value
+    return safe
 
 
 def assemble_rtsp_url(
@@ -92,21 +259,37 @@ def get_camera_credentials(
     rtsp_host = payload.get("rtsp_host")
     rtsp_port = payload.get("rtsp_port")
 
-    if camera_id:
-        camera = db.query(Camera).filter(Camera.id == int(camera_id)).first()
-        if camera:
-            if not host:
-                host = camera.host
-            if not port:
-                port = camera.port
-            if not username:
-                username = camera.username
-            if not password:
-                password = decrypt_text(camera.password_encrypted)
-            if not rtsp_host:
-                rtsp_host = camera.rtsp_reachable_host
-            if not rtsp_port:
-                rtsp_port = camera.rtsp_reachable_port
+    if camera_id is not None and str(camera_id).strip() != "":
+        try:
+            active_camera_id = int(camera_id)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_camera_id", "message": "Camera id is invalid."},
+            )
+
+        camera = (
+            db.query(Camera)
+            .filter(Camera.id == active_camera_id, Camera.deleted_at.is_(None))
+            .first()
+        )
+        if not camera:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "camera_not_active", "message": "Camera was not found or is no longer active."},
+            )
+        if not host:
+            host = camera.host
+        if not port:
+            port = camera.port
+        if not username:
+            username = camera.username
+        if not password:
+            password = decrypt_text(camera.password_encrypted)
+        if not rtsp_host:
+            rtsp_host = camera.rtsp_reachable_host
+        if not rtsp_port:
+            rtsp_port = camera.rtsp_reachable_port
 
     return {
         "camera_id": camera_id,
@@ -193,6 +376,68 @@ def onvif_profiles(
         raise HTTPException(status_code=400, detail=safe_onvif_error(e))
 
 
+@router.post("/onvif/discover")
+def onvif_discover(
+    payload: dict | None = None,
+    current_user: User = Depends(require_permission("manage_cameras")),
+):
+    timeout = parse_bounded_int((payload or {}).get("timeout_seconds"), field="timeout_seconds", default=5, minimum=1, maximum=10)
+    return discover_onvif_devices(timeout_seconds=timeout)
+
+
+@router.post("/onvif/probe")
+def onvif_probe(
+    payload: dict,
+    current_user: User = Depends(require_permission("manage_cameras")),
+):
+    host = str(payload.get("host") or "").strip()
+    port = parse_port(payload.get("port"), field="port", default=80)
+    rtsp_host = str(payload.get("rtsp_host") or host).strip()
+    rtsp_port = parse_port(payload.get("rtsp_port"), field="rtsp_port", default=554)
+    timeout = parse_bounded_int(payload.get("timeout_seconds"), field="timeout_seconds", default=5, minimum=1, maximum=10)
+    if not host:
+        raise HTTPException(status_code=400, detail={"code": "host_required", "message": "ONVIF host is required."})
+
+    request_payload = {
+        "protocol": "onvif",
+        "host": host,
+        "port": port,
+        "rtsp_host": rtsp_host,
+        "rtsp_port": rtsp_port,
+        "username": payload.get("username"),
+        "password": payload.get("password") or "",
+    }
+    try:
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(
+            probe_onvif_device,
+            host=host,
+            port=port,
+            username=payload.get("username") or "",
+            password=payload.get("password") or "",
+            rtsp_host=rtsp_host,
+            rtsp_port=rtsp_port,
+            timeout_seconds=timeout,
+        )
+        try:
+            result = future.result(timeout=timeout)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+        result["onvif_probe_token"] = register_onvif_probe_proof(request_payload)
+        return result
+    except FutureTimeout:
+        raise HTTPException(status_code=400, detail={"code": "timeout", "message": "ONVIF service did not respond in time.", "raw_secret_exposed": False})
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": onvif_error_code(exc),
+                "message": safe_onvif_error(exc),
+                "raw_secret_exposed": False,
+            },
+        )
+
+
 @router.post("/onvif/profile_config")
 def onvif_profile_config(
     payload: dict,
@@ -243,7 +488,7 @@ def list_cameras(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    return db.query(Camera).order_by(Camera.name.asc()).all()
+    return db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.name.asc()).all()
 
 
 @viewer_router.get("")
@@ -251,7 +496,7 @@ def list_viewer_cameras(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_live")),
 ):
-    cameras = db.query(Camera).order_by(Camera.name.asc()).all()
+    cameras = db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.name.asc()).all()
     return [
         {
             "id": camera.id,
@@ -274,7 +519,7 @@ def get_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
     return camera
@@ -326,6 +571,7 @@ def test_camera(
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
     preview_path, preview_url, preview_token = test_preview_destination(payload)
     preview_ok = capture_camera_preview(input_url, transport, preview_path)
+    validation_token = register_rtsp_test_proof(payload)
 
     return {
         "ok": True,
@@ -333,6 +579,7 @@ def test_camera(
         "transport": transport,
         "preview_url": preview_url if preview_ok else None,
         "preview_token": preview_token if preview_ok and preview_token else None,
+        "validation_token": validation_token,
         "preview_ok": preview_ok,
         "preview_message": None if preview_ok else "Соединение установлено, но кадр превью получить не удалось.",
         "video": {
@@ -362,10 +609,12 @@ def create_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    existing = db.query(Camera).filter(Camera.name == payload.name).first()
+    existing = db.query(Camera).filter(Camera.name == payload.name, Camera.deleted_at.is_(None)).first()
     if existing:
         raise HTTPException(status_code=400, detail="Камера с таким именем уже существует")
 
+    payload_dict = payload.model_dump()
+    manual_unverified = require_save_gate(payload_dict, connection_sensitive_change=True)
     folder_name = build_unique_folder_name(db, payload.name)
     ensure_camera_folder(folder_name)
 
@@ -401,6 +650,8 @@ def create_camera(
         password_encrypted=encrypt_text(payload.password),
         rtsp_main_url=rtsp_main_url,
         rtsp_sub_url=rtsp_sub_url,
+        rtsp_host=rtsp_host if str(payload.protocol or "rtsp").lower() == "onvif" else None,
+        rtsp_port=rtsp_port if str(payload.protocol or "rtsp").lower() == "onvif" else None,
         rtsp_transport=payload.rtsp_transport,
         onvif_path=payload.onvif_path,
         onvif_profile_token=payload.onvif_profile_token,
@@ -411,8 +662,8 @@ def create_camera(
         segment_minutes=payload.segment_minutes,
         retention_days=payload.retention_days,
         storage_quota_gb=payload.storage_quota_gb,
-        status="created",
-        last_error=None,
+        status="manual_unverified" if manual_unverified else "created",
+        last_error="created_unverified" if manual_unverified else None,
     )
 
     db.add(camera)
@@ -434,6 +685,7 @@ def create_camera(
             "enabled": bool(camera.enabled),
             "default_live_stream": camera.default_live_stream,
             "default_record_stream": camera.default_record_stream,
+            "validation_state": "manual_unverified" if manual_unverified else "verified",
         },
         ip_address=request_ip(request),
         user_agent=request_user_agent(request),
@@ -585,13 +837,17 @@ def camera_delete_response(
     recordings: dict,
     preview_deleted: bool = False,
 ) -> dict:
+    warnings = list(recordings.get("warnings") or [])
     return {
-        "ok": status_value == "deleted",
+        "ok": status_value in {"deleted", "deleted_archive_cleanup_partial"},
         "status": status_value,
         "camera_id": camera.id,
         "camera_name": camera.name,
+        "camera_removed": status_value in {"deleted", "deleted_archive_cleanup_partial"},
         "delete_files": bool(delete_files),
         "recordings": recordings,
+        "archive_cleanup": recordings,
+        "warnings": warnings,
         "preview_cleanup": {
             "deleted": bool(preview_deleted),
             "scope": "camera_preview_only",
@@ -615,7 +871,9 @@ def audit_camera_delete(
     delete_files: bool,
     status_value: str,
     recordings: dict,
+    camera_name: str | None = None,
 ) -> None:
+    target_camera_name = camera_name or camera.name
     create_event(
         db=db,
         actor=actor,
@@ -623,10 +881,10 @@ def audit_camera_delete(
         event_type=event_type,
         severity=severity,
         message_ru=f"{actor.username} запросил удаление камеры {camera.name}: {status_value}",
-        message_en=f"{actor.username} requested camera deletion for {camera.name}: {status_value}",
+        message_en=f"{actor.username} requested camera deletion for {target_camera_name}: {status_value}",
         target_type="camera",
         target_id=camera.id,
-        target_name=camera.name,
+        target_name=target_camera_name,
         metadata={
             "delete_files": bool(delete_files),
             "status": status_value,
@@ -653,6 +911,11 @@ def delete_camera_preview(camera_id: int) -> bool:
     return existed
 
 
+def deleted_unique_value(value: str, camera_id: int) -> str:
+    suffix = f"__deleted_{int(camera_id)}_{int(time.time())}"
+    return f"{str(value or 'camera')[: max(1, 255 - len(suffix))]}{suffix}"
+
+
 @router.put("/{camera_id}", response_model=CameraResponse)
 def update_camera(
     camera_id: int,
@@ -661,15 +924,18 @@ def update_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
     data = payload.model_dump(exclude_unset=True)
     preview_token = data.pop("preview_token", None)
+    validation_token = data.pop("validation_token", None)
+    onvif_probe_token = data.pop("onvif_probe_token", None)
+    manual_confirm_unverified = bool(data.pop("manual_confirm_unverified", False))
 
     if "name" in data and data["name"] != camera.name:
-        existing = db.query(Camera).filter(Camera.name == data["name"]).first()
+        existing = db.query(Camera).filter(Camera.name == data["name"], Camera.deleted_at.is_(None)).first()
         if existing and existing.id != camera.id:
             raise HTTPException(status_code=400, detail="Камера с таким именем уже существует")
 
@@ -682,9 +948,13 @@ def update_camera(
         data.pop("rtsp_port", None)
         host_for_rtsp = data.get("host", camera.host)
         port_for_rtsp = data.get("port", camera.port)
+        next_rtsp_host = None
+        next_rtsp_port = None
     else:
-        host_for_rtsp = data.pop("rtsp_host", None) or data.get("host", camera.rtsp_reachable_host or camera.host)
-        port_for_rtsp = data.pop("rtsp_port", None) or camera.rtsp_reachable_port or 554
+        next_rtsp_host = data.pop("rtsp_host", None) or camera.rtsp_host or data.get("host", camera.host)
+        next_rtsp_port = data.pop("rtsp_port", None) or camera.rtsp_port or 554
+        host_for_rtsp = next_rtsp_host
+        port_for_rtsp = next_rtsp_port
 
     if "rtsp_main_url" in data and data["rtsp_main_url"] is not None:
         data["rtsp_main_url"] = assemble_rtsp_url(
@@ -716,7 +986,14 @@ def update_camera(
         "host": camera.host,
         "port": camera.port,
         "username": camera.username,
+        "rtsp_host": camera.rtsp_host,
+        "rtsp_port": camera.rtsp_port,
+        "rtsp_main_url": camera.rtsp_main_url,
+        "rtsp_sub_url": camera.rtsp_sub_url,
         "rtsp_transport": camera.rtsp_transport,
+        "onvif_path": camera.onvif_path,
+        "onvif_profile_token": camera.onvif_profile_token,
+        "onvif_channel_id": camera.onvif_channel_id,
         "recording_mode": camera.recording_mode,
         "default_live_stream": camera.default_live_stream,
         "default_record_stream": camera.default_record_stream,
@@ -724,8 +1001,30 @@ def update_camera(
         "retention_days": camera.retention_days,
         "storage_quota_gb": camera.storage_quota_gb,
     }
+    proposed_values = {
+        **old_values,
+        **data,
+        "rtsp_host": next_rtsp_host,
+        "rtsp_port": next_rtsp_port,
+    }
+    connection_sensitive_change = any(old_values.get(key) != proposed_values.get(key) for key in CONNECTION_SENSITIVE_FIELDS if key != "password")
+    connection_sensitive_change = connection_sensitive_change or bool(payload.password)
+    gate_payload = {
+        **proposed_values,
+        "password": payload.password or existing_password or "",
+        "validation_token": validation_token,
+        "onvif_probe_token": onvif_probe_token,
+        "manual_confirm_unverified": manual_confirm_unverified,
+    }
+    manual_unverified = require_save_gate(gate_payload, connection_sensitive_change=connection_sensitive_change)
+
     for key, value in data.items():
         setattr(camera, key, value)
+    camera.rtsp_host = next_rtsp_host
+    camera.rtsp_port = next_rtsp_port
+    if manual_unverified:
+        camera.status = "manual_unverified"
+        camera.last_error = "updated_unverified"
 
     db.add(camera)
     db.commit()
@@ -747,7 +1046,11 @@ def update_camera(
         target_type="camera",
         target_id=camera.id,
         target_name=camera.name,
-        metadata={"changed": changed, "credential_changed": credential_changed},
+        metadata={
+            "changed": safe_changed_metadata(changed),
+            "credential_changed": credential_changed,
+            "validation_state": "manual_unverified" if manual_unverified else ("unchanged" if not connection_sensitive_change else "verified"),
+        },
         ip_address=request_ip(request),
         user_agent=request_user_agent(request),
     )
@@ -761,7 +1064,7 @@ def enable_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
@@ -794,7 +1097,7 @@ def disable_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
@@ -828,7 +1131,7 @@ def preview_delete_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
@@ -903,15 +1206,15 @@ def delete_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
     segments = camera_recording_segments(db, camera.id)
 
-    if not delete_files and segments:
+    if not delete_files:
         recordings = {
-            "ok": False,
+            "ok": True,
             "operation": "camera_delete_without_files",
             "dry_run": False,
             "requested_count": len(segments),
@@ -922,10 +1225,10 @@ def delete_camera(
             "not_found_count": 0,
             "bytes_freed": 0,
             "estimated_freed_bytes": 0,
-            "reason_counts": {CAMERA_DELETE_NO_FILES_BLOCK_REASON: len(segments)},
+            "reason_counts": {CAMERA_DELETE_NO_FILES_BLOCK_REASON: len(segments)} if segments else {},
             "active_blockers": 0,
             "limit_exceeded": False,
-            "warnings": ["camera_delete_blocked_recordings_exist"],
+            "warnings": ["archive_retained"] if segments else [],
             "items": [
                 {
                     "segment_id": segment.id,
@@ -938,132 +1241,93 @@ def delete_camera(
                 for segment in segments[:100]
             ],
         }
-        audit_camera_delete(
-            db,
-            actor=current_user,
-            request=request,
-            event_type="cameras.delete_blocked",
-            severity="warning",
-            camera=camera,
-            delete_files=False,
-            status_value="blocked",
-            recordings=recordings,
-        )
-        raise HTTPException(
-            status_code=409,
-            detail=camera_delete_response(
-                camera=camera,
-                delete_files=False,
-                status_value="blocked",
-                recordings=recordings,
-            ),
-        )
-
-    if delete_files:
-        require_recording_delete_permission_for_camera_delete(current_user)
-        preview = mark_camera_delete_preview_unsafe(
-            compact_deletion_result(
-                preview_segments(
-                    db,
-                    segments,
-                    operation="camera_delete_preview",
-                    reason=CAMERA_DELETE_FILES_REASON,
+    else:
+        if not user_has_permission(getattr(current_user, "role", ""), "delete_recordings"):
+            recordings = {
+                "ok": len(segments) == 0,
+                "operation": "camera_delete_with_files",
+                "dry_run": False,
+                "requested_count": len(segments),
+                "planned_count": 0,
+                "deleted_count": 0,
+                "skipped_count": len(segments),
+                "failed_count": 0,
+                "not_found_count": 0,
+                "bytes_freed": 0,
+                "estimated_freed_bytes": 0,
+                "reason_counts": {CAMERA_DELETE_NO_PERMISSION_REASON: len(segments)} if segments else {},
+                "active_blockers": 0,
+                "limit_exceeded": False,
+                "warnings": [CAMERA_DELETE_NO_PERMISSION_REASON] if segments else [],
+                "items": [
+                    {
+                        "segment_id": segment.id,
+                        "camera_id": segment.camera_id,
+                        "action": "skipped",
+                        "reason": CAMERA_DELETE_NO_PERMISSION_REASON,
+                        "size_bytes": int(segment.size_bytes or 0),
+                        "error": None,
+                    }
+                    for segment in segments[:100]
+                ],
+            }
+        else:
+            preview = mark_camera_delete_preview_unsafe(
+                compact_deletion_result(
+                    preview_segments(
+                        db,
+                        segments,
+                        operation="camera_delete_preview",
+                        reason=CAMERA_DELETE_FILES_REASON,
+                    )
                 )
             )
-        )
-        if not preview["ok"]:
-            audit_camera_delete(
-                db,
-                actor=current_user,
-                request=request,
-                event_type="cameras.delete_blocked",
-                severity="warning",
-                camera=camera,
-                delete_files=True,
-                status_value="blocked",
-                recordings=preview,
-            )
-            raise HTTPException(
-                status_code=409,
-                detail=camera_delete_response(
-                    camera=camera,
-                    delete_files=True,
-                    status_value="blocked",
-                    recordings=preview,
-                ),
-            )
-
-        recordings = compact_deletion_result(
-            execute_segments(
-                db,
-                segments,
-                actor=current_user,
-                operation="camera_delete_with_files",
-                reason=CAMERA_DELETE_FILES_REASON,
-                max_candidates=max(len(segments), 1),
-            )
-        )
-        if recordings["failed_count"] or recordings["skipped_count"] or recordings["limit_exceeded"]:
-            recordings["ok"] = False
-            audit_camera_delete(
-                db,
-                actor=current_user,
-                request=request,
-                event_type="cameras.delete_failed",
-                severity="error",
-                camera=camera,
-                delete_files=True,
-                status_value="blocked",
-                recordings=recordings,
-            )
-            raise HTTPException(
-                status_code=409,
-                detail=camera_delete_response(
-                    camera=camera,
-                    delete_files=True,
-                    status_value="blocked",
-                    recordings=recordings,
-                ),
-            )
-    else:
-        recordings = {
-            "ok": True,
-            "operation": "camera_delete_without_files",
-            "dry_run": False,
-            "requested_count": 0,
-            "planned_count": 0,
-            "deleted_count": 0,
-            "skipped_count": 0,
-            "failed_count": 0,
-            "not_found_count": 0,
-            "bytes_freed": 0,
-            "estimated_freed_bytes": 0,
-            "reason_counts": {},
-            "active_blockers": 0,
-            "limit_exceeded": False,
-            "warnings": [],
-            "items": [],
-        }
+            if not preview["ok"]:
+                recordings = preview
+            else:
+                recordings = compact_deletion_result(
+                    execute_segments(
+                        db,
+                        segments,
+                        actor=current_user,
+                        operation="camera_delete_with_files",
+                        reason=CAMERA_DELETE_FILES_REASON,
+                        max_candidates=max(len(segments), 1),
+                    )
+                )
+                if recordings["failed_count"] or recordings["skipped_count"] or recordings["limit_exceeded"]:
+                    recordings["ok"] = False
+                    if "archive_cleanup_partial" not in recordings["warnings"]:
+                        recordings["warnings"].append("archive_cleanup_partial")
 
     preview_deleted = delete_camera_preview(camera.id)
+    status_value = "deleted" if recordings.get("ok") else "deleted_archive_cleanup_partial"
     response = camera_delete_response(
         camera=camera,
         delete_files=delete_files,
-        status_value="deleted",
+        status_value=status_value,
         recordings=recordings,
         preview_deleted=preview_deleted,
     )
-    db.delete(camera)
-    db.commit()
+    original_camera_name = camera.name
+    original_folder_name = camera.storage_folder_name
     audit_camera_delete(
         db,
         actor=current_user,
         request=request,
-        event_type="cameras.deleted",
-        severity="info",
+        event_type="cameras.deleted" if recordings.get("ok") else "cameras.delete_partial_cleanup",
+        severity="info" if recordings.get("ok") else "warning",
         camera=camera,
         delete_files=delete_files,
-        status_value="deleted",
+        status_value=status_value,
         recordings=recordings,
+        camera_name=original_camera_name,
     )
+    camera.enabled = False
+    camera.status = "deleted"
+    camera.deleted_at = datetime.utcnow()
+    camera.name = deleted_unique_value(original_camera_name, camera.id)
+    camera.storage_folder_name = deleted_unique_value(original_folder_name, camera.id)
+    db.add(camera)
+    db.commit()
     return response

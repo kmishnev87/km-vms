@@ -28,6 +28,9 @@ const initialForm = {
   retention_days: 30,
   storage_quota_gb: 50,
   preview_token: null,
+  validation_token: null,
+  onvif_probe_token: null,
+  manual_confirm_unverified: false,
 };
 
 const initialOnvifConfig = {
@@ -299,6 +302,9 @@ function cameraPayloadFromForm(source, editingCameraId) {
 function normalizeCameraError(message) {
   const text = String(message || "").trim();
   if (!text) return "Не удалось выполнить действие. Проверьте параметры и повторите попытку.";
+  if (text.includes("camera_validation_required")) {
+    return "Перед сохранением выполните тест/ONVIF проверку или явно отметьте сохранение без проверки.";
+  }
   if (text.includes("ffprobe") || text.includes("Invalid data") || text.includes("Server returned")) {
     return "Камера не ответила корректно. Проверьте RTSP path, логин, пароль и сетевой доступ.";
   }
@@ -327,6 +333,45 @@ function normalizeRuntimeError(message) {
     return "Запись недоступна: проверьте параметры камеры и хранилище.";
   }
   return text;
+}
+
+function archiveCleanupMessage(result) {
+  const warnings = result?.warnings || result?.archive_cleanup?.warnings || result?.recordings?.warnings || [];
+  const reasons = result?.archive_cleanup?.reason_counts || result?.recordings?.reason_counts || {};
+  if (!result?.camera_removed) return "";
+  if (!warnings.length && !Object.keys(reasons).length) return "Камера удалена";
+  if (reasons.delete_recordings_permission_missing) {
+    return "Камера удалена. Архив не удален: у пользователя нет права удалять записи.";
+  }
+  if (reasons.active_job) {
+    return "Камера удалена. Архив не удален: для камеры есть активная запись.";
+  }
+  if (reasons.unowned) {
+    return "Камера удалена. Архив не удален: найдены файлы вне владения KM VMS.";
+  }
+  if (reasons.path_outside_storage) {
+    return "Камера удалена. Архив не удален: путь вне безопасного хранилища.";
+  }
+  if (warnings.includes("archive_retained") || reasons.recordings_exist_delete_files_false_requires_safe_policy) {
+    return "Камера удалена. Архив оставлен на диске.";
+  }
+  return "Камера удалена. Архив не удален: cleanup был пропущен или частично заблокирован.";
+}
+
+function cameraEndpointLabel(camera) {
+  const protocol = String(camera?.protocol || "").toUpperCase();
+  return `${camera?.host || "-"}:${camera?.port || "-"} · ${protocol || "-"}`;
+}
+
+function cameraRecordingLabel(camera) {
+  if (camera?.recording_mode === "always") return "Постоянно";
+  return camera?.recording_mode || "-";
+}
+
+function cameraStreamsLabel(camera) {
+  const rec = String(camera?.default_record_stream || "main").toUpperCase();
+  const live = String(camera?.default_live_stream || "main").toUpperCase();
+  return `${rec} rec · ${live} live`;
 }
 
 function getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable) {
@@ -368,6 +413,7 @@ function getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable
 
 export default function CamerasPage() {
   const [cameras, setCameras] = useState([]);
+  const [viewMode, setViewMode] = useState("list");
   const [storage, setStorage] = useState(null);
   const [recorderStatus, setRecorderStatus] = useState(null);
   const [showEditor, setShowEditor] = useState(false);
@@ -375,10 +421,14 @@ export default function CamerasPage() {
   const [editingCameraId, setEditingCameraId] = useState(null);
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState("");
+  const [deleteNotice, setDeleteNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
   const [onvifBusy, setOnvifBusy] = useState(false);
+  const [onvifDiscoveryBusy, setOnvifDiscoveryBusy] = useState(false);
+  const [onvifProbeBusy, setOnvifProbeBusy] = useState(false);
+  const [onvifDiscovery, setOnvifDiscovery] = useState(null);
   const [onvifData, setOnvifData] = useState(null);
   const [onvifConfigBusy, setOnvifConfigBusy] = useState(false);
   const [onvifConfig, setOnvifConfig] = useState(initialOnvifConfig);
@@ -432,7 +482,9 @@ export default function CamerasPage() {
       const next = {
         ...prev,
         [key]: value,
-        ...(PREVIEW_SENSITIVE_FIELDS.has(key) ? { preview_token: null } : {}),
+        ...(PREVIEW_SENSITIVE_FIELDS.has(key)
+          ? { preview_token: null, validation_token: null, onvif_probe_token: null, manual_confirm_unverified: false }
+          : {}),
       };
 
       if (key === "protocol" && value === "onvif") {
@@ -485,7 +537,9 @@ export default function CamerasPage() {
     setEditingCameraId(null);
     setForm(initialForm);
     setError("");
+    setDeleteNotice("");
     setTestResult(null);
+    setOnvifDiscovery(null);
     setOnvifData(null);
     setOnvifConfig(initialOnvifConfig);
     setSelectedOnvifProfileToken("");
@@ -518,9 +572,13 @@ export default function CamerasPage() {
       segment_minutes: camera.segment_minutes || 5,
       retention_days: camera.retention_days || 30,
       storage_quota_gb: camera.storage_quota_gb || 50,
+      validation_token: null,
+      onvif_probe_token: null,
+      manual_confirm_unverified: false,
     }));
     setError("");
     setTestResult(null);
+    setOnvifDiscovery(null);
     setOnvifData(null);
     setOnvifConfig(initialOnvifConfig);
     setSelectedOnvifProfileToken(camera.onvif_profile_token || "");
@@ -554,6 +612,9 @@ export default function CamerasPage() {
       setTestResult(result);
       if (result.preview_token) {
         patch("preview_token", result.preview_token);
+      }
+      if (result.validation_token) {
+        setForm((prev) => ({ ...prev, validation_token: result.validation_token, manual_confirm_unverified: false }));
       }
       updateProfileProbeState(formOverride.onvif_profile_token || selectedOnvifProfileToken, result);
       return result;
@@ -617,6 +678,92 @@ export default function CamerasPage() {
       setOnvifData(null);
     } finally {
       setOnvifBusy(false);
+    }
+  }
+
+  async function discoverOnvifCameras() {
+    setError("");
+    setOnvifStatus("");
+    setOnvifDiscoveryBusy(true);
+    try {
+      const result = await apiFetch("/cameras/onvif/discover", {
+        method: "POST",
+        body: JSON.stringify({ timeout_seconds: 5 }),
+        headers: { "Content-Type": "application/json" },
+      });
+      setOnvifDiscovery(result);
+      if (result.candidates?.length) {
+        setOnvifStatus(`Найдено ONVIF устройств: ${result.candidates.length}. Выберите камеру из списка.`);
+      } else {
+        setOnvifStatus(result.message || "ONVIF discovery не нашёл камер. Используйте ручной ввод.");
+      }
+    } catch (err) {
+      setError(normalizeCameraError(err.message));
+    } finally {
+      setOnvifDiscoveryBusy(false);
+    }
+  }
+
+  function selectOnvifCandidate(candidate) {
+    setForm((prev) => normalizeCameraStreamDefaults({
+      ...prev,
+      protocol: "onvif",
+      host: candidate.host || prev.host,
+      port: candidate.port || prev.port || 80,
+      onvif_path: candidate.xaddr_path || prev.onvif_path || "",
+      rtsp_host: candidate.host || prev.rtsp_host || "",
+      rtsp_port: prev.rtsp_port || 554,
+      preview_token: null,
+      validation_token: null,
+      onvif_probe_token: null,
+      manual_confirm_unverified: false,
+    }));
+    setOnvifStatus("ONVIF endpoint заполнен из discovery. Проверьте логин, пароль и выполните проверку ONVIF.");
+  }
+
+  async function probeOnvifCamera() {
+    setError("");
+    setOnvifStatus("");
+    setOnvifProbeBusy(true);
+    try {
+      const payload = {
+        host: form.host,
+        port: Number(form.port || 80),
+        rtsp_host: rtspReachableHost(form),
+        rtsp_port: rtspReachablePort(form),
+        username: form.username,
+        password: form.password,
+        timeout_seconds: 6,
+      };
+      const result = await apiFetch("/cameras/onvif/probe", {
+        method: "POST",
+        body: JSON.stringify(payload),
+        headers: { "Content-Type": "application/json" },
+      });
+      setOnvifData(result);
+      const mainToken = result.suggested_main_profile_token || result.profiles?.[0]?.token || "";
+      const subToken = result.suggested_sub_profile_token || "";
+      const mainProfile = profileByToken(result, mainToken);
+      const subProfile = profileByToken(result, subToken);
+      setForm((prev) => normalizeCameraStreamDefaults({
+        ...prev,
+        rtsp_host: result.rtsp_reachable?.host || rtspReachableHost(prev),
+        rtsp_port: result.rtsp_reachable?.port || rtspReachablePort(prev),
+        onvif_profile_token: mainToken || prev.onvif_profile_token,
+        rtsp_main_url: mainProfile?.stream_path || prev.rtsp_main_url,
+        rtsp_sub_url: subProfile?.stream_path || prev.rtsp_sub_url,
+        default_record_stream: "main",
+        default_live_stream: subProfile ? "sub" : prev.default_live_stream,
+        onvif_probe_token: result.onvif_probe_token || null,
+        manual_confirm_unverified: false,
+      }));
+      setSelectedOnvifProfileToken(mainToken);
+      setOnvifStatus("ONVIF проверка успешна. Можно сохранить камеру как проверенную или дополнительно выполнить RTSP тест.");
+    } catch (err) {
+      setError(normalizeCameraError(err.message));
+      setOnvifData(null);
+    } finally {
+      setOnvifProbeBusy(false);
     }
   }
 
@@ -769,6 +916,7 @@ export default function CamerasPage() {
       setEditingCameraId(null);
       setForm(initialForm);
       setTestResult(null);
+      setOnvifDiscovery(null);
       setOnvifData(null);
       setOnvifConfig(initialOnvifConfig);
       setSelectedOnvifProfileToken("");
@@ -799,11 +947,12 @@ export default function CamerasPage() {
     setError("");
     setBusy(true);
     try {
-      await apiFetch(
+      const result = await apiFetch(
         `/cameras/${cameraToDelete.id}?delete_files=${deleteFiles ? "true" : "false"}`,
         { method: "DELETE" }
       );
       closeDeleteModal();
+      setDeleteNotice(archiveCleanupMessage(result) || "Камера удалена");
       await load();
     } catch (err) {
       setError(normalizeCameraError(err.message));
@@ -876,25 +1025,75 @@ export default function CamerasPage() {
   return (
     <Layout>
       <div className="standardPage">
-      <div className="pageHeader">
+      <div className="pageHeader cameraPageHeader">
         <div>
           <h1 className="pageTitle">Камеры</h1>
           <div className="pageSubtitle">Добавление, редактирование и управление камерами</div>
         </div>
-        <button className="button" onClick={openCreate}>Добавить камеру</button>
+        <div className="cameraHeaderActions">
+          <div className="cameraViewToggle" role="group" aria-label="Режим отображения камер">
+            <button type="button" className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")}>Список</button>
+            <button type="button" className={viewMode === "cards" ? "active" : ""} onClick={() => setViewMode("cards")}>Карточки</button>
+          </div>
+          <button className="button" onClick={openCreate}>Добавить камеру</button>
+        </div>
       </div>
 
       <OperatorProblemBanners domains={["cameras", "recorder"]} className="pageWarnings" limit={4} />
 
       {error && !showEditor ? <div className="badge err" style={{ marginBottom: 14 }}>{error}</div> : null}
+      {deleteNotice && !showEditor ? <div className="badge ok" style={{ marginBottom: 14 }}>{deleteNotice}</div> : null}
 
-      <div className="cameraCards">
+      <div className={viewMode === "cards" ? "cameraTileGrid" : "cameraCards"}>
         {!cameras.length ? (
           <div className="card">Камеры ещё не добавлены.</div>
         ) : (
           cameras.map((camera) => {
             const runtime = recorderCameraMap.get(String(camera.id));
             const badge = getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable);
+            if (viewMode === "cards") {
+              return (
+                <article className="cameraTileCard" key={camera.id}>
+                  <div className="cameraTilePreview">
+                    {camera.preview_url ? (
+                      <img src={camera.preview_url} alt="" />
+                    ) : (
+                      <div className="cameraTilePreviewEmpty">Нет кадра</div>
+                    )}
+                    <span className={`cameraTileStatus ${badge.cls}`}>{badge.text}</span>
+                  </div>
+                  <div className="cameraTileBody">
+                    <div className="cameraTileTitleRow">
+                      <div className="cameraTileIdentity">
+                        <div className="cameraTileName" title={camera.name}>{camera.name}</div>
+                        <div className="cameraTileEndpoint" title={cameraEndpointLabel(camera)}>{cameraEndpointLabel(camera)}</div>
+                      </div>
+                      <div className="cameraTileActions">
+                        <button className="cameraTileIconButton" onClick={() => openEdit(camera)} title="Редактировать" aria-label="Редактировать">
+                          {"\u270e"}
+                        </button>
+                        <button className="cameraTileIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? "Отключить" : "Включить"} aria-label={camera.enabled ? "Отключить" : "Включить"}>
+                          {camera.enabled ? "\u23fb" : "\u2713"}
+                        </button>
+                        <button className="cameraTileIconButton danger" onClick={() => openDeleteModal(camera)} title="Удалить" aria-label="Удалить">
+                          {"\ud83d\uddd1"}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="cameraTileSystem">
+                      <div><span>Запись</span><strong>{cameraRecordingLabel(camera)}</strong></div>
+                      <div><span>Сегмент</span><strong>{camera.segment_minutes} мин</strong></div>
+                      <div><span>Хранение</span><strong>{camera.retention_days} дн</strong></div>
+                      <div><span>Лимит</span><strong>{camera.storage_quota_gb} ГБ</strong></div>
+                    </div>
+                    <div className="cameraTileFoot">
+                      <span>{cameraStreamsLabel(camera)}</span>
+                      <span className={`badge ${badge.cls}`}>{badge.text}</span>
+                    </div>
+                  </div>
+                </article>
+              );
+            }
             return (
               <div className="cameraCard card" key={camera.id}>
                 <div className="cameraCardGrid">
@@ -1098,6 +1297,32 @@ export default function CamerasPage() {
 
                 {form.protocol === "onvif" ? <section className="cameraModalSection cameraOnvifSection">
                   <h3>3. ONVIF</h3>
+                  <div className="cameraOnvifOnboarding">
+                    <div className="toolbar cameraOnvifActions">
+                      <button className="button secondary small" onClick={discoverOnvifCameras} disabled={onvifDiscoveryBusy}>
+                        {onvifDiscoveryBusy ? "Ищем..." : "Найти ONVIF камеры"}
+                      </button>
+                      <button className="button secondary small" onClick={probeOnvifCamera} disabled={onvifProbeBusy || !form.host}>
+                        {onvifProbeBusy ? "Проверяем..." : "Проверить ONVIF"}
+                      </button>
+                    </div>
+                    <div className="cameraModalNote">
+                      ONVIF host/port используется для управления камерой. RTSP reachable host/port ниже может отличаться для NAT или удаленных камер.
+                    </div>
+                    {onvifDiscovery?.candidates?.length ? (
+                      <div className="cameraDiscoveryList">
+                        {onvifDiscovery.candidates.map((candidate) => (
+                          <button type="button" className="cameraDiscoveryItem" key={candidate.id} onClick={() => selectOnvifCandidate(candidate)}>
+                            <span>{candidate.host}:{candidate.port || 80}</span>
+                            <em>{candidate.xaddr_path || candidate.source || "ws_discovery"}</em>
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {onvifDiscovery && !onvifDiscovery.candidates?.length ? (
+                      <div className="cameraPreviewEmpty">{onvifDiscovery.message || "Discovery недоступен или устройства не найдены."}</div>
+                    ) : null}
+                  </div>
                   {onvifData ? <div className="cameraDeviceInfo">
                     <div><strong>Производитель:</strong> {onvifData.device?.manufacturer || "-"}</div>
                     <div><strong>Модель:</strong> {onvifData.device?.model || "-"}</div>
@@ -1226,6 +1451,17 @@ export default function CamerasPage() {
                   {profileSettingSlots.map(renderProfileSettingSlot)}
                 </div>
               </section>
+            ) : null}
+
+            {form.protocol === "onvif" || editorMode === "create" ? (
+              <label className="cameraUnverifiedConfirm">
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.manual_confirm_unverified)}
+                  onChange={(e) => patch("manual_confirm_unverified", e.target.checked)}
+                />
+                <span>Сохранить без успешной проверки как непроверенную камеру</span>
+              </label>
             ) : null}
 
             <div className="actions">

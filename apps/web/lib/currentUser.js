@@ -12,6 +12,7 @@ import {
   isCurrentUserDeniedError,
   normalizeCurrentUser,
   shouldFetchCurrentUser,
+  shouldRefreshCurrentUserState,
 } from "./currentUserCore";
 
 let state = {
@@ -83,6 +84,8 @@ export function useCurrentUser() {
   useEffect(() => {
     if (state.status === CURRENT_USER_IDLE) {
       loadCurrentUser();
+    } else if (shouldRefreshCurrentUserState(getAuthToken(), state.status)) {
+      loadCurrentUser({ force: true });
     }
 
     function onAuthChanged() {

@@ -27,6 +27,8 @@ class Camera(Base):
 
     rtsp_main_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     rtsp_sub_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rtsp_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    rtsp_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     rtsp_transport: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     onvif_path: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -43,6 +45,7 @@ class Camera(Base):
 
     status: Mapped[str] = mapped_column(String(50), default="new")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -56,6 +59,8 @@ class Camera(Base):
 
     @property
     def rtsp_reachable_host(self) -> str | None:
+        if self.rtsp_host:
+            return self.rtsp_host
         for value in (self.rtsp_main_url, self.rtsp_sub_url):
             if not value:
                 continue
@@ -69,6 +74,8 @@ class Camera(Base):
 
     @property
     def rtsp_reachable_port(self) -> int | None:
+        if self.rtsp_port:
+            return int(self.rtsp_port)
         for value in (self.rtsp_main_url, self.rtsp_sub_url):
             if not value:
                 continue

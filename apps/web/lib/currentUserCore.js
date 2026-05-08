@@ -9,6 +9,13 @@ export function shouldFetchCurrentUser(token) {
   return Boolean(String(token || "").trim());
 }
 
+export function shouldRefreshCurrentUserState(token, status) {
+  return (
+    shouldFetchCurrentUser(token) &&
+    [CURRENT_USER_NO_TOKEN, CURRENT_USER_DENIED, CURRENT_USER_UNAVAILABLE].includes(status)
+  );
+}
+
 export function normalizeCurrentUser(user) {
   if (!user || typeof user !== "object" || Array.isArray(user)) return null;
   return {

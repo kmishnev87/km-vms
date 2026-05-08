@@ -17,7 +17,17 @@ from app.models.audit_event import AuditEvent
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
 from app.models.user import User
-from app.routers.cameras import delete_camera, preview_delete_camera
+import app.routers.cameras as cameras_module
+from app.routers.cameras import (
+    delete_camera,
+    list_cameras,
+    list_viewer_cameras,
+    onvif_profile_config,
+    onvif_profiles,
+    preview_delete_camera,
+    test_camera as camera_test_endpoint,
+    update_onvif_profile_route,
+)
 from app.services.recording_retention import execute_segments
 
 
@@ -156,30 +166,36 @@ def add_segment(
     return segment, path
 
 
-def test_camera_delete_without_files_blocks_when_recordings_exist(db):
+def test_camera_delete_without_files_removes_camera_and_retains_recordings(db):
     camera = add_camera(db)
     segment, file_path = add_segment(db, camera)
 
-    with raises_http() as exc:
-        delete_camera(camera.id, FakeRequest(), delete_files=False, db=db, current_user=actor("owner"))
+    result = delete_camera(camera.id, FakeRequest(), delete_files=False, db=db, current_user=actor("owner"))
 
-    assert exc.value.status_code == 409
+    assert result["ok"] is True
+    assert result["camera_removed"] is True
+    assert result["status"] == "deleted"
+    assert result["recordings"]["skipped_count"] == 1
+    assert result["recordings"]["reason_counts"]["recordings_exist_delete_files_false_requires_safe_policy"] == 1
     assert file_path.exists()
     assert db.get(Camera, camera.id) is not None
+    assert db.get(Camera, camera.id).deleted_at is not None
     assert db.get(RecordingSegment, segment.id) is not None
-    assert exc.value.detail["recordings"]["reason_counts"]["recordings_exist_delete_files_false_requires_safe_policy"] == 1
 
 
-def test_camera_delete_with_files_requires_delete_recordings_permission(db):
+def test_camera_delete_with_files_without_recording_permission_removes_camera_and_skips_archive(db):
     camera = add_camera(db)
     segment, file_path = add_segment(db, camera)
 
-    with raises_http() as exc:
-        delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("operator"))
+    result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("operator"))
 
-    assert exc.value.status_code == 403
+    assert result["ok"] is True
+    assert result["camera_removed"] is True
+    assert result["status"] == "deleted_archive_cleanup_partial"
+    assert result["recordings"]["reason_counts"]["delete_recordings_permission_missing"] == 1
     assert file_path.exists()
     assert db.get(Camera, camera.id) is not None
+    assert db.get(Camera, camera.id).deleted_at is not None
     assert db.get(RecordingSegment, segment.id) is not None
 
 
@@ -195,13 +211,14 @@ def test_camera_delete_with_files_uses_safe_model_and_returns_summary(db):
     assert result["recordings"]["failed_count"] == 0
     assert result["recordings"]["skipped_count"] == 0
     assert not file_path.exists()
-    assert db.get(Camera, camera.id) is None
+    assert db.get(Camera, camera.id) is not None
+    assert db.get(Camera, camera.id).deleted_at is not None
     remaining = db.get(RecordingSegment, segment.id)
     if remaining is not None:
         assert remaining.status == "deleted"
 
 
-def test_camera_delete_with_files_blocks_active_recording(db):
+def test_camera_delete_with_files_skips_active_recording_but_removes_camera(db):
     camera = add_camera(db)
     job = RecordingJob(
         id="stage1_delete_test_job",
@@ -213,41 +230,159 @@ def test_camera_delete_with_files_blocks_active_recording(db):
     db.commit()
     segment, file_path = add_segment(db, camera, job_id=job.id)
 
-    with raises_http() as exc:
-        delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
+    result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
 
-    assert exc.value.status_code == 409
+    assert result["ok"] is True
+    assert result["camera_removed"] is True
+    assert result["status"] == "deleted_archive_cleanup_partial"
+    assert result["recordings"]["reason_counts"]["active_job"] == 1
     assert file_path.exists()
     assert db.get(Camera, camera.id) is not None
+    assert db.get(Camera, camera.id).deleted_at is not None
     assert db.get(RecordingSegment, segment.id) is not None
-    assert exc.value.detail["recordings"]["reason_counts"]["active_job"] == 1
 
 
-def test_camera_delete_with_files_skips_foreign_and_outside_namespace(db):
+def test_camera_delete_with_files_skips_foreign_and_removes_camera(db):
     camera = add_camera(db)
     segment, file_path = add_segment(db, camera, ownership="third_party")
 
-    with raises_http() as exc:
-        delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
+    result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
 
-    assert exc.value.status_code == 409
+    assert result["ok"] is True
+    assert result["camera_removed"] is True
+    assert result["status"] == "deleted_archive_cleanup_partial"
+    assert result["recordings"]["reason_counts"]["unowned"] == 1
     assert file_path.exists()
     assert db.get(Camera, camera.id) is not None
+    assert db.get(Camera, camera.id).deleted_at is not None
     assert db.get(RecordingSegment, segment.id) is not None
-    assert exc.value.detail["recordings"]["reason_counts"]["unowned"] == 1
 
 
-def test_camera_delete_with_files_rejects_path_traversal(db):
+def test_camera_delete_with_files_skips_path_traversal_and_removes_camera(db):
     camera = add_camera(db)
     segment, _file_path = add_segment(db, camera, relative_path="../stage1_delete_test_escape.mkv", file_exists=False)
 
-    with raises_http() as exc:
-        delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
+    result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
 
-    assert exc.value.status_code == 409
+    assert result["ok"] is True
+    assert result["camera_removed"] is True
+    assert result["status"] == "deleted_archive_cleanup_partial"
+    assert result["recordings"]["reason_counts"]["path_outside_storage"] == 1
     assert db.get(Camera, camera.id) is not None
+    assert db.get(Camera, camera.id).deleted_at is not None
     assert db.get(RecordingSegment, segment.id) is not None
-    assert exc.value.detail["recordings"]["reason_counts"]["path_outside_storage"] == 1
+
+
+def test_disabled_offline_camera_without_recordings_deletes_with_and_without_file_flag(db):
+    for delete_files in (False, True):
+        camera = add_camera(db, name=f"stage1_delete_no_recordings_{delete_files}")
+        camera.status = "offline"
+        camera.enabled = False
+        db.add(camera)
+        db.commit()
+
+        result = delete_camera(camera.id, FakeRequest(), delete_files=delete_files, db=db, current_user=actor("owner"))
+
+        assert result["ok"] is True
+        assert result["camera_removed"] is True
+        assert result["status"] == "deleted"
+        assert result["recordings"]["requested_count"] == 0
+        assert db.get(Camera, camera.id).deleted_at is not None
+
+
+def assert_safe_deleted_camera_error(exc: HTTPException):
+    assert exc.status_code == 404
+    assert exc.detail["code"] == "camera_not_active"
+    serialized = str(exc.detail).lower()
+    assert "deleted.example.test" not in serialized
+    assert "operator" not in serialized
+    assert "camera-" + "pass" not in serialized
+    assert "rtsp://" not in serialized
+    assert "traceback" not in serialized
+
+
+def test_deleted_camera_is_hidden_from_active_and_viewer_lists(db):
+    camera = add_camera(db, name="stage102_deleted_visibility")
+
+    result = delete_camera(camera.id, FakeRequest(), delete_files=False, db=db, current_user=actor("owner"))
+
+    assert result["ok"] is True
+    assert db.get(Camera, camera.id).deleted_at is not None
+    assert camera.id not in [item.id for item in list_cameras(db=db, current_user=actor("owner"))]
+    assert camera.id not in [item["id"] for item in list_viewer_cameras(db=db, current_user=actor("viewer"))]
+
+
+def test_deleted_camera_id_cannot_reuse_credentials_for_test_or_onvif(db, monkeypatch):
+    camera = add_camera(db, name="stage102_deleted_credential_reuse")
+    camera.host = "deleted.example.test"
+    camera.port = 20003
+    camera.username = "operator"
+    camera.password_encrypted = "stored-secret-placeholder"
+    db.add(camera)
+    db.commit()
+    camera_id = camera.id
+
+    delete_result = delete_camera(camera_id, FakeRequest(), delete_files=False, db=db, current_user=actor("owner"))
+    assert delete_result["ok"] is True
+
+    def fail_if_password_is_decrypted(value):
+        raise AssertionError("deleted camera password must not be decrypted")
+
+    def fail_if_network_is_used(*args, **kwargs):
+        raise AssertionError("deleted camera credentials must not reach network helpers")
+
+    monkeypatch.setattr(cameras_module, "decrypt_text", fail_if_password_is_decrypted)
+    monkeypatch.setattr(cameras_module.subprocess, "run", fail_if_network_is_used)
+    monkeypatch.setattr(cameras_module, "fetch_onvif_profiles", fail_if_network_is_used)
+    monkeypatch.setattr(cameras_module, "get_onvif_profile_config", fail_if_network_is_used)
+    monkeypatch.setattr(cameras_module, "update_onvif_profile", fail_if_network_is_used)
+
+    deleted_payload = {
+        "camera_id": camera_id,
+        "host": "manual.example.test",
+        "port": 554,
+        "username": "manual",
+        "password": "manual-" + "pass",
+        "rtsp_main_url": "/live",
+        "profile_token": "main",
+        "config": {"fps": 25},
+    }
+
+    for call in (
+        lambda: camera_test_endpoint(deleted_payload, db=db, current_user=actor("owner")),
+        lambda: onvif_profiles(deleted_payload, db=db, current_user=actor("owner")),
+        lambda: onvif_profile_config(deleted_payload, db=db, current_user=actor("owner")),
+        lambda: update_onvif_profile_route(deleted_payload, db=db, current_user=actor("owner")),
+    ):
+        with raises_http() as exc:
+            call()
+        assert_safe_deleted_camera_error(exc.value)
+
+
+def test_manual_camera_test_without_camera_id_still_builds_explicit_url(db, monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return SimpleNamespace(returncode=0, stdout='{"streams":[{"codec_type":"video","codec_name":"h264"}]}')
+
+    monkeypatch.setattr(cameras_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(cameras_module, "capture_camera_preview", lambda *args, **kwargs: False)
+
+    result = camera_test_endpoint(
+        {
+            "host": "manual.example.test",
+            "port": 554,
+            "username": "operator",
+            "password": "camera-" + "pass",
+            "rtsp_main_url": "/live",
+        },
+        db=db,
+        current_user=actor("owner"),
+    )
+
+    assert result["ok"] is True
+    assert captured["cmd"][-1].startswith("rtsp://operator:")
 
 
 def test_camera_delete_preview_does_not_mutate_files_or_metadata(db):

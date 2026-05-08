@@ -13,6 +13,7 @@ const context = {};
 vm.runInNewContext(
   `${source}
 this.shouldFetchCurrentUser = shouldFetchCurrentUser;
+this.shouldRefreshCurrentUserState = shouldRefreshCurrentUserState;
 this.normalizeCurrentUser = normalizeCurrentUser;
 this.isCurrentUserDeniedError = isCurrentUserDeniedError;
 this.CURRENT_USER_NO_TOKEN = CURRENT_USER_NO_TOKEN;
@@ -22,6 +23,7 @@ this.CURRENT_USER_DENIED = CURRENT_USER_DENIED;`,
 
 const {
   shouldFetchCurrentUser,
+  shouldRefreshCurrentUserState,
   normalizeCurrentUser,
   isCurrentUserDeniedError,
   CURRENT_USER_NO_TOKEN,
@@ -34,6 +36,11 @@ assert.equal(CURRENT_USER_DENIED, "denied");
 assert.equal(shouldFetchCurrentUser(""), false);
 assert.equal(shouldFetchCurrentUser(null), false);
 assert.equal(shouldFetchCurrentUser("token"), true);
+assert.equal(shouldRefreshCurrentUserState("token", "no_token"), true);
+assert.equal(shouldRefreshCurrentUserState("token", "denied"), true);
+assert.equal(shouldRefreshCurrentUserState("token", "unavailable"), true);
+assert.equal(shouldRefreshCurrentUserState("token", "ready"), false);
+assert.equal(shouldRefreshCurrentUserState("", "no_token"), false);
 
 assert.equal(normalizeCurrentUser(null), null);
 assert.equal(

@@ -30,6 +30,9 @@ class CameraBase(BaseModel):
     retention_days: int = Field(default=30, ge=1)
     storage_quota_gb: int = Field(default=50, ge=1)
     preview_token: str | None = None
+    validation_token: str | None = None
+    onvif_probe_token: str | None = None
+    manual_confirm_unverified: bool = False
 
 
 class CameraCreate(CameraBase):
@@ -67,6 +70,9 @@ class CameraUpdate(BaseModel):
     status: str | None = None
     last_error: str | None = None
     preview_token: str | None = None
+    validation_token: str | None = None
+    onvif_probe_token: str | None = None
+    manual_confirm_unverified: bool = False
 
 
 class CameraResponse(BaseModel):
@@ -80,6 +86,8 @@ class CameraResponse(BaseModel):
     username: str | None
     rtsp_main_url: str | None
     rtsp_sub_url: str | None
+    rtsp_host: str | None = None
+    rtsp_port: int | None = None
     rtsp_reachable_host: str | None = None
     rtsp_reachable_port: int | None = None
     rtsp_transport: str | None
@@ -94,6 +102,7 @@ class CameraResponse(BaseModel):
     storage_quota_gb: int
     status: str
     last_error: str | None
+    deleted_at: datetime | None = None
     preview_url: str | None = None
     created_at: datetime
     updated_at: datetime

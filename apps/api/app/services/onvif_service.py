@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 from urllib.parse import quote, urlparse, urlsplit, urlunparse, urlunsplit
 
 from onvif import ONVIFCamera
@@ -27,6 +28,17 @@ def wsdl_dir():
 
 def _safe_attr(obj, name, default=None):
     return getattr(obj, name, default) if obj is not None else default
+
+
+def _safe_text(value, max_length=160):
+    text = str(value or "").strip()
+    text = text.replace("\r", " ").replace("\n", " ")
+    return text[:max_length] or None
+
+
+def _candidate_id(host: str | None, port: int | None, source: str) -> str:
+    raw = f"{source}:{host or ''}:{port or ''}".encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
 
 
 def inject_auth_to_rtsp(
@@ -351,6 +363,146 @@ def fetch_onvif_profiles(host, port, username, password, rtsp_host=None, rtsp_po
             "source": "user_reachable" if rtsp_host else "onvif_host_fallback",
         },
         "media_service_xaddr": selected_media_xaddr,
+    }
+
+
+def discover_onvif_devices(timeout_seconds: int = 5) -> dict:
+    timeout = max(1, min(int(timeout_seconds or 5), 10))
+    try:
+        from wsdiscovery.discovery import ThreadedWSDiscovery as WSDiscovery
+    except Exception:
+        return {
+            "ok": True,
+            "discovery_supported": False,
+            "code": "discovery_not_supported",
+            "message": "ONVIF WS-Discovery is not available in this runtime.",
+            "candidates": [],
+            "warnings": [],
+            "limitations": ["manual_onvif_probe_available", "no_broad_subnet_scan"],
+            "timeout_seconds": timeout,
+        }
+
+    candidates = []
+    warnings = []
+    wsd = None
+    try:
+        wsd = WSDiscovery()
+        wsd.start()
+        services = wsd.searchServices(timeout=timeout) or []
+        seen = set()
+        for service in services[:20]:
+            xaddrs = list(getattr(service, "getXAddrs", lambda: [])() or [])
+            scopes = list(getattr(service, "getScopes", lambda: [])() or [])
+            types = list(getattr(service, "getTypes", lambda: [])() or [])
+            for xaddr in xaddrs[:3]:
+                parsed = urlparse(str(xaddr))
+                host = parsed.hostname
+                port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                key = (host, port, parsed.path)
+                if not host or key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(
+                    {
+                        "id": _candidate_id(host, port, "ws_discovery"),
+                        "source": "ws_discovery",
+                        "host": _safe_text(host, 120),
+                        "port": int(port),
+                        "xaddr_path": _safe_text(parsed.path or "/onvif/device_service", 160),
+                        "scopes": [_safe_text(item, 120) for item in scopes[:10] if _safe_text(item, 120)],
+                        "types": [_safe_text(item, 120) for item in types[:10] if _safe_text(item, 120)],
+                        "warnings": [],
+                    }
+                )
+    except TimeoutError:
+        return {
+            "ok": False,
+            "discovery_supported": True,
+            "code": "timeout",
+            "message": "ONVIF discovery timed out.",
+            "candidates": [],
+            "warnings": [],
+            "limitations": ["manual_onvif_probe_available", "no_broad_subnet_scan"],
+            "timeout_seconds": timeout,
+        }
+    except Exception:
+        return {
+            "ok": False,
+            "discovery_supported": True,
+            "code": "runtime_network_limited",
+            "message": "ONVIF discovery is unavailable in the current network/runtime.",
+            "candidates": [],
+            "warnings": ["manual_onvif_probe_available"],
+            "limitations": ["no_broad_subnet_scan"],
+            "timeout_seconds": timeout,
+        }
+    finally:
+        if wsd is not None:
+            try:
+                wsd.stop()
+            except Exception:
+                pass
+
+    return {
+        "ok": True,
+        "discovery_supported": True,
+        "code": "ok" if candidates else "no_devices_found",
+        "message": "ONVIF discovery completed." if candidates else "No ONVIF devices were found.",
+        "candidates": candidates,
+        "warnings": warnings,
+        "limitations": ["no_broad_subnet_scan"],
+        "timeout_seconds": timeout,
+    }
+
+
+def probe_onvif_device(host, port=80, username=None, password=None, rtsp_host=None, rtsp_port=None, timeout_seconds=5) -> dict:
+    host = str(host or "").strip()
+    if not host:
+        raise ValueError("host_required")
+    port = int(port or 80)
+    rtsp_host = str(rtsp_host or host).strip()
+    rtsp_port = int(rtsp_port or 554)
+
+    cam, media_candidates = _prepare_camera(host, port, username or "", password or "")
+    info = cam.devicemgmt.GetDeviceInformation()
+    media, selected_media_xaddr = _get_media_service(cam, media_candidates)
+    profiles = media.GetProfiles()
+    profile_items = [
+        _profile_to_dict(profile, media, username, password, host, port, rtsp_host=rtsp_host, rtsp_port=rtsp_port)
+        for profile in profiles
+    ]
+    suggested_main, suggested_sub = _suggest_profiles(profile_items)
+    stream_ready = any(item.get("rtsp_ready") for item in profile_items)
+    if not profile_items:
+        raise RuntimeError("profiles_unavailable")
+    if not stream_ready:
+        raise RuntimeError("stream_uri_unavailable")
+    return {
+        "ok": True,
+        "code": "ok",
+        "message": "ONVIF probe completed.",
+        "device": {
+            "manufacturer": _safe_text(_safe_attr(info, "Manufacturer"), 120),
+            "model": _safe_text(_safe_attr(info, "Model"), 120),
+            "firmware": _safe_text(_safe_attr(info, "FirmwareVersion"), 120),
+            "serial_number": _safe_text(_safe_attr(info, "SerialNumber"), 120),
+        },
+        "onvif": {"host": host, "port": port, "status": "reachable"},
+        "rtsp_reachable": {
+            "host": rtsp_host,
+            "port": rtsp_port,
+            "source": "user_override" if (rtsp_host != host or rtsp_port != 554) else "onvif_host_fallback",
+        },
+        "media": {
+            "status": "ok" if profile_items else "profiles_unavailable",
+            "profile_count": len(profile_items),
+            "stream_uri_status": "ok" if stream_ready else "stream_uri_unavailable",
+            "media_service_xaddr_path": urlparse(selected_media_xaddr).path if selected_media_xaddr else None,
+        },
+        "profiles": profile_items[:20],
+        "suggested_main_profile_token": suggested_main,
+        "suggested_sub_profile_token": suggested_sub,
+        "raw_secret_exposed": False,
     }
 
 

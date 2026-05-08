@@ -109,6 +109,7 @@ def camera_payload(**overrides):
         "segment_minutes": 5,
         "retention_days": 1,
         "storage_quota_gb": 1,
+        "manual_confirm_unverified": True,
     }
     data.update(overrides)
     return CameraCreate(**data)

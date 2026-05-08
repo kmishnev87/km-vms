@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { saveAuthToken } from "../../lib/api";
+import { loadCurrentUser } from "../../lib/currentUser";
 
 const TEXT = {
   title: "\u0412\u0445\u043e\u0434 \u0432 KM VMS",
@@ -63,8 +64,8 @@ export default function LoginPage() {
       });
       localStorage.removeItem("vms_login_redirect");
       sessionStorage.removeItem("vms_login_redirect");
-      router.push("/");
-      router.refresh();
+      await loadCurrentUser({ force: true });
+      router.replace("/");
     } catch (err) {
       setError(err?.message || TEXT.error);
     } finally {

@@ -93,6 +93,8 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("cameras", "GET", "/cameras/{camera_id}/delete-preview", PERMISSION_MANAGE_CAMERAS, "require_permission", "delete_files=true additionally requires delete_recordings in route logic."),
     EndpointPermission("cameras", "DELETE", "/cameras/{camera_id}", PERMISSION_MANAGE_CAMERAS, "require_permission", "delete_files=true additionally requires delete_recordings in route logic and returns JSON summary."),
     EndpointPermission("cameras", "POST", "/cameras/test", PERMISSION_MANAGE_CAMERAS, "require_permission"),
+    EndpointPermission("cameras", "POST", "/cameras/onvif/discover", PERMISSION_MANAGE_CAMERAS, "require_permission", "Bounded WS-Discovery only; no broad subnet scans and no secrets."),
+    EndpointPermission("cameras", "POST", "/cameras/onvif/probe", PERMISSION_MANAGE_CAMERAS, "require_permission", "Manual ONVIF reachability probe; sanitized response only."),
     EndpointPermission("cameras", "POST", "/cameras/onvif/profiles", PERMISSION_MANAGE_CAMERAS, "require_permission"),
     EndpointPermission("cameras", "POST", "/cameras/onvif/profile_config", PERMISSION_MANAGE_CAMERAS, "require_permission"),
     EndpointPermission("cameras", "POST", "/cameras/onvif/update_profile", PERMISSION_MANAGE_CAMERAS, "require_permission"),

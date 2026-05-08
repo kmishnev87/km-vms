@@ -3119,6 +3119,231 @@ textarea {
   gap: 16px;
 }
 
+.cameraHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.cameraViewToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #e8eef6;
+}
+
+.cameraViewToggle button {
+  height: 32px;
+  min-width: 74px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cameraViewToggle button.active {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+}
+
+.cameraTileGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 260px);
+  gap: 14px;
+  align-items: start;
+}
+
+.cameraTileCard {
+  width: 260px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+}
+
+.cameraTileCard:hover {
+  border-color: #bfdbfe;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.07);
+}
+
+.cameraTilePreview {
+  position: relative;
+  width: 100%;
+  height: 148px;
+  background: #0f172a;
+  overflow: hidden;
+}
+
+.cameraTilePreview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cameraTilePreviewEmpty {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: repeating-linear-gradient(135deg, #f1f5f9 0 12px, #e2e8f0 12px 24px);
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cameraTileStatus {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #0f172a;
+  font-size: 10.5px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cameraTileStatus.ok {
+  color: #166534;
+}
+
+.cameraTileStatus.warn {
+  color: #92400e;
+}
+
+.cameraTileStatus.err {
+  color: #991b1b;
+}
+
+.cameraTileBody {
+  padding: 9px 10px 10px;
+}
+
+.cameraTileTitleRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.cameraTileIdentity {
+  min-width: 0;
+}
+
+.cameraTileName {
+  min-width: 0;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cameraTileEndpoint {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cameraTileActions {
+  display: flex;
+  gap: 5px;
+}
+
+.cameraTileIconButton {
+  width: 27px;
+  min-width: 27px;
+  height: 27px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #0f172a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cameraTileIconButton:hover {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.cameraTileIconButton.danger {
+  color: #b91c1c;
+}
+
+.cameraTileSystem {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid #edf2f7;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 10px;
+  row-gap: 3px;
+  color: #64748b;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.cameraTileSystem div,
+.cameraTileFoot {
+  min-width: 0;
+}
+
+.cameraTileSystem span {
+  color: #94a3b8;
+}
+
+.cameraTileSystem strong {
+  color: #475569;
+  font-weight: 700;
+}
+
+.cameraTileFoot {
+  margin-top: 7px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  color: #94a3b8;
+  font-size: 10.5px;
+}
+
+.cameraTileFoot > span:first-child {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .cameraCard {
   padding: 18px 22px 20px;
 }
@@ -3317,6 +3542,73 @@ textarea {
   margin-bottom: 16px;
   font-size: 13px;
   line-height: 1.4;
+}
+
+.cameraOnvifOnboarding {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.cameraOnvifActions {
+  justify-content: flex-start;
+}
+
+.cameraDiscoveryList {
+  display: grid;
+  gap: 8px;
+}
+
+.cameraDiscoveryItem {
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cameraDiscoveryItem:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.cameraDiscoveryItem span,
+.cameraDiscoveryItem em {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cameraDiscoveryItem span {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cameraDiscoveryItem em {
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.cameraUnverifiedConfirm {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  line-height: 1.35;
 }
 
 .cameraTestResult {
@@ -4095,6 +4387,11 @@ textarea {
     flex-direction: column;
   }
 
+  .cameraHeaderActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .settingsPage {
     min-height: calc(100vh - 70px);
     padding: 10px 8px 18px;
@@ -4439,6 +4736,18 @@ textarea {
 
   .cameraMetaGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cameraTileGrid {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+
+  .cameraTileCard {
+    width: 100%;
+  }
+
+  .cameraDiscoveryItem {
+    grid-template-columns: 1fr;
   }
 
   .actions {

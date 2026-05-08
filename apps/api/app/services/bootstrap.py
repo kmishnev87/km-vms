@@ -17,6 +17,7 @@ def init_db() -> None:
     validate_schema_version_pre_bootstrap(engine, pre_bootstrap_shape)
     Base.metadata.create_all(bind=engine)
     migrate_user_table()
+    migrate_camera_table()
     migrate_system_settings_table()
     migrate_archive_roots()
     migrate_recording_metadata_tables()
@@ -51,6 +52,21 @@ def migrate_user_table() -> None:
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL"))
         if "last_login_at" not in columns:
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP NULL"))
+
+
+def migrate_camera_table() -> None:
+    inspector = inspect(engine)
+    if not inspector.has_table("cameras"):
+        return
+    columns = {column["name"] for column in inspector.get_columns("cameras")}
+    with engine.begin() as conn:
+        if "rtsp_host" not in columns:
+            conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS rtsp_host VARCHAR(255) NULL"))
+        if "rtsp_port" not in columns:
+            conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS rtsp_port INTEGER NULL"))
+        if "deleted_at" not in columns:
+            conn.execute(text("ALTER TABLE cameras ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP NULL"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cameras_deleted_at ON cameras (deleted_at)"))
 
 
 def migrate_recording_metadata_tables() -> None:

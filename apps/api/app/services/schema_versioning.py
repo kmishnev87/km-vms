@@ -31,7 +31,7 @@ BASELINE_MODEL_TABLES = {
 LEGACY_DB_ONLY_TABLES = {"recorder_runtime_status"}
 KNOWN_SAFE_MISSING_TABLES = {"setup_locks", "recorder_runtime_status"}
 KNOWN_CAMERA_NULLABLE_DRIFT_COLUMNS = {"segment_minutes", "retention_days", "storage_quota_gb"}
-KNOWN_SAFE_MISSING_COLUMNS = {"system_settings": {"system_name"}}
+KNOWN_SAFE_MISSING_COLUMNS = {"system_settings": {"system_name"}, "cameras": {"rtsp_host", "rtsp_port", "deleted_at"}}
 SAFE_STATUSES = {"current", "adopted_baseline", "drift_known_safe"}
 BLOCKED_STATUSES = {"unknown", "future_version", "downgrade_blocked", "drift_blocked", "adoption_failed"}
 METADATA_INCOMPLETE_STATUS = "metadata_incomplete"
@@ -130,6 +130,9 @@ def classify_schema_shape(shape: SchemaShape) -> dict[str, Any]:
         known_safe.append({"type": "missing_column", "table": "system_settings", "column": "system_name"})
 
     camera_columns = shape.tables.get("cameras", {}).get("columns", {})
+    for column in sorted(KNOWN_SAFE_MISSING_COLUMNS.get("cameras", set())):
+        if "cameras" in table_names and column not in camera_columns:
+            known_safe.append({"type": "missing_column", "table": "cameras", "column": column})
     nullable_drift = []
     for column in sorted(KNOWN_CAMERA_NULLABLE_DRIFT_COLUMNS):
         if column in camera_columns and camera_columns[column].get("nullable") is True:
