@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -13,9 +14,12 @@ from app.models.user import User
 from app.routers.deps import require_permission
 from app.services.archive_exports import (
     EXPORT_STATUSES,
+    cleanup_archive_export_artifacts,
     create_archive_export_job,
     create_archive_export_manifest,
     generate_archive_export_job,
+    prepare_archive_export_download,
+    prepare_archive_manifest_download,
     read_archive_export_manifest,
     serialize_archive_export_job,
 )
@@ -31,6 +35,14 @@ class ArchiveExportCreateRequest(BaseModel):
     reason: str | None = None
     note: str | None = None
     format_hint: str | None = None
+
+    class Config:
+        extra = "forbid"
+
+
+class ArchiveExportCleanupRequest(BaseModel):
+    dry_run: bool = False
+    limit: int = 100
 
     class Config:
         extra = "forbid"
@@ -76,6 +88,22 @@ def list_exports(
     return {"items": [serialize_archive_export_job(job) for job in jobs]}
 
 
+@router.post("/cleanup")
+def cleanup_exports(
+    payload: ArchiveExportCleanupRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
+):
+    return cleanup_archive_export_artifacts(
+        db,
+        actor=current_user,
+        dry_run=payload.dry_run,
+        limit=payload.limit,
+        request=request,
+    )
+
+
 @router.get("/{export_id}")
 def get_export(
     export_id: str,
@@ -116,3 +144,39 @@ def get_export_manifest(
     current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
 ):
     return read_archive_export_manifest(db, export_id=export_id)
+
+
+@router.get("/{export_id}/download")
+def download_export(
+    export_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
+):
+    path, filename, media_type, _size = prepare_archive_export_download(
+        db,
+        export_id=export_id,
+        actor=current_user,
+        request=request,
+    )
+    return FileResponse(path, media_type=media_type, filename=filename)
+
+
+@router.get("/{export_id}/manifest/download")
+def download_export_manifest(
+    export_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
+):
+    payload, filename = prepare_archive_manifest_download(
+        db,
+        export_id=export_id,
+        actor=current_user,
+        request=request,
+    )
+    return Response(
+        content=payload,
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

@@ -280,10 +280,13 @@ def collect_recording_files(db: Session, camera_name: Optional[str] = None) -> l
         media_metadata = segment_media_metadata(segment, file_path)
         items.append(
             {
+                "camera_id": segment.camera_id,
                 "camera": segment_camera_name(segment, cameras.get(segment.camera_id)),
                 "path": rel_path,
                 "filename": file_path.name,
                 "created_at": format_local_dt(started_at),
+                "started_at": segment.started_at.isoformat() if segment.started_at else None,
+                "ended_at": segment.ended_at.isoformat() if segment.ended_at else None,
                 "_sort_ts": started_at.timestamp(),
                 "size_bytes": size_bytes,
                 "size_human": human_size(size_bytes),

@@ -133,10 +133,13 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("chronology", "GET", "/chronology/file", PERMISSION_VIEW_TIMELINE, "scoped media_token check"),
     EndpointPermission("archive-exports", "POST", "/archive/exports", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Creates metadata-only queued archive export jobs; no clip generation."),
     EndpointPermission("archive-exports", "GET", "/archive/exports", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Lists safe archive export job metadata."),
+    EndpointPermission("archive-exports", "POST", "/archive/exports/cleanup", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Runs bounded cleanup for expired export-owned artifacts under export root."),
     EndpointPermission("archive-exports", "GET", "/archive/exports/{export_id}", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Reads safe archive export job metadata."),
     EndpointPermission("archive-exports", "POST", "/archive/exports/{export_id}/generate", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Generates bounded evidence clip for queued export job; no download endpoint."),
     EndpointPermission("archive-exports", "POST", "/archive/exports/{export_id}/manifest", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Creates or refreshes protected evidence metadata manifest; no download endpoint."),
     EndpointPermission("archive-exports", "GET", "/archive/exports/{export_id}/manifest", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Reads protected sanitized evidence metadata manifest; no file attachment."),
+    EndpointPermission("archive-exports", "GET", "/archive/exports/{export_id}/download", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Downloads completed evidence clip through authenticated request only."),
+    EndpointPermission("archive-exports", "GET", "/archive/exports/{export_id}/manifest/download", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Downloads validated evidence manifest JSON through authenticated request only."),
     EndpointPermission("users", "GET", "/users/me/workspaces/{workspace_key}/layout", AUTHENTICATED, "get_current_user + workspace permission route check", "Per-user workspace layout. live requires view_live; chronology requires view_timeline."),
     EndpointPermission("users", "PUT", "/users/me/workspaces/{workspace_key}/layout", AUTHENTICATED, "get_current_user + workspace permission route check", "Per-user workspace layout. live requires view_live; chronology requires view_timeline."),
 )

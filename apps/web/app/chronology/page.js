@@ -5,6 +5,14 @@ import Layout from "../../components/Layout";
 import ArchiveTilePlayer from "../../components/ArchiveTilePlayer";
 import ChronologyTimeline from "../../components/ChronologyTimeline";
 import { apiFetch } from "../../lib/api";
+import {
+  buildArchiveExportPayload,
+  canExportRecordings,
+  downloadArchiveManifest,
+  normalizeArchiveExportError,
+  runArchiveExportWorkflow,
+  saveBlobDownload,
+} from "../../lib/archiveExports";
 import { resizeWorkspaceTile, visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
 
 const STORAGE_KEY = "vms_chronology_workspace_v1";
@@ -61,6 +69,15 @@ const TEXT = {
   currentTime: "\u0412\u044b\u0431\u0440\u0430\u043d\u043e\u0435 \u0432\u0440\u0435\u043c\u044f",
   previewTime: "\u041f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
   duplicate: "\u041a\u0430\u043c\u0435\u0440\u0430 \u0443\u0436\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0430",
+  exportEvidence: "\u042d\u043a\u0441\u043f\u043e\u0440\u0442",
+  exportTitle: "\u042d\u043a\u0441\u043f\u043e\u0440\u0442 evidence clip",
+  exportCamera: "\u041a\u0430\u043c\u0435\u0440\u0430",
+  exportStart: "\u041d\u0430\u0447\u0430\u043b\u043e",
+  exportEnd: "\u041a\u043e\u043d\u0435\u0446",
+  exportReason: "\u041e\u0441\u043d\u043e\u0432\u0430\u043d\u0438\u0435",
+  exportRun: "\u0421\u043e\u0437\u0434\u0430\u0442\u044c export",
+  exportManifest: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c manifest",
+  exportReady: "\u042d\u043a\u0441\u043f\u043e\u0440\u0442 \u0433\u043e\u0442\u043e\u0432.",
 };
 
 function clamp(value, min, max) {
@@ -263,6 +280,11 @@ export default function ChronologyPage() {
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [isSystemFullscreen, setIsSystemFullscreen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [exportModal, setExportModal] = useState(null);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportStatus, setExportStatus] = useState("");
+  const [lastExportId, setLastExportId] = useState("");
 
   async function loadCameras() {
     try {
@@ -282,6 +304,7 @@ export default function ChronologyPage() {
         apiFetch("/users/me"),
         apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`),
       ]);
+      setCurrentUser(user);
       backendReadyRef.current = true;
       const backendTiles = Array.isArray(layout?.tiles) ? dedupeTiles(layout.tiles.map(normalizeTile)) : [];
       const markerKey = migrationMarkerKey(user?.id);
@@ -407,6 +430,7 @@ export default function ChronologyPage() {
   const selectedCameraKey = selectedCameraIds.join(",");
   const tileSourceKey = visibleTiles.map((tile) => `${tile.id}:${tile.cameraId}`).join("|");
   const timelineTs = previewTs || currentTs;
+  const canExport = canExportRecordings(currentUser);
 
   useEffect(() => {
     tilesRef.current = visibleTiles;
@@ -760,6 +784,74 @@ export default function ChronologyPage() {
   function handlePause() {
     invalidateSeekActions();
     setIsPlaying(false);
+  }
+
+  function formatDateTimeLocalInput(value) {
+    const dt = value instanceof Date ? value : new Date(value);
+    if (!Number.isFinite(dt.getTime())) return "";
+    return formatLocalNaiveTs(dt);
+  }
+
+  function openExportModal() {
+    if (!canExport || !selectedCameraIds.length || exportBusy) return;
+    const center = timelineTs || currentTs || new Date(normalizeTargetTs());
+    const start = new Date(center.getTime() - 15_000);
+    const end = new Date(center.getTime() + 15_000);
+    const cameraId = selectedCameraIds[0];
+    setError("");
+    setLastExportId("");
+    setExportStatus("");
+    setExportModal({
+      cameraId,
+      title: `Chronology evidence ${formatPlaybackDateTime(center)}`,
+      reason: "",
+      startTs: formatLocalNaiveTs(start),
+      endTs: formatLocalNaiveTs(end),
+    });
+  }
+
+  function closeExportModal() {
+    if (exportBusy) return;
+    setExportModal(null);
+    setExportStatus("");
+    setLastExportId("");
+  }
+
+  async function submitExport() {
+    if (!exportModal || exportBusy) return;
+    try {
+      setError("");
+      setExportBusy(true);
+      setLastExportId("");
+      const payload = buildArchiveExportPayload(exportModal);
+      const result = await runArchiveExportWorkflow(payload, {
+        onStatus: (status, job) => {
+          setExportStatus(status);
+          if (job?.id) setLastExportId(job.id);
+        },
+      });
+      if (result?.job?.id) setLastExportId(result.job.id);
+      saveBlobDownload(result.clip.blob, result.clip.filename || "km-vms-evidence-export.mkv");
+      setExportStatus("done");
+    } catch (err) {
+      setError(normalizeArchiveExportError(err.message));
+      setExportStatus("failed");
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  async function downloadLastManifest() {
+    if (!lastExportId || exportBusy) return;
+    try {
+      setExportBusy(true);
+      const manifest = await downloadArchiveManifest(lastExportId);
+      saveBlobDownload(manifest.blob, manifest.filename || "km-vms-evidence-manifest.json");
+    } catch (err) {
+      setError(normalizeArchiveExportError(err.message));
+    } finally {
+      setExportBusy(false);
+    }
   }
 
   function revealFullscreenControls(autoHide = true) {
@@ -1123,6 +1215,16 @@ export default function ChronologyPage() {
             <button type="button" className="chronologyPrimaryButton" onClick={handleFind}>
               {TEXT.find}
             </button>
+            {canExport ? (
+              <button
+                type="button"
+                className="chronologyPrimaryButton"
+                onClick={openExportModal}
+                disabled={!selectedCameraIds.length || exportBusy}
+              >
+                {TEXT.exportEvidence}
+              </button>
+            ) : null}
             <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(-10)} title={TEXT.back10} aria-label={TEXT.back10}>-10</button>
             <button type="button" className="chronologyIconButton" onClick={handlePlay} title={TEXT.play} aria-label={TEXT.play}>{"\u25b6"}</button>
             <button type="button" className="chronologyIconButton" onClick={handlePause} title={TEXT.pause} aria-label={TEXT.pause}>{"\u275a\u275a"}</button>
@@ -1370,6 +1472,79 @@ export default function ChronologyPage() {
           </div>
         </section>
       </div>
+      {exportModal ? (
+        <div className="modalBackdrop">
+          <div className="modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modalHeader">
+              <h2 style={{ margin: 0 }}>{TEXT.exportTitle}</h2>
+              <button type="button" className="iconCloseButton" onClick={closeExportModal} disabled={exportBusy} aria-label={TEXT.close}>
+                {"\u00d7"}
+              </button>
+            </div>
+            <div className="archiveExportForm">
+              <label className="archiveExportField">
+                <span>{TEXT.exportCamera}</span>
+                <select
+                  className="select"
+                  value={exportModal.cameraId}
+                  onChange={(event) => setExportModal((prev) => ({ ...prev, cameraId: event.target.value }))}
+                  disabled={exportBusy}
+                >
+                  {selectedCameraIds.map((cameraId) => (
+                    <option key={cameraId} value={cameraId}>
+                      {selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="archiveExportField">
+                <span>{TEXT.exportStart}</span>
+                <input
+                  className="input"
+                  type="datetime-local"
+                  step="1"
+                  value={formatDateTimeLocalInput(exportModal.startTs)}
+                  onChange={(event) => setExportModal((prev) => ({ ...prev, startTs: event.target.value }))}
+                  disabled={exportBusy}
+                />
+              </label>
+              <label className="archiveExportField">
+                <span>{TEXT.exportEnd}</span>
+                <input
+                  className="input"
+                  type="datetime-local"
+                  step="1"
+                  value={formatDateTimeLocalInput(exportModal.endTs)}
+                  onChange={(event) => setExportModal((prev) => ({ ...prev, endTs: event.target.value }))}
+                  disabled={exportBusy}
+                />
+              </label>
+              <label className="archiveExportField">
+                <span>{TEXT.exportReason}</span>
+                <input
+                  className="input"
+                  value={exportModal.reason}
+                  onChange={(event) => setExportModal((prev) => ({ ...prev, reason: event.target.value }))}
+                  maxLength={500}
+                  disabled={exportBusy}
+                />
+              </label>
+              {exportStatus ? <div className="archiveExportStatus">{exportStatus === "done" ? TEXT.exportReady : exportStatus}</div> : null}
+              <div className="actions">
+                <button type="button" className="button primary" onClick={submitExport} disabled={exportBusy}>
+                  {TEXT.exportRun}
+                </button>
+                <button type="button" className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy || exportStatus !== "done"}>
+                  {TEXT.exportManifest}
+                </button>
+                <button type="button" className="button secondary" onClick={closeExportModal} disabled={exportBusy}>
+                  {TEXT.close}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </Layout>
   );
 }

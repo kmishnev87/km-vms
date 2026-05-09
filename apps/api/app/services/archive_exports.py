@@ -75,6 +75,8 @@ MANIFEST_FORBIDDEN_STRINGS = (
     "traceback",
     "/volume",
 )
+EXPORT_CLEANUP_MAX_JOBS = 100
+EXPORT_OWNED_DIRS = frozenset({EXPORT_OUTPUT_DIR, EXPORT_MANIFEST_DIR})
 PROBLEM_INTEGRITY_STATUSES = {
     "missing_file",
     "orphan_metadata",
@@ -168,6 +170,14 @@ def _manifest_text_has_forbidden(text: str) -> bool:
     return any(pattern in lowered for pattern in MANIFEST_FORBIDDEN_STRINGS) or any(
         pattern and pattern in lowered for pattern in dynamic_forbidden
     )
+
+
+def _safe_download_filename(job: ArchiveExportJob, suffix: str) -> str:
+    start = job.start_ts.strftime("%Y%m%dT%H%M%S") if job.start_ts else "unknown-start"
+    end = job.end_ts.strftime("%Y%m%dT%H%M%S") if job.end_ts else "unknown-end"
+    camera = re.sub(r"[^A-Za-z0-9_-]+", "_", str(job.camera_label_snapshot or "camera")).strip("_")[:40]
+    camera = camera or f"camera_{job.camera_id or 'unknown'}"
+    return f"km-vms-evidence-{camera}-{start}-{end}-{job.id[:8]}.{suffix}"
 
 
 def _mark_failed(db: Session, job: ArchiveExportJob, error_code: str) -> ArchiveExportJob:
@@ -1055,11 +1065,171 @@ def read_archive_export_manifest(db: Session, *, export_id: str) -> dict[str, An
     return manifest
 
 
+def prepare_archive_export_download(db: Session, *, export_id: str, actor: User, request=None) -> tuple[Path, str, str, int]:
+    job = db.get(ArchiveExportJob, export_id)
+    if not job:
+        raise _safe_error(404, "Export job not found")
+    output_path, output = _manifest_output_metadata(db, job)
+    try:
+        read_archive_export_manifest(db, export_id=export_id)
+    except HTTPException as exc:
+        if exc.status_code == 409 and exc.detail == "manifest_missing":
+            raise _safe_error(409, "manifest_not_ready") from exc
+        raise
+
+    filename = _safe_download_filename(job, output["container"] or "mkv")
+    create_event(
+        db=db,
+        actor=actor,
+        category="archive",
+        event_type="archive_export_downloaded",
+        severity="info",
+        message_ru="Archive export downloaded",
+        message_en="Archive export downloaded",
+        target_type="archive_export_job",
+        target_id=job.id,
+        target_name=job.camera_label_snapshot,
+        metadata={
+            "export_job_id": job.id,
+            "camera_id": job.camera_id,
+            "source_segment_count": job.source_segment_count,
+            "output_size_bytes": output["size_bytes"],
+            "output_container": output["container"],
+            "status": job.status,
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    return output_path, filename, "video/x-matroska", int(output["size_bytes"] or 0)
+
+
+def prepare_archive_manifest_download(db: Session, *, export_id: str, actor: User, request=None) -> tuple[bytes, str]:
+    job = db.get(ArchiveExportJob, export_id)
+    if not job:
+        raise _safe_error(404, "Export job not found")
+    manifest = read_archive_export_manifest(db, export_id=export_id)
+    filename = _safe_download_filename(job, "json")
+    payload = _manifest_json_bytes(manifest)
+    return payload, filename
+
+
+def _cleanup_path_allowed(path: Path) -> bool:
+    root = _export_root()
+    try:
+        relative = path.resolve().relative_to(root)
+    except ValueError:
+        return False
+    return bool(relative.parts and relative.parts[0] in EXPORT_OWNED_DIRS)
+
+
+def cleanup_archive_export_artifacts(
+    db: Session,
+    *,
+    actor: User,
+    dry_run: bool = False,
+    limit: int = EXPORT_CLEANUP_MAX_JOBS,
+    request=None,
+) -> dict[str, Any]:
+    now = _utcnow_naive()
+    bounded_limit = max(1, min(int(limit or EXPORT_CLEANUP_MAX_JOBS), EXPORT_CLEANUP_MAX_JOBS))
+    jobs = (
+        db.query(ArchiveExportJob)
+        .filter(
+            or_(
+                ArchiveExportJob.status == EXPORT_STATUS_EXPIRED,
+                ArchiveExportJob.expires_at <= now,
+            )
+        )
+        .order_by(ArchiveExportJob.expires_at.asc(), ArchiveExportJob.created_at.asc())
+        .limit(bounded_limit)
+        .all()
+    )
+
+    result = {
+        "dry_run": bool(dry_run),
+        "jobs_considered": len(jobs),
+        "jobs_marked_expired": 0,
+        "artifacts_removed": 0,
+        "bytes_removed": 0,
+        "skipped_unsafe_paths": 0,
+        "missing_artifacts": 0,
+        "errors": 0,
+    }
+
+    for job in jobs:
+        if job.status != EXPORT_STATUS_EXPIRED and job.expires_at and job.expires_at <= now:
+            result["jobs_marked_expired"] += 1
+            if not dry_run:
+                job.status = EXPORT_STATUS_EXPIRED
+                job.progress_percent = 100
+                job.updated_at = now
+        for attr in ("internal_output_path", "internal_manifest_path"):
+            internal = getattr(job, attr)
+            if not internal:
+                continue
+            try:
+                path = _path_from_internal(internal)
+            except RuntimeError:
+                result["skipped_unsafe_paths"] += 1
+                continue
+            if not path or not _cleanup_path_allowed(path):
+                result["skipped_unsafe_paths"] += 1
+                continue
+            if not path.exists():
+                result["missing_artifacts"] += 1
+                if not dry_run:
+                    setattr(job, attr, None)
+                continue
+            if not path.is_file():
+                result["skipped_unsafe_paths"] += 1
+                continue
+            try:
+                size = int(path.stat().st_size)
+                if not dry_run:
+                    path.unlink()
+                    setattr(job, attr, None)
+                    if attr == "internal_output_path":
+                        job.internal_checksum = None
+                result["artifacts_removed"] += 1
+                result["bytes_removed"] += max(0, size)
+            except OSError:
+                result["errors"] += 1
+        if not dry_run:
+            db.add(job)
+
+    if not dry_run:
+        db.commit()
+
+    create_event(
+        db=db,
+        actor=actor,
+        category="archive",
+        event_type="archive_export_cleanup_completed" if result["errors"] == 0 else "archive_export_cleanup_failed",
+        severity="info" if result["errors"] == 0 else "warning",
+        message_ru="Archive export cleanup completed" if result["errors"] == 0 else "Archive export cleanup failed",
+        message_en="Archive export cleanup completed" if result["errors"] == 0 else "Archive export cleanup failed",
+        target_type="archive_export_cleanup",
+        metadata=result,
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    return result
+
+
 def serialize_archive_export_job(job: ArchiveExportJob) -> dict[str, Any]:
-    output_path = _path_from_internal(job.internal_output_path)
+    try:
+        output_path = _path_from_internal(job.internal_output_path)
+    except RuntimeError:
+        output_path = None
+    try:
+        manifest_path = _path_from_internal(job.internal_manifest_path)
+    except RuntimeError:
+        manifest_path = None
     output_exists = bool(output_path and output_path.exists() and output_path.is_file())
+    manifest_exists = bool(manifest_path and manifest_path.exists() and manifest_path.is_file())
     output_size = int(output_path.stat().st_size) if output_exists and output_path else None
     output_container = output_path.suffix.lstrip(".").lower() if output_exists and output_path else None
+    ready = bool(job.status == EXPORT_STATUS_DONE and output_exists)
     return {
         "id": job.id,
         "status": job.status if job.status in EXPORT_STATUSES else EXPORT_STATUS_FAILED,
@@ -1083,7 +1253,9 @@ def serialize_archive_export_job(job: ArchiveExportJob) -> dict[str, Any]:
         "error_code": job.error_code,
         "error_message": job.sanitized_error_message,
         "has_generated_clip": bool(job.status == EXPORT_STATUS_DONE and output_exists),
-        "clip_ready": bool(job.status == EXPORT_STATUS_DONE and output_exists),
+        "clip_ready": ready,
+        "manifest_ready": bool(ready and manifest_exists),
+        "download_ready": bool(ready and manifest_exists),
         "output_container": output_container,
         "output_size_bytes": output_size,
     }
