@@ -1,3 +1,5 @@
+import hashlib
+import json
 import sys
 import tempfile
 import shutil
@@ -213,11 +215,40 @@ def valid_payload(camera, segment, **overrides):
     return payload
 
 
+def create_done_export(client, db, admin, camera, segment, *, start_offset=0.2, end_offset=1.8):
+    created = client.post(
+        "/archive/exports",
+        json=valid_payload(
+            camera,
+            segment,
+            start_ts=(segment.started_at + timedelta(seconds=start_offset)).replace(tzinfo=timezone.utc).isoformat(),
+            end_ts=(segment.started_at + timedelta(seconds=end_offset)).replace(tzinfo=timezone.utc).isoformat(),
+        ),
+        headers=auth_headers(admin),
+    )
+    assert created.status_code == 200
+    generated = client.post(f"/archive/exports/{created.json()['id']}/generate", headers=auth_headers(admin))
+    assert generated.status_code == 200
+    assert generated.json()["status"] == "done"
+    return db.get(ArchiveExportJob, created.json()["id"])
+
+
+def assert_no_forbidden_manifest_text(text: str, root: Path):
+    lowered = text.lower()
+    assert str(root).lower() not in lowered
+    assert str(settings.storage_root).lower() not in lowered
+    assert str(settings.storage_exports).lower() not in lowered
+    for pattern in FORBIDDEN_PATTERNS + ("file_path", "relative_path", "internal_output_path", "internal_manifest_path", "traceback"):
+        assert pattern not in lowered
+
+
 def test_stage11_endpoint_registry_and_role_matrix():
     registered = {(item.method, item.path, item.decision) for item in ENDPOINT_PERMISSIONS}
     assert ("POST", "/archive/exports", PERMISSION_EXPORT_RECORDINGS) in registered
     assert ("GET", "/archive/exports", PERMISSION_EXPORT_RECORDINGS) in registered
     assert ("GET", "/archive/exports/{export_id}", PERMISSION_EXPORT_RECORDINGS) in registered
+    assert ("POST", "/archive/exports/{export_id}/manifest", PERMISSION_EXPORT_RECORDINGS) in registered
+    assert ("GET", "/archive/exports/{export_id}/manifest", PERMISSION_EXPORT_RECORDINGS) in registered
     assert PERMISSION_EXPORT_RECORDINGS in ROLE_PERMISSIONS[ROLE_OWNER]
     assert PERMISSION_EXPORT_RECORDINGS in ROLE_PERMISSIONS[ROLE_ADMIN]
     assert PERMISSION_EXPORT_RECORDINGS not in ROLE_PERMISSIONS[ROLE_OPERATOR]
@@ -584,3 +615,161 @@ def test_stage11_stage2_expired_and_lower_permission_generate_are_denied(client,
     db.commit()
     expired = client.post(f"/archive/exports/{job.id}/generate", headers=auth_headers(admin))
     assert expired.status_code == 409
+
+
+def test_stage11_stage3_manifest_create_read_and_idempotency(client, api_db):
+    db, root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    camera = add_camera(db)
+    segment = add_media_segment(db, camera, seconds=2)
+    source_path = Path(settings.storage_root) / segment.relative_path
+    source_size = source_path.stat().st_size
+    source_mtime = source_path.stat().st_mtime_ns
+    job = create_done_export(client, db, admin, camera, segment)
+    output_path = Path(settings.storage_exports) / job.internal_output_path
+    output_bytes = output_path.read_bytes()
+    expected_sha = hashlib.sha256(output_bytes).hexdigest()
+
+    created = client.post(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin))
+
+    assert created.status_code == 200
+    manifest = created.json()
+    assert manifest["schema_version"] == "1.0"
+    assert manifest["manifest_type"] == "evidence_export_manifest"
+    assert manifest["product"] == "KM VMS"
+    assert manifest["export_job"]["id"] == job.id
+    assert manifest["export_job"]["status"] == "done"
+    assert manifest["export_job"]["requested_start_ts"]
+    assert manifest["export_job"]["requested_end_ts"]
+    assert manifest["camera"] == {"id": camera.id, "label": camera.name}
+    assert manifest["actor"]["user_id"] == admin.id
+    assert manifest["actor"]["username"] == admin.username
+    assert manifest["actor"]["role"] == admin.role
+    assert manifest["source"]["source_segment_ids"] == [segment.id]
+    assert manifest["source"]["segments"][0]["id"] == segment.id
+    assert "file_path" not in manifest["source"]["segments"][0]
+    assert "relative_path" not in manifest["source"]["segments"][0]
+    assert manifest["output"]["artifact_name"] == output_path.name
+    assert manifest["output"]["container"] == "mkv"
+    assert manifest["output"]["size_bytes"] == len(output_bytes)
+    assert manifest["output"]["sha256"] == expected_sha
+    assert manifest["integrity"]["generated_clip_sha256"] == expected_sha
+    assert manifest["integrity"]["checksum_status"] == "verified"
+    assert manifest["audit"]["event_counts"]["archive_export_requested"] == 1
+    assert manifest["audit"]["event_counts"]["archive_export_generation_completed"] == 1
+    assert manifest["diagnostics"]["generated_output_validation"] == "passed"
+    assert manifest["watermark"]["status"] == "not_embedded_stage3"
+
+    db.refresh(job)
+    assert job.internal_manifest_path
+    manifest_path = Path(settings.storage_exports) / job.internal_manifest_path
+    assert manifest_path.resolve().is_relative_to(Path(settings.storage_exports).resolve())
+    data = manifest_path.read_bytes()
+    assert not data.startswith(b"\xef\xbb\xbf")
+    assert json.loads(data.decode("utf-8")) == manifest
+    assert_no_forbidden_manifest_text(data.decode("utf-8"), root)
+
+    read_back = client.get(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin))
+    assert read_back.status_code == 200
+    assert read_back.json() == manifest
+
+    recreated = client.post(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin))
+    assert recreated.status_code == 200
+    assert recreated.json()["integrity"]["generated_clip_sha256"] == expected_sha
+    db.refresh(job)
+    assert Path(settings.storage_exports, job.internal_manifest_path).name == manifest_path.name
+    assert output_path.read_bytes() == output_bytes
+    assert source_path.stat().st_size == source_size
+    assert source_path.stat().st_mtime_ns == source_mtime
+
+    public_body = client.get(f"/archive/exports/{job.id}", headers=auth_headers(admin)).json()
+    assert "checksum" not in str(public_body).lower()
+    assert "manifest_path" not in str(public_body).lower()
+    assert "download_url" not in str(public_body).lower()
+
+    audit = db.query(AuditEvent).filter(AuditEvent.event_type == "archive_export_manifest_created").first()
+    assert audit is not None
+    audit_text = str(audit.event_metadata).lower()
+    assert expected_sha in audit_text
+    assert_no_forbidden_manifest_text(audit_text, root)
+
+
+def test_stage11_stage3_manifest_permissions_and_status_gates(client, api_db):
+    db, _root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    operator = add_user(db, role=ROLE_OPERATOR, username="stage11_operator_manifest")
+    viewer = add_user(db, role=ROLE_VIEWER, username="stage11_viewer_manifest")
+    camera = add_camera(db)
+    segment = add_media_segment(db, camera, seconds=2)
+    job = create_done_export(client, db, admin, camera, segment)
+
+    assert client.post(f"/archive/exports/{job.id}/manifest").status_code == 401
+    assert client.get(f"/archive/exports/{job.id}/manifest").status_code == 401
+    assert client.post(f"/archive/exports/{job.id}/manifest", headers=auth_headers(operator)).status_code == 403
+    assert client.get(f"/archive/exports/{job.id}/manifest", headers=auth_headers(operator)).status_code == 403
+    assert client.post(f"/archive/exports/{job.id}/manifest", headers=auth_headers(viewer)).status_code == 403
+    assert client.get(f"/archive/exports/{job.id}/manifest", headers=auth_headers(viewer)).status_code == 403
+
+    assert client.get(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin)).status_code == 409
+    assert client.post("/archive/exports/missing-stage11/manifest", headers=auth_headers(admin)).status_code == 404
+
+    for status in ("queued", "running", "failed", "expired"):
+        status_job = ArchiveExportJob(
+            id=f"stage11-manifest-{status}",
+            actor_user_id=admin.id,
+            camera_id=camera.id,
+            camera_label_snapshot=camera.name,
+            start_ts=segment.started_at,
+            end_ts=segment.ended_at,
+            duration_seconds=2,
+            status=status,
+            source_segment_ids=[segment.id],
+            source_segment_count=1,
+            estimated_source_bytes=segment.size_bytes,
+            gap_warnings=[],
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+            expires_at=datetime.utcnow() + timedelta(hours=1),
+        )
+        db.add(status_job)
+    db.commit()
+    for status in ("queued", "running", "failed", "expired"):
+        response = client.post(f"/archive/exports/stage11-manifest-{status}/manifest", headers=auth_headers(admin))
+        assert response.status_code == 409
+
+
+def test_stage11_stage3_manifest_revalidates_path_json_and_checksum(client, api_db):
+    db, root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    camera = add_camera(db)
+    segment = add_media_segment(db, camera, seconds=2)
+    job = create_done_export(client, db, admin, camera, segment)
+    created = client.post(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin))
+    assert created.status_code == 200
+    db.refresh(job)
+    manifest_path = Path(settings.storage_exports) / job.internal_manifest_path
+
+    manifest_path.write_text("{not json", encoding="utf-8")
+    invalid = client.get(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin))
+    assert invalid.status_code == 409
+    assert_no_forbidden_manifest_text(invalid.text, root)
+
+    client.post(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin))
+    manifest_path.write_text(json.dumps({"leak": "rtsp://example.invalid"}, sort_keys=True), encoding="utf-8")
+    forbidden = client.get(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin))
+    assert forbidden.status_code == 409
+
+    client.post(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin))
+    db.refresh(job)
+    output_path = Path(settings.storage_exports) / job.internal_output_path
+    output_path.write_bytes(output_path.read_bytes() + b"changed")
+    mismatch = client.get(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin))
+    assert mismatch.status_code == 409
+    assert "checksum_mismatch" in mismatch.text
+
+    job.internal_manifest_path = "../unsafe.json"
+    db.add(job)
+    db.commit()
+    unsafe = client.get(f"/archive/exports/{job.id}/manifest", headers=auth_headers(admin))
+    assert unsafe.status_code == 409
+    assert_no_forbidden_manifest_text(unsafe.text, root)

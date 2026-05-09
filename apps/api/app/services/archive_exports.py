@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -15,6 +16,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.models.audit_event import AuditEvent
 from app.models.camera import Camera
 from app.models.recording import ArchiveExportJob, RecordingSegment
 from app.models.user import User
@@ -53,6 +55,26 @@ GENERATION_TIMEOUT_SECONDS = 120
 OUTPUT_DURATION_TOLERANCE_SECONDS = 5
 EXPORT_OUTPUT_DIR = "stage11_stage2_clips"
 EXPORT_TEMP_DIR = "stage11_stage2_tmp"
+EXPORT_MANIFEST_DIR = "stage11_stage3_manifests"
+MANIFEST_SCHEMA_VERSION = "1.0"
+MANIFEST_TYPE = "evidence_export_manifest"
+MANIFEST_FORBIDDEN_STRINGS = (
+    "rtsp://",
+    "password",
+    "secret",
+    "token",
+    "jwt",
+    "authorization",
+    "cookie",
+    ".env",
+    "internal_output_path",
+    "internal_manifest_path",
+    "file_path",
+    "relative_path",
+    "ffmpeg stderr",
+    "traceback",
+    "/volume",
+)
 PROBLEM_INTEGRITY_STATUSES = {
     "missing_file",
     "orphan_metadata",
@@ -121,6 +143,31 @@ def _safe_public_message(error_code: str) -> str:
         "invalid_job_status": "Export job status does not allow generation",
     }
     return messages.get(error_code, "Clip generation failed")
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.replace(microsecond=0).isoformat() if value else None
+
+
+def _safe_text(value: str | None, *, max_length: int = 255) -> str | None:
+    if value is None:
+        return None
+    text = re.sub(r"[\x00-\x1f]+", " ", str(value))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_length] if text else None
+
+
+def _manifest_text_has_forbidden(text: str) -> bool:
+    lowered = text.lower()
+    dynamic_forbidden = {
+        str(_export_root()).lower(),
+        str(settings.storage_root).lower(),
+        str(settings.storage_exports).lower(),
+        str(settings.storage_previews).lower(),
+    }
+    return any(pattern in lowered for pattern in MANIFEST_FORBIDDEN_STRINGS) or any(
+        pattern and pattern in lowered for pattern in dynamic_forbidden
+    )
 
 
 def _mark_failed(db: Session, job: ArchiveExportJob, error_code: str) -> ArchiveExportJob:
@@ -748,6 +795,264 @@ def generate_archive_export_job(
                 shutil.rmtree(temp_dir, ignore_errors=True)
     finally:
         lock.release()
+
+
+def _manifest_output_metadata(db: Session, job: ArchiveExportJob) -> tuple[Path, dict[str, Any]]:
+    if job.status == EXPORT_STATUS_EXPIRED:
+        raise _safe_error(409, "expired_job")
+    if job.status != EXPORT_STATUS_DONE:
+        raise _safe_error(409, "invalid_job_status")
+    try:
+        output_path = _path_from_internal(job.internal_output_path)
+    except RuntimeError as exc:
+        raise _safe_error(409, "output_invalid") from exc
+    if not output_path:
+        raise _safe_error(409, "output_missing")
+    try:
+        size, duration = _validate_output(job, output_path)
+    except RuntimeError as exc:
+        raise _safe_error(409, "output_invalid") from exc
+    checksum = _sha256(output_path)
+    if job.internal_checksum and checksum != job.internal_checksum:
+        raise _safe_error(409, "checksum_mismatch")
+    if not job.internal_checksum:
+        job.internal_checksum = checksum
+        job.updated_at = _utcnow_naive()
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+    return output_path, {
+        "artifact_name": output_path.name,
+        "container": output_path.suffix.lstrip(".").lower() or None,
+        "size_bytes": size,
+        "duration_seconds": duration,
+        "sha256": checksum,
+    }
+
+
+def _source_manifest_rows(db: Session, job: ArchiveExportJob) -> list[dict[str, Any]]:
+    ids = [int(value) for value in (job.source_segment_ids or []) if str(value).isdigit()]
+    rows = (
+        finalized_export_segments_query(db)
+        .filter(RecordingSegment.id.in_(ids), RecordingSegment.camera_id == job.camera_id)
+        .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
+        .all()
+    )
+    if len(rows) != len(set(ids)):
+        raise _safe_error(409, "source_metadata_unavailable")
+    result: list[dict[str, Any]] = []
+    for segment in rows:
+        overlap_start = max(job.start_ts, segment.started_at) if segment.started_at else None
+        ended = _segment_end(segment)
+        overlap_end = min(job.end_ts, ended) if ended else None
+        overlap_duration = None
+        if overlap_start and overlap_end and overlap_end > overlap_start:
+            overlap_duration = int((overlap_end - overlap_start).total_seconds())
+        result.append(
+            {
+                "id": segment.id,
+                "camera_id": segment.camera_id,
+                "started_at": _iso(segment.started_at),
+                "ended_at": _iso(ended),
+                "duration_sec": segment.duration_sec,
+                "size_bytes": segment.size_bytes,
+                "stream_type": _safe_text(segment.stream_type, max_length=50),
+                "container": _safe_text(segment.container_format, max_length=32),
+                "mime_type": _safe_text(segment.mime_type, max_length=100),
+                "extension": _safe_text(segment.file_extension, max_length=16),
+                "checksum": _safe_text(segment.checksum, max_length=128),
+                "overlap_start": _iso(overlap_start),
+                "overlap_end": _iso(overlap_end),
+                "overlap_duration_seconds": overlap_duration,
+            }
+        )
+    return result
+
+
+def _audit_manifest_summary(db: Session, job: ArchiveExportJob) -> dict[str, Any]:
+    event_types = (
+        "archive_export_requested",
+        "archive_export_generation_started",
+        "archive_export_generation_completed",
+        "archive_export_generation_failed",
+        "archive_export_manifest_created",
+        "archive_export_manifest_failed",
+    )
+    rows = (
+        db.query(AuditEvent)
+        .filter(AuditEvent.category == "archive", AuditEvent.target_id == job.id, AuditEvent.event_type.in_(event_types))
+        .order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc())
+        .all()
+    )
+    counts = {event_type: 0 for event_type in event_types}
+    references: list[dict[str, Any]] = []
+    for row in rows:
+        counts[row.event_type] = counts.get(row.event_type, 0) + 1
+        references.append({"id": row.id, "event_type": row.event_type, "created_at": _iso(row.created_at)})
+    return {"event_counts": counts, "references": references[:50]}
+
+
+def _build_manifest(db: Session, job: ArchiveExportJob, actor: User | None) -> tuple[dict[str, Any], Path]:
+    output_path, output = _manifest_output_metadata(db, job)
+    source_segments = _source_manifest_rows(db, job)
+    actor_row = db.get(User, job.actor_user_id) if job.actor_user_id else None
+    now = _utcnow_naive()
+    manifest_path = _safe_child(_export_root(), EXPORT_MANIFEST_DIR, f"stage11_manifest_{job.id}.json")
+    manifest = {
+        "actor": {
+            "user_id": getattr(actor_row, "id", None),
+            "username": _safe_text(getattr(actor_row, "username", None), max_length=100),
+            "role": _safe_text(getattr(actor_row, "role", None), max_length=50),
+        },
+        "audit": _audit_manifest_summary(db, job),
+        "camera": {"id": job.camera_id, "label": _safe_text(job.camera_label_snapshot, max_length=255)},
+        "diagnostics": {
+            "generated_output_validation": "passed",
+            "manifest_path_policy": "export_root_relative",
+            "read_contract": "protected_manifest_endpoint",
+        },
+        "export_job": {
+            "id": job.id,
+            "status": job.status,
+            "title": _safe_text(job.title, max_length=MAX_TITLE_LENGTH),
+            "reason": _safe_text(job.reason, max_length=MAX_NOTE_LENGTH),
+            "requested_start_ts": _iso(job.start_ts),
+            "requested_end_ts": _iso(job.end_ts),
+            "duration_seconds": job.duration_seconds,
+            "created_at": _iso(job.created_at),
+            "generated_at": _iso(job.updated_at),
+            "manifest_created_at": _iso(now),
+        },
+        "integrity": {
+            "generated_clip_sha256": output["sha256"],
+            "checksum_algorithm": "sha256",
+            "checksum_status": "verified",
+            "source_metadata_status": "verified",
+        },
+        "manifest_type": MANIFEST_TYPE,
+        "output": output,
+        "product": "KM VMS",
+        "schema_version": MANIFEST_SCHEMA_VERSION,
+        "source": {
+            "source_segment_count": job.source_segment_count,
+            "source_segment_ids": [row["id"] for row in source_segments],
+            "segments": source_segments,
+            "gap_warnings": job.gap_warnings or [],
+        },
+        "watermark": {"status": "not_embedded_stage3"},
+    }
+    return manifest, manifest_path
+
+
+def _manifest_json_bytes(manifest: dict[str, Any]) -> bytes:
+    text = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n"
+    if _manifest_text_has_forbidden(text):
+        raise _safe_error(409, "manifest_forbidden_content")
+    return text.encode("utf-8")
+
+
+def _read_manifest_file(path: Path) -> dict[str, Any]:
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        raise _safe_error(409, "manifest_missing") from exc
+    if data.startswith(b"\xef\xbb\xbf"):
+        raise _safe_error(409, "manifest_invalid")
+    try:
+        text = data.decode("utf-8")
+        manifest = json.loads(text)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _safe_error(409, "manifest_invalid") from exc
+    if not isinstance(manifest, dict) or _manifest_text_has_forbidden(text):
+        raise _safe_error(409, "manifest_invalid")
+    return manifest
+
+
+def create_archive_export_manifest(db: Session, *, export_id: str, actor: User, request=None) -> dict[str, Any]:
+    job = db.get(ArchiveExportJob, export_id)
+    if not job:
+        raise _safe_error(404, "Export job not found")
+    manifest: dict[str, Any] | None = None
+    try:
+        manifest, manifest_path = _build_manifest(db, job, actor)
+        payload = _manifest_json_bytes(manifest)
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = _safe_child(manifest_path.parent, f".{manifest_path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temp_path.write_bytes(payload)
+            verified = _read_manifest_file(temp_path)
+            if verified != manifest:
+                raise _safe_error(409, "manifest_write_failed")
+            temp_path.replace(manifest_path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink(missing_ok=True)
+        job.internal_manifest_path = _relative_to_export_root(manifest_path)
+        job.updated_at = _utcnow_naive()
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        create_event(
+            db=db,
+            actor=actor,
+            category="archive",
+            event_type="archive_export_manifest_created",
+            severity="info",
+            message_ru="Archive export evidence manifest created",
+            message_en="Archive export evidence manifest created",
+            target_type="archive_export_job",
+            target_id=job.id,
+            target_name=job.camera_label_snapshot,
+            metadata={
+                "export_job_id": job.id,
+                "camera_id": job.camera_id,
+                "source_segment_count": job.source_segment_count,
+                "output_size_bytes": manifest["output"]["size_bytes"],
+                "clip_checksum": manifest["integrity"]["generated_clip_sha256"],
+                "manifest_schema_version": MANIFEST_SCHEMA_VERSION,
+                "status": "created",
+            },
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        return manifest
+    except HTTPException as exc:
+        create_event(
+            db=db,
+            actor=actor,
+            category="archive",
+            event_type="archive_export_manifest_failed",
+            severity="warning",
+            message_ru="Archive export evidence manifest failed",
+            message_en="Archive export evidence manifest failed",
+            target_type="archive_export_job",
+            target_id=job.id,
+            target_name=job.camera_label_snapshot,
+            metadata={"export_job_id": job.id, "camera_id": job.camera_id, "error_code": str(exc.detail), "status": "failed"},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise
+
+
+def read_archive_export_manifest(db: Session, *, export_id: str) -> dict[str, Any]:
+    job = db.get(ArchiveExportJob, export_id)
+    if not job:
+        raise _safe_error(404, "Export job not found")
+    try:
+        manifest_path = _path_from_internal(job.internal_manifest_path)
+    except RuntimeError as exc:
+        raise _safe_error(409, "manifest_invalid") from exc
+    if not manifest_path or not manifest_path.exists() or not manifest_path.is_file():
+        raise _safe_error(409, "manifest_missing")
+    manifest = _read_manifest_file(manifest_path)
+    _output_path, output = _manifest_output_metadata(db, job)
+    manifest_checksum = str((manifest.get("integrity") or {}).get("generated_clip_sha256") or "")
+    if manifest_checksum != output["sha256"] or str((manifest.get("output") or {}).get("sha256") or "") != output["sha256"]:
+        raise _safe_error(409, "checksum_mismatch")
+    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION or manifest.get("manifest_type") != MANIFEST_TYPE:
+        raise _safe_error(409, "manifest_invalid")
+    return manifest
 
 
 def serialize_archive_export_job(job: ArchiveExportJob) -> dict[str, Any]:

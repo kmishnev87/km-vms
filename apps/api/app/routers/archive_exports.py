@@ -14,7 +14,9 @@ from app.routers.deps import require_permission
 from app.services.archive_exports import (
     EXPORT_STATUSES,
     create_archive_export_job,
+    create_archive_export_manifest,
     generate_archive_export_job,
+    read_archive_export_manifest,
     serialize_archive_export_job,
 )
 
@@ -95,3 +97,22 @@ def generate_export(
 ):
     job = generate_archive_export_job(db, export_id=export_id, actor=current_user, request=request)
     return serialize_archive_export_job(job)
+
+
+@router.post("/{export_id}/manifest")
+def create_export_manifest(
+    export_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
+):
+    return create_archive_export_manifest(db, export_id=export_id, actor=current_user, request=request)
+
+
+@router.get("/{export_id}/manifest")
+def get_export_manifest(
+    export_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
+):
+    return read_archive_export_manifest(db, export_id=export_id)
