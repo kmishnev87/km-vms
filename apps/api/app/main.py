@@ -9,6 +9,7 @@ from app.core.sanitization import redact_text
 from app.db.session import SessionLocal
 from app.routers.audit import router as audit_router
 from app.routers.auth import router as auth_router
+from app.routers.archive_exports import router as archive_exports_router
 from app.routers.cameras import router as cameras_router, viewer_router as viewer_cameras_router
 from app.routers.chronology import router as chronology_router
 from app.routers.hardware import router as hardware_router
@@ -115,6 +116,7 @@ def system_info(current_user=Depends(require_permission("manage_settings"))):
 
 app.include_router(auth_router)
 app.include_router(audit_router)
+app.include_router(archive_exports_router)
 app.include_router(settings_router)
 app.include_router(users_router)
 app.include_router(cameras_router)

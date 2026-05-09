@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import String, Integer, DateTime, BigInteger, Boolean, ForeignKey, Text
+from sqlalchemy import String, Integer, DateTime, BigInteger, Boolean, ForeignKey, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -95,3 +95,37 @@ class RecordingSegment(Base):
     deletion_source: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ArchiveExportJob(Base):
+    __tablename__ = "archive_export_jobs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    actor_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True)
+    camera_id: Mapped[int | None] = mapped_column(ForeignKey("cameras.id", ondelete="SET NULL"), index=True, nullable=True)
+    camera_label_snapshot: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    start_ts: Mapped[datetime] = mapped_column(DateTime, index=True)
+    end_ts: Mapped[datetime] = mapped_column(DateTime, index=True)
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    progress_percent: Mapped[int | None] = mapped_column(Integer, default=0, nullable=True)
+
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    format_hint: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    source_segment_ids: Mapped[list] = mapped_column(JSON, default=list)
+    source_segment_count: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_source_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    gap_warnings: Mapped[list] = mapped_column(JSON, default=list)
+
+    error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    sanitized_error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    internal_output_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    internal_manifest_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    internal_checksum: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)

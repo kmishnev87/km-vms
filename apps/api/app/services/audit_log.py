@@ -23,6 +23,7 @@ CATEGORIES = {
     "live",
     "records",
     "chronology",
+    "archive",
     "security",
     "diagnostics",
     "system",

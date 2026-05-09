@@ -24,13 +24,14 @@ BASELINE_MODEL_TABLES = {
     "system_settings",
     "setup_locks",
     "archive_roots",
+    "archive_export_jobs",
     "recording_jobs",
     "recording_segments",
     "audit_events",
     "user_workspace_layouts",
 }
 LEGACY_DB_ONLY_TABLES = {"recorder_runtime_status"}
-KNOWN_SAFE_MISSING_TABLES = {"setup_locks", "recorder_runtime_status", "user_workspace_layouts"}
+KNOWN_SAFE_MISSING_TABLES = {"setup_locks", "recorder_runtime_status", "user_workspace_layouts", "archive_export_jobs"}
 KNOWN_CAMERA_NULLABLE_DRIFT_COLUMNS = {"segment_minutes", "retention_days", "storage_quota_gb"}
 KNOWN_SAFE_MISSING_COLUMNS = {"system_settings": {"system_name"}, "cameras": {"rtsp_host", "rtsp_port", "deleted_at"}}
 SAFE_STATUSES = {"current", "adopted_baseline", "drift_known_safe"}

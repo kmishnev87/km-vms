@@ -7,6 +7,7 @@ from fastapi.routing import APIRoute
 
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS, PUBLIC
 from app.core.permissions import (
+    PERMISSION_EXPORT_RECORDINGS,
     ROLE_ADMIN,
     ROLE_OPERATOR,
     ROLE_OWNER,
@@ -73,6 +74,7 @@ def test_role_permissions_matrix():
     expected_admin = {
         "admin_access",
         "delete_recordings",
+        "export_recordings",
         "manage_cameras",
         "manage_settings",
         "manage_users",
@@ -157,6 +159,9 @@ def test_endpoint_allowed_roles_contract():
     assert decision("/recordings", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN, ROLE_OPERATOR)
     assert decision("/recordings", "DELETE").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/chronology/ranges", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN, ROLE_OPERATOR)
+    assert decision("/archive/exports", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
+    assert decision("/archive/exports", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
+    assert decision("/archive/exports/{export_id}", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/live/debug", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/cameras/{camera_id}/enable", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/cameras/{camera_id}/disable", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
@@ -216,6 +221,14 @@ def test_chronology_routes_and_token_file_access_are_permission_protected():
     assert 'scope="chronology"' in source
     assert decision("/chronology/file", "GET").decision == "view_timeline"
     assert decision("/chronology/media-token", "POST").decision == "view_timeline"
+
+
+def test_archive_export_routes_require_explicit_export_permission():
+    source = read_router("archive_exports.py")
+    assert "Depends(require_permission(PERMISSION_EXPORT_RECORDINGS))" in source
+    assert decision("/archive/exports", "POST").decision == PERMISSION_EXPORT_RECORDINGS
+    assert decision("/archive/exports", "GET").decision == PERMISSION_EXPORT_RECORDINGS
+    assert decision("/archive/exports/{export_id}", "GET").decision == PERMISSION_EXPORT_RECORDINGS
 
 
 def test_live_routes_are_permission_protected():

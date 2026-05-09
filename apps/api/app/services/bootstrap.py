@@ -21,6 +21,7 @@ def init_db() -> None:
     migrate_system_settings_table()
     migrate_archive_roots()
     migrate_recording_metadata_tables()
+    migrate_archive_export_jobs()
     migrate_recorder_runtime_status()
     with Session(engine) as db:
         ensure_schema_version_state(db, pre_bootstrap_shape=pre_bootstrap_shape)
@@ -178,6 +179,49 @@ def migrate_recorder_runtime_status() -> None:
             )
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recorder_runtime_status_heartbeat_at ON recorder_runtime_status (heartbeat_at)"))
+
+
+def migrate_archive_export_jobs() -> None:
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS archive_export_jobs (
+                    id VARCHAR(36) PRIMARY KEY,
+                    actor_user_id INTEGER NULL,
+                    camera_id INTEGER NULL,
+                    camera_label_snapshot VARCHAR(255) NOT NULL,
+                    start_ts TIMESTAMP NOT NULL,
+                    end_ts TIMESTAMP NOT NULL,
+                    duration_seconds INTEGER DEFAULT 0 NOT NULL,
+                    status VARCHAR(20) DEFAULT 'queued' NOT NULL,
+                    progress_percent INTEGER DEFAULT 0 NULL,
+                    title VARCHAR(200) NULL,
+                    reason TEXT NULL,
+                    format_hint VARCHAR(20) NULL,
+                    source_segment_ids JSON NULL,
+                    source_segment_count INTEGER DEFAULT 0 NOT NULL,
+                    estimated_source_bytes BIGINT DEFAULT 0 NOT NULL,
+                    gap_warnings JSON NULL,
+                    error_code VARCHAR(100) NULL,
+                    sanitized_error_message TEXT NULL,
+                    internal_output_path VARCHAR(1024) NULL,
+                    internal_manifest_path VARCHAR(1024) NULL,
+                    internal_checksum VARCHAR(128) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    expires_at TIMESTAMP NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_export_jobs_actor_user_id ON archive_export_jobs (actor_user_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_export_jobs_camera_id ON archive_export_jobs (camera_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_export_jobs_status ON archive_export_jobs (status)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_export_jobs_start_ts ON archive_export_jobs (start_ts)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_export_jobs_end_ts ON archive_export_jobs (end_ts)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_export_jobs_created_at ON archive_export_jobs (created_at)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_export_jobs_expires_at ON archive_export_jobs (expires_at)"))
 
 
 def ensure_system_settings(db: Session) -> SystemSettings:

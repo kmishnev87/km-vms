@@ -1,6 +1,6 @@
 from app.models.user import User
 from app.models.camera import Camera
-from app.models.recording import ArchiveRoot, RecordingJob, RecordingSegment
+from app.models.recording import ArchiveExportJob, ArchiveRoot, RecordingJob, RecordingSegment
 from app.models.setup_lock import SetupLock
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
 from app.models.system_settings import SystemSettings
@@ -11,6 +11,7 @@ __all__ = [
     "User",
     "Camera",
     "ArchiveRoot",
+    "ArchiveExportJob",
     "RecordingJob",
     "RecordingSegment",
     "SetupLock",
