@@ -21,13 +21,6 @@ export default function ArchiveTilePlayer({
   playIntentRef.current = Boolean(isPlaying);
   playbackRateRef.current = Number(speed || 1);
 
-  const containerFormat = String(playback?.containerFormat || playback?.fileExtension || "").toLowerCase();
-  const isUnsupportedDirectPlayback = Boolean(playback?.hasVideo) && (
-    containerFormat.includes("mkv") ||
-    containerFormat.includes("matroska") ||
-    String(playback?.mimeType || "").toLowerCase().includes("matroska")
-  );
-
   async function buildMediaUrl() {
     if (!playback?.cameraId || !playback?.relPath) return "";
     const mediaToken = await issueChronologyMediaToken(playback.cameraId, playback.relPath);
@@ -175,7 +168,7 @@ export default function ArchiveTilePlayer({
       if (cancelled || refreshAttempts >= MEDIA_REFRESH_RETRY_LIMIT) {
         pendingLoad = null;
         hardReset();
-        setStatus("error");
+        setStatus("unsupported");
         return;
       }
       refreshAttempts += 1;
@@ -196,12 +189,6 @@ export default function ArchiveTilePlayer({
     if (!hasVideo || !cameraId || !relPath) {
       hardReset();
       setStatus("empty");
-      return;
-    }
-
-    if (isUnsupportedDirectPlayback) {
-      hardReset();
-      setStatus("unsupported");
       return;
     }
 
@@ -237,7 +224,7 @@ export default function ArchiveTilePlayer({
       video.removeEventListener("error", handleError);
       video.removeEventListener("stalled", handleStalledMedia);
     };
-  }, [playback?.playbackKey, isUnsupportedDirectPlayback]);
+  }, [playback?.playbackKey]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -272,7 +259,7 @@ export default function ArchiveTilePlayer({
       ref={wrapRef}
       className="archiveVideoWrap"
       onDoubleClick={allowFullscreen ? toggleFullscreen : undefined}
-      title={allowFullscreen ? "?????????????? ???????? ??? ???? ???????? ??????????" : undefined}
+      title={allowFullscreen ? "Двойной клик для полноэкранного режима" : undefined}
     >
       <video
         key={playback?.playbackKey || "empty"}
@@ -285,23 +272,23 @@ export default function ArchiveTilePlayer({
       />
 
       {status === "loading" ? (
-        <div className="archiveCenterHint">???????? ?? ???????????????????? ??????????...</div>
+        <div className="archiveCenterHint">Загрузка записи...</div>
       ) : null}
 
       {status === "empty" ? (
-        <div className="archiveCenterHint">?????????? ??????????????????????</div>
+        <div className="archiveCenterHint">Запись недоступна</div>
       ) : null}
 
       {status === "error" ? (
         <div className="archiveCenterHint archiveCenterHintError">
-          ???? ?????????????? ?????????????????? ??????????
+          Не удалось воспроизвести запись
         </div>
       ) : null}
 
       {status === "unsupported" ? (
         <div className="archiveCenterHint archiveCenterHintError archiveCenterHintInteractive">
           <div>
-            <div>???????????? MKV ?????????? ???? ???????????????????????????????? ?? ????????????????.</div>
+            <div>Браузер не смог воспроизвести запись онлайн.</div>
             <a
               className="archiveDownloadLink"
               href="#download"
@@ -310,7 +297,7 @@ export default function ArchiveTilePlayer({
                 handleUnsupportedDownload();
               }}
             >
-              ?????????????? ????????
+              Скачать запись
             </a>
           </div>
         </div>

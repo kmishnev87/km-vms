@@ -2892,6 +2892,13 @@ textarea {
   font-weight: 700;
 }
 
+.recordingsMissingStatus {
+  margin-top: 4px;
+  color: #b45309;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .recordingsEmptyCell {
   padding: 26px 12px !important;
   color: #64748b;

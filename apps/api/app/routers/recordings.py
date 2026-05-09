@@ -131,6 +131,20 @@ def resolve_segment_file(segment: RecordingSegment, require_exists: bool = True)
     return file_path
 
 
+def segment_file_resolution(segment: RecordingSegment) -> tuple[Path | None, bool, str | None]:
+    from sqlalchemy.orm import object_session
+
+    db = object_session(segment)
+    if db is None:
+        return None, False, "metadata_unavailable"
+    try:
+        file_path = resolve_segment_file_path(db, segment, require_exists=False)
+    except ValueError:
+        return None, False, "invalid_metadata"
+    exists = file_path.exists() and file_path.is_file()
+    return file_path, exists, None if exists else "missing_file"
+
+
 def finalized_segments_query(db: Session):
     return db.query(RecordingSegment).filter(
         RecordingSegment.ownership == OWNERSHIP_KM_VMS,
@@ -234,15 +248,12 @@ def collect_recording_files(db: Session, camera_name: Optional[str] = None) -> l
 
     items: list[dict] = []
     for segment in segments:
-        try:
-            file_path = resolve_segment_file(segment)
-            rel_path = segment_relative_path(segment)
-        except HTTPException:
-            continue
-        if not rel_path:
+        file_path, file_exists, unavailable_reason = segment_file_resolution(segment)
+        rel_path = segment_relative_path(segment)
+        if file_path is None or not rel_path:
             continue
 
-        size_bytes = int(segment.size_bytes or file_path.stat().st_size)
+        size_bytes = int(file_path.stat().st_size if file_exists else segment.size_bytes or 0)
         started_at = segment.started_at or segment.created_at
         media_metadata = segment_media_metadata(segment, file_path)
         items.append(
@@ -260,6 +271,10 @@ def collect_recording_files(db: Session, camera_name: Optional[str] = None) -> l
                 "container_format": media_metadata["container_format"],
                 "file_extension": media_metadata["file_extension"],
                 "mime_type": media_metadata["mime_type"],
+                "available": file_exists,
+                "playback_available": file_exists,
+                "download_available": file_exists,
+                "availability_status": "available" if file_exists else unavailable_reason,
             }
         )
 
