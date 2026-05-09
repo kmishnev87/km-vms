@@ -3189,103 +3189,6 @@ textarea {
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
 }
 
-.recordingsViewToggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 4px;
-  border: 1px solid #dbe3ef;
-  border-radius: 8px;
-  background: #e8eef6;
-}
-
-.recordingsViewToggle button {
-  height: 30px;
-  min-width: 74px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: #475569;
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
-}
-
-.recordingsViewToggle button.active {
-  background: #ffffff;
-  color: #0f172a;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
-}
-
-.recordingsCardsGrid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px;
-  padding: 12px;
-}
-
-.recordingsCardItem {
-  min-width: 0;
-  border: 1px solid #dbe3ef;
-  border-radius: 8px;
-  background: #ffffff;
-  padding: 12px;
-  display: grid;
-  gap: 10px;
-}
-
-.recordingsCardItem.unavailable {
-  background: #fffbeb;
-  border-color: #fde68a;
-}
-
-.recordingsCardTop,
-.recordingsCardMeta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.recordingsCardCamera,
-.recordingsCardMeta span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: #64748b;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.recordingsCardTitle {
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  color: #0f172a;
-  cursor: pointer;
-  padding: 0;
-  text-align: left;
-  font-size: 14px;
-  font-weight: 800;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-
-.recordingsCardTitle:hover:not(:disabled) {
-  color: #1d4ed8;
-}
-
-.recordingsCardTitle:disabled {
-  cursor: not-allowed;
-  color: #92400e;
-}
-
-.recordingsCardActions {
-  justify-content: flex-end;
-}
-
 .recordingsEmptyInfo {
   color: #0369a1;
   background: #f0f9ff;
@@ -3745,6 +3648,18 @@ textarea {
   gap: 9px;
   font-size: 13px;
   line-height: 1.35;
+}
+
+.cameraVerifiedNotice {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 700;
 }
 
 .cameraTestResult {

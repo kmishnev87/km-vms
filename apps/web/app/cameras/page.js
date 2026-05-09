@@ -638,12 +638,12 @@ export default function CamerasPage() {
         headers: { "Content-Type": "application/json" },
       });
       setTestResult(result);
-      if (result.preview_token) {
-        patch("preview_token", result.preview_token);
-      }
-      if (result.validation_token) {
-        setForm((prev) => ({ ...prev, validation_token: result.validation_token, manual_confirm_unverified: false }));
-      }
+      setForm((prev) => ({
+        ...prev,
+        preview_token: result.preview_token || prev.preview_token,
+        validation_token: result.validation_token || prev.validation_token,
+        manual_confirm_unverified: false,
+      }));
       updateProfileProbeState(formOverride.onvif_profile_token || selectedOnvifProfileToken, result);
       return result;
     } catch (err) {
@@ -1003,6 +1003,8 @@ export default function CamerasPage() {
     profile.token === form.onvif_profile_token || profileMatchesStream(profile, form.rtsp_main_url)
   )) || null;
   const assignedSubProfile = onvifProfiles.find((profile) => profileMatchesStream(profile, form.rtsp_sub_url)) || null;
+  const hasVerifiedCameraPayload = Boolean(form.validation_token && testResult?.ok);
+  const showManualUnverifiedBypass = !hasVerifiedCameraPayload && (form.protocol === "onvif" || editorMode === "create");
 
   function renderProfileSettingSlot(slot) {
     const meta = profileSettingMeta(onvifConfig.supported, slot.key);
@@ -1503,7 +1505,11 @@ export default function CamerasPage() {
               </section>
             ) : null}
 
-            {form.protocol === "onvif" || editorMode === "create" ? (
+            {hasVerifiedCameraPayload ? (
+              <div className="cameraVerifiedNotice">
+                {"\u041a\u0430\u043c\u0435\u0440\u0430 \u043f\u0440\u043e\u0432\u0435\u0440\u0435\u043d\u0430 \u0434\u043b\u044f \u0442\u0435\u043a\u0443\u0449\u0438\u0445 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u043e\u0432."}
+              </div>
+            ) : showManualUnverifiedBypass ? (
               <label className="cameraUnverifiedConfirm">
                 <input
                   type="checkbox"

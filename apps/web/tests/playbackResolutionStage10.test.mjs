@@ -30,8 +30,10 @@ assert.equal(shouldUseAdaptiveHighResolutionPlayback({ width: 1920, height: 1080
 
 assert.equal(recordsPage.includes("video.videoWidth"), true);
 assert.equal(recordsPage.includes("video.videoHeight"), true);
-assert.equal(recordsPage.includes("RECORDS_VIEW_MODE_KEY"), true);
-assert.equal(recordsPage.includes("km_vms_records_view_mode"), true);
+assert.equal(recordsPage.includes("RECORDS_VIEW_MODE_KEY"), false);
+assert.equal(recordsPage.includes("km_vms_records_view_mode"), false);
+assert.equal(recordsPage.includes("recordingsViewToggle"), false);
+assert.equal(recordsPage.includes("recordingsCardsGrid"), false);
 assert.equal(recordsPage.includes("recordingActiveEmpty"), true);
 assert.equal(recordsPage.includes("data-highres-adaptive"), true);
 assert.equal(recordsPage.includes("isDirectPlaybackUnsupported"), false);
@@ -46,6 +48,10 @@ assert.equal(archivePlayer.includes("Двойной клик для полноэ
 assert.equal(camerasPage.includes("validation_token: null"), true);
 assert.equal(camerasPage.includes("onvif_probe_token: null"), true);
 assert.equal(camerasPage.includes("manual_confirm_unverified: false"), true);
+assert.equal(camerasPage.includes("hasVerifiedCameraPayload"), true);
+assert.equal(camerasPage.includes("showManualUnverifiedBypass"), true);
+assert.equal(camerasPage.includes("cameraVerifiedNotice"), true);
+assert.equal(camerasPage.includes('patch("preview_token"'), false);
 
 for (const source of [recordsPage, archivePlayer, camerasPage]) {
   assert.equal(source.includes("????????"), false);

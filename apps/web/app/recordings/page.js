@@ -7,7 +7,6 @@ import { useCurrentUser } from "../../lib/currentUser";
 import { shouldUseAdaptiveHighResolutionPlayback, normalizeVideoDimensions } from "../../lib/playbackResolution";
 
 const PAGE_SIZE = 30;
-const RECORDS_VIEW_MODE_KEY = "km_vms_records_view_mode";
 const TEXT = {
   title: "\u0417\u0430\u043f\u0438\u0441\u0438",
   subtitle: "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440, \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435 \u0438 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0430\u0440\u0445\u0438\u0432\u0430",
@@ -38,8 +37,6 @@ const TEXT = {
   playbackError: "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043d\u0435 \u0441\u043c\u043e\u0433 \u0432\u043e\u0441\u043f\u0440\u043e\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u0437\u0430\u043f\u0438\u0441\u044c \u043e\u043d\u043b\u0430\u0439\u043d. \u0417\u0430\u043f\u0438\u0441\u044c \u043c\u043e\u0436\u043d\u043e \u0441\u043a\u0430\u0447\u0430\u0442\u044c.",
   missingFile: "\u0424\u0430\u0439\u043b \u043e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442 / \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0430\u0440\u0445\u0438\u0432\u0430",
   unavailable: "\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e",
-  cards: "\u041a\u0430\u0440\u0442\u043e\u0447\u043a\u0438",
-  list: "\u0421\u043f\u0438\u0441\u043e\u043a",
   recordingActiveEmpty: "\u0418\u0434\u0451\u0442 \u0437\u0430\u043f\u0438\u0441\u044c. \u0417\u0430\u043f\u0438\u0441\u044c \u043f\u043e\u044f\u0432\u0438\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u0437\u0430\u043a\u0440\u044b\u0442\u0438\u044f \u0441\u0435\u0433\u043c\u0435\u043d\u0442\u0430.",
 };
 
@@ -202,10 +199,6 @@ function isRecordingAvailable(item) {
   return item?.available !== false && item?.playback_available !== false && item?.download_available !== false;
 }
 
-function normalizeRecordsViewMode(value) {
-  return value === "cards" ? "cards" : "list";
-}
-
 function hasActiveRecordingJobs(recorderStatus, selectedCamera) {
   const states = Array.isArray(recorderStatus?.camera_recording_states)
     ? recorderStatus.camera_recording_states
@@ -231,7 +224,6 @@ export default function RecordingsPage() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
-  const [viewMode, setViewMode] = useState("list");
   const [recorderStatus, setRecorderStatus] = useState(null);
   const { currentUser } = useCurrentUser();
 
@@ -289,12 +281,6 @@ export default function RecordingsPage() {
 
   useEffect(() => {
     initialLoad();
-  }, []);
-
-  useEffect(() => {
-    try {
-      setViewMode(normalizeRecordsViewMode(localStorage.getItem(RECORDS_VIEW_MODE_KEY)));
-    } catch (_) {}
   }, []);
 
   useEffect(() => {
@@ -434,14 +420,6 @@ export default function RecordingsPage() {
     handleFullscreenChange();
     return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, [viewerOpen]);
-
-  function changeViewMode(nextMode) {
-    const normalized = normalizeRecordsViewMode(nextMode);
-    setViewMode(normalized);
-    try {
-      localStorage.setItem(RECORDS_VIEW_MODE_KEY, normalized);
-    } catch (_) {}
-  }
 
   function toggleSelectAll() {
     if (allVisibleSelected) {
@@ -702,23 +680,6 @@ export default function RecordingsPage() {
           </div>
 
           <div className="recordingsToolbar recordingsToolbarCompact">
-            <div className="recordingsViewToggle" aria-label="Records view mode">
-              <button
-                type="button"
-                className={viewMode === "list" ? "active" : ""}
-                onClick={() => changeViewMode("list")}
-              >
-                {TEXT.list}
-              </button>
-              <button
-                type="button"
-                className={viewMode === "cards" ? "active" : ""}
-                onClick={() => changeViewMode("cards")}
-              >
-                {TEXT.cards}
-              </button>
-            </div>
-
             <button
               className="button secondary small recordingsActionButton recordingsToolbarIconButton"
               onClick={refresh}
@@ -789,76 +750,6 @@ export default function RecordingsPage() {
       </div>
 
       <div className="card recordingsTableCard">
-        {viewMode === "cards" ? (
-          <div className="recordingsCardsGrid">
-            {paginatedItems.map((item) => (
-              <article key={item.path} className={`recordingsCardItem ${isRecordingAvailable(item) ? "" : "unavailable"}`}>
-                <div className="recordingsCardTop">
-                  {canDelete ? (
-                    <input
-                      type="checkbox"
-                      checked={selectedPaths.includes(item.path)}
-                      onChange={() => toggleSelected(item.path)}
-                      aria-label={`\u0412\u044b\u0431\u0440\u0430\u0442\u044c ${item.filename}`}
-                    />
-                  ) : null}
-                  <span className="recordingsCardCamera">{item.camera}</span>
-                </div>
-                <button
-                  className="recordingsCardTitle"
-                  onClick={() => handleWatch(item)}
-                  disabled={!isRecordingAvailable(item)}
-                  title={TEXT.openEmbeddedViewer}
-                >
-                  {item.filename}
-                </button>
-                {!isRecordingAvailable(item) ? (
-                  <div className="recordingsMissingStatus">{TEXT.missingFile}</div>
-                ) : null}
-                <div className="recordingsCardMeta">
-                  <span>{item.created_at || "-"}</span>
-                  <strong>{item.size_human}</strong>
-                </div>
-                <div className="recordingsActions recordingsCardActions">
-                  <button
-                    className="recordingsIconButton"
-                    onClick={() => handleWatch(item)}
-                    disabled={!isRecordingAvailable(item)}
-                    title={`${ICONS.watch} ${TEXT.watch}`}
-                    aria-label={TEXT.watch}
-                  >
-                    {ICONS.watch}
-                  </button>
-                  <button
-                    className="recordingsIconButton"
-                    onClick={() => handleDownload(item)}
-                    disabled={!isRecordingAvailable(item)}
-                    title={`${ICONS.download} ${TEXT.download}`}
-                    aria-label={TEXT.download}
-                  >
-                    {ICONS.download}
-                  </button>
-                  {canDelete ? (
-                    <button
-                      className="recordingsIconButton danger"
-                      onClick={() => handleDeleteOne(item)}
-                      disabled={busy}
-                      title={`${ICONS.remove} ${TEXT.remove}`}
-                      aria-label={TEXT.remove}
-                    >
-                      {ICONS.remove}
-                    </button>
-                  ) : null}
-                </div>
-              </article>
-            ))}
-            {!paginatedItems.length ? (
-              <div className={`recordingsEmptyCell ${activeRecordingEmpty ? "recordingsEmptyInfo" : ""}`}>
-                {activeRecordingEmpty ? TEXT.recordingActiveEmpty : TEXT.noRecords}
-              </div>
-            ) : null}
-          </div>
-        ) : (
         <div className="recordingsTableWrap">
           <table className="table recordingsTable">
             <colgroup>
@@ -977,7 +868,6 @@ export default function RecordingsPage() {
             </tbody>
           </table>
         </div>
-        )}
 
         <div className="recordingsPagination">
           <button
