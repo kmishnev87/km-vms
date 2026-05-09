@@ -8,10 +8,15 @@ import { apiFetch } from "../../lib/api";
 import {
   buildArchiveExportPayload,
   canExportRecordings,
+  describeArchiveExportLimits,
   downloadArchiveManifest,
+  getArchiveExportLimits,
+  normalizeChronologyDownloadError,
   normalizeArchiveExportError,
   runArchiveExportWorkflow,
   saveBlobDownload,
+  startChronologyCurrentRecordingDownload,
+  validateArchiveExportSelection,
 } from "../../lib/archiveExports";
 import { resizeWorkspaceTile, visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
 
@@ -69,15 +74,29 @@ const TEXT = {
   currentTime: "\u0412\u044b\u0431\u0440\u0430\u043d\u043e\u0435 \u0432\u0440\u0435\u043c\u044f",
   previewTime: "\u041f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
   duplicate: "\u041a\u0430\u043c\u0435\u0440\u0430 \u0443\u0436\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0430",
-  exportEvidence: "\u042d\u043a\u0441\u043f\u043e\u0440\u0442",
-  exportTitle: "\u042d\u043a\u0441\u043f\u043e\u0440\u0442 evidence clip",
+  quickDownload: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c \u0442\u0435\u043a\u0443\u0449\u0443\u044e \u0437\u0430\u043f\u0438\u0441\u044c",
+  quickDownloadHelp: "\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u0435\u0442 \u0438\u0441\u0445\u043e\u0434\u043d\u044b\u0439 \u0430\u0440\u0445\u0438\u0432\u043d\u044b\u0439 \u0444\u0430\u0439\u043b \u0434\u043b\u044f \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u043e\u0439 \u043a\u0430\u043c\u0435\u0440\u044b \u0438 \u0442\u0435\u043a\u0443\u0449\u0435\u0433\u043e \u0432\u0440\u0435\u043c\u0435\u043d\u0438.",
+  quickDownloadChooseHelp: "\u041e\u0442\u043a\u0440\u043e\u0435\u0442 \u0432\u044b\u0431\u043e\u0440 \u043a\u0430\u043c\u0435\u0440\u044b \u0434\u043b\u044f \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u044f \u0438\u0441\u0445\u043e\u0434\u043d\u043e\u0439 \u0437\u0430\u043f\u0438\u0441\u0438 \u0432 \u0442\u0435\u043a\u0443\u0449\u0435\u0435 \u0432\u0440\u0435\u043c\u044f.",
+  quickDownloadReady: "\u0421\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435 \u0442\u0435\u043a\u0443\u0449\u0435\u0439 \u0437\u0430\u043f\u0438\u0441\u0438 \u043d\u0430\u0447\u0430\u0442\u043e.",
+  quickDownloadChoose: "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043a\u0430\u043c\u0435\u0440\u0443",
+  allCameras: "\u0412\u0441\u0435 \u043a\u0430\u043c\u0435\u0440\u044b",
+  noRecordingShort: "\u043d\u0435\u0442 \u0437\u0430\u043f\u0438\u0441\u0438",
+  downloadStartedShort: "\u0441\u0442\u0430\u0440\u0442",
+  downloadFailedShort: "\u043e\u0448\u0438\u0431\u043a\u0430",
+  exportEvidence: "\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043a\u043b\u0438\u043f",
+  exportEvidenceHelpShort: "\u0421\u043e\u0437\u0434\u0430\u0435\u0442 \u0432\u0438\u0434\u0435\u043e\u043a\u043b\u0438\u043f \u0437\u0430 \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 \u0438\u0437 \u0430\u0440\u0445\u0438\u0432\u0430.",
+  exportTitle: "\u0421\u043e\u0437\u0434\u0430\u043d\u0438\u0435 \u043a\u043b\u0438\u043f\u0430",
+  exportHelp: "\u041a\u043b\u0438\u043f \u0441\u043e\u0437\u0434\u0430\u0435\u0442\u0441\u044f \u0437\u0430 \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 \u0438\u0437 \u0430\u0440\u0445\u0438\u0432\u0430. \u041f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430 \u043f\u043e\u043c\u043e\u0433\u0430\u0435\u0442 \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u043a\u0430\u043c\u0435\u0440\u0443, \u0432\u0440\u0435\u043c\u044f \u0438 \u0446\u0435\u043b\u043e\u0441\u0442\u043d\u043e\u0441\u0442\u044c \u0444\u0430\u0439\u043b\u0430.",
+  exportLimits: "\u041b\u0438\u043c\u0438\u0442\u044b",
   exportCamera: "\u041a\u0430\u043c\u0435\u0440\u0430",
+  exportPickCamera: "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043a\u0430\u043c\u0435\u0440\u0443",
   exportStart: "\u041d\u0430\u0447\u0430\u043b\u043e",
   exportEnd: "\u041a\u043e\u043d\u0435\u0446",
   exportReason: "\u041e\u0441\u043d\u043e\u0432\u0430\u043d\u0438\u0435",
-  exportRun: "\u0421\u043e\u0437\u0434\u0430\u0442\u044c export",
-  exportManifest: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c manifest",
-  exportReady: "\u042d\u043a\u0441\u043f\u043e\u0440\u0442 \u0433\u043e\u0442\u043e\u0432.",
+  exportRun: "\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043a\u043b\u0438\u043f",
+  exportManifest: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c \u043f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430",
+  exportManifestHelp: "\u041f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430 \u2014 \u0442\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0444\u0430\u0439\u043b \u0434\u043b\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438, \u0441 \u043a\u0430\u043a\u043e\u0439 \u043a\u0430\u043c\u0435\u0440\u044b \u0438 \u0437\u0430 \u043a\u0430\u043a\u043e\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 \u0441\u043e\u0437\u0434\u0430\u043d \u043a\u043b\u0438\u043f.",
+  exportReady: "\u041a\u043b\u0438\u043f \u0433\u043e\u0442\u043e\u0432.",
 };
 
 function clamp(value, min, max) {
@@ -257,6 +276,7 @@ export default function ChronologyPage() {
   const tileRefs = useRef(new Map());
   const tileVideoRefs = useRef(new Map());
   const fullscreenControlsTimerRef = useRef(null);
+  const downloadChooserRef = useRef(null);
 
   const [cameras, setCameras] = useState([]);
   const [camerasLoaded, setCamerasLoaded] = useState(false);
@@ -285,6 +305,10 @@ export default function ChronologyPage() {
   const [exportBusy, setExportBusy] = useState(false);
   const [exportStatus, setExportStatus] = useState("");
   const [lastExportId, setLastExportId] = useState("");
+  const [exportLimits, setExportLimits] = useState(null);
+  const [quickDownloadBusy, setQuickDownloadBusy] = useState(false);
+  const [downloadChooserOpen, setDownloadChooserOpen] = useState(false);
+  const [downloadResults, setDownloadResults] = useState([]);
 
   async function loadCameras() {
     try {
@@ -431,6 +455,39 @@ export default function ChronologyPage() {
   const tileSourceKey = visibleTiles.map((tile) => `${tile.id}:${tile.cameraId}`).join("|");
   const timelineTs = previewTs || currentTs;
   const canExport = canExportRecordings(currentUser);
+
+  useEffect(() => {
+    if (!canExport) return;
+    getArchiveExportLimits().then(setExportLimits).catch(() => {});
+  }, [canExport]);
+
+  useEffect(() => {
+    if (!downloadChooserOpen) return undefined;
+    function handlePointerDown(event) {
+      if (!downloadChooserRef.current?.contains(event.target)) {
+        setDownloadChooserOpen(false);
+      }
+    }
+    function handleKeyDown(event) {
+      if (event.key === "Escape") {
+        setDownloadChooserOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [downloadChooserOpen]);
+
+  useEffect(() => {
+    setDownloadChooserOpen(false);
+  }, [selectedCameraKey, tileSourceKey, date, time]);
+
+  useEffect(() => {
+    setDownloadChooserOpen(false);
+  }, [timelineTs?.getTime?.()]);
 
   useEffect(() => {
     tilesRef.current = visibleTiles;
@@ -797,13 +854,14 @@ export default function ChronologyPage() {
     const center = timelineTs || currentTs || new Date(normalizeTargetTs());
     const start = new Date(center.getTime() - 15_000);
     const end = new Date(center.getTime() + 15_000);
-    const cameraId = selectedCameraIds[0];
+    const [onlyCameraId] = selectedCameraIds;
+    const cameraId = selectedCameraIds.length === 1 ? onlyCameraId : "";
     setError("");
     setLastExportId("");
     setExportStatus("");
     setExportModal({
       cameraId,
-      title: `Chronology evidence ${formatPlaybackDateTime(center)}`,
+      title: `${TEXT.exportEvidence} ${formatPlaybackDateTime(center)}`,
       reason: "",
       startTs: formatLocalNaiveTs(start),
       endTs: formatLocalNaiveTs(end),
@@ -819,23 +877,35 @@ export default function ChronologyPage() {
 
   async function submitExport() {
     if (!exportModal || exportBusy) return;
+    if (!exportModal.cameraId) {
+      setError(TEXT.exportPickCamera);
+      setExportStatus(TEXT.exportPickCamera);
+      return;
+    }
+    const validation = validateArchiveExportSelection(exportModal, exportLimits);
+    if (validation) {
+      setError(validation);
+      setExportStatus(validation);
+      return;
+    }
     try {
       setError("");
       setExportBusy(true);
       setLastExportId("");
       const payload = buildArchiveExportPayload(exportModal);
       const result = await runArchiveExportWorkflow(payload, {
-        onStatus: (status, job) => {
-          setExportStatus(status);
+        onStatus: (message, job) => {
+          setExportStatus(message);
           if (job?.id) setLastExportId(job.id);
         },
       });
       if (result?.job?.id) setLastExportId(result.job.id);
-      saveBlobDownload(result.clip.blob, result.clip.filename || "km-vms-evidence-export.mkv");
-      setExportStatus("done");
+      saveBlobDownload(result.clip.blob, result.clip.filename || "km-vms-clip.mkv");
+      setExportStatus(TEXT.exportReady);
     } catch (err) {
-      setError(normalizeArchiveExportError(err.message));
-      setExportStatus("failed");
+      const message = normalizeArchiveExportError(err.message);
+      setError(message);
+      setExportStatus(message);
     } finally {
       setExportBusy(false);
     }
@@ -846,11 +916,55 @@ export default function ChronologyPage() {
     try {
       setExportBusy(true);
       const manifest = await downloadArchiveManifest(lastExportId);
-      saveBlobDownload(manifest.blob, manifest.filename || "km-vms-evidence-manifest.json");
+      saveBlobDownload(manifest.blob, manifest.filename || "km-vms-clip-passport.json");
     } catch (err) {
       setError(normalizeArchiveExportError(err.message));
     } finally {
       setExportBusy(false);
+    }
+  }
+
+  async function handleQuickDownload() {
+    if (!selectedCameraIds.length || quickDownloadBusy) return;
+    if (selectedCameraIds.length > 1) {
+      setDownloadChooserOpen((prev) => !prev);
+      return;
+    }
+    const [onlyCameraId] = selectedCameraIds;
+    await startQuickDownloadForCamera(onlyCameraId);
+  }
+
+  function quickDownloadTimestamp() {
+    return formatLocalNaiveTs(timelineTs || currentTs || new Date(normalizeTargetTs()));
+  }
+
+  async function startQuickDownloadForCamera(cameraId) {
+    setDownloadChooserOpen(false);
+    try {
+      setError("");
+      setQuickDownloadBusy(true);
+      const timestamp = quickDownloadTimestamp();
+      await startChronologyCurrentRecordingDownload(cameraId, timestamp);
+      const name = selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
+      setDownloadResults((prev) => [...prev, { cameraId, name, status: TEXT.downloadStartedShort }].slice(-12));
+      setExportStatus(`${TEXT.quickDownloadReady} ${name}`);
+    } catch (err) {
+      const message = normalizeChronologyDownloadError(err.message);
+      const name = selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
+      setDownloadResults((prev) => [...prev, { cameraId, name, status: message }].slice(-12));
+      setError(message);
+    } finally {
+      setQuickDownloadBusy(false);
+    }
+  }
+
+  async function startQuickDownloadForAllCameras() {
+    if (quickDownloadBusy) return;
+    setDownloadChooserOpen(false);
+    setDownloadResults([]);
+    for (const cameraId of selectedCameraIds) {
+      await startQuickDownloadForCamera(cameraId);
+      await new Promise((resolve) => setTimeout(resolve, 600));
     }
   }
 
@@ -1215,15 +1329,75 @@ export default function ChronologyPage() {
             <button type="button" className="chronologyPrimaryButton" onClick={handleFind}>
               {TEXT.find}
             </button>
-            {canExport ? (
+            <div className="chronologyActionWithHelp" ref={downloadChooserRef}>
               <button
                 type="button"
-                className="chronologyPrimaryButton"
-                onClick={openExportModal}
-                disabled={!selectedCameraIds.length || exportBusy}
+                className="chronologyIconButton chronologyDownloadButton"
+                onClick={handleQuickDownload}
+                disabled={!selectedCameraIds.length || quickDownloadBusy}
+                title={TEXT.quickDownload}
+                aria-label={TEXT.quickDownload}
               >
-                {TEXT.exportEvidence}
+                {"\u2b07"}
               </button>
+              <span className="chronologyHelpTooltip" tabIndex={0} aria-label={selectedCameraIds.length > 1 ? TEXT.quickDownloadChooseHelp : TEXT.quickDownloadHelp}>
+                ?
+                <span role="tooltip">{selectedCameraIds.length > 1 ? TEXT.quickDownloadChooseHelp : TEXT.quickDownloadHelp}</span>
+              </span>
+              {downloadChooserOpen ? (
+                <div className="chronologyDownloadChooser" role="menu">
+                  <div className="chronologyDownloadChooserTitle">{TEXT.quickDownloadChoose}</div>
+                  {selectedCameraIds.map((cameraId) => (
+                    <button
+                      key={cameraId}
+                      type="button"
+                      className="chronologyDownloadChoice"
+                      onClick={() => startQuickDownloadForCamera(cameraId)}
+                      disabled={quickDownloadBusy}
+                      role="menuitem"
+                    >
+                      {selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="chronologyDownloadChoice strong"
+                    onClick={startQuickDownloadForAllCameras}
+                    disabled={quickDownloadBusy}
+                    role="menuitem"
+                  >
+                    {TEXT.allCameras}
+                  </button>
+                  {downloadResults.length ? (
+                    <div className="chronologyDownloadResults">
+                      {downloadResults.map((item, index) => (
+                        <div key={`${item.cameraId}-${index}`}>
+                          <span>{item.name}</span>
+                          <strong>{item.status}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+            {canExport ? (
+              <div className="chronologyActionWithHelp">
+                <button
+                  type="button"
+                  className="chronologyIconButton chronologyEvidenceButton"
+                  onClick={openExportModal}
+                  disabled={!selectedCameraIds.length || exportBusy}
+                  title={TEXT.exportEvidence}
+                  aria-label={TEXT.exportEvidence}
+                >
+                  {"\u2696"}
+                </button>
+                <span className="chronologyHelpTooltip" tabIndex={0} aria-label={TEXT.exportEvidenceHelpShort}>
+                  ?
+                  <span role="tooltip">{TEXT.exportEvidenceHelpShort}</span>
+                </span>
+              </div>
             ) : null}
             <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(-10)} title={TEXT.back10} aria-label={TEXT.back10}>-10</button>
             <button type="button" className="chronologyIconButton" onClick={handlePlay} title={TEXT.play} aria-label={TEXT.play}>{"\u25b6"}</button>
@@ -1490,6 +1664,9 @@ export default function ChronologyPage() {
                   onChange={(event) => setExportModal((prev) => ({ ...prev, cameraId: event.target.value }))}
                   disabled={exportBusy}
                 >
+                  {selectedCameraIds.length > 1 ? (
+                    <option value="">{TEXT.exportPickCamera}</option>
+                  ) : null}
                   {selectedCameraIds.map((cameraId) => (
                     <option key={cameraId} value={cameraId}>
                       {selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`}
@@ -1497,6 +1674,11 @@ export default function ChronologyPage() {
                   ))}
                 </select>
               </label>
+              <div className="archiveExportHelp">{TEXT.exportHelp}</div>
+              <div className="archiveExportLimits">
+                <strong>{TEXT.exportLimits}</strong>
+                <span>{describeArchiveExportLimits(exportLimits)}</span>
+              </div>
               <label className="archiveExportField">
                 <span>{TEXT.exportStart}</span>
                 <input
@@ -1529,12 +1711,12 @@ export default function ChronologyPage() {
                   disabled={exportBusy}
                 />
               </label>
-              {exportStatus ? <div className="archiveExportStatus">{exportStatus === "done" ? TEXT.exportReady : exportStatus}</div> : null}
+              {exportStatus ? <div className="archiveExportStatus">{exportStatus}</div> : null}
               <div className="actions">
                 <button type="button" className="button primary" onClick={submitExport} disabled={exportBusy}>
                   {TEXT.exportRun}
                 </button>
-                <button type="button" className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy || exportStatus !== "done"}>
+                <button type="button" className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy} title={TEXT.exportManifestHelp}>
                   {TEXT.exportManifest}
                 </button>
                 <button type="button" className="button secondary" onClick={closeExportModal} disabled={exportBusy}>

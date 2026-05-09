@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import mimetypes
-from datetime import datetime, timedelta
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -87,11 +88,26 @@ def _segment_media_metadata(segment: RecordingSegment, file_path: Path) -> dict[
     }
 
 
+def _safe_download_filename(camera: Camera, segment: RecordingSegment, file_path: Path) -> str:
+    raw_camera = str(camera.name or f"camera_{camera.id}")
+    camera_label = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_camera).strip("_")[:40]
+    camera_label = camera_label or f"camera_{camera.id}"
+    stamp = (segment.started_at or datetime.utcnow()).strftime("%Y%m%dT%H%M%S")
+    extension = (segment.file_extension or file_path.suffix or ".mkv").lower()
+    if not extension.startswith("."):
+        extension = f".{extension}"
+    extension = re.sub(r"[^A-Za-z0-9.]+", "", extension) or ".mkv"
+    return f"km-vms-recording-{camera_label}-{stamp}{extension}"
+
+
 def _parse_ts(raw: str, field_name: str) -> datetime:
     try:
-        return datetime.fromisoformat(raw)
+        value = datetime.fromisoformat(raw)
     except Exception:
         raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
 
 
 def _finalized_segments_query(db: Session):
@@ -105,6 +121,23 @@ def _finalized_segments_query(db: Session):
             ~RecordingSegment.integrity_status.in_(PROBLEM_INTEGRITY_STATUSES),
         ),
     )
+
+
+def _segment_covering_timestamp(db: Session, *, camera_id: int, target_dt: datetime) -> RecordingSegment | None:
+    segments = (
+        _finalized_segments_query(db)
+        .filter(RecordingSegment.camera_id == camera_id, RecordingSegment.started_at <= target_dt)
+        .order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
+        .all()
+    )
+    for segment in segments:
+        interval = _segment_interval(segment)
+        if not interval:
+            continue
+        start_dt, end_dt = interval
+        if start_dt <= target_dt < end_dt:
+            return segment
+    return None
 
 
 def _segment_end(segment: RecordingSegment) -> datetime | None:
@@ -291,6 +324,81 @@ def chronology_ranges(
         "to": range_to.isoformat(),
         "items": result,
     }
+
+
+@router.get("/download")
+def chronology_download_current_recording(
+    camera_id: int = Query(...),
+    ts: str = Query(...),
+    media_token: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    request: Request = None,
+):
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
+    if not camera:
+        raise HTTPException(status_code=404, detail="Recording is unavailable")
+
+    target_dt = _parse_ts(ts, "timestamp")
+    segment = _segment_covering_timestamp(db, camera_id=camera_id, target_dt=target_dt)
+    if not segment:
+        raise HTTPException(status_code=404, detail="Recording is unavailable")
+    validate_media_token(
+        db,
+        token=media_token,
+        scope="chronology-download",
+        resource={"camera_id": camera_id, "segment_id": segment.id, "action": "download"},
+        permission=PERMISSION_VIEW_TIMELINE,
+        request=request,
+        media_area="chronology-download",
+    )
+    try:
+        file_path = _resolve_segment_path(segment)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=409, detail="Recording source is unavailable") from exc
+        raise
+    media_metadata = _segment_media_metadata(segment, file_path)
+    return FileResponse(
+        file_path,
+        media_type=media_metadata["mime_type"] or "application/octet-stream",
+        filename=_safe_download_filename(camera, segment, file_path),
+    )
+
+
+@router.post("/download-token")
+def issue_chronology_download_token(
+    camera_id: int = Query(...),
+    ts: str = Query(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("view_timeline")),
+):
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
+    if not camera:
+        raise HTTPException(status_code=404, detail="Recording is unavailable")
+    target_dt = _parse_ts(ts, "timestamp")
+    segment = _segment_covering_timestamp(db, camera_id=camera_id, target_dt=target_dt)
+    if not segment:
+        raise HTTPException(status_code=404, detail="Recording is unavailable")
+    try:
+        file_path = _resolve_segment_path(segment)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=409, detail="Recording source is unavailable") from exc
+        raise
+    token, expires_at = create_media_token(
+        user=current_user,
+        scope="chronology-download",
+        resource={"camera_id": camera_id, "segment_id": segment.id, "action": "download"},
+    )
+    response = media_token_response(token, expires_at)
+    response.update(
+        {
+            "camera_id": camera_id,
+            "segment_id": segment.id,
+            "filename": _safe_download_filename(camera, segment, file_path),
+        }
+    )
+    return response
 
 
 def _chronology_media_resource(camera_id: int, rel_path: str) -> dict:

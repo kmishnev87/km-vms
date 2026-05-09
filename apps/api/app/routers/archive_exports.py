@@ -13,7 +13,11 @@ from app.models.recording import ArchiveExportJob
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.services.archive_exports import (
+    ALLOWED_FORMAT_HINTS,
     EXPORT_STATUSES,
+    MAX_ESTIMATED_SOURCE_BYTES,
+    MAX_EXPORT_DURATION_SECONDS,
+    MAX_SOURCE_SEGMENTS,
     cleanup_archive_export_artifacts,
     create_archive_export_job,
     create_archive_export_manifest,
@@ -86,6 +90,18 @@ def list_exports(
         query = query.filter(ArchiveExportJob.status == normalized)
     jobs = query.order_by(ArchiveExportJob.created_at.desc(), ArchiveExportJob.id.asc()).offset(offset).limit(limit).all()
     return {"items": [serialize_archive_export_job(job) for job in jobs]}
+
+
+@router.get("/limits")
+def get_export_limits(
+    current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
+):
+    return {
+        "max_duration_seconds": MAX_EXPORT_DURATION_SECONDS,
+        "max_source_segments": MAX_SOURCE_SEGMENTS,
+        "max_estimated_source_bytes": MAX_ESTIMATED_SOURCE_BYTES,
+        "format_hints": sorted(ALLOWED_FORMAT_HINTS),
+    }
 
 
 @router.post("/cleanup")

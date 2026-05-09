@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS
 from app.core.permissions import (
     PERMISSION_EXPORT_RECORDINGS,
+    PERMISSION_VIEW_TIMELINE,
     ROLE_ADMIN,
     ROLE_OPERATOR,
     ROLE_OWNER,
@@ -246,6 +247,7 @@ def test_stage11_endpoint_registry_and_role_matrix():
     registered = {(item.method, item.path, item.decision) for item in ENDPOINT_PERMISSIONS}
     assert ("POST", "/archive/exports", PERMISSION_EXPORT_RECORDINGS) in registered
     assert ("GET", "/archive/exports", PERMISSION_EXPORT_RECORDINGS) in registered
+    assert ("GET", "/archive/exports/limits", PERMISSION_EXPORT_RECORDINGS) in registered
     assert ("GET", "/archive/exports/{export_id}", PERMISSION_EXPORT_RECORDINGS) in registered
     assert ("POST", "/archive/exports/{export_id}/manifest", PERMISSION_EXPORT_RECORDINGS) in registered
     assert ("GET", "/archive/exports/{export_id}/manifest", PERMISSION_EXPORT_RECORDINGS) in registered
@@ -256,6 +258,117 @@ def test_stage11_endpoint_registry_and_role_matrix():
     assert PERMISSION_EXPORT_RECORDINGS in ROLE_PERMISSIONS[ROLE_ADMIN]
     assert PERMISSION_EXPORT_RECORDINGS not in ROLE_PERMISSIONS[ROLE_OPERATOR]
     assert PERMISSION_EXPORT_RECORDINGS not in ROLE_PERMISSIONS[ROLE_VIEWER]
+
+
+def test_stage11_stage5_limits_route_is_permission_gated(client, api_db):
+    db, _root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    operator = add_user(db, role=ROLE_OPERATOR, username="stage11_operator_limits")
+
+    assert client.get("/archive/exports/limits").status_code == 401
+    assert client.get("/archive/exports/limits", headers=auth_headers(operator)).status_code == 403
+
+    response = client.get("/archive/exports/limits", headers=auth_headers(admin))
+    assert response.status_code == 200
+    body = response.json()
+    assert body["max_duration_seconds"] == 10800
+    assert export_service.MAX_EXPORT_DURATION_SECONDS == 10800
+    assert body["max_source_segments"] == export_service.MAX_SOURCE_SEGMENTS
+    assert body["max_estimated_source_bytes"] == export_service.MAX_ESTIMATED_SOURCE_BYTES
+    assert "mkv" in body["format_hints"]
+
+
+def test_stage11_stage501_three_hour_duration_contract(client, api_db):
+    db, _root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    camera = add_camera(db)
+    segment = add_segment(db, camera, started=datetime.utcnow() - timedelta(hours=4), seconds=3 * 60 * 60, size=16)
+
+    allowed = client.post(
+        "/archive/exports",
+        json=valid_payload(
+            camera,
+            segment,
+            start_ts=(segment.started_at + timedelta(minutes=5)).isoformat(),
+            end_ts=(segment.started_at + timedelta(hours=2, minutes=35)).isoformat(),
+        ),
+        headers=auth_headers(admin),
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["duration_seconds"] == 9000
+
+    too_long = client.post(
+        "/archive/exports",
+        json=valid_payload(
+            camera,
+            segment,
+            start_ts=segment.started_at.isoformat(),
+            end_ts=(segment.started_at + timedelta(hours=3, seconds=1)).isoformat(),
+        ),
+        headers=auth_headers(admin),
+    )
+    assert too_long.status_code == 413
+
+
+def test_stage11_stage5_chronology_quick_download_contract(client, api_db):
+    db, root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    operator = add_user(db, role=ROLE_OPERATOR, username="stage11_operator_quick_download")
+    viewer = add_user(db, role=ROLE_VIEWER, username="stage11_viewer_quick_download")
+    camera = add_camera(db, name="stage11 camera unsafe")
+    segment = add_segment(db, camera, started=datetime.utcnow() - timedelta(minutes=5), seconds=60, size=24)
+    ts = (segment.started_at + timedelta(seconds=10)).replace(tzinfo=timezone.utc).isoformat()
+
+    params = {"camera_id": camera.id, "ts": ts}
+    assert client.post("/chronology/download-token", params=params).status_code == 401
+    assert client.post("/chronology/download-token", params=params, headers=auth_headers(viewer)).status_code == 403
+
+    token_response = client.post("/chronology/download-token", params=params, headers=auth_headers(operator))
+    assert token_response.status_code == 200
+    token = token_response.json()["media_token"]
+
+    assert client.get("/chronology/download", params=params).status_code == 401
+    response = client.get("/chronology/download", params={**params, "media_token": token})
+    assert response.status_code == 200
+    assert response.content == b"x" * 24
+    disposition = response.headers.get("content-disposition", "").lower()
+    assert "attachment" in disposition
+    assert "/" not in disposition
+    assert "\\" not in disposition
+    assert str(root).lower() not in str(response.headers).lower()
+
+    no_segment = client.post(
+        "/chronology/download-token",
+        params={"camera_id": camera.id, "ts": (segment.ended_at + timedelta(seconds=1)).isoformat()},
+        headers=auth_headers(operator),
+    )
+    assert no_segment.status_code == 404
+    assert "relative_path" not in no_segment.text
+
+    invalid_ts = client.post("/chronology/download-token", params={"camera_id": camera.id, "ts": "not-a-date"}, headers=auth_headers(operator))
+    assert invalid_ts.status_code == 400
+
+    missing_camera = client.post("/chronology/download-token", params={"camera_id": 999999, "ts": ts}, headers=auth_headers(operator))
+    assert missing_camera.status_code == 404
+
+    deleted = add_camera(db, deleted=True, name="stage11_deleted_download__deleted_5_1777777777")
+    deleted_segment = add_segment(db, deleted, name="deleted_download.mkv")
+    deleted_ts = (deleted_segment.started_at + timedelta(seconds=1)).isoformat()
+    soft_deleted = client.post("/chronology/download-token", params={"camera_id": deleted.id, "ts": deleted_ts}, headers=auth_headers(operator))
+    assert soft_deleted.status_code == 404
+
+    (Path(settings.storage_root) / segment.relative_path).unlink()
+    unavailable = client.post("/chronology/download-token", params=params, headers=auth_headers(operator))
+    assert unavailable.status_code == 409
+    assert str(root).lower() not in unavailable.text.lower()
+
+    wrong_camera = add_camera(db, name="stage11_wrong_camera")
+    add_segment(db, wrong_camera, name="wrong_camera.mkv")
+    forbidden = client.get(
+        "/chronology/download",
+        params={"camera_id": wrong_camera.id, "ts": ts, "media_token": token},
+    )
+    assert forbidden.status_code in {403, 404}
 
 
 def test_stage11_no_auth_and_non_export_user_are_denied(client, api_db):
@@ -338,7 +451,12 @@ def test_stage11_invalid_ranges_and_future_ranges_are_rejected_safely(client, ap
 
     assert client.post(
         "/archive/exports",
-        json=valid_payload(camera, segment, end_ts=(segment.started_at + timedelta(hours=1)).isoformat()),
+        json=valid_payload(
+            camera,
+            segment,
+            start_ts=segment.started_at.isoformat(),
+            end_ts=(segment.started_at + timedelta(hours=3, seconds=1)).isoformat(),
+        ),
         headers=auth_headers(admin),
     ).status_code == 413
 

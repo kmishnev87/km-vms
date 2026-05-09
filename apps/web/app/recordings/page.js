@@ -6,10 +6,13 @@ import { apiFetch, canDeleteRecordings, issueRecordingMediaToken } from "../../l
 import {
   buildArchiveExportPayload,
   canExportRecordings,
+  describeArchiveExportLimits,
   downloadArchiveManifest,
+  getArchiveExportLimits,
   normalizeArchiveExportError,
   runArchiveExportWorkflow,
   saveBlobDownload,
+  validateArchiveExportSelection,
 } from "../../lib/archiveExports";
 import { useCurrentUser } from "../../lib/currentUser";
 import { shouldUseAdaptiveHighResolutionPlayback, normalizeVideoDimensions } from "../../lib/playbackResolution";
@@ -36,14 +39,21 @@ const TEXT = {
   actions: "\u0414\u0435\u0439\u0441\u0442\u0432\u0438\u044f",
   watch: "\u0421\u043c\u043e\u0442\u0440\u0435\u0442\u044c",
   download: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c",
-  exportEvidence: "\u042d\u043a\u0441\u043f\u043e\u0440\u0442",
-  exportTitle: "\u042d\u043a\u0441\u043f\u043e\u0440\u0442 evidence clip",
+  downloadSource: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c \u0438\u0441\u0445\u043e\u0434\u043d\u0443\u044e \u0437\u0430\u043f\u0438\u0441\u044c",
+  createClip: "\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043a\u043b\u0438\u043f",
+  createClipTooltip: "\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043a\u043b\u0438\u043f \u0437\u0430 \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 \u0438\u0437 \u0430\u0440\u0445\u0438\u0432\u0430",
+  exportTitle: "\u0421\u043e\u0437\u0434\u0430\u043d\u0438\u0435 \u043a\u043b\u0438\u043f\u0430",
+  exportHelp: "\u041a\u043b\u0438\u043f \u0441\u043e\u0437\u0434\u0430\u0435\u0442\u0441\u044f \u0437\u0430 \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 \u0438\u0437 \u0430\u0440\u0445\u0438\u0432\u0430. \u041f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430 \u043f\u043e\u043c\u043e\u0433\u0430\u0435\u0442 \u043f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u043a\u0430\u043c\u0435\u0440\u0443, \u0432\u0440\u0435\u043c\u044f \u0438 \u0446\u0435\u043b\u043e\u0441\u0442\u043d\u043e\u0441\u0442\u044c \u0444\u0430\u0439\u043b\u0430.",
+  exportLimits: "\u041b\u0438\u043c\u0438\u0442\u044b",
+  exportCamera: "\u041a\u0430\u043c\u0435\u0440\u0430",
+  exportPickCamera: "\u0412\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u043a\u0430\u043c\u0435\u0440\u0443",
   exportReason: "\u041e\u0441\u043d\u043e\u0432\u0430\u043d\u0438\u0435",
   exportStart: "\u041d\u0430\u0447\u0430\u043b\u043e",
   exportEnd: "\u041a\u043e\u043d\u0435\u0446",
-  exportRun: "\u0421\u043e\u0437\u0434\u0430\u0442\u044c export",
-  exportManifest: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c manifest",
-  exportReady: "\u042d\u043a\u0441\u043f\u043e\u0440\u0442 \u0433\u043e\u0442\u043e\u0432.",
+  exportRun: "\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043a\u043b\u0438\u043f",
+  exportManifest: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c \u043f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430",
+  exportManifestHelp: "\u041f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430 \u2014 \u0442\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0444\u0430\u0439\u043b \u0434\u043b\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438, \u0441 \u043a\u0430\u043a\u043e\u0439 \u043a\u0430\u043c\u0435\u0440\u044b \u0438 \u0437\u0430 \u043a\u0430\u043a\u043e\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 \u0441\u043e\u0437\u0434\u0430\u043d \u043a\u043b\u0438\u043f.",
+  exportReady: "\u041a\u043b\u0438\u043f \u0433\u043e\u0442\u043e\u0432.",
   remove: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c",
   noRecords: "\u041d\u0435\u0442 \u0437\u0430\u043f\u0438\u0441\u0435\u0439",
   pickAllPage: "\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0432\u0441\u0435 \u043d\u0430 \u0442\u0435\u043a\u0443\u0449\u0435\u0439 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0435",
@@ -62,7 +72,7 @@ const ICONS = {
   trash: "\ud83d\uddd1",
   watch: "\u25b6",
   download: "\u2b07",
-  export: "\u21e9",
+  export: "\u2702",
   remove: "\ud83d\uddd1",
   prev: "\u2190",
   next: "\u2192",
@@ -72,6 +82,34 @@ const ICONS = {
   gap: "\u2026",
   close: "\u00d7",
 };
+
+function toDateTimeInputParts(dateValue) {
+  const dt = dateValue instanceof Date ? dateValue : new Date(dateValue);
+  if (!Number.isFinite(dt.getTime())) return "";
+  const pad2 = (n) => String(n).padStart(2, "0");
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}:${pad2(dt.getSeconds())}`;
+}
+
+function defaultClipRange(selectedDate, exportLimits) {
+  const limitMs = Number(exportLimits?.max_duration_seconds || 3 * 60 * 60) * 1000;
+  let start;
+  if (selectedDate) {
+    start = new Date(`${selectedDate}T00:00:00`);
+  } else {
+    start = new Date();
+    start.setSeconds(0, 0);
+    start = new Date(start.getTime() - 60_000);
+  }
+  if (!Number.isFinite(start.getTime())) {
+    start = new Date();
+    start.setSeconds(0, 0);
+  }
+  const end = new Date(start.getTime() + Math.min(60_000, limitMs));
+  return {
+    startTs: toDateTimeInputParts(start),
+    endTs: toDateTimeInputParts(end),
+  };
+}
 
 const SORT_OPTIONS = {
   created_at: { key: "created_at", label: TEXT.createdAt },
@@ -257,6 +295,7 @@ export default function RecordingsPage() {
   const [exportBusy, setExportBusy] = useState(false);
   const [exportStatus, setExportStatus] = useState("");
   const [lastExportId, setLastExportId] = useState("");
+  const [exportLimits, setExportLimits] = useState(null);
 
   const requestIdRef = useRef(0);
   const dangerMenuRef = useRef(null);
@@ -266,6 +305,11 @@ export default function RecordingsPage() {
   const viewerRefreshInFlightRef = useRef(false);
   const canDelete = canDeleteRecordings(currentUser);
   const canExport = canExportRecordings(currentUser);
+
+  useEffect(() => {
+    if (!canExport) return;
+    getArchiveExportLimits().then(setExportLimits).catch(() => {});
+  }, [canExport]);
 
   async function loadCameras() {
     const data = await apiFetch("/recordings/cameras");
@@ -400,6 +444,16 @@ export default function RecordingsPage() {
     };
   }, [filteredItems]);
 
+  const clipCameraOptions = useMemo(() => {
+    const byId = new Map();
+    items.forEach((item) => {
+      if (!item?.camera_id) return;
+      if (selectedCamera !== "__all__" && item.camera !== selectedCamera) return;
+      byId.set(String(item.camera_id), item.camera || `${TEXT.camera} ${item.camera_id}`);
+    });
+    return Array.from(byId.entries()).map(([id, name]) => ({ id, name }));
+  }, [items, selectedCamera]);
+
   const paginationItems = useMemo(
     () => buildPageList(currentPage, pageCount),
     [currentPage, pageCount]
@@ -471,25 +525,20 @@ export default function RecordingsPage() {
   }
 
   function toDateTimeLocal(value) {
-    if (!value) return "";
-    const dt = new Date(value);
-    if (!Number.isFinite(dt.getTime())) return "";
-    const pad2 = (n) => String(n).padStart(2, "0");
-    return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}:${pad2(dt.getSeconds())}`;
+    return toDateTimeInputParts(value);
   }
 
-  function openExportModal(item) {
-    if (!canExport || !isRecordingAvailable(item) || !item?.camera_id) return;
-    const startTs = item.started_at || "";
-    const endTs = item.ended_at || item.started_at || "";
+  function openExportModal() {
+    if (!canExport) return;
+    const initialCameraId = selectedCamera === "__all__" ? "" : (clipCameraOptions[0]?.id || "");
+    const { startTs, endTs } = defaultClipRange(selectedDate, exportLimits);
     setError("");
     setNotice("");
     setLastExportId("");
     setExportStatus("");
     setExportModal({
-      item,
-      cameraId: item.camera_id,
-      title: item.filename || "Evidence export",
+      cameraId: initialCameraId,
+      title: selectedCamera === "__all__" ? TEXT.createClip : `${TEXT.createClip} ${selectedCamera}`,
       reason: "",
       startTs,
       endTs,
@@ -505,6 +554,24 @@ export default function RecordingsPage() {
 
   async function submitExport() {
     if (!exportModal || exportBusy) return;
+    const validation = validateArchiveExportSelection(
+      {
+        startTs: exportModal.startTs,
+        endTs: exportModal.endTs,
+        estimatedSourceBytes: 0,
+      },
+      exportLimits
+    );
+    if (!exportModal.cameraId) {
+      setError(TEXT.exportPickCamera);
+      setExportStatus(TEXT.exportPickCamera);
+      return;
+    }
+    if (validation) {
+      setError(validation);
+      setExportStatus(validation);
+      return;
+    }
     try {
       setError("");
       setNotice("");
@@ -518,18 +585,19 @@ export default function RecordingsPage() {
         reason: exportModal.reason,
       });
       const result = await runArchiveExportWorkflow(payload, {
-        onStatus: (status, job) => {
-          setExportStatus(status);
+        onStatus: (message, job) => {
+          setExportStatus(message);
           if (job?.id) setLastExportId(job.id);
         },
       });
       if (result?.job?.id) setLastExportId(result.job.id);
-      saveBlobDownload(result.clip.blob, result.clip.filename || "km-vms-evidence-export.mkv");
+      saveBlobDownload(result.clip.blob, result.clip.filename || "km-vms-clip.mkv");
       setNotice(TEXT.exportReady);
-      setExportStatus("done");
+      setExportStatus(TEXT.exportReady);
     } catch (err) {
-      setError(normalizeArchiveExportError(err.message));
-      setExportStatus("failed");
+      const message = normalizeArchiveExportError(err.message);
+      setError(message);
+      setExportStatus(message);
     } finally {
       setExportBusy(false);
     }
@@ -540,7 +608,7 @@ export default function RecordingsPage() {
     try {
       setExportBusy(true);
       const manifest = await downloadArchiveManifest(lastExportId);
-      saveBlobDownload(manifest.blob, manifest.filename || "km-vms-evidence-manifest.json");
+      saveBlobDownload(manifest.blob, manifest.filename || "km-vms-clip-passport.json");
     } catch (err) {
       setError(normalizeArchiveExportError(err.message));
     } finally {
@@ -777,6 +845,19 @@ export default function RecordingsPage() {
               onChange={(e) => setSelectedDate(e.target.value)}
               aria-label={TEXT.date}
             />
+
+            {canExport ? (
+              <button
+                type="button"
+                className="button secondary small recordingsCreateClipButton"
+                onClick={openExportModal}
+                disabled={exportBusy}
+                title={TEXT.createClipTooltip}
+                aria-label={TEXT.createClip}
+              >
+                {ICONS.export}
+              </button>
+            ) : null}
           </div>
 
           <div className="recordingsToolbar recordingsToolbarCompact">
@@ -937,22 +1018,11 @@ export default function RecordingsPage() {
                         className="recordingsIconButton"
                         onClick={() => handleDownload(item)}
                         disabled={!isRecordingAvailable(item)}
-                        title={`${ICONS.download} ${TEXT.download}`}
-                        aria-label={TEXT.download}
+                        title={TEXT.downloadSource}
+                        aria-label={TEXT.downloadSource}
                       >
                         {ICONS.download}
                       </button>
-                      {canExport ? (
-                        <button
-                          className="recordingsIconButton"
-                          onClick={() => openExportModal(item)}
-                          disabled={!isRecordingAvailable(item) || busy || exportBusy || !item.camera_id}
-                          title={`${ICONS.export} ${TEXT.exportEvidence}`}
-                          aria-label={TEXT.exportEvidence}
-                        >
-                          {ICONS.export}
-                        </button>
-                      ) : null}
                       {canDelete ? (
                         <button
                           className="recordingsIconButton danger"
@@ -1081,9 +1151,30 @@ export default function RecordingsPage() {
             </div>
             <div className="archiveExportForm">
               <div className="archiveExportSummary">
-                <strong>{exportModal.item?.camera || TEXT.camera}</strong>
-                <span>{exportModal.item?.filename}</span>
+                <strong>{TEXT.createClip}</strong>
+                <span>{selectedDate || TEXT.allCameras}</span>
               </div>
+              <div className="archiveExportHelp">{TEXT.exportHelp}</div>
+              <div className="archiveExportLimits">
+                <strong>{TEXT.exportLimits}</strong>
+                <span>{describeArchiveExportLimits(exportLimits)}</span>
+              </div>
+              <label className="archiveExportField">
+                <span>{TEXT.exportCamera}</span>
+                <select
+                  className="select"
+                  value={exportModal.cameraId}
+                  onChange={(event) => setExportModal((prev) => ({ ...prev, cameraId: event.target.value }))}
+                  disabled={exportBusy}
+                >
+                  <option value="">{TEXT.exportPickCamera}</option>
+                  {clipCameraOptions.map((camera) => (
+                    <option key={camera.id} value={camera.id}>
+                      {camera.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label className="archiveExportField">
                 <span>{TEXT.exportStart}</span>
                 <input
@@ -1121,7 +1212,7 @@ export default function RecordingsPage() {
                 <button className="button primary" onClick={submitExport} disabled={exportBusy}>
                   {TEXT.exportRun}
                 </button>
-                <button className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy || exportStatus !== "done"}>
+                <button className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy} title={TEXT.exportManifestHelp}>
                   {TEXT.exportManifest}
                 </button>
                 <button className="button secondary" onClick={closeExportModal} disabled={exportBusy}>

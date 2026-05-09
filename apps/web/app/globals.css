@@ -2522,6 +2522,72 @@ textarea {
   display: flex;
   gap: 8px;
   flex-wrap: nowrap;
+  align-items: center;
+}
+
+.recordingsCreateClipButton {
+  width: 32px;
+  height: 32px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.recordingsCreateClipButton:hover:not(:disabled) {
+  border-color: #0f172a;
+  background: #eef2ff;
+}
+
+.recordingsCreateClipButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.chronologyHelpTooltip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #cbd5e1;
+  border-radius: 50%;
+  background: #ffffff;
+  color: #334155;
+  font-size: 11px;
+  font-weight: 900;
+  cursor: help;
+}
+
+.chronologyHelpTooltip [role="tooltip"] {
+  position: absolute;
+  z-index: 80;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  width: 260px;
+  transform: translateX(-50%);
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #0f172a;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.35;
+  white-space: normal;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.18);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.chronologyHelpTooltip:hover [role="tooltip"],
+.chronologyHelpTooltip:focus [role="tooltip"] {
+  opacity: 1;
 }
 
 .recordingsHeader {
@@ -3207,6 +3273,23 @@ textarea {
 }
 
 .archiveExportSummary strong {
+  color: #0f172a;
+}
+
+.archiveExportHelp,
+.archiveExportLimits {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  background: #f8fafc;
+  color: #334155;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.archiveExportLimits strong {
   color: #0f172a;
 }
 
@@ -7452,6 +7535,7 @@ textarea {
 }
 
 .chronologyPrimaryButton,
+.chronologySecondaryButton,
 .chronologyIconButton,
 .chronologySpeedButton {
   height: 30px;
@@ -7473,11 +7557,90 @@ textarea {
   font-weight: 700;
 }
 
+.chronologySecondaryButton {
+  background: #ffffff;
+  color: #0f172a;
+  max-width: 210px;
+}
+
+.chronologyActionWithHelp {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chronologyDownloadButton,
+.chronologyEvidenceButton {
+  font-size: 14px;
+}
+
+.chronologyDownloadChooser {
+  position: absolute;
+  z-index: 90;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 260px;
+  padding: 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.18);
+}
+
+.chronologyDownloadChooserTitle {
+  padding: 4px 6px 8px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.chronologyDownloadChoice {
+  width: 100%;
+  min-height: 30px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #0f172a;
+  padding: 0 8px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.chronologyDownloadChoice:hover:not(:disabled) {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.chronologyDownloadChoice.strong {
+  border-top: 1px solid #e2e8f0;
+  margin-top: 4px;
+}
+
+.chronologyDownloadResults {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #e2e8f0;
+  color: #475569;
+  font-size: 12px;
+}
+
+.chronologyDownloadResults div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .chronologyIconButton {
   min-width: 34px;
 }
 
 .chronologyPrimaryButton:hover,
+.chronologySecondaryButton:hover,
 .chronologyIconButton:hover,
 .chronologySpeedButton:hover {
   border-color: #bfdbfe;
