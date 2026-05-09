@@ -70,6 +70,7 @@ function alignMs(ms, stepMs) {
 
 export default function ChronologyTimeline({
   currentTs,
+  committedTs,
   zoomKey,
   onZoomOut,
   onZoomIn,
@@ -81,6 +82,10 @@ export default function ChronologyTimeline({
   selectedCameraIds,
   cameraNames,
   currentTimeLabel,
+  committedTimeLabel,
+  isPreviewing = false,
+  rangesLoading = false,
+  rangesError = false,
   compact = false,
 }) {
   const rootRef = useRef(null);
@@ -88,6 +93,7 @@ export default function ChronologyTimeline({
   const [dragging, setDragging] = useState(false);
 
   const zoom = ZOOM_OPTIONS.find((item) => item.key === zoomKey) || ZOOM_OPTIONS[0];
+  const committedMs = committedTs ? committedTs.getTime() : Number.NaN;
 
   const { startMs, endMs, axisMarks } = useMemo(() => {
     const centerMs = currentTs ? currentTs.getTime() : Date.now();
@@ -119,6 +125,32 @@ export default function ChronologyTimeline({
       axisMarks: marks,
     };
   }, [currentTs, zoom]);
+
+  const committedLeftPct = Number.isFinite(committedMs)
+    ? ((committedMs - startMs) / (endMs - startMs)) * 100
+    : Number.NaN;
+  const showCommittedMarker =
+    isPreviewing &&
+    Number.isFinite(committedLeftPct) &&
+    committedLeftPct >= 0 &&
+    committedLeftPct <= 100 &&
+    Math.abs(committedLeftPct - 50) > 0.6;
+  const hasSelectedCameras = selectedCameraIds.length > 0;
+  const visibleRangeCount = hasSelectedCameras
+    ? selectedCameraIds.reduce((count, cameraId) => {
+        const item = rangesByCamera?.[String(cameraId)];
+        const ranges = Array.isArray(item?.ranges) ? item.ranges : [];
+        return (
+          count +
+          ranges.filter((range) => {
+            const rangeStart = parseNaiveDateTime(range.start);
+            const rangeEnd = parseNaiveDateTime(range.end);
+            return Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) && rangeEnd > startMs && rangeStart < endMs;
+          }).length
+        );
+      }, 0)
+    : 0;
+  const showNoRangeState = hasSelectedCameras && !rangesLoading && !rangesError && visibleRangeCount === 0;
 
   useEffect(() => {
     function handleMove(event) {
@@ -192,7 +224,7 @@ export default function ChronologyTimeline({
   }
 
   return (
-    <div className={`chronologyTimelineCard ${compact ? "compact" : ""}`}>
+    <div className={`chronologyTimelineCard ${compact ? "compact" : ""} ${isPreviewing ? "previewing" : ""}`}>
       <div className="chronologyTimelineFrame">
         <div className="chronologyTimelineHeader">
           <div className="chronologyTimelineZoomControls">
@@ -216,7 +248,10 @@ export default function ChronologyTimeline({
           </div>
 
           <div className="chronologyTimelineHeaderCenter">
-            <div className="chronologyTimelineCenterLabel">{currentTimeLabel || "—"}</div>
+            <div className={`chronologyTimelineCenterLabel ${isPreviewing ? "preview" : ""}`}>
+              <span className="chronologyTimelineStateText">{isPreviewing ? "Предпросмотр" : "Выбрано"}</span>
+              <span>{currentTimeLabel || "—"}</span>
+            </div>
           </div>
         </div>
 
@@ -245,19 +280,33 @@ export default function ChronologyTimeline({
             </div>
 
             <div className="chronologyTimelineCenterLine" />
+            {showCommittedMarker ? (
+              <div className="chronologyTimelineCommittedMarker" style={{ left: `${committedLeftPct}%` }}>
+                <div className="chronologyTimelineCommittedLine" />
+                <div className="chronologyTimelineCommittedLabel">
+                  <span>Выбрано</span>
+                  <span>{committedTimeLabel || "—"}</span>
+                </div>
+              </div>
+            ) : null}
           </div>
 
-          {selectedCameraIds.length ? (
+          {rangesLoading ? <div className="chronologyTimelineStatus">Загружаем диапазоны архива...</div> : null}
+          {rangesError ? <div className="chronologyTimelineStatus error">Диапазоны архива сейчас недоступны</div> : null}
+          {showNoRangeState ? <div className="chronologyTimelineStatus">Нет архивных диапазонов в выбранном окне</div> : null}
+
+          {hasSelectedCameras ? (
             <div className="chronologyTimelineTracks">
               {selectedCameraIds.map((cameraId) => {
                 const cameraKey = String(cameraId);
                 const item = rangesByCamera?.[cameraKey];
                 const ranges = item?.ranges || [];
                 const cameraName = cameraNames?.[cameraKey] || `Камера ${cameraKey}`;
+                let visibleRangesForCamera = 0;
 
                 return (
                   <div className="chronologyTimelineTrackRow" key={cameraKey}>
-                    <div className="chronologyTimelineTrackLabel">{cameraName}</div>
+                    <div className="chronologyTimelineTrackLabel" title={cameraName}>{cameraName}</div>
 
                     <div className="chronologyTimelineTrackLane">
                       {ranges.map((range, index) => {
@@ -271,6 +320,7 @@ export default function ChronologyTimeline({
                         if (rangeEnd <= startMs || rangeStart >= endMs) {
                           return null;
                         }
+                        visibleRangesForCamera += 1;
 
                         const clippedStart = Math.max(rangeStart, startMs);
                         const clippedEnd = Math.min(rangeEnd, endMs);
@@ -289,6 +339,9 @@ export default function ChronologyTimeline({
                           />
                         );
                       })}
+                      {!rangesLoading && !rangesError && visibleRangesForCamera === 0 ? (
+                        <div className="chronologyTimelineTrackEmpty">нет архива</div>
+                      ) : null}
                     </div>
                   </div>
                 );

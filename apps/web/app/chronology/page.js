@@ -58,6 +58,8 @@ const TEXT = {
   missing: "\u041a\u0430\u043c\u0435\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430",
   resize: "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0430\u0437\u043c\u0435\u0440",
   find: "\u041d\u0430\u0439\u0442\u0438",
+  currentTime: "\u0412\u044b\u0431\u0440\u0430\u043d\u043e\u0435 \u0432\u0440\u0435\u043c\u044f",
+  previewTime: "\u041f\u0440\u0435\u0434\u043f\u0440\u043e\u0441\u043c\u043e\u0442\u0440",
   duplicate: "\u041a\u0430\u043c\u0435\u0440\u0430 \u0443\u0436\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0430",
 };
 
@@ -254,6 +256,9 @@ export default function ChronologyPage() {
   const [zoomKey, setZoomKey] = useState("24h");
   const [playbackMap, setPlaybackMap] = useState({});
   const [rangesData, setRangesData] = useState({});
+  const [rangesLoading, setRangesLoading] = useState(false);
+  const [rangesError, setRangesError] = useState(false);
+  const [isTimelinePreviewing, setIsTimelinePreviewing] = useState(false);
   const [fullscreenTileId, setFullscreenTileId] = useState(null);
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [isSystemFullscreen, setIsSystemFullscreen] = useState(false);
@@ -738,6 +743,7 @@ export default function ChronologyPage() {
     const targetDate = new Date(normalizeTargetTs());
 
     setIsPlaying(false);
+    setIsTimelinePreviewing(false);
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(targetDate);
     await resolvePlaybackForTimestamp(formatLocalNaiveTs(targetDate), true);
@@ -785,6 +791,7 @@ export default function ChronologyPage() {
     const action = startSeekAction();
 
     setIsPlaying(false);
+    setIsTimelinePreviewing(false);
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
@@ -798,6 +805,7 @@ export default function ChronologyPage() {
     const action = startSeekAction();
 
     setIsPlaying(false);
+    setIsTimelinePreviewing(false);
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
@@ -818,6 +826,7 @@ export default function ChronologyPage() {
   }
 
   function handleTimelinePreview(nextDate) {
+    setIsTimelinePreviewing(true);
     setPreviewTs(nextDate);
     syncFormDateTime(nextDate);
   }
@@ -825,6 +834,7 @@ export default function ChronologyPage() {
   function handleTimelineDragStart() {
     const action = startSeekAction();
     isScrubbingRef.current = true;
+    setIsTimelinePreviewing(true);
     playWasActiveRef.current = action.shouldResume;
     setPreviewTs(currentTsRef.current || new Date(normalizeTargetTs()));
     if (action.shouldResume) {
@@ -836,6 +846,7 @@ export default function ChronologyPage() {
     const action = activeSeekActionRef.current;
 
     isScrubbingRef.current = false;
+    setIsTimelinePreviewing(false);
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
@@ -866,6 +877,8 @@ export default function ChronologyPage() {
       if (!currentTs || !selectedCameraIds.length || isScrubbingRef.current) {
         if (!selectedCameraIds.length) {
           setRangesData({});
+          setRangesLoading(false);
+          setRangesError(false);
           loadedRangesWindowRef.current = null;
         }
         return;
@@ -889,6 +902,8 @@ export default function ChronologyPage() {
       if (!needsReload) return;
 
       try {
+        setRangesLoading(true);
+        setRangesError(false);
         const response = await apiFetch(
           `/chronology/ranges?camera_ids=${selectedCameraKey}&from=${encodeURIComponent(formatLocalNaiveTs(new Date(fromMs)))}&to=${encodeURIComponent(formatLocalNaiveTs(new Date(toMs)))}`
         );
@@ -896,6 +911,7 @@ export default function ChronologyPage() {
         if (requestId !== rangesRequestIdRef.current) return;
 
         setRangesData(response?.items || {});
+        setRangesError(false);
         loadedRangesWindowRef.current = {
           fromMs,
           toMs,
@@ -906,6 +922,11 @@ export default function ChronologyPage() {
       } catch (_) {
         if (requestId !== rangesRequestIdRef.current) return;
         setRangesData({});
+        setRangesError(true);
+      } finally {
+        if (requestId === rangesRequestIdRef.current) {
+          setRangesLoading(false);
+        }
       }
     }
 
@@ -1081,11 +1102,13 @@ export default function ChronologyPage() {
         </aside>
 
         <section className="chronologyMain">
-          <div className="chronologyToolbar">
+          <div className={`chronologyToolbar ${isTimelinePreviewing ? "isPreviewing" : ""}`}>
             <input
               type="date"
               className="chronologyDateInput"
               value={date}
+              title={TEXT.currentTime}
+              aria-label={TEXT.currentTime}
               onChange={(event) => setDate(event.target.value)}
             />
             <input
@@ -1093,15 +1116,17 @@ export default function ChronologyPage() {
               step="1"
               className="chronologyTimeInput"
               value={time}
+              title={isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}
+              aria-label={isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}
               onChange={(event) => setTime(event.target.value)}
             />
             <button type="button" className="chronologyPrimaryButton" onClick={handleFind}>
               {TEXT.find}
             </button>
-            <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(-10)} title="-10">-10</button>
-            <button type="button" className="chronologyIconButton" onClick={handlePlay} title="Play">{"\u25b6"}</button>
-            <button type="button" className="chronologyIconButton" onClick={handlePause} title="Pause">{"\u275a\u275a"}</button>
-            <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(10)} title="+10">+10</button>
+            <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(-10)} title={TEXT.back10} aria-label={TEXT.back10}>-10</button>
+            <button type="button" className="chronologyIconButton" onClick={handlePlay} title={TEXT.play} aria-label={TEXT.play}>{"\u25b6"}</button>
+            <button type="button" className="chronologyIconButton" onClick={handlePause} title={TEXT.pause} aria-label={TEXT.pause}>{"\u275a\u275a"}</button>
+            <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(10)} title={TEXT.forward10} aria-label={TEXT.forward10}>+10</button>
 
             <div className="chronologySpeedGroup">
               {SPEED_OPTIONS.map((item) => (
@@ -1116,7 +1141,10 @@ export default function ChronologyPage() {
               ))}
             </div>
 
-            <div className="chronologyTimeBox">{formatPlaybackDateTime(timelineTs)}</div>
+            <div className={`chronologyTimeBox ${isTimelinePreviewing ? "preview" : ""}`}>
+              <span>{isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}</span>
+              <strong>{formatPlaybackDateTime(timelineTs)}</strong>
+            </div>
             <button
               type="button"
               className="chronologyIconButton chronologyFullscreenButton"
@@ -1131,6 +1159,7 @@ export default function ChronologyPage() {
           <div className="chronologyTimelineWrap">
             <ChronologyTimeline
               currentTs={timelineTs}
+              committedTs={currentTs}
               zoomKey={zoomKey}
               onZoomOut={handleZoomOut}
               onZoomIn={handleZoomIn}
@@ -1142,6 +1171,10 @@ export default function ChronologyPage() {
               selectedCameraIds={selectedCameraIds}
               cameraNames={selectedCameraNames}
               currentTimeLabel={formatPlaybackDateTime(timelineTs)}
+              committedTimeLabel={formatPlaybackDateTime(currentTs)}
+              isPreviewing={isTimelinePreviewing}
+              rangesLoading={rangesLoading}
+              rangesError={rangesError}
               compact
             />
           </div>
@@ -1243,7 +1276,7 @@ export default function ChronologyPage() {
                         {fullscreenControlsVisible ? (
                           <div className="chronologyFullscreenPanel" role="group" aria-label={TEXT.fullscreenControls}>
                             <div className="chronologyFullscreenContext">
-                              <div className="chronologyFullscreenCameraName">{camera?.name || TEXT.camera}</div>
+                              <div className="chronologyFullscreenCameraName" title={camera?.name || TEXT.camera}>{camera?.name || TEXT.camera}</div>
                               <div className="chronologyFullscreenMeta">
                                 <span>{TEXT.timeContext}: {formatPlaybackDateTime(timelineTs)}</span>
                                 <span>{TEXT.rangeContext}: {zoomKey}</span>
