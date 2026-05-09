@@ -6748,6 +6748,8 @@ textarea {
 }
 
 .liveWorkspaceTileBar {
+  position: relative;
+  z-index: 30;
   height: 34px;
   flex: 0 0 34px;
   display: grid;
@@ -6770,6 +6772,8 @@ textarea {
 }
 
 .liveWorkspaceTileSelect {
+  position: relative;
+  z-index: 40;
   height: 26px;
   min-height: 26px;
   border: 1px solid rgba(148, 163, 184, 0.5);
@@ -6781,6 +6785,8 @@ textarea {
 }
 
 .liveWorkspaceIconButton {
+  position: relative;
+  z-index: 40;
   width: 26px;
   height: 26px;
   border: 0;
@@ -6824,21 +6830,77 @@ textarea {
   font-size: 14px;
 }
 
-.liveWorkspaceResizeHandle {
+.workspaceResizeHandle {
   position: absolute;
+  z-index: 12;
+  width: 24px;
+  height: 24px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  opacity: 0.82;
+  pointer-events: auto;
+}
+
+.workspaceResizeHandle::after {
+  content: "";
+  position: absolute;
+  inset: 7px;
+  border: 2px solid rgba(226, 232, 240, 0.82);
+}
+
+.workspaceResizeHandle.top-left {
+  top: 34px;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  cursor: nwse-resize;
+}
+
+.workspaceResizeHandle.top-left::after {
+  inset: 4px;
+  border-right: 0;
+  border-bottom: 0;
+}
+
+.workspaceResizeHandle.top-right {
+  top: 34px;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  cursor: nesw-resize;
+}
+
+.workspaceResizeHandle.top-right::after {
+  inset: 4px;
+  border-left: 0;
+  border-bottom: 0;
+}
+
+.workspaceResizeHandle.bottom-left {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
+}
+
+.workspaceResizeHandle.bottom-left::after {
+  border-right: 0;
+  border-top: 0;
+}
+
+.workspaceResizeHandle.bottom-right {
   right: 0;
   bottom: 0;
-  z-index: 20;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  background:
-    linear-gradient(135deg, transparent 0 48%, rgba(226, 232, 240, 0.85) 49% 55%, transparent 56%),
-    linear-gradient(135deg, transparent 0 66%, rgba(226, 232, 240, 0.75) 67% 73%, transparent 74%);
-  background-size: 18px 18px;
-  background-position: right bottom;
-  background-repeat: no-repeat;
   cursor: nwse-resize;
+}
+
+.workspaceResizeHandle.bottom-right::after {
+  border-left: 0;
+  border-top: 0;
+}
+
+.liveWorkspaceResizeHandle {
+  color: #e2e8f0;
 }
 
 @media (max-width: 900px) {
@@ -6927,6 +6989,103 @@ textarea {
   gap: 8px;
 }
 
+.chronologySystemFullscreenBody .topNav {
+  display: none;
+}
+
+.chronologySystemFullscreenBody .mainContent {
+  padding: 0;
+}
+
+.chronologyShell.systemFullscreen,
+.chronologyShell.systemFullscreen:fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  padding: 8px;
+  background: #020617;
+  gap: 6px;
+}
+
+.chronologyShell.systemFullscreen .chronologyMain {
+  gap: 6px;
+}
+
+.chronologyShell.systemFullscreen .chronologyToolbar {
+  min-height: 34px;
+  padding: 4px;
+  border-color: rgba(148, 163, 184, 0.32);
+  background: rgba(15, 23, 42, 0.96);
+}
+
+.chronologyShell.systemFullscreen .chronologyDateInput,
+.chronologyShell.systemFullscreen .chronologyTimeInput,
+.chronologyShell.systemFullscreen .chronologyIconButton,
+.chronologyShell.systemFullscreen .chronologySpeedButton,
+.chronologyShell.systemFullscreen .chronologyTimeBox {
+  height: 28px;
+  min-height: 28px;
+}
+
+.chronologyShell.systemFullscreen .chronologyTimeBox {
+  background: rgba(248, 250, 252, 0.08);
+  border-color: rgba(148, 163, 184, 0.32);
+  color: #e2e8f0;
+}
+
+.chronologyShell.systemFullscreen .chronologyTimelineWrap .chronologyTimelineCard {
+  padding: 5px 8px 7px;
+}
+
+.chronologyShell.systemFullscreen .chronologyTimelineWrap .chronologyTimelineBody {
+  min-height: 74px;
+}
+
+.chronologyShell.systemFullscreen .chronologyWorkspace {
+  border-color: rgba(96, 165, 250, 0.45);
+}
+
+.chronologyShell.systemFullscreen.sidebarCollapsed .chronologyCameraPanel {
+  width: 0;
+  flex-basis: 0;
+  padding: 0;
+  border-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(-12px);
+  pointer-events: none;
+}
+
+.chronologyShell.systemFullscreen.sidebarOpen .chronologyCameraPanel {
+  width: 204px;
+  flex-basis: 204px;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.chronologySidebarTab {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  z-index: 5100;
+  width: 30px;
+  height: 56px;
+  border: 1px solid rgba(148, 163, 184, 0.44);
+  border-radius: 0 8px 8px 0;
+  background: rgba(15, 23, 42, 0.94);
+  color: #e2e8f0;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chronologyShell.systemFullscreen.sidebarOpen .chronologySidebarTab {
+  left: 212px;
+}
+
 .chronologyCameraPanel {
   width: 204px;
   flex: 0 0 204px;
@@ -6936,6 +7095,7 @@ textarea {
   background: #ffffff;
   padding: 8px;
   overflow: auto;
+  transition: width 140ms ease, flex-basis 140ms ease, opacity 140ms ease, transform 140ms ease;
 }
 
 .chronologyPanelHeader {
@@ -7191,6 +7351,8 @@ textarea {
 }
 
 .chronologyTileBar {
+  position: relative;
+  z-index: 30;
   height: 34px;
   flex: 0 0 34px;
   display: grid;
@@ -7213,6 +7375,8 @@ textarea {
 }
 
 .chronologyTileButton {
+  position: relative;
+  z-index: 40;
   width: 26px;
   height: 26px;
   border: 0;
@@ -7237,14 +7401,28 @@ textarea {
   box-shadow: 0 22px 70px rgba(0, 0, 0, 0.48);
 }
 
+.chronologyTile.fullscreen .workspaceResizeHandle.top-left,
+.chronologyTile.fullscreen .workspaceResizeHandle.top-right {
+  top: 38px;
+}
+
 .chronologyTile.fullscreen .chronologyTileBar {
-  height: 38px;
-  flex-basis: 38px;
+  display: none;
 }
 
 .chronologyTileVideo {
   flex: 1 1 auto;
   min-height: 0;
+  background: #000000;
+}
+
+.chronologyTile.fullscreen .chronologyTileVideo {
+  height: 100%;
+}
+
+.chronologyTileVideo:fullscreen {
+  width: 100vw;
+  height: 100vh;
   background: #000000;
 }
 
@@ -7272,20 +7450,7 @@ textarea {
 }
 
 .chronologyResizeHandle {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  z-index: 20;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  background:
-    linear-gradient(135deg, transparent 0 48%, rgba(226, 232, 240, 0.85) 49% 55%, transparent 56%),
-    linear-gradient(135deg, transparent 0 66%, rgba(226, 232, 240, 0.75) 67% 73%, transparent 74%);
-  background-size: 18px 18px;
-  background-position: right bottom;
-  background-repeat: no-repeat;
-  cursor: nwse-resize;
+  color: #e2e8f0;
 }
 
 .chronologyResizeHandle.hidden {
@@ -7312,5 +7477,35 @@ textarea {
   .chronologyTimeBox {
     width: 100%;
     margin-left: 0;
+  }
+
+  .chronologyShell.systemFullscreen {
+    flex-direction: row;
+    height: 100vh;
+    padding: 6px;
+  }
+
+  .chronologyShell.systemFullscreen.sidebarOpen .chronologyCameraPanel {
+    position: absolute;
+    left: 6px;
+    top: 6px;
+    bottom: 6px;
+    z-index: 5050;
+    width: min(270px, calc(100vw - 52px));
+    flex-basis: auto;
+    max-height: none;
+    box-shadow: 0 20px 48px rgba(0, 0, 0, 0.36);
+  }
+
+  .chronologyShell.systemFullscreen.sidebarOpen .chronologySidebarTab {
+    left: min(276px, calc(100vw - 46px));
+  }
+
+  .chronologyShell.systemFullscreen .chronologyTimelineWrap .chronologyTimelineBody {
+    min-height: 92px;
+  }
+
+  .chronologyShell.systemFullscreen .chronologyWorkspace {
+    height: auto;
   }
 }

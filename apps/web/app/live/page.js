@@ -5,7 +5,7 @@ import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import TilePlayer from "../../components/TilePlayer";
 import { apiFetch } from "../../lib/api";
-import { visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
+import { resizeWorkspaceTile, visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
 
 const STORAGE_KEY = "vms_live_workspace_v1";
 const WORKSPACE_KEY = "live";
@@ -400,7 +400,7 @@ export default function LivePage() {
     });
   }
 
-  function startResize(event, tile) {
+  function startResize(event, tile, corner = "bottom-right") {
     if (event.button !== 0) return;
     const bounds = workspaceBounds();
     if (!bounds) return;
@@ -418,6 +418,9 @@ export default function LivePage() {
       tileH: tile.hPct,
       workspaceW: bounds.width,
       workspaceH: bounds.height,
+      minWPct: MIN_TILE_W / Math.max(bounds.width, 1),
+      minHPct: MIN_TILE_H / Math.max(bounds.height, 1),
+      corner,
     });
   }
 
@@ -454,19 +457,7 @@ export default function LivePage() {
     if (!resizeState) return undefined;
 
     function onMove(event) {
-      const minWPct = MIN_TILE_W / Math.max(resizeState.workspaceW, 1);
-      const minHPct = MIN_TILE_H / Math.max(resizeState.workspaceH, 1);
-      const nextW = clamp(
-        resizeState.tileW + (event.clientX - resizeState.startX) / resizeState.workspaceW,
-        minWPct,
-        1 - resizeState.tileX
-      );
-      const nextH = clamp(
-        resizeState.tileH + (event.clientY - resizeState.startY) / resizeState.workspaceH,
-        minHPct,
-        1 - resizeState.tileY
-      );
-      updateTile(resizeState.id, { wPct: nextW, hPct: nextH });
+      updateTile(resizeState.id, resizeWorkspaceTile(null, resizeState, event));
     }
 
     function onUp() {
@@ -617,12 +608,16 @@ export default function LivePage() {
                   )}
                 </div>
 
-                <button
-                  type="button"
-                  className="liveWorkspaceResizeHandle"
-                  title={TEXT.resize}
-                  onPointerDown={(event) => startResize(event, tile)}
-                />
+                {["top-left", "top-right", "bottom-left", "bottom-right"].map((corner) => (
+                  <button
+                    key={corner}
+                    type="button"
+                    className={`workspaceResizeHandle liveWorkspaceResizeHandle ${corner}`}
+                    title={TEXT.resize}
+                    aria-label={TEXT.resize}
+                    onPointerDown={(event) => startResize(event, tile, corner)}
+                  />
+                ))}
               </div>
             );
           })}

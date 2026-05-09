@@ -5,7 +5,7 @@ import Layout from "../../components/Layout";
 import ArchiveTilePlayer from "../../components/ArchiveTilePlayer";
 import ChronologyTimeline from "../../components/ChronologyTimeline";
 import { apiFetch } from "../../lib/api";
-import { visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
+import { resizeWorkspaceTile, visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
 
 const STORAGE_KEY = "vms_chronology_workspace_v1";
 const LEGACY_STORAGE_KEY = "vms_chronology" + "2_workspace_v1";
@@ -40,6 +40,10 @@ const TEXT = {
   empty: "\u041f\u0435\u0440\u0435\u0442\u0430\u0449\u0438\u0442\u0435 \u043a\u0430\u043c\u0435\u0440\u0443 \u043d\u0430 workspace",
   camera: "\u041a\u0430\u043c\u0435\u0440\u0430",
   close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
+  enterFullscreen: "\u0412\u043e \u0432\u0435\u0441\u044c \u044d\u043a\u0440\u0430\u043d",
+  exitFullscreen: "\u0412\u044b\u0439\u0442\u0438 \u0438\u0437 fullscreen",
+  collapseSidebar: "\u0421\u043a\u0440\u044b\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u0430\u043c\u0435\u0440",
+  expandSidebar: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u0430\u043c\u0435\u0440",
   missing: "\u041a\u0430\u043c\u0435\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430",
   resize: "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0430\u0437\u043c\u0435\u0440",
   find: "\u041d\u0430\u0439\u0442\u0438",
@@ -218,6 +222,9 @@ export default function ChronologyPage() {
   const seekActionIdRef = useRef(0);
   const activeSeekActionRef = useRef(null);
   const playWasActiveRef = useRef(false);
+  const shellRef = useRef(null);
+  const tileRefs = useRef(new Map());
+  const tileVideoRefs = useRef(new Map());
 
   const [cameras, setCameras] = useState([]);
   const [camerasLoaded, setCamerasLoaded] = useState(false);
@@ -235,6 +242,8 @@ export default function ChronologyPage() {
   const [playbackMap, setPlaybackMap] = useState({});
   const [rangesData, setRangesData] = useState({});
   const [fullscreenTileId, setFullscreenTileId] = useState(null);
+  const [isSystemFullscreen, setIsSystemFullscreen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
 
   async function loadCameras() {
     try {
@@ -533,7 +542,7 @@ export default function ChronologyPage() {
     });
   }
 
-  function startResize(event, tile) {
+  function startResize(event, tile, corner = "bottom-right") {
     if (fullscreenTileId) return;
     if (event.button !== 0) return;
     const bounds = workspaceBounds();
@@ -552,7 +561,30 @@ export default function ChronologyPage() {
       tileH: tile.hPct,
       workspaceW: bounds.width,
       workspaceH: bounds.height,
+      minWPct: MIN_TILE_W / Math.max(bounds.width, 1),
+      minHPct: MIN_TILE_H / Math.max(bounds.height, 1),
+      corner,
     });
+  }
+
+  async function enterTileFullscreen(tileId) {
+    setIsSystemFullscreen(false);
+    setFullscreenTileId(tileId);
+    const fullscreenEl = tileVideoRefs.current.get(tileId) || tileRefs.current.get(tileId);
+    if (!fullscreenEl || document.fullscreenElement === fullscreenEl) return;
+
+    try {
+      await fullscreenEl.requestFullscreen?.();
+    } catch (_) {}
+  }
+
+  async function exitTileFullscreen() {
+    setFullscreenTileId(null);
+    if (document.fullscreenElement && document.fullscreenElement !== shellRef.current) {
+      try {
+        await document.exitFullscreen?.();
+      } catch (_) {}
+    }
   }
 
   useEffect(() => {
@@ -588,19 +620,7 @@ export default function ChronologyPage() {
     if (!resizeState) return undefined;
 
     function onMove(event) {
-      const minWPct = MIN_TILE_W / Math.max(resizeState.workspaceW, 1);
-      const minHPct = MIN_TILE_H / Math.max(resizeState.workspaceH, 1);
-      const nextW = clamp(
-        resizeState.tileW + (event.clientX - resizeState.startX) / resizeState.workspaceW,
-        minWPct,
-        1 - resizeState.tileX
-      );
-      const nextH = clamp(
-        resizeState.tileH + (event.clientY - resizeState.startY) / resizeState.workspaceH,
-        minHPct,
-        1 - resizeState.tileY
-      );
-      updateTile(resizeState.id, { wPct: nextW, hPct: nextH });
+      updateTile(resizeState.id, resizeWorkspaceTile(null, resizeState, event));
     }
 
     function onUp() {
@@ -851,6 +871,10 @@ export default function ChronologyPage() {
     function handleKeyDown(event) {
       if (event.key === "Escape") {
         setFullscreenTileId(null);
+        setIsSystemFullscreen(false);
+        if (document.fullscreenElement) {
+          document.exitFullscreen?.().catch(() => {});
+        }
       }
     }
 
@@ -858,10 +882,77 @@ export default function ChronologyPage() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  useEffect(() => {
+    document.body.classList.toggle("chronologySystemFullscreenBody", isSystemFullscreen);
+    return () => document.body.classList.remove("chronologySystemFullscreenBody");
+  }, [isSystemFullscreen]);
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      const fullscreenElement = document.fullscreenElement;
+      if (!fullscreenElement) {
+        setIsSystemFullscreen(false);
+        setFullscreenTileId(null);
+        return;
+      }
+      if (fullscreenElement === shellRef.current) {
+        setIsSystemFullscreen(true);
+        setFullscreenTileId(null);
+        return;
+      }
+
+      const tileId =
+        fullscreenElement.getAttribute("data-chronology-tile-video-id") ||
+        fullscreenElement.getAttribute("data-chronology-tile-id");
+      if (tileId) {
+        setIsSystemFullscreen(false);
+        setFullscreenTileId(tileId);
+      } else {
+        setIsSystemFullscreen(false);
+      }
+    }
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  async function enterSystemFullscreen() {
+    setFullscreenTileId(null);
+    setIsSystemFullscreen(true);
+    setIsSidebarCollapsed(true);
+    try {
+      await shellRef.current?.requestFullscreen?.();
+    } catch (_) {}
+  }
+
+  async function exitSystemFullscreen() {
+    setIsSystemFullscreen(false);
+    if (document.fullscreenElement) {
+      try {
+        await document.exitFullscreen?.();
+      } catch (_) {}
+    }
+  }
+
   return (
     <Layout>
-      <div className="chronologyShell">
-        <aside className="chronologyCameraPanel">
+      <div
+        ref={shellRef}
+        className={`chronologyShell ${isSystemFullscreen ? "systemFullscreen" : ""} ${isSidebarCollapsed ? "sidebarCollapsed" : "sidebarOpen"}`}
+      >
+        {isSystemFullscreen ? (
+          <button
+            type="button"
+            className="chronologySidebarTab"
+            title={isSidebarCollapsed ? TEXT.expandSidebar : TEXT.collapseSidebar}
+            aria-label={isSidebarCollapsed ? TEXT.expandSidebar : TEXT.collapseSidebar}
+            onClick={() => setIsSidebarCollapsed((value) => !value)}
+          >
+            {isSidebarCollapsed ? "\u203a" : "\u2039"}
+          </button>
+        ) : null}
+
+        <aside className="chronologyCameraPanel" aria-hidden={isSystemFullscreen && isSidebarCollapsed}>
           <div className="chronologyPanelHeader">
             <div className="chronologyPanelTitle">{TEXT.cameras}</div>
             <div className="chronologyPanelActions">
@@ -941,6 +1032,15 @@ export default function ChronologyPage() {
             </div>
 
             <div className="chronologyTimeBox">{formatPlaybackDateTime(timelineTs)}</div>
+            <button
+              type="button"
+              className="chronologyIconButton chronologyFullscreenButton"
+              onClick={isSystemFullscreen ? exitSystemFullscreen : enterSystemFullscreen}
+              title={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
+              aria-label={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
+            >
+              {isSystemFullscreen ? "\u2715" : "\u26f6"}
+            </button>
           </div>
 
           <div className="chronologyTimelineWrap">
@@ -989,6 +1089,11 @@ export default function ChronologyPage() {
               return (
                 <div
                   key={tile.id}
+                  ref={(node) => {
+                    if (node) tileRefs.current.set(tile.id, node);
+                    else tileRefs.current.delete(tile.id);
+                  }}
+                  data-chronology-tile-id={tile.id}
                   className={`chronologyTile ${fullscreenTileId === tile.id ? "fullscreen" : ""}`}
                   style={{
                     left: fullscreenTileId === tile.id ? undefined : `${tile.xPct * 100}%`,
@@ -1013,10 +1118,19 @@ export default function ChronologyPage() {
                   </div>
 
                   <div
+                    ref={(node) => {
+                      if (node) tileVideoRefs.current.set(tile.id, node);
+                      else tileVideoRefs.current.delete(tile.id);
+                    }}
+                    data-chronology-tile-video-id={tile.id}
                     className="chronologyTileVideo"
-                    onDoubleClick={(event) => {
+                    onDoubleClick={async (event) => {
                       event.stopPropagation();
-                      setFullscreenTileId((prev) => (prev === tile.id ? null : tile.id));
+                      if (fullscreenTileId === tile.id) {
+                        await exitTileFullscreen();
+                      } else {
+                        await enterTileFullscreen(tile.id);
+                      }
                     }}
                   >
                     {camera ? (
@@ -1031,12 +1145,16 @@ export default function ChronologyPage() {
                     )}
                   </div>
 
-                  <button
-                    type="button"
-                    className={`chronologyResizeHandle ${fullscreenTileId === tile.id ? "hidden" : ""}`}
-                    title={TEXT.resize}
-                    onPointerDown={(event) => startResize(event, tile)}
-                  />
+                  {["top-left", "top-right", "bottom-left", "bottom-right"].map((corner) => (
+                    <button
+                      key={corner}
+                      type="button"
+                      className={`workspaceResizeHandle chronologyResizeHandle ${corner} ${fullscreenTileId === tile.id ? "hidden" : ""}`}
+                      title={TEXT.resize}
+                      aria-label={TEXT.resize}
+                      onPointerDown={(event) => startResize(event, tile, corner)}
+                    />
+                  ))}
                 </div>
               );
             })}
