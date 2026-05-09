@@ -1,5 +1,7 @@
 import sys
 import tempfile
+import shutil
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -153,6 +155,51 @@ def add_segment(db, camera, *, started=None, seconds=60, write_file=True, name="
     db.commit()
     db.refresh(segment)
     return segment
+
+
+def require_ffmpeg():
+    if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+        pytest.skip("ffmpeg/ffprobe are required for Stage 2 generation tests")
+
+
+def write_tiny_media(path: Path, *, seconds=2, color="testsrc") -> int:
+    require_ffmpeg()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    source = f"{color}=size=64x64:rate=10"
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            source,
+            "-t",
+            str(seconds),
+            "-c:v",
+            "mpeg4",
+            "-q:v",
+            "5",
+            str(path),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        pytest.skip("ffmpeg test media generation is unavailable")
+    return path.stat().st_size
+
+
+def add_media_segment(db, camera, *, started=None, seconds=2, name="media.mkv", color="testsrc"):
+    started = started or (datetime.utcnow() - timedelta(minutes=10))
+    relative_path = f"kmvms/recordings/{camera.storage_folder_name}/{name}"
+    file_path = Path(settings.storage_root) / relative_path
+    size = write_tiny_media(file_path, seconds=seconds, color=color)
+    return add_segment(db, camera, started=started, seconds=seconds, write_file=False, name=name, size=size)
 
 
 def valid_payload(camera, segment, **overrides):
@@ -372,3 +419,168 @@ def test_stage11_request_rejects_path_like_client_fields(client, api_db):
 
 def test_stage11_public_statuses_are_exact():
     assert export_service.EXPORT_STATUSES == {"queued", "running", "done", "failed", "expired"}
+
+
+def test_stage11_stage2_generate_route_is_registered_and_permission_gated():
+    registered = {(item.method, item.path, item.decision) for item in ENDPOINT_PERMISSIONS}
+    assert ("POST", "/archive/exports/{export_id}/generate", PERMISSION_EXPORT_RECORDINGS) in registered
+
+
+def test_stage11_stage2_generates_single_segment_clip_without_public_paths(client, api_db):
+    db, root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    camera = add_camera(db)
+    segment = add_media_segment(db, camera, seconds=3)
+    source_path = Path(settings.storage_root) / segment.relative_path
+    source_size = source_path.stat().st_size
+    source_mtime = source_path.stat().st_mtime_ns
+
+    created = client.post(
+        "/archive/exports",
+        json=valid_payload(
+            camera,
+            segment,
+            start_ts=(segment.started_at + timedelta(seconds=0.2)).replace(tzinfo=timezone.utc).isoformat(),
+            end_ts=(segment.started_at + timedelta(seconds=2.0)).replace(tzinfo=timezone.utc).isoformat(),
+        ),
+        headers=auth_headers(admin),
+    )
+    assert created.status_code == 200
+
+    generated = client.post(f"/archive/exports/{created.json()['id']}/generate", headers=auth_headers(admin))
+
+    assert generated.status_code == 200
+    body = generated.json()
+    assert body["status"] == "done"
+    assert body["has_generated_clip"] is True
+    assert body["clip_ready"] is True
+    assert body["output_container"] == "mkv"
+    assert body["output_size_bytes"] > 0
+    assert "download_url" not in body
+    assert "output_path" not in body
+    assert "manifest_path" not in body
+    assert "checksum" not in body
+    assert str(root) not in str(body)
+
+    job = db.get(ArchiveExportJob, body["id"])
+    output_path = Path(settings.storage_exports) / job.internal_output_path
+    assert output_path.resolve().is_relative_to(Path(settings.storage_exports).resolve())
+    assert output_path.exists()
+    assert job.internal_checksum
+    assert source_path.stat().st_size == source_size
+    assert source_path.stat().st_mtime_ns == source_mtime
+
+
+def test_stage11_stage2_generates_compatible_multi_segment_clip(client, api_db):
+    db, _root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    camera = add_camera(db)
+    start = datetime.utcnow() - timedelta(minutes=10)
+    first = add_media_segment(db, camera, started=start, seconds=2, name="first.mkv")
+    add_media_segment(db, camera, started=start + timedelta(seconds=2), seconds=2, name="second.mkv")
+
+    created = client.post(
+        "/archive/exports",
+        json=valid_payload(
+            camera,
+            first,
+            start_ts=start.replace(tzinfo=timezone.utc).isoformat(),
+            end_ts=(start + timedelta(seconds=4)).replace(tzinfo=timezone.utc).isoformat(),
+        ),
+        headers=auth_headers(admin),
+    )
+    assert created.status_code == 200
+
+    generated = client.post(f"/archive/exports/{created.json()['id']}/generate", headers=auth_headers(admin))
+
+    assert generated.status_code == 200
+    body = generated.json()
+    assert body["status"] == "done"
+    assert body["source_segment_count"] == 2
+    assert body["output_size_bytes"] > 0
+
+
+def test_stage11_stage2_missing_source_marks_failed_without_raw_path(client, api_db):
+    db, root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    camera = add_camera(db)
+    segment = add_media_segment(db, camera, seconds=2)
+    created = client.post(
+        "/archive/exports",
+        json=valid_payload(
+            camera,
+            segment,
+            start_ts=(segment.started_at + timedelta(seconds=0.2)).replace(tzinfo=timezone.utc).isoformat(),
+            end_ts=(segment.started_at + timedelta(seconds=1.8)).replace(tzinfo=timezone.utc).isoformat(),
+        ),
+        headers=auth_headers(admin),
+    )
+    assert created.status_code == 200
+    (Path(settings.storage_root) / segment.relative_path).unlink()
+
+    generated = client.post(f"/archive/exports/{created.json()['id']}/generate", headers=auth_headers(admin))
+
+    assert generated.status_code == 200
+    body = generated.json()
+    assert body["status"] == "failed"
+    assert body["error_code"] == "source_missing"
+    assert str(root) not in str(body)
+
+
+def test_stage11_stage2_gap_marks_failed_safely(client, api_db):
+    db, _root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    camera = add_camera(db)
+    start = datetime.utcnow() - timedelta(minutes=10)
+    first = add_media_segment(db, camera, started=start, seconds=2, name="gap_first.mkv")
+    add_media_segment(db, camera, started=start + timedelta(seconds=8), seconds=2, name="gap_second.mkv")
+
+    created = client.post(
+        "/archive/exports",
+        json=valid_payload(
+            camera,
+            first,
+            start_ts=start.replace(tzinfo=timezone.utc).isoformat(),
+            end_ts=(start + timedelta(seconds=10)).replace(tzinfo=timezone.utc).isoformat(),
+        ),
+        headers=auth_headers(admin),
+    )
+    assert created.status_code == 200
+
+    generated = client.post(f"/archive/exports/{created.json()['id']}/generate", headers=auth_headers(admin))
+
+    assert generated.status_code == 200
+    body = generated.json()
+    assert body["status"] == "failed"
+    assert body["error_code"] == "source_gap_detected"
+    assert body["has_generated_clip"] is False
+
+
+def test_stage11_stage2_expired_and_lower_permission_generate_are_denied(client, api_db):
+    db, _root = api_db
+    admin = add_user(db, role=ROLE_ADMIN)
+    operator = add_user(db, role=ROLE_OPERATOR, username="stage11_operator_generate")
+    viewer = add_user(db, role=ROLE_VIEWER, username="stage11_viewer_generate")
+    camera = add_camera(db)
+    segment = add_media_segment(db, camera, seconds=2)
+    created = client.post(
+        "/archive/exports",
+        json=valid_payload(
+            camera,
+            segment,
+            start_ts=(segment.started_at + timedelta(seconds=0.2)).replace(tzinfo=timezone.utc).isoformat(),
+            end_ts=(segment.started_at + timedelta(seconds=1.8)).replace(tzinfo=timezone.utc).isoformat(),
+        ),
+        headers=auth_headers(admin),
+    )
+    assert created.status_code == 200
+    job = db.get(ArchiveExportJob, created.json()["id"])
+
+    assert client.post(f"/archive/exports/{job.id}/generate", headers=auth_headers(operator)).status_code == 403
+    assert client.post(f"/archive/exports/{job.id}/generate", headers=auth_headers(viewer)).status_code == 403
+
+    job.status = "expired"
+    db.add(job)
+    db.commit()
+    expired = client.post(f"/archive/exports/{job.id}/generate", headers=auth_headers(admin))
+    assert expired.status_code == 409

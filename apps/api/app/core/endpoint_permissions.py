@@ -134,6 +134,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("archive-exports", "POST", "/archive/exports", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Creates metadata-only queued archive export jobs; no clip generation."),
     EndpointPermission("archive-exports", "GET", "/archive/exports", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Lists safe archive export job metadata."),
     EndpointPermission("archive-exports", "GET", "/archive/exports/{export_id}", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Reads safe archive export job metadata."),
+    EndpointPermission("archive-exports", "POST", "/archive/exports/{export_id}/generate", PERMISSION_EXPORT_RECORDINGS, "require_permission", "Generates bounded evidence clip for queued export job; no download endpoint."),
     EndpointPermission("users", "GET", "/users/me/workspaces/{workspace_key}/layout", AUTHENTICATED, "get_current_user + workspace permission route check", "Per-user workspace layout. live requires view_live; chronology requires view_timeline."),
     EndpointPermission("users", "PUT", "/users/me/workspaces/{workspace_key}/layout", AUTHENTICATED, "get_current_user + workspace permission route check", "Per-user workspace layout. live requires view_live; chronology requires view_timeline."),
 )

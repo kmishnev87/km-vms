@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -11,6 +14,7 @@ from fastapi import HTTPException
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models.camera import Camera
 from app.models.recording import ArchiveExportJob, RecordingSegment
 from app.models.user import User
@@ -45,6 +49,10 @@ EXPORT_JOB_EXPIRES_AFTER = timedelta(hours=24)
 FUTURE_RANGE_TOLERANCE = timedelta(hours=24)
 GAP_TOLERANCE_SECONDS = 2
 ALLOWED_FORMAT_HINTS = frozenset({"mkv", "mp4"})
+GENERATION_TIMEOUT_SECONDS = 120
+OUTPUT_DURATION_TOLERANCE_SECONDS = 5
+EXPORT_OUTPUT_DIR = "stage11_stage2_clips"
+EXPORT_TEMP_DIR = "stage11_stage2_tmp"
 PROBLEM_INTEGRITY_STATUSES = {
     "missing_file",
     "orphan_metadata",
@@ -63,6 +71,8 @@ PROBLEM_INTEGRITY_STATUSES = {
     "storage_unavailable",
 }
 TECHNICAL_DELETED_CAMERA_RE = re.compile(r"__deleted_\d+_\d+$")
+_GENERATION_LOCKS: dict[str, threading.Lock] = {}
+_GENERATION_LOCKS_GUARD = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -72,12 +82,128 @@ class ExportPreflight:
     gap_warnings: list[dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class ResolvedExportSegment:
+    segment: RecordingSegment
+    path: Path
+    start_ts: datetime
+    end_ts: datetime
+    source_size: int
+    source_mtime_ns: int
+
+
 def _safe_error(status_code: int, detail: str) -> HTTPException:
     return HTTPException(status_code=status_code, detail=detail)
 
 
 def _utcnow_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _generation_lock(job_id: str) -> threading.Lock:
+    with _GENERATION_LOCKS_GUARD:
+        lock = _GENERATION_LOCKS.get(job_id)
+        if lock is None:
+            lock = threading.Lock()
+            _GENERATION_LOCKS[job_id] = lock
+        return lock
+
+
+def _safe_public_message(error_code: str) -> str:
+    messages = {
+        "source_missing": "Source recording is unavailable",
+        "source_gap_detected": "Requested range is not fully covered by source recordings",
+        "incompatible_segments": "Source segments are not compatible for safe generation",
+        "generation_timeout": "Clip generation timed out",
+        "generation_failed": "Clip generation failed",
+        "output_validation_failed": "Generated clip validation failed",
+        "expired_job": "Export job is expired",
+        "invalid_job_status": "Export job status does not allow generation",
+    }
+    return messages.get(error_code, "Clip generation failed")
+
+
+def _mark_failed(db: Session, job: ArchiveExportJob, error_code: str) -> ArchiveExportJob:
+    job.status = EXPORT_STATUS_FAILED
+    job.progress_percent = 0
+    job.error_code = error_code
+    job.sanitized_error_message = _safe_public_message(error_code)
+    job.updated_at = _utcnow_naive()
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
+def _export_root() -> Path:
+    root = Path(settings.storage_exports).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _safe_child(root: Path, *parts: str) -> Path:
+    target = root.joinpath(*parts).resolve()
+    try:
+        target.relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError("export_path_outside_root") from exc
+    return target
+
+
+def _relative_to_export_root(path: Path) -> str:
+    root = _export_root()
+    return path.resolve().relative_to(root).as_posix()
+
+
+def _path_from_internal(internal_path: str | None) -> Path | None:
+    if not internal_path:
+        return None
+    root = _export_root()
+    target = _safe_child(root, str(internal_path).replace("\\", "/").lstrip("/"))
+    return target
+
+
+def _run_media_tool(args: list[str], *, timeout: int = GENERATION_TIMEOUT_SECONDS) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        args,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+        text=True,
+    )
+
+
+def _ffprobe_duration(path: Path) -> float | None:
+    result = _run_media_tool(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
+        ],
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return None
+    try:
+        return float(str(result.stdout or "").strip())
+    except ValueError:
+        return None
+
+
+def _sha256(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def normalize_export_datetime(value: datetime, field_name: str) -> datetime:
@@ -150,6 +276,21 @@ def _gap_warnings(intervals: list[tuple[datetime, datetime]]) -> list[dict[str, 
     return warnings[:20]
 
 
+def _validate_full_coverage(job: ArchiveExportJob, intervals: list[tuple[datetime, datetime]]) -> list[dict[str, Any]]:
+    warnings = _gap_warnings(intervals)
+    if not intervals:
+        raise ValueError("source_gap_detected")
+    ordered = sorted(intervals, key=lambda item: item[0])
+    tolerance = timedelta(seconds=GAP_TOLERANCE_SECONDS)
+    if ordered[0][0] > job.start_ts + tolerance:
+        raise ValueError("source_gap_detected")
+    if ordered[-1][1] < job.end_ts - tolerance:
+        raise ValueError("source_gap_detected")
+    if warnings:
+        raise ValueError("source_gap_detected")
+    return warnings
+
+
 def preflight_source_segments(
     db: Session,
     *,
@@ -200,6 +341,52 @@ def preflight_source_segments(
         estimated_source_bytes=estimated_bytes,
         gap_warnings=_gap_warnings(intervals),
     )
+
+
+def revalidate_job_sources(db: Session, job: ArchiveExportJob) -> list[ResolvedExportSegment]:
+    ids = [int(value) for value in (job.source_segment_ids or []) if str(value).isdigit()]
+    if not ids:
+        raise ValueError("source_missing")
+    rows = (
+        finalized_export_segments_query(db)
+        .filter(RecordingSegment.id.in_(ids), RecordingSegment.camera_id == job.camera_id)
+        .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
+        .all()
+    )
+    if len(rows) != len(set(ids)):
+        raise ValueError("source_missing")
+
+    resolved: list[ResolvedExportSegment] = []
+    intervals: list[tuple[datetime, datetime]] = []
+    estimated_bytes = 0
+    for segment in rows:
+        interval = _segment_interval(segment)
+        if not interval:
+            raise ValueError("source_missing")
+        segment_start, segment_end = interval
+        if segment_end <= job.start_ts or segment_start >= job.end_ts:
+            continue
+        try:
+            source_path = resolve_segment_file_path(db, segment, require_exists=True)
+            stat = source_path.stat()
+        except (FileNotFoundError, ValueError, OSError) as exc:
+            raise ValueError("source_missing") from exc
+        estimated_bytes += max(int(stat.st_size), int(segment.size_bytes or 0))
+        intervals.append((max(segment_start, job.start_ts), min(segment_end, job.end_ts)))
+        resolved.append(
+            ResolvedExportSegment(
+                segment=segment,
+                path=source_path,
+                start_ts=segment_start,
+                end_ts=segment_end,
+                source_size=int(stat.st_size),
+                source_mtime_ns=int(stat.st_mtime_ns),
+            )
+        )
+    if not resolved or estimated_bytes > MAX_ESTIMATED_SOURCE_BYTES or len(resolved) > MAX_SOURCE_SEGMENTS:
+        raise ValueError("source_missing")
+    _validate_full_coverage(job, intervals)
+    return resolved
 
 
 def validate_export_range(start_ts: datetime, end_ts: datetime) -> tuple[datetime, datetime, int]:
@@ -309,7 +496,265 @@ def create_archive_export_job(
     return job
 
 
+def _trim_segment(
+    *,
+    source: ResolvedExportSegment,
+    job: ArchiveExportJob,
+    target: Path,
+) -> None:
+    clip_start = max(job.start_ts, source.start_ts)
+    clip_end = min(job.end_ts, source.end_ts)
+    if clip_end <= clip_start:
+        raise RuntimeError("source_gap_detected")
+    offset = max(0.0, (clip_start - source.start_ts).total_seconds())
+    duration = max(0.1, (clip_end - clip_start).total_seconds())
+    result = _run_media_tool(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-y",
+            "-ss",
+            f"{offset:.3f}",
+            "-i",
+            str(source.path),
+            "-t",
+            f"{duration:.3f}",
+            "-map",
+            "0:v:0?",
+            "-map",
+            "0:a:0?",
+            "-c",
+            "copy",
+            "-avoid_negative_ts",
+            "make_zero",
+            str(target),
+        ]
+    )
+    if result.returncode != 0 or not target.exists() or target.stat().st_size <= 0:
+        raise RuntimeError("incompatible_segments")
+
+
+def _concat_segments(parts: list[Path], output: Path, concat_file: Path) -> None:
+    lines = []
+    for part in parts:
+        escaped = str(part).replace("'", "'\\''")
+        lines.append(f"file '{escaped}'")
+    concat_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    result = _run_media_tool(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_file),
+            "-c",
+            "copy",
+            str(output),
+        ]
+    )
+    if result.returncode != 0 or not output.exists() or output.stat().st_size <= 0:
+        raise RuntimeError("incompatible_segments")
+
+
+def _validate_output(job: ArchiveExportJob, output: Path) -> tuple[int, float | None]:
+    root = _export_root()
+    try:
+        output.resolve().relative_to(root)
+    except ValueError as exc:
+        raise RuntimeError("output_validation_failed") from exc
+    if not output.exists() or not output.is_file():
+        raise RuntimeError("output_validation_failed")
+    size = int(output.stat().st_size)
+    if size <= 0:
+        raise RuntimeError("output_validation_failed")
+    duration = _ffprobe_duration(output)
+    if duration is None or duration <= 0:
+        raise RuntimeError("output_validation_failed")
+    requested = max(0, int((job.end_ts - job.start_ts).total_seconds()))
+    if requested and abs(duration - requested) > max(OUTPUT_DURATION_TOLERANCE_SECONDS, requested * 0.5):
+        raise RuntimeError("output_validation_failed")
+    return size, duration
+
+
+def _assert_sources_unchanged(sources: list[ResolvedExportSegment]) -> None:
+    for source in sources:
+        stat = source.path.stat()
+        if int(stat.st_size) != source.source_size or int(stat.st_mtime_ns) != source.source_mtime_ns:
+            raise RuntimeError("source_mutated")
+
+
+def generate_archive_export_job(
+    db: Session,
+    *,
+    export_id: str,
+    actor: User,
+    request=None,
+) -> ArchiveExportJob:
+    lock = _generation_lock(export_id)
+    if not lock.acquire(blocking=False):
+        raise _safe_error(409, "Export job is already generating")
+    try:
+        job = db.get(ArchiveExportJob, export_id)
+        if not job:
+            raise _safe_error(404, "Export job not found")
+
+        existing_output = _path_from_internal(job.internal_output_path)
+        if job.status == EXPORT_STATUS_DONE and existing_output and existing_output.exists() and existing_output.is_file():
+            return job
+        if job.status == EXPORT_STATUS_EXPIRED:
+            raise _safe_error(409, "Export job is expired")
+        if job.status == EXPORT_STATUS_RUNNING:
+            raise _safe_error(409, "Export job is already generating")
+        if job.status != EXPORT_STATUS_QUEUED:
+            raise _safe_error(409, "Export job status does not allow generation")
+
+        output_path: Path | None = None
+        temp_dir: Path | None = None
+        try:
+            sources = revalidate_job_sources(db, job)
+            now = _utcnow_naive()
+            job.status = EXPORT_STATUS_RUNNING
+            job.progress_percent = 10
+            job.error_code = None
+            job.sanitized_error_message = None
+            job.updated_at = now
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+
+            create_event(
+                db=db,
+                actor=actor,
+                category="archive",
+                event_type="archive_export_generation_started",
+                severity="info",
+                message_ru="Archive export generation started",
+                message_en="Archive export generation started",
+                target_type="archive_export_job",
+                target_id=job.id,
+                target_name=job.camera_label_snapshot,
+                metadata={"export_job_id": job.id, "camera_id": job.camera_id, "source_segment_count": len(sources), "status": job.status},
+                ip_address=request_ip(request),
+                user_agent=request_user_agent(request),
+            )
+
+            root = _export_root()
+            output_dir = _safe_child(root, EXPORT_OUTPUT_DIR)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            temp_dir = _safe_child(root, EXPORT_TEMP_DIR, f"stage11_stage2_{uuid.uuid4().hex}")
+            temp_dir.mkdir(parents=True, exist_ok=False)
+            output_path = _safe_child(output_dir, f"stage11_clip_{job.id}.mkv")
+            part_paths = [_safe_child(temp_dir, f"part_{index:03d}.mkv") for index, _source in enumerate(sources)]
+            for source, part_path in zip(sources, part_paths):
+                _trim_segment(source=source, job=job, target=part_path)
+            if len(part_paths) == 1:
+                shutil.move(str(part_paths[0]), str(output_path))
+            else:
+                _concat_segments(part_paths, output_path, _safe_child(temp_dir, "concat.txt"))
+
+            size, _duration = _validate_output(job, output_path)
+            _assert_sources_unchanged(sources)
+            job.status = EXPORT_STATUS_DONE
+            job.progress_percent = 100
+            job.internal_output_path = _relative_to_export_root(output_path)
+            job.internal_checksum = _sha256(output_path)
+            job.internal_manifest_path = None
+            job.error_code = None
+            job.sanitized_error_message = None
+            job.updated_at = _utcnow_naive()
+            db.add(job)
+            db.commit()
+            db.refresh(job)
+
+            create_event(
+                db=db,
+                actor=actor,
+                category="archive",
+                event_type="archive_export_generation_completed",
+                severity="info",
+                message_ru="Archive export generation completed",
+                message_en="Archive export generation completed",
+                target_type="archive_export_job",
+                target_id=job.id,
+                target_name=job.camera_label_snapshot,
+                metadata={
+                    "export_job_id": job.id,
+                    "camera_id": job.camera_id,
+                    "source_segment_count": len(sources),
+                    "output_size_bytes": size,
+                    "status": job.status,
+                },
+                ip_address=request_ip(request),
+                user_agent=request_user_agent(request),
+            )
+            return job
+        except subprocess.TimeoutExpired:
+            if output_path and output_path.exists():
+                output_path.unlink(missing_ok=True)
+            job = _mark_failed(db, job, "generation_timeout")
+            create_event(
+                db=db,
+                actor=actor,
+                category="archive",
+                event_type="archive_export_generation_failed",
+                severity="warning",
+                message_ru="Archive export generation failed",
+                message_en="Archive export generation failed",
+                target_type="archive_export_job",
+                target_id=job.id,
+                target_name=job.camera_label_snapshot,
+                metadata={"export_job_id": job.id, "camera_id": job.camera_id, "error_code": job.error_code, "status": job.status},
+                ip_address=request_ip(request),
+                user_agent=request_user_agent(request),
+            )
+            return job
+        except (RuntimeError, ValueError) as exc:
+            error_code = str(exc) if str(exc) else "generation_failed"
+            if error_code not in {
+                "source_missing",
+                "source_gap_detected",
+                "incompatible_segments",
+                "generation_timeout",
+                "generation_failed",
+                "output_validation_failed",
+                "source_mutated",
+            }:
+                error_code = "generation_failed"
+            if output_path and output_path.exists():
+                output_path.unlink(missing_ok=True)
+            job = _mark_failed(db, job, "output_validation_failed" if error_code == "source_mutated" else error_code)
+            create_event(
+                db=db,
+                actor=actor,
+                category="archive",
+                event_type="archive_export_generation_failed",
+                severity="warning",
+                message_ru="Archive export generation failed",
+                message_en="Archive export generation failed",
+                target_type="archive_export_job",
+                target_id=job.id,
+                target_name=job.camera_label_snapshot,
+                metadata={"export_job_id": job.id, "camera_id": job.camera_id, "error_code": job.error_code, "status": job.status},
+                ip_address=request_ip(request),
+                user_agent=request_user_agent(request),
+            )
+            return job
+        finally:
+            if temp_dir and temp_dir.exists():
+                shutil.rmtree(temp_dir, ignore_errors=True)
+    finally:
+        lock.release()
+
+
 def serialize_archive_export_job(job: ArchiveExportJob) -> dict[str, Any]:
+    output_path = _path_from_internal(job.internal_output_path)
+    output_exists = bool(output_path and output_path.exists() and output_path.is_file())
+    output_size = int(output_path.stat().st_size) if output_exists and output_path else None
+    output_container = output_path.suffix.lstrip(".").lower() if output_exists and output_path else None
     return {
         "id": job.id,
         "status": job.status if job.status in EXPORT_STATUSES else EXPORT_STATUS_FAILED,
@@ -332,4 +777,8 @@ def serialize_archive_export_job(job: ArchiveExportJob) -> dict[str, Any]:
         "gap_warnings": job.gap_warnings or [],
         "error_code": job.error_code,
         "error_message": job.sanitized_error_message,
+        "has_generated_clip": bool(job.status == EXPORT_STATUS_DONE and output_exists),
+        "clip_ready": bool(job.status == EXPORT_STATUS_DONE and output_exists),
+        "output_container": output_container,
+        "output_size_bytes": output_size,
     }

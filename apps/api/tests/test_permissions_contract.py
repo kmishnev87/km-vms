@@ -162,6 +162,7 @@ def test_endpoint_allowed_roles_contract():
     assert decision("/archive/exports", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/archive/exports", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/archive/exports/{export_id}", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
+    assert decision("/archive/exports/{export_id}/generate", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/live/debug", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/cameras/{camera_id}/enable", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/cameras/{camera_id}/disable", "POST").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
@@ -229,6 +230,7 @@ def test_archive_export_routes_require_explicit_export_permission():
     assert decision("/archive/exports", "POST").decision == PERMISSION_EXPORT_RECORDINGS
     assert decision("/archive/exports", "GET").decision == PERMISSION_EXPORT_RECORDINGS
     assert decision("/archive/exports/{export_id}", "GET").decision == PERMISSION_EXPORT_RECORDINGS
+    assert decision("/archive/exports/{export_id}/generate", "POST").decision == PERMISSION_EXPORT_RECORDINGS
 
 
 def test_live_routes_are_permission_protected():

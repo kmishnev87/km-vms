@@ -14,6 +14,7 @@ from app.routers.deps import require_permission
 from app.services.archive_exports import (
     EXPORT_STATUSES,
     create_archive_export_job,
+    generate_archive_export_job,
     serialize_archive_export_job,
 )
 
@@ -82,4 +83,15 @@ def get_export(
     job = db.get(ArchiveExportJob, export_id)
     if not job:
         raise HTTPException(status_code=404, detail="Export job not found")
+    return serialize_archive_export_job(job)
+
+
+@router.post("/{export_id}/generate")
+def generate_export(
+    export_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
+):
+    job = generate_archive_export_job(db, export_id=export_id, actor=current_user, request=request)
     return serialize_archive_export_job(job)
