@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { issueChronologyMediaToken } from "../lib/api";
+import {
+  normalizeVideoDimensions,
+  shouldUseAdaptiveHighResolutionPlayback,
+} from "../lib/playbackResolution";
 
 const MEDIA_REFRESH_RETRY_LIMIT = 1;
 
@@ -17,9 +21,18 @@ export default function ArchiveTilePlayer({
   const playbackRateRef = useRef(1);
   const unsupportedDownloadBusyRef = useRef(false);
   const [status, setStatus] = useState("idle");
+  const [naturalResolution, setNaturalResolution] = useState({ width: 0, height: 0 });
+  const [viewerRect, setViewerRect] = useState({ width: 0, height: 0 });
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   playIntentRef.current = Boolean(isPlaying);
   playbackRateRef.current = Number(speed || 1);
+
+  const adaptiveHighRes = shouldUseAdaptiveHighResolutionPlayback(
+    naturalResolution,
+    viewerRect,
+    isFullscreen
+  );
 
   async function buildMediaUrl() {
     if (!playback?.cameraId || !playback?.relPath) return "";
@@ -92,6 +105,7 @@ export default function ArchiveTilePlayer({
 
     const hardReset = () => {
       finishRefreshCycle();
+      setNaturalResolution({ width: 0, height: 0 });
       try {
         video.pause();
       } catch (_) {}
@@ -112,9 +126,14 @@ export default function ArchiveTilePlayer({
       return next;
     }
 
+    function updateNaturalResolution() {
+      setNaturalResolution(normalizeVideoDimensions(video.videoWidth, video.videoHeight));
+    }
+
     function restorePlaybackState(loadState) {
       if (cancelled || !loadState || loadState.sequence !== loadSequence) return;
       finishRefreshCycle();
+      updateNaturalResolution();
 
       try {
         video.currentTime = safeTargetTime(loadState.targetTime);
@@ -146,6 +165,7 @@ export default function ArchiveTilePlayer({
         playIntent,
         playbackRate: playbackRateRef.current,
       };
+      setNaturalResolution({ width: 0, height: 0 });
       setStatus("loading");
 
       try {
@@ -193,6 +213,7 @@ export default function ArchiveTilePlayer({
     }
 
     const handleLoaded = () => {
+      updateNaturalResolution();
       restorePlaybackState(pendingLoad);
     };
 
@@ -227,6 +248,31 @@ export default function ArchiveTilePlayer({
   }, [playback?.playbackKey]);
 
   useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const updateRect = () => {
+      const rect = el.getBoundingClientRect();
+      setViewerRect({ width: Math.round(rect.width || 0), height: Math.round(rect.height || 0) });
+    };
+    updateRect();
+    const observer = new ResizeObserver(updateRect);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [playback?.playbackKey]);
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      const fullscreenElement = document.fullscreenElement;
+      const wrap = wrapRef.current;
+      setIsFullscreen(Boolean(fullscreenElement && (fullscreenElement === wrap || wrap?.contains(fullscreenElement))));
+    }
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    handleFullscreenChange();
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
     try {
@@ -257,14 +303,16 @@ export default function ArchiveTilePlayer({
   return (
     <div
       ref={wrapRef}
-      className="archiveVideoWrap"
+      className={`archiveVideoWrap ${adaptiveHighRes ? "adaptiveHighRes" : ""}`}
       onDoubleClick={allowFullscreen ? toggleFullscreen : undefined}
       title={allowFullscreen ? "Двойной клик для полноэкранного режима" : undefined}
+      data-highres-adaptive={adaptiveHighRes ? "true" : "false"}
+      data-natural-resolution={`${naturalResolution.width}x${naturalResolution.height}`}
     >
       <video
         key={playback?.playbackKey || "empty"}
         ref={videoRef}
-        className="archiveVideo"
+        className={`archiveVideo ${adaptiveHighRes ? "archiveVideoAdaptiveHighRes" : ""}`}
         muted
         autoPlay={false}
         playsInline

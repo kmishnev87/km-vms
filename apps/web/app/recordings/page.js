@@ -4,8 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import { apiFetch, canDeleteRecordings, issueRecordingMediaToken } from "../../lib/api";
 import { useCurrentUser } from "../../lib/currentUser";
+import { shouldUseAdaptiveHighResolutionPlayback, normalizeVideoDimensions } from "../../lib/playbackResolution";
 
 const PAGE_SIZE = 30;
+const RECORDS_VIEW_MODE_KEY = "km_vms_records_view_mode";
 const TEXT = {
   title: "\u0417\u0430\u043f\u0438\u0441\u0438",
   subtitle: "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440, \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435 \u0438 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0430\u0440\u0445\u0438\u0432\u0430",
@@ -36,6 +38,9 @@ const TEXT = {
   playbackError: "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043d\u0435 \u0441\u043c\u043e\u0433 \u0432\u043e\u0441\u043f\u0440\u043e\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u0437\u0430\u043f\u0438\u0441\u044c \u043e\u043d\u043b\u0430\u0439\u043d. \u0417\u0430\u043f\u0438\u0441\u044c \u043c\u043e\u0436\u043d\u043e \u0441\u043a\u0430\u0447\u0430\u0442\u044c.",
   missingFile: "\u0424\u0430\u0439\u043b \u043e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442 / \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0430\u0440\u0445\u0438\u0432\u0430",
   unavailable: "\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e",
+  cards: "\u041a\u0430\u0440\u0442\u043e\u0447\u043a\u0438",
+  list: "\u0421\u043f\u0438\u0441\u043e\u043a",
+  recordingActiveEmpty: "\u0418\u0434\u0451\u0442 \u0437\u0430\u043f\u0438\u0441\u044c. \u0417\u0430\u043f\u0438\u0441\u044c \u043f\u043e\u044f\u0432\u0438\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u0437\u0430\u043a\u0440\u044b\u0442\u0438\u044f \u0441\u0435\u0433\u043c\u0435\u043d\u0442\u0430.",
 };
 
 const ICONS = {
@@ -197,6 +202,22 @@ function isRecordingAvailable(item) {
   return item?.available !== false && item?.playback_available !== false && item?.download_available !== false;
 }
 
+function normalizeRecordsViewMode(value) {
+  return value === "cards" ? "cards" : "list";
+}
+
+function hasActiveRecordingJobs(recorderStatus, selectedCamera) {
+  const states = Array.isArray(recorderStatus?.camera_recording_states)
+    ? recorderStatus.camera_recording_states
+    : [];
+  return states.some((item) => {
+    const state = String(item?.job_state || item?.status || item?.state || "").toLowerCase();
+    const cameraName = String(item?.camera_name || item?.name || item?.camera || "");
+    const selectedMatches = !selectedCamera || selectedCamera === "__all__" || cameraName === selectedCamera;
+    return selectedMatches && (state === "recording" || state === "active" || state === "running");
+  });
+}
+
 export default function RecordingsPage() {
   const [cameras, setCameras] = useState([]);
   const [selectedCamera, setSelectedCamera] = useState("__all__");
@@ -210,6 +231,8 @@ export default function RecordingsPage() {
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
+  const [viewMode, setViewMode] = useState("list");
+  const [recorderStatus, setRecorderStatus] = useState(null);
   const { currentUser } = useCurrentUser();
 
   const [viewerOpen, setViewerOpen] = useState(false);
@@ -218,9 +241,13 @@ export default function RecordingsPage() {
   const [viewerItem, setViewerItem] = useState(null);
   const [viewerPlaybackError, setViewerPlaybackError] = useState(false);
   const [viewerRefreshAttempted, setViewerRefreshAttempted] = useState(false);
+  const [viewerResolution, setViewerResolution] = useState({ width: 0, height: 0 });
+  const [viewerRect, setViewerRect] = useState({ width: 0, height: 0 });
+  const [viewerFullscreen, setViewerFullscreen] = useState(false);
 
   const requestIdRef = useRef(0);
   const dangerMenuRef = useRef(null);
+  const viewerFrameRef = useRef(null);
   const viewerVideoRef = useRef(null);
   const viewerRestoreStateRef = useRef(null);
   const viewerRefreshInFlightRef = useRef(false);
@@ -245,11 +272,16 @@ export default function RecordingsPage() {
     setSelectedPaths([]);
   }
 
+  async function loadRecorderStatus() {
+    const status = await apiFetch("/system/recorder/status").catch(() => null);
+    setRecorderStatus(status);
+  }
+
   async function initialLoad() {
     try {
       setError("");
       setNotice("");
-      await loadCameras();
+      await Promise.all([loadCameras(), loadRecorderStatus()]);
     } catch (err) {
       setError(normalizeRecordingError(err.message));
     }
@@ -257,6 +289,12 @@ export default function RecordingsPage() {
 
   useEffect(() => {
     initialLoad();
+  }, []);
+
+  useEffect(() => {
+    try {
+      setViewMode(normalizeRecordsViewMode(localStorage.getItem(RECORDS_VIEW_MODE_KEY)));
+    } catch (_) {}
   }, []);
 
   useEffect(() => {
@@ -284,7 +322,7 @@ export default function RecordingsPage() {
     try {
       setError("");
       setNotice("");
-      await Promise.all([loadCameras(), loadRecordings(selectedCamera)]);
+      await Promise.all([loadCameras(), loadRecordings(selectedCamera), loadRecorderStatus()]);
     } catch (err) {
       setError(normalizeRecordingError(err.message));
     }
@@ -359,6 +397,52 @@ export default function RecordingsPage() {
     [currentPage, pageCount]
   );
 
+  const activeRecordingEmpty = useMemo(
+    () => !filteredItems.length && hasActiveRecordingJobs(recorderStatus, selectedCamera),
+    [filteredItems.length, recorderStatus, selectedCamera]
+  );
+
+  const viewerAdaptiveHighRes = useMemo(
+    () => shouldUseAdaptiveHighResolutionPlayback(viewerResolution, viewerRect, viewerFullscreen),
+    [viewerResolution, viewerRect, viewerFullscreen]
+  );
+
+  useEffect(() => {
+    if (!viewerOpen) return;
+    const el = viewerFrameRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const updateRect = () => {
+      const rect = el.getBoundingClientRect();
+      setViewerRect({ width: Math.round(rect.width || 0), height: Math.round(rect.height || 0) });
+    };
+    updateRect();
+    const observer = new ResizeObserver(updateRect);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [viewerOpen, viewerUrl]);
+
+  useEffect(() => {
+    if (!viewerOpen) return;
+    function handleFullscreenChange() {
+      const fullscreenElement = document.fullscreenElement;
+      const video = viewerVideoRef.current;
+      const frame = viewerFrameRef.current;
+      setViewerFullscreen(Boolean(fullscreenElement && (fullscreenElement === video || fullscreenElement === frame || frame?.contains(fullscreenElement))));
+    }
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    handleFullscreenChange();
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, [viewerOpen]);
+
+  function changeViewMode(nextMode) {
+    const normalized = normalizeRecordsViewMode(nextMode);
+    setViewMode(normalized);
+    try {
+      localStorage.setItem(RECORDS_VIEW_MODE_KEY, normalized);
+    } catch (_) {}
+  }
+
   function toggleSelectAll() {
     if (allVisibleSelected) {
       setSelectedPaths((prev) => prev.filter((path) => !visiblePaths.includes(path)));
@@ -397,6 +481,9 @@ export default function RecordingsPage() {
       setViewerItem(item);
       setViewerPlaybackError(false);
       setViewerRefreshAttempted(false);
+      setViewerResolution({ width: 0, height: 0 });
+      setViewerRect({ width: 0, height: 0 });
+      setViewerFullscreen(false);
       viewerRestoreStateRef.current = null;
       viewerRefreshInFlightRef.current = false;
       setViewerOpen(true);
@@ -411,6 +498,9 @@ export default function RecordingsPage() {
     setViewerItem(null);
     setViewerPlaybackError(false);
     setViewerRefreshAttempted(false);
+    setViewerResolution({ width: 0, height: 0 });
+    setViewerRect({ width: 0, height: 0 });
+    setViewerFullscreen(false);
     viewerRestoreStateRef.current = null;
     viewerRefreshInFlightRef.current = false;
     setViewerOpen(false);
@@ -442,6 +532,7 @@ export default function RecordingsPage() {
       setViewerPlaybackError(false);
     } catch (_) {
       viewerRestoreStateRef.current = null;
+      setViewerResolution({ width: 0, height: 0 });
       setViewerPlaybackError(true);
     } finally {
       viewerRefreshInFlightRef.current = false;
@@ -450,6 +541,9 @@ export default function RecordingsPage() {
 
   function restoreViewerPlaybackState() {
     const video = viewerVideoRef.current;
+    if (video?.videoWidth || video?.videoHeight) {
+      setViewerResolution(normalizeVideoDimensions(video.videoWidth, video.videoHeight));
+    }
     const restoreState = viewerRestoreStateRef.current;
     if (!video || !restoreState) return;
 
@@ -608,6 +702,23 @@ export default function RecordingsPage() {
           </div>
 
           <div className="recordingsToolbar recordingsToolbarCompact">
+            <div className="recordingsViewToggle" aria-label="Records view mode">
+              <button
+                type="button"
+                className={viewMode === "list" ? "active" : ""}
+                onClick={() => changeViewMode("list")}
+              >
+                {TEXT.list}
+              </button>
+              <button
+                type="button"
+                className={viewMode === "cards" ? "active" : ""}
+                onClick={() => changeViewMode("cards")}
+              >
+                {TEXT.cards}
+              </button>
+            </div>
+
             <button
               className="button secondary small recordingsActionButton recordingsToolbarIconButton"
               onClick={refresh}
@@ -678,6 +789,76 @@ export default function RecordingsPage() {
       </div>
 
       <div className="card recordingsTableCard">
+        {viewMode === "cards" ? (
+          <div className="recordingsCardsGrid">
+            {paginatedItems.map((item) => (
+              <article key={item.path} className={`recordingsCardItem ${isRecordingAvailable(item) ? "" : "unavailable"}`}>
+                <div className="recordingsCardTop">
+                  {canDelete ? (
+                    <input
+                      type="checkbox"
+                      checked={selectedPaths.includes(item.path)}
+                      onChange={() => toggleSelected(item.path)}
+                      aria-label={`\u0412\u044b\u0431\u0440\u0430\u0442\u044c ${item.filename}`}
+                    />
+                  ) : null}
+                  <span className="recordingsCardCamera">{item.camera}</span>
+                </div>
+                <button
+                  className="recordingsCardTitle"
+                  onClick={() => handleWatch(item)}
+                  disabled={!isRecordingAvailable(item)}
+                  title={TEXT.openEmbeddedViewer}
+                >
+                  {item.filename}
+                </button>
+                {!isRecordingAvailable(item) ? (
+                  <div className="recordingsMissingStatus">{TEXT.missingFile}</div>
+                ) : null}
+                <div className="recordingsCardMeta">
+                  <span>{item.created_at || "-"}</span>
+                  <strong>{item.size_human}</strong>
+                </div>
+                <div className="recordingsActions recordingsCardActions">
+                  <button
+                    className="recordingsIconButton"
+                    onClick={() => handleWatch(item)}
+                    disabled={!isRecordingAvailable(item)}
+                    title={`${ICONS.watch} ${TEXT.watch}`}
+                    aria-label={TEXT.watch}
+                  >
+                    {ICONS.watch}
+                  </button>
+                  <button
+                    className="recordingsIconButton"
+                    onClick={() => handleDownload(item)}
+                    disabled={!isRecordingAvailable(item)}
+                    title={`${ICONS.download} ${TEXT.download}`}
+                    aria-label={TEXT.download}
+                  >
+                    {ICONS.download}
+                  </button>
+                  {canDelete ? (
+                    <button
+                      className="recordingsIconButton danger"
+                      onClick={() => handleDeleteOne(item)}
+                      disabled={busy}
+                      title={`${ICONS.remove} ${TEXT.remove}`}
+                      aria-label={TEXT.remove}
+                    >
+                      {ICONS.remove}
+                    </button>
+                  ) : null}
+                </div>
+              </article>
+            ))}
+            {!paginatedItems.length ? (
+              <div className={`recordingsEmptyCell ${activeRecordingEmpty ? "recordingsEmptyInfo" : ""}`}>
+                {activeRecordingEmpty ? TEXT.recordingActiveEmpty : TEXT.noRecords}
+              </div>
+            ) : null}
+          </div>
+        ) : (
         <div className="recordingsTableWrap">
           <table className="table recordingsTable">
             <colgroup>
@@ -789,13 +970,14 @@ export default function RecordingsPage() {
               {!paginatedItems.length ? (
                 <tr>
                   <td colSpan="7" className="recordingsEmptyCell">
-                    {TEXT.noRecords}
+                    {activeRecordingEmpty ? TEXT.recordingActiveEmpty : TEXT.noRecords}
                   </td>
                 </tr>
               ) : null}
             </tbody>
           </table>
         </div>
+        )}
 
         <div className="recordingsPagination">
           <button
@@ -853,18 +1035,25 @@ export default function RecordingsPage() {
                 {TEXT.playbackError}
               </div>
             ) : (
-              <video
-                key={viewerUrl}
-                ref={viewerVideoRef}
-                src={viewerUrl}
-                controls
-                autoPlay
-                preload="metadata"
-                className="recordingVideo"
-                onLoadedMetadata={restoreViewerPlaybackState}
-                onCanPlay={restoreViewerPlaybackState}
-                onError={refreshViewerUrlAfterMediaError}
-              />
+              <div
+                ref={viewerFrameRef}
+                className={`recordingVideoFrame ${viewerAdaptiveHighRes ? "adaptiveHighRes" : ""}`}
+                data-highres-adaptive={viewerAdaptiveHighRes ? "true" : "false"}
+                data-natural-resolution={`${viewerResolution.width}x${viewerResolution.height}`}
+              >
+                <video
+                  key={viewerUrl}
+                  ref={viewerVideoRef}
+                  src={viewerUrl}
+                  controls
+                  autoPlay
+                  preload="metadata"
+                  className={`recordingVideo ${viewerAdaptiveHighRes ? "recordingVideoAdaptiveHighRes" : ""}`}
+                  onLoadedMetadata={restoreViewerPlaybackState}
+                  onCanPlay={restoreViewerPlaybackState}
+                  onError={refreshViewerUrlAfterMediaError}
+                />
+              </div>
             )}
 
             <div className="actions">

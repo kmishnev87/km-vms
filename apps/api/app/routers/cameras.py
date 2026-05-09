@@ -1280,7 +1280,8 @@ def update_camera(
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
-    data = payload.model_dump(exclude_unset=True)
+    raw_payload = payload.model_dump(exclude_unset=True)
+    data = dict(raw_payload)
     preview_token = data.pop("preview_token", None)
     validation_token = data.pop("validation_token", None)
     onvif_probe_token = data.pop("onvif_probe_token", None)
@@ -1362,8 +1363,8 @@ def update_camera(
     connection_sensitive_change = any(old_values.get(key) != proposed_values.get(key) for key in CONNECTION_SENSITIVE_FIELDS if key != "password")
     connection_sensitive_change = connection_sensitive_change or bool(payload.password)
     gate_payload = {
-        **proposed_values,
-        "password": payload.password or existing_password or "",
+        **raw_payload,
+        "password": payload.password or "",
         "validation_token": validation_token,
         "onvif_probe_token": onvif_probe_token,
         "manual_confirm_unverified": manual_confirm_unverified,

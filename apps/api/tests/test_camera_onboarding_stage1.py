@@ -240,6 +240,77 @@ def test_update_connection_change_can_be_saved_as_manual_unverified(monkeypatch)
     assert events[0]["metadata"]["validation_state"] == "manual_unverified"
 
 
+def test_update_onvif_final_payload_validation_token_allows_verified_save(monkeypatch):
+    cam = camera()
+    events = []
+    monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: events.append(kwargs))
+    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "old-pass")
+
+    final_payload = {
+        "protocol": "onvif",
+        "host": "onvif.example.test",
+        "port": 20003,
+        "username": "operator",
+        "password": "",
+        "rtsp_main_url": "/main-final",
+        "rtsp_sub_url": "/sub-final",
+        "rtsp_host": "rtsp.example.test",
+        "rtsp_port": 10003,
+        "rtsp_transport": "tcp",
+        "onvif_path": "",
+        "onvif_profile_token": "main-final",
+        "onvif_channel_id": "",
+        "default_live_stream": "sub",
+        "default_record_stream": "main",
+    }
+    token = register_rtsp_test_proof(final_payload)
+
+    payload = cameras_module.CameraUpdate(
+        **{key: value for key, value in final_payload.items() if key != "password"},
+        validation_token=token,
+        manual_confirm_unverified=False,
+    )
+    result = update_camera(cam.id, payload, request=request(), db=FakeDb(cam), current_user=user())
+
+    assert result.onvif_profile_token == "main-final"
+    assert result.status == "created"
+    assert events[0]["metadata"]["validation_state"] == "verified"
+
+
+def test_update_onvif_changed_after_test_requires_new_proof(monkeypatch):
+    cam = camera()
+    monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: None)
+    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "old-pass")
+
+    final_payload = {
+        "protocol": "onvif",
+        "host": "onvif.example.test",
+        "port": 20003,
+        "username": "operator",
+        "password": "",
+        "rtsp_main_url": "/main-final",
+        "rtsp_sub_url": "/sub-final",
+        "rtsp_host": "rtsp.example.test",
+        "rtsp_port": 10003,
+        "rtsp_transport": "tcp",
+        "onvif_path": "",
+        "onvif_profile_token": "main-final",
+        "onvif_channel_id": "",
+        "default_live_stream": "sub",
+        "default_record_stream": "main",
+    }
+    token = register_rtsp_test_proof(final_payload)
+
+    changed_payload = {key: value for key, value in final_payload.items() if key != "password"}
+    changed_payload["rtsp_main_url"] = "/changed-after-test"
+    payload = cameras_module.CameraUpdate(**changed_payload, validation_token=token)
+    with pytest.raises(HTTPException) as exc:
+        update_camera(cam.id, payload, request=request(), db=FakeDb(cam), current_user=user())
+
+    assert exc.value.status_code == status.HTTP_409_CONFLICT
+    assert exc.value.detail["code"] == "camera_validation_required"
+
+
 def test_validation_proof_covers_stream_transport_and_onvif_fields():
     payload = {
         "protocol": "onvif",

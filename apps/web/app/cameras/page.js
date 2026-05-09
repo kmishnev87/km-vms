@@ -804,6 +804,9 @@ export default function CamerasPage() {
       rtsp_main_url: profileStreamValue(profile),
       default_record_stream: "main",
       preview_token: null,
+      validation_token: null,
+      onvif_probe_token: null,
+      manual_confirm_unverified: false,
     }));
     setTestResult(null);
     setSelectedOnvifProfileToken(token);
@@ -822,6 +825,9 @@ export default function CamerasPage() {
       onvif_profile_token: prev.onvif_profile_token || token,
       default_live_stream: "sub",
       preview_token: null,
+      validation_token: null,
+      onvif_probe_token: null,
+      manual_confirm_unverified: false,
     }));
     setTestResult(null);
     setSelectedOnvifProfileToken(token);
