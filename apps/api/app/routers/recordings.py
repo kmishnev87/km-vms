@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -47,6 +48,7 @@ PROBLEM_INTEGRITY_STATUSES = {
     "unreadable_file",
     "storage_unavailable",
 }
+TECHNICAL_DELETED_CAMERA_RE = re.compile(r"__deleted_\d+_\d+$")
 
 
 class BulkDeleteRequest(BaseModel):
@@ -171,13 +173,26 @@ def get_finalized_segment_by_path(db: Session, relative_path: str) -> RecordingS
     return segment
 
 
+def is_technical_deleted_camera_label(value: str | None) -> bool:
+    return bool(value and TECHNICAL_DELETED_CAMERA_RE.search(str(value)))
+
+
+def safe_recording_camera_label(value: str | None, fallback: str = "Удалённая камера") -> str:
+    text = str(value or "").strip()
+    if not text or is_technical_deleted_camera_label(text):
+        return fallback
+    return text
+
+
 def apply_camera_filter(query, db: Session, camera_name: str | None):
     if not camera_name or camera_name == "__all__":
+        return query
+    if is_technical_deleted_camera_label(camera_name):
         return query
 
     cameras = (
         db.query(Camera)
-        .filter(or_(Camera.name == camera_name, Camera.storage_folder_name == camera_name))
+        .filter(Camera.deleted_at.is_(None), or_(Camera.name == camera_name, Camera.storage_folder_name == camera_name))
         .all()
     )
     camera_ids = [camera.id for camera in cameras]
@@ -217,14 +232,18 @@ def format_local_dt(dt: datetime) -> str:
 
 def segment_camera_name(segment: RecordingSegment, camera: Camera | None) -> str:
     if segment.camera_name_snapshot:
-        return segment.camera_name_snapshot
+        return safe_recording_camera_label(segment.camera_name_snapshot)
     if camera:
-        return camera.name
+        return safe_recording_camera_label(camera.name)
     return str(segment.camera_id)
 
 
 def collect_camera_names(db: Session) -> list[str]:
-    names = {camera.name for camera in db.query(Camera).order_by(Camera.name.asc()).all()}
+    names = {
+        safe_recording_camera_label(camera.name)
+        for camera in db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.name.asc()).all()
+        if camera.name and not is_technical_deleted_camera_label(camera.name)
+    }
     rows = (
         finalized_segments_query(db)
         .filter(RecordingSegment.camera_name_snapshot.isnot(None))
@@ -232,7 +251,10 @@ def collect_camera_names(db: Session) -> list[str]:
         .distinct()
         .all()
     )
-    names.update(name for (name,) in rows if name)
+    names.update(
+        name for (name,) in rows
+        if name and not is_technical_deleted_camera_label(name)
+    )
     return sorted(names)
 
 

@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 import os
+import re
 import shutil
 import threading
 import time
@@ -36,6 +37,7 @@ MAX_NAMESPACE_DIRS = 300
 MAX_SCAN_SECONDS = 3.0
 MAX_SAMPLE_ITEMS = 50
 _STORAGE_AUDIT_LOCK = threading.Lock()
+TECHNICAL_DELETED_CAMERA_RE = re.compile(r"__deleted_\d+_\d+$")
 _LAST_STORAGE_AUDIT_STATE: dict[str, dict] = {}
 
 
@@ -220,10 +222,22 @@ def _capacity_percent(numerator: int | None, denominator: int | None) -> float |
         return None
 
 
+def _is_technical_deleted_camera_label(value: str | None) -> bool:
+    return bool(value and TECHNICAL_DELETED_CAMERA_RE.search(str(value)))
+
+
+def _safe_camera_usage_label(*values: str | None, fallback: str = "Удалённая камера") -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text and not _is_technical_deleted_camera_label(text):
+            return text
+    return fallback
+
+
 def _empty_camera_usage(camera: Camera | None = None) -> dict:
     return {
         "camera_id": camera.id if camera else None,
-        "camera_name": camera.name if camera else None,
+        "camera_name": _safe_camera_usage_label(camera.name) if camera else None,
         "recording_count": 0,
         "segment_count": 0,
         "existing_file_count": 0,
@@ -546,7 +560,11 @@ def build_storage_monitoring_summary(
         errors.append(capacity_error)
 
     cameras = {camera.id: camera for camera in db.query(Camera).order_by(Camera.id.asc()).all()}
-    camera_usage: dict[int, dict] = {camera_id: _empty_camera_usage(camera) for camera_id, camera in cameras.items()}
+    camera_usage: dict[int, dict] = {
+        camera_id: _empty_camera_usage(camera)
+        for camera_id, camera in cameras.items()
+        if camera.deleted_at is None
+    }
     status_counts = Counter()
     integrity_counts = Counter()
     reconciliation_counts = Counter()
@@ -579,7 +597,17 @@ def build_storage_monitoring_summary(
         row = camera_usage.setdefault(segment.camera_id, _empty_camera_usage(cameras.get(segment.camera_id)))
         if row["camera_id"] is None:
             row["camera_id"] = segment.camera_id
-            row["camera_name"] = segment.camera_name_snapshot
+        camera = cameras.get(segment.camera_id)
+        if camera and camera.deleted_at is not None:
+            row["camera_name"] = _safe_camera_usage_label(
+                segment.camera_name_snapshot,
+                camera.name,
+            )
+        elif not row.get("camera_name") or _is_technical_deleted_camera_label(row.get("camera_name")):
+            row["camera_name"] = _safe_camera_usage_label(
+                segment.camera_name_snapshot,
+                camera.name if camera else None,
+            )
         row["recording_count"] += 1
         row["segment_count"] += 1
         _update_range(row, segment.started_at)
