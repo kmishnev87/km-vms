@@ -5,9 +5,12 @@ import Layout from "../../components/Layout";
 import ArchiveTilePlayer from "../../components/ArchiveTilePlayer";
 import ChronologyTimeline from "../../components/ChronologyTimeline";
 import { apiFetch } from "../../lib/api";
+import { visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
 
 const STORAGE_KEY = "vms_chronology_workspace_v1";
 const LEGACY_STORAGE_KEY = "vms_chronology" + "2_workspace_v1";
+const WORKSPACE_KEY = "chronology";
+const MIGRATION_MARKER_PREFIX = `${STORAGE_KEY}_backend_migrated`;
 const LEGACY_CANVAS_W = 1600;
 const LEGACY_CANVAS_H = 900;
 const MIN_TILE_W = 220;
@@ -32,6 +35,7 @@ const SPEED_OPTIONS = [
 const TEXT = {
   cameras: "\u041a\u0430\u043c\u0435\u0440\u044b",
   align: "\u0412\u044b\u0440\u043e\u0432\u043d\u044f\u0442\u044c",
+  addAll: "\u0412\u0441\u0435",
   loadError: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0437\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043a\u0430\u043c\u0435\u0440\u044b",
   empty: "\u041f\u0435\u0440\u0435\u0442\u0430\u0449\u0438\u0442\u0435 \u043a\u0430\u043c\u0435\u0440\u0443 \u043d\u0430 workspace",
   camera: "\u041a\u0430\u043c\u0435\u0440\u0430",
@@ -120,6 +124,10 @@ function readSavedTiles() {
   }
 }
 
+function migrationMarkerKey(userId) {
+  return `${MIGRATION_MARKER_PREFIX}_${String(userId || "anonymous")}`;
+}
+
 function saveTiles(tiles) {
   if (typeof window === "undefined") return;
   try {
@@ -164,11 +172,42 @@ function chooseAutoGrid(count, workspaceW, workspaceH) {
   return best;
 }
 
+function layoutTiles(source, workspaceBounds) {
+  const tiles = dedupeTiles(source);
+  if (!tiles.length) return tiles;
+
+  const workspaceW = workspaceBounds?.width || 16;
+  const workspaceH = workspaceBounds?.height || 9;
+  const { cols, rows } = chooseAutoGrid(tiles.length, workspaceW, workspaceH);
+  const wPct = 1 / cols;
+  const hPct = 1 / rows;
+
+  return tiles.map((tile, idx) =>
+    normalizeTile({
+      ...tile,
+      xPct: (idx % cols) * wPct,
+      yPct: Math.floor(idx / cols) * hPct,
+      wPct,
+      hPct,
+      z: idx + 2,
+    })
+  );
+}
+
+function backendPayload(tiles) {
+  return {
+    layout_version: 1,
+    tiles: dedupeTiles(tiles.map(normalizeTile)),
+  };
+}
+
 export default function ChronologyPage() {
   const initialTs = getNow();
   const initialForm = dateTimeFromDate(initialTs);
   const workspaceRef = useRef(null);
   const hydratedRef = useRef(false);
+  const backendReadyRef = useRef(false);
+  const saveTimerRef = useRef(null);
   const currentTsRef = useRef(initialTs);
   const tilesRef = useRef([]);
   const playbackMapRef = useRef({});
@@ -181,6 +220,7 @@ export default function ChronologyPage() {
   const playWasActiveRef = useRef(false);
 
   const [cameras, setCameras] = useState([]);
+  const [camerasLoaded, setCamerasLoaded] = useState(false);
   const [tiles, setTiles] = useState([]);
   const [error, setError] = useState("");
   const [dragState, setDragState] = useState(null);
@@ -203,30 +243,80 @@ export default function ChronologyPage() {
       setCameras(Array.isArray(data) ? data : []);
     } catch (err) {
       setError(err.message || TEXT.loadError);
+    } finally {
+      setCamerasLoaded(true);
+    }
+  }
+
+  async function loadWorkspaceLayout() {
+    try {
+      const [user, layout] = await Promise.all([
+        apiFetch("/users/me"),
+        apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`),
+      ]);
+      backendReadyRef.current = true;
+      const backendTiles = Array.isArray(layout?.tiles) ? dedupeTiles(layout.tiles.map(normalizeTile)) : [];
+      const markerKey = migrationMarkerKey(user?.id);
+
+      if (backendTiles.length) {
+        setTiles(backendTiles);
+        saveTiles(backendTiles);
+        localStorage.setItem(markerKey, "1");
+        return;
+      }
+
+      const localTiles = readSavedTiles();
+      const shouldMigrate = localTiles.length && !localStorage.getItem(markerKey);
+      if (shouldMigrate) {
+        setTiles(localTiles);
+        saveTiles(localTiles);
+        await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(backendPayload(localTiles)),
+        });
+      } else {
+        setTiles([]);
+      }
+      localStorage.setItem(markerKey, "1");
+    } catch (err) {
+      backendReadyRef.current = false;
+      setTiles(readSavedTiles());
+      setError((prev) => prev || err.message || TEXT.loadError);
+    } finally {
+      hydratedRef.current = true;
     }
   }
 
   useEffect(() => {
-    setTiles(readSavedTiles());
+    loadWorkspaceLayout();
     loadCameras();
-    const timer = setTimeout(() => {
-      hydratedRef.current = true;
-    }, 0);
-    return () => clearTimeout(timer);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
   }, []);
 
   useEffect(() => {
     if (!hydratedRef.current) return;
     saveTiles(tiles);
+    if (!backendReadyRef.current) return;
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(backendPayload(tiles)),
+        });
+      } catch (err) {
+        setError((prev) => prev || err.message || TEXT.loadError);
+      }
+    }, 500);
   }, [tiles]);
 
   useEffect(() => {
     currentTsRef.current = currentTs;
   }, [currentTs]);
-
-  useEffect(() => {
-    tilesRef.current = tiles;
-  }, [tiles]);
 
   useEffect(() => {
     playbackMapRef.current = playbackMap;
@@ -254,12 +344,21 @@ export default function ChronologyPage() {
     return map;
   }, [cameras]);
 
+  const visibleTiles = useMemo(() => {
+    if (!camerasLoaded) return tiles;
+    return visibleWorkspaceTiles(tiles, cameras);
+  }, [tiles, cameras, camerasLoaded]);
+
+  function activeLayoutTiles(source) {
+    return camerasLoaded ? visibleWorkspaceTiles(source, cameras) : dedupeTiles(source);
+  }
+
   const selectedCameraIds = useMemo(() => (
-    tiles
+    visibleTiles
       .map((tile) => String(tile.cameraId || ""))
       .filter(Boolean)
       .filter((value, index, arr) => arr.indexOf(value) === index)
-  ), [tiles]);
+  ), [visibleTiles]);
 
   const selectedCameraNames = useMemo(() => {
     const result = {};
@@ -271,8 +370,12 @@ export default function ChronologyPage() {
   }, [selectedCameraIds, cameraMap]);
 
   const selectedCameraKey = selectedCameraIds.join(",");
-  const tileSourceKey = tiles.map((tile) => `${tile.id}:${tile.cameraId}`).join("|");
+  const tileSourceKey = visibleTiles.map((tile) => `${tile.id}:${tile.cameraId}`).join("|");
   const timelineTs = previewTs || currentTs;
+
+  useEffect(() => {
+    tilesRef.current = visibleTiles;
+  }, [visibleTiles]);
 
   function workspaceBounds() {
     return workspaceRef.current?.getBoundingClientRect() || null;
@@ -329,7 +432,8 @@ export default function ChronologyPage() {
     const yPct = clamp((clientY - bounds.top) / bounds.height - 0.03, 0, 1 - hPct);
 
     setTiles((prev) => {
-      if (prev.some((tile) => String(tile.cameraId || "") === normalizedCameraId)) {
+      const active = activeLayoutTiles(prev);
+      if (active.some((tile) => String(tile.cameraId || "") === normalizedCameraId)) {
         setError(TEXT.duplicate);
         return prev;
       }
@@ -376,27 +480,29 @@ export default function ChronologyPage() {
   }
 
   function autoLayoutTiles() {
+    setTiles((prev) => layoutTiles(activeLayoutTiles(prev), workspaceBounds()));
+  }
+
+  function addAllCameras() {
     setTiles((prev) => {
-      const source = dedupeTiles(prev);
-      if (!source.length) return source;
-
-      const bounds = workspaceBounds();
-      const workspaceW = bounds?.width || 16;
-      const workspaceH = bounds?.height || 9;
-      const { cols, rows } = chooseAutoGrid(source.length, workspaceW, workspaceH);
-      const wPct = 1 / cols;
-      const hPct = 1 / rows;
-
-      return source.map((tile, idx) =>
-        normalizeTile({
-          ...tile,
-          xPct: (idx % cols) * wPct,
-          yPct: Math.floor(idx / cols) * hPct,
-          wPct,
-          hPct,
-          z: idx + 2,
-        })
-      );
+      const active = activeLayoutTiles(prev);
+      const existing = workspaceCameraIds(active);
+      const additions = cameras
+        .filter((camera) => !existing.has(String(camera.id)))
+        .map((camera, idx) =>
+          normalizeTile({
+            id: `${camera.id}-${Date.now()}-${idx}`,
+            cameraId: String(camera.id),
+            xPct: 0,
+            yPct: 0,
+            wPct: DEFAULT_W_PCT,
+            hPct: DEFAULT_H_PCT,
+            z: nextZIndex(active) + idx,
+          })
+        );
+      if (!additions.length) return prev;
+      setError("");
+      return layoutTiles([...active, ...additions], workspaceBounds());
     });
   }
 
@@ -758,14 +864,24 @@ export default function ChronologyPage() {
         <aside className="chronologyCameraPanel">
           <div className="chronologyPanelHeader">
             <div className="chronologyPanelTitle">{TEXT.cameras}</div>
-            <button
-              type="button"
-              className="chronologyAlignButton"
-              onClick={autoLayoutTiles}
-              disabled={!tiles.length}
-            >
-              {TEXT.align}
-            </button>
+            <div className="chronologyPanelActions">
+              <button
+                type="button"
+                className="chronologyAlignButton"
+                onClick={addAllCameras}
+                disabled={!cameras.length}
+              >
+                {TEXT.addAll}
+              </button>
+              <button
+                type="button"
+                className="chronologyAlignButton"
+                onClick={autoLayoutTiles}
+                disabled={!tiles.length}
+              >
+                {TEXT.align}
+              </button>
+            </div>
           </div>
 
           {error ? <div className="chronologyError">{error}</div> : null}
@@ -854,13 +970,13 @@ export default function ChronologyPage() {
             }}
             onDrop={handleDrop}
           >
-            {!tiles.length ? (
+            {!visibleTiles.length ? (
               <div className="chronologyEmpty">
                 <div className="chronologyEmptyTitle">{TEXT.empty}</div>
               </div>
             ) : null}
 
-            {tiles.map((tile) => {
+            {visibleTiles.map((tile) => {
               const camera = cameraMap.get(String(tile.cameraId));
               const playback = playbackMap[tile.id] || {
                 hasVideo: false,

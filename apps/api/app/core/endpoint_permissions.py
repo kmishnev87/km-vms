@@ -102,7 +102,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("cameras", "POST", "/cameras/{camera_id}/onvif/ptz/command", PERMISSION_MANAGE_CAMERAS, "require_permission", "Allowlisted bounded PTZ command contract; dry-run/validation-only by default."),
     EndpointPermission("cameras", "GET", "/cameras/{camera_id}/onvif/health", PERMISSION_MANAGE_CAMERAS, "require_permission", "Cached/static ONVIF health and compatibility summary; no camera network probe."),
     EndpointPermission("cameras", "POST", "/cameras/{camera_id}/onvif/health/check", PERMISSION_MANAGE_CAMERAS, "require_permission", "Explicit bounded read-only ONVIF health, profile, PTZ and events feasibility check."),
-    EndpointPermission("viewer-cameras", "GET", "/viewer/cameras", PERMISSION_VIEW_LIVE, "require_permission", "Viewer-safe camera fields only."),
+    EndpointPermission("viewer-cameras", "GET", "/viewer/cameras", AUTHENTICATED, "get_current_user + view_live/view_timeline route check", "Viewer-safe camera fields only; requires either view_live or view_timeline."),
     EndpointPermission("live", "GET", "/live/status", PERMISSION_VIEW_LIVE, "require_permission"),
     EndpointPermission("live", "POST", "/live/media-token", PERMISSION_VIEW_LIVE, "require_permission", "Issues short-lived scoped media_token for live HLS."),
     EndpointPermission("live", "POST", "/live/viewers", PERMISSION_VIEW_LIVE, "require_permission"),
@@ -130,6 +130,8 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("chronology", "GET", "/chronology/ranges", PERMISSION_VIEW_TIMELINE, "require_permission"),
     EndpointPermission("chronology", "POST", "/chronology/media-token", PERMISSION_VIEW_TIMELINE, "require_permission", "Issues short-lived scoped media_token for chronology file."),
     EndpointPermission("chronology", "GET", "/chronology/file", PERMISSION_VIEW_TIMELINE, "scoped media_token check"),
+    EndpointPermission("users", "GET", "/users/me/workspaces/{workspace_key}/layout", AUTHENTICATED, "get_current_user + workspace permission route check", "Per-user workspace layout. live requires view_live; chronology requires view_timeline."),
+    EndpointPermission("users", "PUT", "/users/me/workspaces/{workspace_key}/layout", AUTHENTICATED, "get_current_user + workspace permission route check", "Per-user workspace layout. live requires view_live; chronology requires view_timeline."),
 )
 
 

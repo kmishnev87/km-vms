@@ -6604,6 +6604,14 @@ textarea {
   font-weight: 800;
 }
 
+.liveWorkspacePanelActions,
+.chronologyPanelActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
 .liveWorkspaceAlignButton {
   height: 26px;
   min-width: 0;

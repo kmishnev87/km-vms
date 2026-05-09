@@ -141,6 +141,19 @@ def test_endpoint_allowed_roles_contract():
     assert decision("/storage/status", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/users", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/viewer/cameras", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER)
+    assert "view_live or view_timeline" in decision("/viewer/cameras", "GET").notes
+    assert decision("/users/me/workspaces/{workspace_key}/layout", "GET").allowed_roles == (
+        ROLE_OWNER,
+        ROLE_ADMIN,
+        ROLE_OPERATOR,
+        ROLE_VIEWER,
+    )
+    assert decision("/users/me/workspaces/{workspace_key}/layout", "PUT").allowed_roles == (
+        ROLE_OWNER,
+        ROLE_ADMIN,
+        ROLE_OPERATOR,
+        ROLE_VIEWER,
+    )
     assert decision("/recordings", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN, ROLE_OPERATOR)
     assert decision("/recordings", "DELETE").allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
     assert decision("/chronology/ranges", "GET").allowed_roles == (ROLE_OWNER, ROLE_ADMIN, ROLE_OPERATOR)
@@ -163,7 +176,8 @@ def test_management_cameras_are_separated_from_viewer_cameras():
     assert 'APIRouter(prefix="/cameras"' in source
     assert 'APIRouter(prefix="/viewer/cameras"' in source
     assert 'Depends(require_permission("manage_cameras"))' in source
-    assert 'Depends(require_permission("view_live"))' in source
+    assert 'Depends(get_current_user)' in source
+    assert 'user_has_permission(role, "view_live") or user_has_permission(role, "view_timeline")' in source
     viewer_body = source.split("def list_viewer_cameras", 1)[1].split("@router.get", 1)[0]
     assert '"password"' not in viewer_body
     assert "password_encrypted" not in viewer_body
@@ -172,7 +186,7 @@ def test_management_cameras_are_separated_from_viewer_cameras():
     assert '"rtsp_main_url": bool(camera.rtsp_main_url)' in source
     assert '"rtsp_sub_url": bool(camera.rtsp_sub_url)' in source
     assert decision("/cameras", "GET").decision == "manage_cameras"
-    assert decision("/viewer/cameras", "GET").decision == "view_live"
+    assert decision("/viewer/cameras", "GET").decision == "authenticated"
 
 
 def test_recording_routes_are_permission_protected():

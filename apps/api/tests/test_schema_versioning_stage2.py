@@ -51,6 +51,7 @@ def existing_shape(*, missing_setup=False, recorder_runtime=True, nullable_camer
         "recording_jobs": {"columns": {"id": {"nullable": False}}},
         "recording_segments": {"columns": {"id": {"nullable": False}}},
         "audit_events": {"columns": {"id": {"nullable": False}}},
+        "user_workspace_layouts": {"columns": {"id": {"nullable": False}}},
     }
     if not missing_setup:
         tables["setup_locks"] = {"columns": {"name": {"nullable": False}}}

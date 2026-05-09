@@ -20,7 +20,7 @@ from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
-from app.routers.deps import require_permission
+from app.routers.deps import FORBIDDEN_DETAIL, get_current_user, require_permission
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
@@ -842,8 +842,12 @@ def list_cameras(
 @viewer_router.get("")
 def list_viewer_cameras(
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("view_live")),
+    current_user: User = Depends(get_current_user),
 ):
+    role = getattr(current_user, "role", "")
+    if not (user_has_permission(role, "view_live") or user_has_permission(role, "view_timeline")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
+
     cameras = db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.name.asc()).all()
     return [
         {

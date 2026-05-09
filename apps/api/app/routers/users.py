@@ -3,15 +3,33 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.core.permissions import ROLE_ADMIN, ROLE_OPERATOR, ROLE_OWNER, ROLE_VIEWER, get_permissions_for_role
+from app.core.permissions import (
+    PERMISSION_VIEW_LIVE,
+    PERMISSION_VIEW_TIMELINE,
+    ROLE_ADMIN,
+    ROLE_OPERATOR,
+    ROLE_OWNER,
+    ROLE_VIEWER,
+    get_permissions_for_role,
+    user_has_permission,
+)
 from app.core.security import hash_password, verify_password
 from app.db.session import get_db
 from app.models.user import User
+from app.models.workspace_layout import UserWorkspaceLayout
 from app.routers.deps import FORBIDDEN_DETAIL, get_current_user, require_permission
 from app.schemas.user import ROLES, UserCreateRequest, UserResponse, UserUpdateRequest
 from app.services.audit_log import create_event, request_ip, request_user_agent
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+WORKSPACE_LAYOUT_VERSION = 1
+WORKSPACE_LAYOUT_MAX_TILES = 64
+WORKSPACE_PERMISSIONS = {
+    "live": PERMISSION_VIEW_LIVE,
+    "chronology": PERMISSION_VIEW_TIMELINE,
+}
+WORKSPACE_STREAMS = {"main", "sub", "sub2"}
 
 
 def serialize_user(user: User) -> UserResponse:
@@ -32,6 +50,87 @@ def validate_role(role: str) -> str:
     if value not in ROLES:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Недопустимая роль")
     return value
+
+
+def validate_workspace_access(workspace_key: str, current_user: User) -> str:
+    key = str(workspace_key or "").strip().lower()
+    required_permission = WORKSPACE_PERMISSIONS.get(key)
+    if not required_permission:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workspace not found")
+    if not user_has_permission(getattr(current_user, "role", ""), required_permission):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
+    return key
+
+
+def _safe_float(value, *, default: float, minimum: float, maximum: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def _safe_int(value, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def sanitize_workspace_layout(workspace_key: str, payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Layout payload must be an object")
+
+    layout_version = _safe_int(
+        payload.get("layout_version", payload.get("layoutVersion", WORKSPACE_LAYOUT_VERSION)),
+        default=WORKSPACE_LAYOUT_VERSION,
+        minimum=WORKSPACE_LAYOUT_VERSION,
+        maximum=WORKSPACE_LAYOUT_VERSION,
+    )
+    if layout_version != WORKSPACE_LAYOUT_VERSION:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported workspace layout version")
+
+    raw_tiles = payload.get("tiles", [])
+    if raw_tiles is None:
+        raw_tiles = []
+    if not isinstance(raw_tiles, list):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Layout tiles must be a list")
+    if len(raw_tiles) > WORKSPACE_LAYOUT_MAX_TILES:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Too many workspace tiles")
+
+    tiles = []
+    seen_camera_ids: set[str] = set()
+    for index, raw_tile in enumerate(raw_tiles):
+        if not isinstance(raw_tile, dict):
+            continue
+        camera_id = str(raw_tile.get("cameraId") or raw_tile.get("camera_id") or "").strip()[:64]
+        if not camera_id or camera_id in seen_camera_ids:
+            continue
+        seen_camera_ids.add(camera_id)
+
+        w_pct = _safe_float(raw_tile.get("wPct"), default=0.25, minimum=0.05, maximum=1.0)
+        h_pct = _safe_float(raw_tile.get("hPct"), default=0.25, minimum=0.05, maximum=1.0)
+        x_pct = _safe_float(raw_tile.get("xPct"), default=0.0, minimum=0.0, maximum=1.0 - w_pct)
+        y_pct = _safe_float(raw_tile.get("yPct"), default=0.0, minimum=0.0, maximum=1.0 - h_pct)
+        tile = {
+            "id": str(raw_tile.get("id") or f"{workspace_key}-{camera_id}-{index}")[:128],
+            "cameraId": camera_id,
+            "xPct": x_pct,
+            "yPct": y_pct,
+            "wPct": w_pct,
+            "hPct": h_pct,
+            "z": _safe_int(raw_tile.get("z"), default=index + 2, minimum=1, maximum=10000),
+        }
+        if workspace_key == "live":
+            stream = str(raw_tile.get("stream") or "main").strip().lower()
+            tile["stream"] = stream if stream in WORKSPACE_STREAMS else "main"
+        tiles.append(tile)
+
+    return {
+        "layout_version": WORKSPACE_LAYOUT_VERSION,
+        "tiles": tiles,
+    }
 
 
 def active_owner_count(db: Session, exclude_user_id: int | None = None) -> int:
@@ -113,6 +212,64 @@ def users_me(current_user: User = Depends(get_current_user)):
         "is_active": bool(current_user.is_active),
         "permissions": sorted(get_permissions_for_role(current_user.role)),
         "last_login_at": getattr(current_user, "last_login_at", None),
+    }
+
+
+@router.get("/me/workspaces/{workspace_key}/layout")
+def get_workspace_layout(
+    workspace_key: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    key = validate_workspace_access(workspace_key, current_user)
+    row = (
+        db.query(UserWorkspaceLayout)
+        .filter(UserWorkspaceLayout.user_id == current_user.id, UserWorkspaceLayout.workspace_key == key)
+        .first()
+    )
+    layout = sanitize_workspace_layout(key, row.layout if row else {})
+    return {
+        "workspace_key": key,
+        **layout,
+        "updated_at": row.updated_at if row else None,
+        "warnings": [],
+    }
+
+
+@router.put("/me/workspaces/{workspace_key}/layout")
+def put_workspace_layout(
+    workspace_key: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    key = validate_workspace_access(workspace_key, current_user)
+    layout = sanitize_workspace_layout(key, payload)
+    row = (
+        db.query(UserWorkspaceLayout)
+        .filter(UserWorkspaceLayout.user_id == current_user.id, UserWorkspaceLayout.workspace_key == key)
+        .first()
+    )
+    if row is None:
+        row = UserWorkspaceLayout(
+            user_id=current_user.id,
+            workspace_key=key,
+            layout_version=WORKSPACE_LAYOUT_VERSION,
+            layout=layout,
+        )
+    else:
+        row.layout_version = WORKSPACE_LAYOUT_VERSION
+        row.layout = layout
+        row.updated_at = datetime.utcnow()
+
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {
+        "workspace_key": key,
+        **sanitize_workspace_layout(key, row.layout),
+        "updated_at": row.updated_at,
+        "warnings": [],
     }
 
 
