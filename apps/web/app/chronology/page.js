@@ -42,6 +42,17 @@ const TEXT = {
   close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
   enterFullscreen: "\u0412\u043e \u0432\u0435\u0441\u044c \u044d\u043a\u0440\u0430\u043d",
   exitFullscreen: "\u0412\u044b\u0439\u0442\u0438 \u0438\u0437 fullscreen",
+  fullscreenControls: "\u0423\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u0435",
+  hideFullscreenControls: "\u0421\u043a\u0440\u044b\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c",
+  showFullscreenControls: "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c",
+  noArchiveAtTime: "\u041d\u0435\u0442 \u0437\u0430\u043f\u0438\u0441\u0438 \u043d\u0430 \u044d\u0442\u043e \u0432\u0440\u0435\u043c\u044f",
+  archiveReady: "\u0410\u0440\u0445\u0438\u0432 \u043d\u0430\u0439\u0434\u0435\u043d",
+  timeContext: "\u0412\u0440\u0435\u043c\u044f",
+  rangeContext: "\u0414\u0438\u0430\u043f\u0430\u0437\u043e\u043d",
+  play: "\u041f\u0443\u0441\u043a",
+  pause: "\u041f\u0430\u0443\u0437\u0430",
+  back10: "\u041d\u0430 10 \u0441\u0435\u043a\u0443\u043d\u0434 \u043d\u0430\u0437\u0430\u0434",
+  forward10: "\u041d\u0430 10 \u0441\u0435\u043a\u0443\u043d\u0434 \u0432\u043f\u0435\u0440\u0435\u0434",
   collapseSidebar: "\u0421\u043a\u0440\u044b\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u0430\u043c\u0435\u0440",
   expandSidebar: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u0430\u043c\u0435\u0440",
   missing: "\u041a\u0430\u043c\u0435\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430",
@@ -212,6 +223,7 @@ export default function ChronologyPage() {
   const hydratedRef = useRef(false);
   const backendReadyRef = useRef(false);
   const saveTimerRef = useRef(null);
+  const lastBackendLayoutPayloadRef = useRef("");
   const currentTsRef = useRef(initialTs);
   const tilesRef = useRef([]);
   const playbackMapRef = useRef({});
@@ -225,6 +237,7 @@ export default function ChronologyPage() {
   const shellRef = useRef(null);
   const tileRefs = useRef(new Map());
   const tileVideoRefs = useRef(new Map());
+  const fullscreenControlsTimerRef = useRef(null);
 
   const [cameras, setCameras] = useState([]);
   const [camerasLoaded, setCamerasLoaded] = useState(false);
@@ -242,6 +255,7 @@ export default function ChronologyPage() {
   const [playbackMap, setPlaybackMap] = useState({});
   const [rangesData, setRangesData] = useState({});
   const [fullscreenTileId, setFullscreenTileId] = useState(null);
+  const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [isSystemFullscreen, setIsSystemFullscreen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
 
@@ -266,6 +280,7 @@ export default function ChronologyPage() {
       backendReadyRef.current = true;
       const backendTiles = Array.isArray(layout?.tiles) ? dedupeTiles(layout.tiles.map(normalizeTile)) : [];
       const markerKey = migrationMarkerKey(user?.id);
+      lastBackendLayoutPayloadRef.current = JSON.stringify(backendPayload(backendTiles));
 
       if (backendTiles.length) {
         setTiles(backendTiles);
@@ -279,11 +294,13 @@ export default function ChronologyPage() {
       if (shouldMigrate) {
         setTiles(localTiles);
         saveTiles(localTiles);
+        const payload = backendPayload(localTiles);
         await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(backendPayload(localTiles)),
+          body: JSON.stringify(payload),
         });
+        lastBackendLayoutPayloadRef.current = JSON.stringify(payload);
       } else {
         setTiles([]);
       }
@@ -312,11 +329,15 @@ export default function ChronologyPage() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       try {
+        const payload = backendPayload(tiles);
+        const payloadText = JSON.stringify(payload);
+        if (payloadText === lastBackendLayoutPayloadRef.current) return;
         await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(backendPayload(tiles)),
+          body: payloadText,
         });
+        lastBackendLayoutPayloadRef.current = payloadText;
       } catch (err) {
         setError((prev) => prev || err.message || TEXT.loadError);
       }
@@ -570,6 +591,7 @@ export default function ChronologyPage() {
   async function enterTileFullscreen(tileId) {
     setIsSystemFullscreen(false);
     setFullscreenTileId(tileId);
+    setFullscreenControlsVisible(true);
     const fullscreenEl = tileVideoRefs.current.get(tileId) || tileRefs.current.get(tileId);
     if (!fullscreenEl || document.fullscreenElement === fullscreenEl) return;
 
@@ -580,6 +602,7 @@ export default function ChronologyPage() {
 
   async function exitTileFullscreen() {
     setFullscreenTileId(null);
+    setFullscreenControlsVisible(true);
     if (document.fullscreenElement && document.fullscreenElement !== shellRef.current) {
       try {
         await document.exitFullscreen?.();
@@ -733,6 +756,28 @@ export default function ChronologyPage() {
     setIsPlaying(false);
   }
 
+  function revealFullscreenControls(autoHide = true) {
+    setFullscreenControlsVisible(true);
+    if (fullscreenControlsTimerRef.current) {
+      clearTimeout(fullscreenControlsTimerRef.current);
+      fullscreenControlsTimerRef.current = null;
+    }
+    if (autoHide) {
+      fullscreenControlsTimerRef.current = setTimeout(() => {
+        setFullscreenControlsVisible(false);
+        fullscreenControlsTimerRef.current = null;
+      }, 5000);
+    }
+  }
+
+  function hideFullscreenControls() {
+    if (fullscreenControlsTimerRef.current) {
+      clearTimeout(fullscreenControlsTimerRef.current);
+      fullscreenControlsTimerRef.current = null;
+    }
+    setFullscreenControlsVisible(false);
+  }
+
   async function seekBySeconds(seconds) {
     const nextDate = currentTsRef.current
       ? new Date(currentTsRef.current.getTime() + seconds * 1000)
@@ -872,15 +917,53 @@ export default function ChronologyPage() {
       if (event.key === "Escape") {
         setFullscreenTileId(null);
         setIsSystemFullscreen(false);
+        setFullscreenControlsVisible(true);
         if (document.fullscreenElement) {
           document.exitFullscreen?.().catch(() => {});
         }
+      }
+      const tagName = String(event.target?.tagName || "").toLowerCase();
+      const isEditableTarget =
+        ["button", "input", "select", "textarea", "a"].includes(tagName) ||
+        Boolean(event.target?.isContentEditable);
+      if (fullscreenTileId && event.key === " " && !isEditableTarget) {
+        event.preventDefault();
+        const fullscreenPlayback = playbackMapRef.current[fullscreenTileId];
+        if (!fullscreenPlayback?.hasVideo) {
+          revealFullscreenControls(false);
+          return;
+        }
+        if (isPlaying) {
+          handlePause();
+        } else {
+          handlePlay();
+        }
+        revealFullscreenControls(false);
       }
     }
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [fullscreenTileId, isPlaying]);
+
+  useEffect(() => {
+    if (!fullscreenTileId) {
+      if (fullscreenControlsTimerRef.current) {
+        clearTimeout(fullscreenControlsTimerRef.current);
+        fullscreenControlsTimerRef.current = null;
+      }
+      setFullscreenControlsVisible(true);
+      return undefined;
+    }
+
+    revealFullscreenControls(true);
+    return () => {
+      if (fullscreenControlsTimerRef.current) {
+        clearTimeout(fullscreenControlsTimerRef.current);
+        fullscreenControlsTimerRef.current = null;
+      }
+    };
+  }, [fullscreenTileId]);
 
   useEffect(() => {
     document.body.classList.toggle("chronologySystemFullscreenBody", isSystemFullscreen);
@@ -893,6 +976,7 @@ export default function ChronologyPage() {
       if (!fullscreenElement) {
         setIsSystemFullscreen(false);
         setFullscreenTileId(null);
+        setFullscreenControlsVisible(true);
         return;
       }
       if (fullscreenElement === shellRef.current) {
@@ -907,6 +991,7 @@ export default function ChronologyPage() {
       if (tileId) {
         setIsSystemFullscreen(false);
         setFullscreenTileId(tileId);
+        setFullscreenControlsVisible(true);
       } else {
         setIsSystemFullscreen(false);
       }
@@ -1123,7 +1208,11 @@ export default function ChronologyPage() {
                       else tileVideoRefs.current.delete(tile.id);
                     }}
                     data-chronology-tile-video-id={tile.id}
-                    className="chronologyTileVideo"
+                    className={`chronologyTileVideo ${fullscreenTileId === tile.id ? "tileFullscreenVideo" : ""} ${fullscreenControlsVisible ? "controlsVisible" : "controlsHidden"}`}
+                    tabIndex={fullscreenTileId === tile.id ? 0 : undefined}
+                    onMouseMove={() => {
+                      if (fullscreenTileId === tile.id) revealFullscreenControls(true);
+                    }}
                     onDoubleClick={async (event) => {
                       event.stopPropagation();
                       if (fullscreenTileId === tile.id) {
@@ -1143,6 +1232,93 @@ export default function ChronologyPage() {
                     ) : (
                       <div className="chronologyMissing">{TEXT.missing}</div>
                     )}
+
+                    {fullscreenTileId === tile.id ? (
+                      <div
+                        className="chronologyFullscreenControlsLayer"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => event.stopPropagation()}
+                        onDoubleClick={(event) => event.stopPropagation()}
+                      >
+                        {fullscreenControlsVisible ? (
+                          <div className="chronologyFullscreenPanel" role="group" aria-label={TEXT.fullscreenControls}>
+                            <div className="chronologyFullscreenContext">
+                              <div className="chronologyFullscreenCameraName">{camera?.name || TEXT.camera}</div>
+                              <div className="chronologyFullscreenMeta">
+                                <span>{TEXT.timeContext}: {formatPlaybackDateTime(timelineTs)}</span>
+                                <span>{TEXT.rangeContext}: {zoomKey}</span>
+                                <span className={playback.hasVideo ? "isReady" : "isEmpty"}>
+                                  {playback.hasVideo ? TEXT.archiveReady : TEXT.noArchiveAtTime}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="chronologyFullscreenTimelineMini" aria-hidden="true">
+                              <span className={playback.hasVideo ? "hasArchive" : "noArchive"} />
+                            </div>
+
+                            <div className="chronologyFullscreenActions">
+                              <button
+                                type="button"
+                                className="chronologyFullscreenControlButton"
+                                onClick={() => seekBySeconds(-10)}
+                                title={TEXT.back10}
+                                aria-label={TEXT.back10}
+                              >
+                                -10
+                              </button>
+                              <button
+                                type="button"
+                                className="chronologyFullscreenControlButton primary"
+                                onClick={isPlaying ? handlePause : handlePlay}
+                                disabled={!playback.hasVideo}
+                                title={isPlaying ? TEXT.pause : TEXT.play}
+                                aria-label={isPlaying ? TEXT.pause : TEXT.play}
+                              >
+                                {isPlaying ? "\u275a\u275a" : "\u25b6"}
+                              </button>
+                              <button
+                                type="button"
+                                className="chronologyFullscreenControlButton"
+                                onClick={() => seekBySeconds(10)}
+                                title={TEXT.forward10}
+                                aria-label={TEXT.forward10}
+                              >
+                                +10
+                              </button>
+                              <button
+                                type="button"
+                                className="chronologyFullscreenControlButton"
+                                onClick={hideFullscreenControls}
+                                title={TEXT.hideFullscreenControls}
+                                aria-label={TEXT.hideFullscreenControls}
+                              >
+                                _
+                              </button>
+                              <button
+                                type="button"
+                                className="chronologyFullscreenControlButton danger"
+                                onClick={exitTileFullscreen}
+                                title={TEXT.exitFullscreen}
+                                aria-label={TEXT.exitFullscreen}
+                              >
+                                {"\u2715"}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="chronologyFullscreenRevealTab"
+                            onClick={() => revealFullscreenControls(false)}
+                            title={TEXT.showFullscreenControls}
+                            aria-label={TEXT.showFullscreenControls}
+                          >
+                            {"\u25b4"}
+                          </button>
+                        )}
+                      </div>
+                    ) : null}
                   </div>
 
                   {["top-left", "top-right", "bottom-left", "bottom-right"].map((corner) => (
