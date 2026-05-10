@@ -24,6 +24,7 @@ from app.services.system_settings import (
     AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT,
     get_system_settings,
 )
+from app.services.timezone_contract import retention_cutoff_storage, timezone_context, utc_now_storage
 
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
@@ -81,7 +82,7 @@ PROBLEM_INTEGRITY_STATUSES = {
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return utc_now_storage()
 
 
 def _iso(dt: datetime | None) -> str | None:
@@ -430,7 +431,7 @@ def _retention_observability_counts(
 
 
 def _policy_candidates(db: Session, *, camera_id: int | None = None) -> tuple[list[tuple[RecordingSegment, str]], dict]:
-    now = _now()
+    ctx = timezone_context(db)
     cameras = {camera.id: camera for camera in db.query(Camera).order_by(Camera.id.asc()).all()}
     query = _eligible_segments_query(db)
     if camera_id is not None:
@@ -444,9 +445,19 @@ def _policy_candidates(db: Session, *, camera_id: int | None = None) -> tuple[li
         if not camera:
             continue
         retention_days = int(camera.retention_days or 0)
-        if retention_days > 0 and segment.started_at and segment.started_at < now - timedelta(days=retention_days):
+        if retention_days > 0:
+            storage_cutoff, local_compat_cutoff = retention_cutoff_storage(retention_days, ctx)
+        if retention_days > 0 and segment.started_at and (
+            segment.started_at < storage_cutoff or segment.started_at < local_compat_cutoff
+        ):
             by_segment.setdefault(segment.id, (segment, set()))[1].add("retention_days")
-            policy_summary["days"][str(camera.id)] = {"retention_days": retention_days}
+            policy_summary["days"][str(camera.id)] = {
+                "retention_days": retention_days,
+                "timezone": ctx.name,
+                "cutoff_storage_utc": storage_cutoff.isoformat(),
+                "cutoff_local_compat": local_compat_cutoff.isoformat(),
+                "boundary": "system_timezone_calendar_day",
+            }
 
     per_camera_segments: dict[int, list[RecordingSegment]] = defaultdict(list)
     for segment in segments:

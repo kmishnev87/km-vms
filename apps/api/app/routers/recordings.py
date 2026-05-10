@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -23,6 +23,16 @@ from app.routers.deps import require_permission
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 from app.services.recording_retention import build_retention_plan, execute_segments, preview_segments, run_retention
 from app.services.recording_storage import resolve_segment_file_path, segment_relative_path as root_segment_relative_path
+from app.services.timezone_contract import (
+    TimezoneContext,
+    format_system_display,
+    format_system_iso,
+    local_day_storage_bounds,
+    parse_api_timestamp,
+    parse_local_date,
+    timestamp_matches_filename,
+    timezone_context,
+)
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
@@ -226,8 +236,19 @@ def human_size(size_bytes: int) -> str:
     return f"{int(value)} {unit}"
 
 
-def format_local_dt(dt: datetime) -> str:
-    return dt.strftime("%d.%m.%Y, %H:%M:%S")
+def format_local_dt(dt: datetime, ctx: TimezoneContext) -> str:
+    return format_system_display(dt, ctx) or dt.strftime("%d.%m.%Y, %H:%M:%S")
+
+
+def segment_uses_local_naive_display(segment: RecordingSegment, filename: str | None = None) -> bool:
+    if segment.source != RECORDER_SOURCE:
+        return False
+    candidates = [
+        filename,
+        Path(str(segment.relative_path or "")).name,
+        Path(str(segment.file_path or "")).name,
+    ]
+    return any(timestamp_matches_filename(segment.started_at, candidate) for candidate in candidates)
 
 
 def segment_camera_name(segment: RecordingSegment, camera: Camera | None) -> str:
@@ -258,8 +279,46 @@ def collect_camera_names(db: Session) -> list[str]:
     return sorted(names)
 
 
-def collect_recording_files(db: Session, camera_name: Optional[str] = None) -> list[dict]:
+def apply_time_filter(query, db: Session, *, date_value: str | None = None, from_value: str | None = None, to_value: str | None = None):
+    ctx = timezone_context(db)
+    storage_from = storage_to = compat_from = compat_to = None
+    if date_value:
+        local_date = parse_local_date(date_value)
+        storage_from, storage_to, compat_from, compat_to = local_day_storage_bounds(local_date, ctx)
+    else:
+        if from_value:
+            parsed = parse_api_timestamp(from_value, ctx, field_name="from")
+            storage_from = parsed.storage_utc
+            compat_from = parsed.compatibility_local
+        if to_value:
+            parsed = parse_api_timestamp(to_value, ctx, field_name="to")
+            storage_to = parsed.storage_utc
+            compat_to = parsed.compatibility_local
+
+    if storage_from is not None or storage_to is not None:
+        storage_filters = []
+        compat_filters = []
+        if storage_from is not None:
+            storage_filters.append(RecordingSegment.started_at >= storage_from)
+            compat_filters.append(RecordingSegment.started_at >= (compat_from or storage_from))
+        if storage_to is not None:
+            storage_filters.append(RecordingSegment.started_at < storage_to)
+            compat_filters.append(RecordingSegment.started_at < (compat_to or storage_to))
+        query = query.filter(or_(and_(*storage_filters), and_(*compat_filters)))
+    return query
+
+
+def collect_recording_files(
+    db: Session,
+    camera_name: Optional[str] = None,
+    *,
+    date_value: str | None = None,
+    from_value: str | None = None,
+    to_value: str | None = None,
+) -> list[dict]:
+    ctx = timezone_context(db)
     query = apply_camera_filter(finalized_segments_query(db), db, camera_name)
+    query = apply_time_filter(query, db, date_value=date_value, from_value=from_value, to_value=to_value)
     segments = query.order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc()).all()
     camera_ids = {segment.camera_id for segment in segments}
     cameras = (
@@ -278,15 +337,20 @@ def collect_recording_files(db: Session, camera_name: Optional[str] = None) -> l
         size_bytes = int(file_path.stat().st_size if file_exists else segment.size_bytes or 0)
         started_at = segment.started_at or segment.created_at
         media_metadata = segment_media_metadata(segment, file_path)
+        local_naive_display = segment_uses_local_naive_display(segment, file_path.name)
         items.append(
             {
                 "camera_id": segment.camera_id,
                 "camera": segment_camera_name(segment, cameras.get(segment.camera_id)),
                 "path": rel_path,
                 "filename": file_path.name,
-                "created_at": format_local_dt(started_at),
+                "created_at": format_system_display(started_at, ctx, local_naive=local_naive_display) or format_local_dt(started_at, ctx),
                 "started_at": segment.started_at.isoformat() if segment.started_at else None,
                 "ended_at": segment.ended_at.isoformat() if segment.ended_at else None,
+                "started_at_system": format_system_iso(segment.started_at, ctx, local_naive=local_naive_display),
+                "ended_at_system": format_system_iso(segment.ended_at, ctx, local_naive=local_naive_display),
+                "display_timezone": ctx.name,
+                "timestamp_display_semantic": "product_local_naive" if local_naive_display else "storage_utc_naive",
                 "_sort_ts": started_at.timestamp(),
                 "size_bytes": size_bytes,
                 "size_human": human_size(size_bytes),
@@ -408,17 +472,36 @@ def retention_run(
 @router.get("")
 def list_recordings(
     camera: Optional[str] = Query(default=None),
+    date: Optional[str] = Query(default=None),
+    from_ts: Optional[str] = Query(default=None, alias="from"),
+    to_ts: Optional[str] = Query(default=None, alias="to"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_recordings")),
 ):
-    items = collect_recording_files(db, camera_name=camera if camera and camera != "__all__" else None)
+    try:
+        items = collect_recording_files(
+            db,
+            camera_name=camera if camera and camera != "__all__" else None,
+            date_value=date,
+            from_value=from_ts,
+            to_value=to_ts,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     total = sum(item["size_bytes"] for item in items)
+    ctx = timezone_context(db)
     return {
         "items": items,
         "summary": {
             "count": len(items),
             "size_bytes": total,
             "size_human": human_size(total),
+        },
+        "timezone": {
+            "id": ctx.name,
+            "source": "system_settings.timezone",
+            "fallback_used": ctx.fallback_used,
+            "storage_semantic": "timestamp_without_time_zone_as_utc_naive_with_local_naive_read_compatibility",
         },
     }
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -18,6 +18,14 @@ from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL, get_db, require_permission
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 from app.services.recording_storage import resolve_segment_file_path
+from app.services.timezone_contract import (
+    ParsedTimestamp,
+    TimezoneContext,
+    format_system_iso,
+    parse_api_timestamp,
+    timestamp_matches_filename,
+    timezone_context,
+)
 
 router = APIRouter(prefix="/chronology", tags=["chronology"])
 
@@ -100,14 +108,11 @@ def _safe_download_filename(camera: Camera, segment: RecordingSegment, file_path
     return f"km-vms-recording-{camera_label}-{stamp}{extension}"
 
 
-def _parse_ts(raw: str, field_name: str) -> datetime:
+def _parse_ts(raw: str, field_name: str, ctx: TimezoneContext) -> ParsedTimestamp:
     try:
-        value = datetime.fromisoformat(raw)
-    except Exception:
+        return parse_api_timestamp(raw, ctx, field_name=field_name)
+    except ValueError:
         raise HTTPException(status_code=400, detail=f"Invalid {field_name}")
-    if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc).replace(tzinfo=None)
-    return value
 
 
 def _finalized_segments_query(db: Session):
@@ -123,19 +128,46 @@ def _finalized_segments_query(db: Session):
     )
 
 
-def _segment_covering_timestamp(db: Session, *, camera_id: int, target_dt: datetime) -> RecordingSegment | None:
+def _segment_uses_local_naive_display(segment: RecordingSegment) -> bool:
+    if segment.source != RECORDER_SOURCE:
+        return False
+    candidates = [
+        Path(str(segment.relative_path or "")).name,
+        Path(str(segment.file_path or "")).name,
+    ]
+    return any(timestamp_matches_filename(segment.started_at, candidate) for candidate in candidates)
+
+
+def _contains_target(segment: RecordingSegment, target: ParsedTimestamp) -> tuple[bool, datetime, bool]:
+    interval = _segment_interval(segment)
+    if not interval:
+        return False, target.storage_utc, False
+    start_dt, end_dt = interval
+    local_naive_display = _segment_uses_local_naive_display(segment)
+    if start_dt <= target.storage_utc < end_dt:
+        return True, target.storage_utc, local_naive_display
+    if target.compatibility_local is not None and start_dt <= target.compatibility_local < end_dt:
+        return True, target.compatibility_local, True
+    return False, target.storage_utc, False
+
+
+def _max_query_ts(target: ParsedTimestamp) -> datetime:
+    values = [target.storage_utc]
+    if target.compatibility_local is not None:
+        values.append(target.compatibility_local)
+    return max(values)
+
+
+def _segment_covering_timestamp(db: Session, *, camera_id: int, target: ParsedTimestamp) -> RecordingSegment | None:
     segments = (
         _finalized_segments_query(db)
-        .filter(RecordingSegment.camera_id == camera_id, RecordingSegment.started_at <= target_dt)
+        .filter(RecordingSegment.camera_id == camera_id, RecordingSegment.started_at <= _max_query_ts(target))
         .order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
         .all()
     )
     for segment in segments:
-        interval = _segment_interval(segment)
-        if not interval:
-            continue
-        start_dt, end_dt = interval
-        if start_dt <= target_dt < end_dt:
+        ok, _effective_target, _local_naive_display = _contains_target(segment, target)
+        if ok:
             return segment
     return None
 
@@ -159,21 +191,21 @@ def _segment_interval(segment: RecordingSegment) -> tuple[datetime, datetime] | 
     return segment.started_at, end_dt
 
 
-def _merge_ranges(ranges: list[tuple[datetime, datetime]], gap_tolerance_sec: int = 2):
+def _merge_ranges(ranges: list[tuple[datetime, datetime, bool]], gap_tolerance_sec: int = 2):
     if not ranges:
         return []
 
     ranges = sorted(ranges, key=lambda x: x[0])
     merged = [ranges[0]]
 
-    for start_dt, end_dt in ranges[1:]:
-        last_start, last_end = merged[-1]
+    for start_dt, end_dt, local_naive_display in ranges[1:]:
+        last_start, last_end, last_local_naive_display = merged[-1]
         gap = (start_dt - last_end).total_seconds()
 
-        if gap <= gap_tolerance_sec:
-            merged[-1] = (last_start, max(last_end, end_dt))
+        if gap <= gap_tolerance_sec and local_naive_display == last_local_naive_display:
+            merged[-1] = (last_start, max(last_end, end_dt), last_local_naive_display)
         else:
-            merged.append((start_dt, end_dt))
+            merged.append((start_dt, end_dt, local_naive_display))
 
     return merged
 
@@ -189,10 +221,11 @@ def chronology_playback(
     if not camera:
         raise HTTPException(status_code=404, detail="Camera not found")
 
-    target_dt = _parse_ts(ts, "timestamp")
+    ctx = timezone_context(db)
+    target = _parse_ts(ts, "timestamp", ctx)
     segments = (
         _finalized_segments_query(db)
-        .filter(RecordingSegment.camera_id == camera_id, RecordingSegment.started_at <= target_dt)
+        .filter(RecordingSegment.camera_id == camera_id, RecordingSegment.started_at <= _max_query_ts(target))
         .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
         .all()
     )
@@ -203,7 +236,8 @@ def chronology_playback(
             continue
 
         start_dt, end_dt = interval
-        if not (start_dt <= target_dt < end_dt):
+        ok, effective_target, local_naive_display = _contains_target(segment, target)
+        if not ok:
             continue
 
         try:
@@ -218,7 +252,7 @@ def chronology_playback(
             }
 
         rel_path = segment.relative_path.replace("\\", "/").lstrip("/")
-        offset_sec = int((target_dt - start_dt).total_seconds())
+        offset_sec = int((effective_target - start_dt).total_seconds())
         media_metadata = _segment_media_metadata(segment, file_path)
         return {
             "camera_id": camera_id,
@@ -228,6 +262,10 @@ def chronology_playback(
             "offset_sec": offset_sec,
             "file_start": start_dt.isoformat(),
             "file_end": end_dt.isoformat(),
+            "file_start_system": format_system_iso(start_dt, ctx, local_naive=local_naive_display),
+            "file_end_system": format_system_iso(end_dt, ctx, local_naive=local_naive_display),
+            "display_timezone": ctx.name,
+            "timestamp_display_semantic": "product_local_naive" if local_naive_display else "storage_utc_naive",
             "container_format": media_metadata["container_format"],
             "file_extension": media_metadata["file_extension"],
             "mime_type": media_metadata["mime_type"],
@@ -258,8 +296,13 @@ def chronology_ranges(
     if not parsed_ids:
         raise HTTPException(status_code=400, detail="camera_ids required")
 
-    range_from = _parse_ts(from_ts, "from")
-    range_to = _parse_ts(to_ts, "to")
+    ctx = timezone_context(db)
+    parsed_from = _parse_ts(from_ts, "from", ctx)
+    parsed_to = _parse_ts(to_ts, "to", ctx)
+    range_from = parsed_from.storage_utc
+    range_to = parsed_to.storage_utc
+    compat_from = parsed_from.compatibility_local
+    compat_to = parsed_to.compatibility_local
     if range_to <= range_from:
         raise HTTPException(status_code=400, detail="to must be greater than from")
 
@@ -281,7 +324,7 @@ def chronology_ranges(
             _finalized_segments_query(db)
             .filter(
                 RecordingSegment.camera_id == camera_id,
-                RecordingSegment.started_at < range_to,
+                RecordingSegment.started_at < max(range_to, compat_to or range_to),
             )
             .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
             .all()
@@ -298,13 +341,25 @@ def chronology_ranges(
                 continue
 
             start_dt, end_dt = interval
-            if end_dt <= range_from or start_dt >= range_to:
+            clip_start = clip_end = None
+            if not (end_dt <= range_from or start_dt >= range_to):
+                clip_start = max(start_dt, range_from)
+                clip_end = min(end_dt, range_to)
+            elif compat_from is not None and compat_to is not None and not (end_dt <= compat_from or start_dt >= compat_to):
+                clip_start = max(start_dt, compat_from)
+                clip_end = min(end_dt, compat_to)
+            if clip_start is None or clip_end is None:
                 continue
-
-            clip_start = max(start_dt, range_from)
-            clip_end = min(end_dt, range_to)
             if clip_end > clip_start:
-                clipped.append((clip_start, clip_end))
+                local_naive_display = (
+                    _segment_uses_local_naive_display(segment)
+                    or (
+                        compat_from is not None
+                        and compat_to is not None
+                        and not (end_dt <= compat_from or start_dt >= compat_to)
+                    )
+                )
+                clipped.append((clip_start, clip_end, local_naive_display))
 
         merged = _merge_ranges(clipped, gap_tolerance_sec=2)
         result[str(camera_id)] = {
@@ -314,14 +369,25 @@ def chronology_ranges(
                 {
                     "start": start_dt.isoformat(),
                     "end": end_dt.isoformat(),
+                    "start_system": format_system_iso(start_dt, ctx, local_naive=local_naive_display),
+                    "end_system": format_system_iso(end_dt, ctx, local_naive=local_naive_display),
+                    "timestamp_display_semantic": "product_local_naive" if local_naive_display else "storage_utc_naive",
                 }
-                for start_dt, end_dt in merged
+                for start_dt, end_dt, local_naive_display in merged
             ],
         }
 
     return {
         "from": range_from.isoformat(),
         "to": range_to.isoformat(),
+        "from_system": format_system_iso(range_from, ctx),
+        "to_system": format_system_iso(range_to, ctx),
+        "timezone": {
+            "id": ctx.name,
+            "source": "system_settings.timezone",
+            "fallback_used": ctx.fallback_used,
+            "storage_semantic": "timestamp_without_time_zone_as_utc_naive_with_local_naive_read_compatibility",
+        },
         "items": result,
     }
 
@@ -338,8 +404,9 @@ def chronology_download_current_recording(
     if not camera:
         raise HTTPException(status_code=404, detail="Recording is unavailable")
 
-    target_dt = _parse_ts(ts, "timestamp")
-    segment = _segment_covering_timestamp(db, camera_id=camera_id, target_dt=target_dt)
+    ctx = timezone_context(db)
+    target = _parse_ts(ts, "timestamp", ctx)
+    segment = _segment_covering_timestamp(db, camera_id=camera_id, target=target)
     if not segment:
         raise HTTPException(status_code=404, detail="Recording is unavailable")
     validate_media_token(
@@ -375,8 +442,9 @@ def issue_chronology_download_token(
     camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Recording is unavailable")
-    target_dt = _parse_ts(ts, "timestamp")
-    segment = _segment_covering_timestamp(db, camera_id=camera_id, target_dt=target_dt)
+    ctx = timezone_context(db)
+    target = _parse_ts(ts, "timestamp", ctx)
+    segment = _segment_covering_timestamp(db, camera_id=camera_id, target=target)
     if not segment:
         raise HTTPException(status_code=404, detail="Recording is unavailable")
     try:

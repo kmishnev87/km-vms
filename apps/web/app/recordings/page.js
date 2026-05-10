@@ -16,6 +16,7 @@ import {
 } from "../../lib/archiveExports";
 import { useCurrentUser } from "../../lib/currentUser";
 import { shouldUseAdaptiveHighResolutionPlayback, normalizeVideoDimensions } from "../../lib/playbackResolution";
+import { formatProductDateTime, productDateFilterParam, productDateTimeInputValue } from "../../lib/timezone";
 
 const PAGE_SIZE = 30;
 const TEXT = {
@@ -170,7 +171,10 @@ function compareValues(left, right, sortBy, sortDir) {
   let result = 0;
 
   if (sortBy === SORT_OPTIONS.created_at.key) {
-    result = parseCreatedAt(left.created_at) - parseCreatedAt(right.created_at);
+    result = Date.parse(left.started_at_system || "") - Date.parse(right.started_at_system || "");
+    if (!Number.isFinite(result)) {
+      result = parseCreatedAt(left.created_at) - parseCreatedAt(right.created_at);
+    }
   } else if (sortBy === SORT_OPTIONS.size_bytes.key) {
     result = Number(left.size_bytes || 0) - Number(right.size_bytes || 0);
   } else if (sortBy === SORT_OPTIONS.camera.key) {
@@ -271,6 +275,7 @@ export default function RecordingsPage() {
   const [selectedCamera, setSelectedCamera] = useState("__all__");
   const [selectedDate, setSelectedDate] = useState("");
   const [items, setItems] = useState([]);
+  const [productTimezone, setProductTimezone] = useState("UTC");
   const [selectedPaths, setSelectedPaths] = useState([]);
   const [sortBy, setSortBy] = useState(SORT_OPTIONS.created_at.key);
   const [sortDir, setSortDir] = useState("desc");
@@ -316,17 +321,18 @@ export default function RecordingsPage() {
     setCameras(data.items || []);
   }
 
-  async function loadRecordings(camera = "__all__") {
+  async function loadRecordings(camera = "__all__", dateValue = selectedDate) {
     const requestId = ++requestIdRef.current;
-    const query =
-      camera && camera !== "__all__"
-        ? `?camera=${encodeURIComponent(camera)}`
-        : "";
+    const params = new URLSearchParams();
+    if (camera && camera !== "__all__") params.set("camera", camera);
+    if (dateValue) params.set("date", productDateFilterParam(dateValue));
+    const query = params.toString() ? `?${params.toString()}` : "";
 
     const data = await apiFetch(`/recordings${query}`);
     if (requestId !== requestIdRef.current) return;
 
     setItems(data.items || []);
+    setProductTimezone(data?.timezone?.id || "UTC");
     setSelectedPaths([]);
   }
 
@@ -350,8 +356,8 @@ export default function RecordingsPage() {
   }, []);
 
   useEffect(() => {
-    loadRecordings(selectedCamera).catch((err) => setError(normalizeRecordingError(err.message)));
-  }, [selectedCamera]);
+    loadRecordings(selectedCamera, selectedDate).catch((err) => setError(normalizeRecordingError(err.message)));
+  }, [selectedCamera, selectedDate]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -374,7 +380,7 @@ export default function RecordingsPage() {
     try {
       setError("");
       setNotice("");
-      await Promise.all([loadCameras(), loadRecordings(selectedCamera), loadRecorderStatus()]);
+      await Promise.all([loadCameras(), loadRecordings(selectedCamera, selectedDate), loadRecorderStatus()]);
     } catch (err) {
       setError(normalizeRecordingError(err.message));
     }
@@ -396,14 +402,7 @@ export default function RecordingsPage() {
     setSortDir(nextSortBy === SORT_OPTIONS.created_at.key ? "desc" : "asc");
   }
 
-  const filteredItems = useMemo(() => {
-    return items.filter((item) => {
-      if (selectedDate) {
-        return formatDateInputFromCreatedAt(item.created_at) === selectedDate;
-      }
-      return true;
-    });
-  }, [items, selectedDate]);
+  const filteredItems = items;
 
   const sortedItems = useMemo(() => {
     return [...filteredItems].sort((left, right) =>
@@ -525,7 +524,7 @@ export default function RecordingsPage() {
   }
 
   function toDateTimeLocal(value) {
-    return toDateTimeInputParts(value);
+    return productDateTimeInputValue(value) || toDateTimeInputParts(value);
   }
 
   function openExportModal() {
@@ -1001,7 +1000,9 @@ export default function RecordingsPage() {
                       </div>
                     )}
                   </td>
-                  <td className="recordingsDateCell">{item.created_at || "-"}</td>
+                  <td className="recordingsDateCell">
+                    {item.started_at_system ? formatProductDateTime(item.started_at_system, productTimezone) : (item.created_at || "-")}
+                  </td>
                   <td className="recordingsSizeCell">{item.size_human}</td>
                   <td>
                     <div className="recordingsActions">

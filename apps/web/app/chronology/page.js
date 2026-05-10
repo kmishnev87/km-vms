@@ -18,6 +18,7 @@ import {
   startChronologyCurrentRecordingDownload,
   validateArchiveExportSelection,
 } from "../../lib/archiveExports";
+import { productLocalInputToApi } from "../../lib/timezone";
 import { resizeWorkspaceTile, visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
 
 const STORAGE_KEY = "vms_chronology_workspace_v1";
@@ -119,6 +120,10 @@ function formatPlaybackDateTime(dt) {
 
 function formatLocalNaiveTs(dt) {
   return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+}
+
+function formatProductTimestampParam(dt) {
+  return productLocalInputToApi(formatLocalNaiveTs(dt));
 }
 
 function dateTimeFromDate(dt) {
@@ -827,7 +832,7 @@ export default function ChronologyPage() {
     setIsTimelinePreviewing(false);
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(targetDate);
-    await resolvePlaybackForTimestamp(formatLocalNaiveTs(targetDate), true);
+    await resolvePlaybackForTimestamp(formatProductTimestampParam(targetDate), true);
   }
 
   function handlePlay() {
@@ -863,8 +868,8 @@ export default function ChronologyPage() {
       cameraId,
       title: `${TEXT.exportEvidence} ${formatPlaybackDateTime(center)}`,
       reason: "",
-      startTs: formatLocalNaiveTs(start),
-      endTs: formatLocalNaiveTs(end),
+      startTs: formatProductTimestampParam(start),
+      endTs: formatProductTimestampParam(end),
     });
   }
 
@@ -935,7 +940,7 @@ export default function ChronologyPage() {
   }
 
   function quickDownloadTimestamp() {
-    return formatLocalNaiveTs(timelineTs || currentTs || new Date(normalizeTargetTs()));
+    return formatProductTimestampParam(timelineTs || currentTs || new Date(normalizeTargetTs()));
   }
 
   async function startQuickDownloadForCamera(cameraId) {
@@ -1001,7 +1006,7 @@ export default function ChronologyPage() {
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
-    const result = await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
+    const result = await resolvePlaybackForTimestamp(formatProductTimestampParam(nextDate), true);
     if (result.applied && action.shouldResume && seekActionIdRef.current === action.id) {
       setIsPlaying(true);
     }
@@ -1015,7 +1020,7 @@ export default function ChronologyPage() {
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
-    const result = await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
+    const result = await resolvePlaybackForTimestamp(formatProductTimestampParam(nextDate), true);
     if (result.applied && action.shouldResume && seekActionIdRef.current === action.id) {
       setIsPlaying(true);
     }
@@ -1056,7 +1061,7 @@ export default function ChronologyPage() {
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
-    const result = await resolvePlaybackForTimestamp(formatLocalNaiveTs(nextDate), true);
+    const result = await resolvePlaybackForTimestamp(formatProductTimestampParam(nextDate), true);
     if (action && result.applied && action.shouldResume && seekActionIdRef.current === action.id) {
       setIsPlaying(true);
     }
@@ -1068,12 +1073,12 @@ export default function ChronologyPage() {
       return;
     }
 
-    resolvePlaybackForTimestamp(formatLocalNaiveTs(currentTs), true);
+    resolvePlaybackForTimestamp(formatProductTimestampParam(currentTs), true);
   }, [tileSourceKey]);
 
   useEffect(() => {
     if (!isPlaying || !currentTs || isScrubbingRef.current) return;
-    resolvePlaybackForTimestamp(formatLocalNaiveTs(currentTs), false);
+    resolvePlaybackForTimestamp(formatProductTimestampParam(currentTs), false);
   }, [currentTs, isPlaying]);
 
   useEffect(() => {
@@ -1111,7 +1116,7 @@ export default function ChronologyPage() {
         setRangesLoading(true);
         setRangesError(false);
         const response = await apiFetch(
-          `/chronology/ranges?camera_ids=${selectedCameraKey}&from=${encodeURIComponent(formatLocalNaiveTs(new Date(fromMs)))}&to=${encodeURIComponent(formatLocalNaiveTs(new Date(toMs)))}`
+          `/chronology/ranges?camera_ids=${selectedCameraKey}&from=${encodeURIComponent(formatProductTimestampParam(new Date(fromMs)))}&to=${encodeURIComponent(formatProductTimestampParam(new Date(toMs)))}`
         );
 
         if (requestId !== rangesRequestIdRef.current) return;

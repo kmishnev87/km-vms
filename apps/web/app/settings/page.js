@@ -654,8 +654,7 @@ function offsetFromTimezone(timezone) {
 
 function timezoneValueForSettings(timezone) {
   if (UTC_TIMEZONES.some((zone) => zone.value === timezone)) return timezone;
-  const offset = offsetFromTimezone(timezone);
-  return UTC_TIMEZONES.find((zone) => zone.offset === offset)?.value || "UTC";
+  return timezone || "UTC";
 }
 
 function hardwareOptionState(backend, hardware, t) {
@@ -1369,6 +1368,9 @@ export default function SettingsPage() {
                   </div>
                   <div className="settingsRowControl">
                     <select id="settings-timezone" className="select settingsSelect timezoneSelect" value={timezoneValueForSettings(draft.timezone)} onChange={(event) => patch("timezone", event.target.value)} disabled={saving}>
+                      {draft.timezone && !UTC_TIMEZONES.some((zone) => zone.value === draft.timezone) ? (
+                        <option value={draft.timezone}>{draft.timezone}</option>
+                      ) : null}
                       {UTC_TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
                     </select>
                   </div>
