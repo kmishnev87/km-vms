@@ -93,6 +93,30 @@ def format_system_display(value: datetime | None, ctx: TimezoneContext, *, local
     return converted.strftime("%d.%m.%Y, %H:%M:%S") if converted else None
 
 
+def format_storage_utc_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    converted = storage_naive_utc_to_aware_utc(value)
+    return converted.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def timezone_metadata(ctx: TimezoneContext) -> dict:
+    return {
+        "id": ctx.name,
+        "source": "system_settings.timezone",
+        "fallback_used": ctx.fallback_used,
+        "storage_semantic": "timestamp_without_time_zone_as_utc_naive",
+    }
+
+
+def timestamp_display_fields(value: datetime | None, ctx: TimezoneContext, field_name: str) -> dict:
+    return {
+        field_name: format_storage_utc_iso(value),
+        f"{field_name}_utc": format_storage_utc_iso(value),
+        f"{field_name}_system": format_system_iso(value, ctx),
+    }
+
+
 def timestamp_matches_filename(value: datetime | None, filename: str | None) -> bool:
     if value is None or not filename:
         return False
@@ -108,7 +132,8 @@ def timestamp_matches_filename(value: datetime | None, filename: str | None) -> 
 
 def parse_api_timestamp(raw: str, ctx: TimezoneContext, *, field_name: str = "timestamp") -> ParsedTimestamp:
     try:
-        value = datetime.fromisoformat(str(raw).strip())
+        text = str(raw).strip()
+        value = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
     except Exception as exc:
         raise ValueError(f"Invalid {field_name}") from exc
     if value.tzinfo is not None:

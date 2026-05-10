@@ -19,11 +19,13 @@ from app.services.recorder_runtime_status import (
     iso_or_none as _iso,
     list_camera_recording_states as _camera_recording_states,
     read_recorder_heartbeat as _read_heartbeat,
+    segment_uses_local_naive_display as _segment_uses_local_naive_display,
     summarize_recorder_jobs as _job_summary,
     summarize_recorder_segments as _segment_summary,
     utc_now as _utc_now,
 )
 from app.services.storage_monitoring import build_storage_monitoring_summary
+from app.services.timezone_contract import format_system_iso, timezone_context, timezone_metadata
 
 SEVERITIES = ("ok", "warning", "error", "unknown")
 SAFE_REASON_CODES = {
@@ -103,7 +105,7 @@ def _recording_stale_threshold(camera: Camera) -> int:
     return max((segment_minutes * 2 * 60) + RECORDING_STALE_GRACE_SECONDS, HEARTBEAT_STALE_SECONDS)
 
 
-def _latest_segment_by_camera(db: Session, now: datetime) -> dict[int, dict[str, Any]]:
+def _latest_segment_by_camera(db: Session, now: datetime, ctx) -> dict[int, dict[str, Any]]:
     rows = (
         db.query(RecordingSegment)
         .filter(RecordingSegment.status != SEGMENT_STATUS_DELETED)
@@ -120,8 +122,12 @@ def _latest_segment_by_camera(db: Session, now: datetime) -> dict[int, dict[str,
         if segment.camera_id in result:
             continue
         last_time = segment.finalized_at or segment.ended_at or segment.started_at
+        local_naive = _segment_uses_local_naive_display(segment)
         result[segment.camera_id] = {
             "last_segment_time": _iso(last_time),
+            "last_segment_time_utc": _iso(last_time),
+            "last_segment_time_system": format_system_iso(last_time, ctx, local_naive=local_naive),
+            "last_segment_time_display_semantic": "product_local_naive" if local_naive else "storage_utc_naive",
             "last_segment_age_seconds": _age_seconds(last_time, now),
         }
     return result
@@ -198,7 +204,7 @@ def _build_live_domain(cameras: list[Camera]) -> tuple[dict[str, Any], dict[int,
     return {"severity": _rollup([item["severity"] for item in items]), "summary": summary, "items": items}, by_camera
 
 
-def _build_recorder_domain(db: Session, now: datetime) -> tuple[dict[str, Any], list[dict[str, Any]], dict[int, dict[str, Any]]]:
+def _build_recorder_domain(db: Session, now: datetime, ctx) -> tuple[dict[str, Any], list[dict[str, Any]], dict[int, dict[str, Any]]]:
     heartbeat = _read_heartbeat(db)
     heartbeat_age_seconds = _age_seconds(heartbeat.get("heartbeat_raw"), now) if heartbeat.get("available") else None
     if "heartbeat_raw" in heartbeat:
@@ -234,6 +240,9 @@ def _build_recorder_domain(db: Session, now: datetime) -> tuple[dict[str, Any], 
         "heartbeat_age_seconds": heartbeat_age_seconds,
         "stale_after_seconds": HEARTBEAT_STALE_SECONDS,
         "last_segment_time": segment_summary.get("last_segment_time"),
+        "last_segment_time_utc": segment_summary.get("last_segment_time_utc"),
+        "last_segment_time_system": segment_summary.get("last_segment_time_system"),
+        "last_segment_time_display_semantic": segment_summary.get("last_segment_time_display_semantic"),
         "last_segment_age_seconds": segment_summary.get("last_segment_age_seconds"),
     }
     return {
@@ -257,11 +266,12 @@ def _camera_configured_state(camera: Camera) -> str:
 def _build_camera_domain(
     db: Session,
     now: datetime,
+    ctx,
     cameras: list[Camera],
     recorder_states: dict[int, dict[str, Any]],
     live_by_camera: dict[int, dict[str, Any]],
 ) -> dict[str, Any]:
-    segments_by_camera = _latest_segment_by_camera(db, now)
+    segments_by_camera = _latest_segment_by_camera(db, now, ctx)
     items: list[dict[str, Any]] = []
 
     for camera in cameras:
@@ -317,6 +327,9 @@ def _build_camera_domain(
                 "reason_codes": reasons,
                 "last_safe_error_code": _safe_reason_from_error(recorder_state.get("last_error") or recorder_state.get("camera_last_error")),
                 "last_segment_time": segment_state.get("last_segment_time"),
+                "last_segment_time_utc": segment_state.get("last_segment_time_utc"),
+                "last_segment_time_system": segment_state.get("last_segment_time_system"),
+                "last_segment_time_display_semantic": segment_state.get("last_segment_time_display_semantic"),
                 "last_segment_age_seconds": last_segment_age,
                 "stale_after_seconds": stale_threshold if recording_enabled else None,
             }
@@ -345,6 +358,17 @@ def _usage_percent(capacity: dict[str, Any]) -> float | None:
 
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _system_time(value: Any, ctx) -> str | None:
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.removesuffix("Z"))
+        except ValueError:
+            return None
+    return format_system_iso(value, ctx)
 
 
 def _storage_severity_and_reasons(summary: dict[str, Any], usage_percent: float | None) -> tuple[str, list[str]]:
@@ -389,7 +413,7 @@ def _storage_severity_and_reasons(summary: dict[str, Any], usage_percent: float 
     return "unknown", reasons
 
 
-def _build_storage_domain(storage_summary: dict[str, Any]) -> dict[str, Any]:
+def _build_storage_domain(storage_summary: dict[str, Any], ctx) -> dict[str, Any]:
     checks = _as_dict(storage_summary.get("storage_path_checks"))
     capacity = _as_dict(storage_summary.get("capacity"))
     policy = _as_dict(storage_summary.get("auto_free_space_policy"))
@@ -432,6 +456,8 @@ def _build_storage_domain(storage_summary: dict[str, Any]) -> dict[str, Any]:
         "evidence_status": "fresh",
         "source": "storage_monitoring_metadata_summary",
         "last_checked_at": storage_summary.get("checked_at"),
+        "last_checked_at_utc": storage_summary.get("checked_at"),
+        "last_checked_at_system": _system_time(storage_summary.get("checked_at"), ctx),
     }
 
 
@@ -455,7 +481,7 @@ def _normalize_retention_status(value: Any) -> str:
     return "unknown"
 
 
-def _build_retention_domain(db: Session, now: datetime) -> dict[str, Any]:
+def _build_retention_domain(db: Session, now: datetime, ctx) -> dict[str, Any]:
     state = automatic_retention_status()
     free_space_state = auto_free_space_status()
     policy_count = db.query(Camera).filter(Camera.retention_days.isnot(None)).count()
@@ -493,7 +519,11 @@ def _build_retention_domain(db: Session, now: datetime) -> dict[str, Any]:
         "running": running,
         "last_status": last_status,
         "last_started_at": state.get("last_started_at"),
+        "last_started_at_utc": state.get("last_started_at"),
+        "last_started_at_system": _system_time(state.get("last_started_at"), ctx),
         "last_finished_at": state.get("last_finished_at"),
+        "last_finished_at_utc": state.get("last_finished_at"),
+        "last_finished_at_system": _system_time(state.get("last_finished_at"), ctx),
         "last_run_age_seconds": _retention_last_run_age_seconds(state, now),
         "policy_count": int(policy_count),
         "deleted_segments_count": int(deleted_segments_count),
@@ -513,7 +543,7 @@ def _build_retention_domain(db: Session, now: datetime) -> dict[str, Any]:
     }
 
 
-def _build_reconciliation_domain(storage_summary: dict[str, Any]) -> dict[str, Any]:
+def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[str, Any]:
     raw_reconciliation = storage_summary.get("reconciliation_summary")
     raw_cleanup = storage_summary.get("cleanup_candidates_summary")
     has_reconciliation_evidence = isinstance(raw_reconciliation, dict)
@@ -560,20 +590,23 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any]) -> dict[str, A
         "evidence_status": "fresh" if has_status_friendly_evidence else "missing",
         "source": "storage_monitoring_metadata_reconciliation_counts" if has_status_friendly_evidence else "reconciliation_evidence_missing",
         "last_checked_at": storage_summary.get("checked_at"),
+        "last_checked_at_utc": storage_summary.get("checked_at"),
+        "last_checked_at_system": _system_time(storage_summary.get("checked_at"), ctx),
     }
 
 
 def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     now = _utc_now()
+    ctx = timezone_context(db)
     cameras = db.query(Camera).order_by(Camera.id.asc()).all()
-    recorder_domain, _camera_states, recorder_states = _build_recorder_domain(db, now)
+    recorder_domain, _camera_states, recorder_states = _build_recorder_domain(db, now, ctx)
     live_domain, live_by_camera = _build_live_domain(cameras)
-    cameras_domain = _build_camera_domain(db, now, cameras, recorder_states, live_by_camera)
+    cameras_domain = _build_camera_domain(db, now, ctx, cameras, recorder_states, live_by_camera)
     storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=False, write_audit=False)
     storage_summary["auto_free_space_policy"] = apply_critical_low_disk_protection(db, storage_summary)
-    storage_domain = _build_storage_domain(storage_summary)
-    retention_domain = _build_retention_domain(db, now)
-    reconciliation_domain = _build_reconciliation_domain(storage_summary)
+    storage_domain = _build_storage_domain(storage_summary, ctx)
+    retention_domain = _build_retention_domain(db, now, ctx)
+    reconciliation_domain = _build_reconciliation_domain(storage_summary, ctx)
     domain_severities = [
         cameras_domain["severity"],
         live_domain["severity"],
@@ -598,6 +631,10 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
 
     return {
         "generated_at": _iso(now),
+        "generated_at_utc": _iso(now),
+        "generated_at_system": format_system_iso(now, ctx),
+        "timezone": timezone_metadata(ctx),
+        "system_timezone": ctx.name,
         "status": severity,
         "severity": severity,
         "summary": {

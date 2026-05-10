@@ -26,6 +26,7 @@ from app.services.recording_storage import (
     root_usage,
 )
 from app.services.storage_contract import storage_contract
+from app.services.timezone_contract import format_system_iso, timezone_context
 
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
@@ -675,6 +676,8 @@ def build_storage_monitoring_summary(
         "ok": status == "available",
         "available": status == "available",
         "checked_at": checked_at,
+        "checked_at_utc": checked_at,
+        "checked_at_system": format_system_iso(datetime.fromisoformat(checked_at.removesuffix("Z")), timezone_context(db)),
         "storage_contract": storage_contract(),
         "container_runtime_storage_root": str(root),
         "container_recordings_namespace_root": str(root / KMVMS_RECORDINGS_NAMESPACE),

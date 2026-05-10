@@ -22,6 +22,7 @@ from app.services.recorder_runtime_status import (
 from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.storage_contract import recording_format_contract, storage_contract
 from app.services.system_settings import get_system_settings
+from app.services.timezone_contract import format_system_iso, timezone_context, timezone_metadata
 
 
 FAILED_JOB_STATES = {"error", "restarting"}
@@ -29,6 +30,7 @@ MAX_RECENT_ITEMS = 50
 
 
 def _recent_events(db: Session) -> list[dict[str, Any]]:
+    ctx = timezone_context(db)
     events = (
         db.query(AuditEvent)
         .filter(
@@ -41,7 +43,7 @@ def _recent_events(db: Session) -> list[dict[str, Any]]:
         .limit(MAX_RECENT_ITEMS)
         .all()
     )
-    return [serialize_event(event) for event in events]
+    return [serialize_event(event, ctx) for event in events]
 
 
 def _storage_state(storage_summary: dict[str, Any]) -> dict[str, Any]:
@@ -52,6 +54,9 @@ def _storage_state(storage_summary: dict[str, Any]) -> dict[str, Any]:
         "status": storage_summary.get("status"),
         "ok": bool(storage_summary.get("ok")),
         "mount_status": storage_summary.get("mount_status"),
+        "checked_at": storage_summary.get("checked_at"),
+        "checked_at_utc": storage_summary.get("checked_at"),
+        "checked_at_system": storage_summary.get("checked_at_system"),
         "scan_limited": bool(storage_summary.get("scan_limited")),
         "partial": bool(storage_summary.get("partial")),
         "warnings_count": len(storage_summary.get("warnings") or []),
@@ -83,6 +88,14 @@ def _retention_state(retention_summary: dict[str, Any]) -> dict[str, Any]:
         "concurrency_guard": retention_summary.get("concurrency_guard"),
         "automatic_retention": retention_summary.get("automatic_retention"),
     }
+
+
+def _add_status_time_metadata(payload: dict[str, Any], generated_at: datetime, ctx) -> dict[str, Any]:
+    payload["generated_at_utc"] = _iso(generated_at)
+    payload["generated_at_system"] = format_system_iso(generated_at, ctx)
+    payload["timezone"] = timezone_metadata(ctx)
+    payload["system_timezone"] = ctx.name
+    return payload
 
 
 def _health_from(
@@ -120,6 +133,7 @@ def _health_from(
 
 def build_recorder_status(db: Session) -> dict[str, Any]:
     now = _utc_now()
+    ctx = timezone_context(db)
     heartbeat = _read_heartbeat(db)
     heartbeat_age_seconds = _age_seconds(heartbeat.get("heartbeat_raw"), now) if heartbeat.get("available") else None
     if "heartbeat_raw" in heartbeat:
@@ -140,7 +154,7 @@ def build_recorder_status(db: Session) -> dict[str, Any]:
         camera_states=camera_states,
         storage_state=storage_state,
     )
-    return {
+    return _add_status_time_metadata({
         "generated_at": _iso(now),
         "service_status": heartbeat.get("service_status") if heartbeat.get("available") else heartbeat.get("status"),
         "health": health,
@@ -164,6 +178,9 @@ def build_recorder_status(db: Session) -> dict[str, Any]:
         "failed_cameras_count": sum(1 for item in camera_states if item.get("current_failure")),
         "retrying_cameras_count": sum(1 for item in camera_states if item.get("job_state") == "restarting"),
         "last_segment_time": segment_summary.get("last_segment_time"),
+        "last_segment_time_utc": segment_summary.get("last_segment_time_utc"),
+        "last_segment_time_system": segment_summary.get("last_segment_time_system"),
+        "last_segment_time_display_semantic": segment_summary.get("last_segment_time_display_semantic"),
         "last_segment_age_seconds": segment_summary.get("last_segment_age_seconds"),
         "last_error": heartbeat.get("last_error"),
         "last_ffmpeg_exit_code": heartbeat.get("last_exit_code"),
@@ -179,12 +196,16 @@ def build_recorder_status(db: Session) -> dict[str, Any]:
         "segment_summary": segment_summary,
         "recent_events": _recent_events(db),
         "log_summary": {"status": "unavailable", "reason": "no_safe_product_log_summary_source"},
-    }
+    }, now, ctx)
 
 
 def _system_runtime_from_status(status: dict[str, Any]) -> dict[str, Any]:
     return {
         "generated_at": status["generated_at"],
+        "generated_at_utc": status.get("generated_at_utc"),
+        "generated_at_system": status.get("generated_at_system"),
+        "timezone": status.get("timezone"),
+        "system_timezone": status.get("system_timezone"),
         "recorder": {
             "health": status["health"],
             "service_status": status["service_status"],
@@ -195,6 +216,9 @@ def _system_runtime_from_status(status: dict[str, Any]) -> dict[str, Any]:
             "failed_cameras_count": status["failed_cameras_count"],
             "retrying_cameras_count": status["retrying_cameras_count"],
             "last_segment_time": status["last_segment_time"],
+            "last_segment_time_utc": status.get("last_segment_time_utc"),
+            "last_segment_time_system": status.get("last_segment_time_system"),
+            "last_segment_time_display_semantic": status.get("last_segment_time_display_semantic"),
             "last_segment_age_seconds": status["last_segment_age_seconds"],
         },
         "storage": status["storage_state"],
@@ -207,6 +231,7 @@ def _system_runtime_from_status(status: dict[str, Any]) -> dict[str, Any]:
 
 def build_system_runtime_status(db: Session) -> dict[str, Any]:
     now = _utc_now()
+    ctx = timezone_context(db)
     heartbeat = _read_heartbeat(db)
     heartbeat_age_seconds = _age_seconds(heartbeat.get("heartbeat_raw"), now) if heartbeat.get("available") else None
     if "heartbeat_raw" in heartbeat:
@@ -226,6 +251,7 @@ def build_system_runtime_status(db: Session) -> dict[str, Any]:
         storage_state=storage_state,
     )
     return _system_runtime_from_status(
+        _add_status_time_metadata(
         {
             "generated_at": _iso(now),
             "health": health,
@@ -243,7 +269,10 @@ def build_system_runtime_status(db: Session) -> dict[str, Any]:
             "storage_contract": storage_contract(db_storage_path=system_settings.storage_path),
             "recording_format_contract": format_contract,
             "effective_recording_format": format_contract["recording_format"],
-        }
+        },
+        now,
+        ctx,
+        )
     )
 
 

@@ -59,6 +59,7 @@ from app.services.schema_versioning import schema_version_status
 from app.services.backup_before_upgrade import BackupExecutionConfig, BackupSafetyBlocked, build_backup_plan, create_backup_before_upgrade
 from app.services.upgrade_report import build_upgrade_report, upgrade_report_text_summary
 from app.services.update_check import UpdateCheckBlocked, build_update_status, run_update_check
+from app.services.timezone_contract import format_system_iso, timezone_context, timezone_metadata, utc_now_storage
 
 router = APIRouter(tags=["settings"])
 
@@ -630,6 +631,19 @@ def write_json(bundle: zipfile.ZipFile, arcname: str, payload) -> None:
     )
 
 
+def _diagnostic_time_context(db: Session) -> tuple[datetime, dict]:
+    now = utc_now_storage()
+    ctx = timezone_context(db)
+    return now, {
+        "created_at": now.isoformat() + "Z",
+        "created_at_utc": now.isoformat() + "Z",
+        "created_at_system": format_system_iso(now, ctx),
+        "timezone": timezone_metadata(ctx),
+        "system_timezone": ctx.name,
+        "filename_timestamp_semantic": "UTC safe archive filename; product timezone is stored inside archive metadata",
+    }
+
+
 def safe_archive_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9._/-]+", "_", value).strip("_") or "log"
 
@@ -875,7 +889,9 @@ def build_log_archive(
     include_logs: bool = True,
 ) -> io.BytesIO:
     mode = mode if mode in DIAGNOSTIC_MODES else "normal"
-    created_at = datetime.utcnow().isoformat() + "Z"
+    created_dt, time_context = _diagnostic_time_context(db)
+    created_at = time_context["created_at"]
+    ctx = timezone_context(db)
     audit_events = list_events(
         db,
         limit=1000,
@@ -888,6 +904,10 @@ def build_log_archive(
             "system/manifest.json",
             {
                 "created_at": created_at,
+                "created_at_utc": time_context["created_at_utc"],
+                "created_at_system": time_context["created_at_system"],
+                "timezone": time_context["timezone"],
+                "filename_timestamp_semantic": time_context["filename_timestamp_semantic"],
                 "mode": mode,
                 "docker_log_rule": "--since=30m" if mode == "extended" else "--since=10m",
                 "containers": DIAGNOSTIC_CONTAINERS,
@@ -902,6 +922,9 @@ def build_log_archive(
             "system/info.json",
             {
                 "created_at": created_at,
+                "created_at_utc": time_context["created_at_utc"],
+                "created_at_system": time_context["created_at_system"],
+                "timezone": time_context["timezone"],
                 "app_env": settings.app_env,
                 "storage_root": settings.storage_root,
                 "storage_previews": settings.storage_previews,
@@ -916,6 +939,7 @@ def build_log_archive(
             },
         )
         write_json(bundle, "system/settings.json", serialize_settings(get_system_settings(db)))
+        write_json(bundle, "system/timezone.json", time_context)
         write_json(bundle, "storage/status.json", storage_diagnostics())
         write_json(bundle, "storage/storage_monitoring_summary.json", build_storage_monitoring_summary(db))
         write_json(bundle, "storage/recording_integrity_summary.json", reconciliation_diagnostics(db))
@@ -929,8 +953,8 @@ def build_log_archive(
         write_json(bundle, "live/debug.json", live_manager.debug())
         write_json(bundle, "recordings/summary.json", recordings_diagnostics())
         write_json(bundle, "chronology/summary.json", chronology_diagnostics(db))
-        write_json(bundle, "audit/events_recent.json", [serialize_event(event) for event in audit_events])
-        write_json(bundle, "audit/summary.json", audit_summary(audit_events))
+        write_json(bundle, "audit/events_recent.json", [serialize_event(event, ctx) for event in audit_events])
+        write_json(bundle, "audit/summary.json", audit_summary(audit_events, ctx))
         upgrade_report = build_upgrade_report(db)
         write_json(bundle, "upgrade/report.json", upgrade_report)
         bundle.writestr("upgrade/summary.txt", audit_redact_text(upgrade_report_text_summary(upgrade_report)) + "\n")
@@ -949,7 +973,7 @@ def build_log_archive(
                 "raw_request_bodies_included": False,
             },
         )
-        bundle.writestr("audit/events_recent.txt", events_as_text(audit_events))
+        bundle.writestr("audit/events_recent.txt", events_as_text(audit_events, ctx))
         if report_text is not None:
             bundle.writestr("bug-report.txt", audit_redact_text(report_text.strip()) + "\n")
         if include_logs:
@@ -1008,7 +1032,7 @@ def download_log_archive(
         user_agent=request_user_agent(request),
     )
     suffix = "extended" if mode == "extended" else "normal"
-    filename = f"km-vms-logs-{suffix}-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
+    filename = f"km-vms-logs-{suffix}-{utc_now_storage().strftime('%Y%m%d-%H%M%S')}.zip"
     return StreamingResponse(
         archive,
         media_type="application/zip",
@@ -1064,7 +1088,7 @@ def create_bug_report(
         ip_address=request_ip(request),
         user_agent=request_user_agent(request),
     )
-    filename = f"km-vms-bug-report-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}.zip"
+    filename = f"km-vms-bug-report-{utc_now_storage().strftime('%Y%m%d-%H%M%S')}.zip"
     return StreamingResponse(
         archive,
         media_type="application/zip",

@@ -1,5 +1,3 @@
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -7,19 +5,16 @@ from app.db.session import get_db
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.services.audit_log import CATEGORIES, SEVERITIES, list_events, serialize_event
+from app.services.timezone_contract import parse_api_timestamp, timezone_context, timezone_metadata
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
 
-def _parse_datetime_filter(value: str | None, field_name: str) -> datetime | None:
+def _parse_datetime_filter(value: str | None, field_name: str, ctx):
     if not value:
         return None
     try:
-        normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
-        parsed = datetime.fromisoformat(normalized)
-        if parsed.tzinfo is not None:
-            parsed = parsed.astimezone().replace(tzinfo=None)
-        return parsed
+        return parse_api_timestamp(value, ctx, field_name=field_name).storage_utc
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Invalid {field_name} filter")
 
@@ -46,8 +41,9 @@ def audit_events(
         raise HTTPException(status_code=422, detail="Invalid category filter")
     if severity and severity not in SEVERITIES:
         raise HTTPException(status_code=422, detail="Invalid severity filter")
-    parsed_date_from = _parse_datetime_filter(date_from, "date_from")
-    parsed_date_to = _parse_datetime_filter(date_to, "date_to")
+    ctx = timezone_context(db)
+    parsed_date_from = _parse_datetime_filter(date_from, "date_from", ctx)
+    parsed_date_to = _parse_datetime_filter(date_to, "date_to", ctx)
     if parsed_date_from and parsed_date_to and parsed_date_from > parsed_date_to:
         raise HTTPException(status_code=422, detail="Invalid date range")
     events = list_events(
@@ -67,8 +63,9 @@ def audit_events(
         q=q,
     )
     return {
-        "items": [serialize_event(event) for event in events],
+        "items": [serialize_event(event, ctx) for event in events],
         "count": len(events),
         "limit": limit,
         "offset": offset,
+        "timezone": timezone_metadata(ctx),
     }

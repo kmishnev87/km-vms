@@ -12,6 +12,13 @@ from sqlalchemy.orm import Session
 from app.core.sanitization import redact_text
 from app.db.session import SessionLocal
 from app.models.audit_event import AuditEvent
+from app.services.timezone_contract import (
+    TimezoneContext,
+    format_system_iso,
+    format_storage_utc_iso,
+    timezone_context,
+    utc_now_storage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +124,7 @@ def create_event(
     try:
         event = AuditEvent(
             id=str(uuid.uuid4()),
-            created_at=datetime.utcnow(),
+            created_at=utc_now_storage(),
             **_actor_fields(actor),
             category=category,
             event_type=event_type,
@@ -147,10 +154,14 @@ def create_event(
             session.close()
 
 
-def serialize_event(event: AuditEvent) -> dict:
+def serialize_event(event: AuditEvent, ctx: TimezoneContext | None = None) -> dict:
+    ctx = ctx or timezone_context(None)
     return {
         "id": event.id,
-        "created_at": event.created_at.isoformat() + "Z" if event.created_at else None,
+        "created_at": format_storage_utc_iso(event.created_at),
+        "created_at_utc": format_storage_utc_iso(event.created_at),
+        "created_at_system": format_system_iso(event.created_at, ctx),
+        "system_timezone": ctx.name,
         "actor_user_id": event.actor_user_id,
         "actor_username": event.actor_username,
         "actor_role": event.actor_role,
@@ -168,7 +179,8 @@ def serialize_event(event: AuditEvent) -> dict:
     }
 
 
-def audit_summary(events: list[AuditEvent]) -> dict:
+def audit_summary(events: list[AuditEvent], ctx: TimezoneContext | None = None) -> dict:
+    ctx = ctx or timezone_context(None)
     by_category: dict[str, int] = {}
     by_severity: dict[str, int] = {}
     highlighted = []
@@ -178,7 +190,9 @@ def audit_summary(events: list[AuditEvent]) -> dict:
         if event.category == "security" or event.severity in {"warning", "error", "security"}:
             highlighted.append(
                 {
-                    "created_at": event.created_at.isoformat() + "Z" if event.created_at else None,
+                    "created_at": format_storage_utc_iso(event.created_at),
+                    "created_at_utc": format_storage_utc_iso(event.created_at),
+                    "created_at_system": format_system_iso(event.created_at, ctx),
                     "category": event.category,
                     "severity": event.severity,
                     "event_type": event.event_type,
@@ -193,6 +207,12 @@ def audit_summary(events: list[AuditEvent]) -> dict:
         "by_category": dict(sorted(by_category.items())),
         "by_severity": dict(sorted(by_severity.items())),
         "recent_security_warning_error": highlighted[:50],
+        "timezone": {
+            "system_timezone": ctx.name,
+            "fallback_used": ctx.fallback_used,
+            "operator_facing_fields": ["created_at_system"],
+            "canonical_fields": ["created_at", "created_at_utc"],
+        },
         "redaction": {
             "metadata_sanitized": True,
             "text_redaction": True,
@@ -256,7 +276,7 @@ def list_events(
     if date_to:
         query = query.filter(AuditEvent.created_at <= date_to)
     if since_minutes is not None:
-        query = query.filter(AuditEvent.created_at >= datetime.utcnow() - timedelta(minutes=since_minutes))
+        query = query.filter(AuditEvent.created_at >= utc_now_storage() - timedelta(minutes=since_minutes))
     if q:
         q_value = f"%{redact_text(q).strip()[:120]}%"
         query = query.filter(
@@ -273,10 +293,11 @@ def list_events(
     return query.order_by(AuditEvent.created_at.desc()).offset(offset).limit(limit).all()
 
 
-def events_as_text(events: list[AuditEvent]) -> str:
+def events_as_text(events: list[AuditEvent], ctx: TimezoneContext | None = None) -> str:
+    ctx = ctx or timezone_context(None)
     lines = []
     for event in events:
-        created = event.created_at.strftime("%Y-%m-%d %H:%M:%S") if event.created_at else ""
+        created = format_system_iso(event.created_at, ctx) or ""
         actor = event.actor_username or "system"
         lines.append(f"{created} | {event.category} | {event.severity} | {actor} | {event.message_ru}")
     return "\n".join(lines) + ("\n" if lines else "")
