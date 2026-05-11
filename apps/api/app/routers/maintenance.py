@@ -15,10 +15,17 @@ from app.services.migration_maintenance import (
     dry_run_migration_maintenance,
     inspect_migration_maintenance,
 )
+from app.services.restore_maintenance import (
+    RestoreMaintenanceBlocked,
+    apply_restore_maintenance,
+    dry_run_restore_maintenance,
+    inspect_restore_maintenance,
+)
 
 
 router = APIRouter(prefix="/system/db-adoption", tags=["maintenance"])
 migrations_router = APIRouter(prefix="/system/migrations", tags=["maintenance"])
+restore_router = APIRouter(prefix="/system/restore", tags=["maintenance"])
 
 
 class DbAdoptionApplyRequest(BaseModel):
@@ -158,6 +165,91 @@ def migration_apply(
             "applied_count": result.get("applied_count", 0),
             "backup_status": result.get("backup_status"),
             "business_data_outside_migration_runner_mutated": False,
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    return result
+
+
+class RestoreDryRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str | None = None
+    target_kind: str = "temporary_validation_db"
+
+
+class RestoreApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = False
+    artifact_id: str
+    target_kind: str
+
+
+@restore_router.get("/status")
+def restore_status(
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    return inspect_restore_maintenance(actor=current_user)
+
+
+@restore_router.post("/dry-run")
+def restore_dry_run(
+    payload: RestoreDryRunRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    return dry_run_restore_maintenance(db, artifact_id=payload.artifact_id, target_kind=payload.target_kind, actor=current_user)
+
+
+@restore_router.post("/apply")
+def restore_apply(
+    payload: RestoreApplyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        result = apply_restore_maintenance(
+            db,
+            confirm=payload.confirm,
+            artifact_id=payload.artifact_id,
+            target_kind=payload.target_kind,
+            actor=current_user,
+        )
+    except RestoreMaintenanceBlocked as exc:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="system",
+            event_type="system.restore_apply_blocked" if exc.status != "restore_failed" else "system.restore_apply_failed",
+            severity="warning",
+            message_ru="Restore maintenance action was blocked.",
+            message_en="Restore maintenance action was blocked.",
+            target_type="restore_rollback",
+            metadata={"status": exc.status, "reason": str(exc)[:300]},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.diagnostics)
+
+    create_event(
+        db=db,
+        actor=current_user,
+        category="system",
+        event_type="system.restore_apply_completed",
+        severity="info",
+        message_ru="Restore maintenance action completed.",
+        message_en="Restore maintenance action completed.",
+        target_type="restore_rollback",
+        metadata={
+            "status": result.get("status"),
+            "report_id": result.get("report_id"),
+            "target_kind": result.get("target_kind"),
+            "current_backup_status": result.get("current_backup_status"),
+            "video_archive_files_restored": False,
+            "migration_auto_apply": False,
         },
         ip_address=request_ip(request),
         user_agent=request_user_agent(request),

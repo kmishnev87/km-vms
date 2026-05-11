@@ -27,6 +27,7 @@ from app.services.schema_versioning import CURRENT_SCHEMA_VERSION, CURRENT_STATE
 from app.services.update_check import build_update_status
 from app.services.db_adoption import inspect_db_adoption
 from app.services.migration_maintenance import inspect_migration_maintenance
+from app.services.restore_maintenance import inspect_restore_maintenance
 
 
 REPORT_VERSION = "stage6.upgrade_report.v1"
@@ -341,6 +342,7 @@ def build_upgrade_report(
         }
     adoption_status = inspect_db_adoption(db, include_backup_plan=False)
     migration_maintenance = inspect_migration_maintenance(db, include_backup_plan=False)
+    restore_maintenance = inspect_restore_maintenance()
     history = _history_summary(db)
     versions = _version_summary(db, schema_status, history, migration_plan)
     pending = _pending_summary(migration_plan)
@@ -528,6 +530,21 @@ def build_upgrade_report(
             "semantics": "DB backup recoverability validated only in disposable environment when restore_validated.",
             "production_rollback_automated": False,
             "video_archive_restore_covered": False,
+        },
+        "restore_maintenance": {
+            "status": restore_maintenance.get("status"),
+            "reason": _sanitize(restore_maintenance.get("reason")),
+            "artifact_count": restore_maintenance.get("artifact_count"),
+            "valid_artifact_count": restore_maintenance.get("valid_artifact_count"),
+            "can_restore": restore_maintenance.get("can_restore"),
+            "temporary_validation_restore_supported": restore_maintenance.get("temporary_validation_restore_supported"),
+            "temporary_validation_target": restore_maintenance.get("temporary_validation_target"),
+            "current_product_restore_supported": False,
+            "current_product_restore_status": "blocked",
+            "current_product_restore_reason": "current_product_restore_not_enabled",
+            "requires_explicit_future_enablement": True,
+            "read_only": True,
+            "side_effects": {"db_restored": False, "current_backup_created": False, "migration_auto_apply": False},
         },
         "warnings": warnings,
         "errors": [],
