@@ -25,6 +25,7 @@ from app.services.restore_validation import backup_restore_validated
 from app.services.schema_migrations import PRODUCTION_ADOPTION_DEFERRED, build_migration_plan
 from app.services.schema_versioning import CURRENT_SCHEMA_VERSION, CURRENT_STATE_ID, schema_version_status
 from app.services.update_check import build_update_status
+from app.services.db_adoption import inspect_db_adoption
 
 
 REPORT_VERSION = "stage6.upgrade_report.v1"
@@ -329,6 +330,7 @@ def build_upgrade_report(
     warnings: list[dict[str, Any]] = []
     schema_status = schema_version_status(db)
     migration_plan = build_migration_plan(db)
+    adoption_status = inspect_db_adoption(db, include_backup_plan=False)
     history = _history_summary(db)
     versions = _version_summary(db, schema_status, history, migration_plan)
     pending = _pending_summary(migration_plan)
@@ -482,6 +484,17 @@ def build_upgrade_report(
             "startup_execution_policy": "preflight_block_only",
         },
         "production": production,
+        "db_adoption": {
+            "status": adoption_status.get("status"),
+            "reason": _sanitize(adoption_status.get("reason")),
+            "metadata_present": adoption_status.get("metadata_present"),
+            "can_adopt": adoption_status.get("can_adopt"),
+            "already_adopted": adoption_status.get("already_adopted"),
+            "backup_required": adoption_status.get("backup_required"),
+            "report_id": adoption_status.get("report_id"),
+            "read_only": True,
+            "side_effects": {"db_mutated": False, "backup_created": False, "migration_executed": False},
+        },
         "update_check": build_update_status(db),
         "backup": backup,
         "restore_validation": {

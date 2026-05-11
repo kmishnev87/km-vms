@@ -32,6 +32,7 @@ BASELINE_MODEL_TABLES = {
 }
 LEGACY_DB_ONLY_TABLES = {"recorder_runtime_status"}
 KNOWN_SAFE_MISSING_TABLES = {"setup_locks", "recorder_runtime_status", "user_workspace_layouts", "archive_export_jobs"}
+KNOWN_OPTIONAL_MISSING_TABLES = {"archive_export_jobs"}
 KNOWN_CAMERA_NULLABLE_DRIFT_COLUMNS = {"segment_minutes", "retention_days", "storage_quota_gb"}
 KNOWN_SAFE_MISSING_COLUMNS = {"system_settings": {"system_name"}, "cameras": {"rtsp_host", "rtsp_port", "deleted_at"}}
 SAFE_STATUSES = {"current", "adopted_baseline", "drift_known_safe"}
@@ -149,7 +150,11 @@ def classify_schema_shape(shape: SchemaShape) -> dict[str, Any]:
             }
         )
 
-    status_affecting_known_safe = [item for item in known_safe if item.get("type") != "db_only_table"]
+    status_affecting_known_safe = [
+        item
+        for item in known_safe
+        if item.get("type") != "db_only_table" and not (item.get("type") == "missing_table" and item.get("table") in KNOWN_OPTIONAL_MISSING_TABLES)
+    ]
 
     if unsafe:
         status = "drift_blocked"
