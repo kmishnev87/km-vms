@@ -22,10 +22,11 @@ from app.services.backup_before_upgrade import (
     verify_backup_manifest,
 )
 from app.services.restore_validation import backup_restore_validated
-from app.services.schema_migrations import PRODUCTION_ADOPTION_DEFERRED, build_migration_plan
+from app.services.schema_migrations import PRODUCTION_ADOPTION_DEFERRED, SchemaMigrationBlocked, build_migration_plan
 from app.services.schema_versioning import CURRENT_SCHEMA_VERSION, CURRENT_STATE_ID, schema_version_status
 from app.services.update_check import build_update_status
 from app.services.db_adoption import inspect_db_adoption
+from app.services.migration_maintenance import inspect_migration_maintenance
 
 
 REPORT_VERSION = "stage6.upgrade_report.v1"
@@ -329,8 +330,17 @@ def build_upgrade_report(
     generated_at = _utc_iso()
     warnings: list[dict[str, Any]] = []
     schema_status = schema_version_status(db)
-    migration_plan = build_migration_plan(db)
+    try:
+        migration_plan = build_migration_plan(db)
+    except SchemaMigrationBlocked as exc:
+        migration_plan = {
+            **_safe_jsonable(exc.diagnostics),
+            "status": "blocked",
+            "blocked_reason": exc.status,
+            "mutates_database": False,
+        }
     adoption_status = inspect_db_adoption(db, include_backup_plan=False)
+    migration_maintenance = inspect_migration_maintenance(db, include_backup_plan=False)
     history = _history_summary(db)
     versions = _version_summary(db, schema_status, history, migration_plan)
     pending = _pending_summary(migration_plan)
@@ -482,6 +492,19 @@ def build_upgrade_report(
             "pending_migrations": pending,
             "mutates_database": False,
             "startup_execution_policy": "preflight_block_only",
+        },
+        "migration_maintenance": {
+            "status": migration_maintenance.get("status"),
+            "reason": _sanitize(migration_maintenance.get("reason")),
+            "current_version": migration_maintenance.get("current_version"),
+            "target_version": migration_maintenance.get("target_version"),
+            "pending_count": migration_maintenance.get("pending_count"),
+            "plan_id": migration_maintenance.get("plan_id"),
+            "backup_required": migration_maintenance.get("backup_required"),
+            "can_apply": migration_maintenance.get("can_apply"),
+            "requires_confirmation": migration_maintenance.get("requires_confirmation"),
+            "read_only": True,
+            "side_effects": {"db_mutated": False, "backup_created": False, "migration_executed": False},
         },
         "production": production,
         "db_adoption": {
