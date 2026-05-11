@@ -79,6 +79,8 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("diagnostics", "GET", "/system/upgrade/report", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Read-only sanitized upgrade/backup/restore report; no backup, restore or migration execution."),
     EndpointPermission("system", "GET", "/system/update/status", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only safe update status; no network check or update apply."),
     EndpointPermission("system", "POST", "/system/update/check", PERMISSION_MANAGE_SETTINGS, "require_permission", "Manual safe update check against trusted configured source only; no arbitrary URL, download, restart, migration, backup or restore."),
+    EndpointPermission("system", "POST", "/system/update/dry-run", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only update apply preflight; no backup, download, restart, migration or restore."),
+    EndpointPermission("system", "POST", "/system/update/apply", PERMISSION_MANAGE_SETTINGS, "require_permission", "Explicit product update apply request; confirmation required and blocked unless a safe trusted apply executor is available."),
     EndpointPermission("diagnostics", "GET", "/settings/logs/archive", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("diagnostics", "POST", "/settings/bug-report", PERMISSION_RUN_DIAGNOSTICS, "require_permission"),
     EndpointPermission("hardware", "GET", "/hardware/capabilities", PERMISSION_MANAGE_SETTINGS, "require_permission"),

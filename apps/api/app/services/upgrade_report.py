@@ -28,6 +28,7 @@ from app.services.update_check import build_update_status
 from app.services.db_adoption import inspect_db_adoption
 from app.services.migration_maintenance import inspect_migration_maintenance
 from app.services.restore_maintenance import inspect_restore_maintenance
+from app.services.update_maintenance import inspect_update_maintenance
 
 
 REPORT_VERSION = "stage6.upgrade_report.v1"
@@ -343,6 +344,7 @@ def build_upgrade_report(
     adoption_status = inspect_db_adoption(db, include_backup_plan=False)
     migration_maintenance = inspect_migration_maintenance(db, include_backup_plan=False)
     restore_maintenance = inspect_restore_maintenance()
+    update_maintenance = inspect_update_maintenance(db)
     history = _history_summary(db)
     versions = _version_summary(db, schema_status, history, migration_plan)
     pending = _pending_summary(migration_plan)
@@ -521,6 +523,28 @@ def build_upgrade_report(
             "side_effects": {"db_mutated": False, "backup_created": False, "migration_executed": False},
         },
         "update_check": build_update_status(db),
+        "update_maintenance": {
+            "status": update_maintenance.get("status"),
+            "reason": _sanitize(update_maintenance.get("reason")),
+            "current_version": update_maintenance.get("current_version"),
+            "available_version": update_maintenance.get("available_version"),
+            "release_id": update_maintenance.get("release_id"),
+            "release_validated": update_maintenance.get("release_validated"),
+            "compatibility_status": update_maintenance.get("compatibility_status"),
+            "backup_required": update_maintenance.get("backup_required"),
+            "backup_root_status": update_maintenance.get("backup_root_status"),
+            "migration_required": update_maintenance.get("migration_required"),
+            "restore_available": update_maintenance.get("restore_available"),
+            "compose_plan_required": update_maintenance.get("compose_plan_required"),
+            "restart_required": update_maintenance.get("restart_required"),
+            "can_apply": update_maintenance.get("can_apply"),
+            "requires_confirmation": update_maintenance.get("requires_confirmation"),
+            "apply_supported": update_maintenance.get("apply_supported"),
+            "apply_status": update_maintenance.get("apply_status"),
+            "apply_blocked_reason": update_maintenance.get("apply_blocked_reason"),
+            "read_only": True,
+            "side_effects": update_maintenance.get("side_effects"),
+        },
         "backup": backup,
         "restore_validation": {
             "status": backup["restore_validation_status"],
