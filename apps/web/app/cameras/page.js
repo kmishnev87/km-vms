@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { apiFetch } from "../../lib/api";
+import { useI18n, useLocaleText } from "../../lib/i18n";
 
 const initialForm = {
   name: "",
@@ -172,40 +173,40 @@ function configVideo(profile) {
   };
 }
 
-function profileVideoSummary(profile) {
+function profileVideoSummary(profile, copy = {}) {
   const video = configVideo(profile);
   const parts = [];
   if (hasValue(video.codec)) parts.push(video.codec);
   if (hasValue(video.resolution) && video.resolution !== "-") parts.push(video.resolution);
   if (hasValue(video.fps)) parts.push(`fps ${video.fps}`);
-  if (parts.length) return `ONVIF video: ${parts.join(" · ")}`;
+  if (parts.length) return `${copy.onvifVideo || copy.video || ""}: ${parts.join(" · ")}`;
   if (profile?.rtsp_probe?.video) {
     const probe = profile.rtsp_probe.video;
     const probeParts = [];
     if (hasValue(probe.codec)) probeParts.push(probe.codec);
     if (hasValue(probe.width) && hasValue(probe.height)) probeParts.push(`${probe.width}x${probe.height}`);
     if (hasValue(probe.fps)) probeParts.push(`fps ${probe.fps}`);
-    if (probeParts.length) return `RTSP probe video: ${probeParts.join(" · ")}`;
+    if (probeParts.length) return `${copy.rtspProbeVideo || copy.video || ""}: ${probeParts.join(" · ")}`;
   }
-  return "Video parameters unavailable";
+  return copy.videoParametersUnavailable || "";
 }
 
-function profileAudioSummary(profile) {
+function profileAudioSummary(profile, copy = {}) {
   const audio = profile?.audio || profile?.rtsp_probe?.audio;
-  if (!audio) return "Audio: none";
+  if (!audio) return copy.audioNone || "";
   const parts = [];
   if (hasValue(audio.codec)) parts.push(audio.codec);
-  if (hasValue(audio.channels)) parts.push(`channels ${audio.channels}`);
-  if (hasValue(audio.sample_rate)) parts.push(`sample_rate ${audio.sample_rate}`);
-  return parts.length ? `Audio: ${parts.join(" · ")}` : "Audio: none";
+  if (hasValue(audio.channels)) parts.push(`${copy.channels || ""} ${audio.channels}`.trim());
+  if (hasValue(audio.sample_rate)) parts.push(`${copy.sampleRate || ""} ${audio.sample_rate}`.trim());
+  return parts.length ? `${copy.audio || ""}: ${parts.join(" · ")}` : (copy.audioNone || "");
 }
 
 function profileNameText(profile) {
   return `${profile?.name || ""} ${profile?.token || ""}`.toLowerCase();
 }
 
-function profileDisplayName(profile) {
-  return String(profile?.name || profile?.token || "Профиль").trim();
+function profileDisplayName(profile, copy = {}) {
+  return String(profile?.name || profile?.token || copy.profileFallback || "Profile").trim();
 }
 
 function profilePixels(profile) {
@@ -231,10 +232,10 @@ function profileRole(profile, data) {
   return "main";
 }
 
-function profileConfigWarning(profile) {
+function profileConfigWarning(profile, copy = {}) {
   const warnings = profile?.warnings || [];
   if (profile?.video_config_state === "unavailable" || warnings.some((item) => String(item).includes("video_encoder"))) {
-    return "ONVIF video config unavailable";
+    return copy.onvifVideoConfigUnavailable;
   }
   return "";
 }
@@ -259,15 +260,15 @@ function profileTokenSummary(profile) {
   return token.length > 28 ? `${token.slice(0, 14)}...${token.slice(-8)}` : token;
 }
 
-function profileAssignmentSummary(profile, fallbackPath) {
+function profileAssignmentSummary(profile, fallbackPath, copy = {}) {
   if (!profile) {
-    return fallbackPath ? `Path: ${prettyRtspValue(fallbackPath)}` : "Не назначен";
+    return fallbackPath ? `${copy.pathLabel} ${prettyRtspValue(fallbackPath)}` : copy.unassigned;
   }
-  const parts = [profileDisplayName(profile)];
+  const parts = [profileDisplayName(profile, copy)];
   const resolution = profileResolution(profile);
   const token = profileTokenSummary(profile);
   if (resolution) parts.push(resolution);
-  if (token) parts.push(`token ${token}`);
+  if (token) parts.push(copy.tokenSummary ? copy.tokenSummary.replace("{token}", token) : `Token: ${token}`);
   return parts.join(" / ");
 }
 
@@ -327,63 +328,63 @@ function cameraPayloadFromForm(source, editingCameraId) {
   return payload;
 }
 
-function normalizeCameraError(message) {
+function normalizeCameraError(message, copy) {
   const text = String(message || "").trim();
-  if (!text) return "Не удалось выполнить действие. Проверьте параметры и повторите попытку.";
+  if (!text) return copy.actionFailed;
   if (text.includes("camera_validation_required")) {
-    return "Перед сохранением выполните тест/ONVIF проверку или явно отметьте сохранение без проверки.";
+    return copy.validationRequired;
   }
   if (text.includes("ffprobe") || text.includes("Invalid data") || text.includes("Server returned")) {
-    return "Камера не ответила корректно. Проверьте RTSP path, логин, пароль и сетевой доступ.";
+    return copy.badCameraResponse;
   }
   if (text.length > 180) {
-    return "Не удалось подключиться к камере. Проверьте адрес, порт и параметры потока.";
+    return copy.cameraConnectFailed;
   }
   return text;
 }
 
-function normalizeRuntimeError(message) {
+function normalizeRuntimeError(message, copy) {
   const text = String(message || "").trim();
   if (!text) return "";
   if (text.includes("401") || text.toLowerCase().includes("auth")) {
-    return "Ошибка подключения: проверьте логин и пароль камеры.";
+    return copy.authError;
   }
   if (text.toLowerCase().includes("timeout")) {
-    return "Камера не отвечает: проверьте сеть и RTSP path.";
+    return copy.timeoutError;
   }
   if (text.toLowerCase().includes("storage")) {
-    return "Запись недоступна: хранилище недоступно.";
+    return copy.storageError;
   }
   if (text.toLowerCase().includes("ffmpeg")) {
-    return "Запись недоступна: ошибка видеопроцесса.";
+    return copy.ffmpegError;
   }
   if (text.length > 140) {
-    return "Запись недоступна: проверьте параметры камеры и хранилище.";
+    return copy.recordingUnavailable;
   }
   return text;
 }
 
-function archiveCleanupMessage(result) {
+function archiveCleanupMessage(result, copy) {
   const warnings = result?.warnings || result?.archive_cleanup?.warnings || result?.recordings?.warnings || [];
   const reasons = result?.archive_cleanup?.reason_counts || result?.recordings?.reason_counts || {};
   if (!result?.camera_removed) return "";
-  if (!warnings.length && !Object.keys(reasons).length) return "Камера удалена";
+  if (!warnings.length && !Object.keys(reasons).length) return copy.cameraDeleted;
   if (reasons.delete_recordings_permission_missing) {
-    return "Камера удалена. Архив не удален: у пользователя нет права удалять записи.";
+    return copy.archiveDeleteNoPermission;
   }
   if (reasons.active_job) {
-    return "Камера удалена. Архив не удален: для камеры есть активная запись.";
+    return copy.archiveDeleteActiveJob;
   }
   if (reasons.unowned) {
-    return "Камера удалена. Архив не удален: найдены файлы вне владения KM VMS.";
+    return copy.archiveDeleteUnowned;
   }
   if (reasons.path_outside_storage) {
-    return "Камера удалена. Архив не удален: путь вне безопасного хранилища.";
+    return copy.archiveDeleteUnsafePath;
   }
   if (warnings.includes("archive_retained") || reasons.recordings_exist_delete_files_false_requires_safe_policy) {
-    return "Камера удалена. Архив оставлен на диске.";
+    return copy.archiveRetained;
   }
-  return "Камера удалена. Архив не удален: cleanup был пропущен или частично заблокирован.";
+  return copy.archiveCleanupPartial;
 }
 
 function cameraEndpointLabel(camera) {
@@ -391,55 +392,59 @@ function cameraEndpointLabel(camera) {
   return `${camera?.host || "-"}:${camera?.port || "-"} · ${protocol || "-"}`;
 }
 
-function cameraRecordingLabel(camera) {
-  if (camera?.recording_mode === "always") return "Постоянно";
+function cameraRecordingLabel(camera, copy) {
+  if (camera?.recording_mode === "always") return copy.always;
   return camera?.recording_mode || "-";
 }
 
-function cameraStreamsLabel(camera) {
+function cameraStreamsLabel(camera, copy = {}) {
   const rec = String(camera?.default_record_stream || "main").toUpperCase();
   const live = String(camera?.default_live_stream || "main").toUpperCase();
-  return `${rec} rec · ${live} live`;
+  return copy.streamCountSummary
+    ? copy.streamCountSummary.replace("{rec}", rec).replace("{live}", live)
+    : `${rec} · ${live}`;
 }
 
-function getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable) {
+function getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable, copy) {
   if (!camera.enabled || runtime?.enabled === false || camera.status === "disabled") {
-    return { text: "Отключена", cls: "warn" };
+    return { text: copy.disabled, cls: "warn" };
   }
 
   if (storageAvailable === false) {
-    return { text: "Ошибка", cls: "err" };
+    return { text: copy.error, cls: "err" };
   }
 
   if (!recorderStatus) {
-    if (camera.status === "error") return { text: "Ошибка", cls: "err" };
-    return { text: "Статус неизвестен", cls: "warn" };
+    if (camera.status === "error") return { text: copy.error, cls: "err" };
+    return { text: copy.unknownStatus, cls: "warn" };
   }
 
-  const runtimeError = normalizeRuntimeError(runtime?.last_error || runtime?.camera_last_error || recorderStatus?.last_error);
+  const runtimeError = normalizeRuntimeError(runtime?.last_error || runtime?.camera_last_error || recorderStatus?.last_error, copy);
   const jobState = String(runtime?.job_state || camera.status || "").toLowerCase();
   const currentFailure = runtime?.current_failure === true;
 
   if (recorderStatus?.heartbeat?.status === "stale_or_unavailable") {
-    return { text: "Статус неизвестен", cls: "warn" };
+    return { text: copy.unknownStatus, cls: "warn" };
   }
 
-  if (jobState === "restarting") return { text: "Перезапуск", cls: "warn" };
-  if (jobState === "starting") return { text: "Запускается", cls: "warn" };
-  if (jobState === "stopping") return { text: "Останавливается", cls: "warn" };
-  if (jobState === "recording" && !currentFailure) return { text: "Идёт запись", cls: "ok" };
+  if (jobState === "restarting") return { text: copy.restarting, cls: "warn" };
+  if (jobState === "starting") return { text: copy.starting, cls: "warn" };
+  if (jobState === "stopping") return { text: copy.stopping, cls: "warn" };
+  if (jobState === "recording" && !currentFailure) return { text: copy.recordingNow, cls: "ok" };
   if (currentFailure || runtimeError || jobState === "error") {
-    return { text: "Ошибка", cls: "err" };
+    return { text: copy.error, cls: "err" };
   }
-  if (jobState === "recording") return { text: "Идёт запись", cls: "ok" };
+  if (jobState === "recording") return { text: copy.recordingNow, cls: "ok" };
   if (runtime?.recording_mode && runtime.recording_mode !== "always") {
-    return { text: "Ожидание записи", cls: "warn" };
+    return { text: copy.recordingWaiting, cls: "warn" };
   }
 
-  return { text: "Ожидание записи", cls: "warn" };
+  return { text: copy.recordingWaiting, cls: "warn" };
 }
 
 export default function CamerasPage() {
+  const { t } = useI18n();
+  const copy = useLocaleText("cameras");
   const [cameras, setCameras] = useState([]);
   const [viewMode, setViewMode] = useState("list");
   const [storage, setStorage] = useState(null);
@@ -480,7 +485,7 @@ export default function CamerasPage() {
       setStorage(st);
       setRecorderStatus(recorder);
     } catch (err) {
-      setError(normalizeCameraError(err.message));
+      setError(normalizeCameraError(err.message, copy));
     }
   }
 
@@ -647,7 +652,7 @@ export default function CamerasPage() {
       updateProfileProbeState(formOverride.onvif_profile_token || selectedOnvifProfileToken, result);
       return result;
     } catch (err) {
-      setError(normalizeCameraError(err.message));
+      setError(normalizeCameraError(err.message, copy));
       setTestResult(null);
       return null;
     } finally {
@@ -697,12 +702,12 @@ export default function CamerasPage() {
       }
       if (mainProfile?.rtsp_ready && nextForm.rtsp_host && nextForm.rtsp_main_url) {
         await runTest(nextForm);
-        setOnvifStatus("Main поток выбран и проверен через RTSP reachable endpoint.");
+        setOnvifStatus(copy.mainSelectedChecked);
       } else {
-        setOnvifStatus("Профили загружены. Для автотеста укажи RTSP reachable host/port и путь Main потока.");
+        setOnvifStatus(copy.profilesLoadedNeedRtsp);
       }
     } catch (err) {
-      setError(normalizeCameraError(err.message));
+      setError(normalizeCameraError(err.message, copy));
       setOnvifData(null);
     } finally {
       setOnvifBusy(false);
@@ -721,12 +726,12 @@ export default function CamerasPage() {
       });
       setOnvifDiscovery(result);
       if (result.candidates?.length) {
-        setOnvifStatus(`Найдено ONVIF устройств: ${result.candidates.length}. Выберите камеру из списка.`);
+        setOnvifStatus(t("cameras.onvifFound", { count: result.candidates.length }));
       } else {
-        setOnvifStatus(result.message || "ONVIF discovery не нашёл камер. Используйте ручной ввод.");
+        setOnvifStatus(result.message || copy.onvifNotFound);
       }
     } catch (err) {
-      setError(normalizeCameraError(err.message));
+      setError(normalizeCameraError(err.message, copy));
     } finally {
       setOnvifDiscoveryBusy(false);
     }
@@ -746,7 +751,7 @@ export default function CamerasPage() {
       onvif_probe_token: null,
       manual_confirm_unverified: false,
     }));
-    setOnvifStatus("ONVIF endpoint заполнен из discovery. Проверьте логин, пароль и выполните проверку ONVIF.");
+    setOnvifStatus(copy.onvifEndpointFilled);
   }
 
   async function probeOnvifCamera() {
@@ -786,9 +791,9 @@ export default function CamerasPage() {
         manual_confirm_unverified: false,
       }));
       setSelectedOnvifProfileToken(mainToken);
-      setOnvifStatus("ONVIF проверка успешна. Можно сохранить камеру как проверенную или дополнительно выполнить RTSP тест.");
+      setOnvifStatus(copy.onvifSuccess);
     } catch (err) {
-      setError(normalizeCameraError(err.message));
+      setError(normalizeCameraError(err.message, copy));
       setOnvifData(null);
     } finally {
       setOnvifProbeBusy(false);
@@ -797,7 +802,7 @@ export default function CamerasPage() {
 
   function useProfileAsMain(profile) {
     const token = profile.token || "";
-    const name = profileDisplayName(profile);
+    const name = profileDisplayName(profile, copy);
     setForm((prev) => normalizeCameraStreamDefaults({
       ...prev,
       onvif_profile_token: token,
@@ -813,12 +818,12 @@ export default function CamerasPage() {
     if (token) {
       loadOnvifProfileConfig(token);
     }
-    showProfileToast("Main stream выбран", name);
+    showProfileToast(copy.mainStreamSelected, name);
   }
 
   function useProfileAsSub(profile) {
     const token = profile.token || "";
-    const name = profileDisplayName(profile);
+    const name = profileDisplayName(profile, copy);
     setForm((prev) => normalizeCameraStreamDefaults({
       ...prev,
       rtsp_sub_url: profileStreamValue(profile),
@@ -834,7 +839,7 @@ export default function CamerasPage() {
     if (token) {
       loadOnvifProfileConfig(token);
     }
-    showProfileToast("Sub stream выбран", name);
+    showProfileToast(copy.subStreamSelected, name);
   }
 
   async function selectOnvifProfile(profile) {
@@ -847,7 +852,7 @@ export default function CamerasPage() {
 
   async function loadOnvifProfileConfig(profileToken = selectedOnvifProfileToken || form.onvif_profile_token) {
     if (!profileToken) {
-      setError("Сначала выбери ONVIF профиль");
+      setError(copy.selectOnvifProfileFirst);
       return;
     }
 
@@ -872,7 +877,7 @@ export default function CamerasPage() {
       updateProfileConfigState(result);
       return result;
     } catch (err) {
-      setError(normalizeCameraError(err.message));
+      setError(normalizeCameraError(err.message, copy));
       return null;
     } finally {
       setOnvifConfigBusy(false);
@@ -882,7 +887,7 @@ export default function CamerasPage() {
   async function applyOnvifProfileConfig() {
     const profileToken = selectedOnvifProfileToken || form.onvif_profile_token;
     if (!profileToken) {
-      setError("Сначала выбери ONVIF профиль");
+      setError(copy.selectOnvifProfileFirst);
       return;
     }
 
@@ -898,7 +903,7 @@ export default function CamerasPage() {
       if (supported.iframe_interval?.writable && onvifConfig.iframe_interval) config.iframe_interval = Number(onvifConfig.iframe_interval);
       if (supported.quality?.writable && onvifConfig.quality !== "") config.quality = Number(onvifConfig.quality);
       if (!Object.keys(config).length) {
-        setError("No writable ONVIF settings available for the selected profile.");
+        setError(copy.noWritableOnvifSettings);
         return;
       }
 
@@ -918,7 +923,7 @@ export default function CamerasPage() {
 
       await loadOnvifProfileConfig(profileToken);
     } catch (err) {
-      setError(normalizeCameraError(err.message));
+      setError(normalizeCameraError(err.message, copy));
     } finally {
       setOnvifConfigBusy(false);
     }
@@ -957,7 +962,7 @@ export default function CamerasPage() {
       setOnvifStatus("");
       await load();
     } catch (err) {
-      setError(normalizeCameraError(err.message));
+      setError(normalizeCameraError(err.message, copy));
     } finally {
       setBusy(false);
     }
@@ -971,7 +976,7 @@ export default function CamerasPage() {
       });
       await load();
     } catch (err) {
-      setError(normalizeCameraError(err.message));
+      setError(normalizeCameraError(err.message, copy));
     }
   }
 
@@ -986,10 +991,10 @@ export default function CamerasPage() {
         { method: "DELETE" }
       );
       closeDeleteModal();
-      setDeleteNotice(archiveCleanupMessage(result) || "Камера удалена");
+      setDeleteNotice(archiveCleanupMessage(result, copy) || copy.cameraDeleted);
       await load();
     } catch (err) {
-      setError(normalizeCameraError(err.message));
+      setError(normalizeCameraError(err.message, copy));
     } finally {
       setBusy(false);
     }
@@ -1012,7 +1017,7 @@ export default function CamerasPage() {
     const state = profileSettingState(meta, value, slot.requiresOptions);
     const hasOptions = Array.isArray(meta.options) && meta.options.length > 0;
     const range = meta.range;
-    const statusText = state === "editable" ? "Доступно для записи" : state === "readonly" ? "Только чтение" : "Недоступно";
+    const statusText = state === "editable" ? copy.writable : state === "readonly" ? copy.readonly : copy.unavailable;
 
     let control = null;
     if (state === "editable" && hasOptions) {
@@ -1045,23 +1050,23 @@ export default function CamerasPage() {
           <em>{statusText}</em>
         </div>
         {control}
-        {state === "editable" && range ? <div className="cameraSettingHint">Диапазон: {range.min ?? "?"} - {range.max ?? "?"}</div> : null}
+        {state === "editable" && range ? <div className="cameraSettingHint">{copy.range}: {range.min ?? "?"} - {range.max ?? "?"}</div> : null}
         {state === "unavailable" ? <div className="cameraSettingHint">{slot.unavailable}</div> : null}
       </div>
     );
   }
 
   const profileSettingSlots = [
-    { key: "codec", label: "Кодек / сжатие", empty: "Не получено", unavailable: "Камера не отдала список кодеков.", requiresOptions: true },
-    { key: "encode_strategy", label: "Стратегия кодирования", empty: "Не получено", unavailable: "Не возвращается стандартным ONVIF ответом." },
-    { key: "resolution", label: "Разрешение", empty: "Не получено", unavailable: "Камера не отдала варианты разрешения." },
-    { key: "fps", label: "Частота кадров", empty: "Не получено", unavailable: "Диапазон FPS не получен.", numeric: true },
-    { key: "bitrate_type", label: "Тип битрейта", empty: "Не получено", unavailable: "CBR/VBR не возвращается этой камерой." },
-    { key: "quality", label: "Качество VBR", empty: "Не получено", unavailable: "Диапазон качества не получен.", numeric: true },
-    { key: "bitrate", label: "Макс. битрейт", empty: "Не получено", unavailable: "Диапазон битрейта не получен.", numeric: true },
-    { key: "iframe_interval", label: "Интервал I-кадров", empty: "Не получено", unavailable: "Диапазон GOP/I-frame не получен.", numeric: true },
-    { key: "codec_profile", label: "Профиль кодека", empty: "Не получено", unavailable: "Профиль кодека не возвращается." },
-    { key: "audio_codec", label: "Аудио", empty: "Не получено", unavailable: "ONVIF encoder audio options не получены." },
+    { key: "codec", label: copy.codecCompression, empty: copy.notReceived, unavailable: copy.codecUnavailable, requiresOptions: true },
+    { key: "encode_strategy", label: copy.encodingStrategy, empty: copy.notReceived, unavailable: copy.standardOnvifUnavailable },
+    { key: "resolution", label: copy.resolution, empty: copy.notReceived, unavailable: copy.resolutionUnavailable },
+    { key: "fps", label: copy.fps, empty: copy.notReceived, unavailable: copy.fpsUnavailable, numeric: true },
+    { key: "bitrate_type", label: copy.bitrateType, empty: copy.notReceived, unavailable: copy.bitrateUnavailable },
+    { key: "quality", label: copy.vbrQuality, empty: copy.notReceived, unavailable: copy.qualityUnavailable, numeric: true },
+    { key: "bitrate", label: copy.maxBitrate, empty: copy.notReceived, unavailable: copy.maxBitrateUnavailable, numeric: true },
+    { key: "iframe_interval", label: copy.iframeInterval, empty: copy.notReceived, unavailable: copy.iframeUnavailable, numeric: true },
+    { key: "codec_profile", label: copy.codecProfile, empty: copy.notReceived, unavailable: copy.codecProfileUnavailable },
+    { key: "audio_codec", label: copy.audio, empty: copy.notReceived, unavailable: copy.audioUnavailable },
   ];
 
   return (
@@ -1069,15 +1074,15 @@ export default function CamerasPage() {
       <div className="standardPage">
       <div className="pageHeader cameraPageHeader">
         <div>
-          <h1 className="pageTitle">Камеры</h1>
-          <div className="pageSubtitle">Добавление, редактирование и управление камерами</div>
+          <h1 className="pageTitle">{copy.title}</h1>
+          <div className="pageSubtitle">{copy.subtitle}</div>
         </div>
         <div className="cameraHeaderActions">
-          <div className="cameraViewToggle" role="group" aria-label="Режим отображения камер">
-            <button type="button" className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")}>Список</button>
-            <button type="button" className={viewMode === "cards" ? "active" : ""} onClick={() => setViewMode("cards")}>Карточки</button>
+          <div className="cameraViewToggle" role="group" aria-label={copy.displayMode}>
+            <button type="button" className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")}>{copy.list}</button>
+            <button type="button" className={viewMode === "cards" ? "active" : ""} onClick={() => setViewMode("cards")}>{copy.cards}</button>
           </div>
-          <button className="button" onClick={openCreate}>Добавить камеру</button>
+          <button className="button" onClick={openCreate}>{copy.addCamera}</button>
         </div>
       </div>
 
@@ -1088,11 +1093,11 @@ export default function CamerasPage() {
 
       <div className={viewMode === "cards" ? "cameraTileGrid" : "cameraCards"}>
         {!cameras.length ? (
-          <div className="card">Камеры ещё не добавлены.</div>
+          <div className="card">{copy.noCameras}</div>
         ) : (
           cameras.map((camera) => {
             const runtime = recorderCameraMap.get(String(camera.id));
-            const badge = getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable);
+            const badge = getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable, copy);
             if (viewMode === "cards") {
               return (
                 <article className="cameraTileCard" key={camera.id}>
@@ -1100,7 +1105,7 @@ export default function CamerasPage() {
                     {camera.preview_url ? (
                       <img src={camera.preview_url} alt="" />
                     ) : (
-                      <div className="cameraTilePreviewEmpty">Нет кадра</div>
+                      <div className="cameraTilePreviewEmpty">{copy.noFrame}</div>
                     )}
                     <span className={`cameraTileStatus ${badge.cls}`}>{badge.text}</span>
                   </div>
@@ -1111,25 +1116,25 @@ export default function CamerasPage() {
                         <div className="cameraTileEndpoint" title={cameraEndpointLabel(camera)}>{cameraEndpointLabel(camera)}</div>
                       </div>
                       <div className="cameraTileActions">
-                        <button className="cameraTileIconButton" onClick={() => openEdit(camera)} title="Редактировать" aria-label="Редактировать">
+                        <button className="cameraTileIconButton" onClick={() => openEdit(camera)} title={copy.edit} aria-label={copy.edit}>
                           {"\u270e"}
                         </button>
-                        <button className="cameraTileIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? "Отключить" : "Включить"} aria-label={camera.enabled ? "Отключить" : "Включить"}>
+                        <button className="cameraTileIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? copy.disable : copy.enable} aria-label={camera.enabled ? copy.disable : copy.enable}>
                           {camera.enabled ? "\u23fb" : "\u2713"}
                         </button>
-                        <button className="cameraTileIconButton danger" onClick={() => openDeleteModal(camera)} title="Удалить" aria-label="Удалить">
+                        <button className="cameraTileIconButton danger" onClick={() => openDeleteModal(camera)} title={copy.delete} aria-label={copy.delete}>
                           {"\ud83d\uddd1"}
                         </button>
                       </div>
                     </div>
                     <div className="cameraTileSystem">
-                      <div><span>Запись</span><strong>{cameraRecordingLabel(camera)}</strong></div>
-                      <div><span>Сегмент</span><strong>{camera.segment_minutes} мин</strong></div>
-                      <div><span>Хранение</span><strong>{camera.retention_days} дн</strong></div>
-                      <div><span>Лимит</span><strong>{camera.storage_quota_gb} ГБ</strong></div>
+                      <div><span>{copy.recording}</span><strong>{cameraRecordingLabel(camera, copy)}</strong></div>
+                      <div><span>{copy.segment}</span><strong>{camera.segment_minutes} {copy.minutesShort}</strong></div>
+                      <div><span>{copy.retention}</span><strong>{camera.retention_days} {copy.daysShort}</strong></div>
+                      <div><span>{copy.limit}</span><strong>{camera.storage_quota_gb} {copy.gbShort}</strong></div>
                     </div>
                     <div className="cameraTileFoot">
-                      <span>{cameraStreamsLabel(camera)}</span>
+                      <span>{cameraStreamsLabel(camera, copy)}</span>
                       <span className={`badge ${badge.cls}`}>{badge.text}</span>
                     </div>
                   </div>
@@ -1140,58 +1145,58 @@ export default function CamerasPage() {
               <div className="cameraCard card" key={camera.id}>
                 <div className="cameraCardGrid">
                   <div className="cameraField cameraNameField">
-                    <div className="cameraFieldLabel">Камера</div>
+                    <div className="cameraFieldLabel">{copy.camera}</div>
                     <div className="cameraPrimary" title={camera.name}>{camera.name}</div>
-                    <div className="cameraSecondary" title={`папка: ${camera.storage_folder_name}`}>папка: {camera.storage_folder_name}</div>
+                    <div className="cameraSecondary" title={`${copy.folder}: ${camera.storage_folder_name}`}>{copy.folder}: {camera.storage_folder_name}</div>
                     <div className="cameraActions">
-                      <button className="cameraIconButton" onClick={() => openEdit(camera)} title="Редактировать" aria-label="Редактировать">
+                      <button className="cameraIconButton" onClick={() => openEdit(camera)} title={copy.edit} aria-label={copy.edit}>
                         {"\u270e"}
                       </button>
-                      <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? "Отключить" : "Включить"} aria-label={camera.enabled ? "Отключить" : "Включить"}>
+                      <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? copy.disable : copy.enable} aria-label={camera.enabled ? copy.disable : copy.enable}>
                         {camera.enabled ? "\u23fb" : "\u2713"}
                       </button>
-                      <button className="cameraIconButton danger" onClick={() => openDeleteModal(camera)} title="Удалить" aria-label="Удалить">
+                      <button className="cameraIconButton danger" onClick={() => openDeleteModal(camera)} title={copy.delete} aria-label={copy.delete}>
                         {"\ud83d\uddd1"}
                       </button>
                     </div>
                   </div>
 
-                  <div className="cameraPreviewField" aria-label="Кадр камеры">
+                  <div className="cameraPreviewField" aria-label={copy.cameraFrame}>
                     {camera.preview_url ? (
                       <img src={camera.preview_url} alt="" />
                     ) : (
-                      <div className="cameraPreviewPlaceholder">Нет кадра</div>
+                      <div className="cameraPreviewPlaceholder">{copy.noFrame}</div>
                     )}
                   </div>
 
                   <div className="cameraMetaGrid">
                     <div className="cameraField">
-                      <div className="cameraFieldLabel">Протокол</div>
+                      <div className="cameraFieldLabel">{copy.protocol}</div>
                       <div>{camera.protocol?.toUpperCase()}</div>
                     </div>
 
                     <div className="cameraField">
-                      <div className="cameraFieldLabel">Адрес</div>
+                      <div className="cameraFieldLabel">{copy.address}</div>
                       <div>{camera.host}:{camera.port}</div>
                     </div>
 
                     <div className="cameraField">
-                      <div className="cameraFieldLabel">Сегм.</div>
-                      <div>{camera.segment_minutes} мин</div>
+                      <div className="cameraFieldLabel">{copy.segment}</div>
+                      <div>{camera.segment_minutes} {copy.minutesShort}</div>
                     </div>
 
                     <div className="cameraField">
-                      <div className="cameraFieldLabel">Хран.</div>
-                      <div>{camera.retention_days} дн</div>
+                      <div className="cameraFieldLabel">{copy.retention}</div>
+                      <div>{camera.retention_days} {copy.daysShort}</div>
                     </div>
 
                     <div className="cameraField">
-                      <div className="cameraFieldLabel">Лимит</div>
-                      <div>{camera.storage_quota_gb} ГБ</div>
+                      <div className="cameraFieldLabel">{copy.limit}</div>
+                      <div>{camera.storage_quota_gb} {copy.gbShort}</div>
                     </div>
 
                     <div className="cameraField">
-                      <div className="cameraFieldLabel">Статус</div>
+                      <div className="cameraFieldLabel">{copy.status}</div>
                       <div className="cameraStatusStack">
                         <span className={`badge ${badge.cls}`}>{badge.text}</span>
                       </div>
@@ -1210,10 +1215,10 @@ export default function CamerasPage() {
           <div className="modal modalWide cameraEditorModal" onClick={(e) => e.stopPropagation()}>
             <div className="modalHeader">
               <div className="cameraModalTitleBlock">
-                <h2>{editorMode === "create" ? "Добавить камеру" : "Редактировать камеру"}</h2>
-                <p>Подключение, тест и параметры записи</p>
+                <h2>{editorMode === "create" ? copy.addTitle : copy.editTitle}</h2>
+                <p>{copy.editorSubtitle}</p>
               </div>
-              <button className="iconCloseButton" onClick={() => setShowEditor(false)} aria-label="Закрыть">×</button>
+              <button className="iconCloseButton" onClick={() => setShowEditor(false)} aria-label={copy.close}>×</button>
             </div>
 
             {profileToast ? (
@@ -1228,67 +1233,67 @@ export default function CamerasPage() {
             <div className="cameraEditorGrid">
               <div className="cameraEditorColumn">
                 <section className="cameraModalSection">
-                  <h3>1. Подключение</h3>
+                  <h3>{copy.connection}</h3>
                   <div className="formGrid">
                     <div>
-                      <div className="formLabel">Имя камеры</div>
+                      <div className="formLabel">{copy.cameraName}</div>
                       <input className="input" value={form.name} onChange={(e) => patch("name", e.target.value)} />
                     </div>
                     <div>
-                      <div className="formLabel">Протокол</div>
+                      <div className="formLabel">{copy.protocol}</div>
                       <select className="select" value={form.protocol} onChange={(e) => patch("protocol", e.target.value)}>
                         <option value="rtsp">RTSP</option>
                         <option value="onvif">ONVIF</option>
                       </select>
                     </div>
                     <div>
-                      <div className="formLabel">{form.protocol === "onvif" ? "ONVIF Host / IP" : "IP / Host"}</div>
+                      <div className="formLabel">{form.protocol === "onvif" ? copy.onvifHostIp : copy.ipHost}</div>
                       <input className="input" value={form.host} onChange={(e) => patch("host", e.target.value)} />
                     </div>
                     <div>
-                      <div className="formLabel">{form.protocol === "onvif" ? "ONVIF Port" : "RTSP Port"}</div>
+                      <div className="formLabel">{form.protocol === "onvif" ? copy.onvifPort : copy.rtspPort}</div>
                       <input className="input" value={form.port} onChange={(e) => patch("port", e.target.value)} />
                     </div>
                     <div>
-                      <div className="formLabel">Логин</div>
+                      <div className="formLabel">{copy.login}</div>
                       <input className="input" value={form.username} onChange={(e) => patch("username", e.target.value)} />
                     </div>
                     <div>
-                      <div className="formLabel">Пароль {editorMode === "edit" ? "(оставь пустым, если не менять)" : ""}</div>
+                      <div className="formLabel">{copy.password} {editorMode === "edit" ? copy.passwordEditHint : ""}</div>
                       <input className="input" type="password" value={form.password} onChange={(e) => patch("password", e.target.value)} />
                     </div>
                   </div>
                 </section>
 
                 <section className="cameraModalSection">
-                  <h3>2. Потоки и запись</h3>
+                  <h3>{copy.streamsRecording}</h3>
                   <div className="cameraStreamsGrid">
                     <div className="cameraStreamField wide">
-                      <div className="formLabel">RTSP Main Path / URL</div>
+                      <div className="formLabel">{copy.rtspMainPathUrl}</div>
                       <input className="input" value={form.rtsp_main_url} onChange={(e) => patch("rtsp_main_url", e.target.value)} />
                     </div>
                     <div className="cameraStreamField wide">
-                      <div className="formLabel">RTSP Sub Path / URL</div>
+                      <div className="formLabel">{copy.rtspSubPathUrl}</div>
                       <input className="input" value={form.rtsp_sub_url} onChange={(e) => patch("rtsp_sub_url", e.target.value)} />
                     </div>
                     <div className="cameraStreamPolicyGrid">
                       <div className="cameraStreamField policy">
-                        <div className="formLabel">RTSP reachable host</div>
+                        <div className="formLabel">{copy.rtspReachableHost}</div>
                         <input className="input" value={form.rtsp_host} onChange={(e) => patch("rtsp_host", e.target.value)} />
                       </div>
                       <div className="cameraStreamField policy">
-                        <div className="formLabel">RTSP reachable port</div>
+                        <div className="formLabel">{copy.rtspReachablePort}</div>
                         <input className="input" type="number" min="1" value={form.rtsp_port} onChange={(e) => patch("rtsp_port", e.target.value)} />
                       </div>
                       <div className="cameraStreamField policy">
-                        <div className="formLabel">RTSP Transport</div>
+                        <div className="formLabel">{copy.rtspTransport}</div>
                         <select className="select" value={form.rtsp_transport} onChange={(e) => patch("rtsp_transport", e.target.value)}>
                           <option value="tcp">TCP</option>
                           <option value="udp">UDP</option>
                         </select>
                       </div>
                       <div className="cameraStreamField policy">
-                        <div className="formLabel">Поток для записи</div>
+                        <div className="formLabel">{copy.recordStream}</div>
                         <select className="select" value={form.default_record_stream} onChange={(e) => patch("default_record_stream", e.target.value)}>
                           {formStreamOptions.map((stream) => (
                             <option key={stream.key} value={stream.key}>{stream.label}</option>
@@ -1296,7 +1301,7 @@ export default function CamerasPage() {
                         </select>
                       </div>
                       <div className="cameraStreamField policy">
-                        <div className="formLabel">Поток для онлайн</div>
+                        <div className="formLabel">{copy.liveStream}</div>
                         <select className="select" value={form.default_live_stream} onChange={(e) => patch("default_live_stream", e.target.value)}>
                           {formStreamOptions.map((stream) => (
                             <option key={stream.key} value={stream.key}>{stream.label}</option>
@@ -1304,33 +1309,33 @@ export default function CamerasPage() {
                         </select>
                       </div>
                       <div className="cameraStreamField policy">
-                        <div className="formLabel">Режим записи</div>
+                        <div className="formLabel">{copy.recordingMode}</div>
                         <select className="select" value={form.recording_mode} onChange={(e) => patch("recording_mode", e.target.value)}>
-                          <option value="always">Постоянно</option>
+                          <option value="always">{copy.always}</option>
                         </select>
                       </div>
                       <div className="cameraStreamField policy">
-                        <div className="formLabel">Длительность сегмента</div>
+                        <div className="formLabel">{copy.segmentDuration}</div>
                         <select className="select" value={form.segment_minutes} onChange={(e) => patch("segment_minutes", e.target.value)}>
-                          <option value="5">5 минут</option>
-                          <option value="15">15 минут</option>
-                          <option value="30">30 минут</option>
-                          <option value="45">45 минут</option>
-                          <option value="60">60 минут</option>
-                          <option value="120">120 минут</option>
+                          <option value="5">5 {copy.minutesShort}</option>
+                          <option value="15">15 {copy.minutesShort}</option>
+                          <option value="30">30 {copy.minutesShort}</option>
+                          <option value="45">45 {copy.minutesShort}</option>
+                          <option value="60">60 {copy.minutesShort}</option>
+                          <option value="120">120 {copy.minutesShort}</option>
                         </select>
                       </div>
                       <div className="cameraStreamField policy">
-                        <div className="formLabel">Срок хранения</div>
+                        <div className="formLabel">{copy.retentionDays}</div>
                         <select className="select" value={form.retention_days} onChange={(e) => patch("retention_days", e.target.value)}>
-                          <option value="7">7 дней</option>
-                          <option value="14">14 дней</option>
-                          <option value="21">21 день</option>
-                          <option value="30">30 дней</option>
+                          <option value="7">7 {copy.daysShort}</option>
+                          <option value="14">14 {copy.daysShort}</option>
+                          <option value="21">21 {copy.daysShort}</option>
+                          <option value="30">30 {copy.daysShort}</option>
                         </select>
                       </div>
                       <div className="cameraStreamField policy">
-                        <div className="formLabel">Лимит архива (ГБ)</div>
+                        <div className="formLabel">{copy.archiveLimitGb}</div>
                         <input className="input" type="number" min="1" value={form.storage_quota_gb} onChange={(e) => patch("storage_quota_gb", e.target.value)} />
                       </div>
                     </div>
@@ -1342,14 +1347,14 @@ export default function CamerasPage() {
                   <div className="cameraOnvifOnboarding">
                     <div className="toolbar cameraOnvifActions">
                       <button className="button secondary small" onClick={discoverOnvifCameras} disabled={onvifDiscoveryBusy}>
-                        {onvifDiscoveryBusy ? "Ищем..." : "Найти ONVIF камеры"}
+                        {onvifDiscoveryBusy ? copy.searching : copy.findOnvif}
                       </button>
                       <button className="button secondary small" onClick={probeOnvifCamera} disabled={onvifProbeBusy || !form.host}>
-                        {onvifProbeBusy ? "Проверяем..." : "Проверить ONVIF"}
+                        {onvifProbeBusy ? copy.checking : copy.checkOnvif}
                       </button>
                     </div>
                     <div className="cameraModalNote">
-                      ONVIF host/port используется для управления камерой. RTSP reachable host/port ниже может отличаться для NAT или удаленных камер.
+                      {copy.onvifHelp}
                     </div>
                     {onvifDiscovery?.candidates?.length ? (
                       <div className="cameraDiscoveryList">
@@ -1362,20 +1367,20 @@ export default function CamerasPage() {
                       </div>
                     ) : null}
                     {onvifDiscovery && !onvifDiscovery.candidates?.length ? (
-                      <div className="cameraPreviewEmpty">{onvifDiscovery.message || "Discovery недоступен или устройства не найдены."}</div>
+                      <div className="cameraPreviewEmpty">{onvifDiscovery.message || copy.discoveryUnavailable}</div>
                     ) : null}
                   </div>
                   {onvifData ? <div className="cameraDeviceInfo">
-                    <div><strong>Производитель:</strong> {onvifData.device?.manufacturer || "-"}</div>
-                    <div><strong>Модель:</strong> {onvifData.device?.model || "-"}</div>
-                    <div><strong>Прошивка:</strong> {onvifData.device?.firmware || "-"}</div>
-                    <div><strong>Серийный номер:</strong> {onvifData.device?.serial_number || "-"}</div>
-                    <div><strong>Profile Token:</strong> {form.onvif_profile_token || "-"}</div>
-                    <div><strong>Channel ID:</strong> {form.onvif_channel_id || "-"}</div>
-                    <div><strong>ONVIF Path:</strong> {form.onvif_path || "-"}</div>
+                    <div><strong>{copy.manufacturer}:</strong> {onvifData.device?.manufacturer || "-"}</div>
+                    <div><strong>{copy.model}:</strong> {onvifData.device?.model || "-"}</div>
+                    <div><strong>{copy.firmware}:</strong> {onvifData.device?.firmware || "-"}</div>
+                    <div><strong>{copy.serialNumber}:</strong> {onvifData.device?.serial_number || "-"}</div>
+                    <div><strong>{copy.profileToken}</strong> {form.onvif_profile_token || "-"}</div>
+                    <div><strong>{copy.channelId}</strong> {form.onvif_channel_id || "-"}</div>
+                    <div><strong>{copy.onvifPath}:</strong> {form.onvif_path || "-"}</div>
                   </div> : (
                     <div className="cameraPreviewEmpty">
-                      ONVIF-параметры будут получены автоматически после чтения профилей.
+                      {copy.onvifAutoSettings}
                     </div>
                   )}
                 </section> : null}
@@ -1383,15 +1388,15 @@ export default function CamerasPage() {
 
               <aside className="cameraPreviewPanel">
                 <div className="cameraPreviewHead">
-                  <h3>Предпросмотр и тест</h3>
+                  <h3>{copy.previewTest}</h3>
                 </div>
                 <div className="toolbar cameraPreviewActions">
                   <button className="button secondary small" onClick={() => runTest()} disabled={testing}>
-                    Тест
+                    {copy.test}
                   </button>
                   {form.protocol === "onvif" ? (
                     <button className="button secondary small" onClick={loadOnvifProfiles} disabled={onvifBusy}>
-                      ONVIF проф.
+                      {copy.onvifProfileShort}
                     </button>
                   ) : null}
                 </div>
@@ -1401,23 +1406,23 @@ export default function CamerasPage() {
                     {testResult.preview_url ? (
                       <img src={`${testResult.preview_url}?v=${Date.now()}`} alt="" />
                     ) : (
-                      <div className="cameraPreviewPlaceholder">Кадр недоступен</div>
+                      <div className="cameraPreviewPlaceholder">{copy.frameUnavailable}</div>
                     )}
                   </div>
-                  <div className="cameraTestStatus">Тест: OK</div>
+                  <div className="cameraTestStatus">{copy.testOk}</div>
                   <div className="cameraTestDetails">
-                    <div><strong>Путь:</strong> <span className="cameraTestPath">{testResult.display_path || "RTSP path указан"}</span></div>
-                    <div><strong>Транспорт:</strong> {testResult.transport}</div>
-                    <div><strong>Видео:</strong> {testResult.video ? `${testResult.video.codec || "-"}, ${testResult.video.width || "-"}x${testResult.video.height || "-"}, fps ${testResult.video.fps || "-"}` : "нет"}</div>
-                    <div><strong>Аудио:</strong> {testResult.audio ? `${testResult.audio.codec || "-"}, channels ${testResult.audio.channels || "-"}, sample_rate ${testResult.audio.sample_rate || "-"}` : "нет"}</div>
-                    <div><strong>Формат:</strong> {testResult.format?.format_name || "-"}</div>
-                    <div><strong>Битрейт:</strong> {testResult.format?.bit_rate || "-"}</div>
+                    <div><strong>{copy.path}:</strong> <span className="cameraTestPath">{testResult.display_path || copy.rtspPathProvided}</span></div>
+                    <div><strong>{copy.transport}:</strong> {testResult.transport}</div>
+                    <div><strong>{copy.video}:</strong> {testResult.video ? `${testResult.video.codec || "-"}, ${testResult.video.width || "-"}x${testResult.video.height || "-"}, fps ${testResult.video.fps || "-"}` : copy.no}</div>
+                    <div><strong>{copy.audio}:</strong> {testResult.audio ? `${testResult.audio.codec || "-"}, ${copy.channels} ${testResult.audio.channels || "-"}, ${copy.sampleRate} ${testResult.audio.sample_rate || "-"}` : copy.no}</div>
+                    <div><strong>{copy.format}:</strong> {testResult.format?.format_name || "-"}</div>
+                    <div><strong>{copy.bitrate}:</strong> {testResult.format?.bit_rate || "-"}</div>
                     {testResult.preview_message ? <div className="cameraTestPreviewNote">{testResult.preview_message}</div> : null}
                   </div>
                 </div>
               ) : (
                 <div className="cameraPreviewEmpty">
-                  Нажми «Тест», чтобы проверить подключение и получить параметры потока.
+                  {copy.runTestHint}
                 </div>
               )}
                 {onvifStatus ? <div className="cameraModalNote">{onvifStatus}</div> : null}
@@ -1431,7 +1436,7 @@ export default function CamerasPage() {
                     {onvifProfiles.map((profile) => {
                       const isMain = form.onvif_profile_token === profile.token;
                       const isSub = profileMatchesStream(profile, form.rtsp_sub_url);
-                      const displayName = profileDisplayName(profile);
+                      const displayName = profileDisplayName(profile, copy);
                       const tokenLabel = profile.token && profile.token !== displayName ? profile.token : "";
                       return (
                       <div
@@ -1453,10 +1458,12 @@ export default function CamerasPage() {
                             {tokenLabel ? <span title={tokenLabel}>{tokenLabel}</span> : null}
                           </div>
                           <div className="cameraProfileMeta">
-                            <div className="cameraProfileVideo">{profileVideoSummary(profile)}</div>
-                            <div className="cameraProfileAudio">{profileAudioSummary(profile)}</div>
-                            {profileConfigWarning(profile) ? <div className="cameraProfileWarn">{profileConfigWarning(profile)}</div> : null}
-                            <div className="cameraProfileReady">RTSP: {profile.rtsp_ready ? "Ready" : "Path missing"} <span>|</span> System: {profile.rtsp_ready ? "Ready" : "Check required"}</div>
+                            <div className="cameraProfileVideo">{profileVideoSummary(profile, copy)}</div>
+                            <div className="cameraProfileAudio">{profileAudioSummary(profile, copy)}</div>
+                            {profileConfigWarning(profile, copy) ? <div className="cameraProfileWarn">{profileConfigWarning(profile, copy)}</div> : null}
+                            <div className="cameraProfileReady">
+                              {profile.rtsp_ready ? copy.rtspReady : copy.rtspPathMissing} <span>|</span> {profile.rtsp_ready ? copy.systemReady : copy.systemCheckRequired}
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -1465,23 +1472,23 @@ export default function CamerasPage() {
                     <aside className="cameraProfileAssignPanel">
                       <div className="cameraProfileAssignHead">
                         <h3>Main / Sub</h3>
-                        <span>{selectedOnvifProfile ? profileDisplayName(selectedOnvifProfile) : "Профиль не выбран"}</span>
+                        <span>{selectedOnvifProfile ? profileDisplayName(selectedOnvifProfile, copy) : copy.profileNotSelected}</span>
                       </div>
                       <div className="cameraProfileAssignActions">
                         <button type="button" className="button secondary small" onClick={() => useProfileAsMain(selectedOnvifProfile)} disabled={!selectedOnvifProfile}>
-                          Использовать как Main
+                          {copy.useAsMain}
                         </button>
-                        <div className="cameraProfileAssignedValue">{profileAssignmentSummary(assignedMainProfile, form.rtsp_main_url)}</div>
+                        <div className="cameraProfileAssignedValue">{profileAssignmentSummary(assignedMainProfile, form.rtsp_main_url, copy)}</div>
                         <button type="button" className="button secondary small" onClick={() => useProfileAsSub(selectedOnvifProfile)} disabled={!selectedOnvifProfile}>
-                          Использовать как Sub
+                          {copy.useAsSub}
                         </button>
-                        <div className="cameraProfileAssignedValue">{profileAssignmentSummary(assignedSubProfile, form.rtsp_sub_url)}</div>
+                        <div className="cameraProfileAssignedValue">{profileAssignmentSummary(assignedSubProfile, form.rtsp_sub_url, copy)}</div>
                       </div>
-                      {!selectedOnvifProfile ? <div className="cameraProfileAssignHint">Выбери профиль слева, затем назначь его как Main или Sub.</div> : null}
+                      {!selectedOnvifProfile ? <div className="cameraProfileAssignHint">{copy.selectProfileHint}</div> : null}
                     </aside>
                   </div> : (
                     <div className="cameraEmptyState">
-                      Загрузите ONVIF профили, чтобы выбрать Main/Sub и прочитать настройки профиля.
+                      {copy.loadProfilesHint}
                     </div>
                   )}
               </section>
@@ -1491,11 +1498,11 @@ export default function CamerasPage() {
               <section className="cameraModalSection cameraProfileSettingsSection">
                 <div className="cameraSettingsHead">
                   <div>
-                    <h3>Настройки выбранного профиля</h3>
-                    <p>Редактируются только параметры, которые камера отдала как writable.</p>
+                    <h3>{copy.selectedProfileSettings}</h3>
+                    <p>{copy.writableOnlyHint}</p>
                   </div>
                   <button className="button secondary small" onClick={applyOnvifProfileConfig} disabled={onvifConfigBusy || !canApplySelectedOnvifSettings}>
-                    {onvifConfigBusy ? "Применяем..." : "Применить настройки профиля"}
+                    {onvifConfigBusy ? copy.applying : copy.applyProfileSettings}
                   </button>
                 </div>
 
@@ -1507,7 +1514,7 @@ export default function CamerasPage() {
 
             {hasVerifiedCameraPayload ? (
               <div className="cameraVerifiedNotice">
-                {"\u041a\u0430\u043c\u0435\u0440\u0430 \u043f\u0440\u043e\u0432\u0435\u0440\u0435\u043d\u0430 \u0434\u043b\u044f \u0442\u0435\u043a\u0443\u0449\u0438\u0445 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u043e\u0432."}
+                {copy.cameraVerified}
               </div>
             ) : showManualUnverifiedBypass ? (
               <label className="cameraUnverifiedConfirm">
@@ -1516,14 +1523,14 @@ export default function CamerasPage() {
                   checked={Boolean(form.manual_confirm_unverified)}
                   onChange={(e) => patch("manual_confirm_unverified", e.target.checked)}
                 />
-                <span>Сохранить без успешной проверки как непроверенную камеру</span>
+                <span>{copy.saveUnverified}</span>
               </label>
             ) : null}
 
             <div className="actions">
-              <button className="button secondary" onClick={() => setShowEditor(false)}>Отмена</button>
+              <button className="button secondary" onClick={() => setShowEditor(false)}>{copy.cancel}</button>
               <button className="button" onClick={saveCamera} disabled={busy}>
-                {busy ? "Сохраняем..." : "Сохранить"}
+                {busy ? copy.saving : copy.save}
               </button>
             </div>
           </div>
@@ -1534,26 +1541,26 @@ export default function CamerasPage() {
         <div className="modalBackdrop">
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
             <div className="modalHeader">
-              <h2 style={{ margin: 0 }}>Удалить камеру</h2>
-              <button className="iconCloseButton" onClick={closeDeleteModal} aria-label="Закрыть">×</button>
+              <h2 style={{ margin: 0 }}>{copy.deleteTitle}</h2>
+              <button className="iconCloseButton" onClick={closeDeleteModal} aria-label={copy.close}>×</button>
             </div>
             <p style={{ color: "#475569", marginBottom: 16 }}>
-              Камера: <strong>{cameraToDelete?.name}</strong>
+              {copy.cameraLabel}: <strong>{cameraToDelete?.name}</strong>
             </p>
 
             <label style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
               <input type="checkbox" checked={deleteFiles} onChange={(e) => setDeleteFiles(e.target.checked)} />
-              <span>Удалить также все записи и папку камеры</span>
+              <span>{copy.deleteRecordsFolder}</span>
             </label>
 
             <div className="badge warn" style={{ marginBottom: 18 }}>
-              Если галочка не установлена, камера удалится только из системы, а архив останется на диске.
+              {copy.deleteHint}
             </div>
 
             <div className="actions">
-              <button className="button secondary" onClick={closeDeleteModal}>Отмена</button>
+              <button className="button secondary" onClick={closeDeleteModal}>{copy.cancel}</button>
               <button className="button secondary" onClick={confirmDeleteCamera} disabled={busy}>
-                {busy ? "Удаляем..." : "Удалить"}
+                {busy ? copy.deleting : copy.delete}
               </button>
             </div>
           </div>

@@ -19,6 +19,7 @@ import {
   validateArchiveExportSelection,
 } from "../../lib/archiveExports";
 import { productLocalInputToApi } from "../../lib/timezone";
+import { useI18n } from "../../lib/i18n";
 import { resizeWorkspaceTile, visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
 
 const STORAGE_KEY = "vms_chronology_workspace_v1";
@@ -37,6 +38,7 @@ const ZOOM_HOURS = {
   "3d": 72,
   "7d": 168,
 };
+const HYDRATION_INITIAL_TS = new Date(2000, 0, 1, 0, 0, 0);
 
 const SPEED_OPTIONS = [
   { value: 0.25, label: "0.25x" },
@@ -46,7 +48,7 @@ const SPEED_OPTIONS = [
   { value: 4, label: "4x" },
 ];
 
-const TEXT = {
+const CHRONOLOGY_TEXT = {
   cameras: "\u041a\u0430\u043c\u0435\u0440\u044b",
   align: "\u0412\u044b\u0440\u043e\u0432\u043d\u044f\u0442\u044c",
   addAll: "\u0412\u0441\u0435",
@@ -260,7 +262,12 @@ function backendPayload(tiles) {
 }
 
 export default function ChronologyPage() {
-  const initialTs = getNow();
+  const { text } = useI18n();
+  const TEXT = useMemo(
+    () => Object.fromEntries(Object.entries(CHRONOLOGY_TEXT).map(([key, value]) => [key, text(value)])),
+    [text]
+  );
+  const initialTs = HYDRATION_INITIAL_TS;
   const initialForm = dateTimeFromDate(initialTs);
   const workspaceRef = useRef(null);
   const hydratedRef = useRef(false);
@@ -370,6 +377,16 @@ export default function ChronologyPage() {
       hydratedRef.current = true;
     }
   }
+
+  useEffect(() => {
+    const now = getNow();
+    const next = dateTimeFromDate(now);
+    currentTsRef.current = now;
+    setCurrentTs(now);
+    setPreviewTs(now);
+    setDate(next.date);
+    setTime(next.time);
+  }, []);
 
   useEffect(() => {
     loadWorkspaceLayout();

@@ -15,6 +15,7 @@ import {
   validateArchiveExportSelection,
 } from "../../lib/archiveExports";
 import { useCurrentUser } from "../../lib/currentUser";
+import { useI18n } from "../../lib/i18n";
 import { shouldUseAdaptiveHighResolutionPlayback, normalizeVideoDimensions } from "../../lib/playbackResolution";
 import { formatProductDateTime, productDateFilterParam, productDateTimeInputValue } from "../../lib/timezone";
 
@@ -271,6 +272,11 @@ function hasActiveRecordingJobs(recorderStatus, selectedCamera) {
 }
 
 export default function RecordingsPage() {
+  const { text } = useI18n();
+  const t = useMemo(
+    () => Object.fromEntries(Object.entries(TEXT).map(([key, value]) => [key, text(value)])),
+    [text]
+  );
   const [cameras, setCameras] = useState([]);
   const [selectedCamera, setSelectedCamera] = useState("__all__");
   const [selectedDate, setSelectedDate] = useState("");
@@ -448,7 +454,7 @@ export default function RecordingsPage() {
     items.forEach((item) => {
       if (!item?.camera_id) return;
       if (selectedCamera !== "__all__" && item.camera !== selectedCamera) return;
-      byId.set(String(item.camera_id), item.camera || `${TEXT.camera} ${item.camera_id}`);
+      byId.set(String(item.camera_id), item.camera || `${t.camera} ${item.camera_id}`);
     });
     return Array.from(byId.entries()).map(([id, name]) => ({ id, name }));
   }, [items, selectedCamera]);
@@ -537,7 +543,7 @@ export default function RecordingsPage() {
     setExportStatus("");
     setExportModal({
       cameraId: initialCameraId,
-      title: selectedCamera === "__all__" ? TEXT.createClip : `${TEXT.createClip} ${selectedCamera}`,
+      title: selectedCamera === "__all__" ? t.createClip : `${t.createClip} ${selectedCamera}`,
       reason: "",
       startTs,
       endTs,
@@ -562,8 +568,8 @@ export default function RecordingsPage() {
       exportLimits
     );
     if (!exportModal.cameraId) {
-      setError(TEXT.exportPickCamera);
-      setExportStatus(TEXT.exportPickCamera);
+      setError(t.exportPickCamera);
+      setExportStatus(t.exportPickCamera);
       return;
     }
     if (validation) {
@@ -591,8 +597,8 @@ export default function RecordingsPage() {
       });
       if (result?.job?.id) setLastExportId(result.job.id);
       saveBlobDownload(result.clip.blob, result.clip.filename || "km-vms-clip.mkv");
-      setNotice(TEXT.exportReady);
-      setExportStatus(TEXT.exportReady);
+      setNotice(t.exportReady);
+      setExportStatus(t.exportReady);
     } catch (err) {
       const message = normalizeArchiveExportError(err.message);
       setError(message);
@@ -805,8 +811,8 @@ export default function RecordingsPage() {
       <div className="standardPage">
       <div className="pageHeader recordingsHeader">
         <div>
-          <h1 className="pageTitle">{TEXT.title}</h1>
-          <div className="pageSubtitle">{TEXT.subtitle}</div>
+          <h1 className="pageTitle">{t.title}</h1>
+          <div className="pageSubtitle">{t.subtitle}</div>
         </div>
       </div>
 
@@ -829,7 +835,7 @@ export default function RecordingsPage() {
               value={selectedCamera}
               onChange={(e) => setSelectedCamera(e.target.value)}
             >
-              <option value="__all__">{TEXT.allCameras}</option>
+              <option value="__all__">{t.allCameras}</option>
               {cameras.map((camera) => (
                 <option key={camera} value={camera}>
                   {camera}
@@ -842,7 +848,7 @@ export default function RecordingsPage() {
               className="input recordingsFilterDate"
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              aria-label={TEXT.date}
+              aria-label={t.date}
             />
 
             {canExport ? (
@@ -851,8 +857,8 @@ export default function RecordingsPage() {
                 className="button secondary small recordingsCreateClipButton"
                 onClick={openExportModal}
                 disabled={exportBusy}
-                title={TEXT.createClipTooltip}
-                aria-label={TEXT.createClip}
+                title={t.createClipTooltip}
+                aria-label={t.createClip}
               >
                 {ICONS.export}
               </button>
@@ -863,8 +869,8 @@ export default function RecordingsPage() {
             <button
               className="button secondary small recordingsActionButton recordingsToolbarIconButton"
               onClick={refresh}
-              title={TEXT.refresh}
-              aria-label={TEXT.refresh}
+              title={t.refresh}
+              aria-label={t.refresh}
             >
               {ICONS.refresh}
             </button>
@@ -875,8 +881,8 @@ export default function RecordingsPage() {
                   className="button secondary small recordingsActionButton recordingsToolbarIconButton"
                   onClick={handleDeleteSelected}
                   disabled={!selectedPaths.length || busy}
-                  title={TEXT.deleteSelected}
-                  aria-label={TEXT.deleteSelected}
+                  title={t.deleteSelected}
+                  aria-label={t.deleteSelected}
                 >
                   {ICONS.trash}
                 </button>
@@ -887,21 +893,21 @@ export default function RecordingsPage() {
                     onClick={() => setDangerMenuOpen((prev) => !prev)}
                     aria-haspopup="menu"
                     aria-expanded={dangerMenuOpen}
-                    title={TEXT.dangerActions}
+                    title={t.dangerActions}
                   >
                     {ICONS.more}
                   </button>
 
                   {dangerMenuOpen ? (
                     <div className="recordingsDangerDropdown" role="menu">
-                      <div className="recordingsDangerTitle">{TEXT.dangerActions}</div>
+                      <div className="recordingsDangerTitle">{t.dangerActions}</div>
                       <button
                         className="recordingsDangerItem"
                         onClick={handleDeleteByCamera}
                         disabled={selectedCamera === "__all__" || busy}
                         role="menuitem"
                       >
-                        {TEXT.deleteCamera}
+                        {t.deleteCamera}
                       </button>
                       <button
                         className="recordingsDangerItem recordingsDangerItemAlert"
@@ -909,7 +915,7 @@ export default function RecordingsPage() {
                         disabled={busy}
                         role="menuitem"
                       >
-                        {TEXT.deleteAll}
+                        {t.deleteAll}
                       </button>
                     </div>
                   ) : null}
@@ -921,11 +927,11 @@ export default function RecordingsPage() {
       </div>
 
       <div className="recordingsStatsRow">
-        <div className="badge">{TEXT.totalFiles}: {visibleSummary.count}</div>
-        <div className="badge">{TEXT.totalSize}: {visibleSummary.size_human}</div>
-        <div className="badge">{TEXT.page}: {currentPage} / {pageCount}</div>
+        <div className="badge">{t.totalFiles}: {visibleSummary.count}</div>
+        <div className="badge">{t.totalSize}: {visibleSummary.size_human}</div>
+        <div className="badge">{t.page}: {currentPage} / {pageCount}</div>
         {selectedPaths.length ? (
-          <div className="badge ok">{TEXT.selected}: {selectedPaths.length}</div>
+          <div className="badge ok">{t.selected}: {selectedPaths.length}</div>
         ) : null}
       </div>
 
@@ -949,24 +955,24 @@ export default function RecordingsPage() {
                       type="checkbox"
                       checked={allVisibleSelected}
                       onChange={toggleSelectAll}
-                      aria-label={TEXT.pickAllPage}
+                      aria-label={t.pickAllPage}
                     />
                   ) : null}
                 </th>
-                <th>{TEXT.camera}</th>
+                <th>{t.camera}</th>
                 <th className="recordingsSpacerHeader" aria-hidden="true"></th>
-                <th>{TEXT.file}</th>
-                <th className="recordingsDateHeader">{TEXT.createdAt}</th>
+                <th>{t.file}</th>
+                <th className="recordingsDateHeader">{t.createdAt}</th>
                 <th className="recordingsSizeHeader">
                   <button
                     className={`recordingsSortButton ${sortBy === SORT_OPTIONS.size_bytes.key ? "active" : ""}`}
                     onClick={() => handleSort(SORT_OPTIONS.size_bytes.key)}
                   >
-                    <span className="recordingsSortLabel">{TEXT.size}</span>
+                    <span className="recordingsSortLabel">{t.size}</span>
                     <span className="recordingsSortIcon">{sortBy === SORT_OPTIONS.size_bytes.key ? (sortDir === "asc" ? ICONS.up : ICONS.down) : ICONS.sort}</span>
                   </button>
                 </th>
-                <th className="recordingsActionsHeader">{TEXT.actions}</th>
+                <th className="recordingsActionsHeader">{t.actions}</th>
               </tr>
             </thead>
             <tbody>
@@ -989,14 +995,14 @@ export default function RecordingsPage() {
                       <button
                         className="linkButton recordingsFileLink"
                         onClick={() => handleWatch(item)}
-                        title={TEXT.openEmbeddedViewer}
+                        title={t.openEmbeddedViewer}
                       >
                         {item.filename}
                       </button>
                     ) : (
                       <div>
                         <div>{item.filename}</div>
-                        <div className="recordingsMissingStatus">{TEXT.missingFile}</div>
+                        <div className="recordingsMissingStatus">{t.missingFile}</div>
                       </div>
                     )}
                   </td>
@@ -1010,8 +1016,8 @@ export default function RecordingsPage() {
                         className="recordingsIconButton"
                         onClick={() => handleWatch(item)}
                         disabled={!isRecordingAvailable(item)}
-                        title={`${ICONS.watch} ${TEXT.watch}`}
-                        aria-label={TEXT.watch}
+                        title={`${ICONS.watch} ${t.watch}`}
+                        aria-label={t.watch}
                       >
                         {ICONS.watch}
                       </button>
@@ -1019,8 +1025,8 @@ export default function RecordingsPage() {
                         className="recordingsIconButton"
                         onClick={() => handleDownload(item)}
                         disabled={!isRecordingAvailable(item)}
-                        title={TEXT.downloadSource}
-                        aria-label={TEXT.downloadSource}
+                        title={t.downloadSource}
+                        aria-label={t.downloadSource}
                       >
                         {ICONS.download}
                       </button>
@@ -1029,8 +1035,8 @@ export default function RecordingsPage() {
                           className="recordingsIconButton danger"
                           onClick={() => handleDeleteOne(item)}
                           disabled={busy}
-                          title={`${ICONS.remove} ${TEXT.remove}`}
-                          aria-label={TEXT.remove}
+                          title={`${ICONS.remove} ${t.remove}`}
+                          aria-label={t.remove}
                         >
                           {ICONS.remove}
                         </button>
@@ -1043,7 +1049,7 @@ export default function RecordingsPage() {
               {!paginatedItems.length ? (
                 <tr>
                   <td colSpan="7" className="recordingsEmptyCell">
-                    {activeRecordingEmpty ? TEXT.recordingActiveEmpty : TEXT.noRecords}
+                    {activeRecordingEmpty ? t.recordingActiveEmpty : t.noRecords}
                   </td>
                 </tr>
               ) : null}
@@ -1090,11 +1096,11 @@ export default function RecordingsPage() {
         <div className="modalBackdrop">
           <div className="modal modalWide" onClick={(e) => e.stopPropagation()}>
             <div className="modalHeader">
-              <h2 style={{ margin: 0 }}>{TEXT.viewRecord}</h2>
+              <h2 style={{ margin: 0 }}>{t.viewRecord}</h2>
               <button
                 className="iconCloseButton"
                 onClick={closeViewer}
-                aria-label={TEXT.close}
+                aria-label={t.close}
               >
                 {ICONS.close}
               </button>
@@ -1104,7 +1110,7 @@ export default function RecordingsPage() {
 
             {viewerPlaybackError ? (
               <div className="recordingPlaybackNotice">
-                {TEXT.playbackError}
+                {t.playbackError}
               </div>
             ) : (
               <div
@@ -1131,11 +1137,11 @@ export default function RecordingsPage() {
             <div className="actions">
               {viewerItem ? (
                 <button className="button secondary" onClick={() => handleDownload(viewerItem)}>
-                  {TEXT.download}
+                  {t.download}
                 </button>
               ) : null}
               <button className="button secondary" onClick={closeViewer}>
-                {TEXT.close}
+                {t.close}
               </button>
             </div>
           </div>
@@ -1145,30 +1151,30 @@ export default function RecordingsPage() {
         <div className="modalBackdrop">
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="modalHeader">
-              <h2 style={{ margin: 0 }}>{TEXT.exportTitle}</h2>
-              <button className="iconCloseButton" onClick={closeExportModal} disabled={exportBusy} aria-label={TEXT.close}>
+              <h2 style={{ margin: 0 }}>{t.exportTitle}</h2>
+              <button className="iconCloseButton" onClick={closeExportModal} disabled={exportBusy} aria-label={t.close}>
                 {ICONS.close}
               </button>
             </div>
             <div className="archiveExportForm">
               <div className="archiveExportSummary">
-                <strong>{TEXT.createClip}</strong>
-                <span>{selectedDate || TEXT.allCameras}</span>
+                <strong>{t.createClip}</strong>
+                <span>{selectedDate || t.allCameras}</span>
               </div>
-              <div className="archiveExportHelp">{TEXT.exportHelp}</div>
+              <div className="archiveExportHelp">{t.exportHelp}</div>
               <div className="archiveExportLimits">
-                <strong>{TEXT.exportLimits}</strong>
+                <strong>{t.exportLimits}</strong>
                 <span>{describeArchiveExportLimits(exportLimits)}</span>
               </div>
               <label className="archiveExportField">
-                <span>{TEXT.exportCamera}</span>
+                <span>{t.exportCamera}</span>
                 <select
                   className="select"
                   value={exportModal.cameraId}
                   onChange={(event) => setExportModal((prev) => ({ ...prev, cameraId: event.target.value }))}
                   disabled={exportBusy}
                 >
-                  <option value="">{TEXT.exportPickCamera}</option>
+                  <option value="">{t.exportPickCamera}</option>
                   {clipCameraOptions.map((camera) => (
                     <option key={camera.id} value={camera.id}>
                       {camera.name}
@@ -1177,7 +1183,7 @@ export default function RecordingsPage() {
                 </select>
               </label>
               <label className="archiveExportField">
-                <span>{TEXT.exportStart}</span>
+                <span>{t.exportStart}</span>
                 <input
                   className="input"
                   type="datetime-local"
@@ -1188,7 +1194,7 @@ export default function RecordingsPage() {
                 />
               </label>
               <label className="archiveExportField">
-                <span>{TEXT.exportEnd}</span>
+                <span>{t.exportEnd}</span>
                 <input
                   className="input"
                   type="datetime-local"
@@ -1199,7 +1205,7 @@ export default function RecordingsPage() {
                 />
               </label>
               <label className="archiveExportField">
-                <span>{TEXT.exportReason}</span>
+                <span>{t.exportReason}</span>
                 <input
                   className="input"
                   value={exportModal.reason}
@@ -1211,13 +1217,13 @@ export default function RecordingsPage() {
               {exportStatus ? <div className="archiveExportStatus">{exportStatus}</div> : null}
               <div className="actions">
                 <button className="button primary" onClick={submitExport} disabled={exportBusy}>
-                  {TEXT.exportRun}
+                  {t.exportRun}
                 </button>
-                <button className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy} title={TEXT.exportManifestHelp}>
-                  {TEXT.exportManifest}
+                <button className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy} title={t.exportManifestHelp}>
+                  {t.exportManifest}
                 </button>
                 <button className="button secondary" onClick={closeExportModal} disabled={exportBusy}>
-                  {TEXT.close}
+                  {t.close}
                 </button>
               </div>
             </div>

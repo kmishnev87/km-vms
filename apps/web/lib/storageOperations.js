@@ -24,10 +24,14 @@ export function formatPercent(value) {
 }
 
 export function formatDateTime(value, language = "ru") {
-  if (!value) return language === "en" ? "Never" : "Не запускалось";
+  if (!value) {
+    if (language === "en") return "Never";
+    if (language === "zh-CN") return "从未运行";
+    return "Не запускалось";
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return String(value);
-  return date.toLocaleString(language === "en" ? "en-US" : "ru-RU");
+  return date.toLocaleString(language === "en" ? "en-US" : language === "zh-CN" ? "zh-CN" : "ru-RU");
 }
 
 export function statusLabel(value, language = "ru") {
@@ -62,6 +66,20 @@ export function statusLabel(value, language = "ru") {
       failed: "Failed",
       unknown: "Unknown",
     },
+    "zh-CN": {
+      available: "可用",
+      degraded: "有警告",
+      blocked: "已阻止",
+      warning: "警告",
+      ok: "正常",
+      pending: "等待中",
+      running: "运行中",
+      problems_found: "发现问题",
+      never_run: "从未运行",
+      completed_with_warnings: "已完成但有警告",
+      failed: "失败",
+      unknown: "未知",
+    },
   };
   const table = labels[language] || labels.ru;
   return table[value] || table.unknown;
@@ -69,12 +87,14 @@ export function statusLabel(value, language = "ru") {
 
 export function boolLabel(value, language = "ru") {
   if (language === "en") return value ? "Yes" : "No";
+  if (language === "zh-CN") return value ? "是" : "否";
   return value ? "Да" : "Нет";
 }
 
 export function policyStateLabel(policy, language = "ru") {
   const enabled = Boolean(policy?.auto_free_space_cleanup_enabled);
   if (language === "en") return enabled ? "ON" : "OFF";
+  if (language === "zh-CN") return enabled ? "开启" : "关闭";
   return enabled ? "Включена" : "Выключена";
 }
 
@@ -87,6 +107,11 @@ export function lowDiskPolicyText(policy, language = "ru") {
     return cleanupEnabled
       ? `Warning below ${warning}% free. Below ${cleanup}% the system may delete only owned metadata-safe recordings. Below ${critical}% recording may be suspended.`
       : `Warning below ${warning}% free. Automatic deletion is OFF; below ${critical}% recording may still be suspended to protect the disk.`;
+  }
+  if (language === "zh-CN") {
+    return cleanupEnabled
+      ? `可用空间低于 ${warning}% 时显示警告。低于 ${cleanup}% 时系统只能删除 owned 且 metadata-safe 的旧录像。低于 ${critical}% 时可暂停录像以保护磁盘。`
+      : `可用空间低于 ${warning}% 时仅显示警告。自动删除已关闭；低于 ${critical}% 时仍可暂停录像以保护磁盘。`;
   }
   return cleanupEnabled
     ? `Ниже ${warning}% система предупреждает о нехватке места. Ниже ${cleanup}% она может автоматически удалить только старые owned metadata-safe записи. Ниже ${critical}% запись может быть приостановлена для защиты диска.`

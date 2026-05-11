@@ -7,69 +7,58 @@ import Layout from "../components/Layout";
 import OperatorProblemBanners from "../components/OperatorProblemBanners";
 import { canAccessPath, getAuthToken } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
+import { normalizeLocale, persistLocale, useI18n } from "../lib/i18n";
 
 const DASHBOARD_ITEMS = [
   {
     href: "/cameras",
     iconSrc: "/assets/icons/dashboard/camera.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/camera.svg",
-    title: "Камеры",
-    description: "Настройка камер, RTSP-адресов и параметров.",
+    titleKey: "dashboard.camerasTitle",
+    descriptionKey: "dashboard.camerasText",
   },
   {
     href: "/recordings",
     iconSrc: "/assets/icons/dashboard/recordings.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/recordings.svg",
-    title: "Записи",
-    description: "Поиск, просмотр и управление архивными файлами.",
+    titleKey: "dashboard.recordingsTitle",
+    descriptionKey: "dashboard.recordingsText",
   },
   {
     href: "/live",
     iconSrc: "/assets/icons/dashboard/live.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/live.svg",
-    title: "Онлайн",
-    description: "Живой просмотр камер в свободном workspace.",
+    titleKey: "dashboard.liveTitle",
+    descriptionKey: "dashboard.liveText",
   },
   {
     href: "/chronology",
     iconSrc: "/assets/icons/dashboard/chronology.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/chronology.svg",
-    title: "Хронология",
-    description: "Синхронный архив камер с общей временной точкой.",
+    titleKey: "dashboard.chronologyTitle",
+    descriptionKey: "dashboard.chronologyText",
   },
   {
     href: "/storage",
     iconSrc: "/assets/icons/ui/storage.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/settings.svg",
-    title: {
-      ru: "Хранилище",
-      en: "Storage",
-    },
-    description: {
-      ru: "Состояние архива, свободное место, retention и проверка целостности.",
-      en: "Archive state, free space, retention, and integrity checks.",
-    },
+    titleKey: "dashboard.storageTitle",
+    descriptionKey: "dashboard.storageText",
   },
   {
     href: "/settings",
     iconSrc: "/assets/icons/dashboard/settings.png",
     backgroundSrc: "/assets/backgrounds/dashboard-cards/settings.svg",
-    title: {
-      ru: "Настройки",
-      en: "Settings",
-    },
-    description: {
-      ru: "Конфигурация системы и управление параметрами.",
-      en: "System configuration and settings management.",
-    },
+    titleKey: "dashboard.settingsTitle",
+    descriptionKey: "dashboard.settingsText",
   },
 ];
 
 export default function HomePage() {
   const router = useRouter();
   const [ready, setReady] = useState(false);
-  const [language, setLanguage] = useState("ru");
   const { currentUser, status: currentUserStatus } = useCurrentUser();
+  const { t } = useI18n();
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -80,8 +69,7 @@ export default function HomePage() {
           return;
         }
         if (status?.language) {
-          setLanguage(status.language);
-          localStorage.setItem("km_vms_language", status.language);
+          persistLocale(normalizeLocale(status.language));
         }
         if (!getAuthToken()) {
           router.replace("/login");
@@ -114,14 +102,14 @@ export default function HomePage() {
           <div>
             <h1 className="dashboardTitle">KM VMS</h1>
             <div className="dashboardSubtitle">
-              Рабочий стол системы видеонаблюдения
+              {t("dashboard.subtitle")}
             </div>
           </div>
         </section>
 
         <OperatorProblemBanners className="dashboardWarnings" limit={6} showOverview />
 
-        <section className="dashboardGrid" aria-label="Основные разделы">
+        <section className="dashboardGrid" aria-label={t("dashboard.sections")}>
           {visibleItems.map((item) => (
             <Link
               href={item.href}
@@ -133,8 +121,8 @@ export default function HomePage() {
                 <img src={item.iconSrc} alt="" />
               </div>
               <div className="dashboardCardBody">
-                <div className="dashboardCardTitle">{typeof item.title === "string" ? item.title : item.title[language] || item.title.ru}</div>
-                <div className="dashboardCardText">{typeof item.description === "string" ? item.description : item.description[language] || item.description.ru}</div>
+                <div className="dashboardCardTitle">{t(item.titleKey)}</div>
+                <div className="dashboardCardText">{t(item.descriptionKey)}</div>
               </div>
               <div className="dashboardCardArrow">{"\u2192"}</div>
             </Link>

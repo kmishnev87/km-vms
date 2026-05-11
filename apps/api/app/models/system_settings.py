@@ -13,7 +13,7 @@ class SystemSettings(Base):
     system_initialized: Mapped[bool] = mapped_column(Boolean, default=False)
     system_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     timezone: Mapped[str] = mapped_column(String(100), default="UTC")
-    language: Mapped[str] = mapped_column(String(2), default="ru")
+    language: Mapped[str] = mapped_column(String(10), default="ru")
     storage_path: Mapped[str] = mapped_column(String(1024), default="/storage/archive")
     recording_format: Mapped[str] = mapped_column(String(16), default="mkv")
     hardware_preferred_backend: Mapped[str | None] = mapped_column(String(64), nullable=True)

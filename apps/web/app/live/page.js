@@ -5,6 +5,7 @@ import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import TilePlayer from "../../components/TilePlayer";
 import { apiFetch } from "../../lib/api";
+import { useI18n } from "../../lib/i18n";
 import { resizeWorkspaceTile, visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
 
 const STORAGE_KEY = "vms_live_workspace_v1";
@@ -17,7 +18,7 @@ const MIN_TILE_H = 150;
 const DEFAULT_W_PCT = 0.28;
 const DEFAULT_H_PCT = 0.29;
 
-const TEXT = {
+const LIVE_TEXT = {
   cameras: "\u041a\u0430\u043c\u0435\u0440\u044b",
   align: "\u0412\u044b\u0440\u043e\u0432\u043d\u044f\u0442\u044c",
   addAll: "\u0412\u0441\u0435",
@@ -174,6 +175,11 @@ function backendPayload(tiles) {
 }
 
 export default function LivePage() {
+  const { text } = useI18n();
+  const TEXT = useMemo(
+    () => Object.fromEntries(Object.entries(LIVE_TEXT).map(([key, value]) => [key, text(value)])),
+    [text]
+  );
   const workspaceRef = useRef(null);
   const hydratedRef = useRef(false);
   const backendReadyRef = useRef(false);

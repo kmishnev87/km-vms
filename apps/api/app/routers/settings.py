@@ -525,11 +525,11 @@ def patch_settings(
     if "hardware_preferred_backend" in data and system.hardware_preferred_backend != previous.get("hardware_preferred_backend"):
         invalidate_hardware_capabilities()
     setting_events = [
-        ("language", "settings.language_changed", "????", "language"),
-        ("timezone", "settings.timezone_changed", "??????? ????", "timezone"),
-        ("hardware_preferred_backend", "settings.hardware_backend_changed", "?????????? ?????????", "hardware backend"),
-        ("recording_format", "settings.recording_format_changed", "?????? ??????", "recording format"),
-        ("auto_free_space_cleanup_enabled", "settings.auto_free_space_cleanup_changed", "???????????????? ?????", "auto free-space cleanup"),
+        ("language", "settings.language_changed", "Язык", "language"),
+        ("timezone", "settings.timezone_changed", "Часовой пояс", "timezone"),
+        ("hardware_preferred_backend", "settings.hardware_backend_changed", "Аппаратное ускорение", "hardware backend"),
+        ("recording_format", "settings.recording_format_changed", "Формат записи", "recording format"),
+        ("auto_free_space_cleanup_enabled", "settings.auto_free_space_cleanup_changed", "Автоосвобождение места", "auto free-space cleanup"),
     ]
     changed = {}
     for key, event_type, label_ru, label_en in setting_events:
@@ -540,7 +540,7 @@ def patch_settings(
                 actor=current_user,
                 category="settings",
                 event_type=event_type,
-                message_ru=f"{current_user.username} ??????? {label_ru}: {previous.get(key)} ? {current.get(key)}",
+                message_ru=f"{current_user.username} изменил {label_ru}: {previous.get(key)} -> {current.get(key)}",
                 message_en=f"{current_user.username} changed {label_en}: {previous.get(key)} -> {current.get(key)}",
                 target_type="settings",
                 metadata={
@@ -558,7 +558,7 @@ def patch_settings(
             actor=current_user,
             category="settings",
             event_type="settings.saved",
-            message_ru=f"{current_user.username} ???????? ?????????",
+            message_ru=f"{current_user.username} сохранил настройки",
             message_en=f"{current_user.username} saved settings",
             target_type="settings",
             metadata={"changed": changed},
@@ -995,7 +995,7 @@ def download_log_archive(
         actor=current_user,
         category="diagnostics",
         event_type="diagnostics.archive_requested",
-        message_ru=f"{current_user.username} ???????? ??????????????? ?????: {mode}",
+        message_ru=f"{current_user.username} запросил диагностический архив: {mode}",
         message_en=f"{current_user.username} requested diagnostic archive: {mode}",
         target_type="diagnostic_archive",
         metadata={"mode": mode},
@@ -1024,7 +1024,7 @@ def download_log_archive(
         actor=current_user,
         category="diagnostics",
         event_type="diagnostics.archive_created",
-        message_ru=f"{current_user.username} ?????? {'???????????' if mode == 'extended' else '???????'} ??????????????? ?????",
+        message_ru=f"{current_user.username} создал {'расширенный' if mode == 'extended' else 'обычный'} диагностический архив",
         message_en=f"{current_user.username} created {'extended' if mode == 'extended' else 'normal'} diagnostic archive",
         target_type="diagnostic_archive",
         metadata={"mode": mode},

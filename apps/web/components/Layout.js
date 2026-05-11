@@ -5,13 +5,14 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { apiFetch, canAccessPath, clearAuthToken, getAuthToken } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
+import { LanguageSelect, normalizeLocale, persistLocale, useI18n } from "../lib/i18n";
 
 const items = [
-  { href: "/cameras", label: "\u041a\u0430\u043c\u0435\u0440\u044b", iconSrc: "/assets/icons/ui/camera.png" },
-  { href: "/recordings", label: "\u0417\u0430\u043f\u0438\u0441\u0438", iconSrc: "/assets/icons/ui/recordings.png" },
-  { href: "/live", label: "\u041e\u043d\u043b\u0430\u0439\u043d", iconSrc: "/assets/icons/ui/live.png" },
-  { href: "/chronology", label: "\u0425\u0440\u043e\u043d\u043e\u043b\u043e\u0433\u0438\u044f", iconSrc: "/assets/icons/ui/chronology.png" },
-  { href: "/storage", label: "\u0425\u0440\u0430\u043d\u0438\u043b\u0438\u0449\u0435", iconSrc: "/assets/icons/ui/storage.png" },
+  { href: "/cameras", labelKey: "nav.cameras", iconSrc: "/assets/icons/ui/camera.png" },
+  { href: "/recordings", labelKey: "nav.recordings", iconSrc: "/assets/icons/ui/recordings.png" },
+  { href: "/live", labelKey: "nav.live", iconSrc: "/assets/icons/ui/live.png" },
+  { href: "/chronology", labelKey: "nav.chronology", iconSrc: "/assets/icons/ui/chronology.png" },
+  { href: "/storage", labelKey: "nav.storage", iconSrc: "/assets/icons/ui/storage.png" },
 ];
 
 export default function Layout({ children }) {
@@ -19,6 +20,7 @@ export default function Layout({ children }) {
   const router = useRouter();
   const [language, setLanguage] = useState("ru");
   const { currentUser, status: currentUserStatus } = useCurrentUser();
+  const { t } = useI18n();
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -29,8 +31,9 @@ export default function Layout({ children }) {
           return;
         }
         if (status?.language) {
-          setLanguage(status.language);
-          localStorage.setItem("km_vms_language", status.language);
+          const normalized = normalizeLocale(status.language);
+          setLanguage(normalized);
+          persistLocale(normalized);
         }
         if (!getAuthToken()) {
           router.replace("/login");
@@ -43,17 +46,16 @@ export default function Layout({ children }) {
 
   useEffect(() => {
     function onLanguage(event) {
-      if (event.detail) setLanguage(event.detail);
+      if (event.detail) setLanguage(normalizeLocale(event.detail));
     }
     window.addEventListener("km-vms-language", onLanguage);
     return () => window.removeEventListener("km-vms-language", onLanguage);
   }, []);
 
-  async function changeLanguage(event) {
-    const nextLanguage = event.target.value;
+  async function changeLanguage(nextLanguage) {
+    nextLanguage = normalizeLocale(nextLanguage);
     setLanguage(nextLanguage);
-    localStorage.setItem("km_vms_language", nextLanguage);
-    window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextLanguage }));
+    persistLocale(nextLanguage);
     try {
       await apiFetch("/settings", {
         method: "PATCH",
@@ -101,8 +103,8 @@ export default function Layout({ children }) {
                 key={item.href}
                 href={item.href}
                 className={`topNavItem ${pathname === item.href ? "active" : ""}`}
-                title={item.label}
-                aria-label={item.label}
+                title={t(item.labelKey)}
+                aria-label={t(item.labelKey)}
               >
                 {item.iconSrc ? <img className="topNavIconImage" src={item.iconSrc} alt="" /> : <span className="topNavGlyph">{item.glyph}</span>}
               </Link>
@@ -110,21 +112,18 @@ export default function Layout({ children }) {
           </nav>
 
           <div className="topNavRight">
-            <select className="topLanguageSelect" value={language} onChange={changeLanguage} aria-label="Language">
-              <option value="ru">RU</option>
-              <option value="en">EN</option>
-            </select>
+            <LanguageSelect className="topLanguageSelect" value={language} onChange={changeLanguage} aria-label={t("common.language")} />
 
-            <div className="topUserChip" title={username || (language === "en" ? "User" : "Пользователь")}>
-              {username || (language === "en" ? "User" : "Пользователь")}
+            <div className="topUserChip" title={username || t("common.user")}>
+              {username || t("common.user")}
             </div>
 
             {canOpenSettings ? (
               <Link
                 href="/settings"
                 className={`topNavItem ${pathname === "/settings" ? "active" : ""}`}
-                title={"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438"}
-                aria-label={"\u041d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438"}
+                title={t("nav.settings")}
+                aria-label={t("nav.settings")}
               >
                 <img className="topNavIconImage" src="/assets/icons/ui/settings.png" alt="" />
               </Link>
@@ -134,8 +133,8 @@ export default function Layout({ children }) {
               className="topNavItem topNavButton"
               onClick={logout}
               type="button"
-              title={"\u0412\u044b\u0445\u043e\u0434"}
-              aria-label={"\u0412\u044b\u0445\u043e\u0434"}
+              title={t("common.logout")}
+              aria-label={t("common.logout")}
             >
               <img className="topNavIconImage" src="/assets/icons/ui/logout.png" alt="" />
             </button>

@@ -2,103 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { LanguageSelect, localeMetadata, normalizeLocale, useI18n, useLocaleText } from "../../lib/i18n";
 
-const COPY = {
-  ru: {
-    title: "Первый запуск KM VMS",
-    subtitle: "Пошагово создайте владельца системы и подтвердите базовые параметры.",
-    steps: ["Язык", "Владелец", "Хранилище", "Запись", "Проверка"],
-    welcomeTitle: "Добро пожаловать",
-    welcomeText: "Этот мастер выполняется один раз до входа в систему.",
-    systemName: "Имя системы",
-    systemNameHelp: "Несекретное имя продукта, которое отображается в настройках.",
-    language: "Язык интерфейса",
-    ownerTitle: "Владелец системы",
-    username: "Логин владельца",
-    password: "Пароль",
-    passwordConfirm: "Повтор пароля",
-    usernameHelp: "2-64 символа: латиница, цифры, точка, дефис или подчеркивание.",
-    storageTitle: "Хранилище архива",
-    storageHelp: "Выберите NAS/server папку для архива. Внутри Docker путь остается /storage/archive.",
-    storageFolder: "Папка архива",
-    storagePreview: "NAS/server путь",
-    storageTechnical: "Docker путь",
-    storageUnavailable: "Выбор диска недоступен: нужен host snapshot от installer.",
-    storageApply: "Проверить и выбрать",
-    storageAllowed: "доступен",
-    storageBlocked: "заблокирован",
-    storageWritable: "запись",
-    storageReadOnly: "только чтение",
-    storageTotal: "всего",
-    storageUsed: "занято",
-    storageFree: "свободно",
-    storageReason: "причина",
-    storagePending: "Выбор записан как pending: host helper/restart должен применить mount.",
-    storageBlockedReady: "Сначала выберите и подтвердите NAS/server папку архива.",
-    nextAction: "Следующее действие",
-    finalLockNote: "После завершения первый запуск будет закрыт.",
-    recordingTitle: "Параметры записи",
-    timezone: "Часовой пояс",
-    format: "Формат записи",
-    formatHelp: "MKV = надежность, MP4 = совместимость.",
-    reviewTitle: "Проверка перед завершением",
-    reviewNote: "Имя системы будет сохранено как несекретная настройка продукта.",
-    back: "Назад",
-    next: "Далее",
-    submit: "Завершить настройку",
-    busy: "Сохраняем...",
-    mismatch: "Пароли не совпадают.",
-    required: "Заполните обязательные поля.",
-    invalidUsername: "Логин содержит недопустимые символы.",
-  },
-  en: {
-    title: "KM VMS first run",
-    subtitle: "Create the system owner and confirm baseline settings step by step.",
-    steps: ["Language", "Owner", "Storage", "Recording", "Review"],
-    welcomeTitle: "Welcome",
-    welcomeText: "This wizard runs once before the first sign-in.",
-    systemName: "System name",
-    systemNameHelp: "Non-secret product name shown in settings.",
-    language: "Interface language",
-    ownerTitle: "System owner",
-    username: "Owner login",
-    password: "Password",
-    passwordConfirm: "Confirm password",
-    usernameHelp: "2-64 characters: letters, numbers, dot, dash or underscore.",
-    storageTitle: "Archive storage",
-    storageHelp: "Choose the NAS/server archive folder. The Docker path remains /storage/archive.",
-    storageFolder: "Archive folder",
-    storagePreview: "NAS/server path",
-    storageTechnical: "Docker path",
-    storageUnavailable: "Disk selection is unavailable: installer host snapshot is required.",
-    storageApply: "Validate and select",
-    storageAllowed: "allowed",
-    storageBlocked: "blocked",
-    storageWritable: "writable",
-    storageReadOnly: "read-only",
-    storageTotal: "total",
-    storageUsed: "used",
-    storageFree: "free",
-    storageReason: "reason",
-    storagePending: "Selection is pending: host helper/restart must apply the mount.",
-    storageBlockedReady: "Choose and confirm the NAS/server archive folder first.",
-    nextAction: "Next action",
-    finalLockNote: "First-run mode will be locked after finish.",
-    recordingTitle: "Recording defaults",
-    timezone: "Timezone",
-    format: "Recording format",
-    formatHelp: "MKV = reliability, MP4 = compatibility.",
-    reviewTitle: "Review before finish",
-    reviewNote: "System name will be saved as a non-secret product setting.",
-    back: "Back",
-    next: "Next",
-    submit: "Finish setup",
-    busy: "Saving...",
-    mismatch: "Passwords do not match.",
-    required: "Fill in the required fields.",
-    invalidUsername: "Username contains unsupported characters.",
-  },
-};
 
 const USERNAME_RE = /^[A-Za-z0-9_.-]{2,64}$/;
 
@@ -106,6 +11,8 @@ export default function SetupPage() {
   const router = useRouter();
   const [step, setStep] = useState(0);
   const [language, setLanguage] = useState("ru");
+  const { setLocale } = useI18n();
+  const setupText = useLocaleText("setup");
   const [form, setForm] = useState({
     username: "admin",
     system_name: "KM VMS",
@@ -128,7 +35,7 @@ export default function SetupPage() {
     error: "",
   });
 
-  const t = COPY[language];
+  const t = setupText;
   const ownerValid = USERNAME_RE.test(form.username.trim()) && form.password.length >= 8 && form.password === form.password_confirm;
   const systemNameValid = form.system_name.trim().length <= 80 && !/[\x00-\x1f]/.test(form.system_name);
   const storageReady = Boolean(storageState.confirmation?.ready && storageState.confirmation?.selected_host_path);
@@ -142,6 +49,12 @@ export default function SetupPage() {
 
   function patch(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function changeLanguage(nextLanguage) {
+    const normalized = normalizeLocale(nextLanguage);
+    setLanguage(normalized);
+    setLocale(normalized);
   }
 
   function storageConfirmationFromApply(data) {
@@ -329,10 +242,7 @@ export default function SetupPage() {
             <h1>{t.title}</h1>
             <p>{t.subtitle}</p>
           </div>
-          <select className="select setupLang" value={language} onChange={(e) => setLanguage(e.target.value)}>
-            <option value="ru">RU</option>
-            <option value="en">EN</option>
-          </select>
+          <LanguageSelect className="select setupLang" value={language} onChange={changeLanguage} aria-label={t.language} />
         </div>
 
         <div className="setupSteps" aria-label="Setup progress">
@@ -356,10 +266,7 @@ export default function SetupPage() {
               </label>
               <label className="settingsField">
                 <span>{t.language}</span>
-                <select className="select" value={language} onChange={(e) => setLanguage(e.target.value)}>
-                  <option value="ru">Русский</option>
-                  <option value="en">English</option>
-                </select>
+                <LanguageSelect className="select" value={language} onChange={changeLanguage} aria-label={t.language} />
               </label>
             </section>
           ) : null}
@@ -461,7 +368,7 @@ export default function SetupPage() {
               <h2>{t.reviewTitle}</h2>
               <div className="setupReviewGrid">
                 <span>{t.systemName}</span><strong>{form.system_name.trim() || "KM VMS"}</strong>
-                <span>{t.language}</span><strong>{language.toUpperCase()}</strong>
+                <span>{t.language}</span><strong>{localeMetadata(language).nativeName}</strong>
                 <span>{t.username}</span><strong>{form.username.trim()}</strong>
                 <span>{t.storagePreview}</span><strong>{storageState.confirmation?.selected_host_path || t.storageBlockedReady}</strong>
                 <span>{t.storageTechnical}</span><strong>{storageState.confirmation?.container_archive_path || "/storage/archive"}</strong>

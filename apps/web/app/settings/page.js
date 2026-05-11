@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { apiFetch, apiFetchBlob, clearAuthToken, forbiddenMessage } from "../../lib/api";
+import { LanguageSelect, normalizeLocale, persistLocale, translateText } from "../../lib/i18n";
 
 const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
   const offset = index - 12;
@@ -21,36 +22,56 @@ const AUDIT_SEVERITIES = ["info", "warning", "error", "security"];
 const AUDIT_LIMIT = 50;
 const AUDIT_LABELS = {
   category: {
-    auth: { ru: "Авторизация", en: "Auth" },
-    users: { ru: "Пользователи", en: "Users" },
-    settings: { ru: "Настройки", en: "Settings" },
-    cameras: { ru: "Камеры", en: "Cameras" },
-    live: { ru: "Live", en: "Live" },
-    records: { ru: "Записи", en: "Records" },
-    chronology: { ru: "Хронология", en: "Chronology" },
-    security: { ru: "Безопасность", en: "Security" },
-    diagnostics: { ru: "Диагностика", en: "Diagnostics" },
-    system: { ru: "Система", en: "System" },
-    recorder: { ru: "Recorder", en: "Recorder" },
-    storage: { ru: "Хранилище", en: "Storage" },
-    retention: { ru: "Retention", en: "Retention" },
-    reconciliation: { ru: "Reconciliation", en: "Reconciliation" },
+    auth: { ru: "Авторизация", en: "Auth", "zh-CN": "授权" },
+    users: { ru: "Пользователи", en: "Users", "zh-CN": "用户" },
+    settings: { ru: "Настройки", en: "Settings", "zh-CN": "设置" },
+    cameras: { ru: "Камеры", en: "Cameras", "zh-CN": "摄像机" },
+    live: { ru: "Live", en: "Live", "zh-CN": "实时" },
+    records: { ru: "Записи", en: "Records", "zh-CN": "录像" },
+    chronology: { ru: "Хронология", en: "Chronology", "zh-CN": "时间轴" },
+    security: { ru: "Безопасность", en: "Security", "zh-CN": "安全" },
+    diagnostics: { ru: "Диагностика", en: "Diagnostics", "zh-CN": "诊断" },
+    system: { ru: "Система", en: "System", "zh-CN": "系统" },
+    recorder: { ru: "Recorder", en: "Recorder", "zh-CN": "录像服务" },
+    storage: { ru: "Хранилище", en: "Storage", "zh-CN": "存储" },
+    retention: { ru: "Retention", en: "Retention", "zh-CN": "保留" },
+    reconciliation: { ru: "Reconciliation", en: "Reconciliation", "zh-CN": "一致性检查" },
   },
   severity: {
-    info: { ru: "Инфо", en: "Info" },
-    warning: { ru: "Предупреждение", en: "Warning" },
-    error: { ru: "Ошибка", en: "Error" },
-    security: { ru: "Security", en: "Security" },
+    info: { ru: "Инфо", en: "Info", "zh-CN": "信息" },
+    warning: { ru: "Предупреждение", en: "Warning", "zh-CN": "告警" },
+    error: { ru: "Ошибка", en: "Error", "zh-CN": "错误" },
+    security: { ru: "Security", en: "Security", "zh-CN": "安全" },
   },
 };
 const BACKEND_LABELS = {
-  auto: { ru: "Автоматический режим", en: "Automatic mode" },
-  qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV" },
-  vaapi: { ru: "VAAPI", en: "VAAPI" },
-  amf: { ru: "AMD AMF", en: "AMD AMF" },
-  nvenc: { ru: "NVIDIA NVENC/NVDEC", en: "NVIDIA NVENC/NVDEC" },
-  cpu: { ru: "Резервный режим CPU", en: "CPU fallback" },
+  auto: { ru: "Автоматический режим", en: "Automatic mode", "zh-CN": "自动模式" },
+  qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV", "zh-CN": "Intel Quick Sync / QSV" },
+  vaapi: { ru: "VAAPI", en: "VAAPI", "zh-CN": "VAAPI" },
+  amf: { ru: "AMD AMF", en: "AMD AMF", "zh-CN": "AMD AMF" },
+  nvenc: { ru: "NVIDIA NVENC/NVDEC", en: "NVIDIA NVENC/NVDEC", "zh-CN": "NVIDIA NVENC/NVDEC" },
+  cpu: { ru: "Резервный режим CPU", en: "CPU fallback", "zh-CN": "CPU 后备模式" },
 };
+
+function localizedValue(value, lang) {
+  if (!value || typeof value !== "object") return value;
+  if (value[lang]) return value[lang];
+  if (lang === "zh-CN") return translateText("zh-CN", value.ru || value.en || "");
+  return value.ru || value.en || "";
+}
+
+function settingsTextFor(lang) {
+  if (TEXT[lang]) return TEXT[lang];
+  if (lang !== "zh-CN") return TEXT.ru;
+  const convert = (value) => {
+    if (Array.isArray(value)) return value.map(convert);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, convert(child)]));
+    }
+    return typeof value === "string" ? translateText("zh-CN", value) : value;
+  };
+  return convert(TEXT.ru);
+}
 
 const TEXT = {
   ru: {
@@ -428,14 +449,12 @@ const TEXT = {
 };
 
 function languageOf(settings) {
-  return settings?.language === "en" ? "en" : "ru";
+  return normalizeLocale(settings?.language);
 }
 
 function backendLabel(value, lang) {
   const key = value || "auto";
-  if (lang === "ru" && key === "auto") return "Автоматический режим";
-  if (lang === "ru" && key === "cpu") return "Резервный режим CPU";
-  return BACKEND_LABELS[key]?.[lang] || key;
+  return localizedValue(BACKEND_LABELS[key], lang) || key;
 }
 
 function roleLabel(role, t) {
@@ -479,7 +498,7 @@ function settingsDraftFromApi(data) {
   return {
     system_name: data?.system_name || "KM VMS",
     timezone: data?.timezone || "UTC",
-    language: data?.language === "en" ? "en" : "ru",
+    language: normalizeLocale(data?.language),
     storage_path: data?.storage_path || "",
     archive_primary_path: data?.archive_primary_path || data?.storage_host_path || data?.storage_root || data?.storage_path || "",
     archive_host_path: data?.archive_host_path || data?.storage_host_path || "",
@@ -536,6 +555,7 @@ function formatAuditTimestamp(value, lang) {
 }
 
 function auditMessage(event, lang) {
+  if (lang === "zh-CN") return translateText("zh-CN", event?.message_ru || event?.message_en || "");
   return lang === "en"
     ? event?.message_en || event?.message_ru || ""
     : event?.message_ru || event?.message_en || "";
@@ -543,7 +563,7 @@ function auditMessage(event, lang) {
 
 function auditLabel(kind, value, lang) {
   if (!value) return "";
-  return AUDIT_LABELS[kind]?.[value]?.[lang] || value;
+  return localizedValue(AUDIT_LABELS[kind]?.[value], lang) || value;
 }
 
 function auditTarget(event, t) {
@@ -598,7 +618,7 @@ function humanErrorText(message, fallback) {
 }
 
 function normalizedError(err, lang, context = "generic") {
-  const t = TEXT[lang] || TEXT.ru;
+  const t = settingsTextFor(lang);
   const message = String(err?.message || "");
   const detail = parseErrorDetail(message);
   const storage = detail?.storage || detail?.detail?.storage;
@@ -739,19 +759,17 @@ export default function SettingsPage() {
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
   const toastTimerRef = useRef(null);
   const lang = languageOf(draft || savedDraft);
-  const t = TEXT[lang] || TEXT.ru;
+  const t = settingsTextFor(lang);
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
   const anyBusy = saving || hardwareChecking || retentionBusy || reconciliationBusy;
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
-  const languageIcon = lang === "en"
-    ? "/assets/icons/ui/language-en.png"
-    : "/assets/icons/ui/language-ru.png";
+  const languageIcon = lang === "en" ? "/assets/icons/ui/language-en.png" : "/assets/icons/ui/language-ru.png";
 
   useEffect(() => {
     load();
     function onLanguage(event) {
-      if (event.detail) patch("language", event.detail);
+      if (event.detail) patch("language", normalizeLocale(event.detail));
     }
     window.addEventListener("km-vms-language", onLanguage);
     return () => {
@@ -845,7 +863,7 @@ export default function SettingsPage() {
   function cancelChanges() {
     if (!savedDraft) return;
     setDraft(savedDraft);
-    window.dispatchEvent(new CustomEvent("km-vms-language", { detail: savedDraft.language }));
+    persistLocale(savedDraft.language);
   }
 
   async function save() {
@@ -860,7 +878,7 @@ export default function SettingsPage() {
       const nextDraft = settingsDraftFromApi(updated);
       setDraft(nextDraft);
       setSavedDraft(nextDraft);
-      window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextDraft.language }));
+      persistLocale(nextDraft.language);
       showToast({ variant: "success", title: t.toasts.saveOkTitle, text: t.toasts.saveOkText });
     } catch (err) {
       showToast(normalizedError(err, lang));
@@ -918,10 +936,9 @@ export default function SettingsPage() {
   }
 
   function handleSettingsLanguageChange(event) {
-    const nextLanguage = event.target.value;
+    const nextLanguage = normalizeLocale(event.target.value);
     patch("language", nextLanguage);
-    localStorage.setItem("km_vms_language", nextLanguage);
-    window.dispatchEvent(new CustomEvent("km-vms-language", { detail: nextLanguage }));
+    persistLocale(nextLanguage);
   }
 
   function reasonEntries(source) {
@@ -1353,10 +1370,7 @@ export default function SettingsPage() {
                     <span>{t.languageHelp}</span>
                   </div>
                   <div className="settingsRowControl">
-                    <select id="settings-language" className="select settingsSelect" value={draft.language} onChange={handleSettingsLanguageChange} disabled={saving}>
-                      <option value="ru">{t.russian}</option>
-                      <option value="en">{t.english}</option>
-                    </select>
+                    <LanguageSelect id="settings-language" className="select settingsSelect" value={draft.language} onChange={(nextLanguage) => handleSettingsLanguageChange({ target: { value: nextLanguage } })} disabled={saving} aria-label={t.language} />
                   </div>
                 </div>
 

@@ -16,7 +16,19 @@ from app.services.storage_contract import (
     storage_contract,
 )
 
-LANGUAGES = {"ru", "en"}
+LANGUAGE_RU = "ru"
+LANGUAGE_EN = "en"
+LANGUAGE_ZH_CN = "zh-CN"
+LANGUAGES = {LANGUAGE_RU, LANGUAGE_EN, LANGUAGE_ZH_CN}
+LANGUAGE_ALIASES = {
+    "ru": LANGUAGE_RU,
+    "en": LANGUAGE_EN,
+    "zh": LANGUAGE_ZH_CN,
+    "zh-cn": LANGUAGE_ZH_CN,
+    "zh_cn": LANGUAGE_ZH_CN,
+    "cn": LANGUAGE_ZH_CN,
+    "chinese": LANGUAGE_ZH_CN,
+}
 HARDWARE_BACKENDS = {"auto", "cpu", "qsv", "vaapi", "nvenc", "amf"}
 ACTIVE_RECORDING_JOB_STATES = {"starting", "recording", "stopping", "restarting"}
 AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT = 10.0
@@ -32,6 +44,7 @@ def default_timezone() -> str:
 def get_system_settings(db: Session) -> SystemSettings:
     row = db.query(SystemSettings).order_by(SystemSettings.id.asc()).first()
     if row:
+        row.language = normalize_stored_language(row.language)
         return row
 
     row = SystemSettings(
@@ -57,7 +70,7 @@ def serialize_settings(row: SystemSettings) -> dict:
         "system_initialized": row.system_initialized,
         "system_name": row.system_name or "KM VMS",
         "timezone": row.timezone,
-        "language": row.language,
+        "language": normalize_stored_language(row.language),
         "storage_path": row.storage_path,
         "storage_contract": contract,
         **contract,
@@ -73,6 +86,20 @@ def serialize_settings(row: SystemSettings) -> dict:
         "created_at": row.created_at,
         "updated_at": row.updated_at,
     }
+
+
+def normalize_stored_language(value: str | None) -> str:
+    normalized = str(value or "").strip()
+    if normalized in LANGUAGES:
+        return normalized
+    return LANGUAGE_ALIASES.get(normalized.lower(), LANGUAGE_RU)
+
+
+def normalize_language_input(value: str | None) -> str | None:
+    normalized = str(value or "").strip()
+    if normalized in LANGUAGES:
+        return normalized
+    return LANGUAGE_ALIASES.get(normalized.lower())
 
 
 def validate_settings_payload(payload: dict, partial: bool = False) -> dict:
@@ -93,9 +120,9 @@ def validate_settings_payload(payload: dict, partial: bool = False) -> dict:
         data["timezone"] = timezone
 
     if "language" in payload:
-        language = str(payload.get("language") or "").strip().lower()
+        language = normalize_language_input(payload.get("language"))
         if language not in LANGUAGES:
-            raise ValueError("language must be ru or en")
+            raise ValueError("language must be ru, en or zh-CN")
         data["language"] = language
 
     if "system_name" in payload:

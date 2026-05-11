@@ -35,6 +35,10 @@ def migrate_system_settings_table() -> None:
     with engine.begin() as conn:
         if "system_name" not in columns:
             conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS system_name VARCHAR(100) NULL"))
+        if "language" in columns:
+            dialect = engine.dialect.name
+            if dialect == "postgresql":
+                conn.execute(text("ALTER TABLE system_settings ALTER COLUMN language TYPE VARCHAR(10)"))
         if "auto_free_space_cleanup_enabled" not in columns:
             conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS auto_free_space_cleanup_enabled BOOLEAN DEFAULT FALSE NOT NULL"))
         if "recording_suspended_by_low_disk" not in columns:
