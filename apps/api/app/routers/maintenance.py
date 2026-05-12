@@ -21,11 +21,117 @@ from app.services.restore_maintenance import (
     dry_run_restore_maintenance,
     inspect_restore_maintenance,
 )
+from app.services.update_maintenance import inspect_update_maintenance
+from app.services.upgrade_report import build_upgrade_report
 
 
 router = APIRouter(prefix="/system/db-adoption", tags=["maintenance"])
 migrations_router = APIRouter(prefix="/system/migrations", tags=["maintenance"])
 restore_router = APIRouter(prefix="/system/restore", tags=["maintenance"])
+overview_router = APIRouter(prefix="/system/maintenance", tags=["maintenance"])
+
+
+def _safe_flow_summary(name: str, payload: dict) -> dict:
+    return {
+        "name": name,
+        "status": payload.get("status"),
+        "reason": payload.get("reason") or payload.get("blocked_reason") or payload.get("apply_blocked_reason"),
+        "can_apply": bool(payload.get("can_apply") or payload.get("can_adopt") or payload.get("can_restore")),
+        "apply_supported": bool(
+            payload.get("apply_supported", payload.get("can_apply") or payload.get("can_adopt") or payload.get("can_restore"))
+        ),
+        "backup_required": bool(payload.get("backup_required") or payload.get("requires_current_backup")),
+        "requires_confirmation": bool(payload.get("requires_confirmation")),
+        "report_id": payload.get("report_id"),
+        "read_only": bool(payload.get("read_only", True)),
+        "side_effects": payload.get("side_effects")
+        or {
+            "db_mutated": False,
+            "backup_created": False,
+            "restore_executed": False,
+            "migration_executed": False,
+            "update_applied": False,
+        },
+        "details": {
+            "metadata_present": payload.get("metadata_present"),
+            "already_adopted": payload.get("already_adopted"),
+            "current_version": payload.get("current_version"),
+            "target_version": payload.get("target_version"),
+            "pending_count": payload.get("pending_count"),
+            "artifact_count": payload.get("artifact_count"),
+            "valid_artifact_count": payload.get("valid_artifact_count"),
+            "current_product_restore_supported": payload.get("current_product_restore_supported"),
+            "temporary_validation_restore_supported": payload.get("temporary_validation_restore_supported"),
+            "current_version_label": payload.get("current_version"),
+            "available_version": payload.get("available_version"),
+            "release_validated": payload.get("release_validated"),
+            "apply_status": payload.get("apply_status"),
+        },
+    }
+
+
+def _last_maintenance_action(report: dict) -> dict:
+    history = report.get("schema_migration_history") if isinstance(report.get("schema_migration_history"), dict) else {}
+    items = history.get("bounded_items") if isinstance(history.get("bounded_items"), list) else []
+    last_item = items[-1] if items else None
+    if last_item:
+        return {
+            "available": True,
+            "operation": last_item.get("source") or last_item.get("migration_id"),
+            "status": last_item.get("status"),
+            "timestamp": last_item.get("applied_at"),
+            "reason": last_item.get("error_summary"),
+            "source": "schema_migration_history",
+        }
+    return {
+        "available": False,
+        "status": "limited",
+        "reason": "No durable maintenance action history is available beyond current status and generated upgrade report summary.",
+        "source": "current_read_only_snapshot",
+    }
+
+
+@overview_router.get("/overview")
+def maintenance_overview(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    adoption = inspect_db_adoption(db, include_backup_plan=False, actor=current_user)
+    migrations = inspect_migration_maintenance(db, include_backup_plan=False, actor=current_user)
+    restore = inspect_restore_maintenance(actor=current_user)
+    update = inspect_update_maintenance(db, actor=current_user)
+    report = build_upgrade_report(db)
+    return {
+        "status": "ok",
+        "read_only": True,
+        "side_effects": {
+            "db_mutated": False,
+            "backup_created": False,
+            "restore_executed": False,
+            "migration_executed": False,
+            "update_applied": False,
+        },
+        "flows": {
+            "db_adoption": _safe_flow_summary("db_adoption", adoption),
+            "migration": _safe_flow_summary("migration", migrations),
+            "restore": _safe_flow_summary("restore", restore),
+            "update": _safe_flow_summary("update", update),
+        },
+        "upgrade_report": {
+            "available": True,
+            "report_id": report.get("report_id"),
+            "generated_at": report.get("generated_at"),
+            "status": report.get("status"),
+            "warnings_count": len(report.get("warnings") or []),
+            "diagnostic_archive": report.get("diagnostic_archive"),
+            "download_endpoint": "/system/upgrade/report",
+        },
+        "history": {
+            "durable_history": "limited",
+            "last_action": _last_maintenance_action(report),
+            "source": "schema_migration_history_and_current_upgrade_report",
+        },
+    }
 
 
 class DbAdoptionApplyRequest(BaseModel):

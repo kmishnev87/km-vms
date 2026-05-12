@@ -70,7 +70,19 @@ function settingsTextFor(lang) {
     }
     return typeof value === "string" ? translateText("zh-CN", value) : value;
   };
-  return convert(TEXT.ru);
+  return mergeText(convert(TEXT.ru), ZH_TEXT_OVERRIDES);
+}
+
+function mergeText(base, overrides) {
+  const result = { ...(base || {}) };
+  for (const [key, value] of Object.entries(overrides || {})) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      result[key] = mergeText(result[key], value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
 const TEXT = {
@@ -150,6 +162,58 @@ const TEXT = {
     notDetected: "Не найдено на этом сервере",
     security: "Безопасность",
     securityText: "Журнал логирования, сбор диагностических логов и отчёт об ошибке.",
+    maintenance: "Обслуживание",
+    maintenanceText: "Статусы обновления, миграций, восстановления и диагностического отчёта без запуска действий применения.",
+    maintenanceOverview: "Обзор обслуживания",
+    maintenanceRefresh: "Обновить",
+    maintenanceLoadError: "Обзор обслуживания недоступен.",
+    maintenanceLimitedHistory: "Долговременная история ограничена: показаны текущий статус и последний безопасный отчёт.",
+    maintenanceReport: "Отчёт обновления",
+    maintenanceReportView: "Показать отчёт",
+    maintenanceReportDownload: "Скачать JSON",
+    maintenanceReportReady: "Санитизированный отчёт доступен.",
+    maintenanceReportUnavailable: "Отчёт недоступен.",
+    maintenanceDryRun: "Проверить",
+    maintenanceDryRunResult: "Проверка выполнена.",
+    maintenanceNoApply: "Применение не запускается с этого экрана.",
+    maintenanceBackupRequired: "Требуется резервная копия",
+    maintenanceBackupNotRequired: "Резервная копия не требуется",
+    maintenanceConfirmationRequired: "Нужно подтверждение",
+    maintenanceUnsupported: "Действие заблокировано или не поддерживается",
+    maintenanceLastAction: "Последнее действие",
+    maintenanceNoHistory: "История действий не найдена",
+    maintenanceGeneratedAt: "Сформирован",
+    maintenanceWarnings: "Предупреждения",
+    maintenanceLabels: {
+      pending: "Ожидают",
+      artifacts: "Артефакты",
+      current: "Текущая версия",
+      target: "Целевая версия",
+      available: "Доступная версия",
+      backup: "Резервная копия",
+      confirm: "Подтверждение",
+      apply: "Применение",
+      reportId: "ID отчёта",
+    },
+    maintenanceFlows: {
+      db_adoption: "Принятие БД",
+      migration: "Миграции",
+      restore: "Восстановление",
+      update: "Обновление",
+    },
+    maintenanceStatuses: {
+      ok: "OK",
+      current: "Актуально",
+      available: "Доступно",
+      adoptable: "Можно принять",
+      adopted: "Принято",
+      already_adopted: "Уже принято",
+      blocked: "Заблокировано",
+      no_artifacts: "Нет артефактов",
+      not_configured: "Не настроено",
+      limited: "Ограничено",
+      unknown: "Неизвестно",
+    },
     logJournal: "Журнал логирования",
     open: "Открыть",
     createDiagnosticArchive: "Создать диагностический архив",
@@ -336,6 +400,58 @@ const TEXT = {
     notDetected: "Not detected on this server",
     security: "Security",
     securityText: "Logging journal, diagnostic logs collection and bug report.",
+    maintenance: "Maintenance",
+    maintenanceText: "Update, migration, restore and diagnostic report status without running apply actions.",
+    maintenanceOverview: "Maintenance overview",
+    maintenanceRefresh: "Refresh",
+    maintenanceLoadError: "Maintenance overview is unavailable.",
+    maintenanceLimitedHistory: "Durable history is limited: current status and the latest safe report are shown.",
+    maintenanceReport: "Upgrade report",
+    maintenanceReportView: "View report",
+    maintenanceReportDownload: "Download JSON",
+    maintenanceReportReady: "Sanitized report is available.",
+    maintenanceReportUnavailable: "Report is unavailable.",
+    maintenanceDryRun: "Check",
+    maintenanceDryRunResult: "Check completed.",
+    maintenanceNoApply: "Apply is not executed from this screen.",
+    maintenanceBackupRequired: "Backup required",
+    maintenanceBackupNotRequired: "Backup not required",
+    maintenanceConfirmationRequired: "Confirmation required",
+    maintenanceUnsupported: "Action blocked or unsupported",
+    maintenanceLastAction: "Last action",
+    maintenanceNoHistory: "No action history found",
+    maintenanceGeneratedAt: "Generated",
+    maintenanceWarnings: "Warnings",
+    maintenanceLabels: {
+      pending: "Pending",
+      artifacts: "Artifacts",
+      current: "Current version",
+      target: "Target version",
+      available: "Available version",
+      backup: "Backup",
+      confirm: "Confirmation",
+      apply: "Apply",
+      reportId: "Report ID",
+    },
+    maintenanceFlows: {
+      db_adoption: "DB adoption",
+      migration: "Migrations",
+      restore: "Restore",
+      update: "Update",
+    },
+    maintenanceStatuses: {
+      ok: "OK",
+      current: "Current",
+      available: "Available",
+      adoptable: "Adoptable",
+      adopted: "Adopted",
+      already_adopted: "Already adopted",
+      blocked: "Blocked",
+      no_artifacts: "No artifacts",
+      not_configured: "Not configured",
+      limited: "Limited",
+      unknown: "Unknown",
+    },
     logJournal: "Logging journal",
     open: "Open",
     createDiagnosticArchive: "Create diagnostic archive",
@@ -448,6 +564,61 @@ const TEXT = {
   },
 };
 
+const ZH_TEXT_OVERRIDES = {
+  maintenance: "维护",
+  maintenanceText: "显示更新、迁移、恢复和诊断报告状态，不执行应用操作。",
+  maintenanceOverview: "维护概览",
+  maintenanceRefresh: "刷新",
+  maintenanceLoadError: "维护概览不可用。",
+  maintenanceLimitedHistory: "持久历史记录有限：仅显示当前状态和最新安全报告。",
+  maintenanceReport: "升级报告",
+  maintenanceReportView: "查看报告",
+  maintenanceReportDownload: "下载 JSON",
+  maintenanceReportReady: "已提供脱敏报告。",
+  maintenanceReportUnavailable: "报告不可用。",
+  maintenanceDryRun: "检查",
+  maintenanceDryRunResult: "检查已完成。",
+  maintenanceNoApply: "此界面不会执行应用操作。",
+  maintenanceBackupRequired: "需要备份",
+  maintenanceBackupNotRequired: "不需要备份",
+  maintenanceConfirmationRequired: "需要确认",
+  maintenanceUnsupported: "操作被阻止或不受支持",
+  maintenanceLastAction: "最近操作",
+  maintenanceNoHistory: "未找到操作历史",
+  maintenanceGeneratedAt: "生成时间",
+  maintenanceWarnings: "警告",
+  maintenanceLabels: {
+    pending: "待处理",
+    artifacts: "工件",
+    current: "当前版本",
+    target: "目标版本",
+    available: "可用版本",
+    backup: "备份",
+    confirm: "确认",
+    apply: "应用",
+    reportId: "报告 ID",
+  },
+  maintenanceFlows: {
+    db_adoption: "数据库接管",
+    migration: "迁移",
+    restore: "恢复",
+    update: "更新",
+  },
+  maintenanceStatuses: {
+    ok: "正常",
+    current: "当前",
+    available: "可用",
+    adoptable: "可接管",
+    adopted: "已接管",
+    already_adopted: "已接管",
+    blocked: "已阻止",
+    no_artifacts: "无工件",
+    not_configured: "未配置",
+    limited: "受限",
+    unknown: "未知",
+  },
+};
+
 function languageOf(settings) {
   return normalizeLocale(settings?.language);
 }
@@ -552,6 +723,45 @@ function formatAuditTimestamp(value, lang) {
     minute: "2-digit",
     second: "2-digit",
   }).format(date);
+}
+
+const MAINTENANCE_DRY_RUN_ENDPOINTS = {
+  db_adoption: { path: "/system/db-adoption/dry-run", body: {} },
+  migration: { path: "/system/migrations/dry-run", body: {} },
+  restore: { path: "/system/restore/dry-run", body: {} },
+  update: { path: "/system/update/dry-run", body: {} },
+};
+
+function maintenanceFlowRows(overview) {
+  const flows = overview?.flows || {};
+  return ["db_adoption", "migration", "restore", "update"].map((key) => ({ key, ...(flows[key] || {}) }));
+}
+
+function maintenanceStatusText(status, t) {
+  const key = status || "unknown";
+  return t.maintenanceStatuses?.[key] || key;
+}
+
+function maintenanceStatusClass(status) {
+  if (["ok", "current", "available", "adopted", "already_adopted"].includes(status)) return "ok";
+  if (["blocked", "no_artifacts", "not_configured"].includes(status)) return "blocked";
+  if (["adoptable", "limited"].includes(status)) return "warning";
+  return "neutral";
+}
+
+function maintenanceDetailRows(flow, t) {
+  const details = flow?.details || {};
+  const labels = t.maintenanceLabels || {};
+  const rows = [];
+  if (details.pending_count !== null && details.pending_count !== undefined) rows.push([labels.pending, details.pending_count]);
+  if (details.valid_artifact_count !== null && details.valid_artifact_count !== undefined) rows.push([labels.artifacts, `${details.valid_artifact_count}/${details.artifact_count || 0}`]);
+  if (details.current_version !== null && details.current_version !== undefined) rows.push([labels.current, details.current_version]);
+  if (details.target_version !== null && details.target_version !== undefined) rows.push([labels.target, details.target_version]);
+  if (details.available_version) rows.push([labels.available, details.available_version]);
+  rows.push([labels.backup, flow?.backup_required ? t.maintenanceBackupRequired : t.maintenanceBackupNotRequired]);
+  if (flow?.requires_confirmation) rows.push([labels.confirm, t.maintenanceConfirmationRequired]);
+  if (!flow?.can_apply) rows.push([labels.apply, t.maintenanceUnsupported]);
+  return rows.slice(0, 5);
 }
 
 function auditMessage(event, lang) {
@@ -739,6 +949,13 @@ export default function SettingsPage() {
   const [userModal, setUserModal] = useState(null);
   const [userDeleteTarget, setUserDeleteTarget] = useState(null);
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
+  const [maintenanceModalOpen, setMaintenanceModalOpen] = useState(false);
+  const [maintenanceOverview, setMaintenanceOverview] = useState(null);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(false);
+  const [maintenanceError, setMaintenanceError] = useState("");
+  const [maintenanceBusy, setMaintenanceBusy] = useState("");
+  const [maintenanceActionResult, setMaintenanceActionResult] = useState(null);
+  const [maintenanceReport, setMaintenanceReport] = useState(null);
   const [diagnosticChoiceOpen, setDiagnosticChoiceOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
   const [auditEvents, setAuditEvents] = useState([]);
@@ -762,6 +979,7 @@ export default function SettingsPage() {
   const t = settingsTextFor(lang);
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
   const anyBusy = saving || hardwareChecking || retentionBusy || reconciliationBusy;
+  const canManageMaintenance = Boolean(currentUser?.permissions?.includes("manage_settings"));
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
   const languageIcon = lang === "en" ? "/assets/icons/ui/language-en.png" : "/assets/icons/ui/language-ru.png";
@@ -783,6 +1001,12 @@ export default function SettingsPage() {
       loadAuditEvents();
     }
   }, [securityModalOpen, auditFilters]);
+
+  useEffect(() => {
+    if (maintenanceModalOpen && canManageMaintenance) {
+      loadMaintenanceOverview();
+    }
+  }, [maintenanceModalOpen, canManageMaintenance]);
 
   function showToast(nextToast) {
     setToast(nextToast);
@@ -1151,6 +1375,84 @@ export default function SettingsPage() {
     setDiagnosticArchive(null);
     setBugReportText("");
     setAuditError("");
+  }
+
+  function openMaintenanceModal() {
+    if (!canManageMaintenance) return;
+    setMaintenanceModalOpen(true);
+  }
+
+  function closeMaintenanceModal() {
+    setMaintenanceModalOpen(false);
+    setMaintenanceActionResult(null);
+    setMaintenanceReport(null);
+    setMaintenanceError("");
+  }
+
+  async function loadMaintenanceOverview() {
+    if (!canManageMaintenance) return;
+    setMaintenanceLoading(true);
+    setMaintenanceError("");
+    try {
+      setMaintenanceOverview(await apiFetch("/system/maintenance/overview"));
+    } catch (err) {
+      setMaintenanceOverview(null);
+      setMaintenanceError(humanErrorText(String(err?.message || ""), t.maintenanceLoadError));
+    } finally {
+      setMaintenanceLoading(false);
+    }
+  }
+
+  async function runMaintenanceDryRun(flowKey) {
+    const config = MAINTENANCE_DRY_RUN_ENDPOINTS[flowKey];
+    if (!config || maintenanceBusy) return;
+    setMaintenanceBusy(flowKey);
+    setMaintenanceActionResult(null);
+    try {
+      const result = await apiFetch(config.path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config.body),
+      });
+      setMaintenanceActionResult({ flowKey, status: result?.status || "ok", reason: result?.reason || result?.blocked_reason || "" });
+      showToast({ variant: "success", title: t.maintenanceDryRunResult, text: maintenanceStatusText(result?.status, t) });
+      await loadMaintenanceOverview();
+    } catch (err) {
+      const message = humanErrorText(String(err?.message || ""), t.maintenanceLoadError);
+      setMaintenanceActionResult({ flowKey, status: "blocked", reason: message });
+      showToast({ variant: "warning", title: t.maintenanceDryRun, text: message });
+    } finally {
+      setMaintenanceBusy("");
+    }
+  }
+
+  async function viewMaintenanceReport() {
+    if (maintenanceBusy) return;
+    setMaintenanceBusy("report");
+    try {
+      const report = await apiFetch("/system/upgrade/report");
+      setMaintenanceReport(report);
+      showToast({ variant: "success", title: t.maintenanceReport, text: t.maintenanceReportReady });
+    } catch (err) {
+      setMaintenanceReport(null);
+      showToast({ variant: "warning", title: t.maintenanceReport, text: humanErrorText(String(err?.message || ""), t.maintenanceReportUnavailable) });
+    } finally {
+      setMaintenanceBusy("");
+    }
+  }
+
+  async function downloadMaintenanceReport() {
+    if (maintenanceBusy) return;
+    setMaintenanceBusy("report-download");
+    try {
+      const { blob } = await apiFetchBlob("/system/upgrade/report");
+      downloadBlob(blob, "km-vms-upgrade-report.json");
+      showToast({ variant: "success", title: t.maintenanceReport, text: t.maintenanceReportReady });
+    } catch (err) {
+      showToast({ variant: "warning", title: t.maintenanceReport, text: humanErrorText(String(err?.message || ""), t.maintenanceReportUnavailable) });
+    } finally {
+      setMaintenanceBusy("");
+    }
   }
 
   async function submitUserModal(event) {
@@ -1547,6 +1849,20 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="settingsRow">
+                  <div className="settingsRowIcon"><img src="/assets/icons/ui/settings.png" alt="" /></div>
+                  <div className="settingsRowText">
+                    <label>{t.maintenance}</label>
+                    <span>{t.maintenanceText}</span>
+                    <small>{t.maintenanceNoApply}</small>
+                  </div>
+                  <div className="settingsRowControl settingsRowControlMeta">
+                    <button className="button secondary small settingsUsersAddButton" onClick={openMaintenanceModal} disabled={!canManageMaintenance}>
+                      {t.open}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="settingsRow">
                   <div className="settingsRowIcon"><img src="/assets/icons/ui/users.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label>{t.users}<InfoTip text={t.tooltips.users} /></label>
@@ -1714,6 +2030,98 @@ export default function SettingsPage() {
                 <button type="submit" className="button small" disabled={userBusy}>{userModal.mode === "create" ? t.create : t.update}</button>
               </div>
             </form>
+          </div>
+        ) : null}
+
+        {maintenanceModalOpen ? (
+          <div className="settingsModalOverlay" role="presentation">
+            <div className="settingsMaintenanceModal" role="dialog" aria-modal="true" aria-label={t.maintenanceOverview}>
+              <div className="settingsUserModalHeader">
+                <h2>{t.maintenanceOverview}</h2>
+                <button type="button" className="settingsModalClose" onClick={closeMaintenanceModal} aria-label={t.close}>×</button>
+              </div>
+
+              <div className="settingsMaintenanceToolbar">
+                <button type="button" className="button secondary small" onClick={loadMaintenanceOverview} disabled={maintenanceLoading || Boolean(maintenanceBusy)}>
+                  {maintenanceLoading ? t.checking : t.maintenanceRefresh}
+                </button>
+                <button type="button" className="button secondary small" onClick={viewMaintenanceReport} disabled={Boolean(maintenanceBusy)}>
+                  {maintenanceBusy === "report" ? t.checking : t.maintenanceReportView}
+                </button>
+                <button type="button" className="button secondary small" onClick={downloadMaintenanceReport} disabled={Boolean(maintenanceBusy)}>
+                  {maintenanceBusy === "report-download" ? t.checking : t.maintenanceReportDownload}
+                </button>
+              </div>
+
+              {maintenanceError ? <div className="settingsJournalEmpty error">{maintenanceError}</div> : null}
+              {maintenanceLoading && !maintenanceOverview ? <div className="settingsJournalEmpty">{t.checking}</div> : null}
+
+              {maintenanceOverview ? (
+                <>
+                  <div className="settingsMaintenanceGrid">
+                    {maintenanceFlowRows(maintenanceOverview).map((flow) => (
+                      <article className="settingsMaintenanceFlow" key={flow.key}>
+                        <div className="settingsMaintenanceFlowHead">
+                          <h3>{t.maintenanceFlows?.[flow.key] || flow.key}</h3>
+                          <span className={`settingsMaintenanceStatus ${maintenanceStatusClass(flow.status)}`}>
+                            {maintenanceStatusText(flow.status, t)}
+                          </span>
+                        </div>
+                        <p>{flow.reason || t.maintenanceUnsupported}</p>
+                        <dl>
+                          {maintenanceDetailRows(flow, t).map(([label, value]) => (
+                            <div key={label}>
+                              <dt>{label}</dt>
+                              <dd>{String(value)}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                        <button type="button" className="button secondary small" onClick={() => runMaintenanceDryRun(flow.key)} disabled={Boolean(maintenanceBusy)}>
+                          {maintenanceBusy === flow.key ? t.checking : t.maintenanceDryRun}
+                        </button>
+                      </article>
+                    ))}
+                  </div>
+
+                  <section className="settingsMaintenanceReport">
+                    <div>
+                      <span>{t.maintenanceReport}</span>
+                      <strong>{maintenanceOverview.upgrade_report?.status || "-"}</strong>
+                      <small>
+                        {t.maintenanceGeneratedAt}: {maintenanceOverview.upgrade_report?.generated_at || "-"} · {t.maintenanceWarnings}: {maintenanceOverview.upgrade_report?.warnings_count ?? 0}
+                      </small>
+                    </div>
+                    <div>
+                      <span>{t.maintenanceLastAction}</span>
+                      <strong>{maintenanceOverview.history?.last_action?.available ? maintenanceOverview.history.last_action.status : t.maintenanceNoHistory}</strong>
+                      <small>{maintenanceOverview.history?.last_action?.reason || t.maintenanceLimitedHistory}</small>
+                    </div>
+                  </section>
+
+                  {maintenanceActionResult ? (
+                    <div className={`settingsMaintenanceResult ${maintenanceStatusClass(maintenanceActionResult.status)}`}>
+                      <strong>{t.maintenanceFlows?.[maintenanceActionResult.flowKey] || maintenanceActionResult.flowKey}: {maintenanceStatusText(maintenanceActionResult.status, t)}</strong>
+                      {maintenanceActionResult.reason ? <span>{maintenanceActionResult.reason}</span> : null}
+                    </div>
+                  ) : null}
+
+                  {maintenanceReport ? (
+                    <section className="settingsMaintenanceReportPreview">
+                      <h3>{t.maintenanceReport}</h3>
+                      <dl>
+                        <div><dt>{t.maintenanceLabels?.reportId}</dt><dd>{maintenanceReport.report_id || "-"}</dd></div>
+                        <div><dt>{t.maintenanceGeneratedAt}</dt><dd>{maintenanceReport.generated_at || "-"}</dd></div>
+                        <div><dt>{t.maintenanceWarnings}</dt><dd>{(maintenanceReport.warnings || []).length}</dd></div>
+                        <div><dt>{t.maintenanceFlows?.db_adoption}</dt><dd>{maintenanceStatusText(maintenanceReport.db_adoption?.status, t)}</dd></div>
+                        <div><dt>{t.maintenanceFlows?.migration}</dt><dd>{maintenanceStatusText(maintenanceReport.migration_maintenance?.status, t)}</dd></div>
+                        <div><dt>{t.maintenanceFlows?.restore}</dt><dd>{maintenanceStatusText(maintenanceReport.restore_maintenance?.status, t)}</dd></div>
+                        <div><dt>{t.maintenanceFlows?.update}</dt><dd>{maintenanceStatusText(maintenanceReport.update_maintenance?.status, t)}</dd></div>
+                      </dl>
+                    </section>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
           </div>
         ) : null}
 
