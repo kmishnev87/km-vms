@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
 import { useSystemHealthStatus } from "../../components/SystemHealthIndicator";
-import { getAuthToken } from "../../lib/api";
+import { canAccessPath, getAuthToken } from "../../lib/api";
 import { useCurrentUser } from "../../lib/currentUser";
 import { useI18n } from "../../lib/i18n";
 
@@ -23,6 +23,29 @@ function domainMeta(row, t) {
 
 function problemCountLabel(count, t) {
   return count === 1 ? t("systemStatus.problemCountOne") : t("systemStatus.problemCount");
+}
+
+const ACTION_ICON_BY_HREF = {
+  "/cameras": "/assets/icons/ui/camera.png",
+  "/diagnostics": "/assets/icons/ui/diagnostics.svg",
+  "/live": "/assets/icons/ui/live.png",
+  "/storage": "/assets/icons/ui/storage.png",
+};
+
+function canUseAction(user, action) {
+  if (!action?.href) return false;
+  return canAccessPath(user, action.href);
+}
+
+function SystemStatusProblemAction({ action, currentUser, text }) {
+  if (!canUseAction(currentUser, action)) return null;
+  const icon = ACTION_ICON_BY_HREF[action.href] || "/assets/icons/ui/system-status-base.png";
+  const label = text(action.label);
+  return (
+    <Link className="systemStatusIconAction" href={action.href} title={label} aria-label={label}>
+      <img src={icon} alt="" />
+    </Link>
+  );
 }
 
 export default function SystemStatusPage() {
@@ -123,9 +146,7 @@ export default function SystemStatusPage() {
                           <span>{t("systemStatus.incidentDomain", { domain })}</span>
                         </div>
                         <div className="systemStatusActions" aria-label={t("systemStatus.activeProblems")}>
-                          <button type="button" className="systemStatusIconAction" disabled title={t("systemStatus.activeProblems")}>
-                            <img src="/assets/icons/ui/diagnostics.svg" alt="" />
-                          </button>
+                          <SystemStatusProblemAction action={item.action} currentUser={currentUser} text={text} />
                         </div>
                       </article>
                     );

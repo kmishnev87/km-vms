@@ -125,6 +125,7 @@ const bounded = buildOperatorWarnings(runtime({
 }), { limit: 2 });
 assert.equal(bounded.length, 2);
 assert.deepEqual(Array.from(bounded.map((item) => item.id)), ["storage-unavailable", "recorder-stale"]);
+assert.equal(bounded.find((item) => item.id === "recorder-stale").action.href, "/diagnostics");
 
 const rendered = JSON.stringify(buildOperatorWarnings(runtime({
   live: { items: [{ severity: "error", state: "failed", running: false, ready: false, reason_codes: ["live_failed"], command: ["ff", "mpeg -i rt", "sp://user:se", "cret@example.test/live"].join("") }] },
@@ -149,6 +150,9 @@ assert.equal(
   JSON.stringify(warningOverview.problems.map((item) => [item.domain_label, item.action?.href]).slice(0, 2)),
   JSON.stringify([["Камеры", "/cameras"], ["Хранилище", "/storage"]])
 );
+assert.equal(buildOperatorWarnings(runtime({
+  reconciliation: { severity: "warning", reason_codes: ["cleanup_candidates_present"], cleanup_candidate_count: 2 },
+}))[0].action.href, "/storage");
 assert.equal(JSON.stringify(warningOverview).includes("rtsp://"), false);
 assert.equal(JSON.stringify(warningOverview).includes("Authorization"), false);
 assert.equal(JSON.stringify(warningOverview).includes("debug"), false);
