@@ -27,6 +27,8 @@ export function canAccessPath(user, href) {
   if (href === "/cameras") return permissions.has("manage_cameras");
   if (href === "/settings") return permissions.has("manage_settings");
   if (href === "/storage") return permissions.has("manage_settings");
+  if (href === "/system-status") return permissions.has("run_diagnostics");
+  if (href === "/apk") return true;
   return false;
 }
 

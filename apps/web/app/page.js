@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../components/Layout";
-import OperatorProblemBanners from "../components/OperatorProblemBanners";
+import { useSystemHealthStatus } from "../components/SystemHealthIndicator";
 import { canAccessPath, getAuthToken } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { normalizeLocale, persistLocale, useI18n } from "../lib/i18n";
@@ -41,9 +41,26 @@ const DASHBOARD_ITEMS = [
   {
     href: "/storage",
     iconSrc: "/assets/icons/ui/storage.png",
-    backgroundSrc: "/assets/backgrounds/dashboard-cards/settings.svg",
+    backgroundSrc: "/assets/backgrounds/dashboard-cards/storage.svg",
     titleKey: "dashboard.storageTitle",
     descriptionKey: "dashboard.storageText",
+  },
+  {
+    href: "/system-status",
+    iconSrc: "/assets/icons/dashboard/system-status-base.png",
+    alertIconSrc: "/assets/icons/dashboard/system-status-alert.png",
+    backgroundSrc: "/assets/backgrounds/dashboard-cards/system-status.svg",
+    titleKey: "dashboard.systemHealthTitle",
+    descriptionKey: "dashboard.systemHealthText",
+    kind: "systemHealth",
+  },
+  {
+    href: "/apk",
+    iconSrc: "/assets/icons/dashboard/apk.png",
+    backgroundSrc: "/assets/backgrounds/dashboard-cards/apk.svg",
+    titleKey: "dashboard.apkTitle",
+    descriptionKey: "dashboard.apkText",
+    kind: "placeholder",
   },
   {
     href: "/settings",
@@ -59,6 +76,7 @@ export default function HomePage() {
   const [ready, setReady] = useState(false);
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { t } = useI18n();
+  const systemHealth = useSystemHealthStatus(currentUser);
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -107,18 +125,19 @@ export default function HomePage() {
           </div>
         </section>
 
-        <OperatorProblemBanners className="dashboardWarnings" limit={6} showOverview />
-
         <section className="dashboardGrid" aria-label={t("dashboard.sections")}>
-          {visibleItems.map((item) => (
+          {visibleItems.map((item) => {
+            const isSystemHealth = item.kind === "systemHealth";
+            const iconSrc = isSystemHealth && systemHealth.hasProblems ? item.alertIconSrc : item.iconSrc;
+            return (
             <Link
               href={item.href}
-              className="dashboardCard"
+              className={`dashboardCard ${item.kind === "placeholder" ? "dashboardCard-placeholder" : ""} ${isSystemHealth && systemHealth.hasProblems ? "dashboardCard-alert" : ""}`}
               key={item.href}
               style={{ "--dashboard-card-bg": `url(${item.backgroundSrc})` }}
             >
               <div className="dashboardCardIcon">
-                <img src={item.iconSrc} alt="" />
+                <img src={iconSrc} alt="" />
               </div>
               <div className="dashboardCardBody">
                 <div className="dashboardCardTitle">{t(item.titleKey)}</div>
@@ -126,7 +145,7 @@ export default function HomePage() {
               </div>
               <div className="dashboardCardArrow">{"\u2192"}</div>
             </Link>
-          ))}
+          )})}
         </section>
       </div>
     </Layout>

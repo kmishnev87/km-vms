@@ -1,0 +1,51 @@
+﻿<svg xmlns="http://www.w3.org/2000/svg" width="720" height="260" viewBox="0 0 720 260" fill="none">
+  <defs>
+    <linearGradient id="wash" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.48" stop-color="#38bdf8" stop-opacity="0.07"/>
+      <stop offset="1" stop-color="#64748b" stop-opacity="0.13"/>
+    </linearGradient>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#64748b" stop-opacity="0"/>
+      <stop offset="0.62" stop-color="#38bdf8" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#64748b" stop-opacity="0.25"/>
+    </linearGradient>
+    <linearGradient id="shieldFill" x1="0" y1="86" x2="0" y2="184">
+      <stop offset="0" stop-color="#38bdf8" stop-opacity="0.17"/>
+      <stop offset="1" stop-color="#64748b" stop-opacity="0.085"/>
+    </linearGradient>
+  </defs>
+  <rect width="720" height="260" rx="22" fill="url(#wash)"/>
+  <path d="M236 204 C334 138 424 144 520 88 C596 42 662 42 720 24" stroke="url(#line)" stroke-width="4" stroke-linecap="round"/>
+  <path d="M292 230 C396 176 486 184 590 126 C650 92 688 84 720 78" stroke="url(#line)" stroke-width="2" stroke-linecap="round" opacity="0.60"/>
+  <path d="M430 0 C492 44 552 62 720 44 L720 0 Z" fill="#38bdf8" opacity="0.04"/>
+
+  <!-- clear smaller shield motif, fully visible and moved left from the edge -->
+  <g opacity="0.23" stroke="#64748b" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M520 86l50 18v34c0 34-22 55-50 70-28-15-50-36-50-70v-34l50-18z" fill="url(#shieldFill)"/>
+    <path d="M520 108v78" opacity="0.32"/>
+    <path d="M490 130h60" opacity="0.36"/>
+    <path d="M498 160h44" opacity="0.32"/>
+  </g>
+
+  <!-- status heartbeat line, no arrow/check inside shield -->
+  <g opacity="0.17" stroke="#38bdf8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M354 178h142"/>
+    <path d="M366 156l22 20 28-44 30 58 28-34 22 22"/>
+    <circle cx="388" cy="176" r="5" fill="#38bdf8" fill-opacity="0.22"/>
+    <circle cx="416" cy="132" r="5" fill="#38bdf8" fill-opacity="0.22"/>
+    <circle cx="446" cy="190" r="5" fill="#38bdf8" fill-opacity="0.22"/>
+    <circle cx="474" cy="156" r="5" fill="#38bdf8" fill-opacity="0.22"/>
+  </g>
+
+  <g opacity="0.14" stroke="#64748b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="606" cy="96" r="12"/>
+    <circle cx="646" cy="118" r="12"/>
+    <circle cx="594" cy="142" r="12"/>
+    <path d="M617 102l18 10M636 120l-32 17"/>
+  </g>
+
+  <g opacity="0.10" stroke="#38bdf8" stroke-width="2" stroke-linecap="round">
+    <path d="M564 214v-30M582 214v-50M600 214v-24M618 214v-42M636 214v-34"/>
+  </g>
+</svg>

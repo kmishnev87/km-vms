@@ -1,24 +1,23 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { apiFetch, canAccessPath, clearAuthToken, getAuthToken } from "../lib/api";
+import { canAccessPath, clearAuthToken, getAuthToken } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
-import { LanguageSelect, normalizeLocale, persistLocale, useI18n } from "../lib/i18n";
+import { normalizeLocale, persistLocale, useI18n } from "../lib/i18n";
+import SystemHealthIndicator from "./SystemHealthIndicator";
 
 const items = [
   { href: "/cameras", labelKey: "nav.cameras", iconSrc: "/assets/icons/ui/camera.png" },
   { href: "/recordings", labelKey: "nav.recordings", iconSrc: "/assets/icons/ui/recordings.png" },
   { href: "/live", labelKey: "nav.live", iconSrc: "/assets/icons/ui/live.png" },
   { href: "/chronology", labelKey: "nav.chronology", iconSrc: "/assets/icons/ui/chronology.png" },
-  { href: "/storage", labelKey: "nav.storage", iconSrc: "/assets/icons/ui/storage.png" },
 ];
 
 export default function Layout({ children }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [language, setLanguage] = useState("ru");
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { t } = useI18n();
 
@@ -32,7 +31,6 @@ export default function Layout({ children }) {
         }
         if (status?.language) {
           const normalized = normalizeLocale(status.language);
-          setLanguage(normalized);
           persistLocale(normalized);
         }
         if (!getAuthToken()) {
@@ -44,27 +42,6 @@ export default function Layout({ children }) {
       });
   }, [router]);
 
-  useEffect(() => {
-    function onLanguage(event) {
-      if (event.detail) setLanguage(normalizeLocale(event.detail));
-    }
-    window.addEventListener("km-vms-language", onLanguage);
-    return () => window.removeEventListener("km-vms-language", onLanguage);
-  }, []);
-
-  async function changeLanguage(nextLanguage) {
-    nextLanguage = normalizeLocale(nextLanguage);
-    setLanguage(nextLanguage);
-    persistLocale(nextLanguage);
-    try {
-      await apiFetch("/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language: nextLanguage }),
-      });
-    } catch (_) {}
-  }
-
   function logout() {
     clearAuthToken();
     localStorage.removeItem("vms_login_redirect");
@@ -72,8 +49,8 @@ export default function Layout({ children }) {
     router.push("/login");
   }
 
-  const username = currentUser?.full_name || currentUser?.username || "";
   const visibleItems = currentUser ? items.filter((item) => canAccessPath(currentUser, item.href)) : [];
+  const canOpenStorage = currentUser ? canAccessPath(currentUser, "/storage") : false;
   const canOpenSettings = currentUser ? canAccessPath(currentUser, "/settings") : false;
 
   useEffect(() => {
@@ -112,11 +89,18 @@ export default function Layout({ children }) {
           </nav>
 
           <div className="topNavRight">
-            <LanguageSelect className="topLanguageSelect" value={language} onChange={changeLanguage} aria-label={t("common.language")} />
+            {canOpenStorage ? (
+              <Link
+                href="/storage"
+                className={`topNavItem ${pathname === "/storage" ? "active" : ""}`}
+                title={t("nav.storage")}
+                aria-label={t("nav.storage")}
+              >
+                <img className="topNavIconImage" src="/assets/icons/ui/storage.png" alt="" />
+              </Link>
+            ) : null}
 
-            <div className="topUserChip" title={username || t("common.user")}>
-              {username || t("common.user")}
-            </div>
+            <SystemHealthIndicator currentUser={currentUser} pathname={pathname} label={t("nav.systemHealth")} />
 
             {canOpenSettings ? (
               <Link
