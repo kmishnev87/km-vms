@@ -28,6 +28,8 @@ export function canAccessPath(user, href) {
   if (href === "/settings") return permissions.has("manage_settings");
   if (href === "/storage") return permissions.has("manage_settings");
   if (href === "/system-status") return permissions.has("run_diagnostics");
+  if (href === "/security-journal") return permissions.has("manage_settings");
+  if (href === "/diagnostics") return permissions.has("run_diagnostics");
   if (href === "/apk") return true;
   return false;
 }
