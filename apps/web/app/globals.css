@@ -3142,6 +3142,13 @@ textarea {
   margin-top: 12px;
 }
 
+.storageOpsActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
 .storageOpsEmpty,
 .storageOpsState {
   color: #64748b;

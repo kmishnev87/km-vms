@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import uuid
 from datetime import datetime
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Iterable
@@ -64,7 +67,6 @@ def root_status(root_path: Path) -> dict:
     namespace_exists = namespace_root.exists() and namespace_root.is_dir()
     readable = False
     writable = False
-    write_probe_error = None
     if exists and is_dir:
         try:
             next(root_path.iterdir(), None)
@@ -72,18 +74,7 @@ def root_status(root_path: Path) -> dict:
         except OSError:
             readable = False
         if namespace_exists:
-            probe = namespace_root / f".kmvms_write_probe_{uuid.uuid4().hex}.tmp"
-            try:
-                probe.write_text("ok", encoding="utf-8")
-                probe.unlink()
-                writable = True
-            except OSError:
-                write_probe_error = "archive_root_not_writable"
-                try:
-                    if probe.exists():
-                        probe.unlink()
-                except OSError:
-                    pass
+            writable = os.access(namespace_root, os.W_OK)
     problem = None
     if not exists:
         problem = "root_missing"
@@ -94,7 +85,7 @@ def root_status(root_path: Path) -> dict:
     elif not readable:
         problem = "root_not_readable"
     elif not writable:
-        problem = write_probe_error or "archive_root_not_writable"
+        problem = "archive_root_not_writable"
     return {
         "exists": exists,
         "is_dir": is_dir,
@@ -322,6 +313,416 @@ def root_usage(db: Session, root_row) -> dict:
     return {"segments_count": count, "existing_file_count": existing, "missing_file_count": missing, "size_bytes": size}
 
 
+def _safe_root_label(root_row) -> str:
+    return str(getattr(root_row, "label", None) or getattr(root_row, "id", None) or "archive")
+
+
+def _sanitize_migration_error(value: str | Exception) -> str:
+    text = str(value)
+    for root_value in {str(settings.storage_root), str(approved_archive_base())}:
+        if root_value:
+            text = text.replace(root_value, "[storage]")
+    return text
+
+
+def _archive_root_safety(root_row, *, require_writable: bool) -> list[dict]:
+    blockers: list[dict] = []
+    if root_row is None:
+        return [{"reason": "archive_root_missing", "count": 1}]
+    if getattr(root_row, "storage_namespace", KMVMS_RECORDINGS_NAMESPACE) != KMVMS_RECORDINGS_NAMESPACE:
+        blockers.append({"reason": "archive_root_namespace_mismatch", "root_id": getattr(root_row, "id", None), "count": 1})
+    try:
+        sanitize_archive_root_path(str(_root_path(root_row)), allow_create=False)
+    except ValueError as exc:
+        blockers.append({"reason": str(exc), "root_id": getattr(root_row, "id", None), "count": 1})
+    status = root_status(_root_path(root_row))
+    if not status["available"]:
+        blockers.append({"reason": status["problem"] or "archive_root_unavailable", "root_id": getattr(root_row, "id", None), "count": 1})
+    if require_writable and not status["writable"]:
+        blockers.append({"reason": status["problem"] or "archive_root_not_writable", "root_id": getattr(root_row, "id", None), "count": 1})
+    return blockers
+
+
+def _roots_overlap(source_root, target_root) -> bool:
+    source = _root_path(source_root).resolve()
+    target = _root_path(target_root).resolve()
+    try:
+        source.relative_to(target)
+        return True
+    except ValueError:
+        pass
+    try:
+        target.relative_to(source)
+        return True
+    except ValueError:
+        return False
+
+
+def _segment_is_kmvms_owned(segment) -> bool:
+    return (
+        getattr(segment, "ownership", None) == "KM VMS"
+        and getattr(segment, "source", None) == "recorder"
+        and getattr(segment, "storage_namespace", None) in (None, KMVMS_RECORDINGS_NAMESPACE)
+        and is_kmvms_namespace_relative(getattr(segment, "relative_path", None))
+        and getattr(segment, "status", None) not in {"deleted", "writing"}
+    )
+
+
+def _migration_plan_id(rows: list[dict], target_root_id: str | None) -> str:
+    payload = {
+        "target_root_id": target_root_id,
+        "items": [
+            {
+                "segment_id": item["segment_id"],
+                "source_root_id": item["source_root_id"],
+                "relative_path": item["relative_path"],
+                "size_bytes": item["size_bytes"],
+                "mtime_ns": item["mtime_ns"],
+            }
+            for item in rows
+        ],
+    }
+    return sha256(str(payload).encode("utf-8")).hexdigest()[:24]
+
+
+def _file_checksum(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    digest = sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _stable_file_stat(path: Path) -> dict:
+    stat = path.stat()
+    return {
+        "size_bytes": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+        "inode": int(getattr(stat, "st_ino", 0) or 0),
+        "device": int(getattr(stat, "st_dev", 0) or 0),
+    }
+
+
+def _source_stat_matches(stat: dict, item: dict) -> bool:
+    return int(stat["size_bytes"]) == int(item["size_bytes"]) and int(stat["mtime_ns"]) == int(item["mtime_ns"])
+
+
+def _cleanup_temp_target(temp_path: Path, target_root) -> bool:
+    try:
+        root = _root_path(target_root).resolve()
+        temp_path.resolve(strict=False).relative_to(root)
+        if temp_path.exists() and temp_path.is_file() and temp_path.name.startswith(".kmvms_migration_tmp_"):
+            temp_path.unlink()
+        return True
+    except OSError:
+        return False
+    except ValueError:
+        return False
+
+
+class StorageMigrationCopyError(RuntimeError):
+    def __init__(self, reason: str, report: dict | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.report = report or {}
+
+
+def _copy_failure_report(reason: str, *, copy_finalized: bool, verified_bytes: int = 0) -> dict:
+    return {
+        "result": reason,
+        "verification_method": "sha256_streaming_size_stat_source_stability",
+        "checksum_algorithm": "sha256",
+        "verified_bytes": int(verified_bytes),
+        "source_preserved": True,
+        "copy_finalized": bool(copy_finalized),
+        "metadata_update_staged": False,
+        "metadata_persisted": False,
+        "cleanup_pending": bool(copy_finalized),
+        "manual_review_required": bool(copy_finalized),
+    }
+
+
+def _verified_copy_to_final(source_path: Path, target_path: Path, target_root, item: dict) -> dict:
+    target_root_path = _root_path(target_root).resolve()
+    target_parent = target_path.parent.resolve(strict=False)
+    target_parent.relative_to(target_root_path)
+    if target_path.exists():
+        raise RuntimeError("target_collision")
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target_path.with_name(f".kmvms_migration_tmp_{uuid.uuid4().hex}_{target_path.name}")
+    temp_path.resolve(strict=False).relative_to(target_root_path)
+    if temp_path.exists():
+        raise RuntimeError("temp_target_collision")
+
+    source_stat_before = _stable_file_stat(source_path)
+    if not _source_stat_matches(source_stat_before, item):
+        raise RuntimeError("source_file_changed_after_plan")
+
+    temp_created = False
+    try:
+        source_checksum = _file_checksum(source_path)
+        shutil.copy2(source_path, temp_path)
+        temp_created = True
+        if not temp_path.exists() or not temp_path.is_file():
+            raise RuntimeError("verification_unavailable")
+        temp_stat = _stable_file_stat(temp_path)
+        if int(temp_stat["size_bytes"]) != int(item["size_bytes"]):
+            raise RuntimeError("copy_size_mismatch")
+        temp_checksum = _file_checksum(temp_path)
+        if source_checksum != temp_checksum:
+            raise RuntimeError("checksum_mismatch")
+        source_stat_after = _stable_file_stat(source_path)
+        if source_stat_after != source_stat_before:
+            raise RuntimeError("source_changed_during_copy")
+        if target_path.exists():
+            raise RuntimeError("target_collision")
+        try:
+            temp_path.replace(target_path)
+        except OSError as exc:
+            raise RuntimeError("finalization_failed") from exc
+        final_stat = _stable_file_stat(target_path)
+        if int(final_stat["size_bytes"]) != int(item["size_bytes"]):
+            raise StorageMigrationCopyError(
+                "final_verification_failed",
+                _copy_failure_report("final_verification_failed", copy_finalized=True, verified_bytes=final_stat["size_bytes"]),
+            )
+        final_checksum = _file_checksum(target_path)
+        if final_checksum != source_checksum:
+            raise StorageMigrationCopyError(
+                "final_checksum_mismatch",
+                _copy_failure_report("final_checksum_mismatch", copy_finalized=True, verified_bytes=final_stat["size_bytes"]),
+            )
+        source_stat_final = _stable_file_stat(source_path)
+        if source_stat_final != source_stat_before:
+            raise StorageMigrationCopyError(
+                "source_changed_after_finalization",
+                _copy_failure_report("source_changed_after_finalization", copy_finalized=True, verified_bytes=final_stat["size_bytes"]),
+            )
+        return {
+            "verification_method": "sha256_streaming_size_stat_source_stability",
+            "checksum_algorithm": "sha256",
+            "verified_bytes": int(final_stat["size_bytes"]),
+            "source_preserved": True,
+            "copy_finalized": True,
+            "metadata_update_staged": False,
+            "metadata_persisted": False,
+            "cleanup_pending": True,
+            "manual_review_required": False,
+        }
+    except Exception:
+        if temp_created:
+            _cleanup_temp_target(temp_path, target_root)
+        raise
+
+
+def storage_migration_apply_plan(db: Session, *, target_root_id: str | None = None) -> dict:
+    from app.models.recording import RecordingJob, RecordingSegment
+
+    roots = list_archive_roots(db)
+    active = active_archive_root(db)
+    target = next((root for root in roots if root.id == target_root_id), None) if target_root_id else active
+    blockers: list[dict] = []
+    skipped: list[dict] = []
+    planned: list[dict] = []
+    active_job_count = db.query(RecordingJob).filter(RecordingJob.state.in_(("starting", "recording", "stopping", "restarting"))).count()
+    if active_job_count:
+        blockers.append({"reason": "active_recording_jobs", "count": int(active_job_count)})
+    blockers.extend(_archive_root_safety(target, require_writable=True))
+
+    root_by_id = {getattr(root, "id", None): root for root in roots}
+    for root in roots:
+        if target is not None and root.id != target.id:
+            blockers.extend(_archive_root_safety(root, require_writable=False))
+            if _roots_overlap(root, target):
+                blockers.append({"reason": "archive_root_overlap", "root_id": root.id, "target_root_id": target.id, "count": 1})
+
+    if target is None:
+        blockers.append({"reason": "target_root_missing", "count": 1})
+
+    for segment in db.query(RecordingSegment).order_by(RecordingSegment.id.asc()).all():
+        source_root = root_by_id.get(getattr(segment, "archive_root_id", None) or DEFAULT_ARCHIVE_ROOT_ID)
+        if target is None or source_root is None or getattr(source_root, "id", None) == getattr(target, "id", None):
+            continue
+        if (
+            getattr(segment, "ownership", None) == "KM VMS"
+            and getattr(segment, "source", None) == "recorder"
+            and not is_kmvms_namespace_relative(getattr(segment, "relative_path", None))
+        ):
+            blockers.append({"reason": "path_outside_archive_root", "segment_id": int(segment.id), "count": 1})
+            continue
+        if not _segment_is_kmvms_owned(segment):
+            skipped.append({"segment_id": segment.id, "reason": "not_kmvms_owned_or_not_finalized"})
+            continue
+        try:
+            source_path = resolve_segment_file_path(db, segment, require_exists=True)
+            relative_path = relative_to_archive_root(source_path, source_root)
+            if not is_kmvms_namespace_relative(relative_path):
+                raise ValueError("path_outside_kmvms_namespace")
+            target_path = safe_resolve_relative_for_root(relative_path, target)
+            target_parent = target_path.parent.resolve(strict=False)
+            target_parent.relative_to(_root_path(target).resolve())
+            if target_path.exists():
+                raise ValueError("target_collision")
+            stat = source_path.stat()
+            planned.append(
+                {
+                    "segment_id": int(segment.id),
+                    "source_root_id": source_root.id,
+                    "target_root_id": target.id,
+                    "relative_path": relative_path,
+                    "size_bytes": int(stat.st_size),
+                    "mtime_ns": int(stat.st_mtime_ns),
+                    "inode": int(getattr(stat, "st_ino", 0) or 0),
+                    "device": int(getattr(stat, "st_dev", 0) or 0),
+                    "source_label": _safe_root_label(source_root),
+                    "target_label": _safe_root_label(target),
+                }
+            )
+        except Exception as exc:
+            blockers.append({"reason": _sanitize_migration_error(exc), "segment_id": int(segment.id), "count": 1})
+
+    total_bytes = sum(item["size_bytes"] for item in planned)
+    if target is not None:
+        try:
+            free_bytes = shutil.disk_usage(_root_path(target)).free
+            if total_bytes > free_bytes:
+                blockers.append({"reason": "insufficient_target_free_space", "count": 1})
+        except OSError as exc:
+            blockers.append({"reason": _sanitize_migration_error(exc), "count": 1})
+
+    return {
+        "mode": "server_side_apply_plan",
+        "target_root_id": getattr(target, "id", None),
+        "target_label": _safe_root_label(target) if target is not None else None,
+        "plan_id": _migration_plan_id(planned, getattr(target, "id", None)),
+        "apply_available": bool(target is not None and not blockers and planned),
+        "copy_only": True,
+        "source_preserved": True,
+        "cleanup_pending": bool(planned),
+        "planned_count": len(planned),
+        "planned_bytes": total_bytes,
+        "skipped_count": len(skipped),
+        "blockers": blockers,
+        "skipped": skipped[:20],
+        "planned": [
+            {
+                "segment_id": item["segment_id"],
+                "source_root_id": item["source_root_id"],
+                "target_root_id": item["target_root_id"],
+                "size_bytes": item["size_bytes"],
+                "source_label": item["source_label"],
+                "target_label": item["target_label"],
+            }
+            for item in planned[:50]
+        ],
+        "_internal_items": planned,
+    }
+
+
+def apply_storage_migration(db: Session, *, target_root_id: str | None = None, expected_plan_id: str | None = None) -> dict:
+    from app.models.recording import ArchiveRoot, RecordingSegment
+
+    plan = storage_migration_apply_plan(db, target_root_id=target_root_id)
+    if expected_plan_id and expected_plan_id != plan["plan_id"]:
+        plan["blockers"].append({"reason": "stale_or_tampered_plan", "count": 1})
+        plan["apply_available"] = False
+    if not plan["apply_available"]:
+        return {
+            "status": "blocked",
+            "mutation_performed": False,
+            "plan_id": plan["plan_id"],
+            "target_root_id": plan["target_root_id"],
+            "blockers": plan["blockers"],
+            "executed": [],
+            "skipped": plan["skipped"],
+            "rollback_strategy": "No mutation was performed. Resolve blockers and rerun preview before applying.",
+            "source_preserved": True,
+            "cleanup_pending": False,
+            "recorder_runtime_affected": False,
+        }
+
+    executed: list[dict] = []
+    try:
+        for item in plan["_internal_items"]:
+            source_root = db.get(ArchiveRoot, item["source_root_id"])
+            target_root = db.get(ArchiveRoot, item["target_root_id"])
+            segment = db.get(RecordingSegment, item["segment_id"])
+            if segment is None or source_root is None or target_root is None:
+                raise RuntimeError("plan_item_missing_after_validation")
+            source_path = resolve_segment_file_path(db, segment, require_exists=True)
+            current_stat = source_path.stat()
+            if int(current_stat.st_size) != item["size_bytes"] or int(current_stat.st_mtime_ns) != item["mtime_ns"]:
+                raise RuntimeError("source_file_changed_after_plan")
+            target_path = safe_resolve_relative_for_root(item["relative_path"], target_root)
+            verification = _verified_copy_to_final(source_path, target_path, target_root, item)
+            segment.archive_root_id = item["target_root_id"]
+            segment.relative_path = item["relative_path"]
+            segment.file_path = item["relative_path"]
+            segment.size_bytes = item["size_bytes"]
+            segment.updated_at = datetime.utcnow()
+            db.add(segment)
+            verification["metadata_update_staged"] = True
+            executed.append({"segment_id": item["segment_id"], "bytes": item["size_bytes"], "result": "copied_verified_finalized_metadata_staged", **verification})
+        db.commit()
+        for executed_item in executed:
+            executed_item["metadata_persisted"] = True
+            executed_item["result"] = "copied_verified_finalized_and_metadata_persisted"
+    except Exception as exc:
+        db.rollback()
+        for executed_item in executed:
+            if executed_item.get("copy_finalized"):
+                executed_item["metadata_persisted"] = False
+                executed_item["cleanup_pending"] = True
+                executed_item["manual_review_required"] = True
+                executed_item["result"] = "copy_finalized_metadata_rolled_back"
+        if isinstance(exc, StorageMigrationCopyError) and exc.report:
+            failed_segment_id = None
+            failed_bytes = 0
+            try:
+                failed_segment_id = item["segment_id"]
+                failed_bytes = item["size_bytes"]
+            except (NameError, KeyError):
+                pass
+            failed_report = {"segment_id": failed_segment_id, "bytes": failed_bytes, **exc.report}
+            executed.append(failed_report)
+        return {
+            "status": "failed",
+            "mutation_performed": bool(executed),
+            "plan_id": plan["plan_id"],
+            "target_root_id": plan["target_root_id"],
+            "blockers": [{"reason": getattr(exc, "reason", _sanitize_migration_error(exc)), "count": 1}],
+            "executed": executed,
+            "skipped": plan["skipped"],
+            "rollback_strategy": "Source files were preserved. Review copied target files for executed rows before retrying; automatic cleanup is not performed.",
+            "source_preserved": True,
+            "cleanup_pending": bool(executed),
+            "recorder_runtime_affected": False,
+            "verification_method": "sha256_streaming_size_stat_source_stability",
+            "checksum_algorithm": "sha256",
+        }
+
+    return {
+        "status": "completed",
+        "mutation_performed": bool(executed),
+        "plan_id": plan["plan_id"],
+        "target_root_id": plan["target_root_id"],
+        "planned_count": plan["planned_count"],
+        "planned_bytes": plan["planned_bytes"],
+        "executed": executed,
+        "skipped": plan["skipped"],
+        "blockers": [],
+        "rollback_strategy": "Copy-only migration preserves source files. Cleanup of old roots remains manual after operator review.",
+        "source_preserved": True,
+        "cleanup_pending": bool(executed),
+        "recorder_runtime_affected": False,
+        "verification_method": "sha256_streaming_size_stat_source_stability",
+        "checksum_algorithm": "sha256",
+        "verified_item_count": len(executed),
+        "verified_bytes": sum(int(item.get("verified_bytes") or item.get("bytes") or 0) for item in executed),
+    }
+
+
 def migration_preview(db: Session, *, target_root_id: str | None = None) -> dict:
     from app.models.recording import RecordingJob, RecordingSegment
 
@@ -360,17 +761,23 @@ def migration_preview(db: Session, *, target_root_id: str | None = None) -> dict
         blockers.append({"reason": "active_recording_jobs", "count": int(active_job_count)})
     if target is None:
         blockers.append({"reason": "target_root_missing", "count": 1})
+    apply_plan = storage_migration_apply_plan(db, target_root_id=target_root_id)
     return {
         "mode": "preview_only",
-        "apply_available": False,
+        "plan_id": apply_plan["plan_id"],
+        "apply_available": bool(apply_plan["apply_available"]),
+        "copy_only_apply": True,
+        "source_preserved": True,
+        "cleanup_pending": bool(apply_plan["cleanup_pending"]),
         "non_mutating": True,
         "target_root_id": getattr(target, "id", None),
         "total_would_move_count": total_move_count,
         "total_would_move_bytes": total_move_bytes,
         "total_would_stay_count": total_stay_count,
-        "blockers": blockers,
+        "blockers": apply_plan["blockers"],
         "per_root": per_root,
-        "explanation": "Migration apply/file move is deferred; this preview does not move, copy, delete, adopt or import files.",
+        "apply_contract": "copy_only_server_side_plan_confirm_required_source_preserved",
+        "explanation": "Preview is read-only. Apply copies only KM VMS-owned finalized metadata segments between configured archive roots, verifies size, updates metadata after copy, and preserves source files.",
     }
 
 

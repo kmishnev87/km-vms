@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -12,6 +12,7 @@ from app.services.audit_log import create_event
 from app.services.recording_reconciliation import reconcile_recordings
 from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
+    apply_storage_migration,
     archive_root_public_status,
     list_archive_roots,
     migration_preview,
@@ -43,7 +44,17 @@ class ArchiveRootActivateRequest(BaseModel):
 
 
 class MigrationPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     target_root_id: str | None = None
+
+
+class MigrationApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    target_root_id: str | None = None
+    plan_id: str | None = None
+    confirm: bool = False
 
 
 @router.get("/status")
@@ -248,6 +259,64 @@ def storage_migration_preview(
             "blocker_count": len(result.get("blockers") or []),
         },
     )
+    return result
+
+
+@router.post("/migration/apply")
+def storage_migration_apply(
+    payload: MigrationApplyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    if not payload.confirm:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="storage",
+            event_type="archive_migration.apply_blocked",
+            severity="warning",
+            message_ru="Archive migration apply blocked",
+            message_en="Archive migration apply blocked",
+            target_type="archive_migration",
+            metadata={"reason": "confirm_required"},
+        )
+        raise HTTPException(status_code=409, detail={"error": "archive_migration_apply_requires_confirm"})
+    create_event(
+        db=db,
+        actor=current_user,
+        category="storage",
+        event_type="archive_migration.apply_started",
+        severity="warning",
+        message_ru="Archive migration apply started",
+        message_en="Archive migration apply started",
+        target_type="archive_migration",
+        metadata={"target_root_id": payload.target_root_id, "plan_id": payload.plan_id},
+    )
+    result = apply_storage_migration(db, target_root_id=payload.target_root_id, expected_plan_id=payload.plan_id)
+    event_type = "archive_migration.apply_completed" if result["status"] == "completed" else "archive_migration.apply_blocked" if result["status"] == "blocked" else "archive_migration.apply_failed"
+    create_event(
+        db=db,
+        actor=current_user,
+        category="storage",
+        event_type=event_type,
+        severity="info" if result["status"] == "completed" else "warning",
+        message_ru="Archive migration apply finished",
+        message_en="Archive migration apply finished",
+        target_type="archive_migration",
+        metadata={
+            "status": result["status"],
+            "target_root_id": result.get("target_root_id"),
+            "plan_id": result.get("plan_id"),
+            "executed_count": len(result.get("executed") or []),
+            "blocker_count": len(result.get("blockers") or []),
+            "source_preserved": bool(result.get("source_preserved")),
+            "cleanup_pending": bool(result.get("cleanup_pending")),
+        },
+    )
+    if result["status"] == "blocked":
+        raise HTTPException(status_code=409, detail=result)
+    if result["status"] == "failed":
+        raise HTTPException(status_code=500, detail=result)
     return result
 
 

@@ -81,6 +81,7 @@ export default function StorageOperationsPage() {
   const [rootPath, setRootPath] = useState("");
   const [rootAction, setRootAction] = useState("");
   const [rootMessage, setRootMessage] = useState("");
+  const [migrationResult, setMigrationResult] = useState(null);
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { locale: language, t } = useI18n();
   const copy = useLocaleText("storagePage");
@@ -210,12 +211,41 @@ export default function StorageOperationsPage() {
     try {
       await apiFetch("/storage/migration/preview", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ target_root_id: null }),
       });
       setRootMessage(copy.previewUpdated);
       await loadStatus({ silent: true });
     } catch (err) {
       setRootMessage(err?.message || copy.previewFailed);
+    } finally {
+      setRootAction("");
+    }
+  }
+
+  async function applyMigration() {
+    if (!migrationPreview?.apply_available) return;
+    if (!window.confirm(copy.applyConfirm)) return;
+    setRootAction("apply-migration");
+    setRootMessage("");
+    setMigrationResult(null);
+    try {
+      const result = await apiFetch("/storage/migration/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target_root_id: migrationPreview.target_root_id || null,
+          plan_id: migrationPreview.plan_id || null,
+          confirm: true,
+        }),
+      });
+      setMigrationResult(result);
+      setRootMessage(copy.applyCompleted);
+      await loadStatus({ silent: true });
+    } catch (err) {
+      const detail = err?.detail || err?.data?.detail || null;
+      setMigrationResult(detail && typeof detail === "object" ? detail : { status: "blocked", blockers: [{ reason: err?.message || copy.applyBlocked }] });
+      setRootMessage(err?.message || copy.applyBlocked);
     } finally {
       setRootAction("");
     }
@@ -384,9 +414,21 @@ export default function StorageOperationsPage() {
                   <Stat label={copy.move} value={`${migrationPreview.total_would_move_count || 0} / ${formatBytes(migrationPreview.total_would_move_bytes)}`} />
                   <Stat label={copy.willStay} value={String(migrationPreview.total_would_stay_count || 0)} />
                   <Stat label={copy.blockers} value={String((migrationPreview.blockers || []).length)} tone={(migrationPreview.blockers || []).length ? "warning" : "neutral"} />
+                  <Stat label={copy.applyState} value={migrationPreview.apply_available ? copy.available : copy.unavailable} tone={migrationPreview.apply_available ? "ok" : "warning"} />
                 </div>
                 <div className="storageOpsNote">{copy.migrationNote}</div>
-                <button className="button secondary small" type="button" onClick={() => refreshMigrationPreview()} disabled={!!rootAction}>{rootAction === "preview" ? copy.calculating : copy.refreshPreview}</button>
+                <div className="storageOpsActions">
+                  <button className="button secondary small" type="button" onClick={() => refreshMigrationPreview()} disabled={!!rootAction}>{rootAction === "preview" ? copy.calculating : copy.refreshPreview}</button>
+                  <button className="button small" type="button" onClick={() => applyMigration()} disabled={!!rootAction || !migrationPreview.apply_available}>{rootAction === "apply-migration" ? copy.applying : copy.applyMigration}</button>
+                </div>
+                {migrationPreview.blockers?.length ? (
+                  <SummaryRow label={copy.blockers} value={migrationPreview.blockers.map((item) => item.reason || copy.reasonUnknown).join(", ")} />
+                ) : null}
+                {migrationResult ? (
+                  <div className="storageOpsNote">
+                    {copy.applyReport}: {statusLabel(migrationResult.status, language)}; {copy.executed}: {(migrationResult.executed || []).length}; {copy.sourcePreserved}: {boolLabel(migrationResult.source_preserved, language)}; {copy.cleanupPending}: {boolLabel(migrationResult.cleanup_pending, language)}
+                  </div>
+                ) : null}
               </Section>
             </div>
 

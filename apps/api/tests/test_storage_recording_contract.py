@@ -2,11 +2,13 @@ import json
 import sys
 import tempfile
 from datetime import datetime, timedelta
+from hashlib import sha256
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -27,12 +29,15 @@ from app.services.setup_storage import CONTAINER_ARCHIVE_PATH, SELECTION_FILE
 from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.recording_storage import (
     DEFAULT_ARCHIVE_ROOT_ID,
+    _file_checksum,
     active_archive_root,
+    apply_storage_migration,
     ensure_archive_roots,
     migration_preview,
     resolve_segment_file_path,
     root_status,
     sanitize_archive_root_path,
+    storage_migration_apply_plan,
 )
 from app.services import recording_reconciliation
 from app.services.recording_reconciliation import reconcile_recordings, reconciliation_diagnostics
@@ -456,10 +461,348 @@ def test_storage_status_and_migration_preview_are_root_aware_and_non_mutating(db
     assert summary["storage_operations"]["archive_roots"]
 
     preview = migration_preview(db, target_root_id="root_target")
-    assert preview["apply_available"] is False
+    assert preview["apply_available"] is True
     assert preview["non_mutating"] is True
     assert preview["total_would_move_count"] == 1
+    assert preview["apply_contract"] == "copy_only_server_side_plan_confirm_required_source_preserved"
     assert default_path.exists()
+
+
+def test_storage_migration_apply_requires_confirm_and_rejects_raw_override_fields(db):
+    from app.routers import storage as storage_router
+
+    with pytest.raises(ValidationError):
+        storage_router.MigrationApplyRequest.model_validate(
+            {"confirm": True, "target_root_id": "root_target", "source_root": "request-controlled-source", "command": "mv"}
+        )
+
+    with pytest.raises(HTTPException) as exc:
+        storage_router.storage_migration_apply(
+            storage_router.MigrationApplyRequest(confirm=False, target_root_id="root_target"),
+            db=db,
+            current_user=actor("owner"),
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["error"] == "archive_migration_apply_requires_confirm"
+
+
+def test_storage_migration_checksum_helper_streams_stable_hash(tmp_path):
+    sample = tmp_path / "sample.mkv"
+    payload = b"known-video-bytes"
+    sample.write_bytes(payload)
+
+    assert _file_checksum(sample) == _file_checksum(sample)
+    assert _file_checksum(sample) == sha256(payload).hexdigest()
+
+
+def test_storage_migration_apply_blocks_active_recorders_and_stale_plan(db):
+    camera = add_camera(db)
+    write_storage_file("kmvms/recordings/default-active.mkv", b"old")
+    add_segment(db, camera, relative_path="kmvms/recordings/default-active.mkv")
+    ensure_archive_roots(db)
+    target_root = Path(settings.storage_root).parent / "archive-target"
+    (target_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, target_root, root_id="root_target", active=False)
+
+    db.add(RecordingJob(id="stage9-active-job", camera_id=camera.id, state="recording", started_at=datetime.utcnow()))
+    db.commit()
+    active_plan = storage_migration_apply_plan(db, target_root_id="root_target")
+    assert active_plan["apply_available"] is False
+    assert any(blocker["reason"] == "active_recording_jobs" for blocker in active_plan["blockers"])
+
+    db.query(RecordingJob).delete()
+    db.commit()
+    stale = apply_storage_migration(db, target_root_id="root_target", expected_plan_id="tampered")
+    assert stale["status"] == "blocked"
+    assert stale["mutation_performed"] is False
+    assert any(blocker["reason"] == "stale_or_tampered_plan" for blocker in stale["blockers"])
+
+
+def test_storage_migration_apply_copy_only_success_preserves_source_and_foreign_sentinel(db):
+    camera = add_camera(db)
+    source_file = write_storage_file("kmvms/recordings/default-apply.mkv", b"owned-video")
+    foreign_sentinel = Path(settings.storage_root) / "Surveillance" / "foreign-sentinel.mkv"
+    foreign_sentinel.parent.mkdir(parents=True, exist_ok=True)
+    foreign_sentinel.write_bytes(b"foreign")
+    segment = add_segment(db, camera, relative_path="kmvms/recordings/default-apply.mkv")
+    ensure_archive_roots(db)
+    target_root = Path(settings.storage_root).parent / "archive-target"
+    (target_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, target_root, root_id="root_target", active=False)
+
+    plan = storage_migration_apply_plan(db, target_root_id="root_target")
+    assert plan["apply_available"] is True
+    result = apply_storage_migration(db, target_root_id="root_target", expected_plan_id=plan["plan_id"])
+    db.refresh(segment)
+
+    assert result["status"] == "completed"
+    assert result["verification_method"] == "sha256_streaming_size_stat_source_stability"
+    assert result["checksum_algorithm"] == "sha256"
+    assert result["verified_item_count"] == 1
+    assert result["verified_bytes"] == len(b"owned-video")
+    assert result["source_preserved"] is True
+    assert result["cleanup_pending"] is True
+    assert result["recorder_runtime_affected"] is False
+    assert result["executed"][0]["copy_finalized"] is True
+    assert result["executed"][0]["metadata_update_staged"] is True
+    assert result["executed"][0]["metadata_persisted"] is True
+    assert segment.archive_root_id == "root_target"
+    assert source_file.exists()
+    assert (target_root / "kmvms/recordings/default-apply.mkv").read_bytes() == b"owned-video"
+    assert not list((target_root / "kmvms/recordings").glob(".kmvms_migration_tmp_*"))
+    assert foreign_sentinel.read_bytes() == b"foreign"
+
+
+def test_storage_migration_apply_checksum_mismatch_preserves_source_and_metadata(db, monkeypatch):
+    from app.services import recording_storage
+
+    camera = add_camera(db)
+    source_file = write_storage_file("kmvms/recordings/checksum-mismatch.mkv", b"owned-video")
+    segment = add_segment(db, camera, relative_path="kmvms/recordings/checksum-mismatch.mkv")
+    ensure_archive_roots(db)
+    target_root = Path(settings.storage_root).parent / "archive-target"
+    (target_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, target_root, root_id="root_target", active=False)
+    plan = storage_migration_apply_plan(db, target_root_id="root_target")
+    original_root_id = segment.archive_root_id
+    real_checksum = recording_storage._file_checksum
+
+    def mismatched_checksum(path):
+        value = real_checksum(path)
+        return "0" * 64 if path.name.startswith(".kmvms_migration_tmp_") else value
+
+    monkeypatch.setattr(recording_storage, "_file_checksum", mismatched_checksum)
+    result = apply_storage_migration(db, target_root_id="root_target", expected_plan_id=plan["plan_id"])
+    db.refresh(segment)
+
+    assert result["status"] == "failed"
+    assert any(blocker["reason"] == "checksum_mismatch" for blocker in result["blockers"])
+    assert segment.archive_root_id == original_root_id
+    assert source_file.exists()
+    assert not (target_root / "kmvms/recordings/checksum-mismatch.mkv").exists()
+    assert not list((target_root / "kmvms/recordings").glob(".kmvms_migration_tmp_*"))
+
+
+def test_storage_migration_apply_source_changed_during_copy_preserves_metadata(db, monkeypatch):
+    from app.services import recording_storage
+
+    camera = add_camera(db)
+    source_file = write_storage_file("kmvms/recordings/source-changed.mkv", b"owned-video")
+    segment = add_segment(db, camera, relative_path="kmvms/recordings/source-changed.mkv")
+    ensure_archive_roots(db)
+    target_root = Path(settings.storage_root).parent / "archive-target"
+    (target_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, target_root, root_id="root_target", active=False)
+    plan = storage_migration_apply_plan(db, target_root_id="root_target")
+    original_root_id = segment.archive_root_id
+    real_copy2 = recording_storage.shutil.copy2
+
+    def changing_copy(src, dst, *args, **kwargs):
+        result = real_copy2(src, dst, *args, **kwargs)
+        Path(src).write_bytes(b"owned-video-changed")
+        return result
+
+    monkeypatch.setattr(recording_storage.shutil, "copy2", changing_copy)
+    result = apply_storage_migration(db, target_root_id="root_target", expected_plan_id=plan["plan_id"])
+    db.refresh(segment)
+
+    assert result["status"] == "failed"
+    assert any(blocker["reason"] == "source_changed_during_copy" for blocker in result["blockers"])
+    assert segment.archive_root_id == original_root_id
+    assert source_file.exists()
+    assert source_file.read_bytes() == b"owned-video-changed"
+    assert not (target_root / "kmvms/recordings/source-changed.mkv").exists()
+
+
+def test_storage_migration_apply_temp_collision_blocks_without_metadata_update(db, monkeypatch):
+    import uuid
+
+    camera = add_camera(db)
+    source_file = write_storage_file("kmvms/recordings/temp-collision.mkv", b"owned-video")
+    segment = add_segment(db, camera, relative_path="kmvms/recordings/temp-collision.mkv")
+    ensure_archive_roots(db)
+    target_root = Path(settings.storage_root).parent / "archive-target"
+    target_dir = target_root / KMVMS_RECORDINGS_NAMESPACE
+    target_dir.mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, target_root, root_id="root_target", active=False)
+    plan = storage_migration_apply_plan(db, target_root_id="root_target")
+    temp_name = ".kmvms_migration_tmp_fixedhex_temp-collision.mkv"
+    (target_dir / temp_name).write_bytes(b"existing-temp")
+    original_root_id = segment.archive_root_id
+
+    monkeypatch.setattr(uuid, "uuid4", lambda: SimpleNamespace(hex="fixedhex"))
+    result = apply_storage_migration(db, target_root_id="root_target", expected_plan_id=plan["plan_id"])
+    db.refresh(segment)
+
+    assert result["status"] == "failed"
+    assert any(blocker["reason"] == "temp_target_collision" for blocker in result["blockers"])
+    assert segment.archive_root_id == original_root_id
+    assert source_file.exists()
+    assert (target_dir / temp_name).read_bytes() == b"existing-temp"
+
+
+def test_storage_migration_apply_finalization_failure_preserves_metadata_and_source(db, monkeypatch):
+    camera = add_camera(db)
+    source_file = write_storage_file("kmvms/recordings/finalization-fails.mkv", b"owned-video")
+    segment = add_segment(db, camera, relative_path="kmvms/recordings/finalization-fails.mkv")
+    ensure_archive_roots(db)
+    target_root = Path(settings.storage_root).parent / "archive-target"
+    (target_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, target_root, root_id="root_target", active=False)
+    plan = storage_migration_apply_plan(db, target_root_id="root_target")
+    original_root_id = segment.archive_root_id
+    real_replace = Path.replace
+
+    def fail_replace(self, target):
+        if self.name.startswith(".kmvms_migration_tmp_"):
+            raise OSError("simulated finalization failure")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    result = apply_storage_migration(db, target_root_id="root_target", expected_plan_id=plan["plan_id"])
+    db.refresh(segment)
+
+    assert result["status"] == "failed"
+    assert any(blocker["reason"] == "finalization_failed" for blocker in result["blockers"])
+    assert segment.archive_root_id == original_root_id
+    assert source_file.exists()
+    assert not (target_root / "kmvms/recordings/finalization-fails.mkv").exists()
+    assert not list((target_root / "kmvms/recordings").glob(".kmvms_migration_tmp_*"))
+
+
+def test_storage_migration_apply_post_final_checksum_failure_reports_cleanup_pending(db, monkeypatch):
+    from app.services import recording_storage
+
+    camera = add_camera(db)
+    source_file = write_storage_file("kmvms/recordings/post-final-checksum.mkv", b"owned-video")
+    segment = add_segment(db, camera, relative_path="kmvms/recordings/post-final-checksum.mkv")
+    ensure_archive_roots(db)
+    target_root = Path(settings.storage_root).parent / "archive-target"
+    (target_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, target_root, root_id="root_target", active=False)
+    plan = storage_migration_apply_plan(db, target_root_id="root_target")
+    original_root_id = segment.archive_root_id
+    real_checksum = recording_storage._file_checksum
+
+    def final_mismatched_checksum(path):
+        value = real_checksum(path)
+        return "0" * 64 if target_root in Path(path).parents and path.name == "post-final-checksum.mkv" else value
+
+    monkeypatch.setattr(recording_storage, "_file_checksum", final_mismatched_checksum)
+    result = apply_storage_migration(db, target_root_id="root_target", expected_plan_id=plan["plan_id"])
+    db.refresh(segment)
+
+    assert result["status"] == "failed"
+    assert any(blocker["reason"] == "final_checksum_mismatch" for blocker in result["blockers"])
+    assert segment.archive_root_id == original_root_id
+    assert source_file.exists()
+    assert (target_root / "kmvms/recordings/post-final-checksum.mkv").exists()
+    failed = result["executed"][0]
+    assert failed["copy_finalized"] is True
+    assert failed["metadata_persisted"] is False
+    assert failed["cleanup_pending"] is True
+    assert failed["manual_review_required"] is True
+    assert str(settings.storage_root) not in json.dumps(result)
+
+
+def test_storage_migration_apply_source_changed_after_finalization_reports_manual_review(db, monkeypatch):
+    camera = add_camera(db)
+    source_file = write_storage_file("kmvms/recordings/source-after-final.mkv", b"owned-video")
+    segment = add_segment(db, camera, relative_path="kmvms/recordings/source-after-final.mkv")
+    ensure_archive_roots(db)
+    target_root = Path(settings.storage_root).parent / "archive-target"
+    (target_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, target_root, root_id="root_target", active=False)
+    plan = storage_migration_apply_plan(db, target_root_id="root_target")
+    original_root_id = segment.archive_root_id
+    real_replace = Path.replace
+
+    def changing_replace(self, target):
+        result = real_replace(self, target)
+        source_file.write_bytes(b"owned-video-changed")
+        return result
+
+    monkeypatch.setattr(Path, "replace", changing_replace)
+    result = apply_storage_migration(db, target_root_id="root_target", expected_plan_id=plan["plan_id"])
+    db.refresh(segment)
+
+    assert result["status"] == "failed"
+    assert any(blocker["reason"] == "source_changed_after_finalization" for blocker in result["blockers"])
+    assert segment.archive_root_id == original_root_id
+    assert source_file.exists()
+    assert (target_root / "kmvms/recordings/source-after-final.mkv").exists()
+    failed = result["executed"][0]
+    assert failed["copy_finalized"] is True
+    assert failed["metadata_persisted"] is False
+    assert failed["cleanup_pending"] is True
+    assert failed["manual_review_required"] is True
+
+
+def test_storage_migration_apply_multi_item_rollback_does_not_report_metadata_persisted(db, monkeypatch):
+    from app.services import recording_storage
+
+    camera = add_camera(db)
+    first_source = write_storage_file("kmvms/recordings/rollback-first.mkv", b"first-video")
+    second_source = write_storage_file("kmvms/recordings/rollback-second.mkv", b"second-video")
+    first = add_segment(db, camera, relative_path="kmvms/recordings/rollback-first.mkv")
+    second = add_segment(db, camera, relative_path="kmvms/recordings/rollback-second.mkv")
+    ensure_archive_roots(db)
+    target_root = Path(settings.storage_root).parent / "archive-target"
+    (target_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, target_root, root_id="root_target", active=False)
+    plan = storage_migration_apply_plan(db, target_root_id="root_target")
+    first_original_root = first.archive_root_id
+    second_original_root = second.archive_root_id
+    real_copy2 = recording_storage.shutil.copy2
+
+    def fail_second_copy(src, dst, *args, **kwargs):
+        if Path(src).name == "rollback-second.mkv":
+            raise OSError("simulated second copy failure")
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(recording_storage.shutil, "copy2", fail_second_copy)
+    result = apply_storage_migration(db, target_root_id="root_target", expected_plan_id=plan["plan_id"])
+    db.refresh(first)
+    db.refresh(second)
+
+    assert result["status"] == "failed"
+    assert first.archive_root_id == first_original_root
+    assert second.archive_root_id == second_original_root
+    assert first_source.exists()
+    assert second_source.exists()
+    assert (target_root / "kmvms/recordings/rollback-first.mkv").exists()
+    assert not (target_root / "kmvms/recordings/rollback-second.mkv").exists()
+    finalized = result["executed"][0]
+    assert finalized["copy_finalized"] is True
+    assert finalized["metadata_update_staged"] is True
+    assert finalized["metadata_persisted"] is False
+    assert finalized["cleanup_pending"] is True
+    assert finalized["manual_review_required"] is True
+    assert finalized["result"] == "copy_finalized_metadata_rolled_back"
+
+
+def test_storage_migration_apply_blocks_traversal_symlink_overlap_and_target_collision(db):
+    camera = add_camera(db)
+    write_storage_file("kmvms/recordings/collision.mkv", b"owned-video")
+    add_segment(db, camera, relative_path="kmvms/recordings/collision.mkv")
+    add_segment(db, camera, relative_path="../escape.mkv")
+    ensure_archive_roots(db)
+    target_root = Path(settings.storage_root).parent / "archive-target"
+    (target_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    (target_root / "kmvms/recordings/collision.mkv").write_bytes(b"existing")
+    add_archive_root(db, target_root, root_id="root_target", active=False)
+
+    plan = storage_migration_apply_plan(db, target_root_id="root_target")
+    reasons = {blocker["reason"] for blocker in plan["blockers"]}
+    assert "target_collision" in reasons
+    assert "path_outside_archive_root" in reasons
+
+    overlap_root = Path(settings.storage_root) / "nested-root"
+    (overlap_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    add_archive_root(db, overlap_root, root_id="root_overlap", active=False)
+    overlap_plan = storage_migration_apply_plan(db, target_root_id="root_overlap")
+    assert any(blocker["reason"] == "archive_root_overlap" for blocker in overlap_plan["blockers"])
 
 
 def test_serialized_settings_expose_ui_storage_and_format_contract(db):

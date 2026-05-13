@@ -27,7 +27,7 @@ const offText = context.lowDiskPolicyText({
 });
 assert.equal(offText.includes("только предупреждает"), true);
 assert.equal(offText.includes("Автоосвобождение выключено"), true);
-assert.equal(offText.includes("не разрешает удаление без opt-in"), true);
+assert.equal(offText.includes("не разрешает удаление без явного включения"), true);
 
 const onText = context.lowDiskPolicyText({
   auto_free_space_cleanup_enabled: true,
@@ -35,7 +35,10 @@ const onText = context.lowDiskPolicyText({
   cleanup_threshold_percent: 5,
   critical_threshold_percent: 1,
 });
-assert.equal(onText.includes("owned metadata-safe"), true);
+assert.equal(onText.includes("принадлежащие KM VMS"), true);
+assert.equal(onText.includes("метаданными"), true);
+assert.equal(onText.includes("owned"), false);
+assert.equal(onText.includes("metadata-safe"), false);
 assert.equal(onText.includes("приостановлена"), true);
 
 const rows = context.cameraStorageRows([
