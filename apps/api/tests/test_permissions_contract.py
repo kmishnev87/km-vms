@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 
-from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS, PUBLIC
+from app.core.endpoint_permissions import AUTHENTICATED, ENDPOINT_PERMISSIONS, PUBLIC
 from app.core.permissions import (
     PERMISSION_EXPORT_RECORDINGS,
     ROLE_ADMIN,
@@ -126,6 +126,62 @@ def test_endpoint_permission_contract_is_explicit_and_reviewable():
     assert decision("/system/recorder/status", "GET").decision == "run_diagnostics"
     assert decision("/settings/logs/archive", "GET").decision == "run_diagnostics"
     assert decision("/settings/bug-report", "POST").decision == "run_diagnostics"
+
+
+def test_public_endpoint_allowlist_is_intentional_and_minimal():
+    public_keys = {(item.method, item.path) for item in ENDPOINT_PERMISSIONS if item.decision == PUBLIC}
+    assert public_keys == {
+        ("GET", "/health"),
+        ("GET", "/"),
+        ("GET", "/system/status"),
+        ("POST", "/setup"),
+        ("POST", "/setup/storage/preview"),
+        ("POST", "/setup/storage/validate"),
+        ("POST", "/setup/storage/apply"),
+        ("GET", "/setup/storage/discovery"),
+        ("GET", "/setup/storage/status"),
+        ("POST", "/auth/login"),
+    }
+    for item in ENDPOINT_PERMISSIONS:
+        if item.decision == PUBLIC:
+            enforcement = item.enforcement.lower()
+            assert "public" in enforcement or "first-run" in enforcement or "login" in enforcement
+            assert item.notes
+
+
+def test_endpoint_enforcement_matches_registry_decision_shape():
+    for item in ENDPOINT_PERMISSIONS:
+        if item.decision == PUBLIC:
+            assert item.allowed_roles == (PUBLIC,)
+            continue
+        if item.decision == AUTHENTICATED:
+            assert "get_current_user" in item.enforcement or "route-level permission check" in item.enforcement
+            assert item.allowed_roles
+            continue
+        enforcement = item.enforcement.lower()
+        if "media_token" not in enforcement and "media token" not in enforcement:
+            assert "require_permission" in item.enforcement
+        assert item.allowed_roles
+
+
+def test_stage_recent_routes_have_explicit_permissions_and_no_apk_api_route():
+    expected = {
+        ("/audit/events", "GET"): "manage_settings",
+        ("/settings/logs/archive", "GET"): "run_diagnostics",
+        ("/settings/bug-report", "POST"): "run_diagnostics",
+        ("/system/runtime/status", "GET"): "run_diagnostics",
+        ("/system/upgrade/report", "GET"): "run_diagnostics",
+        ("/storage/status", "GET"): "manage_settings",
+        ("/storage/archive-roots", "GET"): "manage_settings",
+        ("/storage/migration/preview", "POST"): "manage_settings",
+        ("/storage/migration/apply", "POST"): "manage_settings",
+        ("/storage/reconciliation/summary", "GET"): "run_diagnostics",
+    }
+    for (path, method), permission in expected.items():
+        assert decision(path, method).decision == permission
+        assert decision(path, method).allowed_roles == (ROLE_OWNER, ROLE_ADMIN)
+
+    assert not any("/apk" in path for _, path in actual_app_routes())
 
 
 def test_endpoint_permission_registry_covers_actual_fastapi_routes():

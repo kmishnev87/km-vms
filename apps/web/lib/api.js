@@ -1,3 +1,5 @@
+import { canUserAccessRoute } from "./routePermissions";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "/api";
 const TOKEN_KEY = "token";
 const TOKEN_EXPIRES_KEY = "token_expires_at";
@@ -20,18 +22,7 @@ function currentUiLanguage() {
 }
 
 export function canAccessPath(user, href) {
-  const permissions = new Set(user?.permissions || []);
-  if (href === "/live") return permissions.has("view_live");
-  if (href === "/recordings") return permissions.has("view_recordings");
-  if (href === "/chronology") return permissions.has("view_timeline");
-  if (href === "/cameras") return permissions.has("manage_cameras");
-  if (href === "/settings") return permissions.has("manage_settings");
-  if (href === "/storage") return permissions.has("manage_settings");
-  if (href === "/system-status") return permissions.has("run_diagnostics");
-  if (href === "/security-journal") return permissions.has("manage_settings");
-  if (href === "/diagnostics") return permissions.has("run_diagnostics");
-  if (href === "/apk") return true;
-  return false;
+  return canUserAccessRoute(user, href);
 }
 
 export function canDeleteRecordings(user) {

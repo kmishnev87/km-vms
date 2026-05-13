@@ -8,6 +8,7 @@ const root = resolve(__dirname, "..");
 const read = (relative) => fs.readFileSync(resolve(root, relative), "utf8");
 
 const api = read("lib/api.js");
+const routePermissions = read("lib/routePermissions.js");
 const component = read("components/AuditDiagnosticsEntries.js");
 const securityPage = read("app/security-journal/page.js");
 const diagnosticsPage = read("app/diagnostics/page.js");
@@ -17,8 +18,11 @@ const problemBanners = read("components/OperatorProblemBanners.js");
 const dashboard = read("app/page.js");
 const contract = await import(pathToFileURL(resolve(root, "lib/auditEntryContract.js")));
 
-assert.equal(api.includes('if (href === "/security-journal") return permissions.has("manage_settings");'), true);
-assert.equal(api.includes('if (href === "/diagnostics") return permissions.has("run_diagnostics");'), true);
+assert.equal(api.includes("canUserAccessRoute(user, href)"), true);
+assert.equal(routePermissions.includes('"/security-journal"'), true);
+assert.equal(routePermissions.includes('permission: "manage_settings"'), true);
+assert.equal(routePermissions.includes('"/diagnostics"'), true);
+assert.equal(routePermissions.includes('permission: "run_diagnostics"'), true);
 
 assert.equal(securityPage.includes("<SecurityJournalEntry />"), true);
 assert.equal(diagnosticsPage.includes("<DiagnosticsEntry />"), true);

@@ -13,6 +13,7 @@ const systemStatusPage = read("app/system-status/page.js");
 const problemBanners = read("components/OperatorProblemBanners.js");
 const dashboard = read("app/page.js");
 const api = read("lib/api.js");
+const routePermissions = read("lib/routePermissions.js");
 const i18n = read("lib/i18n.js");
 
 for (const route of [
@@ -28,11 +29,17 @@ for (const route of [
   assert.equal(fs.existsSync(resolve(root, route)), true, `${route} target route missing`);
 }
 
-assert.equal(api.includes('if (href === "/cameras") return permissions.has("manage_cameras");'), true);
-assert.equal(api.includes('if (href === "/live") return permissions.has("view_live");'), true);
-assert.equal(api.includes('if (href === "/storage") return permissions.has("manage_settings");'), true);
-assert.equal(api.includes('if (href === "/diagnostics") return permissions.has("run_diagnostics");'), true);
-assert.equal(api.includes('if (href === "/security-journal") return permissions.has("manage_settings");'), true);
+assert.equal(api.includes("canUserAccessRoute(user, href)"), true);
+for (const [route, permission] of [
+  ["/cameras", "manage_cameras"],
+  ["/live", "view_live"],
+  ["/storage", "manage_settings"],
+  ["/diagnostics", "run_diagnostics"],
+  ["/security-journal", "manage_settings"],
+]) {
+  assert.equal(routePermissions.includes(`"${route}"`), true, `${route} missing from route access registry`);
+  assert.equal(routePermissions.includes(`permission: "${permission}"`), true, `${permission} missing from route access registry`);
+}
 
 assert.equal(problemBanners.includes("canAccessPath("), true);
 assert.equal(problemBanners.includes("action.href"), true);

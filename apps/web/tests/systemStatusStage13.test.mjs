@@ -20,6 +20,7 @@ const indicator = read("components/SystemHealthIndicator.js");
 const systemStatus = read("app/system-status/page.js");
 const apk = read("app/apk/page.js");
 const api = read("lib/api.js");
+const routePermissions = read("lib/routePermissions.js");
 const i18n = read("lib/i18n.js");
 const css = read("app/globals.css");
 
@@ -79,8 +80,11 @@ assert.equal(indicator.includes("system-status-alert.png"), true);
 assert.equal(css.includes("@keyframes systemHealthPulse"), true);
 assert.equal(css.includes(".systemHealthNavItem.attention"), true);
 
-assert.equal(api.includes('if (href === "/system-status") return permissions.has("run_diagnostics");'), true);
-assert.equal(api.includes('if (href === "/apk") return true;'), true);
+assert.equal(api.includes("canUserAccessRoute(user, href)"), true);
+assert.equal(routePermissions.includes('"/system-status"'), true);
+assert.equal(routePermissions.includes('permission: "run_diagnostics"'), true);
+assert.equal(routePermissions.includes('"/apk"'), true);
+assert.equal(routePermissions.includes("placeholderOnly: true"), true);
 
 assert.equal(systemStatus.includes('apiFetch("/system/runtime/status")'), false);
 assert.equal(systemStatus.includes("useSystemHealthStatus"), true);
