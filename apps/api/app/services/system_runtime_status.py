@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
-from app.services.live_engine_v2 import manager as live_manager
+from app.services.live_engine import manager as live_manager
 from app.services.recording_retention import automatic_retention_status
 from app.services.recording_retention import apply_critical_low_disk_protection, auto_free_space_status
 from app.services.recorder_runtime_status import (

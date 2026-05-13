@@ -16,7 +16,7 @@ from app.models.camera import Camera
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
-from app.services.live_engine_v2 import manager
+from app.services.live_engine import manager
 
 router = APIRouter(prefix="/live", tags=["live"])
 

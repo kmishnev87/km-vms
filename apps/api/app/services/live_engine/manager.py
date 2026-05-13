@@ -16,7 +16,7 @@ from app.core.config import settings
 from app.models.camera import Camera
 from app.services.audit_log import create_event
 from app.services.hardware import get_hardware_capabilities, hardware_capabilities_summary
-from app.services.live_engine_v2.ffmpeg import (
+from app.services.live_engine.ffmpeg import (
     build_hls_command,
     choose_input_url,
     command_text,
@@ -207,7 +207,7 @@ class StreamInstance:
 
     @property
     def stream_dir(self) -> Path:
-        path = Path(settings.storage_previews) / "live_v2" / str(self.camera_id) / self.stream
+        path = Path(settings.storage_previews) / "live" / str(self.camera_id) / self.stream
         path.mkdir(parents=True, exist_ok=True)
         return path
 

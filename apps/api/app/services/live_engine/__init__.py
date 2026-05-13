@@ -1,4 +1,4 @@
-from app.services.live_engine_v2.manager import (
+from app.services.live_engine.manager import (
     manager,
     start_cleanup_worker,
     stop_all_streams,

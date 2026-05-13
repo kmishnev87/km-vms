@@ -309,7 +309,7 @@ def test_media_endpoints_reject_access_tokens_and_accept_only_scoped_media_token
     camera, segment = add_segment(db)
     access_token = create_access_token(user.username)
 
-    playlist_path = Path(settings.storage_previews) / "live_v2" / str(camera.id) / "sub" / "index.m3u8"
+    playlist_path = Path(settings.storage_previews) / "live" / str(camera.id) / "sub" / "index.m3u8"
     playlist_path.parent.mkdir(parents=True, exist_ok=True)
     playlist_path.write_text("#EXTM3U\n#EXTINF:1.0,\nseg_0.ts\n", encoding="utf-8")
     monkeypatch.setattr("app.routers.live.manager.get_playlist_file", lambda camera_id, stream: playlist_path)
@@ -347,7 +347,7 @@ def test_media_endpoints_reject_access_tokens_and_accept_only_scoped_media_token
 def test_media_endpoints_reject_expired_and_wrong_resource_tokens(db, monkeypatch):
     user = add_user(db, role="owner")
     camera, segment = add_segment(db)
-    playlist_path = Path(settings.storage_previews) / "live_v2" / str(camera.id) / "sub" / "index.m3u8"
+    playlist_path = Path(settings.storage_previews) / "live" / str(camera.id) / "sub" / "index.m3u8"
     playlist_path.parent.mkdir(parents=True, exist_ok=True)
     playlist_path.write_text("#EXTM3U\n#EXTINF:1.0,\nseg_0.ts\n", encoding="utf-8")
     monkeypatch.setattr("app.routers.live.manager.get_playlist_file", lambda camera_id, stream: playlist_path)

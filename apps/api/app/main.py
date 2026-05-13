@@ -24,7 +24,7 @@ from app.services.automatic_retention import start_automatic_retention_worker, s
 from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration, ensure_system_settings
 from app.services.recording_storage import ensure_archive_roots
 from app.services.hardware import refresh_hardware_capabilities
-from app.services.live_engine_v2 import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
+from app.services.live_engine import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
 from app.services.update_check import run_startup_due_check
 
 

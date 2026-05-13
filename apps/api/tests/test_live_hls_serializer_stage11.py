@@ -18,8 +18,8 @@ from app.db.session import Base, get_db
 from app.main import app
 from app.models.camera import Camera
 from app.models.user import User
-from app.services.live_engine_v2.ffmpeg import command_text, mask_rtsp_credentials
-from app.services.live_engine_v2 import manager as live_manager
+from app.services.live_engine.ffmpeg import command_text, mask_rtsp_credentials
+from app.services.live_engine import manager as live_manager
 from app.services.media_tokens import create_media_token
 
 
@@ -191,7 +191,7 @@ def unsafe_manager_item(camera_id=1):
     unsafe_rtsp = "".join(["rt", "sp://user:se", "cret@example.invalid/live"])
     unsafe_command = "".join(["ff", "mpeg -i ", unsafe_rtsp])
     unsafe_password = "".join(["pass", "word=se", "cret"])
-    unsafe_storage_path = "".join(["/sto", "rage/previews/live_v2/1/sub/index.m3u8"])
+    unsafe_storage_path = "".join(["/sto", "rage/previews/live/1/sub/index.m3u8"])
     return {
         "stream_key": f"{camera_id}_sub",
         "camera_id": camera_id,
@@ -326,7 +326,7 @@ def test_live_media_token_and_hls_access_contract(client, api_db):
     operator = add_user(db, role=ROLE_OPERATOR)
     viewer = add_user(db, role=ROLE_VIEWER, username="stage11_live_viewer")
     camera = add_camera(db)
-    stream_dir = root / "previews" / "live_v2" / str(camera.id) / "sub"
+    stream_dir = root / "previews" / "live" / str(camera.id) / "sub"
     stream_dir.mkdir(parents=True)
     (stream_dir / "index.m3u8").write_text("#EXTM3U\nseg_1.ts\n", encoding="utf-8")
     (stream_dir / "seg_1.ts").write_bytes(b"stage11")

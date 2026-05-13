@@ -6,7 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.models.camera import Camera
 from app.routers.cameras import apply_profile_assignments, assemble_rtsp_url, build_test_url
-from app.services.live_engine_v2.ffmpeg import choose_input_url as live_choose_input_url
+from app.services.live_engine.ffmpeg import choose_input_url as live_choose_input_url
 from app.services.onvif_service import _profile_to_dict, rtsp_display_uri, rtsp_path_from_uri
 
 
