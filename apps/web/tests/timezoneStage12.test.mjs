@@ -8,6 +8,7 @@ const helper = fs.readFileSync(resolve(__dirname, "../lib/timezone.js"), "utf8")
 const recordsPage = fs.readFileSync(resolve(__dirname, "../app/recordings/page.js"), "utf8");
 const chronologyPage = fs.readFileSync(resolve(__dirname, "../app/chronology/page.js"), "utf8");
 const settingsPage = fs.readFileSync(resolve(__dirname, "../app/settings/page.js"), "utf8");
+const settingsHelpers = fs.readFileSync(resolve(__dirname, "../lib/settingsPageHelpers.js"), "utf8");
 
 assert.equal(helper.includes("formatProductDateTime"), true);
 assert.equal(helper.includes("timeZone: normalizeProductTimezone(timezone)"), true);
@@ -23,7 +24,7 @@ assert.equal(chronologyPage.includes("formatProductTimestampParam"), true);
 assert.equal(chronologyPage.includes("productLocalInputToApi(formatLocalNaiveTs(dt))"), true);
 assert.equal(chronologyPage.includes("formatProductTimestampParam(new Date(fromMs))"), true);
 
-assert.equal(settingsPage.includes("return timezone || \"UTC\";"), true);
+assert.equal(settingsHelpers.includes("return timezone || \"UTC\";"), true);
 assert.equal(settingsPage.includes("<option value={draft.timezone}>{draft.timezone}</option>"), true);
 
 const berlinFormatter = new Intl.DateTimeFormat("en-GB", {

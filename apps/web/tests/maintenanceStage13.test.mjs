@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const settingsPage = fs.readFileSync(resolve(__dirname, "../app/settings/page.js"), "utf8");
+const settingsHelpers = fs.readFileSync(resolve(__dirname, "../lib/settingsPageHelpers.js"), "utf8");
 
 function read(relative) {
   return fs.readFileSync(resolve(__dirname, "..", relative), "utf8");
@@ -37,10 +38,11 @@ assert.equal(settingsPage.includes('apiFetch("/system/maintenance/overview")'), 
 assert.equal(settingsPage.includes('apiFetch("/system/upgrade/report")'), true);
 assert.equal(settingsPage.includes('apiFetchBlob("/system/upgrade/report")'), true);
 assert.equal(settingsPage.includes("MAINTENANCE_DRY_RUN_ENDPOINTS"), true);
-assert.equal(settingsPage.includes("/system/db-adoption/dry-run"), true);
-assert.equal(settingsPage.includes("/system/migrations/dry-run"), true);
-assert.equal(settingsPage.includes("/system/restore/dry-run"), true);
-assert.equal(settingsPage.includes("/system/update/dry-run"), true);
+assert.equal(settingsHelpers.includes("MAINTENANCE_DRY_RUN_ENDPOINTS"), true);
+assert.equal(settingsHelpers.includes("/system/db-adoption/dry-run"), true);
+assert.equal(settingsHelpers.includes("/system/migrations/dry-run"), true);
+assert.equal(settingsHelpers.includes("/system/restore/dry-run"), true);
+assert.equal(settingsHelpers.includes("/system/update/dry-run"), true);
 assert.equal(settingsPage.includes("applyRetentionPlan"), true);
 assert.equal(settingsPage.includes("applyReconciliationSafe"), true);
 assert.equal(settingsPage.includes("/system/update/apply"), false);
@@ -84,7 +86,7 @@ for (const expected of [
   assert.equal(settingsPage.includes(expected), true, `${expected} missing`);
 }
 
-const maintenanceDetailRows = extractBlockAfter("function maintenanceDetailRows");
+const maintenanceDetailRows = settingsHelpers.slice(settingsHelpers.indexOf("function maintenanceDetailRows"));
 for (const label of ["Pending", "Artifacts", "Current", "Target", "Available", "Backup", "Confirm", "Apply"]) {
   assert.equal(maintenanceDetailRows.includes(`"${label}"`), false);
   assert.equal(maintenanceDetailRows.includes(`'${label}'`), false);

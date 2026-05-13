@@ -8,57 +8,45 @@ import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { apiFetch, apiFetchBlob, clearAuthToken, forbiddenMessage } from "../../lib/api";
 import { LanguageSelect, normalizeLocale, persistLocale, translateText } from "../../lib/i18n";
 
-const UTC_TIMEZONES = Array.from({ length: 27 }, (_, index) => {
-  const offset = index - 12;
-  const sign = offset >= 0 ? "+" : "-";
-  const label = offset === 0 ? "UTC+00:00" : `UTC${sign}${String(Math.abs(offset)).padStart(2, "0")}:00`;
-  const value = offset === 0 ? "UTC" : `Etc/GMT${offset > 0 ? "-" : "+"}${Math.abs(offset)}`;
-  return { offset, label, value };
-});
+import {
+  AUDIT_CATEGORIES,
+  AUDIT_LIMIT,
+  AUDIT_SEVERITIES,
+  HARDWARE_OPTIONS,
+  MAINTENANCE_DRY_RUN_ENDPOINTS,
+  UTC_TIMEZONES,
+  auditLabel,
+  auditMessage,
+  auditTarget,
+  backendLabel,
+  configureSettingsPageHelpers,
+  formatAuditTimestamp,
+  formatBytes,
+  hardwareOptionState,
+  humanErrorText,
+  languageOf,
+  maintenanceDetailRows,
+  maintenanceFlowRows,
+  maintenanceStatusClass,
+  maintenanceStatusText,
+  passwordConfirmMessage,
+  passwordHint,
+  passwordLengthMessage,
+  parseErrorDetail,
+  payloadFromDraft,
+  recordingFormatForProfile,
+  roleLabel,
+  roleOptionsFor,
+  safeMetadataRows,
+  samePayload,
+  settingsDraftFromApi,
+  sortedUsersForTable,
+  timezoneValueForSettings,
+  userCanBeDeleted,
+  userCanBeManaged,
+} from "../../lib/settingsPageHelpers";
 
-const HARDWARE_OPTIONS = ["auto", "qsv", "amf", "nvenc", "cpu", "vaapi"];
-const AUDIT_CATEGORIES = ["auth", "users", "settings", "cameras", "live", "records", "chronology", "security", "diagnostics", "system", "recorder", "storage", "retention", "reconciliation"];
-const AUDIT_SEVERITIES = ["info", "warning", "error", "security"];
-const AUDIT_LIMIT = 50;
-const AUDIT_LABELS = {
-  category: {
-    auth: { ru: "Авторизация", en: "Auth", "zh-CN": "授权" },
-    users: { ru: "Пользователи", en: "Users", "zh-CN": "用户" },
-    settings: { ru: "Настройки", en: "Settings", "zh-CN": "设置" },
-    cameras: { ru: "Камеры", en: "Cameras", "zh-CN": "摄像机" },
-    live: { ru: "Live", en: "Live", "zh-CN": "实时" },
-    records: { ru: "Записи", en: "Records", "zh-CN": "录像" },
-    chronology: { ru: "Хронология", en: "Chronology", "zh-CN": "时间轴" },
-    security: { ru: "Безопасность", en: "Security", "zh-CN": "安全" },
-    diagnostics: { ru: "Диагностика", en: "Diagnostics", "zh-CN": "诊断" },
-    system: { ru: "Система", en: "System", "zh-CN": "系统" },
-    recorder: { ru: "Recorder", en: "Recorder", "zh-CN": "录像服务" },
-    storage: { ru: "Хранилище", en: "Storage", "zh-CN": "存储" },
-    retention: { ru: "Retention", en: "Retention", "zh-CN": "保留" },
-    reconciliation: { ru: "Reconciliation", en: "Reconciliation", "zh-CN": "一致性检查" },
-  },
-  severity: {
-    info: { ru: "Инфо", en: "Info", "zh-CN": "信息" },
-    warning: { ru: "Предупреждение", en: "Warning", "zh-CN": "告警" },
-    error: { ru: "Ошибка", en: "Error", "zh-CN": "错误" },
-    security: { ru: "Security", en: "Security", "zh-CN": "安全" },
-  },
-};
-const BACKEND_LABELS = {
-  auto: { ru: "Автоматический режим", en: "Automatic mode", "zh-CN": "自动模式" },
-  qsv: { ru: "Intel Quick Sync / QSV", en: "Intel Quick Sync / QSV", "zh-CN": "Intel Quick Sync / QSV" },
-  vaapi: { ru: "VAAPI", en: "VAAPI", "zh-CN": "VAAPI" },
-  amf: { ru: "AMD AMF", en: "AMD AMF", "zh-CN": "AMD AMF" },
-  nvenc: { ru: "NVIDIA NVENC/NVDEC", en: "NVIDIA NVENC/NVDEC", "zh-CN": "NVIDIA NVENC/NVDEC" },
-  cpu: { ru: "Резервный режим CPU", en: "CPU fallback", "zh-CN": "CPU 后备模式" },
-};
-
-function localizedValue(value, lang) {
-  if (!value || typeof value !== "object") return value;
-  if (value[lang]) return value[lang];
-  if (lang === "zh-CN") return translateText("zh-CN", value.ru || value.en || "");
-  return value.ru || value.en || "";
-}
+configureSettingsPageHelpers({ normalizeLocale, translateText });
 
 function settingsTextFor(lang) {
   if (TEXT[lang]) return TEXT[lang];
@@ -619,214 +607,6 @@ const ZH_TEXT_OVERRIDES = {
   },
 };
 
-function languageOf(settings) {
-  return normalizeLocale(settings?.language);
-}
-
-function backendLabel(value, lang) {
-  const key = value || "auto";
-  return localizedValue(BACKEND_LABELS[key], lang) || key;
-}
-
-function roleLabel(role, t) {
-  if (!role) return "-";
-  if (role === "owner") return t.roleOwner;
-  if (role === "admin") return t.roleAdmin;
-  if (role === "operator") return t.roleOperator;
-  return t.roleViewer;
-}
-
-function passwordLengthMessage(lang) {
-  return lang === "en"
-    ? "Password must be at least 8 characters."
-    : "Пароль должен быть не менее 8 символов.";
-}
-
-function passwordConfirmMessage(lang) {
-  return lang === "en"
-    ? "Passwords do not match."
-    : "Пароли не совпадают.";
-}
-
-function passwordHint(lang) {
-  return lang === "en"
-    ? "At least 8 characters. Enter the password twice to avoid mistakes."
-    : "Не менее 8 символов. Введите пароль дважды, чтобы исключить ошибку.";
-}
-
-function sortedUsersForTable(users) {
-  const rolePriority = { owner: 0, admin: 1, operator: 2, viewer: 3 };
-  return [...users].sort((left, right) => {
-    const roleCompare = (rolePriority[left.role] ?? 99) - (rolePriority[right.role] ?? 99);
-    if (roleCompare !== 0) return roleCompare;
-    const leftName = String(left.display_name || left.username || "");
-    const rightName = String(right.display_name || right.username || "");
-    return leftName.localeCompare(rightName, "ru", { sensitivity: "base", numeric: true });
-  });
-}
-
-function settingsDraftFromApi(data) {
-  return {
-    system_name: data?.system_name || "KM VMS",
-    timezone: data?.timezone || "UTC",
-    language: normalizeLocale(data?.language),
-    storage_path: data?.storage_path || "",
-    archive_primary_path: data?.archive_primary_path || data?.storage_host_path || data?.storage_root || data?.storage_path || "",
-    archive_host_path: data?.archive_host_path || data?.storage_host_path || "",
-    storage_host_path: data?.storage_host_path || "",
-    storage_root: data?.storage_root || data?.container_runtime_storage_root || "",
-    storage_recordings_path: data?.storage_recordings_path || data?.container_recordings_namespace_root || "",
-    storage_namespace: data?.storage_namespace || "",
-    storage_change_requires: data?.storage_change_requires || "",
-    auto_free_space_cleanup_enabled: Boolean(data?.auto_free_space_cleanup_enabled),
-    auto_free_space_warning_threshold_percent: data?.auto_free_space_warning_threshold_percent ?? 10,
-    auto_free_space_cleanup_threshold_percent: data?.auto_free_space_cleanup_threshold_percent ?? 5,
-    auto_free_space_critical_threshold_percent: data?.auto_free_space_critical_threshold_percent ?? 1,
-    recording_suspended_by_low_disk: Boolean(data?.recording_suspended_by_low_disk),
-    recordingProfile: profileFromFormat(data?.recording_format),
-    hardware_preferred_backend: data?.hardware_preferred_backend || null,
-  };
-}
-
-function payloadFromDraft(draft) {
-  return {
-    system_name: draft.system_name?.trim() || null,
-    timezone: timezoneValueForSettings(draft.timezone),
-    language: draft.language,
-    recording_format: recordingFormatForProfile(draft.recordingProfile),
-    hardware_preferred_backend: draft.hardware_preferred_backend || null,
-    auto_free_space_cleanup_enabled: Boolean(draft.auto_free_space_cleanup_enabled),
-  };
-}
-
-function samePayload(left, right) {
-  if (!left || !right) return true;
-  return JSON.stringify(payloadFromDraft(left)) === JSON.stringify(payloadFromDraft(right));
-}
-
-function formatBytes(value) {
-  const bytes = Number(value);
-  if (!Number.isFinite(bytes) || bytes < 0) return "-";
-  if (bytes < 1024 ** 4) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-  return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
-}
-
-function formatAuditTimestamp(value, lang) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  return new Intl.DateTimeFormat(lang === "en" ? "en-US" : "ru-RU", {
-    year: "2-digit",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(date);
-}
-
-const MAINTENANCE_DRY_RUN_ENDPOINTS = {
-  db_adoption: { path: "/system/db-adoption/dry-run", body: {} },
-  migration: { path: "/system/migrations/dry-run", body: {} },
-  restore: { path: "/system/restore/dry-run", body: {} },
-  update: { path: "/system/update/dry-run", body: {} },
-};
-
-function maintenanceFlowRows(overview) {
-  const flows = overview?.flows || {};
-  return ["db_adoption", "migration", "restore", "update"].map((key) => ({ key, ...(flows[key] || {}) }));
-}
-
-function maintenanceStatusText(status, t) {
-  const key = status || "unknown";
-  return t.maintenanceStatuses?.[key] || key;
-}
-
-function maintenanceStatusClass(status) {
-  if (["ok", "current", "available", "adopted", "already_adopted"].includes(status)) return "ok";
-  if (["blocked", "no_artifacts", "not_configured"].includes(status)) return "blocked";
-  if (["adoptable", "limited"].includes(status)) return "warning";
-  return "neutral";
-}
-
-function maintenanceDetailRows(flow, t) {
-  const details = flow?.details || {};
-  const labels = t.maintenanceLabels || {};
-  const rows = [];
-  if (details.pending_count !== null && details.pending_count !== undefined) rows.push([labels.pending, details.pending_count]);
-  if (details.valid_artifact_count !== null && details.valid_artifact_count !== undefined) rows.push([labels.artifacts, `${details.valid_artifact_count}/${details.artifact_count || 0}`]);
-  if (details.current_version !== null && details.current_version !== undefined) rows.push([labels.current, details.current_version]);
-  if (details.target_version !== null && details.target_version !== undefined) rows.push([labels.target, details.target_version]);
-  if (details.available_version) rows.push([labels.available, details.available_version]);
-  rows.push([labels.backup, flow?.backup_required ? t.maintenanceBackupRequired : t.maintenanceBackupNotRequired]);
-  if (flow?.requires_confirmation) rows.push([labels.confirm, t.maintenanceConfirmationRequired]);
-  if (!flow?.can_apply) rows.push([labels.apply, t.maintenanceUnsupported]);
-  return rows.slice(0, 5);
-}
-
-function auditMessage(event, lang) {
-  if (lang === "zh-CN") return translateText("zh-CN", event?.message_ru || event?.message_en || "");
-  return lang === "en"
-    ? event?.message_en || event?.message_ru || ""
-    : event?.message_ru || event?.message_en || "";
-}
-
-function auditLabel(kind, value, lang) {
-  if (!value) return "";
-  return localizedValue(AUDIT_LABELS[kind]?.[value], lang) || value;
-}
-
-function auditTarget(event, t) {
-  const parts = [event?.target_type, event?.target_name || event?.target_id].filter(Boolean);
-  return parts.length ? parts.join(": ") : t.journalTargetEmpty;
-}
-
-function safeMetadataRows(metadata) {
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return [];
-  return Object.entries(metadata).slice(0, 8).map(([key, value]) => {
-    let rendered;
-    if (value && typeof value === "object") {
-      rendered = JSON.stringify(value);
-    } else if (value === null || value === undefined) {
-      rendered = "-";
-    } else {
-      rendered = String(value);
-    }
-    return {
-      key: String(key).slice(0, 48),
-      value: rendered.length > 160 ? `${rendered.slice(0, 157)}...` : rendered,
-    };
-  });
-}
-
-function parseErrorDetail(message) {
-  if (!message) return null;
-  try {
-    return JSON.parse(message);
-  } catch {
-    return null;
-  }
-}
-
-function humanErrorText(message, fallback) {
-  if (!message) return fallback;
-  const detail = parseErrorDetail(message);
-  const value = detail?.detail ?? detail;
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) {
-    return value
-      .map((item) => item?.msg || item?.message || "")
-      .filter(Boolean)
-      .join("; ") || fallback;
-  }
-  if (value && typeof value === "object") {
-    if (typeof value.error === "string") return value.error;
-    if (typeof value.message === "string") return value.message;
-  }
-  if (!message.startsWith("{")) return message;
-  return fallback;
-}
-
 function normalizedError(err, lang, context = "generic") {
   const t = settingsTextFor(lang);
   const message = String(err?.message || "");
@@ -837,7 +617,7 @@ function normalizedError(err, lang, context = "generic") {
   if (lower.includes("not authenticated") || lower.includes("invalid token") || message.includes("401")) {
     return { variant: "error", title: t.toasts.authTitle, text: t.toasts.authText };
   }
-  if (message.includes("403") || lower.includes("forbidden") || message.includes("Ограничены права пользователя")) {
+  if (message.includes("403") || lower.includes("forbidden") || message.includes("РћРіСЂР°РЅРёС‡РµРЅС‹ РїСЂР°РІР° РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ")) {
     return { variant: "error", title: t.toasts.forbiddenTitle, text: forbiddenMessage(lang) };
   }
   if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("server is unavailable")) {
@@ -859,43 +639,6 @@ function normalizedError(err, lang, context = "generic") {
   return { variant: "error", title: t.toasts.networkTitle, text: humanErrorText(message, t.toasts.networkText) };
 }
 
-function recordingFormatForProfile(profile) {
-  return profile === "compatibility" ? "mp4" : "mkv";
-}
-
-function profileFromFormat(format) {
-  return format === "mp4" ? "compatibility" : "reliability";
-}
-
-function offsetFromTimezone(timezone) {
-  try {
-    const value = new Intl.DateTimeFormat("en-US", {
-      timeZone: timezone,
-      timeZoneName: "shortOffset",
-      hour: "2-digit",
-    }).formatToParts(new Date()).find((part) => part.type === "timeZoneName")?.value || "GMT";
-    const match = value.match(/^GMT([+-])(\d{1,2})(?::\d{2})?$/);
-    if (!match) return 0;
-    return (match[1] === "-" ? -1 : 1) * Number(match[2]);
-  } catch {
-    return 0;
-  }
-}
-
-function timezoneValueForSettings(timezone) {
-  if (UTC_TIMEZONES.some((zone) => zone.value === timezone)) return timezone;
-  return timezone || "UTC";
-}
-
-function hardwareOptionState(backend, hardware, t) {
-  if (backend === "auto" || backend === "cpu") return { selectable: true, reason: "" };
-  const status = hardware?.backend_status?.[backend];
-  const available = (hardware?.available_backends || []).includes(backend);
-  if (available) return { selectable: true, reason: "" };
-  if (status?.candidate) return { selectable: false, reason: status.reason || t.failedValidation };
-  return { selectable: false, reason: t.notDetected };
-}
-
 function InfoTip({ text }) {
   if (!text) return null;
   return (
@@ -904,33 +647,6 @@ function InfoTip({ text }) {
       <span className="settingsInfoBubble" role="tooltip">{text}</span>
     </span>
   );
-}
-
-function userCanBeManaged(currentUser, user) {
-  if (!currentUser || !user) return false;
-  if (currentUser.role === "owner") return true;
-  if (currentUser.role !== "admin") return false;
-  return user.role !== "owner" && user.role !== "admin";
-}
-
-function userCanBeDeleted(currentUser, user, users) {
-  if (!currentUser || !user) return false;
-  if (user.role === "owner") return false;
-  if (user.id === currentUser.id) return false;
-  if (!userCanBeManaged(currentUser, user)) return false;
-
-  const activeCriticalUsers = users.filter((item) => (
-    item.id !== user.id &&
-    item.is_active &&
-    (item.role === "owner" || item.role === "admin")
-  ));
-  return activeCriticalUsers.length > 0;
-}
-
-function roleOptionsFor(currentUser) {
-  if (currentUser?.role === "owner") return ["admin", "operator", "viewer"];
-  if (currentUser?.role === "admin") return ["operator", "viewer"];
-  return [];
 }
 
 export default function SettingsPage() {
