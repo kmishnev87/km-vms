@@ -1,0 +1,479 @@
+/* Original shared responsive overrides for dashboard, settings, cameras, records, storage, system status and top navigation. */
+
+@media (max-width: 1200px) {
+  .cameraCardGrid {
+    grid-template-columns: minmax(190px, 1fr) 260px minmax(260px, 1.4fr);
+  }
+
+  .cameraPreviewField {
+    justify-self: center;
+  }
+
+  .cameraMetaGrid {
+    grid-template-columns: repeat(2, minmax(96px, 1fr));
+    gap: 14px 18px;
+  }
+
+}
+
+@media (max-width: 900px) {
+  .operatorStatusDomains {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .settingsAuditFilters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cameraEditorGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .cameraPreviewPanel {
+    position: static;
+  }
+
+  .cameraProfileWorkspace {
+    grid-template-columns: 1fr;
+  }
+
+  .cameraProfileGrid,
+  .cameraProfileCard,
+  .cameraDeviceInfo {
+    grid-template-columns: 1fr;
+  }
+
+  .cameraSettingsGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cameraStreamField.wide,
+  .cameraStreamField.compact,
+  .cameraStreamField.third {
+    grid-column: span 6;
+  }
+
+  .cameraStreamPolicyGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .pageHeader {
+    flex-direction: column;
+  }
+
+  .cameraHeaderActions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .settingsPage {
+    min-height: calc(100vh - 70px);
+    padding: 10px 8px 18px;
+    background: #eef3f8;
+  }
+
+  .settingsPage::after {
+    width: 100%;
+    background: linear-gradient(180deg, rgba(238, 243, 248, 0.86) 0%, rgba(238, 243, 248, 0.52) 62%, rgba(238, 243, 248, 0.16) 100%);
+  }
+
+  .settingsHeader,
+  .settingsWorkspace {
+    max-width: none;
+  }
+
+  .settingsHeaderActions {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    justify-items: end;
+  }
+
+  .settingsDirtyNote {
+    justify-self: start;
+    white-space: normal;
+  }
+
+  .settingsSecuritySummary {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsUserActions {
+    justify-content: flex-start;
+  }
+
+  .settingsModalGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsControlGrid.two,
+  .settingsStorageLayout,
+  .settingsHardwareLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .setupSteps {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .settingsRow {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+
+  .settingsRowControl {
+    grid-column: 2;
+    justify-self: start;
+    width: min(var(--settings-control-width), 100%);
+  }
+
+  .settingsControl,
+  .settingsControlWide,
+  .settingsPathControl {
+    width: 100%;
+    max-width: none;
+  }
+
+  .settingsActions .button,
+  .settingsStorageAction .button {
+    width: 100%;
+    max-width: none;
+  }
+
+  .storageOpsPage {
+    padding: 10px 8px 22px;
+  }
+
+  .storageOpsHeader,
+  .storageOpsOverview,
+  .storageOpsSectionHead,
+  .storageOpsSummaryRow {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .storageOpsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsStat {
+    min-width: min(100%, 150px);
+    flex: 1 1 140px;
+  }
+
+  .settingsHardwareOptions {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: start;
+    max-width: 100%;
+    width: 100%;
+    padding-right: 38px;
+  }
+
+  .settingsBadge,
+  .settingsBadge-amf,
+  .settingsBadge-vaapi {
+    width: 100%;
+  }
+
+  .settingsInfoBubble {
+    left: auto;
+    right: 0;
+    transform: translate(0, 4px);
+  }
+
+  .settingsInfoBubble::after {
+    left: auto;
+    right: 5px;
+    transform: translate(0, -4px) rotate(45deg);
+  }
+
+  .settingsInfoTip:hover .settingsInfoBubble,
+  .settingsInfoTip:focus .settingsInfoBubble {
+    transform: translate(0, 0);
+  }
+
+  .timezoneSelect {
+    min-width: 0;
+  }
+
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .cameraCardGrid {
+    grid-template-columns: minmax(0, 1fr) 260px;
+    grid-template-areas:
+      "identity preview"
+      "meta meta";
+    align-items: end;
+  }
+
+  .cameraNameField {
+    grid-area: identity;
+  }
+
+  .cameraPreviewField {
+    grid-area: preview;
+  }
+
+  .cameraMetaGrid {
+    grid-area: meta;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    padding-top: 12px;
+    border-top: 1px solid #eef2f7;
+  }
+
+  .cameraTestResult {
+    grid-template-columns: 1fr;
+  }
+
+  .cameraTestPreview {
+    max-width: 360px;
+    justify-self: center;
+  }
+
+  .recordingsTable th,
+  .recordingsTable td {
+    padding: 12px 8px;
+    font-size: 14px;
+  }
+
+}
+
+@media (max-width: 640px) {
+  .operatorStatusOverviewHead,
+  .operatorStatusProblem {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .operatorStatusCounter {
+    width: 100%;
+  }
+
+  .operatorStatusDomains {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operatorStatusProblem .operatorWarningAction {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .settingsAuditFilters,
+  .settingsAuditMetadata div {
+    grid-template-columns: 1fr;
+  }
+
+  .cameraSettingsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .cameraStreamField.wide,
+  .cameraStreamField.compact,
+  .cameraStreamField.third {
+    grid-column: 1 / -1;
+  }
+
+  .cameraStreamPolicyGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .cameraSettingsHead {
+    flex-direction: column;
+  }
+
+  .setupPage {
+    align-items: flex-start;
+    padding: 12px;
+  }
+
+  .setupCard {
+    padding: 18px;
+  }
+
+  .setupHeader,
+  .setupActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .setupLang,
+  .setupActions .button {
+    width: 100%;
+  }
+
+  .setupSteps,
+  .settingsGrid,
+  .setupReviewGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .topNav {
+    height: 58px;
+    min-height: 58px;
+    padding: 5px 0;
+  }
+
+  .topNavInner {
+    width: 100%;
+    padding: 0 8px;
+    gap: 6px;
+  }
+
+  .topBrand {
+    min-width: 64px;
+    height: 34px;
+    padding: 0 8px;
+  }
+
+  .topNavItem {
+    height: 46px;
+    width: 48px;
+    min-width: 48px;
+  }
+
+  .topNavButton {
+    margin-left: 0;
+  }
+
+  .topNavIconImage {
+    width: 36px;
+    height: 36px;
+  }
+
+  .mainContent {
+    padding: 8px;
+  }
+
+  .standardPage {
+    padding: 0;
+  }
+
+  .dashboardHeader {
+    min-height: 112px;
+    padding: 18px;
+  }
+
+  .dashboardPage {
+    padding: 8px 0;
+  }
+
+  .dashboardTitle {
+    font-size: 28px;
+  }
+
+  .dashboardGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboardCard {
+    min-height: 206px;
+  }
+
+  .dashboardCardIcon {
+    width: 96px;
+    height: 96px;
+  }
+
+  .dashboardCardIcon img {
+    width: 96px;
+    height: 96px;
+  }
+
+  .card {
+    padding: 16px;
+    border-radius: 18px;
+  }
+
+  .pageTitle {
+    font-size: 26px;
+  }
+
+  .cameraCardGrid {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "identity"
+      "preview"
+      "meta";
+    align-items: start;
+  }
+
+  .cameraPreviewField {
+    justify-self: center;
+    width: min(100%, 280px);
+    height: auto;
+    aspect-ratio: 16 / 9;
+  }
+
+  .cameraMetaGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cameraTileGrid {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  }
+
+  .cameraTileCard {
+    width: 100%;
+  }
+
+  .cameraDiscoveryItem {
+    grid-template-columns: 1fr;
+  }
+
+  .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .button,
+  .button.small,
+  .button.secondary {
+    width: 100%;
+  }
+
+  .recordingsActions .button {
+    width: auto;
+  }
+
+  .recordingsFilterCard,
+  .recordingsTableCard {
+    padding: 12px;
+  }
+
+  .recordingsFilterBar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .recordingsFilterGroup,
+  .recordingsToolbarCompact {
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+  }
+
+  .recordingsFilterSelect,
+  .recordingsFilterDate {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .recordingsToolbarCompact {
+    justify-content: flex-start;
+  }
+
+  .recordingsActionButton {
+    flex: 0 0 auto;
+  }
+
+  .recordingsDangerMenu {
+    margin-left: auto;
+  }
+
+  .recordingsTableWrap {
+    max-height: none;
+  }
+}
+

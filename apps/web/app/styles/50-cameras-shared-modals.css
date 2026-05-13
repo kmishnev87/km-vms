@@ -1,0 +1,1295 @@
+/* Shared modal tail and Cameras management/editor surfaces. */
+
+.modalWide {
+  width: min(1200px, 100%);
+}
+
+.modalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.iconCloseButton {
+  width: 48px;
+  height: 48px;
+  border: 1px solid #d7dee8;
+  background: #f1f5f9;
+  color: #0f172a;
+  border-radius: 14px;
+  cursor: pointer;
+  font-size: 30px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.iconCloseButton:hover {
+  background: #e2e8f0;
+}
+
+.recordingVideo {
+  width: 100%;
+  max-height: 72vh;
+  border-radius: 20px;
+  background: #000;
+  display: block;
+  object-fit: contain;
+}
+
+.recordingVideoFrame {
+  width: 100%;
+  background: #000;
+  border-radius: 20px;
+  overflow: hidden;
+}
+
+.recordingVideoFrame.adaptiveHighRes {
+  max-height: 72vh;
+}
+
+.recordingVideoAdaptiveHighRes {
+  max-height: min(72vh, 680px);
+  object-fit: contain;
+}
+
+.recordingVideoFrame:fullscreen,
+.recordingVideoFrame:fullscreen .recordingVideo,
+.recordingVideo:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  border-radius: 0;
+  object-fit: contain;
+}
+
+/* Камеры — оставляем текущий удачный вид */
+.cameraCards {
+  display: grid;
+  gap: 16px;
+}
+
+.cameraHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.cameraViewToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #e8eef6;
+}
+
+.cameraViewToggle button {
+  height: 32px;
+  min-width: 74px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cameraViewToggle button.active {
+  background: #ffffff;
+  color: #0f172a;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08);
+}
+
+.recordingsEmptyInfo {
+  color: #0369a1;
+  background: #f0f9ff;
+}
+
+.archiveExportForm {
+  display: grid;
+  gap: 12px;
+}
+
+.archiveExportSummary {
+  display: grid;
+  gap: 4px;
+  color: #475569;
+  font-size: 14px;
+}
+
+.archiveExportSummary strong {
+  color: #0f172a;
+}
+
+.archiveExportHelp,
+.archiveExportLimits {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #dbeafe;
+  background: #f8fafc;
+  color: #334155;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.archiveExportLimits strong {
+  color: #0f172a;
+}
+
+.archiveExportField {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.archiveExportStatus {
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.cameraTileGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 260px);
+  gap: 14px;
+  align-items: start;
+}
+
+.cameraTileCard {
+  width: 260px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.02);
+}
+
+.cameraTileCard:hover {
+  border-color: #bfdbfe;
+  box-shadow: 0 12px 24px rgba(15, 23, 42, 0.07);
+}
+
+.cameraTilePreview {
+  position: relative;
+  width: 100%;
+  height: 148px;
+  background: #0f172a;
+  overflow: hidden;
+}
+
+.cameraTilePreview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cameraTilePreviewEmpty {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: repeating-linear-gradient(135deg, #f1f5f9 0 12px, #e2e8f0 12px 24px);
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cameraTileStatus {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  min-height: 22px;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #0f172a;
+  font-size: 10.5px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cameraTileStatus.ok {
+  color: #166534;
+}
+
+.cameraTileStatus.warn {
+  color: #92400e;
+}
+
+.cameraTileStatus.err {
+  color: #991b1b;
+}
+
+.cameraTileBody {
+  padding: 9px 10px 10px;
+}
+
+.cameraTileTitleRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.cameraTileIdentity {
+  min-width: 0;
+}
+
+.cameraTileName {
+  min-width: 0;
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cameraTileEndpoint {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cameraTileActions {
+  display: flex;
+  gap: 5px;
+}
+
+.cameraTileIconButton {
+  width: 27px;
+  min-width: 27px;
+  height: 27px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #0f172a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.cameraTileIconButton:hover {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.cameraTileIconButton.danger {
+  color: #b91c1c;
+}
+
+.cameraTileSystem {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid #edf2f7;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 10px;
+  row-gap: 3px;
+  color: #64748b;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.cameraTileSystem div,
+.cameraTileFoot {
+  min-width: 0;
+}
+
+.cameraTileSystem span {
+  color: #94a3b8;
+}
+
+.cameraTileSystem strong {
+  color: #475569;
+  font-weight: 700;
+}
+
+.cameraTileFoot {
+  margin-top: 7px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  color: #94a3b8;
+  font-size: 10.5px;
+}
+
+.cameraTileFoot > span:first-child {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cameraCard {
+  padding: 18px 22px 20px;
+}
+
+.cameraCardGrid {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.1fr) 260px minmax(0, 4fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.cameraFieldLabel {
+  font-size: 13px;
+  color: #64748b;
+  margin-bottom: 8px;
+  text-align: center;
+}
+
+.cameraField {
+  align-self: stretch;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  text-align: center;
+}
+
+.cameraField > div:not(.cameraFieldLabel) {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+}
+
+.cameraStatusStack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+.cameraNameField {
+  min-width: 0;
+  overflow: hidden;
+  align-self: stretch;
+  display: grid;
+  grid-template-rows: auto auto auto 1fr;
+  align-content: start;
+  justify-items: stretch;
+}
+
+.cameraNameField .cameraFieldLabel {
+  width: 114px;
+  text-align: center;
+  justify-self: center;
+  margin-bottom: 16px;
+}
+
+.cameraPrimary {
+  width: 100%;
+  max-width: 100%;
+  font-size: 18px;
+  line-height: 1.25;
+  text-align: left;
+  display: block;
+  min-height: 0;
+  min-width: 0;
+}
+
+.cameraSecondary {
+  width: 100%;
+  max-width: 100%;
+  margin-top: -2px;
+  font-size: 9px;
+  line-height: 1.05;
+  color: #64748b;
+  text-align: left;
+  display: block;
+  min-height: 0;
+  min-width: 0;
+}
+
+.cameraNameField .cameraPrimary,
+.cameraNameField .cameraSecondary {
+  display: block;
+  min-height: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: ltr;
+}
+
+.cameraField.cameraNameField > .cameraPrimary,
+.cameraField.cameraNameField > .cameraSecondary {
+  display: block;
+  align-items: initial;
+  justify-content: initial;
+  text-align: left;
+}
+
+.cameraPreviewField {
+  width: 260px;
+  max-width: 100%;
+  height: 100%;
+  min-height: 126px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow: hidden;
+  align-self: stretch;
+  justify-self: center;
+}
+
+.cameraMetaGrid {
+  align-self: stretch;
+  display: grid;
+  grid-template-columns: minmax(78px, 0.7fr) minmax(160px, 1.35fr) repeat(4, minmax(78px, 0.7fr));
+  gap: 12px;
+  align-items: stretch;
+}
+
+.cameraPreviewField img,
+.cameraTestPreview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.cameraPreviewPlaceholder {
+  width: 100%;
+  height: 100%;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  color: #94a3b8;
+  font-size: 12px;
+  text-align: center;
+}
+
+.cameraActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  align-self: end;
+  justify-content: center;
+  justify-self: center;
+  width: 114px;
+}
+
+.cameraIconButton {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #0f172a;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+}
+
+.cameraIconButton:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.cameraIconButton.danger:hover:not(:disabled) {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.cameraIconButton:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+.cameraModalError {
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.cameraOnvifOnboarding {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.cameraOnvifActions {
+  justify-content: flex-start;
+}
+
+.cameraDiscoveryList {
+  display: grid;
+  gap: 8px;
+}
+
+.cameraDiscoveryItem {
+  min-width: 0;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cameraDiscoveryItem:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.cameraDiscoveryItem span,
+.cameraDiscoveryItem em {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cameraDiscoveryItem span {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.cameraDiscoveryItem em {
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.cameraUnverifiedConfirm {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.cameraVerifiedNotice {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 700;
+}
+
+.cameraTestResult {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 24px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.cameraTestDetails {
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.cameraTestPath {
+  overflow-wrap: anywhere;
+}
+
+.cameraTestPreview {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #f8fafc;
+  overflow: hidden;
+}
+
+.cameraTestPreviewNote {
+  margin-top: 8px;
+  color: #92400e;
+}
+
+.cameraEditorModal {
+  width: min(1040px, calc(100vw - 28px));
+  max-width: 1040px;
+  max-height: calc(100vh - 28px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 18px 18px 14px;
+  border: 1px solid #dbe4ef;
+  border-radius: 10px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.18);
+}
+
+.cameraEditorModal .modalHeader {
+  margin-bottom: 14px;
+}
+
+.cameraEditorModal .iconCloseButton {
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 8px;
+  font-size: 24px;
+  background: #f8fafc;
+}
+
+.cameraEditorModal .input,
+.cameraEditorModal .select {
+  min-height: 32px;
+  height: 32px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.cameraEditorModal .formLabel {
+  margin-bottom: 5px;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.cameraEditorModal .formGrid {
+  gap: 10px 14px;
+}
+
+.cameraEditorModal .button.small {
+  min-height: 32px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.cameraEditorModal .cameraPreviewActions .button.small {
+  width: 100%;
+  justify-content: center;
+}
+
+.cameraModalTitleBlock {
+  display: grid;
+  gap: 4px;
+}
+
+.cameraModalTitleBlock h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 21px;
+  line-height: 1.15;
+}
+
+.cameraModalTitleBlock p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.cameraEditorGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 2.1fr) minmax(286px, 0.95fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.cameraEditorColumn {
+  display: grid;
+  gap: 10px;
+}
+
+.cameraStreamsGrid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.cameraStreamPolicyGrid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.cameraStreamField {
+  min-width: 0;
+}
+
+.cameraStreamField.wide {
+  grid-column: span 6;
+}
+
+.cameraStreamField.compact {
+  grid-column: span 3;
+}
+
+.cameraStreamField.third {
+  grid-column: span 4;
+}
+
+.cameraStreamField.policy {
+  min-width: 0;
+}
+
+.cameraStreamField.policy .input,
+.cameraStreamField.policy .select {
+  width: 100%;
+  min-height: 42px;
+}
+
+.cameraModalSection,
+.cameraPreviewPanel {
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035);
+}
+
+.cameraModalSection h3,
+.cameraSettingsHead h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.2;
+  color: #0f172a;
+}
+
+.cameraPreviewPanel {
+  position: sticky;
+  top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.cameraPreviewHead h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.cameraPreviewActions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.cameraPreviewEmpty,
+.cameraEmptyState {
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 12px;
+}
+
+.cameraPreviewPanel .cameraTestResult {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin: 0;
+}
+
+.cameraPreviewPanel .cameraTestPreview {
+  order: initial;
+}
+
+.cameraTestStatus {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  border: 1px solid #bbf7d0;
+  border-radius: 7px;
+  background: #f0fdf4;
+  color: #166534;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.cameraPreviewPanel .cameraTestDetails {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 8px 12px;
+  border: 1px solid #edf2f7;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #475569;
+  padding: 10px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.32;
+}
+
+.cameraPreviewPanel .cameraTestDetails > div {
+  display: contents;
+}
+
+.cameraPreviewPanel .cameraTestDetails strong {
+  color: #64748b;
+  font-weight: 650;
+}
+
+.cameraPreviewPanel .cameraTestPath {
+  color: #475569;
+  font-weight: 500;
+}
+
+.cameraModalNote {
+  margin-top: 10px;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.cameraOnvifSection {
+  margin-top: 0;
+}
+
+.cameraDeviceInfo {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px 12px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.cameraDeviceInfo > div {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cameraDeviceInfo strong {
+  color: #334155;
+  font-weight: 700;
+}
+
+.cameraProfileStrip {
+  margin-top: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.cameraProfileWorkspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
+  gap: 12px;
+  align-items: start;
+}
+
+.cameraProfileGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cameraProfileCard {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  min-height: 74px;
+  padding: 10px 12px;
+  background: #ffffff;
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cameraProfileCard:hover,
+.cameraProfileCard.selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.cameraProfileCard.main {
+  box-shadow: inset 3px 0 0 #2563eb;
+}
+
+.cameraProfileCard.sub {
+  box-shadow: inset 3px 0 0 #0f766e;
+}
+
+.cameraProfileChoice {
+  width: 14px;
+  height: 14px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 3px #ffffff;
+}
+
+.cameraProfileCard.selected .cameraProfileChoice {
+  border-color: #2563eb;
+  background: #2563eb;
+}
+
+.cameraProfileBody {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.cameraProfileHead {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.cameraProfileHead span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  line-height: 1.2;
+}
+
+.cameraProfileBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 16px;
+  margin-left: 6px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.cameraProfileBadge.main {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.cameraProfileBadge.sub {
+  color: #0f766e;
+  background: #ccfbf1;
+}
+
+.cameraProfileHead span:last-child {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cameraProfileMeta {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.18;
+}
+
+.cameraProfileMeta > div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cameraProfileWarn {
+  color: #92400e;
+}
+
+.cameraProfileReady {
+  color: #334155;
+}
+
+.cameraProfileReady span {
+  color: #94a3b8;
+  padding: 0 5px;
+}
+
+.cameraProfileActions {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  justify-self: end;
+}
+
+.cameraProfileActions .button {
+  justify-content: center;
+  white-space: nowrap;
+  min-height: 32px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.cameraProfileActions .button.active {
+  border-color: #2563eb;
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.cameraProfileAssignPanel {
+  border: 1px solid #dbe4ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 12px;
+  min-width: 0;
+}
+
+.cameraProfileAssignHead {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 10px;
+}
+
+.cameraProfileAssignHead h3 {
+  margin: 0;
+  font-size: 14px;
+  color: #0f172a;
+}
+
+.cameraProfileAssignHead span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #475569;
+  font-size: 12px;
+}
+
+.cameraProfileAssignActions {
+  display: grid;
+  gap: 7px;
+}
+
+.cameraProfileAssignActions .button {
+  justify-content: center;
+  width: 100%;
+  min-height: 32px;
+}
+
+.cameraProfileAssignedValue {
+  min-height: 30px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.25;
+  padding: 7px 8px;
+  overflow-wrap: anywhere;
+}
+
+.cameraProfileAssignHint {
+  margin-top: 9px;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.cameraProfileToast {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9600;
+  width: auto;
+  max-width: min(340px, calc(100vw - 32px));
+  border: 1px solid #bbf7d0;
+  border-radius: 12px;
+  background: #f0fdf4;
+  color: #14532d;
+  padding: 10px 12px;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: center;
+  display: grid;
+  gap: 2px;
+}
+
+.cameraProfileToast strong {
+  font-size: 13px;
+}
+
+.cameraProfileToast span {
+  color: inherit;
+  font-size: 12px;
+}
+
+.cameraSettingsHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.cameraSettingsHead p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.cameraProfileSettingsSection {
+  margin-top: 12px;
+  padding: 14px 12px 12px;
+}
+
+.cameraEditorModal .actions {
+  margin-top: 14px;
+  gap: 10px;
+}
+
+.cameraEditorModal .actions .button {
+  min-height: 34px;
+  padding: 7px 18px;
+  border-radius: 7px;
+  font-size: 13px;
+}
+
+.cameraSettingsGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+}
+
+.cameraSettingSlot {
+  display: grid;
+  gap: 6px;
+  min-height: 0;
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.cameraSettingSlot.editable {
+  background: transparent;
+}
+
+.cameraSettingSlot.readonly {
+  background: transparent;
+}
+
+.cameraSettingSlot.unavailable {
+  background: transparent;
+  color: #64748b;
+}
+
+.cameraSettingSlotHead {
+  display: grid;
+  gap: 2px;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.cameraSettingSlotHead em {
+  color: #94a3b8;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cameraSettingSlot.unavailable .cameraSettingHint {
+  display: none;
+}
+
+.cameraSettingControl {
+  width: 100%;
+  min-height: 32px;
+  white-space: nowrap;
+}
+
+.cameraSettingValue {
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #334155;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cameraSettingHint {
+  display: none;
+}
+

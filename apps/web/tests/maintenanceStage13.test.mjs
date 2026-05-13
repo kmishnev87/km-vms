@@ -5,7 +5,19 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const settingsPage = fs.readFileSync(resolve(__dirname, "../app/settings/page.js"), "utf8");
-const css = fs.readFileSync(resolve(__dirname, "../app/globals.css"), "utf8");
+
+function read(relative) {
+  return fs.readFileSync(resolve(__dirname, "..", relative), "utf8");
+}
+
+function readEffectiveCss(relative) {
+  const content = read(relative);
+  const imports = [...content.matchAll(/@import\s+"\.\/([^"]+)";/g)];
+  if (!imports.length) return content;
+  return imports.map((match) => read(`app/${match[1]}`)).join("\n");
+}
+
+const css = readEffectiveCss("app/globals.css");
 
 function extractBlockAfter(marker) {
   const start = settingsPage.indexOf(marker);

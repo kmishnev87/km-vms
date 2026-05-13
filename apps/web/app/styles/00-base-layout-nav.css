@@ -1,0 +1,208 @@
+/* Base tokens, reset, app shell, top navigation, shared page width contract. */
+
+:root {
+  --page-working-width: 1400px;
+  --page-outer-padding: 12px;
+  --page-x-padding: 24px;
+  --settings-control-width: 248px;
+  --settings-row-icon: 48px;
+  --settings-row-gap: 14px;
+  --settings-row-padding-y: 12px;
+  --settings-row-padding-x: 14px;
+  --settings-radius: 12px;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #eef3f8;
+  color: #0f172a;
+  font-family: Arial, sans-serif;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.layoutShell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: #eef3f8;
+}
+
+.topNav {
+  width: 100%;
+  min-height: 66px;
+  height: 66px;
+  background: #ffffff;
+  border-bottom: 1px solid #dbe3ef;
+  padding: 6px 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+}
+
+.topNavInner {
+  width: calc(100% - (var(--page-outer-padding) * 2));
+  max-width: var(--page-working-width);
+  height: 100%;
+  margin: 0 auto;
+  padding: 0 var(--page-x-padding);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topBrand {
+  height: 42px;
+  min-width: 86px;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 12px;
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.topNavItems {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.topNavRight {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.topLanguageSelect {
+  width: 64px;
+  height: 38px;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #334155;
+  padding: 0 8px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.topUserChip {
+  max-width: 140px;
+  height: 38px;
+  border: 1px solid #dbe3ef;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #334155;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topNavItem {
+  height: 52px;
+  width: 54px;
+  min-width: 54px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: #334155;
+  font-size: 13px;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.topNavButton {
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.topNavItem:hover {
+  background: transparent;
+  border-color: #dbeafe;
+}
+
+.topNavItem.active {
+  border-color: transparent;
+  background: transparent;
+  color: #1d4ed8;
+  box-shadow: inset 0 -3px 0 rgba(37, 99, 235, 0.28);
+}
+
+.systemHealthNavItem.attention {
+  border-color: #fecaca;
+  background: #fff7f7;
+  animation: systemHealthPulse 2.8s ease-in-out infinite;
+}
+
+@keyframes systemHealthPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(220, 38, 38, 0);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.12);
+  }
+}
+
+.topNavIconImage {
+  width: 42px;
+  height: 42px;
+  display: block;
+  object-fit: contain;
+}
+
+.topNavGlyph {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.mainContent {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  padding: 10px var(--page-outer-padding) 16px;
+}
+
+.standardPage {
+  width: 100%;
+  max-width: var(--page-working-width);
+  margin: 0 auto;
+  padding: 0 var(--page-x-padding);
+}
+

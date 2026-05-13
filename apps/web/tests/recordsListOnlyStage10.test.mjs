@@ -5,8 +5,20 @@ import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const recordsPage = fs.readFileSync(resolve(__dirname, "../app/recordings/page.js"), "utf8");
-const globalsCss = fs.readFileSync(resolve(__dirname, "../app/globals.css"), "utf8");
 const camerasPage = fs.readFileSync(resolve(__dirname, "../app/cameras/page.js"), "utf8");
+
+function read(relative) {
+  return fs.readFileSync(resolve(__dirname, "..", relative), "utf8");
+}
+
+function readEffectiveCss(relative) {
+  const content = read(relative);
+  const imports = [...content.matchAll(/@import\s+"\.\/([^"]+)";/g)];
+  if (!imports.length) return content;
+  return imports.map((match) => read(`app/${match[1]}`)).join("\n");
+}
+
+const globalsCss = readEffectiveCss("app/globals.css");
 
 assert.equal(recordsPage.includes("recordingsTableWrap"), true);
 assert.equal(recordsPage.includes("recordingsTable"), true);

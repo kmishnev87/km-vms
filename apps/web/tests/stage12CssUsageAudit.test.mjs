@@ -7,7 +7,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
 const read = (relative) => fs.readFileSync(resolve(root, relative), "utf8");
 
-const css = read("app/globals.css");
+function readEffectiveCss(relative) {
+  const content = read(relative);
+  const importMatches = [...content.matchAll(/@import\s+"\.\/([^"]+)";/g)];
+
+  if (!importMatches.length) return content;
+
+  return importMatches.map((match) => read(`app/${match[1]}`)).join("\n");
+}
+
+const css = readEffectiveCss("app/globals.css");
 const dashboardPage = read("app/page.js");
 const camerasPage = read("app/cameras/page.js");
 const recordsPage = read("app/recordings/page.js");
@@ -51,4 +60,4 @@ for (const removedSelector of [
   assert.equal(css.includes(removedSelector), false, `${removedSelector} should stay removed as UNUSED_STATIC_PROVEN`);
 }
 
-assert.equal(css.includes("@import"), false, "Stage 12 must not split/modularize CSS");
+assert.equal(read("app/globals.css").includes("@import"), true, "Stage 13 keeps globals.css as the ownership import entrypoint");

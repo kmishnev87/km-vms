@@ -1,0 +1,880 @@
+/* Chronology top controls, archive video, timeline and fullscreen viewer surfaces. */
+
+.chronologyTopCard {
+  padding: 10px 12px;
+}
+
+.chronologyTopCardCompact {
+  padding: 8px 10px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.22) 0%, rgba(15, 23, 42, 0.08) 100%);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 28px rgba(2, 6, 23, 0.14);
+}
+
+.chronologyControlsRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chronologyDateInput {
+  width: 170px;
+}
+
+.chronologyTimeInput {
+  width: 150px;
+}
+
+.chronologyApplyButton {
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.chronologyApplyButtonCompact {
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.chronologyGridSelect {
+  width: 110px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.chronologyGridSelectCompact,
+.chronologyInputCompact {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.chronologyTopCardCompact .chronologyApplyButtonCompact,
+.chronologyTopCardCompact .chronologyGridSelectCompact,
+.chronologyTopCardCompact .chronologyInputCompact,
+.chronologyTopCardCompact .chronologyIconButtonCompact,
+.chronologyTopCardCompact .chronologySpeedButtonCompact,
+.chronologyTopCardCompact .chronologyCurrentTimeBoxCompact {
+  border-color: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 6px 18px rgba(2, 6, 23, 0.18);
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.14);
+}
+
+.chronologyTopCardCompact .chronologyInputCompact,
+.chronologyTopCardCompact .chronologyGridSelectCompact,
+.chronologyTopCardCompact .chronologyCurrentTimeBoxCompact {
+  background: rgba(248, 250, 252, 0.88);
+  color: #0f172a;
+}
+
+.chronologyTopCardCompact .chronologyApplyButtonCompact {
+  background: rgba(15, 23, 42, 0.84);
+  color: #f8fafc;
+}
+
+.chronologyTopCardCompact .chronologyIconButtonCompact,
+.chronologyTopCardCompact .chronologySpeedButtonCompact {
+  background: rgba(248, 250, 252, 0.84);
+  color: #0f172a;
+}
+
+.chronologyTopCardCompact .chronologySpeedButtonCompact.active {
+  background: rgba(15, 23, 42, 0.9);
+  color: #f8fafc;
+  border-color: rgba(255, 255, 255, 0.22);
+}
+
+.chronologySpeedGroup {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chronologySpeedButton {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid #d7dee8;
+  border-radius: 10px;
+  background: #f1f5f9;
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.chronologySpeedButton.active {
+  background: #0f172a;
+  color: #fff;
+  border-color: #0f172a;
+}
+
+.chronologyWorkspaceCard {
+  padding: 10px;
+}
+
+.chronologyWorkspaceCardFullscreen {
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border-radius: 20px;
+  background: transparent;
+  box-shadow: none;
+}
+
+.chronologyGrid {
+  display: grid;
+  gap: 16px;
+}
+
+.chronologyGrid2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.chronologyGrid4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.chronologyTile {
+  border-radius: 22px;
+  overflow: hidden;
+  background: #020b3a;
+  border: 1px solid #16204f;
+}
+
+.chronologyTileFullscreen {
+  min-height: 0;
+  height: 100%;
+}
+
+.chronologyTileBar {
+  display: flex;
+  gap: 10px;
+  padding: 10px;
+  background: #11193f;
+}
+
+.chronologyTileBarCompact {
+  padding: 8px;
+}
+
+.chronologyCameraSelect {
+  flex: 1 1 auto;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
+.chronologyCameraSelectCompact {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.chronologyTileBody {
+  min-height: 320px;
+  background: #020b3a;
+}
+
+.chronologyTileBodyFullscreen {
+  height: 100%;
+  min-height: 0;
+}
+
+.chronologyPlaceholder {
+  min-height: 320px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #cbd5e1;
+  background: #020b3a;
+  font-size: 22px;
+}
+
+.archiveVideoWrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 320px;
+  background: #000;
+  cursor: pointer;
+}
+
+.archiveVideo {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #000;
+}
+
+.archiveCenterHint {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  text-align: center;
+  color: #cbd5e1;
+  background: rgba(2, 6, 23, 0.35);
+}
+
+.archiveCenterHintError {
+  color: #fecaca;
+}
+
+@media (max-width: 900px) {
+  .chronologyGrid2,
+  .chronologyGrid4 {
+    grid-template-columns: 1fr;
+  }
+
+  .chronologyTileBody,
+  .chronologyPlaceholder,
+  .archiveVideoWrap {
+    min-height: 240px;
+  }
+}
+
+.chronologyIconButton {
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid #d7dee8;
+  border-radius: 12px;
+  background: #f1f5f9;
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.chronologyIconButtonCompact {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.chronologyIconButton:hover {
+  background: #e2e8f0;
+}
+
+.chronologyControlsRowSpread {
+  justify-content: space-between;
+}
+
+.chronologyControlsLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.chronologyCurrentTimeBox {
+  min-height: 40px;
+  padding: 8px 14px;
+  border: 1px solid #d7dee8;
+  border-radius: 12px;
+  background: #f8fbff;
+  color: #0f172a;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.chronologyCurrentTimeBoxCompact {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+@media (max-width: 1200px) {
+  .chronologyControlsRowSpread {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .chronologyCurrentTimeBox {
+    width: 100%;
+    justify-content: flex-start;
+  }
+}
+
+.chronologyTileBody {
+  aspect-ratio: 16 / 9;
+  min-height: 0;
+  background: #020b3a;
+}
+
+.archiveVideoWrap {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  background: #000;
+  cursor: pointer;
+}
+
+.archiveVideo {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #000;
+}
+
+.chronologyPlaceholder {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: #cbd5e1;
+  background: #020b3a;
+  font-size: 22px;
+}
+
+.archiveVideo {
+  object-fit: contain;
+  background: #000;
+}
+
+.archiveVideoWrap.adaptiveHighRes .archiveVideo,
+.archiveVideoAdaptiveHighRes {
+  object-fit: contain;
+}
+
+.archiveVideoWrap:fullscreen,
+.archiveVideoWrap:fullscreen .archiveVideo {
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  object-fit: contain;
+}
+
+.chronologyTimelineCard {
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 12px 12px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
+  margin-bottom: 14px;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.chronologyTimelineCard.compact {
+  margin-bottom: 6px;
+  padding: 7px 8px 8px;
+  border-radius: 10px;
+  background: #ffffff;
+  border: 1px solid #dbe3ef;
+  box-shadow: none;
+}
+
+.chronologyTimelineCard.previewing {
+  border-color: rgba(37, 99, 235, 0.46);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+}
+
+.chronologyTimelineHeader {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 28px;
+  margin-bottom: 6px;
+  position: relative;
+}
+
+.chronologyTimelineZoomControls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chronologyTimelineZoomLabel {
+  min-width: 44px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.chronologyTimelineZoomButton {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  border: 1px solid #d7dee8;
+  border-radius: 9px;
+  background: #f1f5f9;
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.chronologyTimelineZoomButton:hover {
+  background: #e2e8f0;
+}
+
+.chronologyTimelineBody {
+  position: relative;
+  min-height: 104px;
+  border: 1px solid #d7dee8;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fbfdff 0%, #f4f8fc 100%);
+  overflow: hidden;
+  cursor: ew-resize;
+  user-select: none;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.chronologyTimelineBody.isDragging {
+  cursor: grabbing;
+  border-color: rgba(37, 99, 235, 0.62);
+}
+
+.chronologyTimelineFrame {
+  position: relative;
+}
+
+.chronologyTimelineTimeLayer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 188px;
+  right: 10px;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.chronologyTimelineHeaderCenter {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 188px;
+  right: 10px;
+  pointer-events: none;
+}
+
+.chronologyTimelineAxis {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 38px;
+  border-bottom: 1px solid rgba(203, 213, 225, 0.7);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(248, 250, 252, 0.92));
+  z-index: 1;
+}
+
+.chronologyTimelineAxisMark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transform: translateX(-0.5px);
+}
+
+.chronologyTimelineAxisLine {
+  position: absolute;
+  top: 20px;
+  bottom: 0;
+  width: 1px;
+  background: rgba(148, 163, 184, 0.34);
+}
+
+.chronologyTimelineAxisMark.major .chronologyTimelineAxisLine {
+  top: 14px;
+  width: 1px;
+  background: rgba(100, 116, 139, 0.52);
+}
+
+.chronologyTimelineAxisLabel {
+  position: absolute;
+  top: 2px;
+  left: 0;
+  transform: translateX(-50%);
+  color: #64748b;
+  font-size: 10px;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.chronologyTimelineAxisLabel.multiline {
+  display: grid;
+  gap: 1px;
+  justify-items: center;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+
+.chronologyTimelineAxisLabel.multiline span:first-child {
+  font-weight: 700;
+}
+
+.archiveCenterHintInteractive {
+  pointer-events: auto;
+  padding: 14px;
+  line-height: 1.45;
+}
+
+.archiveDownloadLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  margin-top: 10px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.chronologyTimelineCenterLine {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  margin-left: -1px;
+  background: #2563eb;
+  z-index: 14;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.72);
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.chronologyTimelineCenterLabel {
+  position: absolute;
+  top: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 15;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid rgba(37, 99, 235, 0.26);
+  border-radius: 8px;
+  background: rgba(239, 246, 255, 0.96);
+  color: #1d4ed8;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
+}
+
+.chronologyTimelineCenterLabel.preview {
+  border-color: rgba(14, 165, 233, 0.4);
+  background: rgba(240, 249, 255, 0.96);
+  color: #0369a1;
+}
+
+.chronologyTimelineStateText {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.chronologyTimelineTracks {
+  position: relative;
+  z-index: 2;
+  padding: 42px 10px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.chronologyTimelineTrackRow {
+  position: relative;
+  min-height: 18px;
+  padding-left: 178px;
+}
+
+.chronologyTimelineTrackLabel {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 168px;
+  transform: translateY(-50%);
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chronologyTimelineTrackLane {
+  position: relative;
+  height: 16px;
+  border: 1px solid rgba(203, 213, 225, 0.86);
+  border-radius: 8px;
+  background: rgba(241, 245, 249, 0.9);
+  overflow: hidden;
+}
+
+.chronologyTimelineRange {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, #1d4ed8, #0f766e);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.chronologyTimelineTrackEmpty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 8px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.chronologyTimelineCommittedMarker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transform: translateX(-50%);
+  z-index: 12;
+}
+
+.chronologyTimelineCommittedLine {
+  width: 1px;
+  height: 100%;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.chronologyTimelineCommittedLabel {
+  position: absolute;
+  top: 27px;
+  left: 0;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 1px;
+  max-width: 138px;
+  padding: 3px 6px;
+  border: 1px solid rgba(100, 116, 139, 0.26);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #334155;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+}
+
+.chronologyTimelineCommittedLabel span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chronologyTimelineEmpty {
+  min-height: 112px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 14px;
+  padding: 44px 20px 16px;
+  text-align: center;
+}
+
+.chronologyTimelineStatus {
+  position: absolute;
+  left: max(10px, min(188px, 28%));
+  right: 10px;
+  bottom: 8px;
+  z-index: 10;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 800;
+  pointer-events: none;
+}
+
+.chronologyTimelineStatus.error {
+  border-color: rgba(248, 113, 113, 0.36);
+  color: #991b1b;
+  background: rgba(254, 242, 242, 0.9);
+}
+
+.chronologyIconButton {
+  min-width: 40px;
+  height: 40px;
+  padding: 0 10px;
+  border: 1px solid #d7dee8;
+  border-radius: 12px;
+  background: #f1f5f9;
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.chronologyIconButton:hover {
+  background: #e2e8f0;
+}
+
+.chronologySpeedGroup {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 6px;
+}
+
+.chronologySpeedButton {
+  width: 58px;
+  min-width: 58px;
+  height: 36px;
+  padding: 0 6px;
+  border: 1px solid #d7dee8;
+  border-radius: 10px;
+  background: #f1f5f9;
+  color: #0f172a;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.chronologySpeedButton.active {
+  background: #0f172a;
+  color: #fff;
+  border-color: #0f172a;
+}
+
+.chronologySpeedButtonCompact {
+  width: 50px;
+  min-width: 50px;
+  height: 32px;
+  font-size: 12px;
+}
+
+.chronologyViewOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  overflow: hidden;
+  background: #020617;
+}
+
+.chronologyViewChrome {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 20;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(2, 6, 23, 0.42) 0%, rgba(2, 6, 23, 0.18) 26%, rgba(2, 6, 23, 0) 100%);
+  border-radius: 24px;
+}
+
+.chronologyViewControlStack {
+  width: min(100%, 100%);
+  max-width: 100%;
+  display: grid;
+  gap: 8px;
+  pointer-events: auto;
+  padding: 6px;
+}
+
+.chronologyViewToolbarActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chronologyViewWorkspace {
+  position: absolute;
+  inset: 0;
+  padding: 10px;
+  display: flex;
+}
+
+.chronologyGridFullscreen {
+  height: 100%;
+  min-height: 0;
+}
+
+.chronologyGridFullscreen.chronologyGrid2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.chronologyGridFullscreen.chronologyGrid4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.chronologyGridFullscreen2 {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.chronologyGridFocused {
+  grid-template-columns: minmax(0, 1fr) !important;
+  grid-template-rows: minmax(0, 1fr) !important;
+}
+
+.chronologyTileFocused {
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+}
+
+.chronologyTileInteractive {
+  cursor: zoom-in;
+}
+
+.chronologyGridFocused .chronologyTileInteractive {
+  cursor: zoom-out;
+}
+
+.chronologyViewHandle {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 24;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.62);
+  color: #f8fafc;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 10px 24px rgba(2, 6, 23, 0.2);
+  text-shadow: 0 1px 2px rgba(2, 6, 23, 0.55);
+}
+
+.chronologyViewHandle:hover {
+  background: rgba(15, 23, 42, 0.76);
+}
+

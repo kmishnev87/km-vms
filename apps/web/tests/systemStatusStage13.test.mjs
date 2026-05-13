@@ -10,6 +10,13 @@ function read(path) {
   return fs.readFileSync(resolve(root, path), "utf8");
 }
 
+function readEffectiveCss(path) {
+  const content = read(path);
+  const imports = [...content.matchAll(/@import\s+"\.\/([^"]+)";/g)];
+  if (!imports.length) return content;
+  return imports.map((match) => read(`app/${match[1]}`)).join("\n");
+}
+
 function exists(path) {
   return fs.existsSync(resolve(root, path));
 }
@@ -22,7 +29,7 @@ const apk = read("app/apk/page.js");
 const api = read("lib/api.js");
 const routePermissions = read("lib/routePermissions.js");
 const i18n = read("lib/i18n.js");
-const css = read("app/globals.css");
+const css = readEffectiveCss("app/globals.css");
 
 for (const asset of [
   "public/assets/icons/dashboard/system-status-base.png",
