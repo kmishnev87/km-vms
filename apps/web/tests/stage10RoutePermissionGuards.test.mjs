@@ -88,6 +88,8 @@ assert.equal(routePermissions.canUserAccessRoute(owner, "/apk"), true);
 assert.equal(routePermissions.canUserAccessRoute(owner, "/unknown-stage-10-route"), false);
 assert.equal(routePermissions.canUserAccessRoute(owner, "/timeline"), false);
 assert.equal(routePermissions.canUserAccessRoute(owner, "/chronology2"), false);
+assert.equal(routePermissions.canUserAccessRoute(viewer, "/timeline"), false);
+assert.equal(routePermissions.canUserAccessRoute(viewer, "/chronology2"), false);
 
 for (const forbidden of [
   "/apk/",

@@ -35,14 +35,6 @@ export const FRONTEND_ROUTE_ACCESS = Object.freeze({
     permission: "view_timeline",
     backend: Object.freeze(["/chronology/ranges", "/chronology/media-token", "/chronology/file"]),
   }),
-  "/timeline": Object.freeze({
-    access: ROUTE_ACCESS_DENIED,
-    reason: "legacy route shell is not linked; access remains default-denied until revalidated",
-  }),
-  "/chronology2": Object.freeze({
-    access: ROUTE_ACCESS_DENIED,
-    reason: "legacy route shell is not linked; access remains default-denied until revalidated",
-  }),
   "/cameras": Object.freeze({
     access: ROUTE_ACCESS_PERMISSION,
     permission: "manage_cameras",
