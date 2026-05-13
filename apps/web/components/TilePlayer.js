@@ -29,8 +29,7 @@ function extractErrorMessage(err, fallback) {
     const detail = parsed?.detail;
     if (typeof detail === "string") return detail;
     if (detail?.message) return detail.message;
-    if (detail?.debug?.failure_reason) return detail.debug.failure_reason;
-    if (detail?.debug?.last_error) return detail.debug.last_error;
+    if (detail?.code) return detail.code;
   } catch (_) {}
 
   return raw || fallback;
@@ -156,12 +155,12 @@ export default function TilePlayer({ cameraId, stream }) {
           if (
             item?.status === "failed" ||
             item?.failure_reason ||
-            (item?.exit_code !== null && item?.exit_code !== undefined)
+            item?.safe_failure_reason
           ) {
             return {
               ready: false,
               failed: true,
-              message: item?.failure_reason || item?.last_error || TEXT.failedStart,
+              message: item?.safe_failure_reason || item?.failure_reason || TEXT.failedStart,
               item,
             };
           }

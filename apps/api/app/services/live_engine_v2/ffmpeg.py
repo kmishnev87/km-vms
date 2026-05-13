@@ -13,6 +13,7 @@ from app.models.camera import Camera
 
 logger = logging.getLogger(__name__)
 RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://[^:\s/@]+):([^@\s]+)@", re.IGNORECASE)
+RTSP_URL_RE = re.compile(r"rtsp://[^\s'\"\]]+", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -46,12 +47,13 @@ def mask_rtsp_credentials(text: str | None) -> str:
     try:
         parsed = urlsplit(masked)
     except Exception:
-        return masked
+        return RTSP_URL_RE.sub("[rtsp-url-redacted]", masked)
 
     if not parsed.password:
-        return masked
+        return RTSP_URL_RE.sub("[rtsp-url-redacted]", masked)
 
-    return masked.replace(f":{parsed.password}@", ":***@")
+    masked = masked.replace(f":{parsed.password}@", ":***@")
+    return RTSP_URL_RE.sub("[rtsp-url-redacted]", masked)
 
 
 def inspect_input_url(camera: Camera, stream: str, input_url: str):

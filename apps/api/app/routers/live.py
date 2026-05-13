@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
@@ -22,6 +22,55 @@ router = APIRouter(prefix="/live", tags=["live"])
 
 StreamKey = Literal["main", "sub", "sub2"]
 HLS_FILENAME_RE = re.compile(r"^(index\.m3u8|seg_\d+\.ts)$")
+SENSITIVE_TEXT_RE = re.compile(
+    r"(rtsp://|authorization|bearer\s+|password|credential|secret|token=|access_token|media_token|"
+    r"/Volume\d*/|/storage/|/tmp/|/proc/|/dev/|ffmpeg\s|traceback|stack trace)",
+    re.IGNORECASE,
+)
+SAFE_FAILURE_REASONS = {
+    "no_rtsp_url",
+    "resource_limit",
+    "startup_timeout_no_progress",
+    "startup_timeout_no_hls",
+    "startup_timeout",
+    "process_exit",
+    "ffmpeg_exit",
+    "copy_not_ready",
+    "hardware_no_hls",
+    "slow_transcode_no_hls",
+    "live_start_failed",
+    "stream_not_ready",
+}
+LIVE_STATUS_ALLOWED_FIELDS = (
+    "stream_key",
+    "camera_id",
+    "stream",
+    "stream_type",
+    "running",
+    "ready",
+    "status",
+    "mode",
+    "selected_mode",
+    "input_codec",
+    "input_resolution",
+    "input_fps",
+    "output_fps",
+    "browser_compatible",
+    "reason_for_transcode",
+    "high_cpu_risk",
+    "resource_limit",
+    "viewers",
+    "uptime_seconds",
+    "idle_seconds",
+    "startup_elapsed_seconds",
+    "speed_state",
+    "last_fps",
+    "last_speed",
+    "state_changed_at",
+    "last_state_transition",
+    "playlist_exists",
+    "segment_count",
+)
 
 
 class LiveStopPayload(BaseModel):
@@ -64,77 +113,102 @@ def _validate_hls_filename(filename: str):
         raise HTTPException(status_code=400, detail="Некорректное имя HLS-файла")
 
 
-def _hls_debug_payload(camera_id: int, stream: str) -> dict:
-    debug = manager.debug(camera_id=camera_id, stream=stream)
-    item = (debug.get("items") or [{}])[0]
-    return {
-        "camera_id": camera_id,
-        "stream": stream,
-        "status": item.get("status"),
-        "running": item.get("running"),
-        "ready": item.get("ready"),
-        "pid": item.get("pid"),
-        "pid_exists": item.get("pid_exists"),
-        "pid_cmdline": item.get("pid_cmdline"),
-        "process_poll": item.get("process_poll"),
-        "is_zombie": item.get("is_zombie"),
-        "running_verified": item.get("running_verified"),
-        "process_started_at": item.get("process_started_at"),
-        "process_age_seconds": item.get("process_age_seconds"),
-        "mode": item.get("mode"),
-        "requested_mode": item.get("requested_mode"),
-        "selected_mode": item.get("selected_mode"),
-        "input_codec": item.get("input_codec"),
-        "input_resolution": item.get("input_resolution"),
-        "input_fps": item.get("input_fps"),
-        "copy_eligible": item.get("copy_eligible"),
-        "browser_compatible": item.get("browser_compatible"),
-        "reason_for_transcode": item.get("reason_for_transcode"),
-        "high_cpu_risk": item.get("high_cpu_risk"),
-        "resource_limit": item.get("resource_limit"),
-        "hardware_accel_available": item.get("hardware_accel_available"),
-        "hw_backend": item.get("hw_backend"),
-        "hw_device": item.get("hw_device"),
-        "hwaccel_mode": item.get("hwaccel_mode"),
-        "selected_pipeline": item.get("selected_pipeline"),
-        "selected_backend": item.get("selected_backend"),
-        "configured_backend": item.get("configured_backend"),
-        "effective_backend": item.get("effective_backend"),
-        "decision_source": item.get("decision_source"),
-        "decision_reason": item.get("decision_reason"),
-        "copy_safe": item.get("copy_safe"),
-        "heavy_stream": item.get("heavy_stream"),
-        "hardware_candidates": item.get("hardware_candidates"),
-        "attempted_backends": item.get("attempted_backends"),
-        "failed_backends": item.get("failed_backends"),
-        "hw_decode": item.get("hw_decode"),
-        "hw_encode": item.get("hw_encode"),
-        "fallback_to_cpu": item.get("fallback_to_cpu"),
-        "hw_failure_reason": item.get("hw_failure_reason"),
-        "docker_device_access_ok": item.get("docker_device_access_ok"),
-        "hardware_misconfigured": item.get("hardware_misconfigured"),
-        "playlist_path": item.get("playlist_path"),
-        "playlist_exists": item.get("playlist_exists"),
-        "segment_count": item.get("segment_count"),
-        "exit_code": item.get("exit_code"),
-        "failure_reason": item.get("failure_reason"),
-        "last_error": item.get("last_error"),
-        "stderr_tail": item.get("stderr_tail"),
-        "startup_elapsed_seconds": item.get("startup_elapsed_seconds"),
-        "startup_deadline_seconds": item.get("startup_deadline_seconds"),
-        "startup_hard_deadline_seconds": item.get("startup_hard_deadline_seconds"),
-        "last_ffmpeg_progress_at": item.get("last_ffmpeg_progress_at"),
-        "ffmpeg_progress_detected": item.get("ffmpeg_progress_detected"),
-        "hardware_progress_detected": item.get("hardware_progress_detected"),
-        "hardware_readiness_elapsed": item.get("hardware_readiness_elapsed"),
-        "last_fps": item.get("last_fps"),
-        "last_speed": item.get("last_speed"),
-        "speed_state": item.get("speed_state"),
-        "stop_reason": item.get("stop_reason"),
-        "stopped_by_backend": item.get("stopped_by_backend"),
-        "state_changed_at": item.get("state_changed_at"),
-        "last_state_transition": item.get("last_state_transition"),
+def _safe_scalar(value: Any) -> Any:
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return int(value)
+    if isinstance(value, float):
+        return round(float(value), 3)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if SENSITIVE_TEXT_RE.search(text):
+            return None
+        return text[:160]
+    return None
+
+
+def _safe_failure_reason(item: dict[str, Any] | None, fallback: str = "live_start_failed") -> str | None:
+    if not item:
+        return fallback
+    for key in ("failure_reason", "stop_reason", "recoverable_start_error", "error_code"):
+        value = str(item.get(key) or "").strip().lower()
+        if not value:
+            continue
+        value = re.sub(r"[^a-z0-9_:-]+", "_", value).strip("_")
+        if value in SAFE_FAILURE_REASONS:
+            return value
+        if value.startswith("idle_ttl"):
+            return "stream_not_ready"
+    status_value = str(item.get("status") or "").strip().lower()
+    if status_value == "failed":
+        return fallback
+    return None
+
+
+def _serialize_live_status_item(item: dict[str, Any] | None) -> dict[str, Any]:
+    item = item or {}
+    safe = {field: _safe_scalar(item.get(field)) for field in LIVE_STATUS_ALLOWED_FIELDS}
+    safe["camera_id"] = int(item.get("camera_id") or 0)
+    safe["stream"] = str(item.get("stream") or item.get("stream_type") or "main")
+    safe["stream_type"] = safe["stream"]
+    safe["running"] = bool(item.get("running"))
+    safe["ready"] = bool(item.get("ready"))
+    safe["status"] = str(item.get("status") or ("ready" if safe["ready"] else "starting" if safe["running"] else "stopped"))
+    safe["viewers"] = int(item.get("viewers") or 0)
+    safe["playlist_exists"] = bool(item.get("playlist_exists"))
+    safe["segment_count"] = int(item.get("segment_count") or item.get("segments_count") or 0)
+    reason = _safe_failure_reason(item)
+    if reason:
+        safe["failure_reason"] = reason
+        safe["safe_failure_reason"] = reason
+    return {key: value for key, value in safe.items() if value is not None}
+
+
+def _serialize_live_status(items: list[dict[str, Any]]) -> dict[str, Any]:
+    safe_items = [_serialize_live_status_item(item) for item in items]
+    return {"items": safe_items, "count": len(safe_items)}
+
+
+def _serialize_live_viewer_result(result: dict[str, Any]) -> dict[str, Any]:
+    item = _serialize_live_status_item(result)
+    response = {
+        "ok": bool(result.get("ok")),
+        "viewer_id": _safe_scalar(result.get("viewer_id")),
+        "stream_url": _safe_scalar(result.get("stream_url")),
+        **item,
     }
+    recoverable = _safe_failure_reason(result)
+    if result.get("recoverable_start_error") and recoverable:
+        response["recoverable_start_error"] = recoverable
+    return {key: value for key, value in response.items() if value is not None}
+
+
+def _serialize_live_debug(debug: dict[str, Any]) -> dict[str, Any]:
+    items = [_serialize_live_status_item(item) for item in debug.get("items") or []]
+    hardware = debug.get("hardware_capabilities") or {}
+    return {
+        "items": items,
+        "count": len(items),
+        "viewers_count": int(debug.get("viewers_count") or 0),
+        "hardware_capabilities": {
+            "hardware_accel_available": bool(hardware.get("hardware_accel_available")),
+            "docker_device_access_ok": bool(hardware.get("docker_device_access_ok")),
+            "hardware_misconfigured": bool(hardware.get("hardware_misconfigured")),
+            "available_backends": [
+                str(item)
+                for item in (hardware.get("available_backends") or [])
+                if isinstance(item, str) and not SENSITIVE_TEXT_RE.search(item)
+            ][:8],
+        },
+    }
+
+
+def _live_start_error_detail(result: dict[str, Any]) -> dict[str, Any]:
+    reason = _safe_failure_reason(result) or "live_start_failed"
+    return {"message": "Live stream could not be started", "code": reason}
 
 
 def _serve_live_playlist(camera_id: int, stream: str, media_token: str) -> Response:
@@ -144,7 +218,9 @@ def _serve_live_playlist(camera_id: int, stream: str, media_token: str) -> Respo
             status_code=503,
             detail={
                 "message": "HLS-плейлист еще не готов",
-                "debug": _hls_debug_payload(camera_id, stream),
+                "code": "stream_not_ready",
+                "camera_id": camera_id,
+                "stream": stream,
             },
         )
 
@@ -194,10 +270,7 @@ def live_status(
     current_user: User = Depends(require_permission("view_live")),
 ):
     items = manager.status(camera_id=camera_id, stream=stream)
-    return {
-        "items": items,
-        "count": len(items),
-    }
+    return _serialize_live_status(items)
 
 
 @router.post("/viewers")
@@ -212,12 +285,9 @@ def open_live_viewer(
         status_code = 503 if result.get("error_code") == "resource_limit" else 400
         raise HTTPException(
             status_code=status_code,
-            detail={
-                "message": result.get("error") or "Не удалось открыть live viewer",
-                "debug": result,
-            },
+            detail=_live_start_error_detail(result),
         )
-    return result
+    return _serialize_live_viewer_result(result)
 
 
 @router.delete("/viewers/{viewer_id}")
@@ -229,7 +299,6 @@ def close_live_viewer(
     return {
         "ok": True,
         "closed": closed,
-        "viewer_id": viewer_id,
     }
 
 
@@ -242,7 +311,6 @@ def touch_live_viewer(
     return {
         "ok": True,
         "touched": touched,
-        "viewer_id": viewer_id,
     }
 
 
@@ -252,7 +320,7 @@ def live_debug_all(
     stream: Optional[StreamKey] = Query(default=None),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    return manager.debug(camera_id=camera_id, stream=stream)
+    return _serialize_live_debug(manager.debug(camera_id=camera_id, stream=stream))
 
 
 @router.post("/media-token")
@@ -278,7 +346,7 @@ def live_debug_stream(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     _get_camera(db, camera_id)
-    return manager.debug(camera_id=camera_id, stream=stream)
+    return _serialize_live_debug(manager.debug(camera_id=camera_id, stream=stream))
 
 
 @router.get("/{camera_id}/{stream}/index.m3u8")
