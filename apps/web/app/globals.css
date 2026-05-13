@@ -1,4 +1,7 @@
 :root {
+  --page-working-width: 1400px;
+  --page-outer-padding: 12px;
+  --page-x-padding: 24px;
   --settings-control-width: 248px;
   --settings-row-icon: 48px;
   --settings-row-gap: 14px;
@@ -14,6 +17,10 @@ body {
   background: #eef3f8;
   color: #0f172a;
   font-family: Arial, sans-serif;
+}
+
+html {
+  scrollbar-gutter: stable;
 }
 
 * {
@@ -52,11 +59,11 @@ textarea {
 }
 
 .topNavInner {
-  width: 100%;
-  max-width: 1400px;
+  width: calc(100% - (var(--page-outer-padding) * 2));
+  max-width: var(--page-working-width);
   height: 100%;
   margin: 0 auto;
-  padding: 0 24px;
+  padding: 0 var(--page-x-padding);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -187,19 +194,19 @@ textarea {
   flex: 1;
   min-width: 0;
   width: 100%;
-  padding: 10px 12px 16px;
+  padding: 10px var(--page-outer-padding) 16px;
 }
 
 .standardPage {
   width: 100%;
-  max-width: 1360px;
+  max-width: var(--page-working-width);
   margin: 0 auto;
-  padding: 0 12px;
+  padding: 0 var(--page-x-padding);
 }
 
 .dashboardPage {
   width: 100%;
-  max-width: 1400px;
+  max-width: var(--page-working-width);
   margin: 0 auto;
   min-height: calc(100vh - 86px);
   display: flex;
@@ -873,10 +880,10 @@ textarea {
 .settingsPage {
   position: relative;
   width: 100%;
-  max-width: 1360px;
+  max-width: var(--page-working-width);
   margin: 0 auto;
   min-height: calc(100vh - 86px);
-  padding: 16px 12px 28px;
+  padding: 16px var(--page-x-padding) 28px;
   overflow: hidden;
   border-radius: 14px;
   background: #eef3f8;
@@ -2460,12 +2467,13 @@ textarea {
 .systemStatusPage,
 .apkPage {
   width: 100%;
-  max-width: 1180px;
+  max-width: var(--page-working-width);
   margin: 0 auto;
-  padding: 16px 24px;
+  padding: 16px var(--page-x-padding);
 }
 
 .systemStatusPanel {
+  max-width: 1180px;
   overflow: hidden;
   border: 1px solid #d8e2ee;
   border-radius: 10px;
@@ -2927,9 +2935,9 @@ textarea {
 
 .storageOpsPage {
   width: 100%;
-  max-width: 1360px;
+  max-width: var(--page-working-width);
   margin: 0 auto;
-  padding: 14px 12px 28px;
+  padding: 16px var(--page-x-padding) 28px;
 }
 
 .storageOpsHeader {
@@ -5139,151 +5147,6 @@ textarea {
   display: none;
 }
 
-/* Онлайн / Хронология — возвращаем дружелюбный каркас */
-.liveLayout,
-.timelineLayout,
-.livePage,
-.timelinePage {
-  display: grid;
-  gap: 18px;
-}
-
-.liveTopBar,
-.timelineTopBar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.liveColumns,
-.timelineColumns {
-  display: grid;
-  grid-template-columns: 280px minmax(0, 1fr);
-  gap: 18px;
-}
-
-.sidePanel {
-  background: #fff;
-  border-radius: 24px;
-  padding: 16px;
-  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
-}
-
-.workPanel {
-  background: #fff;
-  border-radius: 24px;
-  padding: 16px;
-  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
-}
-
-.panelTitle {
-  font-size: 16px;
-  font-weight: 700;
-  margin-bottom: 12px;
-}
-
-.cameraList {
-  display: grid;
-  gap: 12px;
-}
-
-.cameraListItem {
-  border: 1px solid #e5e7eb;
-  border-radius: 18px;
-  padding: 12px;
-  background: #fff;
-}
-
-.videoGrid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.videoTile {
-  min-height: 220px;
-  border-radius: 18px;
-  overflow: hidden;
-  background: #0b1028;
-  color: #cbd5e1;
-  border: 1px solid #dbe3ef;
-  display: flex;
-  flex-direction: column;
-}
-
-.videoTileHeader {
-  min-height: 34px;
-  padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #fff;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.videoTileBody {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 18px;
-  text-align: center;
-  color: #94a3b8;
-}
-
-.timelineControls {
-  display: grid;
-  gap: 14px;
-}
-
-.timelineControlRow {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.timelineGrid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.timelineTile {
-  min-height: 220px;
-  border-radius: 18px;
-  overflow: hidden;
-  background: #fff;
-  border: 1px solid #dbe3ef;
-  display: flex;
-  flex-direction: column;
-}
-
-.timelineTileHeader {
-  min-height: 34px;
-  padding: 8px 10px;
-  background: #f8fafc;
-  color: #0f172a;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid #e5e7eb;
-}
-
-.timelineTileBody {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 18px;
-  text-align: center;
-  color: #64748b;
-}
-
 @media (max-width: 1200px) {
   .cameraCardGrid {
     grid-template-columns: minmax(190px, 1fr) 260px minmax(260px, 1.4fr);
@@ -5298,10 +5161,6 @@ textarea {
     gap: 14px 18px;
   }
 
-  .liveColumns,
-  .timelineColumns {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 900px) {
@@ -5525,10 +5384,6 @@ textarea {
     font-size: 14px;
   }
 
-  .videoGrid,
-  .timelineGrid {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 640px) {
@@ -5607,6 +5462,7 @@ textarea {
   }
 
   .topNavInner {
+    width: 100%;
     padding: 0 8px;
     gap: 6px;
   }
@@ -5741,6 +5597,7 @@ textarea {
   .recordingsFilterGroup,
   .recordingsToolbarCompact {
     width: 100%;
+    min-width: 0;
     flex-wrap: wrap;
   }
 
@@ -5764,156 +5621,6 @@ textarea {
 
   .recordingsTableWrap {
     max-height: none;
-  }
-}
-
-.liveWorkspace {
-  display: grid;
-  grid-template-columns: 320px minmax(0, 1fr);
-  gap: 18px;
-}
-
-.cameraListName {
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1.25;
-}
-
-.cameraListAddr {
-  margin-top: 4px;
-  font-size: 14px;
-  color: #475569;
-}
-
-.cameraListEmpty {
-  color: #64748b;
-  font-size: 14px;
-  padding: 8px 2px;
-}
-
-.liveGrid {
-  display: grid;
-  gap: 14px;
-}
-
-.liveGrid1 {
-  grid-template-columns: 1fr;
-}
-
-.liveGrid4 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.liveGrid6 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.liveGrid9 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.liveTile {
-  min-height: 250px;
-  border-radius: 20px;
-  overflow: hidden;
-  border: 1px solid #dbe3ef;
-  background: #0b1028;
-  display: flex;
-  flex-direction: column;
-}
-
-.liveTileHeader {
-  min-height: 42px;
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.06);
-  color: #ffffff;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.liveTileHeaderRight {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.liveTileTitle {
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.liveTileControls {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 130px;
-  gap: 10px;
-  padding: 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.liveSelect {
-  min-height: 40px;
-}
-
-.liveStreamSelect {
-  min-width: 0;
-}
-
-.liveTileBody {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 18px;
-  text-align: center;
-  color: #cbd5e1;
-}
-
-.liveTilePlaceholder {
-  display: grid;
-  gap: 8px;
-  justify-items: center;
-}
-
-.liveTileCameraName {
-  font-size: 22px;
-  font-weight: 700;
-  color: #ffffff;
-}
-
-.liveTileMeta {
-  font-size: 14px;
-  color: #cbd5e1;
-}
-
-.liveTileHint {
-  margin-top: 6px;
-  font-size: 14px;
-  color: #94a3b8;
-}
-
-@media (max-width: 1200px) {
-  .liveWorkspace {
-    grid-template-columns: 1fr;
-  }
-
-  .liveGrid6,
-  .liveGrid9 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 720px) {
-  .liveGrid4,
-  .liveGrid6,
-  .liveGrid9 {
-    grid-template-columns: 1fr;
-  }
-
-  .liveTileControls {
-    grid-template-columns: 1fr;
   }
 }
 
