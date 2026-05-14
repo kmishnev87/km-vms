@@ -268,6 +268,43 @@ def test_healthy_current_recorder_job_ignores_stale_old_error_and_excludes_debug
     assert all(value not in rendered(payload) for value in forbidden)
 
 
+def test_recording_job_with_stale_current_segment_maps_to_warning(db):
+    camera = add_camera(db)
+    add_job(db, camera, state="recording")
+    now = datetime.utcnow()
+    db.add(
+        RecordingSegment(
+            camera_id=camera.id,
+            camera_name_snapshot=camera.name,
+            camera_folder_snapshot=camera.storage_folder_name,
+            file_path="/storage/archive/redacted/stale.mkv",
+            relative_path="camera/stale.mkv",
+            started_at=now - timedelta(minutes=65),
+            ended_at=None,
+            finalized_at=None,
+            duration_sec=0,
+            size_bytes=100,
+            status="writing",
+            ownership="KM VMS",
+            source="recorder",
+        )
+    )
+    db.commit()
+    add_heartbeat(db)
+
+    payload = build_operator_runtime_status(db)
+    camera_item = payload["domains"]["cameras"]["items"][0]
+
+    assert camera_item["recording_state"] == "recording"
+    assert camera_item["recording_health"] == "degraded"
+    assert camera_item["severity"] == "warning"
+    assert camera_item["stale_current_segment"] is True
+    assert camera_item["stale_after_seconds"] == 600
+    assert camera_item["expected_segment_duration_seconds"] == 300
+    assert "recording_segment_not_rotating" in camera_item["reason_codes"]
+    assert "recording_stale" in camera_item["reason_codes"]
+
+
 def test_enabled_always_camera_without_active_recorder_evidence_is_warning(db):
     add_camera(db)
 

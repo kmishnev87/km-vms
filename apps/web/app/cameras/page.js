@@ -422,6 +422,7 @@ function getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable
   const runtimeError = normalizeRuntimeError(runtime?.last_error || runtime?.camera_last_error || recorderStatus?.last_error, copy);
   const jobState = String(runtime?.job_state || camera.status || "").toLowerCase();
   const currentFailure = runtime?.current_failure === true;
+  const staleCurrentSegment = runtime?.stale_current_segment === true || String(runtime?.recording_health || "").toLowerCase() === "degraded";
 
   if (recorderStatus?.heartbeat?.status === "stale_or_unavailable") {
     return { text: copy.unknownStatus, cls: "warn" };
@@ -430,6 +431,7 @@ function getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable
   if (jobState === "restarting") return { text: copy.restarting, cls: "warn" };
   if (jobState === "starting") return { text: copy.starting, cls: "warn" };
   if (jobState === "stopping") return { text: copy.stopping, cls: "warn" };
+  if (jobState === "recording" && staleCurrentSegment) return { text: copy.recordingStale, cls: "warn" };
   if (jobState === "recording" && !currentFailure) return { text: copy.recordingNow, cls: "ok" };
   if (currentFailure || runtimeError || jobState === "error") {
     return { text: copy.error, cls: "err" };

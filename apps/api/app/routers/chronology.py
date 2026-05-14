@@ -144,10 +144,13 @@ def _contains_target(segment: RecordingSegment, target: ParsedTimestamp) -> tupl
         return False, target.storage_utc, False
     start_dt, end_dt = interval
     local_naive_display = _segment_uses_local_naive_display(segment)
+    if target.compatibility_local is not None:
+        if start_dt <= target.compatibility_local < end_dt:
+            return True, target.compatibility_local, True
+        if local_naive_display:
+            return False, target.compatibility_local, True
     if start_dt <= target.storage_utc < end_dt:
         return True, target.storage_utc, local_naive_display
-    if target.compatibility_local is not None and start_dt <= target.compatibility_local < end_dt:
-        return True, target.compatibility_local, True
     return False, target.storage_utc, False
 
 
@@ -170,6 +173,30 @@ def _segment_covering_timestamp(db: Session, *, camera_id: int, target: ParsedTi
         if ok:
             return segment
     return None
+
+
+def _clip_segment_to_range(
+    segment: RecordingSegment,
+    *,
+    range_from: datetime,
+    range_to: datetime,
+    compat_from: datetime | None,
+    compat_to: datetime | None,
+) -> tuple[datetime, datetime, bool] | None:
+    interval = _segment_interval(segment)
+    if not interval:
+        return None
+
+    start_dt, end_dt = interval
+    local_naive_display = _segment_uses_local_naive_display(segment)
+    if local_naive_display and compat_from is not None and compat_to is not None:
+        if end_dt <= compat_from or start_dt >= compat_to:
+            return None
+        return max(start_dt, compat_from), min(end_dt, compat_to), True
+
+    if end_dt <= range_from or start_dt >= range_to:
+        return None
+    return max(start_dt, range_from), min(end_dt, range_to), local_naive_display
 
 
 def _segment_end(segment: RecordingSegment) -> datetime | None:
@@ -253,8 +280,11 @@ def chronology_playback(
 
         rel_path = segment.relative_path.replace("\\", "/").lstrip("/")
         offset_sec = int((effective_target - start_dt).total_seconds())
+        if offset_sec < 0:
+            continue
         media_metadata = _segment_media_metadata(segment, file_path)
         return {
+            "segment_id": segment.id,
             "camera_id": camera_id,
             "has_video": True,
             "file_url": f"/api/chronology/file?camera_id={camera_id}&rel_path={rel_path}",
@@ -332,33 +362,22 @@ def chronology_ranges(
 
         clipped = []
         for segment in segments:
-            interval = _segment_interval(segment)
-            if not interval:
-                continue
             try:
                 _resolve_segment_path(segment)
             except HTTPException:
                 continue
 
-            start_dt, end_dt = interval
-            clip_start = clip_end = None
-            if not (end_dt <= range_from or start_dt >= range_to):
-                clip_start = max(start_dt, range_from)
-                clip_end = min(end_dt, range_to)
-            elif compat_from is not None and compat_to is not None and not (end_dt <= compat_from or start_dt >= compat_to):
-                clip_start = max(start_dt, compat_from)
-                clip_end = min(end_dt, compat_to)
-            if clip_start is None or clip_end is None:
+            clipped_segment = _clip_segment_to_range(
+                segment,
+                range_from=range_from,
+                range_to=range_to,
+                compat_from=compat_from,
+                compat_to=compat_to,
+            )
+            if clipped_segment is None:
                 continue
+            clip_start, clip_end, local_naive_display = clipped_segment
             if clip_end > clip_start:
-                local_naive_display = (
-                    _segment_uses_local_naive_display(segment)
-                    or (
-                        compat_from is not None
-                        and compat_to is not None
-                        and not (end_dt <= compat_from or start_dt >= compat_to)
-                    )
-                )
                 clipped.append((clip_start, clip_end, local_naive_display))
 
         merged = _merge_ranges(clipped, gap_tolerance_sec=2)

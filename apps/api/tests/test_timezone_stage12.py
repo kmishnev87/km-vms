@@ -200,6 +200,141 @@ def test_chronology_naive_and_offset_aware_inputs_find_existing_segments(db):
     assert first_range["timestamp_display_semantic"] == "product_local_naive"
 
 
+def test_chronology_local_naive_playback_prefers_local_segment_over_utc_shift(db):
+    add_settings(db, "Asia/Yekaterinburg")
+    camera = add_camera(db)
+    shifted = add_segment(
+        db,
+        camera,
+        datetime(2026, 5, 14, 6, 5),
+        name="stage12-camera-2026-05-14-06-05-00.mkv",
+    )
+    local = add_segment(
+        db,
+        camera,
+        datetime(2026, 5, 14, 11, 5),
+        name="stage12-camera-2026-05-14-11-05-00.mkv",
+    )
+
+    result = chronology_playback(camera_id=camera.id, ts="2026-05-14T11:07:52", db=db, current_user=actor())
+
+    assert result["has_video"] is True
+    assert result["rel_path"] == local.relative_path
+    assert result["rel_path"] != shifted.relative_path
+    assert result["offset_sec"] == 172
+    assert result["file_start_system"] == "2026-05-14T11:05:00+05:00"
+    assert result["timestamp_display_semantic"] == "product_local_naive"
+
+
+def test_chronology_local_naive_playback_prefers_local_segment_for_second_camera(db):
+    add_settings(db, "Asia/Yekaterinburg")
+    camera = add_camera(db)
+    add_segment(db, camera, datetime(2026, 5, 14, 6, 25, 51), name="stage12-camera-2026-05-14-06-25-51.mkv")
+    local = add_segment(db, camera, datetime(2026, 5, 14, 11, 25, 51), name="stage12-camera-2026-05-14-11-25-51.mkv")
+
+    result = chronology_playback(camera_id=camera.id, ts="2026-05-14T11:27:51", db=db, current_user=actor())
+
+    assert result["has_video"] is True
+    assert result["rel_path"] == local.relative_path
+    assert result["offset_sec"] == 120
+    assert result["file_start_system"] == "2026-05-14T11:25:51+05:00"
+
+
+def test_chronology_local_naive_pre_gap_does_not_select_previous_day_utc_shift(db):
+    add_settings(db, "Asia/Yekaterinburg")
+    camera = add_camera(db)
+    add_segment(db, camera, datetime(2026, 5, 13, 19, 35, 29), name="stage12-camera-2026-05-13-19-35-29.mkv")
+    local = add_segment(db, camera, datetime(2026, 5, 14, 0, 35, 42), name="stage12-camera-2026-05-14-00-35-42.mkv")
+
+    result = chronology_playback(camera_id=camera.id, ts="2026-05-14T00:37:42", db=db, current_user=actor())
+
+    assert result["has_video"] is True
+    assert result["rel_path"] == local.relative_path
+    assert result["offset_sec"] == 120
+    assert result["file_start_system"] == "2026-05-14T00:35:42+05:00"
+
+
+def test_chronology_long_recovered_segment_beats_future_writing_segment(db):
+    add_settings(db, "Asia/Yekaterinburg")
+    camera = add_camera(db)
+    long_segment = add_segment(
+        db,
+        camera,
+        datetime(2026, 5, 14, 1, 5, 41),
+        name="stage12-camera-2026-05-14-01-05-41.mkv",
+    )
+    long_segment.ended_at = datetime(2026, 5, 14, 12, 36, 57)
+    long_segment.finalized_at = datetime(2026, 5, 14, 12, 36, 58)
+    long_segment.duration_sec = 41476
+    long_segment.size_bytes = 6_671_615_716
+    long_segment.integrity_status = "ok_owned_finalized"
+    long_segment.reconciliation_status = "ok_owned_finalized"
+    add_segment(
+        db,
+        camera,
+        datetime(2026, 5, 14, 12, 36, 58),
+        name="stage12-camera-2026-05-14-12-36-58.mkv",
+    )
+    db.commit()
+
+    result = chronology_playback(camera_id=camera.id, ts="2026-05-14T12:04:47", db=db, current_user=actor())
+
+    assert result["has_video"] is True
+    assert result["segment_id"] == long_segment.id
+    assert result["file_start"] == "2026-05-14T01:05:41"
+    assert result["file_end"] == "2026-05-14T12:36:57"
+    assert result["offset_sec"] == 39546
+    assert result["file_start_system"] == "2026-05-14T01:05:41+05:00"
+    assert result["timestamp_display_semantic"] == "product_local_naive"
+
+
+def test_chronology_playback_does_not_fallback_to_future_segment(db):
+    add_settings(db, "Asia/Yekaterinburg")
+    camera = add_camera(db)
+    add_segment(
+        db,
+        camera,
+        datetime(2026, 5, 14, 12, 36, 58),
+        name="stage12-camera-2026-05-14-12-36-58.mkv",
+    )
+
+    result = chronology_playback(camera_id=camera.id, ts="2026-05-14T12:04:47", db=db, current_user=actor())
+
+    assert result["has_video"] is False
+    assert result["rel_path"] is None
+    assert result["offset_sec"] == 0
+
+
+def test_chronology_ranges_for_long_local_naive_segment_use_local_window_not_utc_shift(db):
+    add_settings(db, "Asia/Yekaterinburg")
+    camera = add_camera(db)
+    long_segment = add_segment(
+        db,
+        camera,
+        datetime(2026, 5, 14, 1, 5, 41),
+        name="stage12-camera-2026-05-14-01-05-41.mkv",
+    )
+    long_segment.ended_at = datetime(2026, 5, 14, 12, 36, 57)
+    long_segment.finalized_at = datetime(2026, 5, 14, 12, 36, 58)
+    long_segment.duration_sec = 41476
+    db.commit()
+
+    ranges = chronology_ranges(
+        camera_ids=str(camera.id),
+        from_ts="2026-05-14T11:50:00",
+        to_ts="2026-05-14T12:45:00",
+        db=db,
+        current_user=actor(),
+    )
+
+    item = ranges["items"][str(camera.id)]["ranges"][0]
+    assert item["start"] == "2026-05-14T11:50:00"
+    assert item["end"] == "2026-05-14T12:36:57"
+    assert item["start_system"] == "2026-05-14T11:50:00+05:00"
+    assert item["timestamp_display_semantic"] == "product_local_naive"
+    assert "06:50:00" not in item["start"]
+
+
 def test_chronology_offset_aware_input_finds_utc_storage_segment(db):
     add_settings(db, "Asia/Yekaterinburg")
     camera = add_camera(db)

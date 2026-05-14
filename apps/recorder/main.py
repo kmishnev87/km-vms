@@ -94,6 +94,7 @@ ERROR_PROCESS_CRASHED = "process_crashed"
 ERROR_PROCESS_START_FAILED = "process_start_failed"
 ERROR_DUPLICATE_PROCESS = "duplicate_process_prevented"
 ERROR_UNKNOWN_FFMPEG = "unknown_ffmpeg_error"
+ERROR_STALE_SEGMENT = "recording_segment_not_rotating"
 
 running = True
 jobs: dict[int, "RecordingJob"] = {}
@@ -130,6 +131,8 @@ class RecordingJob:
     config_signature: tuple[Any, ...] | None = None
     stderr_tail: deque[str] = field(default_factory=lambda: deque(maxlen=STDERR_TAIL_LINES))
     stderr_thread: threading.Thread | None = None
+    stale_recovery_count: int = 0
+    last_stale_recovery_at: float | None = None
 
     def set_state(self, state: str, error: str | None = None, error_type: str | None = None) -> None:
         if self.state != state:
@@ -165,6 +168,8 @@ class RecordingJob:
             "current_output_path": self.current_output_path,
             "recording_mode": self.recording_mode,
             "enabled": self.enabled,
+            "stale_recovery_count": self.stale_recovery_count,
+            "last_stale_recovery_at": iso_ts(self.last_stale_recovery_at),
         }
 
 
@@ -1065,6 +1070,85 @@ def sync_segment_metadata_for_job(job: RecordingJob) -> None:
         log_event("warning", "metadata_update_failed", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, error=str(exc))
 
 
+def segment_duration_seconds_for_row(row) -> int:
+    return max(int(row.segment_minutes or 5), 1) * 60
+
+
+def stale_segment_after_seconds(row) -> int:
+    return segment_duration_seconds_for_row(row) + 300
+
+
+def current_writing_segment(job: RecordingJob) -> Path | None:
+    files = discover_job_segments(job)
+    if not files:
+        return None
+    return files[-1]
+
+
+def current_segment_age_seconds(file_path: Path) -> int:
+    started_at = parse_segment_start_time(file_path)
+    return max(0, int((datetime.now() - started_at).total_seconds()))
+
+
+def stale_recovery_allowed(job: RecordingJob, now_ts: float) -> bool:
+    if job.last_stale_recovery_at and now_ts - job.last_stale_recovery_at < 15 * 60:
+        return False
+    return job.stale_recovery_count < 3
+
+
+def handle_stale_current_segment(row, job: RecordingJob) -> bool:
+    if not job.process or job.process.poll() is not None:
+        return False
+    sync_segment_metadata_for_job(job)
+    file_path = current_writing_segment(job)
+    if file_path is None:
+        return False
+    age_sec = current_segment_age_seconds(file_path)
+    threshold_sec = stale_segment_after_seconds(row)
+    if age_sec <= threshold_sec:
+        return False
+
+    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
+    now_ts = time.time()
+    event_metadata = {
+        "reason": ERROR_STALE_SEGMENT,
+        "age_seconds": age_sec,
+        "stale_after_seconds": threshold_sec,
+        "segment_name": file_path.name,
+    }
+    log_event(
+        "warning",
+        "stale_current_segment_detected",
+        camera_id=job.camera_id,
+        camera_name=job.camera_name,
+        db_job_id=job.db_job_id,
+        relative_path=rel_path,
+        age_seconds=age_sec,
+        stale_after_seconds=threshold_sec,
+    )
+    write_audit_event(
+        event_type="stale_writing_detected",
+        severity="warning",
+        message=f"Recorder detected stale writing segment for camera {job.camera_name}",
+        camera_id=job.camera_id,
+        camera_name=job.camera_name,
+        metadata=event_metadata,
+    )
+
+    if not stale_recovery_allowed(job, now_ts):
+        job.set_state(RecorderState.ERROR, "stale writing segment recovery limit reached", ERROR_STALE_SEGMENT)
+        update_camera_status_from_job(job)
+        update_recording_job(job, state=RecorderState.ERROR, last_error=job.last_error, last_error_type=ERROR_STALE_SEGMENT)
+        log_event("error", "stale_current_segment_recovery_blocked", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id)
+        return True
+
+    job.stale_recovery_count += 1
+    job.last_stale_recovery_at = now_ts
+    stop_camera(row.id, ERROR_STALE_SEGMENT, audit_event="camera_restarted")
+    log_event("warning", "stale_current_segment_recovery_attempted", camera_id=job.camera_id, camera_name=job.camera_name, attempt=job.stale_recovery_count)
+    return False
+
+
 def finalize_segments_for_job(job: RecordingJob) -> None:
     if not job.db_job_id:
         return
@@ -1709,6 +1793,8 @@ def sync_cameras() -> None:
 
             if job.process and job.process.poll() is None:
                 sync_segment_metadata_for_job(job)
+                if handle_stale_current_segment(row, job):
+                    continue
 
             if job.config_signature and job.config_signature != desired_signature and job.process and job.process.poll() is None:
                 log_event("info", "recording_config_changed_restart", camera_id=job.camera_id, camera_name=job.camera_name, recording_format=effective_recording_format)

@@ -12,9 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.config import settings
 from app.db.session import Base
 from app.models.camera import Camera
-from app.models.recording import RecordingJob
+from app.models.recording import RecordingJob, RecordingSegment
+from app.models.system_settings import SystemSettings
+from app.services import recorder_runtime_status
 from app.services.recorder_diagnostics import _health_from, build_recorder_status
-from app.services.recorder_runtime_status import list_camera_recording_states
+from app.services.recorder_runtime_status import list_camera_recording_states, stale_current_segment_after_seconds
 
 
 @pytest.fixture
@@ -35,7 +37,21 @@ def db():
         tmp.cleanup()
 
 
-def add_camera(db, *, name="stage201_camera", enabled=True, status="recording", last_error=None):
+def add_settings(db, timezone_name="Asia/Yekaterinburg"):
+    row = SystemSettings(
+        system_initialized=True,
+        timezone=timezone_name,
+        language="ru",
+        storage_path=settings.storage_root,
+        recording_format="mkv",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def add_camera(db, *, name="stage201_camera", enabled=True, status="recording", last_error=None, segment_minutes=5):
     camera = Camera(
         name=name,
         storage_folder_name=name,
@@ -48,7 +64,7 @@ def add_camera(db, *, name="stage201_camera", enabled=True, status="recording", 
         recording_mode="always",
         default_live_stream="main",
         default_record_stream="main",
-        segment_minutes=5,
+        segment_minutes=segment_minutes,
         retention_days=1,
         storage_quota_gb=50,
         status=status,
@@ -89,6 +105,31 @@ def add_job(
     db.commit()
     db.refresh(job)
     return job
+
+
+def add_segment(db, camera, *, status, started_delta_seconds, duration_seconds=10, name="segment.mkv"):
+    started_at = datetime.utcnow() + timedelta(seconds=started_delta_seconds)
+    segment = RecordingSegment(
+        camera_id=camera.id,
+        camera_name_snapshot=camera.name,
+        camera_folder_snapshot=camera.storage_folder_name,
+        file_path=f"/storage/redacted/{name}",
+        relative_path=f"camera_{camera.id}/{name}",
+        started_at=started_at,
+        ended_at=None if status == "writing" else started_at + timedelta(seconds=duration_seconds),
+        finalized_at=None if status == "writing" else started_at + timedelta(seconds=duration_seconds),
+        duration_sec=0 if status == "writing" else duration_seconds,
+        size_bytes=100,
+        status=status,
+        ownership="KM VMS",
+        source="recorder",
+        integrity_status=status,
+        reconciliation_status="pending" if status == "writing" else "ok_owned_finalized",
+    )
+    db.add(segment)
+    db.commit()
+    db.refresh(segment)
+    return segment
 
 
 def test_shared_recorder_runtime_status_import_boundary():
@@ -139,6 +180,114 @@ def test_recording_job_with_stale_error_is_not_current_failure(db):
     assert state["stale_error_ignored"] is True
     assert status["failed_cameras_count"] == 0
     assert "camera_recording_errors" not in status["health_reasons"]
+
+
+def test_fresh_current_writing_segment_is_not_stale(db):
+    camera = add_camera(db)
+    add_job(db, camera, job_id="stage201_recording_fresh_segment", state="recording")
+    add_segment(db, camera, status="writing", started_delta_seconds=-120, name="fresh.mkv")
+
+    state = list_camera_recording_states(db)[0]
+
+    assert state["current_failure"] is False
+    assert state["stale_current_segment"] is False
+    assert state["current_segment_age_seconds"] >= 120
+    assert state["expected_segment_duration_seconds"] == 300
+    assert state["stale_current_segment_after_seconds"] == 600
+    assert state["recording_health"] == "recording"
+
+
+@pytest.mark.parametrize(
+    ("segment_minutes", "threshold_seconds"),
+    [
+        (5, 600),
+        (30, 2100),
+        (60, 3900),
+        (120, 7500),
+    ],
+)
+def test_strict_stale_current_segment_threshold_is_duration_plus_300(db, segment_minutes, threshold_seconds):
+    camera = add_camera(db, segment_minutes=segment_minutes)
+
+    assert stale_current_segment_after_seconds(camera) == threshold_seconds
+
+
+@pytest.mark.parametrize(
+    ("segment_minutes", "age_seconds", "expected_stale"),
+    [
+        (5, 599, False),
+        (5, 601, True),
+        (30, 2160, True),
+        (30, 2700, True),
+        (60, 3960, True),
+        (120, 7800, True),
+    ],
+)
+def test_current_writing_segment_strict_threshold_examples(db, segment_minutes, age_seconds, expected_stale):
+    camera = add_camera(db, segment_minutes=segment_minutes)
+    add_job(db, camera, job_id=f"stage201_threshold_{segment_minutes}_{age_seconds}", state="recording")
+    add_segment(db, camera, status="writing", started_delta_seconds=-age_seconds, name=f"threshold_{segment_minutes}.mkv")
+
+    state = list_camera_recording_states(db)[0]
+
+    assert state["stale_current_segment_after_seconds"] == (segment_minutes * 60) + 300
+    assert state["stale_current_segment"] is expected_stale
+    assert state["recording_health"] == ("degraded" if expected_stale else "recording")
+
+
+def test_product_local_naive_current_segment_age_uses_system_timezone(db, monkeypatch):
+    add_settings(db, "Asia/Yekaterinburg")
+    camera = add_camera(db, segment_minutes=30)
+    add_job(db, camera, job_id="stage201_local_naive_age", state="recording")
+    segment = RecordingSegment(
+        camera_id=camera.id,
+        camera_name_snapshot=camera.name,
+        camera_folder_snapshot=camera.storage_folder_name,
+        file_path="/storage/redacted/Dahua-2026-05-14-11-24-00.mkv",
+        relative_path="camera_1/Dahua-2026-05-14-11-24-00.mkv",
+        started_at=datetime(2026, 5, 14, 11, 24, 0),
+        ended_at=None,
+        finalized_at=None,
+        duration_sec=0,
+        size_bytes=100,
+        status="writing",
+        ownership="KM VMS",
+        source="recorder",
+        integrity_status="writing",
+        reconciliation_status="pending",
+    )
+    db.add(segment)
+    db.commit()
+    monkeypatch.setattr(recorder_runtime_status, "utc_now", lambda: datetime(2026, 5, 14, 7, 0, 0))
+
+    state = list_camera_recording_states(db)[0]
+
+    assert state["current_segment_age_seconds"] == 2160
+    assert state["stale_current_segment_after_seconds"] == 2100
+    assert state["stale_current_segment"] is True
+    assert state["recording_health"] == "degraded"
+
+
+def test_stale_current_writing_segment_is_degraded_not_healthy(db):
+    camera = add_camera(db)
+    add_job(db, camera, job_id="stage201_recording_stale_segment", state="recording")
+    add_segment(db, camera, status="writing", started_delta_seconds=-3900, name="stale.mkv")
+
+    state = list_camera_recording_states(db)[0]
+
+    assert state["current_failure"] is False
+    assert state["stale_current_segment"] is True
+    assert state["stale_current_segment_reason"] == "recording_segment_not_rotating"
+    assert "recording_segment_not_rotating" in state["recording_health_reason_codes"]
+    assert state["recording_health"] == "degraded"
+
+
+def test_recorder_watchdog_source_uses_strict_duration_plus_300():
+    source = (Path(__file__).resolve().parents[2] / "recorder" / "main.py").read_text(encoding="utf-8")
+
+    assert "return segment_duration_seconds_for_row(row) + 300" in source
+    assert "segment_seconds * 2" not in source
+    assert "datetime.utcnow() - started_at" not in source
 
 
 def test_restarting_job_remains_current_failure(db):

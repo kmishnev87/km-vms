@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,8 @@ SEGMENT_STATUS_DELETED = "deleted"
 RECORDER_SOURCE = "recorder"
 HEARTBEAT_STALE_SECONDS = 90
 MAX_RECENT_ITEMS = 50
+SEGMENT_STALE_GRACE_SECONDS = 300
+STALE_CURRENT_SEGMENT_REASON = "recording_segment_not_rotating"
 
 
 def utc_now() -> datetime:
@@ -82,6 +84,23 @@ def age_seconds(value: datetime | None, now: datetime) -> int | None:
     if isinstance(value, str):
         value = datetime.fromisoformat(value.removesuffix("Z"))
     return max(0, int((now - value).total_seconds()))
+
+
+def segment_age_seconds(segment: RecordingSegment | None, now: datetime, ctx: TimezoneContext) -> int | None:
+    if segment is None or segment.started_at is None:
+        return None
+    if segment_uses_local_naive_display(segment):
+        local_now = now.replace(tzinfo=timezone.utc).astimezone(ctx.zone).replace(tzinfo=None)
+        return age_seconds(segment.started_at, local_now)
+    return age_seconds(segment.started_at, now)
+
+
+def expected_segment_duration_seconds(camera: Camera) -> int:
+    return max(int(camera.segment_minutes or 5), 1) * 60
+
+
+def stale_current_segment_after_seconds(camera: Camera) -> int:
+    return expected_segment_duration_seconds(camera) + SEGMENT_STALE_GRACE_SECONDS
 
 
 def counter_dict(rows: list[tuple[Any, int]]) -> dict[str, int]:
@@ -186,6 +205,7 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
     ctx = timezone_context(db)
     cameras = db.query(Camera).order_by(Camera.id.asc()).all()
     latest_jobs: dict[int, RecordingJob] = {}
+    now = utc_now()
 
     def job_rank(job: RecordingJob) -> tuple[int, datetime]:
         state = str(job.state or "")
@@ -203,18 +223,73 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
         if current is None or job_rank(job) >= job_rank(current):
             latest_jobs[job.camera_id] = job
 
+    writing_segments: dict[int, RecordingSegment] = {}
+    for segment in (
+        db.query(RecordingSegment)
+        .filter(
+            RecordingSegment.status == "writing",
+            RecordingSegment.source == RECORDER_SOURCE,
+            RecordingSegment.started_at.isnot(None),
+        )
+        .order_by(RecordingSegment.camera_id.asc(), RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
+        .all()
+    ):
+        writing_segments.setdefault(int(segment.camera_id), segment)
+
+    finalized_segments: dict[int, RecordingSegment] = {}
+    for segment in (
+        db.query(RecordingSegment)
+        .filter(
+            RecordingSegment.status.in_(("finalized", "ready")),
+            RecordingSegment.source == RECORDER_SOURCE,
+            RecordingSegment.started_at.isnot(None),
+        )
+        .order_by(
+            RecordingSegment.camera_id.asc(),
+            RecordingSegment.finalized_at.desc().nullslast(),
+            RecordingSegment.ended_at.desc().nullslast(),
+            RecordingSegment.started_at.desc(),
+            RecordingSegment.id.desc(),
+        )
+        .all()
+    ):
+        finalized_segments.setdefault(int(segment.camera_id), segment)
+
     rows = []
     for camera in cameras:
         job = latest_jobs.get(camera.id)
+        current_segment = writing_segments.get(camera.id)
+        latest_finalized_segment = finalized_segments.get(camera.id)
         job_state = job.state if job else None
         job_last_error = compact_error(job.last_error) if job else None
         camera_last_error = compact_error(camera.last_error)
+        expected_segment_seconds = expected_segment_duration_seconds(camera)
+        stale_after_seconds = stale_current_segment_after_seconds(camera)
+        current_segment_age = segment_age_seconds(current_segment, now, ctx)
+        latest_finalized_time = (
+            latest_finalized_segment.finalized_at
+            or latest_finalized_segment.ended_at
+            or latest_finalized_segment.started_at
+            if latest_finalized_segment
+            else None
+        )
+        latest_finalized_age = age_seconds(latest_finalized_time, now) if latest_finalized_time else None
+        stale_current_segment = bool(
+            job_state == "recording"
+            and current_segment is not None
+            and current_segment_age is not None
+            and current_segment_age > stale_after_seconds
+        )
         has_healthy_current_job = job_state in HEALTHY_NEUTRAL_JOB_STATES
         current_failure = (
             job_state in FAILED_JOB_STATES
             or (job_state not in HEALTHY_NEUTRAL_JOB_STATES and bool(job_last_error))
             or (not has_healthy_current_job and (camera.status == "error" or bool(camera_last_error)))
         )
+        reason_codes: list[str] = []
+        if stale_current_segment:
+            reason_codes.append(STALE_CURRENT_SEGMENT_REASON)
+        recording_health = "failed" if current_failure else ("degraded" if stale_current_segment else ("recording" if job_state == "recording" else "unknown"))
         rows.append({
             "camera_id": camera.id,
             "camera_name": camera.name,
@@ -229,6 +304,17 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             "last_error": job_last_error,
             "current_failure": bool(current_failure),
             "stale_error_ignored": bool((job_last_error or camera_last_error) and not current_failure),
+            "recording_health": recording_health,
+            "recording_health_reason_codes": reason_codes,
+            "current_segment_started_at": iso_or_none(current_segment.started_at if current_segment else None),
+            "current_segment_started_at_system": format_system_iso(current_segment.started_at, ctx, local_naive=segment_uses_local_naive_display(current_segment)) if current_segment else None,
+            "current_segment_age_seconds": current_segment_age,
+            "expected_segment_duration_seconds": expected_segment_seconds,
+            "stale_current_segment_after_seconds": stale_after_seconds,
+            "stale_current_segment": stale_current_segment,
+            "stale_current_segment_reason": STALE_CURRENT_SEGMENT_REASON if stale_current_segment else None,
+            "latest_finalized_segment_time": iso_or_none(latest_finalized_time),
+            "latest_finalized_segment_age_seconds": latest_finalized_age,
         })
     return rows
 

@@ -15,7 +15,9 @@ from app.services.recorder_runtime_status import (
     ACTIVE_JOB_STATES,
     HEARTBEAT_STALE_SECONDS,
     SEGMENT_STATUS_DELETED,
+    STALE_CURRENT_SEGMENT_REASON,
     age_seconds as _age_seconds,
+    stale_current_segment_after_seconds as _stale_current_segment_after_seconds,
     iso_or_none as _iso,
     list_camera_recording_states as _camera_recording_states,
     read_recorder_heartbeat as _read_heartbeat,
@@ -34,6 +36,7 @@ SAFE_REASON_CODES = {
     "recorder_heartbeat_stale",
     "recording_failed",
     "recording_stale",
+    "recording_segment_not_rotating",
     "live_failed",
     "live_starting",
     "stream_unavailable",
@@ -101,8 +104,7 @@ def _append_reason(reasons: list[str], reason: str | None) -> None:
 
 
 def _recording_stale_threshold(camera: Camera) -> int:
-    segment_minutes = int(camera.segment_minutes or 5)
-    return max((segment_minutes * 2 * 60) + RECORDING_STALE_GRACE_SECONDS, HEARTBEAT_STALE_SECONDS)
+    return _stale_current_segment_after_seconds(camera)
 
 
 def _latest_segment_by_camera(db: Session, now: datetime, ctx) -> dict[int, dict[str, Any]]:
@@ -284,6 +286,7 @@ def _build_camera_domain(
         recording_enabled = bool(camera.enabled and recording_mode == "always")
         job_state = recorder_state.get("job_state")
         current_failure = bool(recorder_state.get("current_failure"))
+        stale_current_segment = bool(recorder_state.get("stale_current_segment"))
         last_segment_age = segment_state.get("last_segment_age_seconds")
         stale_threshold = _recording_stale_threshold(camera)
 
@@ -300,6 +303,10 @@ def _build_camera_domain(
         elif recording_enabled and job_state not in ACTIVE_JOB_STATES:
             severity = "warning"
             _append_reason(reasons, "no_evidence")
+        elif recording_enabled and stale_current_segment:
+            severity = "warning"
+            _append_reason(reasons, STALE_CURRENT_SEGMENT_REASON)
+            _append_reason(reasons, "recording_stale")
         elif recording_enabled and last_segment_age is not None and last_segment_age > stale_threshold:
             severity = "warning"
             _append_reason(reasons, "recording_stale")
@@ -322,6 +329,7 @@ def _build_camera_domain(
                 "recording_mode": recording_mode,
                 "recording_enabled": recording_enabled,
                 "recording_state": job_state or "unknown",
+                "recording_health": recorder_state.get("recording_health") or ("degraded" if stale_current_segment else "unknown"),
                 "live_state": (live_state or {}).get("state", "unknown"),
                 "severity": severity,
                 "reason_codes": reasons,
@@ -332,6 +340,12 @@ def _build_camera_domain(
                 "last_segment_time_display_semantic": segment_state.get("last_segment_time_display_semantic"),
                 "last_segment_age_seconds": last_segment_age,
                 "stale_after_seconds": stale_threshold if recording_enabled else None,
+                "current_segment_started_at": recorder_state.get("current_segment_started_at"),
+                "current_segment_started_at_system": recorder_state.get("current_segment_started_at_system"),
+                "current_segment_age_seconds": recorder_state.get("current_segment_age_seconds"),
+                "expected_segment_duration_seconds": recorder_state.get("expected_segment_duration_seconds"),
+                "stale_current_segment": stale_current_segment,
+                "stale_current_segment_reason": recorder_state.get("stale_current_segment_reason"),
             }
         )
 
