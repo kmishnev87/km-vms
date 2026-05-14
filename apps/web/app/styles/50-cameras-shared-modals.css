@@ -167,13 +167,15 @@
 
 .cameraTileGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, 260px);
-  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 21px;
   align-items: start;
+  width: 100%;
 }
 
 .cameraTileCard {
-  width: 260px;
+  width: 100%;
+  min-width: 0;
   border: 1px solid #dbe3ef;
   border-radius: 8px;
   overflow: hidden;
@@ -189,7 +191,8 @@
 .cameraTilePreview {
   position: relative;
   width: 100%;
-  height: 148px;
+  height: auto;
+  aspect-ratio: 260 / 148;
   background: #0f172a;
   overflow: hidden;
 }
@@ -210,37 +213,6 @@
   color: #64748b;
   font-size: 12px;
   font-weight: 800;
-}
-
-.cameraTileStatus {
-  position: absolute;
-  left: 8px;
-  bottom: 8px;
-  max-width: calc(100% - 16px);
-  min-height: 22px;
-  display: inline-flex;
-  align-items: center;
-  padding: 3px 8px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.9);
-  color: #0f172a;
-  font-size: 10.5px;
-  font-weight: 800;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.cameraTileStatus.ok {
-  color: #166534;
-}
-
-.cameraTileStatus.warn {
-  color: #92400e;
-}
-
-.cameraTileStatus.err {
-  color: #991b1b;
 }
 
 .cameraTileBody {
@@ -328,13 +300,25 @@
   min-width: 0;
 }
 
+.cameraTileSystem div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 5px;
+  align-items: baseline;
+}
+
 .cameraTileSystem span {
   color: #94a3b8;
+  white-space: nowrap;
 }
 
 .cameraTileSystem strong {
   color: #475569;
   font-weight: 700;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cameraTileFoot {

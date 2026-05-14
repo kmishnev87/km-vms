@@ -28,6 +28,7 @@ from app.routers.cameras import (
     test_camera as camera_test_endpoint,
     update_onvif_profile_route,
 )
+from app.schemas.camera import CameraResponse
 from app.services.recording_retention import execute_segments
 
 
@@ -310,6 +311,47 @@ def test_deleted_camera_is_hidden_from_active_and_viewer_lists(db):
     assert db.get(Camera, camera.id).deleted_at is not None
     assert camera.id not in [item.id for item in list_cameras(db=db, current_user=actor("owner"))]
     assert camera.id not in [item["id"] for item in list_viewer_cameras(db=db, current_user=actor("viewer"))]
+
+
+def test_stage16_active_camera_response_strips_deleted_marker_without_mutating_deleted_history(db):
+    active = add_camera(db, name="stage16_active__deleted_7_1777777777")
+    active.storage_folder_name = "stage16_active_folder__deleted_7_1777777777"
+    deleted = add_camera(db, name="stage16_deleted_seed")
+    deleted.name = "stage16_deleted_seed__deleted_8_1777777777"
+    deleted.storage_folder_name = "stage16_deleted_folder__deleted_8_1777777777"
+    deleted.deleted_at = datetime.utcnow()
+    db.add(active)
+    db.add(deleted)
+    db.commit()
+    db.refresh(active)
+    db.refresh(deleted)
+
+    active_payload = CameraResponse.model_validate(active).model_dump(mode="json")
+    deleted_payload = CameraResponse.model_validate(deleted).model_dump(mode="json")
+
+    assert "__deleted_" not in active_payload["name"]
+    assert "__deleted_" not in active_payload["storage_folder_name"]
+    assert "__deleted_" in db.get(Camera, active.id).storage_folder_name
+    assert "__deleted_" in deleted_payload["name"]
+    assert "__deleted_" in deleted_payload["storage_folder_name"]
+
+
+def test_stage16_soft_delete_allows_same_name_reuse_without_active_marker_leak(db):
+    original = add_camera(db, name="stage16_reuse_camera")
+
+    result = delete_camera(original.id, FakeRequest(), delete_files=False, db=db, current_user=actor("owner"))
+    deleted_row = db.get(Camera, original.id)
+    replacement = add_camera(db, name="stage16_reuse_camera")
+    replacement_payload = CameraResponse.model_validate(replacement).model_dump(mode="json")
+
+    assert result["ok"] is True
+    assert deleted_row.deleted_at is not None
+    assert "__deleted_" in deleted_row.name
+    assert "__deleted_" in deleted_row.storage_folder_name
+    assert replacement.name == "stage16_reuse_camera"
+    assert replacement.storage_folder_name == "stage16_reuse_camera"
+    assert "__deleted_" not in replacement_payload["name"]
+    assert "__deleted_" not in replacement_payload["storage_folder_name"]
 
 
 def test_deleted_camera_id_cannot_reuse_credentials_for_test_or_onvif(db, monkeypatch):

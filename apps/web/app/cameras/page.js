@@ -4,6 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { apiFetch } from "../../lib/api";
+import { useCurrentUser } from "../../lib/currentUser";
+import {
+  applyCameraFormPatch,
+  loadCamerasViewMode,
+  isRtspPortManualOverrideForEdit,
+  saveCamerasViewMode,
+  smartRtspPort,
+} from "../../lib/cameraStage16";
 import { useI18n, useLocaleText } from "../../lib/i18n";
 
 const initialForm = {
@@ -18,6 +26,7 @@ const initialForm = {
   rtsp_sub_url: "",
   rtsp_host: "",
   rtsp_port: 554,
+  rtsp_port_manually_set: false,
   rtsp_transport: "tcp",
   onvif_path: "",
   onvif_profile_token: "",
@@ -318,6 +327,7 @@ function cameraPayloadFromForm(source, editingCameraId) {
     retention_days: Number(normalizedSource.retention_days),
     storage_quota_gb: Number(normalizedSource.storage_quota_gb),
   };
+  delete payload.rtsp_port_manually_set;
   if (protocol === "onvif") {
     payload.rtsp_host = rtspReachableHost(normalizedSource);
     payload.rtsp_port = rtspReachablePort(normalizedSource);
@@ -447,6 +457,7 @@ function getCameraRuntimeBadge(camera, runtime, recorderStatus, storageAvailable
 export default function CamerasPage() {
   const { t } = useI18n();
   const copy = useLocaleText("cameras");
+  const { currentUser } = useCurrentUser();
   const [cameras, setCameras] = useState([]);
   const [viewMode, setViewMode] = useState("list");
   const [storage, setStorage] = useState(null);
@@ -475,6 +486,7 @@ export default function CamerasPage() {
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [cameraToDelete, setCameraToDelete] = useState(null);
   const [deleteFiles, setDeleteFiles] = useState(false);
+  const viewModeLoadedRef = useRef(false);
 
   async function load() {
     try {
@@ -506,6 +518,16 @@ export default function CamerasPage() {
     };
   }, []);
 
+  useEffect(() => {
+    setViewMode(loadCamerasViewMode(window.localStorage, currentUser, "list"));
+    viewModeLoadedRef.current = true;
+  }, [currentUser?.id, currentUser?.username]);
+
+  useEffect(() => {
+    if (!viewModeLoadedRef.current) return;
+    saveCamerasViewMode(window.localStorage, currentUser, viewMode);
+  }, [currentUser?.id, currentUser?.username, viewMode]);
+
   function showProfileToast(title, text) {
     setProfileToast({ title, text, variant: "success" });
     window.clearTimeout(profileToastTimerRef.current);
@@ -514,22 +536,7 @@ export default function CamerasPage() {
 
   function patch(key, value) {
     setForm((prev) => {
-      const next = {
-        ...prev,
-        [key]: value,
-        ...(PREVIEW_SENSITIVE_FIELDS.has(key)
-          ? { preview_token: null, validation_token: null, onvif_probe_token: null, manual_confirm_unverified: false }
-          : {}),
-      };
-
-      if (key === "protocol" && value === "onvif") {
-        next.rtsp_host = prev.host || "";
-        next.rtsp_port = prev.rtsp_port || 554;
-      }
-      if (prev.protocol === "onvif" && key === "host" && (!prev.rtsp_host || prev.rtsp_host === prev.host)) {
-        next.rtsp_host = value;
-      }
-
+      const next = applyCameraFormPatch(prev, key, value, PREVIEW_SENSITIVE_FIELDS);
       return normalizeCameraStreamDefaults(next);
     });
     if (PREVIEW_SENSITIVE_FIELDS.has(key)) {
@@ -583,6 +590,8 @@ export default function CamerasPage() {
   }
 
   function openEdit(camera) {
+    const explicitEditRtspPort = camera.rtsp_port;
+    const editRtspPort = camera.rtsp_reachable_port || rtspPortFromValue(camera.rtsp_main_url || camera.rtsp_sub_url || "") || 554;
     setEditorMode("edit");
     setEditingCameraId(camera.id);
     setForm(normalizeCameraStreamDefaults({
@@ -596,7 +605,8 @@ export default function CamerasPage() {
       rtsp_main_url: prettyRtspValue(camera.rtsp_main_url || ""),
       rtsp_sub_url: prettyRtspValue(camera.rtsp_sub_url || ""),
       rtsp_host: camera.rtsp_reachable_host || rtspHostFromValue(camera.rtsp_main_url || camera.rtsp_sub_url || "") || camera.host || "",
-      rtsp_port: camera.rtsp_reachable_port || rtspPortFromValue(camera.rtsp_main_url || camera.rtsp_sub_url || "") || 554,
+      rtsp_port: editRtspPort,
+      rtsp_port_manually_set: isRtspPortManualOverrideForEdit(camera.port, explicitEditRtspPort),
       rtsp_transport: camera.rtsp_transport || "tcp",
       onvif_path: camera.onvif_path || "",
       onvif_profile_token: camera.onvif_profile_token || "",
@@ -690,7 +700,7 @@ export default function CamerasPage() {
       const nextForm = normalizeCameraStreamDefaults({
         ...form,
         rtsp_host: result.rtsp_reachable?.host || rtspReachableHost(form),
-        rtsp_port: result.rtsp_reachable?.port || rtspReachablePort(form),
+        rtsp_port: smartRtspPort(form, result.rtsp_reachable?.port || rtspReachablePort(form)),
         onvif_profile_token: mainToken,
         rtsp_main_url: mainProfile?.stream_path || prettyRtspValue(mainProfile?.stream_uri || form.rtsp_main_url),
         rtsp_sub_url: subProfile?.stream_path || prettyRtspValue(subProfile?.stream_uri || form.rtsp_sub_url),
@@ -747,7 +757,7 @@ export default function CamerasPage() {
       port: candidate.port || prev.port || 80,
       onvif_path: candidate.xaddr_path || prev.onvif_path || "",
       rtsp_host: candidate.host || prev.rtsp_host || "",
-      rtsp_port: prev.rtsp_port || 554,
+      rtsp_port: smartRtspPort(prev, candidate.port || prev.port || 554),
       preview_token: null,
       validation_token: null,
       onvif_probe_token: null,
@@ -783,7 +793,7 @@ export default function CamerasPage() {
       setForm((prev) => normalizeCameraStreamDefaults({
         ...prev,
         rtsp_host: result.rtsp_reachable?.host || rtspReachableHost(prev),
-        rtsp_port: result.rtsp_reachable?.port || rtspReachablePort(prev),
+        rtsp_port: smartRtspPort(prev, result.rtsp_reachable?.port || rtspReachablePort(prev)),
         onvif_profile_token: mainToken || prev.onvif_profile_token,
         rtsp_main_url: mainProfile?.stream_path || prev.rtsp_main_url,
         rtsp_sub_url: subProfile?.stream_path || prev.rtsp_sub_url,
@@ -1109,7 +1119,6 @@ export default function CamerasPage() {
                     ) : (
                       <div className="cameraTilePreviewEmpty">{copy.noFrame}</div>
                     )}
-                    <span className={`cameraTileStatus ${badge.cls}`}>{badge.text}</span>
                   </div>
                   <div className="cameraTileBody">
                     <div className="cameraTileTitleRow">

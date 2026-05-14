@@ -1,6 +1,10 @@
 /* Original shared responsive overrides for dashboard, settings, cameras, records, storage, system status and top navigation. */
 
 @media (max-width: 1200px) {
+  .cameraTileGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
   .cameraCardGrid {
     grid-template-columns: minmax(190px, 1fr) 260px minmax(260px, 1.4fr);
   }
@@ -17,6 +21,10 @@
 }
 
 @media (max-width: 900px) {
+  .cameraTileGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .operatorStatusDomains {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -410,11 +418,7 @@
   }
 
   .cameraTileGrid {
-    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  }
-
-  .cameraTileCard {
-    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .cameraDiscoveryItem {

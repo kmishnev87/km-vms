@@ -1,5 +1,16 @@
 from datetime import datetime
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_serializer
+
+
+DELETED_CAMERA_MARKER_RE = re.compile(r"__deleted_\d+_\d+$")
+
+
+def active_camera_display_value(value: str, deleted_at: datetime | None) -> str:
+    if deleted_at is not None:
+        return value
+    return DELETED_CAMERA_MARKER_RE.sub("", str(value or ""))
 
 
 class CameraBase(BaseModel):
@@ -106,6 +117,14 @@ class CameraResponse(BaseModel):
     preview_url: str | None = None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("name")
+    def serialize_active_name(self, value: str) -> str:
+        return active_camera_display_value(value, self.deleted_at)
+
+    @field_serializer("storage_folder_name")
+    def serialize_active_storage_folder_name(self, value: str) -> str:
+        return active_camera_display_value(value, self.deleted_at)
 
     class Config:
         from_attributes = True
