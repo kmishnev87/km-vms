@@ -4,7 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import CompactVideoCanvas from "./CompactVideoCanvas";
 import { apiFetch, issueLiveMediaTokenInfo } from "../lib/api";
-import { normalizeVideoDimensions, selectCompactVideoRenderMode } from "../lib/playbackResolution";
+import {
+  isCompactSmoothingSourceVideo,
+  normalizeVideoDimensions,
+  selectCompactVideoRenderMode,
+} from "../lib/playbackResolution";
 
 const READY_POLL_INTERVAL_MS = 700;
 const READY_TIMEOUT_MS = 210000;
@@ -66,11 +70,13 @@ export default function TilePlayer({ cameraId, stream }) {
     error: "",
   });
 
+  const sourceEligibleForCompactSmoothing =
+    stream === "main" || isCompactSmoothingSourceVideo(naturalResolution);
   const renderState = selectCompactVideoRenderMode({
     dimensions: naturalResolution,
     rect: viewerRect,
     isFullscreen,
-    sourceHighResolution: stream === "main",
+    sourceHighResolution: sourceEligibleForCompactSmoothing,
   });
   const compactCanvasRequested = renderState.renderer === "canvas" && readyState >= 2;
   const canvasGeneration = [
@@ -625,6 +631,7 @@ export default function TilePlayer({ cameraId, stream }) {
       data-rendered-rect={`${viewerRect.width}x${viewerRect.height}`}
       data-decoded-resolution={`${naturalResolution.width}x${naturalResolution.height}`}
       data-source-resolution={`${naturalResolution.width}x${naturalResolution.height}`}
+      data-source-compact-smoothing={sourceEligibleForCompactSmoothing ? "true" : "false"}
       data-ready-state={readyState}
       data-dimension-source={naturalResolution.source || "missing"}
       data-canvas-ready={nativeVideoSuppressed ? "true" : "false"}

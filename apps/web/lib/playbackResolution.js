@@ -3,6 +3,11 @@ export const HIGH_RESOLUTION_THRESHOLD = {
   height: 1440,
 };
 
+export const COMPACT_SMOOTHING_SOURCE_THRESHOLD = {
+  minWidth: 1920,
+  minPixels: 1900000,
+};
+
 export const COMPACT_VIEWER_THRESHOLD = {
   minWidth: 960,
   minHeight: 540,
@@ -38,6 +43,15 @@ export function isHighResolutionVideo(dimensions) {
   const { width, height } = normalizeVideoDimensions(dimensions?.width, dimensions?.height);
   if (!width || !height) return false;
   return width >= HIGH_RESOLUTION_THRESHOLD.width || height >= HIGH_RESOLUTION_THRESHOLD.height;
+}
+
+export function isCompactSmoothingSourceVideo(dimensions) {
+  const { width, height } = normalizeVideoDimensions(dimensions?.width, dimensions?.height);
+  if (!width || !height) return false;
+  return (
+    width >= COMPACT_SMOOTHING_SOURCE_THRESHOLD.minWidth ||
+    width * height >= COMPACT_SMOOTHING_SOURCE_THRESHOLD.minPixels
+  );
 }
 
 export function isCompactPlaybackViewer(dimensions, rect) {
@@ -169,7 +183,10 @@ export function selectCompactVideoRenderMode({
   const natural = normalizeVideoDimensions(dimensions?.width, dimensions?.height);
   const rendered = normalizeVideoDimensions(rect?.width, rect?.height);
   const ratio = downscaleRatio(natural, rendered);
-  const highResolution = isHighResolutionVideo(natural) || Boolean(sourceHighResolution && natural.width && natural.height);
+  const highResolution =
+    isHighResolutionVideo(natural) ||
+    isCompactSmoothingSourceVideo(natural) ||
+    Boolean(sourceHighResolution && natural.width && natural.height);
 
   if (isFullscreen) {
     return { renderer: "native", mode: "normal", qualityTier: "normal", ratio, backingScale: 1, reason: "fullscreen" };

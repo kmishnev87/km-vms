@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   compactRenderTierForRatio,
+  isCompactSmoothingSourceVideo,
   planCompactVideoDownscale,
   selectCompactVideoRenderMode,
 } from "../lib/playbackResolution.js";
@@ -51,6 +52,7 @@ test("large and fullscreen views stay native while compact high-res uses canvas"
 });
 
 test("low-resolution substream is not over-treated by dimensions alone", () => {
+  assert.equal(isCompactSmoothingSourceVideo({ width: 1280, height: 720 }), false);
   assert.equal(
     selectCompactVideoRenderMode({
       dimensions: { width: 1280, height: 720 },
@@ -58,6 +60,28 @@ test("low-resolution substream is not over-treated by dimensions alone", () => {
       sourceHighResolution: false,
     }).renderer,
     "native"
+  );
+});
+
+test("high-resolution substreams are eligible for compact smoothing by dimensions", () => {
+  assert.equal(isCompactSmoothingSourceVideo({ width: 2048, height: 928 }), true);
+  assert.equal(isCompactSmoothingSourceVideo({ width: 1920, height: 1080 }), true);
+
+  assert.equal(
+    selectCompactVideoRenderMode({
+      dimensions: { width: 2048, height: 928 },
+      rect: { width: 512, height: 232 },
+      sourceHighResolution: false,
+    }).renderer,
+    "canvas"
+  );
+  assert.equal(
+    selectCompactVideoRenderMode({
+      dimensions: { width: 1920, height: 1080 },
+      rect: { width: 480, height: 270 },
+      sourceHighResolution: false,
+    }).renderer,
+    "canvas"
   );
 });
 
@@ -83,6 +107,9 @@ test("V4 renderer lifecycle forbids V3 premature native suppression", () => {
   const tile = read("components/TilePlayer.js");
   const archive = read("components/ArchiveTilePlayer.js");
   const canvas = read("components/CompactVideoCanvas.js");
+
+  assert.equal(tile.includes("isCompactSmoothingSourceVideo(naturalResolution)"), true);
+  assert.equal(tile.includes("sourceHighResolution: stream === \"main\""), false);
 
   for (const source of [tile, archive]) {
     assert.equal(source.includes("compactCanvasActive = renderState.renderer === \"canvas\" && readyState >= 2"), false);
