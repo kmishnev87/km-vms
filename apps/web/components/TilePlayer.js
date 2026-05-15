@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
+import CompactVideoCanvas from "./CompactVideoCanvas";
 import { apiFetch, issueLiveMediaTokenInfo } from "../lib/api";
+import { normalizeVideoDimensions, selectCompactVideoRenderMode } from "../lib/playbackResolution";
 
 const READY_POLL_INTERVAL_MS = 700;
 const READY_TIMEOUT_MS = 210000;
@@ -49,9 +51,96 @@ export default function TilePlayer({ cameraId, stream }) {
   const nativeHlsCleanupRef = useRef(null);
   const touchTimerRef = useRef(null);
   const viewerIdRef = useRef(null);
+  const dimensionProbeTimerRef = useRef(null);
 
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
+  const [naturalResolution, setNaturalResolution] = useState({ width: 0, height: 0, source: "missing" });
+  const [viewerRect, setViewerRect] = useState({ width: 0, height: 0 });
+  const [readyState, setReadyState] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [canvasFrame, setCanvasFrame] = useState({
+    ready: false,
+    generation: "",
+    reason: "inactive",
+    error: "",
+  });
+
+  const renderState = selectCompactVideoRenderMode({
+    dimensions: naturalResolution,
+    rect: viewerRect,
+    isFullscreen,
+    sourceHighResolution: stream === "main",
+  });
+  const compactCanvasRequested = renderState.renderer === "canvas" && readyState >= 2;
+  const canvasGeneration = [
+    cameraId || "",
+    stream || "",
+    naturalResolution.width,
+    naturalResolution.height,
+    viewerRect.width,
+    viewerRect.height,
+    isFullscreen ? "fullscreen" : "inline",
+  ].join(":");
+  const nativeVideoSuppressed =
+    compactCanvasRequested &&
+    canvasFrame.ready &&
+    canvasFrame.generation === canvasGeneration &&
+    !canvasFrame.error;
+
+  const handleCanvasFrameState = useCallback((next) => {
+    setCanvasFrame({
+      ready: Boolean(next?.ready),
+      generation: String(next?.generation || ""),
+      reason: next?.reason || "",
+      error: next?.error || "",
+    });
+  }, []);
+
+  function applyNaturalResolution(width, height, source) {
+    const normalized = normalizeVideoDimensions(width, height);
+    setNaturalResolution((prev) => {
+      if (
+        prev.width === normalized.width &&
+        prev.height === normalized.height &&
+        prev.source === source
+      ) {
+        return prev;
+      }
+      return { ...normalized, source };
+    });
+  }
+
+  function clearDimensionProbe() {
+    if (dimensionProbeTimerRef.current) {
+      clearTimeout(dimensionProbeTimerRef.current);
+      dimensionProbeTimerRef.current = null;
+    }
+  }
+
+  function sampleVideoDimensions(source = "video") {
+    const video = videoRef.current;
+    if (!video) return;
+    setReadyState(Number(video.readyState || 0));
+    if (video.videoWidth && video.videoHeight) {
+      applyNaturalResolution(video.videoWidth, video.videoHeight, source);
+    }
+  }
+
+  function startDimensionProbe(source = "probe") {
+    clearDimensionProbe();
+    let attempts = 0;
+    const tick = () => {
+      attempts += 1;
+      sampleVideoDimensions(source);
+      const video = videoRef.current;
+      if (video?.videoWidth && video?.videoHeight) return;
+      if (attempts < 20) {
+        dimensionProbeTimerRef.current = setTimeout(tick, 250);
+      }
+    };
+    tick();
+  }
 
   function destroyPlayer() {
     if (retryTimerRef.current) {
@@ -77,6 +166,10 @@ export default function TilePlayer({ cameraId, stream }) {
       } catch (_) {}
       hlsRef.current = null;
     }
+    clearDimensionProbe();
+    setReadyState(0);
+    setNaturalResolution({ width: 0, height: 0, source: "missing" });
+    setCanvasFrame({ ready: false, generation: "", reason: "destroy", error: "" });
 
     const video = videoRef.current;
     if (video) {
@@ -100,11 +193,67 @@ export default function TilePlayer({ cameraId, stream }) {
   }
 
   useEffect(() => {
+    const el = wrapRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+
+    const updateRect = () => {
+      const rect = el.getBoundingClientRect();
+      setViewerRect({ width: Math.round(rect.width || 0), height: Math.round(rect.height || 0) });
+      setCanvasFrame((prev) => ({ ...prev, ready: false, reason: "resize", error: "" }));
+    };
+    updateRect();
+    const observer = new ResizeObserver(updateRect);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [cameraId, stream]);
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      const fullscreenElement = document.fullscreenElement;
+      const wrap = wrapRef.current;
+      setIsFullscreen(Boolean(fullscreenElement && (fullscreenElement === wrap || wrap?.contains(fullscreenElement))));
+      setCanvasFrame((prev) => ({ ...prev, ready: false, reason: "fullscreen-change", error: "" }));
+    }
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    handleFullscreenChange();
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const updateMetadata = () => sampleVideoDimensions("video-event");
+    const resetReadiness = () => {
+      setReadyState(Number(video.readyState || 0));
+      setCanvasFrame((prev) => ({ ...prev, ready: false, reason: "video-state", error: "" }));
+    };
+    video.addEventListener("loadedmetadata", updateMetadata);
+    video.addEventListener("loadeddata", updateMetadata);
+    video.addEventListener("canplay", updateMetadata);
+    video.addEventListener("playing", updateMetadata);
+    video.addEventListener("resize", updateMetadata);
+    video.addEventListener("emptied", resetReadiness);
+    video.addEventListener("waiting", resetReadiness);
+    video.addEventListener("stalled", resetReadiness);
+    return () => {
+      video.removeEventListener("loadedmetadata", updateMetadata);
+      video.removeEventListener("loadeddata", updateMetadata);
+      video.removeEventListener("canplay", updateMetadata);
+      video.removeEventListener("playing", updateMetadata);
+      video.removeEventListener("resize", updateMetadata);
+      video.removeEventListener("emptied", resetReadiness);
+      video.removeEventListener("waiting", resetReadiness);
+      video.removeEventListener("stalled", resetReadiness);
+    };
+  }, [cameraId, stream]);
+
+  useEffect(() => {
     let cancelled = false;
     const sourceKey = {
       cameraId: cameraId ? Number(cameraId) : null,
       stream: stream || null,
     };
+    setCanvasFrame({ ready: false, generation: "", reason: "source-change", error: "" });
 
     async function closeViewer() {
       if (touchTimerRef.current) {
@@ -149,6 +298,9 @@ export default function TilePlayer({ cameraId, stream }) {
           );
           const item = response?.items?.[0];
           if (item) lastItem = item;
+          if (item?.source_resolution?.width && item?.source_resolution?.height) {
+            applyNaturalResolution(item.source_resolution.width, item.source_resolution.height, "runtime-source");
+          }
           if (item?.running && item?.ready) {
             return { ready: true, item };
           }
@@ -306,12 +458,27 @@ export default function TilePlayer({ cameraId, stream }) {
           }
         });
 
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
           if (cancelled) return;
+          const level = Array.isArray(data?.levels)
+            ? data.levels.find((item) => item?.width && item?.height)
+            : null;
+          if (level?.width && level?.height) {
+            applyNaturalResolution(level.width, level.height, "hls-manifest");
+          }
           authRefreshFailures = 0;
           setStatus("playing");
           setError("");
           video.play().catch(() => {});
+          startDimensionProbe("hls-manifest-probe");
+        });
+
+        hls.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
+          const level = hls.levels?.[data?.level];
+          if (level?.width && level?.height) {
+            applyNaturalResolution(level.width, level.height, "hls-level");
+          }
+          sampleVideoDimensions("hls-level");
         });
 
         hls.on(Hls.Events.ERROR, async (_event, data) => {
@@ -344,10 +511,12 @@ export default function TilePlayer({ cameraId, stream }) {
 
         const onLoaded = () => {
           if (cancelled) return;
+          sampleVideoDimensions("native-hls");
           setStatus("playing");
           setError("");
           nativeRefreshFailures = 0;
           video.play().catch(() => {});
+          startDimensionProbe("native-hls-probe");
         };
 
         const onError = async () => {
@@ -438,23 +607,49 @@ export default function TilePlayer({ cameraId, stream }) {
       cancelled = true;
       destroyPlayer();
       closeViewer();
+      clearDimensionProbe();
     };
   }, [cameraId, stream]);
 
   return (
     <div
       ref={wrapRef}
-      className="liveVideoWrap"
+      className={`liveVideoWrap ${compactCanvasRequested ? "compactVideoCanvasRequested" : ""} ${nativeVideoSuppressed ? "compactVideoCanvasActive" : ""}`}
       onDoubleClick={toggleFullscreen}
       title={TEXT.doubleClick}
+      data-render-context="live"
+      data-renderer={nativeVideoSuppressed ? "canvas" : "native"}
+      data-render-mode={renderState.mode}
+      data-quality-tier={renderState.qualityTier}
+      data-downscale-ratio={renderState.ratio == null ? "" : renderState.ratio.toFixed(4)}
+      data-rendered-rect={`${viewerRect.width}x${viewerRect.height}`}
+      data-decoded-resolution={`${naturalResolution.width}x${naturalResolution.height}`}
+      data-source-resolution={`${naturalResolution.width}x${naturalResolution.height}`}
+      data-ready-state={readyState}
+      data-dimension-source={naturalResolution.source || "missing"}
+      data-canvas-ready={nativeVideoSuppressed ? "true" : "false"}
+      data-first-frame-drawn={canvasFrame.ready && canvasFrame.generation === canvasGeneration ? "true" : "false"}
+      data-canvas-draw-error={canvasFrame.error || ""}
+      data-canvas-generation={canvasGeneration}
+      data-fullscreen={isFullscreen ? "true" : "false"}
     >
       <video
         ref={videoRef}
-        className="liveVideo"
+        className={`liveVideo ${nativeVideoSuppressed ? "nativeVideoSuppressed" : ""}`}
         muted
         autoPlay
         playsInline
         controls={false}
+      />
+      <CompactVideoCanvas
+        videoRef={videoRef}
+        active={compactCanvasRequested}
+        mode={renderState.mode}
+        ratio={renderState.ratio}
+        backingScale={renderState.backingScale}
+        generation={canvasGeneration}
+        onFrameState={handleCanvasFrameState}
+        className="liveCompactVideoCanvas"
       />
 
       {status === "loading" || status === "waiting" ? (

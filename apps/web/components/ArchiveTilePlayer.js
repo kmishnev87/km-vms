@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import CompactVideoCanvas from "./CompactVideoCanvas";
 import { issueChronologyMediaToken } from "../lib/api";
 import {
   normalizeVideoDimensions,
-  shouldUseAdaptiveHighResolutionPlayback,
+  selectCompactVideoRenderMode,
 } from "../lib/playbackResolution";
 
 const MEDIA_REFRESH_RETRY_LIMIT = 1;
@@ -20,19 +21,96 @@ export default function ArchiveTilePlayer({
   const playIntentRef = useRef(false);
   const playbackRateRef = useRef(1);
   const unsupportedDownloadBusyRef = useRef(false);
+  const dimensionProbeTimerRef = useRef(null);
   const [status, setStatus] = useState("idle");
-  const [naturalResolution, setNaturalResolution] = useState({ width: 0, height: 0 });
+  const [naturalResolution, setNaturalResolution] = useState({ width: 0, height: 0, source: "missing" });
   const [viewerRect, setViewerRect] = useState({ width: 0, height: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [readyState, setReadyState] = useState(0);
+  const [canvasFrame, setCanvasFrame] = useState({
+    ready: false,
+    generation: "",
+    reason: "inactive",
+    error: "",
+  });
 
   playIntentRef.current = Boolean(isPlaying);
   playbackRateRef.current = Number(speed || 1);
 
-  const adaptiveHighRes = shouldUseAdaptiveHighResolutionPlayback(
-    naturalResolution,
-    viewerRect,
-    isFullscreen
-  );
+  const renderState = selectCompactVideoRenderMode({
+    dimensions: naturalResolution,
+    rect: viewerRect,
+    isFullscreen,
+    sourceHighResolution: true,
+  });
+  const compactCanvasRequested = renderState.renderer === "canvas" && readyState >= 2;
+  const canvasGeneration = [
+    playback?.playbackKey || "empty",
+    naturalResolution.width,
+    naturalResolution.height,
+    viewerRect.width,
+    viewerRect.height,
+    isFullscreen ? "fullscreen" : "inline",
+  ].join(":");
+  const nativeVideoSuppressed =
+    compactCanvasRequested &&
+    canvasFrame.ready &&
+    canvasFrame.generation === canvasGeneration &&
+    !canvasFrame.error;
+
+  const handleCanvasFrameState = useCallback((next) => {
+    setCanvasFrame({
+      ready: Boolean(next?.ready),
+      generation: String(next?.generation || ""),
+      reason: next?.reason || "",
+      error: next?.error || "",
+    });
+  }, []);
+
+  function applyNaturalResolution(width, height, source) {
+    const normalized = normalizeVideoDimensions(width, height);
+    setNaturalResolution((prev) => {
+      if (
+        prev.width === normalized.width &&
+        prev.height === normalized.height &&
+        prev.source === source
+      ) {
+        return prev;
+      }
+      return { ...normalized, source };
+    });
+  }
+
+  function clearDimensionProbe() {
+    if (dimensionProbeTimerRef.current) {
+      clearTimeout(dimensionProbeTimerRef.current);
+      dimensionProbeTimerRef.current = null;
+    }
+  }
+
+  function sampleVideoDimensions(source = "video") {
+    const video = videoRef.current;
+    if (!video) return;
+    setReadyState(Number(video.readyState || 0));
+    if (video.videoWidth && video.videoHeight) {
+      applyNaturalResolution(video.videoWidth, video.videoHeight, source);
+    }
+  }
+
+  function startDimensionProbe(source = "probe") {
+    clearDimensionProbe();
+    let attempts = 0;
+    const tick = () => {
+      attempts += 1;
+      sampleVideoDimensions(source);
+      const video = videoRef.current;
+      if (video?.videoWidth && video?.videoHeight) return;
+      if (attempts < 20) {
+        dimensionProbeTimerRef.current = setTimeout(tick, 250);
+      }
+    };
+    tick();
+  }
 
   async function buildMediaUrl() {
     if (!playback?.cameraId || !playback?.relPath) return "";
@@ -105,7 +183,10 @@ export default function ArchiveTilePlayer({
 
     const hardReset = () => {
       finishRefreshCycle();
-      setNaturalResolution({ width: 0, height: 0 });
+      clearDimensionProbe();
+      setNaturalResolution({ width: 0, height: 0, source: "missing" });
+      setReadyState(0);
+      setCanvasFrame({ ready: false, generation: "", reason: "hard-reset", error: "" });
       try {
         video.pause();
       } catch (_) {}
@@ -127,7 +208,7 @@ export default function ArchiveTilePlayer({
     }
 
     function updateNaturalResolution() {
-      setNaturalResolution(normalizeVideoDimensions(video.videoWidth, video.videoHeight));
+      sampleVideoDimensions("video-event");
     }
 
     function restorePlaybackState(loadState) {
@@ -165,7 +246,9 @@ export default function ArchiveTilePlayer({
         playIntent,
         playbackRate: playbackRateRef.current,
       };
-      setNaturalResolution({ width: 0, height: 0 });
+      setNaturalResolution({ width: 0, height: 0, source: "missing" });
+      setReadyState(0);
+      setCanvasFrame({ ready: false, generation: "", reason: "load-media", error: "" });
       setStatus("loading");
 
       try {
@@ -214,6 +297,7 @@ export default function ArchiveTilePlayer({
 
     const handleLoaded = () => {
       updateNaturalResolution();
+      startDimensionProbe("loaded-media-probe");
       restorePlaybackState(pendingLoad);
     };
 
@@ -224,7 +308,10 @@ export default function ArchiveTilePlayer({
     hardReset();
 
     video.addEventListener("loadedmetadata", handleLoaded);
+    video.addEventListener("loadeddata", handleLoaded);
     video.addEventListener("canplay", handleLoaded);
+    video.addEventListener("playing", handleLoaded);
+    video.addEventListener("resize", handleLoaded);
     video.addEventListener("error", handleError);
 
     const handleStalledMedia = () => {
@@ -241,9 +328,13 @@ export default function ArchiveTilePlayer({
       loadSequence += 1;
       finishRefreshCycle();
       video.removeEventListener("loadedmetadata", handleLoaded);
+      video.removeEventListener("loadeddata", handleLoaded);
       video.removeEventListener("canplay", handleLoaded);
+      video.removeEventListener("playing", handleLoaded);
+      video.removeEventListener("resize", handleLoaded);
       video.removeEventListener("error", handleError);
       video.removeEventListener("stalled", handleStalledMedia);
+      clearDimensionProbe();
     };
   }, [playback?.playbackKey]);
 
@@ -254,6 +345,7 @@ export default function ArchiveTilePlayer({
     const updateRect = () => {
       const rect = el.getBoundingClientRect();
       setViewerRect({ width: Math.round(rect.width || 0), height: Math.round(rect.height || 0) });
+      setCanvasFrame((prev) => ({ ...prev, ready: false, reason: "resize", error: "" }));
     };
     updateRect();
     const observer = new ResizeObserver(updateRect);
@@ -266,6 +358,7 @@ export default function ArchiveTilePlayer({
       const fullscreenElement = document.fullscreenElement;
       const wrap = wrapRef.current;
       setIsFullscreen(Boolean(fullscreenElement && (fullscreenElement === wrap || wrap?.contains(fullscreenElement))));
+      setCanvasFrame((prev) => ({ ...prev, ready: false, reason: "fullscreen-change", error: "" }));
     }
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     handleFullscreenChange();
@@ -303,20 +396,45 @@ export default function ArchiveTilePlayer({
   return (
     <div
       ref={wrapRef}
-      className={`archiveVideoWrap ${adaptiveHighRes ? "adaptiveHighRes" : ""}`}
+      className={`archiveVideoWrap ${compactCanvasRequested ? "compactVideoCanvasRequested" : ""} ${nativeVideoSuppressed ? "compactVideoCanvasActive" : ""}`}
       onDoubleClick={allowFullscreen ? toggleFullscreen : undefined}
       title={allowFullscreen ? "Двойной клик для полноэкранного режима" : undefined}
-      data-highres-adaptive={adaptiveHighRes ? "true" : "false"}
+      data-highres-adaptive={nativeVideoSuppressed ? "true" : "false"}
       data-natural-resolution={`${naturalResolution.width}x${naturalResolution.height}`}
+      data-render-context="chronology"
+      data-renderer={nativeVideoSuppressed ? "canvas" : "native"}
+      data-render-mode={renderState.mode}
+      data-quality-tier={renderState.qualityTier}
+      data-downscale-ratio={renderState.ratio == null ? "" : renderState.ratio.toFixed(4)}
+      data-rendered-rect={`${viewerRect.width}x${viewerRect.height}`}
+      data-decoded-resolution={`${naturalResolution.width}x${naturalResolution.height}`}
+      data-source-resolution={`${naturalResolution.width}x${naturalResolution.height}`}
+      data-ready-state={readyState}
+      data-dimension-source={naturalResolution.source || "missing"}
+      data-canvas-ready={nativeVideoSuppressed ? "true" : "false"}
+      data-first-frame-drawn={canvasFrame.ready && canvasFrame.generation === canvasGeneration ? "true" : "false"}
+      data-canvas-draw-error={canvasFrame.error || ""}
+      data-canvas-generation={canvasGeneration}
+      data-fullscreen={isFullscreen ? "true" : "false"}
     >
       <video
         key={playback?.playbackKey || "empty"}
         ref={videoRef}
-        className={`archiveVideo ${adaptiveHighRes ? "archiveVideoAdaptiveHighRes" : ""}`}
+        className={`archiveVideo ${nativeVideoSuppressed ? "nativeVideoSuppressed" : ""}`}
         muted
         autoPlay={false}
         playsInline
         controls={false}
+      />
+      <CompactVideoCanvas
+        videoRef={videoRef}
+        active={compactCanvasRequested}
+        mode={renderState.mode}
+        ratio={renderState.ratio}
+        backingScale={renderState.backingScale}
+        generation={canvasGeneration}
+        onFrameState={handleCanvasFrameState}
+        className="archiveCompactVideoCanvas"
       />
 
       {status === "loading" ? (

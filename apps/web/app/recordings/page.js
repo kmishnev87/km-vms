@@ -16,7 +16,11 @@ import {
 } from "../../lib/archiveExports";
 import { useCurrentUser } from "../../lib/currentUser";
 import { useI18n } from "../../lib/i18n";
-import { shouldUseAdaptiveHighResolutionPlayback, normalizeVideoDimensions } from "../../lib/playbackResolution";
+import {
+  shouldUseAdaptiveHighResolutionPlayback,
+  normalizeVideoDimensions,
+  selectCompactVideoRenderMode,
+} from "../../lib/playbackResolution";
 import { formatProductDateTime, productDateFilterParam, productDateTimeInputValue } from "../../lib/timezone";
 
 const PAGE_SIZE = 30;
@@ -471,6 +475,16 @@ export default function RecordingsPage() {
 
   const viewerAdaptiveHighRes = useMemo(
     () => shouldUseAdaptiveHighResolutionPlayback(viewerResolution, viewerRect, viewerFullscreen),
+    [viewerResolution, viewerRect, viewerFullscreen]
+  );
+  const viewerRenderState = useMemo(
+    () =>
+      selectCompactVideoRenderMode({
+        dimensions: viewerResolution,
+        rect: viewerRect,
+        isFullscreen: viewerFullscreen,
+        sourceHighResolution: true,
+      }),
     [viewerResolution, viewerRect, viewerFullscreen]
   );
 
@@ -1118,6 +1132,20 @@ export default function RecordingsPage() {
                 className={`recordingVideoFrame ${viewerAdaptiveHighRes ? "adaptiveHighRes" : ""}`}
                 data-highres-adaptive={viewerAdaptiveHighRes ? "true" : "false"}
                 data-natural-resolution={`${viewerResolution.width}x${viewerResolution.height}`}
+                data-render-context="records"
+                data-renderer="native"
+                data-render-mode={viewerRenderState.mode}
+                data-quality-tier={viewerRenderState.qualityTier}
+                data-downscale-ratio={viewerRenderState.ratio == null ? "" : viewerRenderState.ratio.toFixed(4)}
+                data-rendered-rect={`${viewerRect.width}x${viewerRect.height}`}
+                data-decoded-resolution={`${viewerResolution.width}x${viewerResolution.height}`}
+                data-source-resolution={`${viewerResolution.width}x${viewerResolution.height}`}
+                data-ready-state={viewerVideoRef.current?.readyState || 0}
+                data-dimension-source={viewerResolution.width && viewerResolution.height ? "video-metadata" : "missing"}
+                data-canvas-ready="false"
+                data-first-frame-drawn="false"
+                data-canvas-draw-error=""
+                data-fullscreen={viewerFullscreen ? "true" : "false"}
               >
                 <video
                   key={viewerUrl}
