@@ -32,6 +32,9 @@ const MIN_TILE_W = 220;
 const MIN_TILE_H = 150;
 const DEFAULT_W_PCT = 0.32;
 const DEFAULT_H_PCT = 0.34;
+const PLAYBACK_COORDINATOR_SOFT_TIMEOUT_MS = 3500;
+const PLAYBACK_COORDINATOR_HARD_TIMEOUT_MS = 7000;
+const TILE_READY_STATES = new Set(["ready", "empty", "error", "unsupported", "timeout"]);
 const ZOOM_KEYS = ["24h", "3d", "7d"];
 const ZOOM_HOURS = {
   "24h": 24,
@@ -283,6 +286,9 @@ export default function ChronologyPage() {
   const loadedRangesWindowRef = useRef(null);
   const seekActionIdRef = useRef(0);
   const activeSeekActionRef = useRef(null);
+  const playbackCoordinatorIdRef = useRef(0);
+  const playbackCoordinatorRef = useRef(null);
+  const playbackCoordinatorTimersRef = useRef({ soft: null, hard: null });
   const playWasActiveRef = useRef(false);
   const shellRef = useRef(null);
   const tileRefs = useRef(new Map());
@@ -302,6 +308,7 @@ export default function ChronologyPage() {
   const [time, setTime] = useState(initialForm.time);
   const [speed, setSpeed] = useState(1);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackCoordinator, setPlaybackCoordinator] = useState(null);
   const [zoomKey, setZoomKey] = useState("24h");
   const [playbackMap, setPlaybackMap] = useState({});
   const [rangesData, setRangesData] = useState({});
@@ -393,6 +400,7 @@ export default function ChronologyPage() {
     loadCameras();
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      clearPlaybackCoordinatorTimers();
     };
   }, []);
 
@@ -425,6 +433,20 @@ export default function ChronologyPage() {
   useEffect(() => {
     playbackMapRef.current = playbackMap;
   }, [playbackMap]);
+
+  useEffect(() => {
+    playbackCoordinatorRef.current = playbackCoordinator;
+  }, [playbackCoordinator]);
+
+  useEffect(() => {
+    if (
+      playbackCoordinator?.id &&
+      playbackCoordinator.releaseState === "holding" &&
+      coordinatorBarrierComplete(playbackCoordinator)
+    ) {
+      releasePlaybackCoordinator(playbackCoordinator.id, "released");
+    }
+  }, [playbackCoordinator]);
 
   useEffect(() => {
     if (!isPlaying || !currentTsRef.current) return undefined;
@@ -557,6 +579,139 @@ export default function ChronologyPage() {
     activeSeekActionRef.current = null;
   }
 
+  function clearPlaybackCoordinatorTimers() {
+    const timers = playbackCoordinatorTimersRef.current;
+    if (timers.soft) {
+      clearTimeout(timers.soft);
+      timers.soft = null;
+    }
+    if (timers.hard) {
+      clearTimeout(timers.hard);
+      timers.hard = null;
+    }
+  }
+
+  function terminalTileState(state) {
+    return TILE_READY_STATES.has(String(state || ""));
+  }
+
+  function coordinatorBarrierComplete(coordinator) {
+    if (!coordinator?.expectedTileIds?.length) return true;
+    return coordinator.expectedTileIds.every((tileId) =>
+      terminalTileState(coordinator.tileStates?.[tileId]?.state)
+    );
+  }
+
+  function releasePlaybackCoordinator(id, releaseState = "released") {
+    clearPlaybackCoordinatorTimers();
+    setPlaybackCoordinator((prev) => {
+      if (!prev || prev.id !== id || prev.releaseState !== "holding") return prev;
+      return { ...prev, releaseState, state: releaseState === "partial" ? "partial" : "ready" };
+    });
+    const current = playbackCoordinatorRef.current;
+    if (current?.id === id && current.shouldResume) {
+      setIsPlaying(true);
+    }
+  }
+
+  function markCoordinatorTimeout(id, timeoutState = "timeout") {
+    let nextCoordinator = null;
+    setPlaybackCoordinator((prev) => {
+      if (!prev || prev.id !== id || prev.releaseState !== "holding") return prev;
+      const tileStates = { ...prev.tileStates };
+      prev.expectedTileIds.forEach((tileId) => {
+        if (!terminalTileState(tileStates[tileId]?.state)) {
+          tileStates[tileId] = {
+            ...(tileStates[tileId] || {}),
+            state: timeoutState,
+            facts: { ...(tileStates[tileId]?.facts || {}), timeout: true },
+            updatedAt: Date.now(),
+          };
+        }
+      });
+      nextCoordinator = { ...prev, tileStates, state: "partial" };
+      playbackCoordinatorRef.current = nextCoordinator;
+      return nextCoordinator;
+    });
+    if (nextCoordinator) {
+      playbackCoordinatorRef.current = nextCoordinator;
+    }
+    releasePlaybackCoordinator(id, "partial");
+  }
+
+  function startPlaybackCoordinator({ targetTs, shouldResume, expectedTileIds }) {
+    clearPlaybackCoordinatorTimers();
+    const id = `chronology-${Date.now()}-${++playbackCoordinatorIdRef.current}`;
+    const uniqueTileIds = Array.from(new Set(expectedTileIds.map(String).filter(Boolean)));
+    const tileStates = Object.fromEntries(
+      uniqueTileIds.map((tileId) => [tileId, { state: "pending", updatedAt: Date.now(), facts: {} }])
+    );
+    const coordinator = {
+      id,
+      targetTs,
+      shouldResume: Boolean(shouldResume),
+      expectedTileIds: uniqueTileIds,
+      tileStates,
+      state: "preparing",
+      releaseState: "holding",
+      softTimeoutMs: PLAYBACK_COORDINATOR_SOFT_TIMEOUT_MS,
+      hardTimeoutMs: PLAYBACK_COORDINATOR_HARD_TIMEOUT_MS,
+      createdAt: Date.now(),
+    };
+    playbackCoordinatorRef.current = coordinator;
+    setPlaybackCoordinator(coordinator);
+
+    if (!uniqueTileIds.length) {
+      releasePlaybackCoordinator(id, "released");
+      return coordinator;
+    }
+
+    playbackCoordinatorTimersRef.current.soft = setTimeout(() => {
+      const current = playbackCoordinatorRef.current;
+      if (current?.id === id && current.releaseState === "holding" && !coordinatorBarrierComplete(current)) {
+        setPlaybackCoordinator((prev) => (prev?.id === id ? { ...prev, state: "partial" } : prev));
+      }
+    }, PLAYBACK_COORDINATOR_SOFT_TIMEOUT_MS);
+
+    playbackCoordinatorTimersRef.current.hard = setTimeout(() => {
+      const current = playbackCoordinatorRef.current;
+      if (current?.id === id && current.releaseState === "holding" && !coordinatorBarrierComplete(current)) {
+        markCoordinatorTimeout(id, "timeout");
+      }
+    }, PLAYBACK_COORDINATOR_HARD_TIMEOUT_MS);
+
+    return coordinator;
+  }
+
+  function cancelPlaybackCoordinator(reason = "cancelled") {
+    clearPlaybackCoordinatorTimers();
+    playbackCoordinatorIdRef.current += 1;
+    setPlaybackCoordinator((prev) => {
+      if (!prev || prev.releaseState !== "holding") return prev;
+      const next = { ...prev, state: reason, releaseState: "cancelled" };
+      playbackCoordinatorRef.current = next;
+      return next;
+    });
+  }
+
+  function handleTilePlaybackState(tileId, operationId, state, facts = {}) {
+    if (!operationId || !tileId) return;
+    setPlaybackCoordinator((prev) => {
+      if (!prev || prev.id !== operationId || !prev.expectedTileIds.includes(tileId)) return prev;
+      const tileStates = {
+        ...prev.tileStates,
+        [tileId]: {
+          state,
+          facts,
+          updatedAt: Date.now(),
+        },
+      };
+      const next = { ...prev, tileStates };
+      playbackCoordinatorRef.current = next;
+      return next;
+    });
+  }
+
   function addTile(cameraId, clientX, clientY) {
     const bounds = workspaceBounds();
     if (!bounds) return;
@@ -598,6 +753,7 @@ export default function ChronologyPage() {
   }
 
   function removeTile(tileId) {
+    cancelPlaybackCoordinator("tile-removed");
     setTiles((prev) => prev.filter((tile) => tile.id !== tileId));
     setFullscreenTileId((prev) => (prev === tileId ? null : prev));
     setPlaybackMap((prev) => {
@@ -844,12 +1000,22 @@ export default function ChronologyPage() {
   async function handleFind() {
     invalidateSeekActions();
     const targetDate = new Date(normalizeTargetTs());
+    const targetTs = formatProductTimestampParam(targetDate);
 
     setIsPlaying(false);
     setIsTimelinePreviewing(false);
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(targetDate);
-    await resolvePlaybackForTimestamp(formatProductTimestampParam(targetDate), true);
+    const result = await resolvePlaybackForTimestamp(targetTs, false);
+    if (!result.applied) {
+      cancelPlaybackCoordinator("stale-find");
+      return;
+    }
+    const expectedTileIds = tilesRef.current.map((tile) => tile.id);
+    const coordinator = startPlaybackCoordinator({ targetTs, shouldResume: false, expectedTileIds });
+    if (!expectedTileIds.length) {
+      releasePlaybackCoordinator(coordinator.id, "released");
+    }
   }
 
   function handlePlay() {
@@ -857,11 +1023,19 @@ export default function ChronologyPage() {
     if (!currentTsRef.current) {
       commitCurrentTimestamp(new Date(normalizeTargetTs()));
     }
-    setIsPlaying(true);
+    const targetDate = currentTsRef.current || new Date(normalizeTargetTs());
+    const expectedTileIds = tilesRef.current.map((tile) => tile.id);
+    startPlaybackCoordinator({
+      targetTs: formatProductTimestampParam(targetDate),
+      shouldResume: true,
+      expectedTileIds,
+    });
+    setIsPlaying(false);
   }
 
   function handlePause() {
     invalidateSeekActions();
+    cancelPlaybackCoordinator("paused");
     setIsPlaying(false);
   }
 
@@ -1017,29 +1191,43 @@ export default function ChronologyPage() {
       ? new Date(currentTsRef.current.getTime() + seconds * 1000)
       : new Date(normalizeTargetTs());
     const action = startSeekAction();
+    const targetTs = formatProductTimestampParam(nextDate);
 
     setIsPlaying(false);
     setIsTimelinePreviewing(false);
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
-    const result = await resolvePlaybackForTimestamp(formatProductTimestampParam(nextDate), true);
-    if (result.applied && action.shouldResume && seekActionIdRef.current === action.id) {
-      setIsPlaying(true);
+    const result = await resolvePlaybackForTimestamp(targetTs, false);
+    if (!result.applied || seekActionIdRef.current !== action.id) {
+      cancelPlaybackCoordinator("stale-seek");
+      return;
+    }
+    const expectedTileIds = tilesRef.current.map((tile) => tile.id);
+    const coordinator = startPlaybackCoordinator({ targetTs, shouldResume: action.shouldResume, expectedTileIds });
+    if (!expectedTileIds.length) {
+      releasePlaybackCoordinator(coordinator.id, "released");
     }
   }
 
   async function handleTimelineSelect(nextDate) {
     const action = startSeekAction();
+    const targetTs = formatProductTimestampParam(nextDate);
 
     setIsPlaying(false);
     setIsTimelinePreviewing(false);
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
-    const result = await resolvePlaybackForTimestamp(formatProductTimestampParam(nextDate), true);
-    if (result.applied && action.shouldResume && seekActionIdRef.current === action.id) {
-      setIsPlaying(true);
+    const result = await resolvePlaybackForTimestamp(targetTs, false);
+    if (!result.applied || seekActionIdRef.current !== action.id) {
+      cancelPlaybackCoordinator("stale-select");
+      return;
+    }
+    const expectedTileIds = tilesRef.current.map((tile) => tile.id);
+    const coordinator = startPlaybackCoordinator({ targetTs, shouldResume: action.shouldResume, expectedTileIds });
+    if (!expectedTileIds.length) {
+      releasePlaybackCoordinator(coordinator.id, "released");
     }
   }
 
@@ -1072,15 +1260,22 @@ export default function ChronologyPage() {
 
   async function handleTimelineDragEnd(nextDate) {
     const action = activeSeekActionRef.current;
+    const targetTs = formatProductTimestampParam(nextDate);
 
     isScrubbingRef.current = false;
     setIsTimelinePreviewing(false);
     invalidateLoadedRangesWindow();
     commitCurrentTimestamp(nextDate);
 
-    const result = await resolvePlaybackForTimestamp(formatProductTimestampParam(nextDate), true);
-    if (action && result.applied && action.shouldResume && seekActionIdRef.current === action.id) {
-      setIsPlaying(true);
+    const result = await resolvePlaybackForTimestamp(targetTs, false);
+    if (!action || !result.applied || seekActionIdRef.current !== action.id) {
+      cancelPlaybackCoordinator("stale-drag");
+      return;
+    }
+    const expectedTileIds = tilesRef.current.map((tile) => tile.id);
+    const coordinator = startPlaybackCoordinator({ targetTs, shouldResume: Boolean(action.shouldResume), expectedTileIds });
+    if (!expectedTileIds.length) {
+      releasePlaybackCoordinator(coordinator.id, "released");
     }
   }
 
@@ -1557,8 +1752,16 @@ export default function ChronologyPage() {
                       <ArchiveTilePlayer
                         playback={playback}
                         speed={speed}
-                        isPlaying={isPlaying}
+                        isPlaying={isPlaying && playbackCoordinator?.releaseState !== "holding"}
                         allowFullscreen={false}
+                        coordination={{
+                          operationId: playbackCoordinator?.id || "",
+                          releaseState: playbackCoordinator?.releaseState || "released",
+                          targetTs: playbackCoordinator?.targetTs || "",
+                          shouldResume: Boolean(playbackCoordinator?.shouldResume),
+                        }}
+                        tileId={tile.id}
+                        onTilePlaybackState={handleTilePlaybackState}
                       />
                     ) : (
                       <div className="chronologyMissing">{TEXT.missing}</div>

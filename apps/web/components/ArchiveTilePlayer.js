@@ -15,11 +15,17 @@ export default function ArchiveTilePlayer({
   speed,
   isPlaying,
   allowFullscreen = true,
+  coordination = null,
+  tileId = "",
+  onTilePlaybackState,
 }) {
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
   const playIntentRef = useRef(false);
   const playbackRateRef = useRef(1);
+  const coordinationRef = useRef(coordination);
+  const currentSourceRef = useRef({ playbackKey: "", relPath: "", cameraId: "" });
+  const prepareSequenceRef = useRef(0);
   const unsupportedDownloadBusyRef = useRef(false);
   const dimensionProbeTimerRef = useRef(null);
   const [status, setStatus] = useState("idle");
@@ -34,8 +40,10 @@ export default function ArchiveTilePlayer({
     error: "",
   });
 
-  playIntentRef.current = Boolean(isPlaying);
+  const coordinatorHolding = coordination?.releaseState === "holding";
+  playIntentRef.current = Boolean(isPlaying && !coordinatorHolding);
   playbackRateRef.current = Number(speed || 1);
+  coordinationRef.current = coordination;
 
   const renderState = selectCompactVideoRenderMode({
     dimensions: naturalResolution,
@@ -66,6 +74,22 @@ export default function ArchiveTilePlayer({
       error: next?.error || "",
     });
   }, []);
+
+  const reportTileState = useCallback(
+    (state, facts = {}) => {
+      const operationId = coordinationRef.current?.operationId || "";
+      if (!operationId || !tileId || typeof onTilePlaybackState !== "function") return;
+      onTilePlaybackState(tileId, operationId, state, {
+        playbackKey: playback?.playbackKey || "",
+        relPath: playback?.relPath || "",
+        offsetSec: Number(playback?.offsetSec || 0),
+        readyState: videoRef.current?.readyState || 0,
+        currentTime: Number(videoRef.current?.currentTime || 0),
+        ...facts,
+      });
+    },
+    [onTilePlaybackState, playback?.offsetSec, playback?.playbackKey, playback?.relPath, tileId]
+  );
 
   function applyNaturalResolution(width, height, source) {
     const normalized = normalizeVideoDimensions(width, height);
@@ -154,6 +178,107 @@ export default function ArchiveTilePlayer({
     }
   }
 
+  function safeTargetTimeForVideo(video, value) {
+    const next = Math.max(0, Number(value || 0));
+    const duration = Number(video?.duration || 0);
+    if (Number.isFinite(duration) && duration > 0) {
+      return Math.min(next, Math.max(0, duration - 0.25));
+    }
+    return next;
+  }
+
+  function prepareVideoAtTarget({
+    targetTime,
+    playIntent = playIntentRef.current,
+    reason = "prepare",
+    timeoutMs = 6000,
+  } = {}) {
+    const video = videoRef.current;
+    if (!video) return;
+    const sequence = ++prepareSequenceRef.current;
+    const operationId = coordinationRef.current?.operationId || "";
+    const target = safeTargetTimeForVideo(video, targetTime);
+    let done = false;
+    let timer = null;
+
+    const cleanup = () => {
+      video.removeEventListener("seeked", complete);
+      video.removeEventListener("loadeddata", complete);
+      video.removeEventListener("canplay", complete);
+      video.removeEventListener("error", fail);
+      if (timer) clearTimeout(timer);
+    };
+
+    const currentOperationMatches = () =>
+      sequence === prepareSequenceRef.current &&
+      (!operationId || coordinationRef.current?.operationId === operationId);
+
+    const readyEnough = () => {
+      const ready = Number(video.readyState || 0) >= 2;
+      const current = Number(video.currentTime || 0);
+      return ready && Math.abs(current - target) <= 1;
+    };
+
+    function complete() {
+      if (done || !currentOperationMatches() || !readyEnough()) return;
+      done = true;
+      cleanup();
+      sampleVideoDimensions(reason);
+      try {
+        video.playbackRate = Number(playbackRateRef.current || 1);
+      } catch (_) {}
+      if (playIntent && coordinationRef.current?.releaseState !== "holding") {
+        video.play().catch(() => {});
+        setStatus("playing");
+      } else {
+        try {
+          video.pause();
+        } catch (_) {}
+        setStatus("ready");
+      }
+      reportTileState("ready", { reason, targetTime: target });
+    }
+
+    function fail() {
+      if (done || !currentOperationMatches()) return;
+      done = true;
+      cleanup();
+      setStatus("error");
+      reportTileState("error", { reason, targetTime: target });
+    }
+
+    try {
+      video.pause();
+    } catch (_) {}
+
+    setStatus("loading");
+    reportTileState("loading", { reason, targetTime: target });
+
+    video.addEventListener("seeked", complete);
+    video.addEventListener("loadeddata", complete);
+    video.addEventListener("canplay", complete);
+    video.addEventListener("error", fail);
+
+    try {
+      if (Number.isFinite(target) && Math.abs(Number(video.currentTime || 0) - target) > 0.35) {
+        video.currentTime = target;
+      }
+    } catch (_) {}
+
+    complete();
+    timer = setTimeout(() => {
+      if (done || !currentOperationMatches()) return;
+      if (readyEnough()) {
+        complete();
+        return;
+      }
+      done = true;
+      cleanup();
+      setStatus("ready");
+      reportTileState("timeout", { reason, targetTime: target });
+    }, timeoutMs);
+  }
+
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -193,19 +318,11 @@ export default function ArchiveTilePlayer({
       try {
         video.removeAttribute("src");
       } catch (_) {}
+      currentSourceRef.current = { playbackKey: "", relPath: "", cameraId: "" };
       try {
         video.load();
       } catch (_) {}
     };
-
-    function safeTargetTime(value) {
-      const next = Math.max(0, Number(value || 0));
-      const duration = Number(video.duration || 0);
-      if (Number.isFinite(duration) && duration > 0) {
-        return Math.min(next, Math.max(0, duration - 0.25));
-      }
-      return next;
-    }
 
     function updateNaturalResolution() {
       sampleVideoDimensions("video-event");
@@ -216,23 +333,11 @@ export default function ArchiveTilePlayer({
       finishRefreshCycle();
       updateNaturalResolution();
 
-      try {
-        video.currentTime = safeTargetTime(loadState.targetTime);
-      } catch (_) {}
-
-      try {
-        video.playbackRate = Number(loadState.playbackRate || 1);
-      } catch (_) {}
-
-      if (loadState.playIntent) {
-        video.play().catch(() => {});
-        setStatus("playing");
-      } else {
-        try {
-          video.pause();
-        } catch (_) {}
-        setStatus("ready");
-      }
+      prepareVideoAtTarget({
+        targetTime: loadState.targetTime,
+        playIntent: loadState.playIntent,
+        reason: "source-ready",
+      });
       pendingLoad = null;
     }
 
@@ -254,6 +359,11 @@ export default function ArchiveTilePlayer({
       try {
         const src = await buildMediaUrl();
         if (cancelled || sequence !== loadSequence) return;
+        currentSourceRef.current = {
+          playbackKey: playback?.playbackKey || "",
+          relPath: relPath || "",
+          cameraId: cameraId || "",
+        };
         video.src = src;
         video.load();
       } catch (_) {
@@ -262,6 +372,7 @@ export default function ArchiveTilePlayer({
           finishRefreshCycle();
           hardReset();
           setStatus("error");
+          reportTileState("error", { reason: "media-token" });
         }
       }
     }
@@ -272,6 +383,7 @@ export default function ArchiveTilePlayer({
         pendingLoad = null;
         hardReset();
         setStatus("unsupported");
+        reportTileState("unsupported", { reason: "refresh-exhausted" });
         return;
       }
       refreshAttempts += 1;
@@ -282,6 +394,7 @@ export default function ArchiveTilePlayer({
         pendingLoad = null;
         hardReset();
         setStatus("error");
+        reportTileState("error", { reason: "refresh-timeout" });
       }, 20000);
       loadFreshMedia({
         preserveTime: true,
@@ -292,6 +405,7 @@ export default function ArchiveTilePlayer({
     if (!hasVideo || !cameraId || !relPath) {
       hardReset();
       setStatus("empty");
+      reportTileState("empty", { reason: "no-archive" });
       return;
     }
 
@@ -306,6 +420,7 @@ export default function ArchiveTilePlayer({
     };
 
     hardReset();
+    reportTileState("loading", { reason: "source-load", offsetSec });
 
     video.addEventListener("loadedmetadata", handleLoaded);
     video.addEventListener("loadeddata", handleLoaded);
@@ -378,7 +493,7 @@ export default function ArchiveTilePlayer({
     if (!video) return;
 
     if (status === "ready" || status === "playing") {
-      if (isPlaying) {
+      if (isPlaying && !coordinatorHolding) {
         try {
           video.playbackRate = Number(speed || 1);
         } catch (_) {}
@@ -391,7 +506,40 @@ export default function ArchiveTilePlayer({
         setStatus("ready");
       }
     }
-  }, [isPlaying, speed, status]);
+  }, [coordinatorHolding, isPlaying, speed, status]);
+
+  useEffect(() => {
+    const operationId = coordination?.operationId || "";
+    if (!operationId || coordination?.releaseState !== "holding") return;
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (!playback?.hasVideo || !playback?.cameraId || !playback?.relPath) {
+      setStatus("empty");
+      reportTileState("empty", { reason: "operation-empty" });
+      return;
+    }
+
+    const currentSource = currentSourceRef.current;
+    const sameSourceReady =
+      currentSource.playbackKey === (playback?.playbackKey || "") &&
+      currentSource.relPath === (playback?.relPath || "") &&
+      currentSource.cameraId === String(playback?.cameraId || "") &&
+      video.currentSrc;
+
+    if (!sameSourceReady) {
+      setStatus("loading");
+      reportTileState("loading", { reason: "operation-waiting-for-source" });
+      return;
+    }
+
+    prepareVideoAtTarget({
+      targetTime: Number(playback?.offsetSec || 0),
+      playIntent: false,
+      reason: "same-source-seek",
+    });
+  }, [coordination?.operationId, coordination?.releaseState, playback?.cameraId, playback?.hasVideo, playback?.offsetSec, playback?.playbackKey, playback?.relPath, reportTileState]);
 
   return (
     <div
@@ -416,6 +564,12 @@ export default function ArchiveTilePlayer({
       data-canvas-draw-error={canvasFrame.error || ""}
       data-canvas-generation={canvasGeneration}
       data-fullscreen={isFullscreen ? "true" : "false"}
+      data-playback-status={status}
+      data-playback-operation={coordination?.operationId || ""}
+      data-playback-release-state={coordination?.releaseState || "released"}
+      data-playback-offset-sec={String(Number(playback?.offsetSec || 0))}
+      data-playback-key={playback?.playbackKey || ""}
+      data-playback-rel-path={playback?.relPath || ""}
     >
       <video
         key={playback?.playbackKey || "empty"}
