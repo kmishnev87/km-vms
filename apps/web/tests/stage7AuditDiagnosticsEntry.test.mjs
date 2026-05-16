@@ -119,7 +119,10 @@ assert.equal(path.includes("sample"), false);
 
 for (const source of [systemStatusPage, problemBanners, dashboard]) {
   assert.equal(source.includes('href="/security-journal"'), false);
-  assert.equal(source.includes('href="/diagnostics"'), false);
   assert.equal(source.includes('href: "/security-journal"'), false);
-  assert.equal(source.includes('href: "/diagnostics"'), false);
 }
+
+assert.equal(dashboard.includes('href="/diagnostics"'), false);
+assert.equal(dashboard.includes('href: "/diagnostics"'), false);
+assert.equal(systemStatusPage.includes('href="/diagnostics"'), false);
+assert.equal(problemBanners.includes('href: "/diagnostics"'), true);

@@ -39,22 +39,22 @@ const AUDIT_LABELS = {
     users: { ru: "Пользователи", en: "Users", "zh-CN": "用户" },
     settings: { ru: "Настройки", en: "Settings", "zh-CN": "设置" },
     cameras: { ru: "Камеры", en: "Cameras", "zh-CN": "摄像机" },
-    live: { ru: "Live", en: "Live", "zh-CN": "实时" },
+    live: { ru: "Онлайн", en: "Live", "zh-CN": "实时" },
     records: { ru: "Записи", en: "Records", "zh-CN": "录像" },
     chronology: { ru: "Хронология", en: "Chronology", "zh-CN": "时间轴" },
     security: { ru: "Безопасность", en: "Security", "zh-CN": "安全" },
     diagnostics: { ru: "Диагностика", en: "Diagnostics", "zh-CN": "诊断" },
     system: { ru: "Система", en: "System", "zh-CN": "系统" },
-    recorder: { ru: "Recorder", en: "Recorder", "zh-CN": "录像服务" },
+    recorder: { ru: "Запись", en: "Recorder", "zh-CN": "录像服务" },
     storage: { ru: "Хранилище", en: "Storage", "zh-CN": "存储" },
-    retention: { ru: "Retention", en: "Retention", "zh-CN": "保留" },
-    reconciliation: { ru: "Reconciliation", en: "Reconciliation", "zh-CN": "一致性检查" },
+    retention: { ru: "Хранение", en: "Retention", "zh-CN": "保留" },
+    reconciliation: { ru: "Целостность архива", en: "Reconciliation", "zh-CN": "一致性检查" },
   },
   severity: {
     info: { ru: "Инфо", en: "Info", "zh-CN": "信息" },
     warning: { ru: "Предупреждение", en: "Warning", "zh-CN": "告警" },
     error: { ru: "Ошибка", en: "Error", "zh-CN": "错误" },
-    security: { ru: "Security", en: "Security", "zh-CN": "安全" },
+    security: { ru: "Безопасность", en: "Security", "zh-CN": "安全" },
   },
 };
 const BACKEND_LABELS = {
@@ -344,4 +344,3 @@ export function roleOptionsFor(currentUser) {
   if (currentUser?.role === "admin") return ["operator", "viewer"];
   return [];
 }
-
