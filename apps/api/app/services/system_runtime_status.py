@@ -30,6 +30,7 @@ from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.timezone_contract import format_system_iso, timezone_context, timezone_metadata
 
 SEVERITIES = ("ok", "warning", "error", "unknown")
+LIVE_STARTING_WARNING_THRESHOLD_SECONDS = 30
 SAFE_REASON_CODES = {
     "disabled",
     "no_evidence",
@@ -154,20 +155,32 @@ def _live_reason_and_severity(item: dict[str, Any] | None, expected: bool) -> tu
 
     if ready and running:
         return "ok", [], None
-    if status in {"starting", "restarting"} or (running and not ready):
-        _append_reason(reasons, "live_starting")
-        return "warning", reasons, safe_failure_reason
     if status in {"failed", "error"} or failure:
         _append_reason(reasons, "live_failed")
         _append_reason(reasons, safe_failure_reason)
         return "error", reasons, safe_failure_reason
+    if status in {"starting", "restarting"} or (running and not ready):
+        elapsed = item.get("startup_elapsed_seconds")
+        try:
+            elapsed_seconds = float(elapsed)
+        except (TypeError, ValueError):
+            elapsed_seconds = None
+        if elapsed_seconds is not None and elapsed_seconds >= LIVE_STARTING_WARNING_THRESHOLD_SECONDS:
+            _append_reason(reasons, "live_starting")
+            return "warning", reasons, safe_failure_reason
+        return "ok", ["not_applicable"], None
     _append_reason(reasons, "unknown_status")
     return "unknown", reasons, safe_failure_reason
 
 
 def _build_live_domain(cameras: list[Camera]) -> tuple[dict[str, Any], dict[int, dict[str, Any]]]:
     raw_items = _safe_live_items()
-    by_key = {(int(item.get("camera_id")), str(item.get("stream") or "")): item for item in raw_items if item.get("camera_id") is not None}
+    active_camera_ids = {int(camera.id) for camera in cameras}
+    by_key = {
+        (int(item.get("camera_id")), str(item.get("stream") or "")): item
+        for item in raw_items
+        if item.get("camera_id") is not None and int(item.get("camera_id")) in active_camera_ids
+    }
     expected_keys = {(camera.id, camera.default_live_stream or "sub") for camera in cameras if camera.enabled}
     keys = sorted(expected_keys | set(by_key.keys()))
     items: list[dict[str, Any]] = []
@@ -287,8 +300,16 @@ def _build_camera_domain(
         job_state = recorder_state.get("job_state")
         current_failure = bool(recorder_state.get("current_failure"))
         stale_current_segment = bool(recorder_state.get("stale_current_segment"))
+        current_segment_age = recorder_state.get("current_segment_age_seconds")
         last_segment_age = segment_state.get("last_segment_age_seconds")
         stale_threshold = _recording_stale_threshold(camera)
+        has_active_recording_job = job_state in ACTIVE_JOB_STATES
+        has_valid_current_segment = (
+            recording_enabled
+            and has_active_recording_job
+            and current_segment_age is not None
+            and current_segment_age <= stale_threshold
+        )
 
         if not camera.enabled:
             severity = "ok"
@@ -300,20 +321,20 @@ def _build_camera_domain(
             severity = "error"
             _append_reason(reasons, "recording_failed")
             _append_reason(reasons, _safe_reason_from_error(recorder_state.get("last_error") or recorder_state.get("camera_last_error")))
-        elif recording_enabled and job_state not in ACTIVE_JOB_STATES:
+        elif recording_enabled and not has_active_recording_job:
             severity = "warning"
             _append_reason(reasons, "no_evidence")
         elif recording_enabled and stale_current_segment:
             severity = "warning"
             _append_reason(reasons, STALE_CURRENT_SEGMENT_REASON)
             _append_reason(reasons, "recording_stale")
-        elif recording_enabled and last_segment_age is not None and last_segment_age > stale_threshold:
+        elif recording_enabled and last_segment_age is not None and last_segment_age > stale_threshold and not has_valid_current_segment:
             severity = "warning"
             _append_reason(reasons, "recording_stale")
         elif live_state and live_state.get("severity") == "error":
             severity = "error"
             _append_reason(reasons, "live_failed")
-        elif live_state and live_state.get("severity") in {"warning", "unknown"}:
+        elif live_state and live_state.get("severity") == "warning":
             severity = str(live_state.get("severity"))
             for reason in live_state.get("reason_codes") or []:
                 _append_reason(reasons, reason)
@@ -612,7 +633,7 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
 def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     now = _utc_now()
     ctx = timezone_context(db)
-    cameras = db.query(Camera).order_by(Camera.id.asc()).all()
+    cameras = db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.id.asc()).all()
     recorder_domain, _camera_states, recorder_states = _build_recorder_domain(db, now, ctx)
     live_domain, live_by_camera = _build_live_domain(cameras)
     cameras_domain = _build_camera_domain(db, now, ctx, cameras, recorder_states, live_by_camera)

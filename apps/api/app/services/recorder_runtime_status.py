@@ -203,7 +203,7 @@ def summarize_recorder_jobs(db: Session) -> dict[str, Any]:
 
 def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
     ctx = timezone_context(db)
-    cameras = db.query(Camera).order_by(Camera.id.asc()).all()
+    cameras = db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.id.asc()).all()
     latest_jobs: dict[int, RecordingJob] = {}
     now = utc_now()
 

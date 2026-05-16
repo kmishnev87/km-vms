@@ -64,7 +64,7 @@
 .operatorStatus {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
 }
 
 .operatorStatusOverview {
@@ -241,70 +241,190 @@
   line-height: 1.25;
 }
 
-.operatorWarnings {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 12px;
-  margin: 16px 0 18px;
-}
-
-.operatorWarning {
-  min-width: 0;
-  padding: 12px 14px;
-  border: 1px solid rgba(148, 163, 184, 0.32);
-  border-left: 4px solid #f59e0b;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
-}
-
-.operatorWarning-error {
-  border-left-color: #dc2626;
-}
-
-.operatorWarningTop {
+.operatorWarningStrip {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 6px;
-  color: #64748b;
+  min-width: 0;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid rgba(245, 158, 11, 0.34);
+  border-left: 3px solid #f59e0b;
+  border-radius: 8px;
+  background: rgba(255, 251, 235, 0.82);
+}
+
+.operatorWarningStrip-error {
+  border-color: rgba(220, 38, 38, 0.32);
+  border-left-color: #dc2626;
+  background: rgba(254, 242, 242, 0.84);
+}
+
+.operatorWarningStripIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: #b45309;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.operatorWarningStrip-error .operatorWarningStripIcon {
+  background: #b91c1c;
+}
+
+.operatorWarningStripTitle {
+  flex: 0 0 auto;
+  color: #0f172a;
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.operatorWarningChips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.operatorWarningChip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  max-width: 180px;
+  padding: 3px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: #334155;
   font-size: 11px;
   font-weight: 800;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operatorWarningChip-error {
+  color: #991b1b;
+  border-color: rgba(220, 38, 38, 0.28);
+}
+
+.operatorWarningChip-warning {
+  color: #92400e;
+  border-color: rgba(245, 158, 11, 0.34);
+}
+
+.operatorWarningToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.operatorWarningDetails {
+  display: grid;
+  gap: 8px;
+  max-height: min(340px, 45vh);
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid rgba(203, 213, 225, 0.86);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.operatorWarningGroup {
+  display: grid;
+  gap: 5px;
+}
+
+.operatorWarningGroupTitle {
+  color: #475569;
+  font-size: 11px;
+  font-weight: 900;
   text-transform: uppercase;
 }
 
-.operatorWarningSeverity {
-  color: #991b1b;
+.operatorWarningRows {
+  display: grid;
+  gap: 5px;
 }
 
-.operatorWarning-warning .operatorWarningSeverity {
-  color: #92400e;
+.operatorWarningRow {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
 }
 
-.operatorWarningDomain {
-  color: #475569;
+.operatorWarningRowSeverity {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #f59e0b;
 }
 
-.operatorWarningTitle {
+.operatorWarningRow-error .operatorWarningRowSeverity {
+  background: #dc2626;
+}
+
+.operatorWarningRowText {
+  min-width: 0;
+}
+
+.operatorWarningRowText strong,
+.operatorWarningRowText span,
+.operatorWarningRowText small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operatorWarningRowText strong {
   color: #0f172a;
-  font-size: 14px;
-  font-weight: 800;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.operatorWarningRowText span,
+.operatorWarningRowText small,
+.operatorWarningDetailsHint {
+  color: #64748b;
+  font-size: 11px;
   line-height: 1.25;
 }
 
-.operatorWarningMessage,
-.operatorWarningHint,
-.operatorWarningMeta {
-  margin-top: 5px;
+.operatorWarningRowText small {
+  margin-top: 2px;
   color: #475569;
-  font-size: 12px;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
 }
 
-.operatorWarningHint {
-  color: #334155;
-  font-weight: 700;
+.operatorWarningRow .operatorWarningAction:empty {
+  display: none;
 }
 
 .operatorWarningAction {
@@ -672,4 +792,3 @@
   gap: 10px;
   flex-wrap: wrap;
 }
-

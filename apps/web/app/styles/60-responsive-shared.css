@@ -267,6 +267,35 @@
     white-space: normal;
   }
 
+  .operatorWarningStrip {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .operatorWarningStripTitle {
+    white-space: normal;
+  }
+
+  .operatorWarningChips {
+    order: 3;
+    width: 100%;
+  }
+
+  .operatorWarningToggle {
+    margin-left: auto;
+  }
+
+  .operatorWarningRow {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .operatorWarningRowText strong,
+  .operatorWarningRowText span,
+  .operatorWarningRowText small {
+    white-space: normal;
+  }
+
   .settingsAuditFilters,
   .settingsAuditMetadata div {
     grid-template-columns: 1fr;
@@ -480,4 +509,3 @@
     max-height: none;
   }
 }
-
