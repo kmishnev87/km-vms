@@ -35,6 +35,11 @@ const LIVE_TEXT = {
   empty: "\u041f\u0435\u0440\u0435\u0442\u0430\u0449\u0438\u0442\u0435 \u043a\u0430\u043c\u0435\u0440\u0443 \u043d\u0430 canvas",
   camera: "\u041a\u0430\u043c\u0435\u0440\u0430",
   close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
+  audioOn: "\u0412\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0437\u0432\u0443\u043a",
+  audioOff: "\u0412\u044b\u043a\u043b\u044e\u0447\u0438\u0442\u044c \u0437\u0432\u0443\u043a",
+  audioUnavailable: "\u0410\u0443\u0434\u0438\u043e \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e",
+  audioDisabled: "\u0410\u0443\u0434\u0438\u043e \u043e\u0442\u043a\u043b\u044e\u0447\u0435\u043d\u043e",
+  audioBlocked: "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u0437\u0430\u0431\u043b\u043e\u043a\u0438\u0440\u043e\u0432\u0430\u043b \u0437\u0432\u0443\u043a",
   enterFullscreen: "\u0412\u043e \u0432\u0435\u0441\u044c \u044d\u043a\u0440\u0430\u043d",
   exitFullscreen: "\u0412\u044b\u0439\u0442\u0438 \u0438\u0437 fullscreen",
   collapseSidebar: "\u0421\u043a\u0440\u044b\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u0430\u043c\u0435\u0440",
@@ -199,6 +204,14 @@ function backendPayload(tiles, sidebarCameraOrder = []) {
   };
 }
 
+function defaultAudioFact() {
+  return {
+    audioAvailable: false,
+    audioDisabledByConfig: false,
+    audioReason: "unknown",
+  };
+}
+
 export default function LivePage() {
   const { text } = useI18n();
   const TEXT = useMemo(
@@ -223,6 +236,9 @@ export default function LivePage() {
   const [sidebarDropTargetCameraId, setSidebarDropTargetCameraId] = useState("");
   const [isSystemFullscreen, setIsSystemFullscreen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [activeAudioTileId, setActiveAudioTileId] = useState("");
+  const [audioRequestId, setAudioRequestId] = useState(0);
+  const [audioFactsByTileId, setAudioFactsByTileId] = useState({});
 
   async function loadCameras() {
     try {
@@ -331,6 +347,13 @@ export default function LivePage() {
     return visibleWorkspaceTiles(tiles, cameras);
   }, [tiles, cameras, camerasLoaded]);
 
+  useEffect(() => {
+    if (!activeAudioTileId) return;
+    if (!visibleTiles.some((tile) => tile.id === activeAudioTileId)) {
+      setActiveAudioTileId("");
+    }
+  }, [activeAudioTileId, visibleTiles]);
+
   const orderedCameras = useMemo(
     () => mergeSidebarCameraOrder(cameras, sidebarCameraOrder),
     [cameras, sidebarCameraOrder]
@@ -385,13 +408,52 @@ export default function LivePage() {
   }
 
   function updateTile(tileId, patch) {
+    if (patch?.stream) {
+      setAudioFactsByTileId((prev) => ({ ...prev, [tileId]: defaultAudioFact() }));
+      setActiveAudioTileId((current) => (current === tileId ? "" : current));
+    }
     setTiles((prev) =>
       dedupeTiles(prev.map((tile) => (tile.id === tileId ? normalizeTile({ ...tile, ...patch }) : tile)))
     );
   }
 
   function removeTile(tileId) {
+    setActiveAudioTileId((current) => (current === tileId ? "" : current));
+    setAudioFactsByTileId((prev) => {
+      if (!Object.prototype.hasOwnProperty.call(prev, tileId)) return prev;
+      const next = { ...prev };
+      delete next[tileId];
+      return next;
+    });
     setTiles((prev) => prev.filter((tile) => tile.id !== tileId));
+  }
+
+  function handleAudioStatusChange(tileId, fact) {
+    setAudioFactsByTileId((prev) => ({ ...prev, [tileId]: { ...defaultAudioFact(), ...(fact || {}) } }));
+    if (fact?.audioAvailable === false || fact?.audioDisabledByConfig) {
+      setActiveAudioTileId((current) => (current === tileId ? "" : current));
+    }
+  }
+
+  function toggleTileAudio(tileId) {
+    const fact = audioFactsByTileId[tileId] || defaultAudioFact();
+    if (fact.audioDisabledByConfig || !fact.audioAvailable) return;
+    setActiveAudioTileId((current) => (current === tileId ? "" : tileId));
+    setAudioRequestId((value) => value + 1);
+  }
+
+  function audioButtonState(tileId) {
+    const fact = audioFactsByTileId[tileId] || defaultAudioFact();
+    const active = activeAudioTileId === tileId && fact.audioAvailable && !fact.audioDisabledByConfig;
+    const disabled = fact.audioDisabledByConfig || !fact.audioAvailable;
+    const title = active
+      ? TEXT.audioOff
+      : fact.audioDisabledByConfig
+      ? TEXT.audioDisabled
+      : fact.audioAvailable
+      ? TEXT.audioOn
+      : TEXT.audioUnavailable;
+    return { fact, active, disabled, title };
   }
 
   function bringToFront(tileId) {
@@ -779,11 +841,16 @@ export default function LivePage() {
             const stream = streams.some((item) => item.key === tile.stream)
               ? tile.stream
               : defaultStream(camera);
+            const audioState = audioButtonState(tile.id);
 
             return (
               <div
                 key={tile.id}
-                className="liveWorkspaceTile"
+                className={`liveWorkspaceTile ${audioState.active ? "audioActive" : ""}`}
+                data-active-audio-tile={audioState.active ? "true" : "false"}
+                data-audio-available={audioState.fact.audioAvailable ? "true" : "false"}
+                data-audio-disabled-by-config={audioState.fact.audioDisabledByConfig ? "true" : "false"}
+                data-audio-reason={audioState.fact.audioReason || "unknown"}
                 style={{
                   left: `${tile.xPct * 100}%`,
                   top: `${tile.yPct * 100}%`,
@@ -807,6 +874,33 @@ export default function LivePage() {
                   </select>
                   <button
                     type="button"
+                    className={`liveWorkspaceIconButton liveWorkspaceAudioButton ${audioState.active ? "isActive" : ""}`}
+                    title={audioState.title}
+                    aria-label={audioState.title}
+                    aria-pressed={audioState.active ? "true" : "false"}
+                    disabled={audioState.disabled}
+                    data-live-audio-button="true"
+                    data-audio-state={audioState.active ? "active" : audioState.disabled ? "unavailable" : "available"}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={() => toggleTileAudio(tile.id)}
+                  >
+                    <svg className="liveWorkspaceAudioIcon" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        className="liveWorkspaceAudioSpeaker"
+                        d="M4 9.5v5h4l5 4.5V5L8 9.5H4Z"
+                      />
+                      <path
+                        className="liveWorkspaceAudioWave one"
+                        d="M16 9c.9.9 1.4 1.9 1.4 3s-.5 2.1-1.4 3"
+                      />
+                      <path
+                        className="liveWorkspaceAudioWave two"
+                        d="M18.7 6.5c1.6 1.5 2.5 3.4 2.5 5.5s-.9 4-2.5 5.5"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
                     className="liveWorkspaceIconButton"
                     title={TEXT.close}
                     onPointerDown={(event) => event.stopPropagation()}
@@ -818,7 +912,17 @@ export default function LivePage() {
 
                 <div className="liveWorkspaceTileVideo">
                   {camera ? (
-                    <TilePlayer cameraId={camera.id} stream={stream} />
+                    <TilePlayer
+                      cameraId={camera.id}
+                      stream={stream}
+                      audioEnabled={audioState.active}
+                      audioRequestId={audioRequestId}
+                      onAudioStatusChange={(fact) => handleAudioStatusChange(tile.id, fact)}
+                      onAudioPlaybackBlocked={() => {
+                        setActiveAudioTileId((current) => (current === tile.id ? "" : current));
+                        setError(TEXT.audioBlocked);
+                      }}
+                    />
                   ) : (
                     <div className="liveWorkspaceMissing">{TEXT.unavailable}</div>
                   )}

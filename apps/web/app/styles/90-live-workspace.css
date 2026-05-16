@@ -395,7 +395,7 @@
   height: 34px;
   flex: 0 0 34px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 76px 30px;
+  grid-template-columns: minmax(0, 1fr) 76px 30px 30px;
   align-items: center;
   gap: 6px;
   padding: 4px 5px 4px 8px;
@@ -442,6 +442,59 @@
 
 .liveWorkspaceIconButton:hover {
   background: rgba(239, 68, 68, 0.7);
+}
+
+.liveWorkspaceAudioButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(248, 250, 252, 0.1);
+}
+
+.liveWorkspaceAudioButton:hover,
+.liveWorkspaceAudioButton:focus-visible {
+  background: rgba(37, 99, 235, 0.64);
+  outline: none;
+}
+
+.liveWorkspaceAudioButton.isActive {
+  background: rgba(34, 197, 94, 0.76);
+  color: #ffffff;
+  box-shadow: 0 0 0 1px rgba(187, 247, 208, 0.32);
+}
+
+.liveWorkspaceAudioButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.liveWorkspaceAudioIcon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  flex: 0 0 16px;
+}
+
+.liveWorkspaceAudioSpeaker {
+  fill: currentColor;
+}
+
+.liveWorkspaceAudioWave {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.92;
+}
+
+.liveWorkspaceAudioButton:not(.isActive) .liveWorkspaceAudioWave.two,
+.liveWorkspaceAudioButton:disabled .liveWorkspaceAudioWave {
+  display: none;
+}
+
+.liveWorkspaceTile.audioActive {
+  border-color: rgba(34, 197, 94, 0.72);
 }
 
 .liveWorkspaceTileVideo {

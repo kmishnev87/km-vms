@@ -45,7 +45,14 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export default function TilePlayer({ cameraId, stream }) {
+export default function TilePlayer({
+  cameraId,
+  stream,
+  audioEnabled = false,
+  audioRequestId = 0,
+  onAudioStatusChange,
+  onAudioPlaybackBlocked,
+}) {
   const videoRef = useRef(null);
   const wrapRef = useRef(null);
   const hlsRef = useRef(null);
@@ -56,6 +63,8 @@ export default function TilePlayer({ cameraId, stream }) {
   const touchTimerRef = useRef(null);
   const viewerIdRef = useRef(null);
   const dimensionProbeTimerRef = useRef(null);
+  const audioStatusChangeRef = useRef(onAudioStatusChange);
+  const audioPlaybackBlockedRef = useRef(onAudioPlaybackBlocked);
 
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
@@ -78,6 +87,24 @@ export default function TilePlayer({ cameraId, stream }) {
     isFullscreen,
     sourceHighResolution: sourceEligibleForCompactSmoothing,
   });
+
+  function reportAudioStatus(item, source = "live-status") {
+    if (typeof audioStatusChangeRef.current !== "function") return;
+    const audioMode = String(item?.audio_mode || "unknown").toLowerCase();
+    const audioEnabledByConfig = item?.audio_enabled !== false && !["none", "off", "disable", "disabled"].includes(audioMode);
+    const inputHasAudio = item?.audio_available === true || Boolean(item?.input_audio_codec);
+    audioStatusChangeRef.current({
+      source,
+      audioMode,
+      audioEnabled: audioEnabledByConfig,
+      audioAvailable: Boolean(audioEnabledByConfig && inputHasAudio),
+      audioDisabledByConfig: !audioEnabledByConfig || audioMode === "none",
+      audioReason: item?.audio_reason || (audioEnabledByConfig ? "unknown" : "disabled"),
+      inputAudioCodec: item?.input_audio_codec || "",
+      inputAudioChannels: item?.input_audio_channels || null,
+      inputAudioSampleRate: item?.input_audio_sample_rate || null,
+    });
+  }
   const compactCanvasRequested = renderState.renderer === "canvas" && readyState >= 2;
   const canvasGeneration = [
     cameraId || "",
@@ -307,6 +334,7 @@ export default function TilePlayer({ cameraId, stream }) {
           if (item?.source_resolution?.width && item?.source_resolution?.height) {
             applyNaturalResolution(item.source_resolution.width, item.source_resolution.height, "runtime-source");
           }
+          reportAudioStatus(item, "live-status");
           if (item?.running && item?.ready) {
             return { ready: true, item };
           }
@@ -473,6 +501,9 @@ export default function TilePlayer({ cameraId, stream }) {
             applyNaturalResolution(level.width, level.height, "hls-manifest");
           }
           authRefreshFailures = 0;
+          if ((Array.isArray(data?.audioTracks) && data.audioTracks.length) || (Array.isArray(hls.audioTracks) && hls.audioTracks.length)) {
+            reportAudioStatus({ audio_mode: "manifest", audio_enabled: true, audio_available: true, audio_reason: "input_has_audio" }, "hls-manifest");
+          }
           setStatus("playing");
           setError("");
           video.play().catch(() => {});
@@ -617,6 +648,27 @@ export default function TilePlayer({ cameraId, stream }) {
     };
   }, [cameraId, stream]);
 
+  useEffect(() => {
+    audioStatusChangeRef.current = onAudioStatusChange;
+    audioPlaybackBlockedRef.current = onAudioPlaybackBlocked;
+  }, [onAudioStatusChange, onAudioPlaybackBlocked]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = !audioEnabled;
+    if (!audioEnabled) {
+      return;
+    }
+    video.volume = 1;
+    video.play().catch(() => {
+      video.muted = true;
+      if (typeof audioPlaybackBlockedRef.current === "function") {
+        audioPlaybackBlockedRef.current();
+      }
+    });
+  }, [audioEnabled, audioRequestId]);
+
   return (
     <div
       ref={wrapRef}
@@ -639,11 +691,12 @@ export default function TilePlayer({ cameraId, stream }) {
       data-canvas-draw-error={canvasFrame.error || ""}
       data-canvas-generation={canvasGeneration}
       data-fullscreen={isFullscreen ? "true" : "false"}
+      data-audio-enabled={audioEnabled ? "true" : "false"}
     >
       <video
         ref={videoRef}
         className={`liveVideo ${nativeVideoSuppressed ? "nativeVideoSuppressed" : ""}`}
-        muted
+        muted={!audioEnabled}
         autoPlay
         playsInline
         controls={false}

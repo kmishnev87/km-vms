@@ -148,6 +148,10 @@ class StreamInstance:
         self.input_width: int | None = None
         self.input_height: int | None = None
         self.input_fps: float | None = None
+        self.input_audio_codec: str | None = None
+        self.input_audio_channels: int | None = None
+        self.input_audio_sample_rate: int | None = None
+        self.audio_reason = "unknown"
         self.output_fps: float | None = None
         self.force_stable_fps = False
         self.jitter_detected = False
@@ -698,6 +702,17 @@ class StreamInstance:
         self.input_width = probe.width
         self.input_height = probe.height
         self.input_fps = probe.fps
+        self.input_audio_codec = probe.audio_codec
+        self.input_audio_channels = probe.audio_channels
+        self.input_audio_sample_rate = probe.audio_sample_rate
+        if self._audio_mode() in {"none", "off", "disable", "disabled"}:
+            self.audio_reason = "disabled"
+        elif probe.audio_codec:
+            self.audio_reason = "input_has_audio"
+        elif probe.audio_error:
+            self.audio_reason = "probe_failed"
+        else:
+            self.audio_reason = "input_no_audio"
         self.output_fps, forced_fps = select_output_fps(probe.fps, self.force_stable_fps)
         self.unstable_source = bool(forced_fps)
         self.jitter_detected = bool(forced_fps)
@@ -902,6 +917,10 @@ class StreamInstance:
             self.input_width = None
             self.input_height = None
             self.input_fps = None
+            self.input_audio_codec = None
+            self.input_audio_channels = None
+            self.input_audio_sample_rate = None
+            self.audio_reason = "unknown"
             self.output_fps = None
             self.jitter_detected = False
             self.unstable_source = bool(self.force_stable_fps)
@@ -1258,6 +1277,9 @@ class StreamInstance:
             status = self.status if self.status in {"starting", "restarting"} else "starting"
         else:
             status = self.status
+        audio_mode = self._audio_mode()
+        audio_enabled = audio_mode not in {"none", "off", "disable", "disabled"}
+        audio_available = bool(audio_enabled and self.input_audio_codec)
         return {
             "stream_key": self.sid,
             "camera_id": self.camera_id,
@@ -1277,6 +1299,13 @@ class StreamInstance:
             "input_fps": self.input_fps,
             "real_input_fps": self.input_fps,
             "output_fps": self.output_fps,
+            "audio_mode": "transcode" if audio_mode == "transcode" else audio_mode,
+            "audio_enabled": audio_enabled,
+            "audio_available": audio_available,
+            "input_audio_codec": self.input_audio_codec,
+            "input_audio_channels": self.input_audio_channels,
+            "input_audio_sample_rate": self.input_audio_sample_rate,
+            "audio_reason": "input_has_audio" if audio_available else self.audio_reason,
             "jitter_detected": self.jitter_detected,
             "unstable_source": self.unstable_source,
             "restart_reason": self.restart_reason,
@@ -1349,6 +1378,12 @@ class StreamInstance:
             "stderr_tail": self._read_log_tail() or self.last_error,
             "command": self.cmd_text,
         }
+
+    def _audio_mode(self) -> str:
+        value = str(settings.live_audio_mode or "aac").strip().lower()
+        if value in {"none", "off", "disable", "disabled", "copy", "aac", "transcode"}:
+            return value
+        return "aac"
 
 
 class StreamManager:

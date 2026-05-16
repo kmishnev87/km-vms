@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     live_video_codec: str = "auto"
     live_transcode_profile: str = "stable"
     live_unstable_source_target_fps: int = 20
-    live_audio_mode: str = "none"
+    live_audio_mode: str = "aac"
     live_hwaccel_mode: str = "auto"
     live_hwaccel_backend: str = "auto"
     live_hwaccel_device: str = "/dev/dri/renderD128"

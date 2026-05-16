@@ -24,6 +24,10 @@ class ProbeResult:
     height: int | None = None
     fps: float | None = None
     error: str | None = None
+    audio_codec: str | None = None
+    audio_channels: int | None = None
+    audio_sample_rate: int | None = None
+    audio_error: str | None = None
 
 
 def choose_input_url(camera: Camera, stream: str) -> str | None:
@@ -165,6 +169,7 @@ def probe_video_codec(input_url: str, rtsp_transport: str) -> ProbeResult:
         except Exception:
             return None
 
+    audio_probe = probe_audio_stream(input_url, rtsp_transport)
     codec_name = (values.get("codec_name") or "").strip().lower() or None
     fps = parse_fps(values.get("avg_frame_rate")) or parse_fps(values.get("r_frame_rate"))
     width = parse_int(values.get("width"))
@@ -177,6 +182,10 @@ def probe_video_codec(input_url: str, rtsp_transport: str) -> ProbeResult:
             height=height,
             fps=fps,
             error=(result.stderr or "").strip()[-1200:] or f"ffprobe exit {result.returncode}",
+            audio_codec=audio_probe.codec,
+            audio_channels=audio_probe.channels,
+            audio_sample_rate=audio_probe.sample_rate,
+            audio_error=audio_probe.error,
         )
 
     return ProbeResult(
@@ -185,6 +194,79 @@ def probe_video_codec(input_url: str, rtsp_transport: str) -> ProbeResult:
         width=width,
         height=height,
         fps=fps,
+        error=None,
+        audio_codec=audio_probe.codec,
+        audio_channels=audio_probe.channels,
+        audio_sample_rate=audio_probe.sample_rate,
+        audio_error=audio_probe.error,
+    )
+
+
+@dataclass(frozen=True)
+class AudioProbeResult:
+    codec: str | None
+    channels: int | None = None
+    sample_rate: int | None = None
+    error: str | None = None
+
+
+def probe_audio_stream(input_url: str, rtsp_transport: str) -> AudioProbeResult:
+    cmd = [
+        "ffprobe",
+        "-hide_banner",
+        "-v",
+        "error",
+        "-rtsp_transport",
+        rtsp_transport,
+        "-timeout",
+        "5000000",
+        "-select_streams",
+        "a:0",
+        "-show_entries",
+        "stream=codec_name,channels,sample_rate",
+        "-of",
+        "default=noprint_wrappers=1",
+        input_url,
+    ]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except Exception as exc:
+        return AudioProbeResult(codec=None, error=str(exc))
+
+    values = {}
+    for line in (result.stdout or "").strip().splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip()
+
+    def parse_int(value: str | None) -> int | None:
+        try:
+            return int(value) if value and value != "N/A" else None
+        except Exception:
+            return None
+
+    codec_name = (values.get("codec_name") or "").strip().lower() or None
+    if result.returncode != 0:
+        return AudioProbeResult(
+            codec=codec_name,
+            channels=parse_int(values.get("channels")),
+            sample_rate=parse_int(values.get("sample_rate")),
+            error=(result.stderr or "").strip()[-1200:] or f"ffprobe exit {result.returncode}",
+        )
+
+    return AudioProbeResult(
+        codec=codec_name,
+        channels=parse_int(values.get("channels")),
+        sample_rate=parse_int(values.get("sample_rate")),
         error=None,
     )
 
