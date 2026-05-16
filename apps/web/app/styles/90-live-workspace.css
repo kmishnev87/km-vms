@@ -7,6 +7,108 @@
   gap: 8px;
 }
 
+.liveSystemFullscreenBody .topNav {
+  display: none;
+}
+
+.liveSystemFullscreenBody .mainContent {
+  padding: 0;
+}
+
+.liveSystemFullscreenBody .liveWorkspaceWarnings {
+  display: none;
+}
+
+.liveWorkspaceShell.systemFullscreen,
+.liveWorkspaceShell.systemFullscreen:fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  width: 100vw;
+  height: 100vh;
+  min-height: 0;
+  padding: 8px;
+  background: #020617;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.liveWorkspaceShell.systemFullscreen .liveWorkspaceCanvas {
+  border-color: rgba(96, 165, 250, 0.45);
+  border-radius: 8px;
+  min-height: 0;
+}
+
+.liveWorkspaceShell.systemFullscreen .liveWorkspaceCameraPanel {
+  border-color: rgba(96, 165, 250, 0.34);
+  background: rgba(15, 23, 42, 0.96);
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.34);
+}
+
+.liveWorkspaceShell.systemFullscreen.sidebarCollapsed .liveWorkspaceCameraPanel {
+  width: 0;
+  flex-basis: 0;
+  padding: 0;
+  border-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateX(-12px);
+  pointer-events: none;
+}
+
+.liveWorkspaceShell.systemFullscreen.sidebarOpen .liveWorkspaceCameraPanel {
+  width: 204px;
+  flex-basis: 204px;
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.liveWorkspaceSidebarTab {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  z-index: 5100;
+  width: 30px;
+  height: 56px;
+  border: 1px solid rgba(148, 163, 184, 0.44);
+  border-radius: 0 8px 8px 0;
+  background: rgba(15, 23, 42, 0.94);
+  color: #e2e8f0;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.liveWorkspaceShell.systemFullscreen.sidebarOpen .liveWorkspaceSidebarTab {
+  left: 212px;
+}
+
+.liveWorkspaceFullscreenExitButton {
+  position: absolute;
+  right: 14px;
+  top: 12px;
+  z-index: 5100;
+  width: 34px;
+  height: 30px;
+  border: 1px solid rgba(148, 163, 184, 0.44);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.94);
+  color: #e2e8f0;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.liveWorkspaceSidebarTab:hover,
+.liveWorkspaceSidebarTab:focus-visible,
+.liveWorkspaceFullscreenExitButton:hover,
+.liveWorkspaceFullscreenExitButton:focus-visible {
+  border-color: #60a5fa;
+  color: #ffffff;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.18);
+}
+
 .liveWorkspaceCameraPanel {
   width: 204px;
   flex: 0 0 204px;
@@ -16,6 +118,7 @@
   background: #ffffff;
   padding: 8px;
   overflow: auto;
+  transition: width 140ms ease, flex-basis 140ms ease, opacity 140ms ease, transform 140ms ease;
 }
 
 .liveWorkspacePanelHeader {
@@ -27,9 +130,34 @@
 }
 
 .liveWorkspacePanelTitle {
+  min-width: 0;
   color: #0f172a;
   font-size: 15px;
   font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liveWorkspaceShell.systemFullscreen .liveWorkspacePanelTitle,
+.liveWorkspaceShell.systemFullscreen .liveWorkspaceCameraName {
+  color: #f8fafc;
+}
+
+.liveWorkspaceShell.systemFullscreen .liveWorkspaceCameraMeta {
+  color: #94a3b8;
+}
+
+.liveWorkspaceShell.systemFullscreen .liveWorkspaceAlignButton {
+  border-color: rgba(148, 163, 184, 0.38);
+  background: rgba(248, 250, 252, 0.08);
+  color: #e2e8f0;
+}
+
+.liveWorkspaceShell.systemFullscreen .liveWorkspaceAlignButton:hover {
+  border-color: rgba(147, 197, 253, 0.78);
+  background: rgba(37, 99, 235, 0.28);
+  color: #ffffff;
 }
 
 .liveWorkspacePanelActions,
@@ -42,14 +170,64 @@
 
 .liveWorkspaceAlignButton {
   height: 26px;
-  min-width: 0;
+  min-width: 28px;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   background: #ffffff;
   color: #0f172a;
   padding: 0 8px;
   font-size: 11px;
+  font-weight: 800;
   cursor: pointer;
+}
+
+.liveWorkspaceFullscreenButton {
+  font-size: 14px;
+  padding: 0;
+  width: 28px;
+}
+
+.workspaceAlignGridIcon {
+  position: relative;
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  vertical-align: -3px;
+}
+
+.workspaceAlignGridIconLine {
+  position: absolute;
+  display: block;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.workspaceAlignGridIconLine.vertical {
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+}
+
+.workspaceAlignGridIconLine.vertical.left {
+  left: 5px;
+}
+
+.workspaceAlignGridIconLine.vertical.right {
+  right: 5px;
+}
+
+.workspaceAlignGridIconLine.horizontal {
+  left: 2px;
+  right: 2px;
+  height: 2px;
+}
+
+.workspaceAlignGridIconLine.horizontal.top {
+  top: 5px;
+}
+
+.workspaceAlignGridIconLine.horizontal.bottom {
+  bottom: 5px;
 }
 
 .liveWorkspaceAlignButton:hover {
@@ -78,11 +256,47 @@
 }
 
 .liveWorkspaceCameraItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
   border: 1px solid #dbe3ef;
   border-radius: 10px;
   background: #f8fafc;
   padding: 8px;
   cursor: grab;
+  transform: translateY(0);
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease, opacity 150ms ease, transform 150ms ease;
+}
+
+.liveWorkspaceShell.systemFullscreen .liveWorkspaceCameraItem {
+  border-color: rgba(71, 85, 105, 0.88);
+  background: rgba(30, 41, 59, 0.86);
+}
+
+.liveWorkspaceCameraItem.isReorderDragging {
+  opacity: 0.58;
+  border-color: #60a5fa;
+  transform: scale(0.985);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.18);
+}
+
+.liveWorkspaceCameraItem.isReorderDropTarget {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.12);
+}
+
+.liveWorkspaceShell.systemFullscreen .liveWorkspaceCameraItem.isReorderDropTarget {
+  border-color: #60a5fa;
+  background: rgba(30, 64, 175, 0.34);
+}
+
+.liveWorkspaceCameraItem.isReorderDropBefore {
+  box-shadow: inset 0 3px 0 #2563eb, 0 8px 18px rgba(37, 99, 235, 0.12);
+}
+
+.liveWorkspaceCameraItem.isReorderDropAfter {
+  box-shadow: inset 0 -3px 0 #2563eb, 0 8px 18px rgba(37, 99, 235, 0.12);
 }
 
 .liveWorkspaceCameraItem:active {

@@ -41,7 +41,7 @@ assert.equal(api.includes('apiFetch("/live/media-token"'), true);
 assert.equal(routePermissions.includes('"/live"'), true);
 assert.equal(routePermissions.includes('permission: "view_live"'), true);
 
-assert.equal(livePage.includes("JSON.stringify(backendPayload(tiles))"), true);
+assert.equal(livePage.includes("backendPayload(tiles, sidebarCameraOrder)"), true);
 assert.equal(tilePlayer.includes("body: JSON.stringify({"), true);
 assert.equal(tilePlayer.includes("JSON.stringify(response"), false);
 assert.equal(tilePlayer.includes("JSON.stringify(viewer"), false);

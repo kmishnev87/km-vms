@@ -20,7 +20,15 @@ import {
 } from "../../lib/archiveExports";
 import { productLocalInputToApi } from "../../lib/timezone";
 import { useI18n } from "../../lib/i18n";
-import { resizeWorkspaceTile, visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
+import {
+  CHRONOLOGY_CAMERA_DROP_MIME,
+  SIDEBAR_CAMERA_REORDER_MIME,
+  mergeSidebarCameraOrder,
+  resizeWorkspaceTile,
+  sanitizeSidebarCameraOrder,
+  visibleWorkspaceTiles,
+  workspaceCameraIds,
+} from "../../lib/workspaceLayoutCore";
 
 const STORAGE_KEY = "vms_chronology_workspace_v1";
 const LEGACY_STORAGE_KEY = "vms_chronology" + "2_workspace_v1";
@@ -74,6 +82,8 @@ const CHRONOLOGY_TEXT = {
   forward10: "\u041d\u0430 10 \u0441\u0435\u043a\u0443\u043d\u0434 \u0432\u043f\u0435\u0440\u0435\u0434",
   collapseSidebar: "\u0421\u043a\u0440\u044b\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u0430\u043c\u0435\u0440",
   expandSidebar: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u0430\u043c\u0435\u0440",
+  collapseTimeline: "\u0421\u043a\u0440\u044b\u0442\u044c timeline",
+  expandTimeline: "\u041f\u043e\u043a\u0430\u0437\u0430\u0442\u044c timeline",
   missing: "\u041a\u0430\u043c\u0435\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430",
   resize: "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0430\u0437\u043c\u0435\u0440",
   find: "\u041d\u0430\u0439\u0442\u0438",
@@ -104,6 +114,17 @@ const CHRONOLOGY_TEXT = {
   exportManifestHelp: "\u041f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430 \u2014 \u0442\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0444\u0430\u0439\u043b \u0434\u043b\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438, \u0441 \u043a\u0430\u043a\u043e\u0439 \u043a\u0430\u043c\u0435\u0440\u044b \u0438 \u0437\u0430 \u043a\u0430\u043a\u043e\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 \u0441\u043e\u0437\u0434\u0430\u043d \u043a\u043b\u0438\u043f.",
   exportReady: "\u041a\u043b\u0438\u043f \u0433\u043e\u0442\u043e\u0432.",
 };
+
+function AlignGridIcon() {
+  return (
+    <span className="workspaceAlignGridIcon" data-workspace-align-icon="grid-2x2" aria-hidden="true">
+      <span className="workspaceAlignGridIconLine vertical left" />
+      <span className="workspaceAlignGridIconLine vertical right" />
+      <span className="workspaceAlignGridIconLine horizontal top" />
+      <span className="workspaceAlignGridIconLine horizontal bottom" />
+    </span>
+  );
+}
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -257,10 +278,11 @@ function layoutTiles(source, workspaceBounds) {
   );
 }
 
-function backendPayload(tiles) {
+function backendPayload(tiles, sidebarCameraOrder = []) {
   return {
     layout_version: 1,
     tiles: dedupeTiles(tiles.map(normalizeTile)),
+    sidebarCameraOrder: sanitizeSidebarCameraOrder(sidebarCameraOrder),
   };
 }
 
@@ -273,6 +295,7 @@ export default function ChronologyPage() {
   const initialTs = HYDRATION_INITIAL_TS;
   const initialForm = dateTimeFromDate(initialTs);
   const workspaceRef = useRef(null);
+  const timelinePanelRef = useRef(null);
   const hydratedRef = useRef(false);
   const backendReadyRef = useRef(false);
   const saveTimerRef = useRef(null);
@@ -299,9 +322,13 @@ export default function ChronologyPage() {
   const [cameras, setCameras] = useState([]);
   const [camerasLoaded, setCamerasLoaded] = useState(false);
   const [tiles, setTiles] = useState([]);
+  const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
+  const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
   const [error, setError] = useState("");
   const [dragState, setDragState] = useState(null);
   const [resizeState, setResizeState] = useState(null);
+  const [draggedSidebarCameraId, setDraggedSidebarCameraId] = useState("");
+  const [sidebarDropTargetCameraId, setSidebarDropTargetCameraId] = useState("");
   const [currentTs, setCurrentTs] = useState(initialTs);
   const [previewTs, setPreviewTs] = useState(initialTs);
   const [date, setDate] = useState(initialForm.date);
@@ -319,6 +346,7 @@ export default function ChronologyPage() {
   const [fullscreenControlsVisible, setFullscreenControlsVisible] = useState(true);
   const [isSystemFullscreen, setIsSystemFullscreen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(true);
+  const [isTimelineCollapsed, setIsTimelineCollapsed] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [exportModal, setExportModal] = useState(null);
   const [exportBusy, setExportBusy] = useState(false);
@@ -350,8 +378,11 @@ export default function ChronologyPage() {
       setCurrentUser(user);
       backendReadyRef.current = true;
       const backendTiles = Array.isArray(layout?.tiles) ? dedupeTiles(layout.tiles.map(normalizeTile)) : [];
+      const backendSidebarOrder = sanitizeSidebarCameraOrder(layout?.sidebarCameraOrder);
       const markerKey = migrationMarkerKey(user?.id);
-      lastBackendLayoutPayloadRef.current = JSON.stringify(backendPayload(backendTiles));
+      setSidebarCameraOrder(backendSidebarOrder);
+      setLastPersistedSidebarCameraOrder(backendSidebarOrder);
+      lastBackendLayoutPayloadRef.current = JSON.stringify(backendPayload(backendTiles, backendSidebarOrder));
 
       if (backendTiles.length) {
         setTiles(backendTiles);
@@ -365,7 +396,7 @@ export default function ChronologyPage() {
       if (shouldMigrate) {
         setTiles(localTiles);
         saveTiles(localTiles);
-        const payload = backendPayload(localTiles);
+        const payload = backendPayload(localTiles, backendSidebarOrder);
         await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -379,6 +410,8 @@ export default function ChronologyPage() {
     } catch (err) {
       backendReadyRef.current = false;
       setTiles(readSavedTiles());
+      setSidebarCameraOrder([]);
+      setLastPersistedSidebarCameraOrder([]);
       setError((prev) => prev || err.message || TEXT.loadError);
     } finally {
       hydratedRef.current = true;
@@ -411,20 +444,24 @@ export default function ChronologyPage() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       try {
-        const payload = backendPayload(tiles);
+        const payload = backendPayload(tiles, sidebarCameraOrder);
         const payloadText = JSON.stringify(payload);
         if (payloadText === lastBackendLayoutPayloadRef.current) return;
-        await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
+        const saved = await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: payloadText,
         });
-        lastBackendLayoutPayloadRef.current = payloadText;
+        const savedOrder = sanitizeSidebarCameraOrder(saved?.sidebarCameraOrder);
+        setLastPersistedSidebarCameraOrder(savedOrder);
+        setSidebarCameraOrder(savedOrder);
+        lastBackendLayoutPayloadRef.current = JSON.stringify(backendPayload(saved?.tiles || tiles, savedOrder));
       } catch (err) {
+        setSidebarCameraOrder(lastPersistedSidebarCameraOrder);
         setError((prev) => prev || err.message || TEXT.loadError);
       }
     }, 500);
-  }, [tiles]);
+  }, [tiles, sidebarCameraOrder, lastPersistedSidebarCameraOrder]);
 
   useEffect(() => {
     currentTsRef.current = currentTs;
@@ -474,6 +511,11 @@ export default function ChronologyPage() {
     if (!camerasLoaded) return tiles;
     return visibleWorkspaceTiles(tiles, cameras);
   }, [tiles, cameras, camerasLoaded]);
+
+  const orderedCameras = useMemo(
+    () => mergeSidebarCameraOrder(cameras, sidebarCameraOrder),
+    [cameras, sidebarCameraOrder]
+  );
 
   function activeLayoutTiles(source) {
     return camerasLoaded ? visibleWorkspaceTiles(source, cameras) : dedupeTiles(source);
@@ -802,8 +844,42 @@ export default function ChronologyPage() {
 
   function handleDrop(event) {
     event.preventDefault();
-    const cameraId = event.dataTransfer.getData("application/x-chronology-camera-id");
+    const cameraId = event.dataTransfer.getData(CHRONOLOGY_CAMERA_DROP_MIME);
     if (cameraId) addTile(cameraId, event.clientX, event.clientY);
+    setDraggedSidebarCameraId("");
+    setSidebarDropTargetCameraId("");
+  }
+
+  function sidebarDropToken(cameraId, position) {
+    return `${String(cameraId || "")}:${position === "after" ? "after" : "before"}`;
+  }
+
+  function sidebarDropParts(token) {
+    const [cameraId, position] = String(token || "").split(":");
+    return { cameraId, position: position === "after" ? "after" : "before" };
+  }
+
+  function sidebarDropPosition(event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+  }
+
+  function reorderSidebarCamera(targetCameraId, position = "before") {
+    const sourceId = String(draggedSidebarCameraId || "");
+    const targetId = String(targetCameraId || "");
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    const current = orderedCameras.map((camera) => String(camera.id));
+    const from = current.indexOf(sourceId);
+    const to = current.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    const next = [...current];
+    const [moved] = next.splice(from, 1);
+    const targetIndex = next.indexOf(targetId);
+    const insertAt = position === "after" ? targetIndex + 1 : targetIndex;
+    next.splice(insertAt, 0, moved);
+    setSidebarCameraOrder(next);
+    setDraggedSidebarCameraId("");
+    setSidebarDropTargetCameraId("");
   }
 
   function startMove(event, tile) {
@@ -1361,6 +1437,7 @@ export default function ChronologyPage() {
       if (event.key === "Escape") {
         setFullscreenTileId(null);
         setIsSystemFullscreen(false);
+        setIsTimelineCollapsed(false);
         setFullscreenControlsVisible(true);
         if (document.fullscreenElement) {
           document.exitFullscreen?.().catch(() => {});
@@ -1415,10 +1492,42 @@ export default function ChronologyPage() {
   }, [isSystemFullscreen]);
 
   useEffect(() => {
+    if (!isSystemFullscreen || !timelinePanelRef.current) return undefined;
+    let frameId = 0;
+
+    function syncTimelineTabPosition() {
+      if (frameId) cancelAnimationFrame(frameId);
+      frameId = requestAnimationFrame(() => {
+        frameId = 0;
+        const panel = timelinePanelRef.current;
+        const centerLine = panel?.querySelector(".chronologyTimelineCenterLine");
+        if (!panel || !centerLine) return;
+        const panelRect = panel.getBoundingClientRect();
+        const lineRect = centerLine.getBoundingClientRect();
+        if (!panelRect.width || !lineRect.width) return;
+        const lineCenter = lineRect.left + lineRect.width / 2 - panelRect.left;
+        panel.style.setProperty("--chronology-timeline-tab-left", `${lineCenter}px`);
+      });
+    }
+
+    syncTimelineTabPosition();
+    window.addEventListener("resize", syncTimelineTabPosition);
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(syncTimelineTabPosition) : null;
+    resizeObserver?.observe(timelinePanelRef.current);
+
+    return () => {
+      if (frameId) cancelAnimationFrame(frameId);
+      window.removeEventListener("resize", syncTimelineTabPosition);
+      resizeObserver?.disconnect();
+    };
+  }, [isSystemFullscreen, isTimelineCollapsed, timelineTs?.getTime?.(), selectedCameraKey]);
+
+  useEffect(() => {
     function handleFullscreenChange() {
       const fullscreenElement = document.fullscreenElement;
       if (!fullscreenElement) {
         setIsSystemFullscreen(false);
+        setIsTimelineCollapsed(false);
         setFullscreenTileId(null);
         setFullscreenControlsVisible(true);
         return;
@@ -1448,7 +1557,8 @@ export default function ChronologyPage() {
   async function enterSystemFullscreen() {
     setFullscreenTileId(null);
     setIsSystemFullscreen(true);
-    setIsSidebarCollapsed(true);
+    setIsSidebarCollapsed(false);
+    setIsTimelineCollapsed(false);
     try {
       await shellRef.current?.requestFullscreen?.();
     } catch (_) {}
@@ -1456,6 +1566,7 @@ export default function ChronologyPage() {
 
   async function exitSystemFullscreen() {
     setIsSystemFullscreen(false);
+    setIsTimelineCollapsed(false);
     if (document.fullscreenElement) {
       try {
         await document.exitFullscreen?.();
@@ -1467,7 +1578,10 @@ export default function ChronologyPage() {
     <Layout>
       <div
         ref={shellRef}
-        className={`chronologyShell ${isSystemFullscreen ? "systemFullscreen" : ""} ${isSidebarCollapsed ? "sidebarCollapsed" : "sidebarOpen"}`}
+        className={`chronologyShell ${isSystemFullscreen ? "systemFullscreen" : ""} ${isSidebarCollapsed ? "sidebarCollapsed" : "sidebarOpen"} ${isTimelineCollapsed ? "timelineCollapsed" : "timelineOpen"}`}
+        data-chronology-fullscreen-active={isSystemFullscreen ? "true" : "false"}
+        data-chronology-sidebar-collapsed={isSidebarCollapsed ? "true" : "false"}
+        data-chronology-timeline-collapsed={isTimelineCollapsed ? "true" : "false"}
       >
         {isSystemFullscreen ? (
           <button
@@ -1480,7 +1594,6 @@ export default function ChronologyPage() {
             {isSidebarCollapsed ? "\u203a" : "\u2039"}
           </button>
         ) : null}
-
         <aside className="chronologyCameraPanel" aria-hidden={isSystemFullscreen && isSidebarCollapsed}>
           <div className="chronologyPanelHeader">
             <div className="chronologyPanelTitle">{TEXT.cameras}</div>
@@ -1498,8 +1611,20 @@ export default function ChronologyPage() {
                 className="chronologyAlignButton"
                 onClick={autoLayoutTiles}
                 disabled={!tiles.length}
+                title={TEXT.align}
+                aria-label={TEXT.align}
+                data-workspace-align-button="grid-2x2"
               >
-                {TEXT.align}
+                <AlignGridIcon />
+              </button>
+              <button
+                type="button"
+                className="chronologyAlignButton chronologyFullscreenButton"
+                onClick={isSystemFullscreen ? exitSystemFullscreen : enterSystemFullscreen}
+                title={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
+                aria-label={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
+              >
+                {isSystemFullscreen ? "\u2715" : "\u26f6"}
               </button>
             </div>
           </div>
@@ -1507,169 +1632,206 @@ export default function ChronologyPage() {
           {error ? <div className="chronologyError">{error}</div> : null}
 
           <div className="chronologyCameraList">
-            {cameras.map((camera) => (
+            {orderedCameras.map((camera) => {
+              const dropParts = sidebarDropParts(sidebarDropTargetCameraId);
+              const isDropTarget = dropParts.cameraId === String(camera.id);
+              return (
               <div
                 key={camera.id}
-                className="chronologyCameraItem"
+                className={`chronologyCameraItem ${draggedSidebarCameraId === String(camera.id) ? "isReorderDragging" : ""} ${isDropTarget ? "isReorderDropTarget" : ""} ${isDropTarget && dropParts.position === "after" ? "isReorderDropAfter" : ""} ${isDropTarget && dropParts.position === "before" ? "isReorderDropBefore" : ""}`}
+                data-sidebar-camera-row={String(camera.id)}
+                data-sidebar-reorder-dragging={draggedSidebarCameraId === String(camera.id) ? "true" : "false"}
+                data-sidebar-reorder-drop-target={isDropTarget ? "true" : "false"}
+                data-sidebar-reorder-drop-position={isDropTarget ? dropParts.position : ""}
                 draggable
                 onDragStart={(event) => {
-                  event.dataTransfer.setData("application/x-chronology-camera-id", String(camera.id));
-                  event.dataTransfer.effectAllowed = "copy";
+                  setDraggedSidebarCameraId(String(camera.id));
+                  event.dataTransfer.setData(CHRONOLOGY_CAMERA_DROP_MIME, String(camera.id));
+                  event.dataTransfer.setData(SIDEBAR_CAMERA_REORDER_MIME, String(camera.id));
+                  event.dataTransfer.effectAllowed = "copyMove";
+                }}
+                onDragEnd={() => {
+                  setDraggedSidebarCameraId("");
+                  setSidebarDropTargetCameraId("");
+                }}
+                onDragOver={(event) => {
+                  if (!event.dataTransfer.types.includes(SIDEBAR_CAMERA_REORDER_MIME)) return;
+                  event.preventDefault();
+                  event.dataTransfer.dropEffect = "move";
+                  setSidebarDropTargetCameraId(sidebarDropToken(camera.id, sidebarDropPosition(event)));
+                }}
+                onDragLeave={(event) => {
+                  if (!event.currentTarget.contains(event.relatedTarget)) {
+                    setSidebarDropTargetCameraId((value) => (sidebarDropParts(value).cameraId === String(camera.id) ? "" : value));
+                  }
+                }}
+                onDrop={(event) => {
+                  const reorderId = event.dataTransfer.getData(SIDEBAR_CAMERA_REORDER_MIME);
+                  if (!reorderId) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  reorderSidebarCamera(camera.id, sidebarDropPosition(event));
                 }}
               >
                 <div className="chronologyCameraName">{camera.name}</div>
                 <div className="chronologyCameraMeta">{camera.host}:{camera.port}</div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </aside>
 
         <section className="chronologyMain">
-          <div className={`chronologyToolbar ${isTimelinePreviewing ? "isPreviewing" : ""}`}>
-            <input
-              type="date"
-              className="chronologyDateInput"
-              value={date}
-              title={TEXT.currentTime}
-              aria-label={TEXT.currentTime}
-              onChange={(event) => setDate(event.target.value)}
-            />
-            <input
-              type="time"
-              step="1"
-              className="chronologyTimeInput"
-              value={time}
-              title={isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}
-              aria-label={isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}
-              onChange={(event) => setTime(event.target.value)}
-            />
-            <button type="button" className="chronologyPrimaryButton" onClick={handleFind}>
-              {TEXT.find}
-            </button>
-            <div className="chronologyActionWithHelp" ref={downloadChooserRef}>
+          <div className="chronologyTimelinePanel" ref={timelinePanelRef}>
+            {isSystemFullscreen ? (
               <button
                 type="button"
-                className="chronologyIconButton chronologyDownloadButton"
-                onClick={handleQuickDownload}
-                disabled={!selectedCameraIds.length || quickDownloadBusy}
-                title={TEXT.quickDownload}
-                aria-label={TEXT.quickDownload}
+                className="chronologyTimelineTab"
+                title={isTimelineCollapsed ? TEXT.expandTimeline : TEXT.collapseTimeline}
+                aria-label={isTimelineCollapsed ? TEXT.expandTimeline : TEXT.collapseTimeline}
+                onClick={() => setIsTimelineCollapsed((value) => !value)}
               >
-                {"\u2b07"}
+                {isTimelineCollapsed ? "\u25be" : "\u25b4"}
               </button>
-              <span className="chronologyHelpTooltip" tabIndex={0} aria-label={selectedCameraIds.length > 1 ? TEXT.quickDownloadChooseHelp : TEXT.quickDownloadHelp}>
-                ?
-                <span role="tooltip">{selectedCameraIds.length > 1 ? TEXT.quickDownloadChooseHelp : TEXT.quickDownloadHelp}</span>
-              </span>
-              {downloadChooserOpen ? (
-                <div className="chronologyDownloadChooser" role="menu">
-                  <div className="chronologyDownloadChooserTitle">{TEXT.quickDownloadChoose}</div>
-                  {selectedCameraIds.map((cameraId) => (
+            ) : null}
+
+            <div className={`chronologyToolbar ${isTimelinePreviewing ? "isPreviewing" : ""}`}>
+              <input
+                type="date"
+                className="chronologyDateInput"
+                value={date}
+                title={TEXT.currentTime}
+                aria-label={TEXT.currentTime}
+                onChange={(event) => setDate(event.target.value)}
+              />
+              <input
+                type="time"
+                step="1"
+                className="chronologyTimeInput"
+                value={time}
+                title={isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}
+                aria-label={isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}
+                onChange={(event) => setTime(event.target.value)}
+              />
+              <button type="button" className="chronologyPrimaryButton" onClick={handleFind}>
+                {TEXT.find}
+              </button>
+              <div className="chronologyActionWithHelp" ref={downloadChooserRef}>
+                <button
+                  type="button"
+                  className="chronologyIconButton chronologyDownloadButton"
+                  onClick={handleQuickDownload}
+                  disabled={!selectedCameraIds.length || quickDownloadBusy}
+                  title={TEXT.quickDownload}
+                  aria-label={TEXT.quickDownload}
+                >
+                  {"\u2b07"}
+                </button>
+                <span className="chronologyHelpTooltip" tabIndex={0} aria-label={selectedCameraIds.length > 1 ? TEXT.quickDownloadChooseHelp : TEXT.quickDownloadHelp}>
+                  ?
+                  <span role="tooltip">{selectedCameraIds.length > 1 ? TEXT.quickDownloadChooseHelp : TEXT.quickDownloadHelp}</span>
+                </span>
+                {downloadChooserOpen ? (
+                  <div className="chronologyDownloadChooser" role="menu">
+                    <div className="chronologyDownloadChooserTitle">{TEXT.quickDownloadChoose}</div>
+                    {selectedCameraIds.map((cameraId) => (
+                      <button
+                        key={cameraId}
+                        type="button"
+                        className="chronologyDownloadChoice"
+                        onClick={() => startQuickDownloadForCamera(cameraId)}
+                        disabled={quickDownloadBusy}
+                        role="menuitem"
+                      >
+                        {selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`}
+                      </button>
+                    ))}
                     <button
-                      key={cameraId}
                       type="button"
-                      className="chronologyDownloadChoice"
-                      onClick={() => startQuickDownloadForCamera(cameraId)}
+                      className="chronologyDownloadChoice strong"
+                      onClick={startQuickDownloadForAllCameras}
                       disabled={quickDownloadBusy}
                       role="menuitem"
                     >
-                      {selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`}
+                      {TEXT.allCameras}
                     </button>
-                  ))}
+                    {downloadResults.length ? (
+                      <div className="chronologyDownloadResults">
+                        {downloadResults.map((item, index) => (
+                          <div key={`${item.cameraId}-${index}`}>
+                            <span>{item.name}</span>
+                            <strong>{item.status}</strong>
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+              {canExport ? (
+                <div className="chronologyActionWithHelp">
                   <button
                     type="button"
-                    className="chronologyDownloadChoice strong"
-                    onClick={startQuickDownloadForAllCameras}
-                    disabled={quickDownloadBusy}
-                    role="menuitem"
+                    className="chronologyIconButton chronologyEvidenceButton"
+                    onClick={openExportModal}
+                    disabled={!selectedCameraIds.length || exportBusy}
+                    title={TEXT.exportEvidence}
+                    aria-label={TEXT.exportEvidence}
                   >
-                    {TEXT.allCameras}
+                    {"\u2696"}
                   </button>
-                  {downloadResults.length ? (
-                    <div className="chronologyDownloadResults">
-                      {downloadResults.map((item, index) => (
-                        <div key={`${item.cameraId}-${index}`}>
-                          <span>{item.name}</span>
-                          <strong>{item.status}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
+                  <span className="chronologyHelpTooltip" tabIndex={0} aria-label={TEXT.exportEvidenceHelpShort}>
+                    ?
+                    <span role="tooltip">{TEXT.exportEvidenceHelpShort}</span>
+                  </span>
                 </div>
               ) : null}
-            </div>
-            {canExport ? (
-              <div className="chronologyActionWithHelp">
-                <button
-                  type="button"
-                  className="chronologyIconButton chronologyEvidenceButton"
-                  onClick={openExportModal}
-                  disabled={!selectedCameraIds.length || exportBusy}
-                  title={TEXT.exportEvidence}
-                  aria-label={TEXT.exportEvidence}
-                >
-                  {"\u2696"}
-                </button>
-                <span className="chronologyHelpTooltip" tabIndex={0} aria-label={TEXT.exportEvidenceHelpShort}>
-                  ?
-                  <span role="tooltip">{TEXT.exportEvidenceHelpShort}</span>
-                </span>
+              <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(-10)} title={TEXT.back10} aria-label={TEXT.back10}>-10</button>
+              <button type="button" className="chronologyIconButton" onClick={handlePlay} title={TEXT.play} aria-label={TEXT.play}>{"\u25b6"}</button>
+              <button type="button" className="chronologyIconButton" onClick={handlePause} title={TEXT.pause} aria-label={TEXT.pause}>{"\u275a\u275a"}</button>
+              <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(10)} title={TEXT.forward10} aria-label={TEXT.forward10}>+10</button>
+
+              <div className="chronologySpeedGroup">
+                {SPEED_OPTIONS.map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    className={`chronologySpeedButton ${speed === item.value ? "active" : ""}`}
+                    onClick={() => setSpeed(item.value)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
               </div>
-            ) : null}
-            <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(-10)} title={TEXT.back10} aria-label={TEXT.back10}>-10</button>
-            <button type="button" className="chronologyIconButton" onClick={handlePlay} title={TEXT.play} aria-label={TEXT.play}>{"\u25b6"}</button>
-            <button type="button" className="chronologyIconButton" onClick={handlePause} title={TEXT.pause} aria-label={TEXT.pause}>{"\u275a\u275a"}</button>
-            <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(10)} title={TEXT.forward10} aria-label={TEXT.forward10}>+10</button>
 
-            <div className="chronologySpeedGroup">
-              {SPEED_OPTIONS.map((item) => (
-                <button
-                  key={item.value}
-                  type="button"
-                  className={`chronologySpeedButton ${speed === item.value ? "active" : ""}`}
-                  onClick={() => setSpeed(item.value)}
-                >
-                  {item.label}
-                </button>
-              ))}
+              <div className={`chronologyTimeBox ${isTimelinePreviewing ? "preview" : ""}`}>
+                <span>{isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}</span>
+                <strong>{formatPlaybackDateTime(timelineTs)}</strong>
+              </div>
             </div>
 
-            <div className={`chronologyTimeBox ${isTimelinePreviewing ? "preview" : ""}`}>
-              <span>{isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}</span>
-              <strong>{formatPlaybackDateTime(timelineTs)}</strong>
+            <div className="chronologyTimelineWrap">
+              <ChronologyTimeline
+                currentTs={timelineTs}
+                committedTs={currentTs}
+                zoomKey={zoomKey}
+                onZoomOut={handleZoomOut}
+                onZoomIn={handleZoomIn}
+                onPreviewTime={handleTimelinePreview}
+                onDragStart={handleTimelineDragStart}
+                onDragEnd={handleTimelineDragEnd}
+                onSelectTime={handleTimelineSelect}
+                rangesByCamera={rangesData}
+                selectedCameraIds={selectedCameraIds}
+                cameraNames={selectedCameraNames}
+                currentTimeLabel={formatPlaybackDateTime(timelineTs)}
+                committedTimeLabel={formatPlaybackDateTime(currentTs)}
+                isPreviewing={isTimelinePreviewing}
+                rangesLoading={rangesLoading}
+                rangesError={rangesError}
+                compact
+              />
             </div>
-            <button
-              type="button"
-              className="chronologyIconButton chronologyFullscreenButton"
-              onClick={isSystemFullscreen ? exitSystemFullscreen : enterSystemFullscreen}
-              title={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
-              aria-label={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
-            >
-              {isSystemFullscreen ? "\u2715" : "\u26f6"}
-            </button>
-          </div>
-
-          <div className="chronologyTimelineWrap">
-            <ChronologyTimeline
-              currentTs={timelineTs}
-              committedTs={currentTs}
-              zoomKey={zoomKey}
-              onZoomOut={handleZoomOut}
-              onZoomIn={handleZoomIn}
-              onPreviewTime={handleTimelinePreview}
-              onDragStart={handleTimelineDragStart}
-              onDragEnd={handleTimelineDragEnd}
-              onSelectTime={handleTimelineSelect}
-              rangesByCamera={rangesData}
-              selectedCameraIds={selectedCameraIds}
-              cameraNames={selectedCameraNames}
-              currentTimeLabel={formatPlaybackDateTime(timelineTs)}
-              committedTimeLabel={formatPlaybackDateTime(currentTs)}
-              isPreviewing={isTimelinePreviewing}
-              rangesLoading={rangesLoading}
-              rangesError={rangesError}
-              compact
-            />
           </div>
 
           <div
@@ -1677,7 +1839,7 @@ export default function ChronologyPage() {
             className={`chronologyWorkspace ${dragState || resizeState ? "isEditing" : ""}`}
             onDragOver={(event) => {
               event.preventDefault();
-              event.dataTransfer.dropEffect = "copy";
+              event.dataTransfer.dropEffect = event.dataTransfer.types.includes(CHRONOLOGY_CAMERA_DROP_MIME) ? "copy" : "none";
             }}
             onDrop={handleDrop}
           >

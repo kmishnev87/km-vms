@@ -6,7 +6,16 @@ import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import TilePlayer from "../../components/TilePlayer";
 import { apiFetch } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
-import { resizeWorkspaceTile, visibleWorkspaceTiles, workspaceCameraIds } from "../../lib/workspaceLayoutCore";
+import {
+  LIVE_CAMERA_DROP_MIME,
+  LIVE_CAMERA_STREAM_DROP_MIME,
+  SIDEBAR_CAMERA_REORDER_MIME,
+  mergeSidebarCameraOrder,
+  resizeWorkspaceTile,
+  sanitizeSidebarCameraOrder,
+  visibleWorkspaceTiles,
+  workspaceCameraIds,
+} from "../../lib/workspaceLayoutCore";
 
 const STORAGE_KEY = "vms_live_workspace_v1";
 const WORKSPACE_KEY = "live";
@@ -26,10 +35,25 @@ const LIVE_TEXT = {
   empty: "\u041f\u0435\u0440\u0435\u0442\u0430\u0449\u0438\u0442\u0435 \u043a\u0430\u043c\u0435\u0440\u0443 \u043d\u0430 canvas",
   camera: "\u041a\u0430\u043c\u0435\u0440\u0430",
   close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
+  enterFullscreen: "\u0412\u043e \u0432\u0435\u0441\u044c \u044d\u043a\u0440\u0430\u043d",
+  exitFullscreen: "\u0412\u044b\u0439\u0442\u0438 \u0438\u0437 fullscreen",
+  collapseSidebar: "\u0421\u043a\u0440\u044b\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u0430\u043c\u0435\u0440",
+  expandSidebar: "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043f\u0430\u043d\u0435\u043b\u044c \u043a\u0430\u043c\u0435\u0440",
   unavailable: "\u041a\u0430\u043c\u0435\u0440\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u0430",
   resize: "\u0418\u0437\u043c\u0435\u043d\u0438\u0442\u044c \u0440\u0430\u0437\u043c\u0435\u0440",
   duplicate: "\u041a\u0430\u043c\u0435\u0440\u0430 \u0443\u0436\u0435 \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0430",
 };
+
+function AlignGridIcon() {
+  return (
+    <span className="workspaceAlignGridIcon" data-workspace-align-icon="grid-2x2" aria-hidden="true">
+      <span className="workspaceAlignGridIconLine vertical left" />
+      <span className="workspaceAlignGridIconLine vertical right" />
+      <span className="workspaceAlignGridIconLine horizontal top" />
+      <span className="workspaceAlignGridIconLine horizontal bottom" />
+    </span>
+  );
+}
 
 function detectStreams(camera) {
   const result = [];
@@ -167,10 +191,11 @@ function layoutTiles(source, workspaceBounds) {
   );
 }
 
-function backendPayload(tiles) {
+function backendPayload(tiles, sidebarCameraOrder = []) {
   return {
     layout_version: 1,
     tiles: dedupeTiles(tiles.map(normalizeTile)),
+    sidebarCameraOrder: sanitizeSidebarCameraOrder(sidebarCameraOrder),
   };
 }
 
@@ -181,15 +206,23 @@ export default function LivePage() {
     [text]
   );
   const workspaceRef = useRef(null);
+  const shellRef = useRef(null);
   const hydratedRef = useRef(false);
   const backendReadyRef = useRef(false);
   const saveTimerRef = useRef(null);
+  const lastBackendLayoutPayloadRef = useRef("");
   const [cameras, setCameras] = useState([]);
   const [camerasLoaded, setCamerasLoaded] = useState(false);
   const [tiles, setTiles] = useState([]);
+  const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
+  const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
   const [error, setError] = useState("");
   const [dragState, setDragState] = useState(null);
   const [resizeState, setResizeState] = useState(null);
+  const [draggedSidebarCameraId, setDraggedSidebarCameraId] = useState("");
+  const [sidebarDropTargetCameraId, setSidebarDropTargetCameraId] = useState("");
+  const [isSystemFullscreen, setIsSystemFullscreen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
 
   async function loadCameras() {
     try {
@@ -211,7 +244,11 @@ export default function LivePage() {
       ]);
       backendReadyRef.current = true;
       const backendTiles = Array.isArray(layout?.tiles) ? dedupeTiles(layout.tiles.map(normalizeTile)) : [];
+      const backendSidebarOrder = sanitizeSidebarCameraOrder(layout?.sidebarCameraOrder);
       const markerKey = migrationMarkerKey(user?.id);
+      setSidebarCameraOrder(backendSidebarOrder);
+      setLastPersistedSidebarCameraOrder(backendSidebarOrder);
+      lastBackendLayoutPayloadRef.current = JSON.stringify(backendPayload(backendTiles, backendSidebarOrder));
 
       if (backendTiles.length) {
         setTiles(backendTiles);
@@ -225,11 +262,13 @@ export default function LivePage() {
       if (shouldMigrate) {
         setTiles(localTiles);
         saveTiles(localTiles);
+        const payload = backendPayload(localTiles, backendSidebarOrder);
         await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(backendPayload(localTiles)),
+          body: JSON.stringify(payload),
         });
+        lastBackendLayoutPayloadRef.current = JSON.stringify(payload);
       } else {
         setTiles([]);
       }
@@ -237,6 +276,8 @@ export default function LivePage() {
     } catch (err) {
       backendReadyRef.current = false;
       setTiles(readSavedTiles());
+      setSidebarCameraOrder([]);
+      setLastPersistedSidebarCameraOrder([]);
       setError((prev) => prev || err.message || TEXT.loadError);
     } finally {
       hydratedRef.current = true;
@@ -260,16 +301,24 @@ export default function LivePage() {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(async () => {
       try {
-        await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
+        const payload = backendPayload(tiles, sidebarCameraOrder);
+        const payloadText = JSON.stringify(payload);
+        if (payloadText === lastBackendLayoutPayloadRef.current) return;
+        const saved = await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(backendPayload(tiles)),
+          body: payloadText,
         });
+        const savedOrder = sanitizeSidebarCameraOrder(saved?.sidebarCameraOrder);
+        setLastPersistedSidebarCameraOrder(savedOrder);
+        setSidebarCameraOrder(savedOrder);
+        lastBackendLayoutPayloadRef.current = JSON.stringify(backendPayload(saved?.tiles || tiles, savedOrder));
       } catch (err) {
+        setSidebarCameraOrder(lastPersistedSidebarCameraOrder);
         setError((prev) => prev || err.message || TEXT.loadError);
       }
     }, 500);
-  }, [tiles]);
+  }, [tiles, sidebarCameraOrder, lastPersistedSidebarCameraOrder]);
 
   const cameraMap = useMemo(() => {
     const map = new Map();
@@ -281,6 +330,11 @@ export default function LivePage() {
     if (!camerasLoaded) return tiles;
     return visibleWorkspaceTiles(tiles, cameras);
   }, [tiles, cameras, camerasLoaded]);
+
+  const orderedCameras = useMemo(
+    () => mergeSidebarCameraOrder(cameras, sidebarCameraOrder),
+    [cameras, sidebarCameraOrder]
+  );
 
   function activeLayoutTiles(source) {
     return camerasLoaded ? visibleWorkspaceTiles(source, cameras) : dedupeTiles(source);
@@ -380,10 +434,62 @@ export default function LivePage() {
 
   function handleDrop(event) {
     event.preventDefault();
-    const cameraId = event.dataTransfer.getData("application/x-camera-id");
+    const cameraId = event.dataTransfer.getData(LIVE_CAMERA_DROP_MIME);
     const camera = cameraMap.get(String(cameraId || ""));
-    const stream = event.dataTransfer.getData("application/x-camera-stream") || defaultStream(camera);
+    const stream = event.dataTransfer.getData(LIVE_CAMERA_STREAM_DROP_MIME) || defaultStream(camera);
     if (cameraId) addTile(cameraId, stream, event.clientX, event.clientY);
+    setDraggedSidebarCameraId("");
+    setSidebarDropTargetCameraId("");
+  }
+
+  function sidebarDropToken(cameraId, position) {
+    return `${String(cameraId || "")}:${position === "after" ? "after" : "before"}`;
+  }
+
+  function sidebarDropParts(token) {
+    const [cameraId, position] = String(token || "").split(":");
+    return { cameraId, position: position === "after" ? "after" : "before" };
+  }
+
+  function sidebarDropPosition(event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+  }
+
+  function reorderSidebarCamera(targetCameraId, position = "before") {
+    const sourceId = String(draggedSidebarCameraId || "");
+    const targetId = String(targetCameraId || "");
+    if (!sourceId || !targetId || sourceId === targetId) return;
+    const current = orderedCameras.map((camera) => String(camera.id));
+    const from = current.indexOf(sourceId);
+    const to = current.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    const next = [...current];
+    const [moved] = next.splice(from, 1);
+    const targetIndex = next.indexOf(targetId);
+    const insertAt = position === "after" ? targetIndex + 1 : targetIndex;
+    next.splice(insertAt, 0, moved);
+    setSidebarCameraOrder(next);
+    setDraggedSidebarCameraId("");
+    setSidebarDropTargetCameraId("");
+  }
+
+  async function enterSystemFullscreen() {
+    setIsSystemFullscreen(true);
+    setIsSidebarCollapsed(false);
+    try {
+      await shellRef.current?.requestFullscreen?.();
+    } catch (_) {}
+  }
+
+  async function exitSystemFullscreen() {
+    setIsSystemFullscreen(false);
+    setIsSidebarCollapsed(false);
+    if (document.fullscreenElement) {
+      try {
+        await document.exitFullscreen?.();
+      } catch (_) {}
+    }
   }
 
   function startMove(event, tile) {
@@ -429,6 +535,36 @@ export default function LivePage() {
       corner,
     });
   }
+
+  useEffect(() => {
+    document.body.classList.toggle("liveSystemFullscreenBody", isSystemFullscreen);
+    return () => document.body.classList.remove("liveSystemFullscreenBody");
+  }, [isSystemFullscreen]);
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      if (document.fullscreenElement === shellRef.current) {
+        setIsSystemFullscreen(true);
+        return;
+      }
+      setIsSystemFullscreen(false);
+      setIsSidebarCollapsed(false);
+    }
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.key === "Escape" && isSystemFullscreen) {
+        setIsSystemFullscreen(false);
+        setIsSidebarCollapsed(false);
+      }
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isSystemFullscreen]);
 
   useEffect(() => {
     if (!dragState) return undefined;
@@ -481,8 +617,36 @@ export default function LivePage() {
   return (
     <Layout>
       <OperatorProblemBanners domains={["live"]} className="liveWorkspaceWarnings" limit={3} />
-      <div className="liveWorkspaceShell">
-        <aside className="liveWorkspaceCameraPanel">
+      <div
+        ref={shellRef}
+        className={`liveWorkspaceShell ${isSystemFullscreen ? "systemFullscreen" : ""} ${isSidebarCollapsed ? "sidebarCollapsed" : "sidebarOpen"}`}
+        data-live-fullscreen-active={isSystemFullscreen ? "true" : "false"}
+        data-live-sidebar-collapsed={isSidebarCollapsed ? "true" : "false"}
+        data-live-sidebar-order={orderedCameras.map((camera) => String(camera.id)).join(",")}
+      >
+        {isSystemFullscreen ? (
+          <button
+            type="button"
+            className="liveWorkspaceSidebarTab"
+            title={isSidebarCollapsed ? TEXT.expandSidebar : TEXT.collapseSidebar}
+            aria-label={isSidebarCollapsed ? TEXT.expandSidebar : TEXT.collapseSidebar}
+            onClick={() => setIsSidebarCollapsed((value) => !value)}
+          >
+            {isSidebarCollapsed ? "\u203a" : "\u2039"}
+          </button>
+        ) : null}
+        {isSystemFullscreen ? (
+          <button
+            type="button"
+            className="liveWorkspaceFullscreenExitButton"
+            onClick={exitSystemFullscreen}
+            title={TEXT.exitFullscreen}
+            aria-label={TEXT.exitFullscreen}
+          >
+            {"\u2715"}
+          </button>
+        ) : null}
+        <aside className="liveWorkspaceCameraPanel" aria-hidden={isSystemFullscreen && isSidebarCollapsed}>
           <div className="liveWorkspacePanelHeader">
             <div className="liveWorkspacePanelTitle">{TEXT.cameras}</div>
             <div className="liveWorkspacePanelActions">
@@ -499,27 +663,71 @@ export default function LivePage() {
                 className="liveWorkspaceAlignButton"
                 onClick={autoLayoutTiles}
                 disabled={!tiles.length}
+                title={TEXT.align}
+                aria-label={TEXT.align}
+                data-workspace-align-button="grid-2x2"
               >
-                {TEXT.align}
+                <AlignGridIcon />
+              </button>
+              <button
+                type="button"
+                className="liveWorkspaceAlignButton liveWorkspaceFullscreenButton"
+                onClick={isSystemFullscreen ? exitSystemFullscreen : enterSystemFullscreen}
+                title={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
+                aria-label={isSystemFullscreen ? TEXT.exitFullscreen : TEXT.enterFullscreen}
+              >
+                {isSystemFullscreen ? "\u2715" : "\u26f6"}
               </button>
             </div>
           </div>
           {error ? <div className="liveWorkspaceError">{error}</div> : null}
 
           <div className="liveWorkspaceCameraList">
-            {cameras.map((camera) => {
+            {orderedCameras.map((camera) => {
               const streams = detectStreams(camera);
               const initialStream = defaultStream(camera);
 
               return (
+                (() => {
+                  const dropParts = sidebarDropParts(sidebarDropTargetCameraId);
+                  const isDropTarget = dropParts.cameraId === String(camera.id);
+                  return (
                 <div
                   key={camera.id}
-                  className="liveWorkspaceCameraItem"
+                  className={`liveWorkspaceCameraItem ${draggedSidebarCameraId === String(camera.id) ? "isReorderDragging" : ""} ${isDropTarget ? "isReorderDropTarget" : ""} ${isDropTarget && dropParts.position === "after" ? "isReorderDropAfter" : ""} ${isDropTarget && dropParts.position === "before" ? "isReorderDropBefore" : ""}`}
+                  data-sidebar-camera-row={String(camera.id)}
+                  data-sidebar-reorder-dragging={draggedSidebarCameraId === String(camera.id) ? "true" : "false"}
+                  data-sidebar-reorder-drop-target={isDropTarget ? "true" : "false"}
+                  data-sidebar-reorder-drop-position={isDropTarget ? dropParts.position : ""}
                   draggable
                   onDragStart={(event) => {
-                    event.dataTransfer.setData("application/x-camera-id", String(camera.id));
-                    event.dataTransfer.setData("application/x-camera-stream", initialStream);
-                    event.dataTransfer.effectAllowed = "copy";
+                    setDraggedSidebarCameraId(String(camera.id));
+                    event.dataTransfer.setData(LIVE_CAMERA_DROP_MIME, String(camera.id));
+                    event.dataTransfer.setData(LIVE_CAMERA_STREAM_DROP_MIME, initialStream);
+                    event.dataTransfer.setData(SIDEBAR_CAMERA_REORDER_MIME, String(camera.id));
+                    event.dataTransfer.effectAllowed = "copyMove";
+                  }}
+                  onDragEnd={() => {
+                    setDraggedSidebarCameraId("");
+                    setSidebarDropTargetCameraId("");
+                  }}
+                  onDragOver={(event) => {
+                    if (!event.dataTransfer.types.includes(SIDEBAR_CAMERA_REORDER_MIME)) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                    setSidebarDropTargetCameraId(sidebarDropToken(camera.id, sidebarDropPosition(event)));
+                  }}
+                  onDragLeave={(event) => {
+                    if (!event.currentTarget.contains(event.relatedTarget)) {
+                      setSidebarDropTargetCameraId((value) => (sidebarDropParts(value).cameraId === String(camera.id) ? "" : value));
+                    }
+                  }}
+                  onDrop={(event) => {
+                    const reorderId = event.dataTransfer.getData(SIDEBAR_CAMERA_REORDER_MIME);
+                    if (!reorderId) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    reorderSidebarCamera(camera.id, sidebarDropPosition(event));
                   }}
                 >
                   <div className="liveWorkspaceCameraName">{camera.name}</div>
@@ -533,8 +741,8 @@ export default function LivePage() {
                         draggable
                         onDragStart={(event) => {
                           event.stopPropagation();
-                          event.dataTransfer.setData("application/x-camera-id", String(camera.id));
-                          event.dataTransfer.setData("application/x-camera-stream", stream.key);
+                          event.dataTransfer.setData(LIVE_CAMERA_DROP_MIME, String(camera.id));
+                          event.dataTransfer.setData(LIVE_CAMERA_STREAM_DROP_MIME, stream.key);
                           event.dataTransfer.effectAllowed = "copy";
                         }}
                       >
@@ -543,6 +751,8 @@ export default function LivePage() {
                     ))}
                   </div>
                 </div>
+                  );
+                })()
               );
             })}
           </div>
@@ -553,7 +763,7 @@ export default function LivePage() {
           className={`liveWorkspaceCanvas ${dragState || resizeState ? "isEditing" : ""}`}
           onDragOver={(event) => {
             event.preventDefault();
-            event.dataTransfer.dropEffect = "copy";
+            event.dataTransfer.dropEffect = event.dataTransfer.types.includes(LIVE_CAMERA_DROP_MIME) ? "copy" : "none";
           }}
           onDrop={handleDrop}
         >

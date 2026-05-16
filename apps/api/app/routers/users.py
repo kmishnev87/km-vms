@@ -15,6 +15,7 @@ from app.core.permissions import (
 )
 from app.core.security import hash_password, verify_password
 from app.db.session import get_db
+from app.models.camera import Camera
 from app.models.user import User
 from app.models.workspace_layout import UserWorkspaceLayout
 from app.routers.deps import FORBIDDEN_DETAIL, get_current_user, require_permission
@@ -25,6 +26,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 WORKSPACE_LAYOUT_VERSION = 1
 WORKSPACE_LAYOUT_MAX_TILES = 64
+WORKSPACE_LAYOUT_MAX_SIDEBAR_CAMERAS = 512
 WORKSPACE_PERMISSIONS = {
     "live": PERMISSION_VIEW_LIVE,
     "chronology": PERMISSION_VIEW_TIMELINE,
@@ -78,7 +80,34 @@ def _safe_int(value, *, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, parsed))
 
 
-def sanitize_workspace_layout(workspace_key: str, payload: dict) -> dict:
+def accessible_workspace_camera_ids(db: Session) -> set[str]:
+    rows = db.query(Camera.id).filter(Camera.deleted_at.is_(None)).all()
+    return {str(row[0]) for row in rows}
+
+
+def sanitize_sidebar_camera_order(raw_order, accessible_camera_ids: set[str] | None = None) -> list[str]:
+    if raw_order is None:
+        return []
+    if not isinstance(raw_order, list):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Sidebar camera order must be a list")
+
+    allowed = {str(value) for value in accessible_camera_ids} if accessible_camera_ids is not None else None
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw_id in raw_order[:WORKSPACE_LAYOUT_MAX_SIDEBAR_CAMERAS]:
+        if isinstance(raw_id, (dict, list, tuple, set)):
+            continue
+        camera_id = str(raw_id or "").strip()[:64]
+        if not camera_id or camera_id in seen:
+            continue
+        if allowed is not None and camera_id not in allowed:
+            continue
+        seen.add(camera_id)
+        result.append(camera_id)
+    return result
+
+
+def sanitize_workspace_layout(workspace_key: str, payload: dict, accessible_camera_ids: set[str] | None = None) -> dict:
     if not isinstance(payload, dict):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Layout payload must be an object")
 
@@ -130,6 +159,7 @@ def sanitize_workspace_layout(workspace_key: str, payload: dict) -> dict:
     return {
         "layout_version": WORKSPACE_LAYOUT_VERSION,
         "tiles": tiles,
+        "sidebarCameraOrder": sanitize_sidebar_camera_order(payload.get("sidebarCameraOrder"), accessible_camera_ids),
     }
 
 
@@ -227,7 +257,7 @@ def get_workspace_layout(
         .filter(UserWorkspaceLayout.user_id == current_user.id, UserWorkspaceLayout.workspace_key == key)
         .first()
     )
-    layout = sanitize_workspace_layout(key, row.layout if row else {})
+    layout = sanitize_workspace_layout(key, row.layout if row else {}, accessible_workspace_camera_ids(db))
     return {
         "workspace_key": key,
         **layout,
@@ -244,7 +274,7 @@ def put_workspace_layout(
     current_user: User = Depends(get_current_user),
 ):
     key = validate_workspace_access(workspace_key, current_user)
-    layout = sanitize_workspace_layout(key, payload)
+    layout = sanitize_workspace_layout(key, payload, accessible_workspace_camera_ids(db))
     row = (
         db.query(UserWorkspaceLayout)
         .filter(UserWorkspaceLayout.user_id == current_user.id, UserWorkspaceLayout.workspace_key == key)

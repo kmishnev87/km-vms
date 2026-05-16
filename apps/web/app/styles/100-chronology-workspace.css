@@ -26,9 +26,26 @@
   padding: 8px;
   background: #020617;
   gap: 6px;
+  overflow: hidden;
 }
 
 .chronologyShell.systemFullscreen .chronologyMain {
+  position: relative;
+  gap: 6px;
+}
+
+.chronologyTimelinePanel {
+  position: relative;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-height: 0;
+  transition: flex-basis 140ms ease, opacity 140ms ease, transform 140ms ease;
+}
+
+.chronologyShell.systemFullscreen .chronologyTimelinePanel {
   gap: 6px;
 }
 
@@ -37,6 +54,24 @@
   padding: 4px;
   border-color: rgba(148, 163, 184, 0.32);
   background: rgba(15, 23, 42, 0.96);
+}
+
+.chronologyShell.systemFullscreen .chronologyDateInput,
+.chronologyShell.systemFullscreen .chronologyTimeInput,
+.chronologyShell.systemFullscreen .chronologyPrimaryButton,
+.chronologyShell.systemFullscreen .chronologySecondaryButton,
+.chronologyShell.systemFullscreen .chronologyIconButton,
+.chronologyShell.systemFullscreen .chronologySpeedButton {
+  border-color: rgba(148, 163, 184, 0.38);
+  background: rgba(248, 250, 252, 0.08);
+  color: #e2e8f0;
+}
+
+.chronologyShell.systemFullscreen .chronologyPrimaryButton,
+.chronologyShell.systemFullscreen .chronologySpeedButton.active {
+  border-color: rgba(147, 197, 253, 0.78);
+  background: rgba(37, 99, 235, 0.72);
+  color: #ffffff;
 }
 
 .chronologyShell.systemFullscreen .chronologyDateInput,
@@ -56,14 +91,50 @@
 
 .chronologyShell.systemFullscreen .chronologyTimelineWrap .chronologyTimelineCard {
   padding: 5px 8px 7px;
+  border-color: rgba(148, 163, 184, 0.32);
+  background: rgba(15, 23, 42, 0.96);
+  color: #e2e8f0;
 }
 
 .chronologyShell.systemFullscreen .chronologyTimelineWrap .chronologyTimelineBody {
   min-height: 74px;
+  border-color: rgba(51, 65, 85, 0.96);
+  background-color: rgba(2, 6, 23, 0.88);
 }
 
 .chronologyShell.systemFullscreen .chronologyWorkspace {
   border-color: rgba(96, 165, 250, 0.45);
+  border-radius: 8px;
+  min-height: 0;
+}
+
+.chronologyShell.systemFullscreen .chronologyCameraPanel {
+  border-color: rgba(96, 165, 250, 0.34);
+  background: rgba(15, 23, 42, 0.96);
+  box-shadow: 0 20px 46px rgba(0, 0, 0, 0.34);
+}
+
+.chronologyShell.systemFullscreen.timelineCollapsed .chronologyTimelinePanel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  z-index: 5100;
+  flex-basis: auto;
+  height: 0;
+  gap: 0;
+  opacity: 1;
+  transform: none;
+  pointer-events: none;
+}
+
+.chronologyShell.systemFullscreen.timelineCollapsed .chronologyToolbar,
+.chronologyShell.systemFullscreen.timelineCollapsed .chronologyTimelineWrap {
+  display: none;
+}
+
+.chronologyShell.systemFullscreen.timelineCollapsed .chronologyWorkspace {
+  flex: 1 1 auto;
 }
 
 .chronologyShell.systemFullscreen.sidebarCollapsed .chronologyCameraPanel {
@@ -84,10 +155,9 @@
   transform: translateX(0);
 }
 
-.chronologySidebarTab {
+.chronologySidebarTab,
+.chronologyTimelineTab {
   position: absolute;
-  left: 8px;
-  top: 50%;
   z-index: 5100;
   width: 30px;
   height: 56px;
@@ -100,8 +170,47 @@
   cursor: pointer;
 }
 
+.chronologySidebarTab {
+  left: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+
 .chronologyShell.systemFullscreen.sidebarOpen .chronologySidebarTab {
   left: 212px;
+}
+
+.chronologyTimelineTab {
+  left: var(--chronology-timeline-tab-left, 50%);
+  right: auto;
+  bottom: -30px;
+  width: 56px;
+  height: 30px;
+  border-radius: 0 0 8px 8px;
+  font-size: 17px;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+
+@media (max-width: 1100px) {
+  .chronologyTimelineTab {
+    left: var(--chronology-timeline-tab-left, 50%);
+  }
+}
+
+.chronologyShell.systemFullscreen.timelineCollapsed .chronologyTimelineTab {
+  top: 0;
+  bottom: auto;
+}
+
+.chronologySidebarTab:hover,
+.chronologySidebarTab:focus-visible,
+.chronologyTimelineTab:hover,
+.chronologyTimelineTab:focus-visible {
+  border-color: #60a5fa;
+  color: #ffffff;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.18);
 }
 
 .chronologyCameraPanel {
@@ -128,6 +237,27 @@
   color: #0f172a;
   font-size: 15px;
   font-weight: 800;
+}
+
+.chronologyShell.systemFullscreen .chronologyPanelTitle,
+.chronologyShell.systemFullscreen .chronologyCameraName {
+  color: #f8fafc;
+}
+
+.chronologyShell.systemFullscreen .chronologyCameraMeta {
+  color: #94a3b8;
+}
+
+.chronologyShell.systemFullscreen .chronologyAlignButton {
+  border-color: rgba(148, 163, 184, 0.38);
+  background: rgba(248, 250, 252, 0.08);
+  color: #e2e8f0;
+}
+
+.chronologyShell.systemFullscreen .chronologyAlignButton:hover {
+  border-color: rgba(147, 197, 253, 0.78);
+  background: rgba(37, 99, 235, 0.28);
+  color: #ffffff;
 }
 
 .chronologyAlignButton {
@@ -168,11 +298,47 @@
 }
 
 .chronologyCameraItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
   border: 1px solid #dbe3ef;
   border-radius: 10px;
   background: #f8fafc;
   padding: 8px;
   cursor: grab;
+  transform: translateY(0);
+  transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease, opacity 150ms ease, transform 150ms ease;
+}
+
+.chronologyShell.systemFullscreen .chronologyCameraItem {
+  border-color: rgba(71, 85, 105, 0.88);
+  background: rgba(30, 41, 59, 0.86);
+}
+
+.chronologyCameraItem.isReorderDragging {
+  opacity: 0.58;
+  border-color: #60a5fa;
+  transform: scale(0.985);
+  box-shadow: 0 10px 24px rgba(37, 99, 235, 0.18);
+}
+
+.chronologyCameraItem.isReorderDropTarget {
+  border-color: #2563eb;
+  background: #eff6ff;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.12);
+}
+
+.chronologyShell.systemFullscreen .chronologyCameraItem.isReorderDropTarget {
+  border-color: #60a5fa;
+  background: rgba(30, 64, 175, 0.34);
+}
+
+.chronologyCameraItem.isReorderDropBefore {
+  box-shadow: inset 0 3px 0 #2563eb, 0 8px 18px rgba(37, 99, 235, 0.12);
+}
+
+.chronologyCameraItem.isReorderDropAfter {
+  box-shadow: inset 0 -3px 0 #2563eb, 0 8px 18px rgba(37, 99, 235, 0.12);
 }
 
 .chronologyCameraItem:active {

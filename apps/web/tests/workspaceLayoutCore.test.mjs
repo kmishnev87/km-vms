@@ -7,17 +7,32 @@ import { dirname, resolve } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const source = fs
   .readFileSync(resolve(__dirname, "../lib/workspaceLayoutCore.js"), "utf8")
+  .replaceAll("export const ", "const ")
   .replaceAll("export function ", "function ");
 const context = {};
 vm.runInNewContext(
   `${source}
 this.visibleWorkspaceTiles = visibleWorkspaceTiles;
 this.workspaceCameraIds = workspaceCameraIds;
-this.resizeWorkspaceTile = resizeWorkspaceTile;`,
+this.resizeWorkspaceTile = resizeWorkspaceTile;
+this.mergeSidebarCameraOrder = mergeSidebarCameraOrder;
+this.sanitizeSidebarCameraOrder = sanitizeSidebarCameraOrder;
+this.SIDEBAR_CAMERA_REORDER_MIME = SIDEBAR_CAMERA_REORDER_MIME;
+this.LIVE_CAMERA_DROP_MIME = LIVE_CAMERA_DROP_MIME;
+this.CHRONOLOGY_CAMERA_DROP_MIME = CHRONOLOGY_CAMERA_DROP_MIME;`,
   context
 );
 
-const { visibleWorkspaceTiles, workspaceCameraIds, resizeWorkspaceTile } = context;
+const {
+  visibleWorkspaceTiles,
+  workspaceCameraIds,
+  resizeWorkspaceTile,
+  mergeSidebarCameraOrder,
+  sanitizeSidebarCameraOrder,
+  SIDEBAR_CAMERA_REORDER_MIME,
+  LIVE_CAMERA_DROP_MIME,
+  CHRONOLOGY_CAMERA_DROP_MIME,
+} = context;
 
 const tiles = [
   { id: "visible-live", cameraId: "1", stream: "sub", xPct: 0.44 },
@@ -79,3 +94,21 @@ assert.deepEqual(
   roundedResize("top-left", { clientX: 900, clientY: 800 }),
   { xPct: 0.5, yPct: 0.4, wPct: 0.1, hPct: 0.1 }
 );
+
+const orderedCameras = [
+  { id: "2", name: "Beta" },
+  { id: "1", name: "Alpha" },
+  { id: "3", name: "Gamma" },
+];
+
+assert.deepEqual(
+  JSON.parse(JSON.stringify(mergeSidebarCameraOrder(orderedCameras, null).map((camera) => camera.id))),
+  ["1", "2", "3"]
+);
+assert.deepEqual(
+  JSON.parse(JSON.stringify(mergeSidebarCameraOrder(orderedCameras, ["3", "404", "3", "1"]).map((camera) => camera.id))),
+  ["3", "1", "2"]
+);
+assert.deepEqual(JSON.parse(JSON.stringify(sanitizeSidebarCameraOrder(["2", "2", 1, "", null, { bad: true }, ["bad"]]))), ["2", "1"]);
+assert.notEqual(SIDEBAR_CAMERA_REORDER_MIME, LIVE_CAMERA_DROP_MIME);
+assert.notEqual(SIDEBAR_CAMERA_REORDER_MIME, CHRONOLOGY_CAMERA_DROP_MIME);

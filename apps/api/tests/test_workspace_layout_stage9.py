@@ -6,6 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
+from app.models.camera import Camera
 from app.models.user import User
 from app.models.workspace_layout import UserWorkspaceLayout
 from app.routers.users import get_workspace_layout, put_workspace_layout, sanitize_workspace_layout
@@ -27,6 +28,10 @@ def test_live_workspace_layout_is_sanitized_and_persisted_per_user():
     owner = User(id=1, username="owner", password_hash="hash", role="owner", is_active=True)
     operator = User(id=2, username="operator", password_hash="hash", role="operator", is_active=True)
     db.add_all([owner, operator])
+    db.add_all([
+        Camera(id=10, name="A", storage_folder_name="a", protocol="rtsp", host="a", port=554),
+        Camera(id=20, name="B", storage_folder_name="b", protocol="rtsp", host="b", port=554),
+    ])
     db.commit()
 
     payload = {
@@ -46,6 +51,7 @@ def test_live_workspace_layout_is_sanitized_and_persisted_per_user():
             },
             {"id": "duplicate", "cameraId": "10", "stream": "main"},
         ],
+        "sidebarCameraOrder": ["20", "10", "20", "", {"bad": True}, "999"],
     }
 
     saved = put_workspace_layout("live", payload, db=db, current_user=owner)
@@ -62,6 +68,7 @@ def test_live_workspace_layout_is_sanitized_and_persisted_per_user():
         "z": 10000,
         "stream": "sub",
     }
+    assert saved["sidebarCameraOrder"] == ["20", "10"]
     rendered = str(db.query(UserWorkspaceLayout).first().layout)
     assert "must-not-persist" not in rendered
     assert "rtsp://" not in rendered
@@ -74,6 +81,8 @@ def test_live_workspace_layout_is_sanitized_and_persisted_per_user():
     )
     assert get_workspace_layout("live", db=db, current_user=owner)["tiles"][0]["cameraId"] == "10"
     assert get_workspace_layout("live", db=db, current_user=operator)["tiles"][0]["cameraId"] == "20"
+    assert get_workspace_layout("live", db=db, current_user=owner)["sidebarCameraOrder"] == ["20", "10"]
+    assert get_workspace_layout("live", db=db, current_user=operator)["sidebarCameraOrder"] == []
 
 
 def test_workspace_layout_permissions_follow_workspace_key():
