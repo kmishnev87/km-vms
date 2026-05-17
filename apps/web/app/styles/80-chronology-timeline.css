@@ -458,6 +458,7 @@
   overflow: hidden;
   cursor: ew-resize;
   user-select: none;
+  touch-action: pan-y;
   transition: border-color 140ms ease, background 140ms ease;
 }
 

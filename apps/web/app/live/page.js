@@ -26,6 +26,9 @@ const MIN_TILE_W = 220;
 const MIN_TILE_H = 150;
 const DEFAULT_W_PCT = 0.28;
 const DEFAULT_H_PCT = 0.29;
+const POINTER_DRAG_THRESHOLD_PX = 8;
+const DOUBLE_TAP_MS = 360;
+const DOUBLE_TAP_DISTANCE_PX = 22;
 
 const LIVE_TEXT = {
   cameras: "\u041a\u0430\u043c\u0435\u0440\u044b",
@@ -78,6 +81,11 @@ function defaultStream(camera) {
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function pointerDistance(a, b) {
+  if (!a || !b) return Number.POSITIVE_INFINITY;
+  return Math.hypot(Number(a.x) - Number(b.x), Number(a.y) - Number(b.y));
 }
 
 function normalizeTile(tile) {
@@ -220,10 +228,16 @@ export default function LivePage() {
   );
   const workspaceRef = useRef(null);
   const shellRef = useRef(null);
+  const tileRefs = useRef(new Map());
+  const tileVideoRefs = useRef(new Map());
   const hydratedRef = useRef(false);
   const backendReadyRef = useRef(false);
   const saveTimerRef = useRef(null);
   const lastBackendLayoutPayloadRef = useRef("");
+  const sidebarPointerDragRef = useRef(null);
+  const lastSidebarTapRef = useRef(null);
+  const lastTileTapRef = useRef(null);
+  const tileFullscreenReturnStateRef = useRef(null);
   const [cameras, setCameras] = useState([]);
   const [camerasLoaded, setCamerasLoaded] = useState(false);
   const [tiles, setTiles] = useState([]);
@@ -234,8 +248,11 @@ export default function LivePage() {
   const [resizeState, setResizeState] = useState(null);
   const [draggedSidebarCameraId, setDraggedSidebarCameraId] = useState("");
   const [sidebarDropTargetCameraId, setSidebarDropTargetCameraId] = useState("");
+  const [sidebarPointerDragMode, setSidebarPointerDragMode] = useState("");
+  const [sidebarDragPreview, setSidebarDragPreview] = useState(null);
   const [isSystemFullscreen, setIsSystemFullscreen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [fullscreenTileId, setFullscreenTileId] = useState(null);
   const [activeAudioTileId, setActiveAudioTileId] = useState("");
   const [audioRequestId, setAudioRequestId] = useState(0);
   const [audioFactsByTileId, setAudioFactsByTileId] = useState({});
@@ -407,6 +424,14 @@ export default function LivePage() {
     });
   }
 
+  function addTileFromSidebar(cameraId, stream) {
+    const bounds = workspaceBounds();
+    if (!bounds) return;
+    const activeCount = activeLayoutTiles(tiles).length;
+    const offset = Math.min(activeCount * 28, Math.max(bounds.width * 0.18, 1));
+    addTile(cameraId, stream, bounds.left + bounds.width / 2 + offset, bounds.top + bounds.height * 0.42 + offset / 2);
+  }
+
   function updateTile(tileId, patch) {
     if (patch?.stream) {
       setAudioFactsByTileId((prev) => ({ ...prev, [tileId]: defaultAudioFact() }));
@@ -418,6 +443,7 @@ export default function LivePage() {
   }
 
   function removeTile(tileId) {
+    setFullscreenTileId((current) => (current === tileId ? null : current));
     setActiveAudioTileId((current) => (current === tileId ? "" : current));
     setAudioFactsByTileId((prev) => {
       if (!Object.prototype.hasOwnProperty.call(prev, tileId)) return prev;
@@ -518,8 +544,13 @@ export default function LivePage() {
     return event.clientY > rect.top + rect.height / 2 ? "after" : "before";
   }
 
-  function reorderSidebarCamera(targetCameraId, position = "before") {
-    const sourceId = String(draggedSidebarCameraId || "");
+  function sidebarDropPositionFromPoint(row, clientY) {
+    const rect = row.getBoundingClientRect();
+    return clientY > rect.top + rect.height / 2 ? "after" : "before";
+  }
+
+  function reorderSidebarCamera(targetCameraId, position = "before", sourceCameraId = draggedSidebarCameraId) {
+    const sourceId = String(sourceCameraId || "");
     const targetId = String(targetCameraId || "");
     if (!sourceId || !targetId || sourceId === targetId) return;
     const current = orderedCameras.map((camera) => String(camera.id));
@@ -536,7 +567,117 @@ export default function LivePage() {
     setSidebarDropTargetCameraId("");
   }
 
+  function clearSidebarPointerDrag() {
+    sidebarPointerDragRef.current = null;
+    setDraggedSidebarCameraId("");
+    setSidebarDropTargetCameraId("");
+    setSidebarPointerDragMode("");
+    setSidebarDragPreview(null);
+  }
+
+  function sidebarCameraRowFromPoint(clientX, clientY) {
+    const node = document.elementFromPoint(clientX, clientY);
+    return node?.closest?.("[data-sidebar-camera-row]") || null;
+  }
+
+  function isPointInsideWorkspace(clientX, clientY) {
+    const bounds = workspaceBounds();
+    return Boolean(
+      bounds &&
+        clientX >= bounds.left &&
+        clientX <= bounds.right &&
+        clientY >= bounds.top &&
+        clientY <= bounds.bottom
+    );
+  }
+
+  function startSidebarPointerDrag(event, camera, stream) {
+    if (event.button !== 0) return;
+    if (event.target?.closest?.("button, select, input, textarea, a")) return;
+    if (event.pointerType !== "mouse") event.preventDefault();
+    sidebarPointerDragRef.current = {
+      pointerId: event.pointerId,
+      cameraId: String(camera.id),
+      stream,
+      label: camera.name || TEXT.camera,
+      meta: camera.host || "",
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
+  }
+
+  function updateSidebarPointerDrag(event) {
+    const state = sidebarPointerDragRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
+    if (!state.active && distance < POINTER_DRAG_THRESHOLD_PX) return;
+
+    if (!state.active) {
+      state.active = true;
+      setDraggedSidebarCameraId(state.cameraId);
+    }
+
+    if (isPointInsideWorkspace(event.clientX, event.clientY)) {
+      setSidebarPointerDragMode("workspace");
+      setSidebarDropTargetCameraId("");
+      setSidebarDragPreview({ cameraId: state.cameraId, label: state.label, meta: state.meta, x: event.clientX, y: event.clientY, mode: "workspace" });
+      return;
+    }
+
+    const row = sidebarCameraRowFromPoint(event.clientX, event.clientY);
+    const rowCameraId = row?.getAttribute("data-sidebar-camera-row") || "";
+    if (rowCameraId && rowCameraId !== state.cameraId) {
+      setSidebarPointerDragMode("reorder");
+      setSidebarDropTargetCameraId(sidebarDropToken(rowCameraId, sidebarDropPositionFromPoint(row, event.clientY)));
+      setSidebarDragPreview({ cameraId: state.cameraId, label: state.label, meta: state.meta, x: event.clientX, y: event.clientY, mode: "reorder" });
+      return;
+    }
+
+    setSidebarPointerDragMode("cancel");
+    setSidebarDropTargetCameraId("");
+    setSidebarDragPreview({ cameraId: state.cameraId, label: state.label, meta: state.meta, x: event.clientX, y: event.clientY, mode: "cancel" });
+  }
+
+  function finishSidebarPointerDrag(event, cameraId, stream) {
+    const state = sidebarPointerDragRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+
+    if (state.active) {
+      if (isPointInsideWorkspace(event.clientX, event.clientY)) {
+        addTile(state.cameraId, state.stream, event.clientX, event.clientY);
+      } else {
+        const row = sidebarCameraRowFromPoint(event.clientX, event.clientY);
+        const rowCameraId = row?.getAttribute("data-sidebar-camera-row") || "";
+        if (rowCameraId && rowCameraId !== state.cameraId) {
+          reorderSidebarCamera(rowCameraId, sidebarDropPositionFromPoint(row, event.clientY), state.cameraId);
+        }
+      }
+      clearSidebarPointerDrag();
+      return;
+    }
+
+    clearSidebarPointerDrag();
+    if (event.pointerType === "mouse") return;
+    const now = Date.now();
+    const point = { x: event.clientX, y: event.clientY };
+    const previous = lastSidebarTapRef.current;
+    if (
+      previous?.cameraId === String(cameraId) &&
+      now - previous.time <= DOUBLE_TAP_MS &&
+      pointerDistance(previous.point, point) <= DOUBLE_TAP_DISTANCE_PX
+    ) {
+      lastSidebarTapRef.current = null;
+      addTileFromSidebar(cameraId, stream);
+      return;
+    }
+    lastSidebarTapRef.current = { cameraId: String(cameraId), time: now, point };
+  }
+
   async function enterSystemFullscreen() {
+    tileFullscreenReturnStateRef.current = null;
     setIsSystemFullscreen(true);
     setIsSidebarCollapsed(false);
     try {
@@ -545,6 +686,7 @@ export default function LivePage() {
   }
 
   async function exitSystemFullscreen() {
+    tileFullscreenReturnStateRef.current = null;
     setIsSystemFullscreen(false);
     setIsSidebarCollapsed(false);
     if (document.fullscreenElement) {
@@ -554,12 +696,81 @@ export default function LivePage() {
     }
   }
 
+  async function enterTileFullscreen(tileId) {
+    const returnState = { isSystemFullscreen, isSidebarCollapsed };
+    tileFullscreenReturnStateRef.current = returnState;
+    if (!returnState.isSystemFullscreen) setIsSystemFullscreen(false);
+    setFullscreenTileId(tileId);
+    const fullscreenEl = tileVideoRefs.current.get(tileId) || tileRefs.current.get(tileId);
+    if (!fullscreenEl || document.fullscreenElement === fullscreenEl) return;
+    try {
+      await fullscreenEl.requestFullscreen?.();
+    } catch (_) {
+      tileFullscreenReturnStateRef.current = null;
+      setIsSystemFullscreen(returnState.isSystemFullscreen);
+      setIsSidebarCollapsed(returnState.isSidebarCollapsed);
+    }
+  }
+
+  async function exitTileFullscreen() {
+    setFullscreenTileId(null);
+    if (document.fullscreenElement && document.fullscreenElement !== shellRef.current) {
+      try {
+        await document.exitFullscreen?.();
+      } catch (_) {}
+    }
+  }
+
+  async function toggleTileFullscreen(tileId) {
+    if (fullscreenTileId === tileId) {
+      await exitTileFullscreen();
+    } else {
+      await enterTileFullscreen(tileId);
+    }
+  }
+
+  function handleTileSurfaceTap(tileId, point) {
+    const now = Date.now();
+    const previous = lastTileTapRef.current;
+    if (
+      previous?.tileId === tileId &&
+      now - previous.time <= DOUBLE_TAP_MS &&
+      pointerDistance(previous.point, point) <= DOUBLE_TAP_DISTANCE_PX
+    ) {
+      lastTileTapRef.current = null;
+      toggleTileFullscreen(tileId);
+      return;
+    }
+    lastTileTapRef.current = { tileId, time: now, point };
+  }
+
+  function handleTileSurfacePointerUp(event, tileId) {
+    if (event.target?.closest?.("button, select, input, textarea, a")) return;
+    if (dragState || resizeState) return;
+    if (event.pointerType === "mouse" || event.pointerType === "touch") return;
+    event.stopPropagation();
+    handleTileSurfaceTap(tileId, { x: event.clientX, y: event.clientY });
+  }
+
+  function handleTileSurfaceTouchEnd(event, tileId) {
+    if (event.target?.closest?.("button, select, input, textarea, a")) return;
+    if (dragState || resizeState) return;
+    const touch = event.changedTouches?.[0];
+    if (!touch) return;
+    event.preventDefault();
+    event.stopPropagation();
+    handleTileSurfaceTap(tileId, { x: touch.clientX, y: touch.clientY });
+  }
+
   function startMove(event, tile) {
+    if (fullscreenTileId) return;
     if (event.button !== 0) return;
+    if (event.target?.closest?.("[data-live-tile-video-id], button, select, input, textarea, a")) return;
     const bounds = workspaceBounds();
     if (!bounds) return;
 
     event.preventDefault();
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
     bringToFront(tile.id);
     setDragState({
       id: tile.id,
@@ -575,12 +786,14 @@ export default function LivePage() {
   }
 
   function startResize(event, tile, corner = "bottom-right") {
+    if (fullscreenTileId) return;
     if (event.button !== 0) return;
     const bounds = workspaceBounds();
     if (!bounds) return;
 
     event.preventDefault();
     event.stopPropagation();
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
     bringToFront(tile.id);
     setResizeState({
       id: tile.id,
@@ -607,10 +820,24 @@ export default function LivePage() {
     function handleFullscreenChange() {
       if (document.fullscreenElement === shellRef.current) {
         setIsSystemFullscreen(true);
+        setFullscreenTileId(null);
         return;
       }
-      setIsSystemFullscreen(false);
-      setIsSidebarCollapsed(false);
+      if (document.fullscreenElement) {
+        const tileId =
+          document.fullscreenElement.getAttribute("data-live-tile-video-id") ||
+          document.fullscreenElement.getAttribute("data-live-tile-id");
+        if (tileId) {
+          if (!tileFullscreenReturnStateRef.current?.isSystemFullscreen) setIsSystemFullscreen(false);
+          setFullscreenTileId(tileId);
+          return;
+        }
+      }
+      const returnState = tileFullscreenReturnStateRef.current;
+      tileFullscreenReturnStateRef.current = null;
+      setIsSystemFullscreen(Boolean(returnState?.isSystemFullscreen));
+      setIsSidebarCollapsed(returnState?.isSystemFullscreen ? returnState.isSidebarCollapsed : false);
+      setFullscreenTileId(null);
     }
 
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -619,19 +846,23 @@ export default function LivePage() {
 
   useEffect(() => {
     function handleKeyDown(event) {
-      if (event.key === "Escape" && isSystemFullscreen) {
+      if (event.key === "Escape" && isSystemFullscreen && !fullscreenTileId) {
         setIsSystemFullscreen(false);
         setIsSidebarCollapsed(false);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isSystemFullscreen]);
+  }, [isSystemFullscreen, fullscreenTileId]);
 
   useEffect(() => {
     if (!dragState) return undefined;
 
     function onMove(event) {
+      if (event.pointerType === "mouse" && event.buttons === 0) {
+        setDragState(null);
+        return;
+      }
       const nextX = clamp(
         dragState.tileX + (event.clientX - dragState.startX) / dragState.workspaceW,
         0,
@@ -651,9 +882,11 @@ export default function LivePage() {
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, { once: true });
+    window.addEventListener("pointercancel", onUp, { once: true });
     return () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
   }, [dragState]);
 
@@ -670,9 +903,11 @@ export default function LivePage() {
 
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, { once: true });
+    window.addEventListener("pointercancel", onUp, { once: true });
     return () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
     };
   }, [resizeState]);
 
@@ -707,6 +942,16 @@ export default function LivePage() {
           >
             {"\u2715"}
           </button>
+        ) : null}
+        {sidebarDragPreview ? (
+          <div
+            className={`liveWorkspaceSidebarDragGhost ${sidebarDragPreview.mode}`}
+            style={{ left: sidebarDragPreview.x, top: sidebarDragPreview.y }}
+            aria-hidden="true"
+          >
+            <div className="liveWorkspaceSidebarDragGhostName">{sidebarDragPreview.label}</div>
+            {sidebarDragPreview.meta ? <div className="liveWorkspaceSidebarDragGhostMeta">{sidebarDragPreview.meta}</div> : null}
+          </div>
         ) : null}
         <aside className="liveWorkspaceCameraPanel" aria-hidden={isSystemFullscreen && isSidebarCollapsed}>
           <div className="liveWorkspacePanelHeader">
@@ -758,10 +1003,21 @@ export default function LivePage() {
                   key={camera.id}
                   className={`liveWorkspaceCameraItem ${draggedSidebarCameraId === String(camera.id) ? "isReorderDragging" : ""} ${isDropTarget ? "isReorderDropTarget" : ""} ${isDropTarget && dropParts.position === "after" ? "isReorderDropAfter" : ""} ${isDropTarget && dropParts.position === "before" ? "isReorderDropBefore" : ""}`}
                   data-sidebar-camera-row={String(camera.id)}
+                  data-touch-add-path="double-tap-card"
                   data-sidebar-reorder-dragging={draggedSidebarCameraId === String(camera.id) ? "true" : "false"}
                   data-sidebar-reorder-drop-target={isDropTarget ? "true" : "false"}
                   data-sidebar-reorder-drop-position={isDropTarget ? dropParts.position : ""}
+                  data-sidebar-pointer-drag-mode={draggedSidebarCameraId === String(camera.id) ? sidebarPointerDragMode : ""}
                   draggable
+                  onPointerDown={(event) => startSidebarPointerDrag(event, camera, initialStream)}
+                  onPointerMove={updateSidebarPointerDrag}
+                  onPointerUp={(event) => finishSidebarPointerDrag(event, camera.id, initialStream)}
+                  onPointerCancel={clearSidebarPointerDrag}
+                  onDoubleClick={(event) => {
+                    if (event.target?.closest?.("button, select, input, textarea, a")) return;
+                    event.preventDefault();
+                    addTileFromSidebar(camera.id, initialStream);
+                  }}
                   onDragStart={(event) => {
                     setDraggedSidebarCameraId(String(camera.id));
                     event.dataTransfer.setData(LIVE_CAMERA_DROP_MIME, String(camera.id));
@@ -770,8 +1026,7 @@ export default function LivePage() {
                     event.dataTransfer.effectAllowed = "copyMove";
                   }}
                   onDragEnd={() => {
-                    setDraggedSidebarCameraId("");
-                    setSidebarDropTargetCameraId("");
+                    clearSidebarPointerDrag();
                   }}
                   onDragOver={(event) => {
                     if (!event.dataTransfer.types.includes(SIDEBAR_CAMERA_REORDER_MIME)) return;
@@ -789,7 +1044,7 @@ export default function LivePage() {
                     if (!reorderId) return;
                     event.preventDefault();
                     event.stopPropagation();
-                    reorderSidebarCamera(camera.id, sidebarDropPosition(event));
+                    reorderSidebarCamera(camera.id, sidebarDropPosition(event), reorderId);
                   }}
                 >
                   <div className="liveWorkspaceCameraName">{camera.name}</div>
@@ -801,6 +1056,7 @@ export default function LivePage() {
                         type="button"
                         className="liveWorkspaceStreamButton"
                         draggable
+                        onPointerDown={(event) => event.stopPropagation()}
                         onDragStart={(event) => {
                           event.stopPropagation();
                           event.dataTransfer.setData(LIVE_CAMERA_DROP_MIME, String(camera.id));
@@ -846,19 +1102,32 @@ export default function LivePage() {
             return (
               <div
                 key={tile.id}
-                className={`liveWorkspaceTile ${audioState.active ? "audioActive" : ""}`}
+                ref={(node) => {
+                  if (node) tileRefs.current.set(tile.id, node);
+                  else tileRefs.current.delete(tile.id);
+                }}
+                data-live-tile-id={tile.id}
+                className={`liveWorkspaceTile ${audioState.active ? "audioActive" : ""} ${fullscreenTileId === tile.id ? "fullscreen" : ""}`}
                 data-active-audio-tile={audioState.active ? "true" : "false"}
+                data-live-tile-fullscreen={fullscreenTileId === tile.id ? "true" : "false"}
                 data-audio-available={audioState.fact.audioAvailable ? "true" : "false"}
                 data-audio-disabled-by-config={audioState.fact.audioDisabledByConfig ? "true" : "false"}
                 data-audio-reason={audioState.fact.audioReason || "unknown"}
                 style={{
-                  left: `${tile.xPct * 100}%`,
-                  top: `${tile.yPct * 100}%`,
-                  width: `${tile.wPct * 100}%`,
-                  height: `${tile.hPct * 100}%`,
-                  zIndex: tile.z || 2,
+                  left: fullscreenTileId === tile.id ? undefined : `${tile.xPct * 100}%`,
+                  top: fullscreenTileId === tile.id ? undefined : `${tile.yPct * 100}%`,
+                  width: fullscreenTileId === tile.id ? undefined : `${tile.wPct * 100}%`,
+                  height: fullscreenTileId === tile.id ? undefined : `${tile.hPct * 100}%`,
+                  zIndex: fullscreenTileId === tile.id ? 4000 : tile.z || 2,
                 }}
                 onPointerDown={(event) => startMove(event, tile)}
+                onPointerUpCapture={(event) => handleTileSurfacePointerUp(event, tile.id)}
+                onTouchEndCapture={(event) => handleTileSurfaceTouchEnd(event, tile.id)}
+                onDoubleClickCapture={(event) => {
+                  if (event.target?.closest?.("button, select, input, textarea, a")) return;
+                  event.stopPropagation();
+                  toggleTileFullscreen(tile.id);
+                }}
               >
                 <div className="liveWorkspaceTileBar">
                   <div className="liveWorkspaceTileTitle">{camera?.name || TEXT.camera}</div>
@@ -910,7 +1179,19 @@ export default function LivePage() {
                   </button>
                 </div>
 
-                <div className="liveWorkspaceTileVideo">
+                <div
+                  ref={(node) => {
+                    if (node) tileVideoRefs.current.set(tile.id, node);
+                    else tileVideoRefs.current.delete(tile.id);
+                  }}
+                  className="liveWorkspaceTileVideo"
+                  data-live-tile-video-id={tile.id}
+                  onPointerUp={(event) => handleTileSurfacePointerUp(event, tile.id)}
+                  onDoubleClick={(event) => {
+                    event.stopPropagation();
+                    toggleTileFullscreen(tile.id);
+                  }}
+                >
                   {camera ? (
                     <TilePlayer
                       cameraId={camera.id}

@@ -264,8 +264,51 @@
   background: #f8fafc;
   padding: 8px;
   cursor: grab;
+  touch-action: none;
+  user-select: none;
   transform: translateY(0);
   transition: border-color 150ms ease, background 150ms ease, box-shadow 150ms ease, opacity 150ms ease, transform 150ms ease;
+}
+
+.liveWorkspaceSidebarDragGhost {
+  position: fixed;
+  z-index: 6000;
+  width: min(260px, calc(100vw - 24px));
+  pointer-events: none;
+  transform: translate(-18px, -18px);
+  border: 1px solid rgba(37, 99, 235, 0.7);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.96);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.28);
+  padding: 9px 10px;
+}
+
+.liveWorkspaceSidebarDragGhost.workspace {
+  border-color: #14b8a6;
+  box-shadow: 0 18px 42px rgba(20, 184, 166, 0.22);
+}
+
+.liveWorkspaceSidebarDragGhost.cancel {
+  opacity: 0.72;
+}
+
+.liveWorkspaceSidebarDragGhostName {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liveWorkspaceSidebarDragGhostMeta {
+  margin-top: 3px;
+  color: #64748b;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .liveWorkspaceShell.systemFullscreen .liveWorkspaceCameraItem {
@@ -284,6 +327,11 @@
   border-color: #2563eb;
   background: #eff6ff;
   box-shadow: 0 8px 18px rgba(37, 99, 235, 0.12);
+}
+
+.liveWorkspaceCameraItem[data-sidebar-pointer-drag-mode="workspace"] {
+  border-color: #14b8a6;
+  box-shadow: 0 10px 24px rgba(20, 184, 166, 0.16);
 }
 
 .liveWorkspaceShell.systemFullscreen .liveWorkspaceCameraItem.isReorderDropTarget {
@@ -339,6 +387,10 @@
   cursor: grab;
 }
 
+.liveWorkspaceStreamButton {
+  touch-action: manipulation;
+}
+
 .liveWorkspaceCanvas {
   position: relative;
   flex: 1 1 auto;
@@ -387,6 +439,16 @@
   border-radius: 8px;
   background: #000000;
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
+  touch-action: none;
+}
+
+.liveWorkspaceTile.fullscreen {
+  position: fixed;
+  inset: 8px;
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.48);
 }
 
 .liveWorkspaceTileBar {
@@ -402,6 +464,7 @@
   background: rgba(15, 23, 42, 0.92);
   color: #f8fafc;
   cursor: move;
+  touch-action: none;
 }
 
 .liveWorkspaceTileTitle {
@@ -424,6 +487,7 @@
   color: #0f172a;
   padding: 3px 6px;
   font-size: 12px;
+  touch-action: manipulation;
 }
 
 .liveWorkspaceIconButton {
@@ -438,6 +502,7 @@
   cursor: pointer;
   font-size: 21px;
   line-height: 1;
+  touch-action: manipulation;
 }
 
 .liveWorkspaceIconButton:hover {
@@ -503,6 +568,12 @@
   background: #000000;
 }
 
+.liveWorkspaceTileVideo:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  background: #000000;
+}
+
 .liveWorkspaceTileVideo .liveVideoWrap {
   min-height: 0;
   height: 100%;
@@ -535,6 +606,7 @@
   background: transparent;
   opacity: 0.82;
   pointer-events: auto;
+  touch-action: none;
 }
 
 .workspaceResizeHandle::after {

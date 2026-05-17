@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 const ZOOM_OPTIONS = [
   { key: "24h", label: "24ч", hours: 24, majorEveryMinutes: 60, minorEveryMinutes: 30 },
@@ -152,67 +152,15 @@ export default function ChronologyTimeline({
     : 0;
   const showNoRangeState = hasSelectedCameras && !rangesLoading && !rangesError && visibleRangeCount === 0;
 
-  useEffect(() => {
-    function handleMove(event) {
-      const state = dragStateRef.current;
-      if (!state) return;
-
-      const deltaX = event.clientX - state.startClientX;
-      if (!state.active && Math.abs(deltaX) < DRAG_THRESHOLD_PX) {
-        return;
-      }
-
-      if (!state.active) {
-        state.active = true;
-        setDragging(true);
-        onDragStart?.();
-      }
-
-      if (!state.rect.width) return;
-
-      const msPerPx = state.spanMs / state.rect.width;
-      const nextMs = state.startCenterMs - deltaX * msPerPx;
-      onPreviewTime?.(new Date(nextMs));
-    }
-
-    function handleUp(event) {
-      const state = dragStateRef.current;
-      if (!state) return;
-
-      dragStateRef.current = null;
-
-      if (state.active) {
-        const deltaX = event.clientX - state.startClientX;
-        const msPerPx = state.spanMs / state.rect.width;
-        const nextMs = state.startCenterMs - deltaX * msPerPx;
-        setDragging(false);
-        onDragEnd?.(new Date(nextMs));
-        return;
-      }
-
-      setDragging(false);
-      const clickX = Math.max(0, Math.min(state.rect.width, event.clientX - state.rect.left));
-      const ratio = clickX / state.rect.width;
-      const targetMs = state.startMs + (state.endMs - state.startMs) * ratio;
-      onSelectTime?.(new Date(targetMs));
-    }
-
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-
-    return () => {
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
-    };
-  }, [onDragEnd, onDragStart, onPreviewTime, onSelectTime]);
-
   function handlePointerDown(event) {
     if (event.button !== 0) return;
 
     const rect = rootRef.current?.getBoundingClientRect();
     if (!rect) return;
 
+    event.currentTarget?.setPointerCapture?.(event.pointerId);
     dragStateRef.current = {
+      pointerId: event.pointerId,
       startClientX: event.clientX,
       startCenterMs: currentTs ? currentTs.getTime() : Date.now(),
       startMs,
@@ -221,6 +169,58 @@ export default function ChronologyTimeline({
       rect,
       active: false,
     };
+  }
+
+  function handlePointerMove(event) {
+    const state = dragStateRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+
+    const deltaX = event.clientX - state.startClientX;
+    if (!state.active && Math.abs(deltaX) < DRAG_THRESHOLD_PX) {
+      return;
+    }
+
+    if (!state.active) {
+      state.active = true;
+      setDragging(true);
+      onDragStart?.();
+    }
+
+    if (!state.rect.width) return;
+
+    event.preventDefault();
+    const msPerPx = state.spanMs / state.rect.width;
+    const nextMs = state.startCenterMs - deltaX * msPerPx;
+    onPreviewTime?.(new Date(nextMs));
+  }
+
+  function finishPointerInteraction(event, cancelled = false) {
+    const state = dragStateRef.current;
+    if (!state || state.pointerId !== event.pointerId) return;
+
+    dragStateRef.current = null;
+    event.currentTarget?.releasePointerCapture?.(event.pointerId);
+
+    if (cancelled) {
+      setDragging(false);
+      if (state.active) onDragEnd?.(new Date(state.startCenterMs));
+      return;
+    }
+
+    if (state.active) {
+      const deltaX = event.clientX - state.startClientX;
+      const msPerPx = state.spanMs / state.rect.width;
+      const nextMs = state.startCenterMs - deltaX * msPerPx;
+      setDragging(false);
+      onDragEnd?.(new Date(nextMs));
+      return;
+    }
+
+    setDragging(false);
+    const clickX = Math.max(0, Math.min(state.rect.width, event.clientX - state.rect.left));
+    const ratio = clickX / state.rect.width;
+    const targetMs = state.startMs + (state.endMs - state.startMs) * ratio;
+    onSelectTime?.(new Date(targetMs));
   }
 
   return (
@@ -258,7 +258,11 @@ export default function ChronologyTimeline({
         <div
           ref={rootRef}
           className={`chronologyTimelineBody ${dragging ? "isDragging" : ""}`}
-          onMouseDown={handlePointerDown}
+          data-chronology-timeline-pointer="true"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={(event) => finishPointerInteraction(event)}
+          onPointerCancel={(event) => finishPointerInteraction(event, true)}
         >
           <div className="chronologyTimelineTimeLayer">
             <div className="chronologyTimelineAxis">
