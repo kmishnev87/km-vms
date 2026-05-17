@@ -30,6 +30,7 @@ const TEXT = {
   allCameras: "\u0412\u0441\u0435 \u043a\u0430\u043c\u0435\u0440\u044b",
   date: "\u0414\u0430\u0442\u0430",
   refresh: "\u041e\u0431\u043d\u043e\u0432\u0438\u0442\u044c",
+  loading: "\u0417\u0430\u0433\u0440\u0443\u0437\u043a\u0430...",
   deleteSelected: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0435",
   dangerActions: "\u041e\u043f\u0430\u0441\u043d\u044b\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u044f",
   deleteCamera: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u0441\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 \u043a\u0430\u043c\u0435\u0440\u044b",
@@ -285,6 +286,7 @@ export default function RecordingsPage() {
   const [selectedCamera, setSelectedCamera] = useState("__all__");
   const [selectedDate, setSelectedDate] = useState("");
   const [items, setItems] = useState([]);
+  const [recordingsLoadState, setRecordingsLoadState] = useState("idle");
   const [productTimezone, setProductTimezone] = useState("UTC");
   const [selectedPaths, setSelectedPaths] = useState([]);
   const [sortBy, setSortBy] = useState(SORT_OPTIONS.created_at.key);
@@ -333,17 +335,26 @@ export default function RecordingsPage() {
 
   async function loadRecordings(camera = "__all__", dateValue = selectedDate) {
     const requestId = ++requestIdRef.current;
+    setRecordingsLoadState((prev) => (prev === "loaded" || prev === "refreshing" ? "refreshing" : "loading"));
     const params = new URLSearchParams();
     if (camera && camera !== "__all__") params.set("camera", camera);
     if (dateValue) params.set("date", productDateFilterParam(dateValue));
     const query = params.toString() ? `?${params.toString()}` : "";
 
-    const data = await apiFetch(`/recordings${query}`);
-    if (requestId !== requestIdRef.current) return;
+    try {
+      const data = await apiFetch(`/recordings${query}`);
+      if (requestId !== requestIdRef.current) return;
 
-    setItems(data.items || []);
-    setProductTimezone(data?.timezone?.id || "UTC");
-    setSelectedPaths([]);
+      setItems(data.items || []);
+      setProductTimezone(data?.timezone?.id || "UTC");
+      setSelectedPaths([]);
+      setError("");
+      setRecordingsLoadState("loaded");
+    } catch (err) {
+      if (requestId !== requestIdRef.current) return;
+      setError(normalizeRecordingError(err.message));
+      setRecordingsLoadState((prev) => (prev === "loaded" || prev === "refreshing" ? "loaded" : "error"));
+    }
   }
 
   async function loadRecorderStatus() {
@@ -366,7 +377,7 @@ export default function RecordingsPage() {
   }, []);
 
   useEffect(() => {
-    loadRecordings(selectedCamera, selectedDate).catch((err) => setError(normalizeRecordingError(err.message)));
+    loadRecordings(selectedCamera, selectedDate);
   }, [selectedCamera, selectedDate]);
 
   useEffect(() => {
@@ -413,6 +424,8 @@ export default function RecordingsPage() {
   }
 
   const filteredItems = items;
+  const recordingsLoaded = recordingsLoadState === "loaded" || recordingsLoadState === "refreshing";
+  const recordingsFirstLoading = recordingsLoadState === "idle" || recordingsLoadState === "loading";
 
   const sortedItems = useMemo(() => {
     return [...filteredItems].sort((left, right) =>
@@ -469,9 +482,16 @@ export default function RecordingsPage() {
   );
 
   const activeRecordingEmpty = useMemo(
-    () => !filteredItems.length && hasActiveRecordingJobs(recorderStatus, selectedCamera),
-    [filteredItems.length, recorderStatus, selectedCamera]
+    () => recordingsLoaded && !filteredItems.length && hasActiveRecordingJobs(recorderStatus, selectedCamera),
+    [recordingsLoaded, filteredItems.length, recorderStatus, selectedCamera]
   );
+  const recordingsEmptyMessage = recordingsFirstLoading
+    ? t.loading
+    : recordingsLoadState === "error"
+      ? t.unavailable
+      : activeRecordingEmpty
+        ? t.recordingActiveEmpty
+        : t.noRecords;
 
   const viewerAdaptiveHighRes = useMemo(
     () => shouldUseAdaptiveHighResolutionPlayback(viewerResolution, viewerRect, viewerFullscreen),
@@ -941,9 +961,9 @@ export default function RecordingsPage() {
       </div>
 
       <div className="recordingsStatsRow">
-        <div className="badge">{t.totalFiles}: {visibleSummary.count}</div>
-        <div className="badge">{t.totalSize}: {visibleSummary.size_human}</div>
-        <div className="badge">{t.page}: {currentPage} / {pageCount}</div>
+        <div className="badge">{t.totalFiles}: {recordingsLoaded ? visibleSummary.count : t.loading}</div>
+        <div className="badge">{t.totalSize}: {recordingsLoaded ? visibleSummary.size_human : t.loading}</div>
+        <div className="badge">{t.page}: {recordingsLoaded ? `${currentPage} / ${pageCount}` : t.loading}</div>
         {selectedPaths.length ? (
           <div className="badge ok">{t.selected}: {selectedPaths.length}</div>
         ) : null}
@@ -1063,7 +1083,7 @@ export default function RecordingsPage() {
               {!paginatedItems.length ? (
                 <tr>
                   <td colSpan="7" className="recordingsEmptyCell">
-                    {activeRecordingEmpty ? t.recordingActiveEmpty : t.noRecords}
+                    {recordingsEmptyMessage}
                   </td>
                 </tr>
               ) : null}

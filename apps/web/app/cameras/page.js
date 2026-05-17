@@ -459,6 +459,7 @@ export default function CamerasPage() {
   const copy = useLocaleText("cameras");
   const { currentUser } = useCurrentUser();
   const [cameras, setCameras] = useState([]);
+  const [camerasLoadState, setCamerasLoadState] = useState("idle");
   const [viewMode, setViewMode] = useState("list");
   const [storage, setStorage] = useState(null);
   const [recorderStatus, setRecorderStatus] = useState(null);
@@ -489,6 +490,7 @@ export default function CamerasPage() {
   const viewModeLoadedRef = useRef(false);
 
   async function load() {
+    setCamerasLoadState((prev) => (prev === "loaded" || prev === "refreshing" ? "refreshing" : "loading"));
     try {
       const [cams, st, recorder] = await Promise.all([
         apiFetch("/cameras"),
@@ -498,11 +500,16 @@ export default function CamerasPage() {
       setCameras(cams);
       setStorage(st);
       setRecorderStatus(recorder);
+      setError("");
+      setCamerasLoadState("loaded");
     } catch (err) {
       setError(normalizeCameraError(err.message, copy));
+      setCamerasLoadState((prev) => (prev === "loaded" || prev === "refreshing" ? "loaded" : "error"));
     }
   }
 
+  const camerasLoaded = camerasLoadState === "loaded" || camerasLoadState === "refreshing";
+  const camerasFirstLoading = camerasLoadState === "idle" || camerasLoadState === "loading";
   const storagePathChecks = storage?.storage_path_checks || {};
   const storageAvailable = storagePathChecks.path_exists ?? storage?.storage_root_exists;
   const recorderCameraMap = new Map(
@@ -1104,7 +1111,11 @@ export default function CamerasPage() {
       {deleteNotice && !showEditor ? <div className="badge ok" style={{ marginBottom: 14 }}>{deleteNotice}</div> : null}
 
       <div className={viewMode === "cards" ? "cameraTileGrid" : "cameraCards"}>
-        {!cameras.length ? (
+        {camerasFirstLoading ? (
+          <div className="card">{t("common.loading")}</div>
+        ) : camerasLoadState === "error" ? (
+          <div className="card">{error}</div>
+        ) : camerasLoaded && !cameras.length ? (
           <div className="card">{copy.noCameras}</div>
         ) : (
           cameras.map((camera) => {

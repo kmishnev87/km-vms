@@ -110,7 +110,21 @@ export default function HomePage() {
     }
   }, [currentUserStatus, router]);
 
-  if (!ready) return null;
+  if (!ready) {
+    return (
+      <Layout>
+        <div className="dashboardPage">
+          <section className="dashboardHeader">
+            <div>
+              <h1 className="dashboardTitle">KM VMS</h1>
+              <div className="dashboardSubtitle">{t("common.loading")}</div>
+            </div>
+          </section>
+        </div>
+      </Layout>
+    );
+  }
+
   const visibleItems = currentUser ? DASHBOARD_ITEMS.filter((item) => canAccessPath(currentUser, item.href)) : [];
 
   return (

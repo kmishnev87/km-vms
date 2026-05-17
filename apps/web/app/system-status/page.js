@@ -16,6 +16,7 @@ function safeSeverity(value) {
 }
 
 function domainMeta(row, t) {
+  if (row.severity === "unknown") return t("systemStatus.loading");
   if (row.domain === "live" && row.severity === "ok") return t("systemStatus.neutralLive");
   if (row.problem_count > 0) return t("systemStatus.affected", { count: row.affected_count || row.problem_count });
   return t("systemStatus.domainOk");
@@ -67,6 +68,7 @@ export default function SystemStatusPage() {
 
   const canRead = systemHealth.canRead && !systemHealth.accessDenied;
   const summary = systemHealth.summary;
+  const summaryLoaded = Boolean(summary);
   const severity = safeSeverity(summary?.severity || "unknown");
   const hasProblems = severity === "warning" || severity === "error";
   const problemCount = summary?.problem_count || 0;
@@ -104,8 +106,8 @@ export default function SystemStatusPage() {
                 <h1>{summary ? (hasProblems ? t("systemStatus.problemTitle") : t("systemStatus.okTitle")) : t("systemStatus.loading")}</h1>
                 <p>{summary ? (hasProblems ? t("systemStatus.problemSummary") : t("systemStatus.okSummary")) : t("systemStatus.loading")}</p>
               </div>
-              <div className={`systemStatusScore ${hasProblems ? "problem" : "ok"}`}>
-                <strong>{problemCount}</strong>
+              <div className={`systemStatusScore ${summaryLoaded ? (hasProblems ? "problem" : "ok") : "unknown"}`}>
+                <strong>{summaryLoaded ? problemCount : "..."}</strong>
                 <span>{problemCountLabel(problemCount, t)}</span>
               </div>
             </header>
@@ -134,7 +136,16 @@ export default function SystemStatusPage() {
                 </div>
 
                 <div className="systemStatusIncidents">
-                  {problems.length ? problems.map((item) => {
+                  {!summaryLoaded ? (
+                    <article className="systemStatusIncident unknown">
+                      <div className="systemStatusIncidentIcon">...</div>
+                      <div>
+                        <h3>{t("systemStatus.loading")}</h3>
+                        <p>{t("systemStatus.loading")}</p>
+                        <span>{t("systemStatus.incidentDomain", { domain: t("systemStatus.title") })}</span>
+                      </div>
+                    </article>
+                  ) : problems.length ? problems.map((item) => {
                     const itemSeverity = safeSeverity(item.severity);
                     const domain = t(`systemStatus.domains.${item.domain}`);
                     return (
