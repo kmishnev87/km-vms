@@ -148,6 +148,10 @@
   color: #94a3b8;
 }
 
+.liveWorkspaceShell.systemFullscreen .liveWorkspaceStreamInfo {
+  color: #cbd5e1;
+}
+
 .liveWorkspaceShell.systemFullscreen .liveWorkspaceAlignButton {
   border-color: rgba(148, 163, 184, 0.38);
   background: rgba(248, 250, 252, 0.08);
@@ -170,14 +174,13 @@
 
 .liveWorkspaceAlignButton {
   height: 26px;
-  min-width: 28px;
+  min-width: 0;
   border: 1px solid #cbd5e1;
   border-radius: 8px;
   background: #ffffff;
   color: #0f172a;
   padding: 0 8px;
   font-size: 11px;
-  font-weight: 800;
   cursor: pointer;
 }
 
@@ -185,6 +188,8 @@
   font-size: 14px;
   padding: 0;
   width: 28px;
+  min-width: 28px;
+  font-weight: 800;
 }
 
 .workspaceAlignGridIcon {
@@ -364,31 +369,53 @@
 .liveWorkspaceCameraMeta {
   margin-top: 3px;
   color: #64748b;
-  font-size: 12px;
+  font-size: 10px;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.liveWorkspaceStreamButtons {
-  display: flex;
-  gap: 4px;
-  margin-top: 6px;
+.liveWorkspaceCameraEndpoint {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 400;
 }
 
-.liveWorkspaceStreamButton {
-  height: 24px;
-  min-width: 46px;
-  border: 1px solid #cbd5e1;
-  border-radius: 7px;
-  background: #ffffff;
-  color: #0f172a;
-  font-size: 11px;
-  cursor: grab;
+.liveWorkspaceStreamInfo {
+  display: grid;
+  align-items: center;
+  grid-template-columns: 23px 7px 20px;
+  flex: 0 0 auto;
+  column-gap: 2px;
+  min-width: 56px;
+  margin-left: auto;
+  color: inherit;
+  font-size: inherit;
+  line-height: 1.2;
+  font-weight: 400;
 }
 
-.liveWorkspaceStreamButton {
-  touch-action: manipulation;
+.liveWorkspaceStreamText {
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+}
+
+.liveWorkspaceStreamText.empty {
+  visibility: hidden;
+}
+
+.liveWorkspaceStreamPipe {
+  color: #94a3b8;
+  font-weight: 400;
+  text-align: center;
+  opacity: 0.9;
 }
 
 .liveWorkspaceCanvas {

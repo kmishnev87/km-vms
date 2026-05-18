@@ -463,6 +463,7 @@ export default function CamerasPage() {
   const [viewMode, setViewMode] = useState("list");
   const [storage, setStorage] = useState(null);
   const [recorderStatus, setRecorderStatus] = useState(null);
+  const [secondaryStatusState, setSecondaryStatusState] = useState("idle");
   const [showEditor, setShowEditor] = useState(false);
   const [editorMode, setEditorMode] = useState("create");
   const [editingCameraId, setEditingCameraId] = useState(null);
@@ -492,19 +493,28 @@ export default function CamerasPage() {
   async function load() {
     setCamerasLoadState((prev) => (prev === "loaded" || prev === "refreshing" ? "refreshing" : "loading"));
     try {
-      const [cams, st, recorder] = await Promise.all([
-        apiFetch("/cameras"),
-        apiFetch("/storage/status"),
-        apiFetch("/system/recorder/status").catch(() => null),
-      ]);
+      const cams = await apiFetch("/cameras");
       setCameras(cams);
-      setStorage(st);
-      setRecorderStatus(recorder);
       setError("");
       setCamerasLoadState("loaded");
     } catch (err) {
       setError(normalizeCameraError(err.message, copy));
       setCamerasLoadState((prev) => (prev === "loaded" || prev === "refreshing" ? "loaded" : "error"));
+    }
+  }
+
+  async function loadSecondaryStatus() {
+    setSecondaryStatusState((prev) => (prev === "loaded" || prev === "refreshing" ? "refreshing" : "loading"));
+    try {
+      const [st, recorder] = await Promise.all([
+        apiFetch("/storage/status").catch(() => null),
+        apiFetch("/system/recorder/summary").catch(() => null),
+      ]);
+      setStorage(st);
+      setRecorderStatus(recorder);
+      setSecondaryStatusState("loaded");
+    } catch (_) {
+      setSecondaryStatusState("error");
     }
   }
 
@@ -518,9 +528,12 @@ export default function CamerasPage() {
 
   useEffect(() => {
     load();
+    loadSecondaryStatus();
     const timer = setInterval(load, 5000);
+    const secondaryTimer = setInterval(loadSecondaryStatus, 5000);
     return () => {
       clearInterval(timer);
+      clearInterval(secondaryTimer);
       window.clearTimeout(profileToastTimerRef.current);
     };
   }, []);

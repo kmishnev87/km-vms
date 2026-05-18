@@ -1048,25 +1048,13 @@ export default function LivePage() {
                   }}
                 >
                   <div className="liveWorkspaceCameraName">{camera.name}</div>
-                  <div className="liveWorkspaceCameraMeta">{camera.host}:{camera.port}</div>
-                  <div className="liveWorkspaceStreamButtons">
-                    {streams.map((stream) => (
-                      <button
-                        key={stream.key}
-                        type="button"
-                        className="liveWorkspaceStreamButton"
-                        draggable
-                        onPointerDown={(event) => event.stopPropagation()}
-                        onDragStart={(event) => {
-                          event.stopPropagation();
-                          event.dataTransfer.setData(LIVE_CAMERA_DROP_MIME, String(camera.id));
-                          event.dataTransfer.setData(LIVE_CAMERA_STREAM_DROP_MIME, stream.key);
-                          event.dataTransfer.effectAllowed = "copy";
-                        }}
-                      >
-                        {stream.label}
-                      </button>
-                    ))}
+                  <div className="liveWorkspaceCameraMeta">
+                    <span className="liveWorkspaceCameraEndpoint">{camera.host}:{camera.port}</span>
+                    <span className="liveWorkspaceStreamInfo" aria-label="Streams">
+                      <span className={`liveWorkspaceStreamText ${camera.rtsp_main_url ? "" : "empty"}`}>Main</span>
+                      <span className="liveWorkspaceStreamPipe" aria-hidden="true">|</span>
+                      <span className={`liveWorkspaceStreamText ${camera.rtsp_sub_url ? "" : "empty"}`}>Sub</span>
+                    </span>
                   </div>
                 </div>
                   );

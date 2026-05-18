@@ -342,8 +342,6 @@ def validate_segment_for_deletion(
         return False, "already_deleted", None, 0
     if segment.status != SEGMENT_STATUS_FINALIZED:
         return False, "not_finalized", None, 0
-    if segment.job_id and str(segment.job_id) in active_job_ids:
-        return False, "active_job", None, 0
     if segment.integrity_status in PROBLEM_INTEGRITY_STATUSES:
         return False, "integrity_problem", None, 0
 

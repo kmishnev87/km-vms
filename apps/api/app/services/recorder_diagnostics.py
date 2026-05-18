@@ -199,6 +199,61 @@ def build_recorder_status(db: Session) -> dict[str, Any]:
     }, now, ctx)
 
 
+def build_recorder_summary(db: Session) -> dict[str, Any]:
+    now = _utc_now()
+    ctx = timezone_context(db)
+    heartbeat = _read_heartbeat(db)
+    heartbeat_age_seconds = _age_seconds(heartbeat.get("heartbeat_raw"), now) if heartbeat.get("available") else None
+    if "heartbeat_raw" in heartbeat:
+        heartbeat = {key: value for key, value in heartbeat.items() if key != "heartbeat_raw"}
+    job_summary = _job_summary(db)
+    camera_states = _camera_recording_states(db)
+    enabled_always = [item for item in camera_states if item["enabled"] and item["recording_mode"] == "always"]
+    failed_cameras = [item for item in camera_states if item.get("current_failure")]
+    reasons: list[str] = []
+    if not heartbeat.get("available"):
+        reasons.append(str(heartbeat.get("reason") or "heartbeat_unavailable"))
+    elif heartbeat_age_seconds is None or heartbeat_age_seconds > HEARTBEAT_STALE_SECONDS:
+        reasons.append("heartbeat_stale")
+    elif heartbeat.get("service_status") in {"error", "degraded"}:
+        reasons.append(f"recorder_service_{heartbeat.get('service_status')}")
+    if failed_cameras:
+        reasons.append("camera_recording_errors")
+    if enabled_always and job_summary.get("active_count", 0) == 0:
+        reasons.append("no_active_jobs_for_enabled_always_cameras")
+
+    if any(reason in reasons for reason in ["recorder_runtime_status_unavailable", "no_recorder_heartbeat"]):
+        health = "unavailable"
+    elif reasons:
+        health = "degraded"
+    else:
+        health = "healthy"
+        reasons = ["all_checks_passed"]
+
+    return _add_status_time_metadata({
+        "generated_at": _iso(now),
+        "service_status": heartbeat.get("service_status") if heartbeat.get("available") else heartbeat.get("status"),
+        "health": health,
+        "health_reasons": reasons,
+        "heartbeat": {
+            "available": heartbeat.get("available"),
+            "status": heartbeat.get("status"),
+            "service_status": heartbeat.get("service_status"),
+            "age_seconds": heartbeat_age_seconds,
+        },
+        "job_summary": {
+            "active_count": job_summary.get("active_count", 0),
+            "recording_count": job_summary.get("recording_count", 0),
+            "failed_count": job_summary.get("failed_count", 0),
+        },
+        "camera_recording_states": camera_states,
+        "cameras_recording_count": sum(1 for item in camera_states if item.get("job_state") == "recording"),
+        "failed_cameras_count": sum(1 for item in camera_states if item.get("current_failure")),
+        "retrying_cameras_count": sum(1 for item in camera_states if item.get("job_state") == "restarting"),
+        "summary_contract": "lightweight_recorder_ui_status",
+    }, now, ctx)
+
+
 def _system_runtime_from_status(status: dict[str, Any]) -> dict[str, Any]:
     return {
         "generated_at": status["generated_at"],

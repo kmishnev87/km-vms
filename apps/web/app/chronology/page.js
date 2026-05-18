@@ -113,7 +113,7 @@ const CHRONOLOGY_TEXT = {
   exportEnd: "\u041a\u043e\u043d\u0435\u0446",
   exportReason: "\u041e\u0441\u043d\u043e\u0432\u0430\u043d\u0438\u0435",
   exportRun: "\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043a\u043b\u0438\u043f",
-  exportManifest: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c \u043f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430",
+  exportManifest: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c \u043f\u0430\u0441\u043f\u043e\u0440\u0442",
   exportManifestHelp: "\u041f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430 \u2014 \u0442\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0444\u0430\u0439\u043b \u0434\u043b\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438, \u0441 \u043a\u0430\u043a\u043e\u0439 \u043a\u0430\u043c\u0435\u0440\u044b \u0438 \u0437\u0430 \u043a\u0430\u043a\u043e\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 \u0441\u043e\u0437\u0434\u0430\u043d \u043a\u043b\u0438\u043f.",
   exportReady: "\u041a\u043b\u0438\u043f \u0433\u043e\u0442\u043e\u0432.",
 };
@@ -126,6 +126,27 @@ function AlignGridIcon() {
       <span className="workspaceAlignGridIconLine horizontal top" />
       <span className="workspaceAlignGridIconLine horizontal bottom" />
     </span>
+  );
+}
+
+function ChronologyScissorsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="5.5" cy="6.5" r="3" className="chronologyIconCutout"></circle>
+      <circle cx="5.5" cy="17.5" r="3" className="chronologyIconCutout"></circle>
+      <path d="M8.3 8.3 20.5 19.2"></path>
+      <path d="M8.3 15.7 20.5 4.8"></path>
+    </svg>
+  );
+}
+
+function ChronologyDownloadIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 4.6v10.2"></path>
+      <path d="m7.8 10.8 4.2 4.2 4.2-4.2"></path>
+      <path d="M5.8 19.4h12.4"></path>
+    </svg>
   );
 }
 
@@ -332,6 +353,7 @@ export default function ChronologyPage() {
   const tileFullscreenReturnStateRef = useRef(null);
 
   const [cameras, setCameras] = useState([]);
+  const [exportCameraOptions, setExportCameraOptions] = useState([]);
   const [camerasLoaded, setCamerasLoaded] = useState(false);
   const [tiles, setTiles] = useState([]);
   const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
@@ -380,6 +402,15 @@ export default function ChronologyPage() {
       setError(err.message || TEXT.loadError);
     } finally {
       setCamerasLoaded(true);
+    }
+  }
+
+  async function loadExportCameras() {
+    try {
+      const data = await apiFetch("/recordings/cameras");
+      setExportCameraOptions(Array.isArray(data?.export_items) ? data.export_items : []);
+    } catch (_) {
+      setExportCameraOptions([]);
     }
   }
 
@@ -445,6 +476,7 @@ export default function ChronologyPage() {
   useEffect(() => {
     loadWorkspaceLayout();
     loadCameras();
+    loadExportCameras();
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       clearPlaybackCoordinatorTimers();
@@ -551,7 +583,28 @@ export default function ChronologyPage() {
     return result;
   }, [selectedCameraIds, cameraMap]);
 
+  const quickDownloadCameraIds = useMemo(() => {
+    const result = [];
+    visibleTiles.forEach((tile) => {
+      const cameraId = String(tile.cameraId || "");
+      const playback = playbackMap[tile.id];
+      if (!cameraId || !playback?.hasVideo || result.includes(cameraId)) return;
+      result.push(cameraId);
+    });
+    return result;
+  }, [visibleTiles, playbackMap]);
+
+  const quickDownloadCameraNames = useMemo(() => {
+    const result = {};
+    quickDownloadCameraIds.forEach((id) => {
+      const camera = cameraMap.get(String(id));
+      result[String(id)] = camera?.name || `${TEXT.camera} ${id}`;
+    });
+    return result;
+  }, [quickDownloadCameraIds, cameraMap]);
+
   const selectedCameraKey = selectedCameraIds.join(",");
+  const quickDownloadCameraKey = quickDownloadCameraIds.join(",");
   const tileSourceKey = visibleTiles.map((tile) => `${tile.id}:${tile.cameraId}`).join("|");
   const timelineTs = previewTs || currentTs;
   const canExport = canExportRecordings(currentUser);
@@ -583,7 +636,7 @@ export default function ChronologyPage() {
 
   useEffect(() => {
     setDownloadChooserOpen(false);
-  }, [selectedCameraKey, tileSourceKey, date, time]);
+  }, [selectedCameraKey, quickDownloadCameraKey, tileSourceKey, date, time]);
 
   useEffect(() => {
     setDownloadChooserOpen(false);
@@ -1315,17 +1368,15 @@ export default function ChronologyPage() {
   }
 
   function openExportModal() {
-    if (!canExport || !selectedCameraIds.length || exportBusy) return;
+    if (!canExport || exportBusy) return;
     const center = timelineTs || currentTs || new Date(normalizeTargetTs());
     const start = new Date(center.getTime() - 15_000);
     const end = new Date(center.getTime() + 15_000);
-    const [onlyCameraId] = selectedCameraIds;
-    const cameraId = selectedCameraIds.length === 1 ? onlyCameraId : "";
     setError("");
     setLastExportId("");
     setExportStatus("");
     setExportModal({
-      cameraId,
+      cameraId: "",
       title: `${TEXT.exportEvidence} ${formatPlaybackDateTime(center)}`,
       reason: "",
       startTs: formatProductTimestampParam(start),
@@ -1390,12 +1441,12 @@ export default function ChronologyPage() {
   }
 
   async function handleQuickDownload() {
-    if (!selectedCameraIds.length || quickDownloadBusy) return;
-    if (selectedCameraIds.length > 1) {
+    if (!quickDownloadCameraIds.length || quickDownloadBusy) return;
+    if (quickDownloadCameraIds.length > 1) {
       setDownloadChooserOpen((prev) => !prev);
       return;
     }
-    const [onlyCameraId] = selectedCameraIds;
+    const [onlyCameraId] = quickDownloadCameraIds;
     await startQuickDownloadForCamera(onlyCameraId);
   }
 
@@ -1410,12 +1461,12 @@ export default function ChronologyPage() {
       setQuickDownloadBusy(true);
       const timestamp = quickDownloadTimestamp();
       await startChronologyCurrentRecordingDownload(cameraId, timestamp);
-      const name = selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
+      const name = quickDownloadCameraNames[cameraId] || selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
       setDownloadResults((prev) => [...prev, { cameraId, name, status: TEXT.downloadStartedShort }].slice(-12));
       setExportStatus(`${TEXT.quickDownloadReady} ${name}`);
     } catch (err) {
       const message = normalizeChronologyDownloadError(err.message);
-      const name = selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
+      const name = quickDownloadCameraNames[cameraId] || selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
       setDownloadResults((prev) => [...prev, { cameraId, name, status: message }].slice(-12));
       setError(message);
     } finally {
@@ -1427,7 +1478,7 @@ export default function ChronologyPage() {
     if (quickDownloadBusy) return;
     setDownloadChooserOpen(false);
     setDownloadResults([]);
-    for (const cameraId of selectedCameraIds) {
+    for (const cameraId of quickDownloadCameraIds) {
       await startQuickDownloadForCamera(cameraId);
       await new Promise((resolve) => setTimeout(resolve, 600));
     }
@@ -1945,20 +1996,20 @@ export default function ChronologyPage() {
                   type="button"
                   className="chronologyIconButton chronologyDownloadButton"
                   onClick={handleQuickDownload}
-                  disabled={!selectedCameraIds.length || quickDownloadBusy}
+                  disabled={!quickDownloadCameraIds.length || quickDownloadBusy}
                   title={TEXT.quickDownload}
                   aria-label={TEXT.quickDownload}
                 >
-                  {"\u2b07"}
+                  <ChronologyDownloadIcon />
                 </button>
-                <span className="chronologyHelpTooltip" tabIndex={0} aria-label={selectedCameraIds.length > 1 ? TEXT.quickDownloadChooseHelp : TEXT.quickDownloadHelp}>
+                <span className="chronologyHelpTooltip" tabIndex={0} aria-label={quickDownloadCameraIds.length > 1 ? TEXT.quickDownloadChooseHelp : TEXT.quickDownloadHelp}>
                   ?
-                  <span role="tooltip">{selectedCameraIds.length > 1 ? TEXT.quickDownloadChooseHelp : TEXT.quickDownloadHelp}</span>
+                  <span role="tooltip">{quickDownloadCameraIds.length > 1 ? TEXT.quickDownloadChooseHelp : TEXT.quickDownloadHelp}</span>
                 </span>
                 {downloadChooserOpen ? (
                   <div className="chronologyDownloadChooser" role="menu">
                     <div className="chronologyDownloadChooserTitle">{TEXT.quickDownloadChoose}</div>
-                    {selectedCameraIds.map((cameraId) => (
+                    {quickDownloadCameraIds.map((cameraId) => (
                       <button
                         key={cameraId}
                         type="button"
@@ -1967,7 +2018,7 @@ export default function ChronologyPage() {
                         disabled={quickDownloadBusy}
                         role="menuitem"
                       >
-                        {selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`}
+                        {quickDownloadCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`}
                       </button>
                     ))}
                     <button
@@ -1992,24 +2043,22 @@ export default function ChronologyPage() {
                   </div>
                 ) : null}
               </div>
-              {canExport ? (
-                <div className="chronologyActionWithHelp">
-                  <button
-                    type="button"
-                    className="chronologyIconButton chronologyEvidenceButton"
-                    onClick={openExportModal}
-                    disabled={!selectedCameraIds.length || exportBusy}
-                    title={TEXT.exportEvidence}
-                    aria-label={TEXT.exportEvidence}
-                  >
-                    {"\u2696"}
-                  </button>
-                  <span className="chronologyHelpTooltip" tabIndex={0} aria-label={TEXT.exportEvidenceHelpShort}>
-                    ?
-                    <span role="tooltip">{TEXT.exportEvidenceHelpShort}</span>
-                  </span>
-                </div>
-              ) : null}
+              <div className="chronologyActionWithHelp">
+                <button
+                  type="button"
+                  className="chronologyIconButton chronologyEvidenceButton"
+                  onClick={openExportModal}
+                  disabled={!canExport || exportBusy}
+                  title={TEXT.exportEvidence}
+                  aria-label={TEXT.exportEvidence}
+                >
+                  <ChronologyScissorsIcon />
+                </button>
+                <span className="chronologyHelpTooltip" tabIndex={0} aria-label={TEXT.exportEvidenceHelpShort}>
+                  ?
+                  <span role="tooltip">{TEXT.exportEvidenceHelpShort}</span>
+                </span>
+              </div>
               <button type="button" className="chronologyIconButton" onClick={() => seekBySeconds(-10)} title={TEXT.back10} aria-label={TEXT.back10}>-10</button>
               <button type="button" className="chronologyIconButton" onClick={handlePlay} title={TEXT.play} aria-label={TEXT.play}>{"\u25b6"}</button>
               <button type="button" className="chronologyIconButton" onClick={handlePause} title={TEXT.pause} aria-label={TEXT.pause}>{"\u275a\u275a"}</button>
@@ -2263,79 +2312,74 @@ export default function ChronologyPage() {
       </div>
       {exportModal ? (
         <div className="modalBackdrop">
-          <div className="modal" onClick={(event) => event.stopPropagation()}>
+          <div className="modal archiveExportModal" onClick={(event) => event.stopPropagation()}>
             <div className="modalHeader">
-              <h2 style={{ margin: 0 }}>{TEXT.exportTitle}</h2>
+              <h2 className="archiveExportTitle">{TEXT.exportTitle}</h2>
               <button type="button" className="iconCloseButton" onClick={closeExportModal} disabled={exportBusy} aria-label={TEXT.close}>
                 {"\u00d7"}
               </button>
             </div>
             <div className="archiveExportForm">
-              <label className="archiveExportField">
-                <span>{TEXT.exportCamera}</span>
-                <select
-                  className="select"
-                  value={exportModal.cameraId}
-                  onChange={(event) => setExportModal((prev) => ({ ...prev, cameraId: event.target.value }))}
-                  disabled={exportBusy}
-                >
-                  {selectedCameraIds.length > 1 ? (
-                    <option value="">{TEXT.exportPickCamera}</option>
-                  ) : null}
-                  {selectedCameraIds.map((cameraId) => (
-                    <option key={cameraId} value={cameraId}>
-                      {selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="archiveExportHelp">{TEXT.exportHelp}</div>
-              <div className="archiveExportLimits">
-                <strong>{TEXT.exportLimits}</strong>
-                <span>{describeArchiveExportLimits(exportLimits)}</span>
+              <div className="archiveExportInfo">
+                {TEXT.exportHelp} {describeArchiveExportLimits(exportLimits)}
               </div>
-              <label className="archiveExportField">
-                <span>{TEXT.exportStart}</span>
-                <input
-                  className="input"
-                  type="datetime-local"
-                  step="1"
-                  value={formatDateTimeLocalInput(exportModal.startTs)}
-                  onChange={(event) => setExportModal((prev) => ({ ...prev, startTs: event.target.value }))}
-                  disabled={exportBusy}
-                />
-              </label>
-              <label className="archiveExportField">
-                <span>{TEXT.exportEnd}</span>
-                <input
-                  className="input"
-                  type="datetime-local"
-                  step="1"
-                  value={formatDateTimeLocalInput(exportModal.endTs)}
-                  onChange={(event) => setExportModal((prev) => ({ ...prev, endTs: event.target.value }))}
-                  disabled={exportBusy}
-                />
-              </label>
-              <label className="archiveExportField">
-                <span>{TEXT.exportReason}</span>
-                <input
-                  className="input"
-                  value={exportModal.reason}
-                  onChange={(event) => setExportModal((prev) => ({ ...prev, reason: event.target.value }))}
-                  maxLength={500}
-                  disabled={exportBusy}
-                />
-              </label>
+              <div className="archiveExportFields">
+                <label className="archiveExportField">
+                  <span>{TEXT.exportCamera}</span>
+                  <select
+                    className="select"
+                    value={exportModal.cameraId}
+                    onChange={(event) => setExportModal((prev) => ({ ...prev, cameraId: event.target.value }))}
+                    disabled={exportBusy}
+                  >
+                    <option value="">{TEXT.exportPickCamera}</option>
+                    {exportCameraOptions.map((camera) => (
+                      <option key={camera.id} value={camera.id}>
+                        {camera.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="archiveExportField">
+                  <span>{TEXT.exportReason}</span>
+                  <input
+                    className="input"
+                    value={exportModal.reason}
+                    onChange={(event) => setExportModal((prev) => ({ ...prev, reason: event.target.value }))}
+                    maxLength={500}
+                    disabled={exportBusy}
+                  />
+                </label>
+                <label className="archiveExportField">
+                  <span>{TEXT.exportStart}</span>
+                  <input
+                    className="input"
+                    type="datetime-local"
+                    step="1"
+                    value={formatDateTimeLocalInput(exportModal.startTs)}
+                    onChange={(event) => setExportModal((prev) => ({ ...prev, startTs: event.target.value }))}
+                    disabled={exportBusy}
+                  />
+                </label>
+                <label className="archiveExportField">
+                  <span>{TEXT.exportEnd}</span>
+                  <input
+                    className="input"
+                    type="datetime-local"
+                    step="1"
+                    value={formatDateTimeLocalInput(exportModal.endTs)}
+                    onChange={(event) => setExportModal((prev) => ({ ...prev, endTs: event.target.value }))}
+                    disabled={exportBusy}
+                  />
+                </label>
+              </div>
               {exportStatus ? <div className="archiveExportStatus">{exportStatus}</div> : null}
-              <div className="actions">
+              <div className="actions archiveExportActions">
                 <button type="button" className="button primary" onClick={submitExport} disabled={exportBusy}>
                   {TEXT.exportRun}
                 </button>
                 <button type="button" className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy} title={TEXT.exportManifestHelp}>
                   {TEXT.exportManifest}
-                </button>
-                <button type="button" className="button secondary" onClick={closeExportModal} disabled={exportBusy}>
-                  {TEXT.close}
                 </button>
               </div>
             </div>

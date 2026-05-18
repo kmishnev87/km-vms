@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -37,6 +37,9 @@ from app.services.timezone_contract import (
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 
 CHUNK_SIZE = 1024 * 1024
+DEFAULT_RECORDINGS_PAGE_SIZE = 30
+MAX_RECORDINGS_PAGE_SIZE = 100
+SUPPORTED_RECORDINGS_PAGE_SIZES = (15, 30, 50, 100)
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
 SEGMENT_STATUS_FINALIZED = "finalized"
@@ -153,8 +156,23 @@ def segment_file_resolution(segment: RecordingSegment) -> tuple[Path | None, boo
         file_path = resolve_segment_file_path(db, segment, require_exists=False)
     except ValueError:
         return None, False, "invalid_metadata"
-    exists = file_path.exists() and file_path.is_file()
+    try:
+        exists = file_path.exists() and file_path.is_file()
+    except OSError:
+        return file_path, False, "verification_error"
     return file_path, exists, None if exists else "missing_file"
+
+
+def segment_metadata_path(segment: RecordingSegment) -> tuple[Path | None, str | None]:
+    from sqlalchemy.orm import object_session
+
+    db = object_session(segment)
+    if db is None:
+        return None, "metadata_unavailable"
+    try:
+        return resolve_segment_file_path(db, segment, require_exists=False), None
+    except ValueError:
+        return None, "invalid_metadata"
 
 
 def finalized_segments_query(db: Session):
@@ -315,11 +333,19 @@ def collect_recording_files(
     date_value: str | None = None,
     from_value: str | None = None,
     to_value: str | None = None,
+    limit: int | None = None,
+    offset: int = 0,
+    sort_by: str = "created_at",
+    sort_dir: str = "desc",
+    verify_files: bool = False,
 ) -> list[dict]:
     ctx = timezone_context(db)
     query = apply_camera_filter(finalized_segments_query(db), db, camera_name)
     query = apply_time_filter(query, db, date_value=date_value, from_value=from_value, to_value=to_value)
-    segments = query.order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc()).all()
+    query = order_recordings_query(query, sort_by=sort_by, sort_dir=sort_dir)
+    if limit is not None:
+        query = query.offset(max(0, int(offset))).limit(max(0, int(limit)))
+    segments = query.all()
     camera_ids = {segment.camera_id for segment in segments}
     cameras = (
         {camera.id: camera for camera in db.query(Camera).filter(Camera.id.in_(camera_ids)).all()}
@@ -329,12 +355,23 @@ def collect_recording_files(
 
     items: list[dict] = []
     for segment in segments:
-        file_path, file_exists, unavailable_reason = segment_file_resolution(segment)
+        if verify_files:
+            file_path, file_exists, unavailable_reason = segment_file_resolution(segment)
+            if file_exists:
+                availability_status = "available"
+            elif unavailable_reason == "missing_file":
+                availability_status = "missing"
+            else:
+                availability_status = "error"
+        else:
+            file_path, unavailable_reason = segment_metadata_path(segment)
+            file_exists = None
+            availability_status = "not_checked" if file_path is not None else unavailable_reason
         rel_path = segment_relative_path(segment)
         if file_path is None or not rel_path:
             continue
 
-        size_bytes = int(file_path.stat().st_size if file_exists else segment.size_bytes or 0)
+        size_bytes = int(segment.size_bytes or 0)
         started_at = segment.started_at or segment.created_at
         media_metadata = segment_media_metadata(segment, file_path)
         local_naive_display = segment_uses_local_naive_display(segment, file_path.name)
@@ -361,16 +398,76 @@ def collect_recording_files(
                 "file_extension": media_metadata["file_extension"],
                 "mime_type": media_metadata["mime_type"],
                 "available": file_exists,
+                "file_exists": file_exists,
                 "playback_available": file_exists,
                 "download_available": file_exists,
-                "availability_status": "available" if file_exists else unavailable_reason,
+                "availability_status": availability_status,
             }
         )
 
-    items.sort(key=lambda x: x["_sort_ts"], reverse=True)
     for item in items:
         item.pop("_sort_ts", None)
     return items
+
+
+def clamp_recordings_pagination(limit: int | None, offset: int | None) -> tuple[int, int]:
+    requested = DEFAULT_RECORDINGS_PAGE_SIZE if limit is None else int(limit)
+    requested = max(1, min(MAX_RECORDINGS_PAGE_SIZE, requested))
+    page_size = next((size for size in SUPPORTED_RECORDINGS_PAGE_SIZES if requested <= size), MAX_RECORDINGS_PAGE_SIZE)
+    page_offset = max(0, int(offset or 0))
+    return page_size, page_offset
+
+
+def order_recordings_query(query, *, sort_by: str = "created_at", sort_dir: str = "desc"):
+    direction = asc if sort_dir == "asc" else desc
+    if sort_by == "size_bytes":
+        return query.order_by(direction(RecordingSegment.size_bytes), desc(RecordingSegment.started_at), desc(RecordingSegment.id))
+    if sort_by == "camera":
+        return query.order_by(direction(RecordingSegment.camera_name_snapshot), desc(RecordingSegment.started_at), desc(RecordingSegment.id))
+    return query.order_by(direction(RecordingSegment.started_at), direction(RecordingSegment.id))
+
+
+def recording_summary(db: Session, query) -> dict:
+    count = query.count()
+    size_bytes = int(query.with_entities(func.coalesce(func.sum(RecordingSegment.size_bytes), 0)).scalar() or 0)
+    return {
+        "count": count,
+        "size_bytes": size_bytes,
+        "size_human": human_size(size_bytes),
+    }
+
+
+def collect_recording_camera_options(db: Session, query) -> list[dict]:
+    rows = query.with_entities(RecordingSegment.camera_id, RecordingSegment.camera_name_snapshot).distinct().all()
+    camera_ids = {camera_id for camera_id, _name in rows if camera_id is not None}
+    cameras = (
+        {camera.id: camera for camera in db.query(Camera).filter(Camera.id.in_(camera_ids)).all()}
+        if camera_ids
+        else {}
+    )
+    options = []
+    seen = set()
+    for camera_id, snapshot in rows:
+        camera = cameras.get(camera_id)
+        name = safe_recording_camera_label(snapshot or (camera.name if camera else None), fallback=str(camera_id))
+        key = str(camera_id)
+        if not camera_id or key in seen:
+            continue
+        seen.add(key)
+        options.append({"id": key, "name": name})
+    return sorted(options, key=lambda item: item["name"].lower())
+
+
+def recordings_query_for_filters(
+    db: Session,
+    *,
+    camera_name: str | None = None,
+    date_value: str | None = None,
+    from_value: str | None = None,
+    to_value: str | None = None,
+):
+    query = apply_camera_filter(finalized_segments_query(db), db, camera_name)
+    return apply_time_filter(query, db, date_value=date_value, from_value=from_value, to_value=to_value)
 
 
 def stream_video(request: Request, file_path: Path, media_type_override: str | None = None):
@@ -430,7 +527,11 @@ def list_recording_cameras(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_recordings")),
 ):
-    return {"items": collect_camera_names(db)}
+    export_query = finalized_segments_query(db).join(Camera, Camera.id == RecordingSegment.camera_id).filter(Camera.deleted_at.is_(None))
+    return {
+        "items": collect_camera_names(db),
+        "export_items": collect_recording_camera_options(db, export_query),
+    }
 
 
 @router.post("/retention/dry-run")
@@ -475,28 +576,52 @@ def list_recordings(
     date: Optional[str] = Query(default=None),
     from_ts: Optional[str] = Query(default=None, alias="from"),
     to_ts: Optional[str] = Query(default=None, alias="to"),
+    limit: int | None = Query(default=DEFAULT_RECORDINGS_PAGE_SIZE, ge=1),
+    offset: int | None = Query(default=0, ge=0),
+    sort_by: str = Query(default="created_at"),
+    sort_dir: str = Query(default="desc"),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_recordings")),
 ):
+    page_limit, page_offset = clamp_recordings_pagination(limit, offset)
+    if sort_by not in {"created_at", "size_bytes", "camera"}:
+        raise HTTPException(status_code=400, detail="Unsupported recordings sort field")
+    if sort_dir not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="Unsupported recordings sort direction")
     try:
-        items = collect_recording_files(
+        base_query = recordings_query_for_filters(
             db,
             camera_name=camera if camera and camera != "__all__" else None,
             date_value=date,
             from_value=from_ts,
             to_value=to_ts,
         )
+        items = collect_recording_files(
+            db,
+            camera_name=camera if camera and camera != "__all__" else None,
+            date_value=date,
+            from_value=from_ts,
+            to_value=to_ts,
+            limit=page_limit,
+            offset=page_offset,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+            verify_files=True,
+        )
+        summary = recording_summary(db, base_query)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    total = sum(item["size_bytes"] for item in items)
     ctx = timezone_context(db)
     return {
         "items": items,
-        "summary": {
-            "count": len(items),
-            "size_bytes": total,
-            "size_human": human_size(total),
+        "pagination": {
+            "limit": page_limit,
+            "offset": page_offset,
+            "returned_count": len(items),
+            "total_count": summary["count"],
+            "has_more": page_offset + len(items) < summary["count"],
         },
+        "summary": summary,
         "timezone": {
             "id": ctx.name,
             "source": "system_settings.timezone",
@@ -589,7 +714,7 @@ def delete_recording(
         reason="manual_delete",
         max_candidates=1,
     )
-    if result["failed_count"]:
+    if result["failed_count"] or result["skipped_count"] or not result["deleted_count"]:
         raise HTTPException(status_code=409, detail=result)
     return result
 

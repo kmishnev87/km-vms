@@ -23,7 +23,8 @@ import {
 } from "../../lib/playbackResolution";
 import { formatProductDateTime, productDateFilterParam, productDateTimeInputValue } from "../../lib/timezone";
 
-const PAGE_SIZE = 30;
+const DEFAULT_PAGE_SIZE = 30;
+const PAGE_SIZE_OPTIONS = [15, 30, 50, 100];
 const TEXT = {
   title: "\u0417\u0430\u043f\u0438\u0441\u0438",
   subtitle: "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440, \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435 \u0438 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0430\u0440\u0445\u0438\u0432\u0430",
@@ -38,6 +39,8 @@ const TEXT = {
   totalFiles: "\u0412\u0441\u0435\u0433\u043e \u0444\u0430\u0439\u043b\u043e\u0432",
   totalSize: "\u041e\u0431\u0449\u0438\u0439 \u043e\u0431\u044a\u0451\u043c",
   page: "\u0421\u0442\u0440\u0430\u043d\u0438\u0446\u0430",
+  pageSize: "\u041d\u0430 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u0435",
+  jumpToPage: "\u041f\u0435\u0440\u0435\u0439\u0442\u0438",
   selected: "\u0412\u044b\u0431\u0440\u0430\u043d\u043e",
   camera: "\u041a\u0430\u043c\u0435\u0440\u0430",
   file: "\u0424\u0430\u0439\u043b",
@@ -58,7 +61,7 @@ const TEXT = {
   exportStart: "\u041d\u0430\u0447\u0430\u043b\u043e",
   exportEnd: "\u041a\u043e\u043d\u0435\u0446",
   exportRun: "\u0421\u043e\u0437\u0434\u0430\u0442\u044c \u043a\u043b\u0438\u043f",
-  exportManifest: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c \u043f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430",
+  exportManifest: "\u0421\u043a\u0430\u0447\u0430\u0442\u044c \u043f\u0430\u0441\u043f\u043e\u0440\u0442",
   exportManifestHelp: "\u041f\u0430\u0441\u043f\u043e\u0440\u0442 \u043a\u043b\u0438\u043f\u0430 \u2014 \u0442\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u0438\u0439 \u0444\u0430\u0439\u043b \u0434\u043b\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438, \u0441 \u043a\u0430\u043a\u043e\u0439 \u043a\u0430\u043c\u0435\u0440\u044b \u0438 \u0437\u0430 \u043a\u0430\u043a\u043e\u0439 \u043f\u0435\u0440\u0438\u043e\u0434 \u0441\u043e\u0437\u0434\u0430\u043d \u043a\u043b\u0438\u043f.",
   exportReady: "\u041a\u043b\u0438\u043f \u0433\u043e\u0442\u043e\u0432.",
   remove: "\u0423\u0434\u0430\u043b\u0438\u0442\u044c",
@@ -68,7 +71,8 @@ const TEXT = {
   viewRecord: "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440 \u0437\u0430\u043f\u0438\u0441\u0438",
   close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
   playbackError: "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043d\u0435 \u0441\u043c\u043e\u0433 \u0432\u043e\u0441\u043f\u0440\u043e\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u0437\u0430\u043f\u0438\u0441\u044c \u043e\u043d\u043b\u0430\u0439\u043d. \u0417\u0430\u043f\u0438\u0441\u044c \u043c\u043e\u0436\u043d\u043e \u0441\u043a\u0430\u0447\u0430\u0442\u044c.",
-  missingFile: "\u0424\u0430\u0439\u043b \u043e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442 / \u0442\u0440\u0435\u0431\u0443\u0435\u0442\u0441\u044f \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0430 \u0430\u0440\u0445\u0438\u0432\u0430",
+  missingFile: "\u0424\u0430\u0439\u043b \u043e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442",
+  verificationError: "\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438",
   unavailable: "\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e",
   recordingActiveEmpty: "\u0418\u0434\u0451\u0442 \u0437\u0430\u043f\u0438\u0441\u044c. \u0417\u0430\u043f\u0438\u0441\u044c \u043f\u043e\u044f\u0432\u0438\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u0437\u0430\u043a\u0440\u044b\u0442\u0438\u044f \u0441\u0435\u0433\u043c\u0435\u043d\u0442\u0430.",
 };
@@ -116,6 +120,113 @@ function defaultClipRange(selectedDate, exportLimits) {
     startTs: toDateTimeInputParts(start),
     endTs: toDateTimeInputParts(end),
   };
+}
+
+function formatRecordingsTableDateTime(value, timezone) {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const options = {
+    timeZone: timezone || "UTC",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  };
+  try {
+    const parts = new Intl.DateTimeFormat("ru-RU", options)
+      .formatToParts(date)
+      .reduce((acc, part) => {
+        if (part.type !== "literal") acc[part.type] = part.value;
+        return acc;
+      }, {});
+    return {
+      time: `${parts.hour}:${parts.minute}`,
+      date: `${parts.day}.${parts.month}.${parts.year}`,
+    };
+  } catch {
+    const fallback = formatProductDateTime(value, timezone).replace(/:\d{2}(?=,|\s|$)/, "");
+    const match = fallback.match(/(\d{2}:\d{2}).*?(\d{2}\.\d{2}\.\d{4})/);
+    return match ? { time: match[1], date: match[2] } : { time: fallback, date: "" };
+  }
+}
+
+function renderRecordingsTableDateTime(value, timezone) {
+  const formatted = formatRecordingsTableDateTime(value, timezone);
+  if (!formatted) return "-";
+  return (
+    <span className="recordingsDateTime">
+      <span>{formatted.time}</span>
+      {formatted.date ? (
+        <>
+          <span className="recordingsDateDivider" aria-hidden="true"></span>
+          <span>{formatted.date}</span>
+        </>
+      ) : null}
+    </span>
+  );
+}
+
+function ScissorsIcon() {
+  return (
+    <svg className="recordingsUiIcon recordingsToolbarSvgIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="5.5" cy="6.5" r="3"></circle>
+      <circle cx="5.5" cy="17.5" r="3"></circle>
+      <path d="M8.3 8.3 20.5 19.2"></path>
+      <path d="M8.3 15.7 20.5 4.8"></path>
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg className="recordingsUiIcon recordingsToolbarSvgIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M18.6 8.2A7.2 7.2 0 1 0 19 15"></path>
+      <path d="M18.8 4.8v4.1h-4.1"></path>
+    </svg>
+  );
+}
+
+function TrashIcon({ compact = false } = {}) {
+  return (
+    <svg className={`recordingsUiIcon recordingsTrashIcon ${compact ? "recordingsRowSvgIcon" : "recordingsToolbarSvgIcon"}`} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4.2 6.8h15.6"></path>
+      <path d="M8.9 6.8V4.5h6.2v2.3"></path>
+      <path d="M6.7 7.2 7.6 19c.1 1.05 1 1.9 2.05 1.9h4.7c1.05 0 1.95-.85 2.05-1.9l.9-11.8"></path>
+      <path d="M10.1 10.7v6.6"></path>
+      <path d="M13.9 10.7v6.6"></path>
+    </svg>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <svg className="recordingsUiIcon recordingsRowSvgIcon recordingsPlayIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M8 5.8v12.4L18.2 12 8 5.8Z"></path>
+    </svg>
+  );
+}
+
+function DownloadIcon() {
+  return (
+    <svg className="recordingsUiIcon recordingsRowSvgIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 4.6v10.2"></path>
+      <path d="m7.8 10.8 4.2 4.2 4.2-4.2"></path>
+      <path d="M5.8 19.4h12.4"></path>
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg className="recordingsUiIcon recordingsToolbarSvgIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <circle cx="4.8" cy="12" r="1.9"></circle>
+      <circle cx="12" cy="12" r="1.7"></circle>
+      <circle cx="19.2" cy="12" r="1.9"></circle>
+    </svg>
+  );
 }
 
 const SORT_OPTIONS = {
@@ -261,7 +372,15 @@ function normalizeRecordingError(message) {
 }
 
 function isRecordingAvailable(item) {
-  return item?.available !== false && item?.playback_available !== false && item?.download_available !== false;
+  return item?.availability_status === "available"
+    && item?.available === true
+    && item?.playback_available === true
+    && item?.download_available === true;
+}
+
+function recordingAvailabilityLabel(item, t) {
+  if (item?.availability_status === "error") return t.verificationError;
+  return t.missingFile;
 }
 
 function hasActiveRecordingJobs(recorderStatus, selectedCamera) {
@@ -283,10 +402,15 @@ export default function RecordingsPage() {
     [text]
   );
   const [cameras, setCameras] = useState([]);
+  const [exportCameraOptions, setExportCameraOptions] = useState([]);
   const [selectedCamera, setSelectedCamera] = useState("__all__");
   const [selectedDate, setSelectedDate] = useState("");
   const [items, setItems] = useState([]);
   const [recordingsLoadState, setRecordingsLoadState] = useState("idle");
+  const [recordingsSummary, setRecordingsSummary] = useState(null);
+  const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
+  const [pageJumpValue, setPageJumpValue] = useState("1");
+  const [recordingsPagination, setRecordingsPagination] = useState({ limit: DEFAULT_PAGE_SIZE, offset: 0, total_count: 0, has_more: false });
   const [productTimezone, setProductTimezone] = useState("UTC");
   const [selectedPaths, setSelectedPaths] = useState([]);
   const [sortBy, setSortBy] = useState(SORT_OPTIONS.created_at.key);
@@ -331,14 +455,21 @@ export default function RecordingsPage() {
   async function loadCameras() {
     const data = await apiFetch("/recordings/cameras");
     setCameras(data.items || []);
+    setExportCameraOptions(data.export_items || []);
   }
 
-  async function loadRecordings(camera = "__all__", dateValue = selectedDate) {
+  async function loadRecordings(camera = "__all__", dateValue = selectedDate, page = currentPage) {
     const requestId = ++requestIdRef.current;
-    setRecordingsLoadState((prev) => (prev === "loaded" || prev === "refreshing" ? "refreshing" : "loading"));
+    setRecordingsLoadState("loading");
+    setItems([]);
+    setSelectedPaths([]);
     const params = new URLSearchParams();
     if (camera && camera !== "__all__") params.set("camera", camera);
     if (dateValue) params.set("date", productDateFilterParam(dateValue));
+    params.set("limit", String(pageSize));
+    params.set("offset", String(Math.max(0, (page - 1) * pageSize)));
+    params.set("sort_by", sortBy);
+    params.set("sort_dir", sortDir);
     const query = params.toString() ? `?${params.toString()}` : "";
 
     try {
@@ -346,19 +477,20 @@ export default function RecordingsPage() {
       if (requestId !== requestIdRef.current) return;
 
       setItems(data.items || []);
+      setRecordingsSummary(data.summary || null);
+      setRecordingsPagination(data.pagination || { limit: pageSize, offset: 0, total_count: data.items?.length || 0, has_more: false });
       setProductTimezone(data?.timezone?.id || "UTC");
-      setSelectedPaths([]);
       setError("");
       setRecordingsLoadState("loaded");
     } catch (err) {
       if (requestId !== requestIdRef.current) return;
       setError(normalizeRecordingError(err.message));
-      setRecordingsLoadState((prev) => (prev === "loaded" || prev === "refreshing" ? "loaded" : "error"));
+      setRecordingsLoadState("error");
     }
   }
 
   async function loadRecorderStatus() {
-    const status = await apiFetch("/system/recorder/status").catch(() => null);
+    const status = await apiFetch("/system/recorder/summary").catch(() => null);
     setRecorderStatus(status);
   }
 
@@ -377,12 +509,16 @@ export default function RecordingsPage() {
   }, []);
 
   useEffect(() => {
-    loadRecordings(selectedCamera, selectedDate);
-  }, [selectedCamera, selectedDate]);
+    loadRecordings(selectedCamera, selectedDate, currentPage);
+  }, [selectedCamera, selectedDate, sortBy, sortDir, currentPage, pageSize]);
 
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedCamera, selectedDate, sortBy, sortDir]);
+
+  useEffect(() => {
+    setPageJumpValue(String(currentPage));
+  }, [currentPage]);
 
   useEffect(() => {
     function handlePointerDown(event) {
@@ -401,7 +537,7 @@ export default function RecordingsPage() {
     try {
       setError("");
       setNotice("");
-      await Promise.all([loadCameras(), loadRecordings(selectedCamera, selectedDate), loadRecorderStatus()]);
+      await Promise.all([loadCameras(), loadRecordings(selectedCamera, selectedDate, currentPage), loadRecorderStatus()]);
     } catch (err) {
       setError(normalizeRecordingError(err.message));
     }
@@ -423,26 +559,36 @@ export default function RecordingsPage() {
     setSortDir(nextSortBy === SORT_OPTIONS.created_at.key ? "desc" : "asc");
   }
 
-  const filteredItems = items;
-  const recordingsLoaded = recordingsLoadState === "loaded" || recordingsLoadState === "refreshing";
+  function handlePageSizeChange(event) {
+    const nextPageSize = Number(event.target.value);
+    if (!PAGE_SIZE_OPTIONS.includes(nextPageSize)) return;
+    setPageSize(nextPageSize);
+    setCurrentPage(1);
+  }
+
+  function handlePageJump(event) {
+    event.preventDefault();
+    const requested = Number.parseInt(pageJumpValue, 10);
+    if (!Number.isFinite(requested)) {
+      setPageJumpValue(String(currentPage));
+      return;
+    }
+    const nextPage = Math.min(Math.max(requested, 1), pageCount);
+    setPageJumpValue(String(nextPage));
+    setCurrentPage(nextPage);
+  }
+
+  const recordingsLoaded = recordingsLoadState === "loaded";
   const recordingsFirstLoading = recordingsLoadState === "idle" || recordingsLoadState === "loading";
+  const filteredItems = recordingsLoaded ? items : [];
 
-  const sortedItems = useMemo(() => {
-    return [...filteredItems].sort((left, right) =>
-      compareValues(left, right, sortBy, sortDir)
-    );
-  }, [filteredItems, sortBy, sortDir]);
-
-  const pageCount = Math.max(1, Math.ceil(sortedItems.length / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(Number(recordingsPagination?.total_count || recordingsSummary?.count || 0) / pageSize));
 
   useEffect(() => {
     setCurrentPage((prev) => Math.min(prev, pageCount));
   }, [pageCount]);
 
-  const paginatedItems = useMemo(() => {
-    const startIndex = (currentPage - 1) * PAGE_SIZE;
-    return sortedItems.slice(startIndex, startIndex + PAGE_SIZE);
-  }, [sortedItems, currentPage]);
+  const paginatedItems = filteredItems;
 
   const visiblePaths = useMemo(
     () => paginatedItems.map((item) => item.path),
@@ -455,26 +601,15 @@ export default function RecordingsPage() {
   }, [visiblePaths, selectedPaths]);
 
   const visibleSummary = useMemo(() => {
-    const sizeBytes = filteredItems.reduce(
-      (total, item) => total + Number(item.size_bytes || 0),
-      0
-    );
-
     return {
-      count: filteredItems.length,
-      size_human: formatSizeBytes(sizeBytes),
+      count: recordingsSummary?.count ?? 0,
+      size_human: recordingsSummary?.size_human || formatSizeBytes(recordingsSummary?.size_bytes || 0),
     };
-  }, [filteredItems]);
+  }, [recordingsSummary]);
 
   const clipCameraOptions = useMemo(() => {
-    const byId = new Map();
-    items.forEach((item) => {
-      if (!item?.camera_id) return;
-      if (selectedCamera !== "__all__" && item.camera !== selectedCamera) return;
-      byId.set(String(item.camera_id), item.camera || `${t.camera} ${item.camera_id}`);
-    });
-    return Array.from(byId.entries()).map(([id, name]) => ({ id, name }));
-  }, [items, selectedCamera]);
+    return exportCameraOptions;
+  }, [exportCameraOptions]);
 
   const paginationItems = useMemo(
     () => buildPageList(currentPage, pageCount),
@@ -569,15 +704,14 @@ export default function RecordingsPage() {
 
   function openExportModal() {
     if (!canExport) return;
-    const initialCameraId = selectedCamera === "__all__" ? "" : (clipCameraOptions[0]?.id || "");
     const { startTs, endTs } = defaultClipRange(selectedDate, exportLimits);
     setError("");
     setNotice("");
     setLastExportId("");
     setExportStatus("");
     setExportModal({
-      cameraId: initialCameraId,
-      title: selectedCamera === "__all__" ? t.createClip : `${t.createClip} ${selectedCamera}`,
+      cameraId: "",
+      title: t.createClip,
       reason: "",
       startTs,
       endTs,
@@ -888,13 +1022,13 @@ export default function RecordingsPage() {
             {canExport ? (
               <button
                 type="button"
-                className="button secondary small recordingsCreateClipButton"
+                className="button secondary small recordingsActionButton recordingsToolbarIconButton recordingsCreateClipButton"
                 onClick={openExportModal}
                 disabled={exportBusy}
                 title={t.createClipTooltip}
                 aria-label={t.createClip}
               >
-                {ICONS.export}
+                <ScissorsIcon />
               </button>
             ) : null}
           </div>
@@ -906,7 +1040,7 @@ export default function RecordingsPage() {
               title={t.refresh}
               aria-label={t.refresh}
             >
-              {ICONS.refresh}
+              <RefreshIcon />
             </button>
 
             {canDelete ? (
@@ -918,7 +1052,7 @@ export default function RecordingsPage() {
                   title={t.deleteSelected}
                   aria-label={t.deleteSelected}
                 >
-                  {ICONS.trash}
+                  <TrashIcon />
                 </button>
 
                 <div className="recordingsDangerMenu recordingsToolbarMenu" ref={dangerMenuRef}>
@@ -929,7 +1063,7 @@ export default function RecordingsPage() {
                     aria-expanded={dangerMenuOpen}
                     title={t.dangerActions}
                   >
-                    {ICONS.more}
+                    <MoreIcon />
                   </button>
 
                   {dangerMenuOpen ? (
@@ -1036,12 +1170,12 @@ export default function RecordingsPage() {
                     ) : (
                       <div>
                         <div>{item.filename}</div>
-                        <div className="recordingsMissingStatus">{t.missingFile}</div>
+                        <div className="recordingsMissingStatus">{recordingAvailabilityLabel(item, t)}</div>
                       </div>
                     )}
                   </td>
                   <td className="recordingsDateCell">
-                    {item.started_at_system ? formatProductDateTime(item.started_at_system, productTimezone) : (item.created_at || "-")}
+                    {item.started_at_system ? renderRecordingsTableDateTime(item.started_at_system, productTimezone) : (item.created_at || "-")}
                   </td>
                   <td className="recordingsSizeCell">{item.size_human}</td>
                   <td>
@@ -1050,10 +1184,10 @@ export default function RecordingsPage() {
                         className="recordingsIconButton"
                         onClick={() => handleWatch(item)}
                         disabled={!isRecordingAvailable(item)}
-                        title={`${ICONS.watch} ${t.watch}`}
+                        title={t.watch}
                         aria-label={t.watch}
                       >
-                        {ICONS.watch}
+                        <PlayIcon />
                       </button>
                       <button
                         className="recordingsIconButton"
@@ -1062,17 +1196,17 @@ export default function RecordingsPage() {
                         title={t.downloadSource}
                         aria-label={t.downloadSource}
                       >
-                        {ICONS.download}
+                        <DownloadIcon />
                       </button>
                       {canDelete ? (
                         <button
                           className="recordingsIconButton danger"
                           onClick={() => handleDeleteOne(item)}
                           disabled={busy}
-                          title={`${ICONS.remove} ${t.remove}`}
+                          title={t.remove}
                           aria-label={t.remove}
                         >
-                          {ICONS.remove}
+                          <TrashIcon compact />
                         </button>
                       ) : null}
                     </div>
@@ -1092,6 +1226,15 @@ export default function RecordingsPage() {
         </div>
 
         <div className="recordingsPagination">
+          <label className="recordingsPageSizeControl">
+            <span>{t.pageSize}</span>
+            <select value={pageSize} onChange={handlePageSizeChange}>
+              {PAGE_SIZE_OPTIONS.map((size) => (
+                <option key={size} value={size}>{size}</option>
+              ))}
+            </select>
+          </label>
+
           <button
             className="recordingsPageButton"
             onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
@@ -1123,6 +1266,20 @@ export default function RecordingsPage() {
           >
             {ICONS.next}
           </button>
+
+          <form className="recordingsPageJump" onSubmit={handlePageJump}>
+            <input
+              type="number"
+              min="1"
+              max={pageCount}
+              value={pageJumpValue}
+              onChange={(event) => setPageJumpValue(event.target.value)}
+              aria-label={t.page}
+            />
+            <button className="recordingsPageButton" type="submit" title={t.jumpToPage}>
+              {t.jumpToPage}
+            </button>
+          </form>
         </div>
       </div>
 
@@ -1197,81 +1354,74 @@ export default function RecordingsPage() {
       ) : null}
       {exportModal ? (
         <div className="modalBackdrop">
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal archiveExportModal" onClick={(e) => e.stopPropagation()}>
             <div className="modalHeader">
-              <h2 style={{ margin: 0 }}>{t.exportTitle}</h2>
+              <h2 className="archiveExportTitle">{t.exportTitle}</h2>
               <button className="iconCloseButton" onClick={closeExportModal} disabled={exportBusy} aria-label={t.close}>
                 {ICONS.close}
               </button>
             </div>
             <div className="archiveExportForm">
-              <div className="archiveExportSummary">
-                <strong>{t.createClip}</strong>
-                <span>{selectedDate || t.allCameras}</span>
+              <div className="archiveExportInfo">
+                {t.exportHelp} {describeArchiveExportLimits(exportLimits)}
               </div>
-              <div className="archiveExportHelp">{t.exportHelp}</div>
-              <div className="archiveExportLimits">
-                <strong>{t.exportLimits}</strong>
-                <span>{describeArchiveExportLimits(exportLimits)}</span>
+              <div className="archiveExportFields">
+                <label className="archiveExportField">
+                  <span>{t.exportCamera}</span>
+                  <select
+                    className="select"
+                    value={exportModal.cameraId}
+                    onChange={(event) => setExportModal((prev) => ({ ...prev, cameraId: event.target.value }))}
+                    disabled={exportBusy}
+                  >
+                    <option value="">{t.exportPickCamera}</option>
+                    {clipCameraOptions.map((camera) => (
+                      <option key={camera.id} value={camera.id}>
+                        {camera.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="archiveExportField">
+                  <span>{t.exportReason}</span>
+                  <input
+                    className="input"
+                    value={exportModal.reason}
+                    onChange={(event) => setExportModal((prev) => ({ ...prev, reason: event.target.value }))}
+                    disabled={exportBusy}
+                    maxLength={500}
+                  />
+                </label>
+                <label className="archiveExportField">
+                  <span>{t.exportStart}</span>
+                  <input
+                    className="input"
+                    type="datetime-local"
+                    step="1"
+                    value={toDateTimeLocal(exportModal.startTs)}
+                    onChange={(event) => setExportModal((prev) => ({ ...prev, startTs: event.target.value }))}
+                    disabled={exportBusy}
+                  />
+                </label>
+                <label className="archiveExportField">
+                  <span>{t.exportEnd}</span>
+                  <input
+                    className="input"
+                    type="datetime-local"
+                    step="1"
+                    value={toDateTimeLocal(exportModal.endTs)}
+                    onChange={(event) => setExportModal((prev) => ({ ...prev, endTs: event.target.value }))}
+                    disabled={exportBusy}
+                  />
+                </label>
               </div>
-              <label className="archiveExportField">
-                <span>{t.exportCamera}</span>
-                <select
-                  className="select"
-                  value={exportModal.cameraId}
-                  onChange={(event) => setExportModal((prev) => ({ ...prev, cameraId: event.target.value }))}
-                  disabled={exportBusy}
-                >
-                  <option value="">{t.exportPickCamera}</option>
-                  {clipCameraOptions.map((camera) => (
-                    <option key={camera.id} value={camera.id}>
-                      {camera.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="archiveExportField">
-                <span>{t.exportStart}</span>
-                <input
-                  className="input"
-                  type="datetime-local"
-                  step="1"
-                  value={toDateTimeLocal(exportModal.startTs)}
-                  onChange={(event) => setExportModal((prev) => ({ ...prev, startTs: event.target.value }))}
-                  disabled={exportBusy}
-                />
-              </label>
-              <label className="archiveExportField">
-                <span>{t.exportEnd}</span>
-                <input
-                  className="input"
-                  type="datetime-local"
-                  step="1"
-                  value={toDateTimeLocal(exportModal.endTs)}
-                  onChange={(event) => setExportModal((prev) => ({ ...prev, endTs: event.target.value }))}
-                  disabled={exportBusy}
-                />
-              </label>
-              <label className="archiveExportField">
-                <span>{t.exportReason}</span>
-                <input
-                  className="input"
-                  value={exportModal.reason}
-                  onChange={(event) => setExportModal((prev) => ({ ...prev, reason: event.target.value }))}
-                  disabled={exportBusy}
-                  maxLength={500}
-                />
-              </label>
               {exportStatus ? <div className="archiveExportStatus">{exportStatus}</div> : null}
-              <div className="actions">
+              <div className="actions archiveExportActions">
                 <button className="button primary" onClick={submitExport} disabled={exportBusy}>
                   {t.exportRun}
                 </button>
                 <button className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy} title={t.exportManifestHelp}>
                   {t.exportManifest}
-                </button>
-                <button className="button secondary" onClick={closeExportModal} disabled={exportBusy}>
-                  {t.close}
                 </button>
               </div>
             </div>

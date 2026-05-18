@@ -335,6 +335,14 @@
   cursor: pointer;
 }
 
+.chronologyFullscreenButton {
+  font-size: 14px;
+  padding: 0;
+  width: 28px;
+  min-width: 28px;
+  font-weight: 800;
+}
+
 .chronologyAlignButton:hover {
   background: #eff6ff;
   border-color: #bfdbfe;
@@ -560,6 +568,27 @@
 .chronologyDownloadButton,
 .chronologyEvidenceButton {
   font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chronologyDownloadButton svg,
+.chronologyEvidenceButton svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chronologyEvidenceButton svg .chronologyIconCutout {
+  fill: #f8fafc;
+  stroke: currentColor;
+  stroke-width: 2.1;
 }
 
 .chronologyDownloadChooser {
@@ -626,18 +655,26 @@
   min-width: 34px;
 }
 
-.chronologyPrimaryButton:hover,
-.chronologySecondaryButton:hover,
-.chronologyIconButton:hover,
-.chronologySpeedButton:hover {
+.chronologyPrimaryButton:hover:not(:disabled),
+.chronologySecondaryButton:hover:not(:disabled),
+.chronologyIconButton:hover:not(:disabled),
+.chronologySpeedButton:hover:not(:disabled) {
   border-color: #bfdbfe;
   background: #eff6ff;
   color: #1d4ed8;
 }
 
-.chronologyPrimaryButton:hover {
+.chronologyPrimaryButton:hover:not(:disabled) {
   background: #1e293b;
   color: #ffffff;
+}
+
+.chronologyPrimaryButton:disabled,
+.chronologySecondaryButton:disabled,
+.chronologyIconButton:disabled,
+.chronologySpeedButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .chronologySpeedGroup {

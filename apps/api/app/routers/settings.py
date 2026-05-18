@@ -34,7 +34,12 @@ from app.services.hardware import get_hardware_capabilities, invalidate_hardware
 from app.services.live_engine import manager as live_manager
 from app.services.recording_reconciliation import reconciliation_diagnostics
 from app.services.recording_retention import retention_diagnostics
-from app.services.recorder_diagnostics import build_recorder_archive_payloads, build_recorder_status, build_system_runtime_status
+from app.services.recorder_diagnostics import (
+    build_recorder_archive_payloads,
+    build_recorder_status,
+    build_recorder_summary,
+    build_system_runtime_status,
+)
 from app.services.system_runtime_status import build_operator_runtime_status
 from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.system_settings import (
@@ -200,6 +205,14 @@ def system_recorder_status(
     current_user: User = Depends(require_permission("run_diagnostics")),
 ):
     return build_recorder_status(db)
+
+
+@router.get("/system/recorder/summary")
+def system_recorder_summary(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics")),
+):
+    return build_recorder_summary(db)
 
 
 @router.get("/system/schema/status")

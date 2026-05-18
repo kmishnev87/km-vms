@@ -63,6 +63,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("settings", "POST", "/settings/storage/validate", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("diagnostics", "GET", "/system/runtime/status", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Operator camera/live/recorder runtime status aggregate."),
     EndpointPermission("diagnostics", "GET", "/system/recorder/status", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Recorder liveness, jobs, storage, retention, and segment diagnostics."),
+    EndpointPermission("diagnostics", "GET", "/system/recorder/summary", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Lightweight recorder UI status without storage or retention diagnostics."),
     EndpointPermission("system", "GET", "/system/schema/status", PERMISSION_MANAGE_SETTINGS, "require_permission", "Database schema version status; owner/admin only."),
     EndpointPermission("system", "GET", "/system/schema/plan", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only deterministic migration plan; no migration execution."),
     EndpointPermission("system", "GET", "/system/backup/plan", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only backup-before-upgrade plan; no backup files created."),

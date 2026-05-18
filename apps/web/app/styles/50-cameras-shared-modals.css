@@ -113,45 +113,65 @@
   background: #f0f9ff;
 }
 
+.archiveExportModal {
+  width: min(720px, calc(100vw - 32px));
+  padding: 22px;
+  border-radius: 22px;
+}
+
+.archiveExportModal .modalHeader {
+  margin-bottom: 14px;
+}
+
 .archiveExportForm {
   display: grid;
   gap: 12px;
 }
 
-.archiveExportSummary {
-  display: grid;
-  gap: 4px;
-  color: #475569;
-  font-size: 14px;
+.archiveExportTitle {
+  margin: 0;
+  font-size: 26px;
+  line-height: 1.15;
+  font-weight: 800;
 }
 
-.archiveExportSummary strong {
-  color: #0f172a;
-}
-
-.archiveExportHelp,
-.archiveExportLimits {
-  display: grid;
-  gap: 4px;
+.archiveExportInfo {
   padding: 10px 12px;
   border: 1px solid #dbeafe;
   background: #f8fafc;
   color: #334155;
   border-radius: 8px;
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.4;
 }
 
-.archiveExportLimits strong {
-  color: #0f172a;
+.archiveExportFields {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(220px, 1fr);
+  gap: 10px 12px;
 }
 
 .archiveExportField {
   display: grid;
   gap: 6px;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 400;
+}
+
+.archiveExportField > span {
   color: #334155;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 400;
+}
+
+.archiveExportField .input,
+.archiveExportField .select {
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 400;
 }
 
 .archiveExportStatus {
@@ -163,6 +183,39 @@
   border-radius: 8px;
   font-size: 13px;
   font-weight: 700;
+}
+
+.archiveExportModal .actions {
+  margin-top: 4px;
+}
+
+.archiveExportActions {
+  justify-content: flex-end;
+}
+
+.archiveExportActions .button {
+  width: 172px;
+  justify-content: center;
+}
+
+@media (max-width: 720px) {
+  .archiveExportModal {
+    width: calc(100vw - 24px);
+    padding: 18px;
+  }
+
+  .archiveExportFields {
+    grid-template-columns: 1fr;
+  }
+
+  .archiveExportActions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .archiveExportActions .button {
+    width: 100%;
+  }
 }
 
 .cameraTileGrid {

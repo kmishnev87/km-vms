@@ -301,15 +301,7 @@
 }
 
 .recordingsCreateClipButton {
-  width: 32px;
-  height: 32px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-  background: #f8fafc;
-  color: #0f172a;
-  font-size: 12px;
-  font-weight: 800;
-  cursor: pointer;
+  color: #1f2937;
 }
 
 .recordingsCreateClipButton:hover:not(:disabled) {
@@ -320,6 +312,61 @@
 .recordingsCreateClipButton:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.recordingsUiIcon {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.recordingsUiIcon circle {
+  fill: currentColor;
+  stroke: none;
+}
+
+.recordingsToolbarSvgIcon {
+  width: 19px;
+  height: 19px;
+}
+
+.recordingsToolbarIconButton .recordingsUiIcon,
+.recordingsDangerTrigger .recordingsUiIcon {
+  color: #1f2937;
+}
+
+.recordingsRowSvgIcon {
+  width: 21px;
+  height: 21px;
+}
+
+.recordingsIconButton .recordingsUiIcon {
+  color: #1f2937;
+}
+
+.recordingsTrashIcon {
+  width: 22px;
+  height: 22px;
+}
+
+.recordingsToolbarSvgIcon.recordingsTrashIcon {
+  width: 19px;
+  height: 19px;
+}
+
+.recordingsPlayIcon {
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.35;
+}
+
+.recordingsCreateClipButton .recordingsUiIcon circle {
+  fill: #f8fafc;
+  stroke: currentColor;
+  stroke-width: 1.8;
 }
 
 .chronologyHelpTooltip {
@@ -439,6 +486,11 @@
   flex: 0 0 auto;
 }
 
+.recordingsActionButton,
+.recordingsDangerTrigger {
+  color: #1f2937;
+}
+
 .recordingsToolbarIconButton {
   font-size: 18px;
   line-height: 1;
@@ -526,15 +578,15 @@
 }
 
 .recordingsTableWrap {
-  max-height: calc(100vh - 330px);
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: visible;
   border: 1px solid #e5e7eb;
   border-radius: 18px;
 }
 
 .recordingsTable {
   width: 100%;
-  min-width: 980px;
+  min-width: 1060px;
   table-layout: fixed;
 }
 
@@ -543,23 +595,23 @@
 }
 
 .recordingsCameraCol {
-  width: 150px;
+  width: 220px;
 }
 
 .recordingsSpacerCol {
-  width: 105px;
+  width: 24px;
 }
 
 .recordingsFileCol {
-  width: auto;
+  width: 360px;
 }
 
 .recordingsDateCol {
-  width: 190px;
+  width: 180px;
 }
 
 .recordingsSizeCol {
-  width: 105px;
+  width: 100px;
 }
 
 .recordingsActionsCol {
@@ -662,6 +714,22 @@
 .recordingsTable td.recordingsDateCell,
 .recordingsTable td.recordingsSizeCell {
   text-align: center;
+}
+
+.recordingsDateTime {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  white-space: nowrap;
+}
+
+.recordingsDateDivider {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: #aab7c7;
+  box-shadow: 0 0 0 3px rgba(170, 183, 199, 0.23);
 }
 
 .recordingsCameraCell {
@@ -780,6 +848,40 @@
   cursor: not-allowed;
 }
 
+.recordingsPageSizeControl,
+.recordingsPageJump {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+}
+
+.recordingsPageSizeControl {
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.recordingsPageSizeControl select,
+.recordingsPageJump input {
+  height: 36px;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #fff;
+  color: #64748b;
+  font: inherit;
+}
+
+.recordingsPageSizeControl select {
+  min-width: 68px;
+  padding: 0 8px;
+}
+
+.recordingsPageJump input {
+  width: 72px;
+  padding: 0 8px;
+}
+
 .recordingsPageGap {
   padding: 0 2px;
   color: #94a3b8;
@@ -832,6 +934,15 @@
   padding: 8px 14px;
   border-radius: 12px;
   font-size: 14px;
+}
+
+.button.secondary.small.recordingsActionButton,
+.button.secondary.small.recordingsDangerTrigger {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 0;
 }
 
 .input,

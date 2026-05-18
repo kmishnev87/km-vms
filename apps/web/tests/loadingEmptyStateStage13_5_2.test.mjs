@@ -26,11 +26,11 @@ assert.doesNotMatch(camerasPage, /\{\s*!cameras\.length \? \(\s*<div className="
 
 assert.match(recordsPage, /loading: "\\u0417\\u0430\\u0433\\u0440\\u0443\\u0437\\u043a\\u0430\.\.\."/);
 assert.match(recordsPage, /const \[recordingsLoadState, setRecordingsLoadState\] = useState\("idle"\)/);
-assert.match(recordsPage, /setRecordingsLoadState\(\(prev\) => \(prev === "loaded" \|\| prev === "refreshing" \? "refreshing" : "loading"\)\)/);
+assert.match(recordsPage, /setRecordingsLoadState\("loading"\)/);
 assert.match(recordsPage, /try \{\s*const data = await apiFetch\(`\/recordings\$\{query\}`\)/s);
 assert.match(recordsPage, /setRecordingsLoadState\("loaded"\)/);
-assert.match(recordsPage, /setRecordingsLoadState\(\(prev\) => \(prev === "loaded" \|\| prev === "refreshing" \? "loaded" : "error"\)\)/);
-assert.match(recordsPage, /const recordingsLoaded = recordingsLoadState === "loaded" \|\| recordingsLoadState === "refreshing"/);
+assert.match(recordsPage, /setRecordingsLoadState\("error"\)/);
+assert.match(recordsPage, /const recordingsLoaded = recordingsLoadState === "loaded"/);
 assert.match(recordsPage, /const recordingsFirstLoading = recordingsLoadState === "idle" \|\| recordingsLoadState === "loading"/);
 assert.match(recordsPage, /\(\) => recordingsLoaded && !filteredItems\.length && hasActiveRecordingJobs\(recorderStatus, selectedCamera\)/);
 assert.match(recordsPage, /\{t\.totalFiles\}: \{recordingsLoaded \? visibleSummary\.count : t\.loading\}/);
