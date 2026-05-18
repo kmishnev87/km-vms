@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import CompactVideoCanvas from "./CompactVideoCanvas";
+import VideoZoomPanSurface from "./VideoZoomPanSurface";
 import { issueChronologyMediaToken } from "../lib/api";
 import {
   normalizeVideoDimensions,
@@ -571,25 +572,31 @@ export default function ArchiveTilePlayer({
       data-playback-key={playback?.playbackKey || ""}
       data-playback-rel-path={playback?.relPath || ""}
     >
-      <video
-        key={playback?.playbackKey || "empty"}
-        ref={videoRef}
-        className={`archiveVideo ${nativeVideoSuppressed ? "nativeVideoSuppressed" : ""}`}
-        muted
-        autoPlay={false}
-        playsInline
-        controls={false}
-      />
-      <CompactVideoCanvas
-        videoRef={videoRef}
-        active={compactCanvasRequested}
-        mode={renderState.mode}
-        ratio={renderState.ratio}
-        backingScale={renderState.backingScale}
-        generation={canvasGeneration}
-        onFrameState={handleCanvasFrameState}
-        className="archiveCompactVideoCanvas"
-      />
+      <VideoZoomPanSurface
+        className="archiveVideoZoomSurface"
+        context="chronology"
+        sourceKey={playback?.playbackKey || "empty"}
+      >
+        <video
+          key={playback?.playbackKey || "empty"}
+          ref={videoRef}
+          className={`archiveVideo ${nativeVideoSuppressed ? "nativeVideoSuppressed" : ""}`}
+          muted
+          autoPlay={false}
+          playsInline
+          controls={false}
+        />
+        <CompactVideoCanvas
+          videoRef={videoRef}
+          active={compactCanvasRequested}
+          mode={renderState.mode}
+          ratio={renderState.ratio}
+          backingScale={renderState.backingScale}
+          generation={canvasGeneration}
+          onFrameState={handleCanvasFrameState}
+          className="archiveCompactVideoCanvas"
+        />
+      </VideoZoomPanSurface>
 
       {status === "loading" ? (
         <div className="archiveCenterHint">Загрузка записи...</div>

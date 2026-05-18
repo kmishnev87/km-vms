@@ -35,7 +35,9 @@ assert.match(livePage, /isPointInsideWorkspace\(event\.clientX, event\.clientY\)
 assert.match(livePage, /reorderSidebarCamera\(rowCameraId, sidebarDropPositionFromPoint\(row, event\.clientY\), state\.cameraId\)/);
 assert.match(livePage, /reorderSidebarCamera\(camera\.id, sidebarDropPosition\(event\), reorderId\)/);
 assert.match(livePage, /event\.dataTransfer\.setData\(LIVE_CAMERA_DROP_MIME, String\(camera\.id\)\)/);
-assert.match(livePage, /event\.dataTransfer\.setData\(LIVE_CAMERA_STREAM_DROP_MIME, stream\.key\)/);
+assert.match(livePage, /event\.dataTransfer\.setData\(LIVE_CAMERA_STREAM_DROP_MIME, initialStream\)/);
+assert.match(livePage, /liveWorkspaceStreamInfo/);
+assert.match(livePage, /liveWorkspaceStreamPipe/);
 assert.match(livePage, /event\.dataTransfer\.setData\(SIDEBAR_CAMERA_REORDER_MIME, String\(camera\.id\)\)/);
 
 assert.match(chronologyPage, /function addTileFromSidebar\(cameraId\)/);

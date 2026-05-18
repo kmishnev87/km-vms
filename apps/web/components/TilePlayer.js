@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Hls from "hls.js";
 import CompactVideoCanvas from "./CompactVideoCanvas";
+import VideoZoomPanSurface from "./VideoZoomPanSurface";
 import { apiFetch, issueLiveMediaTokenInfo } from "../lib/api";
 import {
   isCompactSmoothingSourceVideo,
@@ -693,24 +694,30 @@ export default function TilePlayer({
       data-fullscreen={isFullscreen ? "true" : "false"}
       data-audio-enabled={audioEnabled ? "true" : "false"}
     >
-      <video
-        ref={videoRef}
-        className={`liveVideo ${nativeVideoSuppressed ? "nativeVideoSuppressed" : ""}`}
-        muted={!audioEnabled}
-        autoPlay
-        playsInline
-        controls={false}
-      />
-      <CompactVideoCanvas
-        videoRef={videoRef}
-        active={compactCanvasRequested}
-        mode={renderState.mode}
-        ratio={renderState.ratio}
-        backingScale={renderState.backingScale}
-        generation={canvasGeneration}
-        onFrameState={handleCanvasFrameState}
-        className="liveCompactVideoCanvas"
-      />
+      <VideoZoomPanSurface
+        className="liveVideoZoomSurface"
+        context="live"
+        sourceKey={`${cameraId || ""}:${stream || ""}`}
+      >
+        <video
+          ref={videoRef}
+          className={`liveVideo ${nativeVideoSuppressed ? "nativeVideoSuppressed" : ""}`}
+          muted={!audioEnabled}
+          autoPlay
+          playsInline
+          controls={false}
+        />
+        <CompactVideoCanvas
+          videoRef={videoRef}
+          active={compactCanvasRequested}
+          mode={renderState.mode}
+          ratio={renderState.ratio}
+          backingScale={renderState.backingScale}
+          generation={canvasGeneration}
+          onFrameState={handleCanvasFrameState}
+          className="liveCompactVideoCanvas"
+        />
+      </VideoZoomPanSurface>
 
       {status === "loading" || status === "waiting" ? (
         <div className="liveCenterHint">

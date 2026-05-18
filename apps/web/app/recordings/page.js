@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
+import VideoZoomPanSurface from "../../components/VideoZoomPanSurface";
 import { apiFetch, canDeleteRecordings, issueRecordingMediaToken } from "../../lib/api";
 import {
   buildArchiveExportPayload,
@@ -25,6 +26,8 @@ import { formatProductDateTime, productDateFilterParam, productDateTimeInputValu
 
 const DEFAULT_PAGE_SIZE = 30;
 const PAGE_SIZE_OPTIONS = [15, 30, 50, 100];
+const DOUBLE_TAP_MS = 330;
+const DOUBLE_TAP_DISTANCE_PX = 28;
 const TEXT = {
   title: "\u0417\u0430\u043f\u0438\u0441\u0438",
   subtitle: "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440, \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435 \u0438 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0430\u0440\u0445\u0438\u0432\u0430",
@@ -99,6 +102,10 @@ function toDateTimeInputParts(dateValue) {
   if (!Number.isFinite(dt.getTime())) return "";
   const pad2 = (n) => String(n).padStart(2, "0");
   return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}:${pad2(dt.getSeconds())}`;
+}
+
+function pointerDistance(a, b) {
+  return Math.hypot(Number(a.x || 0) - Number(b.x || 0), Number(a.y || 0) - Number(b.y || 0));
 }
 
 function defaultClipRange(selectedDate, exportLimits) {
@@ -444,6 +451,7 @@ export default function RecordingsPage() {
   const viewerVideoRef = useRef(null);
   const viewerRestoreStateRef = useRef(null);
   const viewerRefreshInFlightRef = useRef(false);
+  const viewerLastTapRef = useRef(null);
   const canDelete = canDeleteRecordings(currentUser);
   const canExport = canExportRecordings(currentUser);
 
@@ -812,6 +820,10 @@ export default function RecordingsPage() {
   }
 
   function closeViewer() {
+    const frame = viewerFrameRef.current;
+    if (document.fullscreenElement && frame && (document.fullscreenElement === frame || frame.contains(document.fullscreenElement))) {
+      document.exitFullscreen?.().catch(() => {});
+    }
     setViewerTitle("");
     setViewerUrl("");
     setViewerItem(null);
@@ -823,6 +835,39 @@ export default function RecordingsPage() {
     viewerRestoreStateRef.current = null;
     viewerRefreshInFlightRef.current = false;
     setViewerOpen(false);
+  }
+
+  async function toggleViewerFrameFullscreen(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    const frame = viewerFrameRef.current;
+    if (!frame) return;
+    if (document.fullscreenElement && (document.fullscreenElement === frame || frame.contains(document.fullscreenElement))) {
+      await document.exitFullscreen?.().catch(() => {});
+      return;
+    }
+    await frame.requestFullscreen?.().catch(() => {});
+  }
+
+  function handleViewerSurfacePointerUp(event) {
+    if (event.pointerType !== "touch") return;
+    if (event.target?.closest?.("button, select, input, textarea, a")) return;
+    const scale = Number(event.currentTarget?.querySelector?.("[data-video-zoom-surface]")?.getAttribute("data-video-zoom-scale") || 1);
+    if (scale > 1.001) return;
+
+    const now = Date.now();
+    const point = { x: Number(event.clientX || 0), y: Number(event.clientY || 0) };
+    const previous = viewerLastTapRef.current;
+    viewerLastTapRef.current = { time: now, point };
+
+    if (
+      previous &&
+      now - previous.time <= DOUBLE_TAP_MS &&
+      pointerDistance(previous.point, point) <= DOUBLE_TAP_DISTANCE_PX
+    ) {
+      viewerLastTapRef.current = null;
+      toggleViewerFrameFullscreen(event);
+    }
   }
 
   async function refreshViewerUrlAfterMediaError() {
@@ -1323,19 +1368,29 @@ export default function RecordingsPage() {
                 data-first-frame-drawn="false"
                 data-canvas-draw-error=""
                 data-fullscreen={viewerFullscreen ? "true" : "false"}
+                onPointerUpCapture={handleViewerSurfacePointerUp}
+                onDoubleClickCapture={toggleViewerFrameFullscreen}
               >
-                <video
-                  key={viewerUrl}
-                  ref={viewerVideoRef}
-                  src={viewerUrl}
-                  controls
-                  autoPlay
-                  preload="metadata"
-                  className={`recordingVideo ${viewerAdaptiveHighRes ? "recordingVideoAdaptiveHighRes" : ""}`}
-                  onLoadedMetadata={restoreViewerPlaybackState}
-                  onCanPlay={restoreViewerPlaybackState}
-                  onError={refreshViewerUrlAfterMediaError}
-                />
+                <VideoZoomPanSurface
+                  className="recordingVideoZoomSurface"
+                  context="records"
+                  sourceKey={viewerUrl}
+                >
+                  <video
+                    key={viewerUrl}
+                    ref={viewerVideoRef}
+                    src={viewerUrl}
+                    controls
+                    controlsList="nofullscreen"
+                    playsInline
+                    autoPlay
+                    preload="metadata"
+                    className={`recordingVideo ${viewerAdaptiveHighRes ? "recordingVideoAdaptiveHighRes" : ""}`}
+                    onLoadedMetadata={restoreViewerPlaybackState}
+                    onCanPlay={restoreViewerPlaybackState}
+                    onError={refreshViewerUrlAfterMediaError}
+                  />
+                </VideoZoomPanSurface>
               </div>
             )}
 
