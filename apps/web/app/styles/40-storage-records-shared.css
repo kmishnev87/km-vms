@@ -16,18 +16,68 @@
 .storageOpsSection,
 .storageOpsState {
   border: 1px solid #dbe3ef;
-  border-radius: 12px;
+  border-radius: 8px;
   background: #fff;
   box-shadow: 0 2px 10px rgba(15, 23, 42, 0.03);
 }
 
 .storageOpsOverview {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(260px, 1.1fr) minmax(360px, 1.4fr) minmax(220px, 0.8fr);
   gap: 16px;
-  align-items: flex-start;
+  align-items: stretch;
   padding: 14px 16px;
   margin-bottom: 12px;
+}
+
+.storageOpsOverview-warning {
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+
+.storageOpsOverview-error {
+  border-color: #fca5a5;
+  background: #fef2f2;
+}
+
+.storageOpsOverview-ok {
+  border-color: #86efac;
+}
+
+.storageOpsOverview-unknown {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+.storageOpsHealthMain,
+.storageOpsHealthAction {
+  min-width: 0;
+}
+
+.storageOpsHealthMetrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-content: flex-start;
+}
+
+.storageOpsHealthAction {
+  display: grid;
+  gap: 5px;
+  align-content: start;
+  padding-left: 14px;
+  border-left: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.storageOpsHealthAction strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.storageOpsHealthAction span {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .storageOpsOverview strong {
@@ -63,7 +113,7 @@
 .storageOpsBadge,
 .storageOpsStat {
   border: 1px solid #dbe3ef;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #f8fafc;
 }
 
@@ -98,11 +148,22 @@
   color: #92400e;
 }
 
+.storageOpsBadge-unknown,
+.storageOpsStat-unknown {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+}
+
 .storageOpsGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 12px;
+}
+
+.storageOpsSection-wide {
+  grid-column: 1 / -1;
 }
 
 .storageOpsSection {
@@ -175,7 +236,7 @@
 .storageOpsTableWrap {
   overflow: auto;
   border: 1px solid #e5e7eb;
-  border-radius: 12px;
+  border-radius: 8px;
 }
 
 .storageOpsTable {
@@ -183,6 +244,10 @@
   min-width: 840px;
   border-collapse: collapse;
   table-layout: fixed;
+}
+
+.storageOpsTable-compact {
+  min-width: 620px;
 }
 
 .storageOpsTable th,
@@ -223,6 +288,84 @@
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.storageOpsActionsColumn {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: stretch;
+}
+
+.storageOpsActionsColumn .button {
+  justify-content: flex-start;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.storageOpsConfirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  max-width: 100%;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.storageOpsConfirm input {
+  margin-top: 2px;
+}
+
+.storageOpsNoteStrong {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.storageOpsDetails {
+  color: #334155;
+  font-size: 13px;
+}
+
+.storageOpsDetails summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.storageOpsDetails dl {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 0;
+}
+
+.storageOpsDetails div {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.45fr) minmax(0, 1fr);
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #edf2f7;
+}
+
+.storageOpsDetails dt {
+  color: #64748b;
+  font-weight: 700;
+}
+
+.storageOpsDetails dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.storageOpsAdvancedRoot {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid #edf2f7;
+}
+
+.storageOpsAdvancedRootBody {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
 }
 
 .storageOpsEmpty,
@@ -1032,4 +1175,3 @@
   padding: 26px;
   box-shadow: 0 20px 40px rgba(15, 23, 42, 0.12);
 }
-

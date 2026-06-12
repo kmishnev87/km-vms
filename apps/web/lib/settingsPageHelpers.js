@@ -124,19 +124,6 @@ export function settingsDraftFromApi(data) {
     system_name: data?.system_name || "KM VMS",
     timezone: data?.timezone || "UTC",
     language: normalizeLocaleImpl(data?.language),
-    storage_path: data?.storage_path || "",
-    archive_primary_path: data?.archive_primary_path || data?.storage_host_path || data?.storage_root || data?.storage_path || "",
-    archive_host_path: data?.archive_host_path || data?.storage_host_path || "",
-    storage_host_path: data?.storage_host_path || "",
-    storage_root: data?.storage_root || data?.container_runtime_storage_root || "",
-    storage_recordings_path: data?.storage_recordings_path || data?.container_recordings_namespace_root || "",
-    storage_namespace: data?.storage_namespace || "",
-    storage_change_requires: data?.storage_change_requires || "",
-    auto_free_space_cleanup_enabled: Boolean(data?.auto_free_space_cleanup_enabled),
-    auto_free_space_warning_threshold_percent: data?.auto_free_space_warning_threshold_percent ?? 10,
-    auto_free_space_cleanup_threshold_percent: data?.auto_free_space_cleanup_threshold_percent ?? 5,
-    auto_free_space_critical_threshold_percent: data?.auto_free_space_critical_threshold_percent ?? 1,
-    recording_suspended_by_low_disk: Boolean(data?.recording_suspended_by_low_disk),
     recordingProfile: profileFromFormat(data?.recording_format),
     hardware_preferred_backend: data?.hardware_preferred_backend || null,
   };
@@ -149,7 +136,6 @@ export function payloadFromDraft(draft) {
     language: draft.language,
     recording_format: recordingFormatForProfile(draft.recordingProfile),
     hardware_preferred_backend: draft.hardware_preferred_backend || null,
-    auto_free_space_cleanup_enabled: Boolean(draft.auto_free_space_cleanup_enabled),
   };
 }
 

@@ -46,14 +46,12 @@ const apiSettings = {
   system_name: "Demo",
   timezone: "Europe/Moscow",
   language: "en",
-  storage_host_path: "/host/archive",
   recording_format: "mp4",
-  auto_free_space_cleanup_enabled: true,
   hardware_preferred_backend: "qsv",
 };
 const draft = settingsDraftFromApi(apiSettings);
 assert.equal(draft.system_name, "Demo");
-assert.equal(draft.archive_primary_path, "/host/archive");
+assert.equal(Object.hasOwn(draft, "archive_primary_path"), false);
 assert.equal(draft.recordingProfile, "compatibility");
 assert.equal(languageOf(draft), "en");
 assert.deepEqual(payloadFromDraft(draft), {
@@ -62,7 +60,6 @@ assert.deepEqual(payloadFromDraft(draft), {
   language: "en",
   recording_format: "mp4",
   hardware_preferred_backend: "qsv",
-  auto_free_space_cleanup_enabled: true,
 });
 assert.equal(samePayload(draft, { ...draft }), true);
 assert.equal(samePayload(draft, { ...draft, recordingProfile: "reliability" }), false);

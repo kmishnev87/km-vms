@@ -1,10 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
-import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { apiFetch, apiFetchBlob, clearAuthToken, forbiddenMessage } from "../../lib/api";
 import { LanguageSelect, normalizeLocale, persistLocale, translateText } from "../../lib/i18n";
 
@@ -21,7 +19,6 @@ import {
   backendLabel,
   configureSettingsPageHelpers,
   formatAuditTimestamp,
-  formatBytes,
   hardwareOptionState,
   humanErrorText,
   languageOf,
@@ -76,7 +73,7 @@ function mergeText(base, overrides) {
 const TEXT = {
   ru: {
     title: "Настройки",
-    subtitle: "Системные параметры KM VMS: язык, время, архив, запись, ускорение и безопасность.",
+    subtitle: "Системные параметры KM VMS: язык, время, запись, ускорение, безопасность и обслуживание.",
     save: "Сохранить",
     saving: "Сохранение...",
     cancel: "Отменить",
@@ -90,50 +87,6 @@ const TEXT = {
     english: "English",
     timezone: "Часовой пояс",
     timezoneHelp: "Определяет время интерфейса, архива и хронологии.",
-    storage: "Хранилище",
-    storageText: "Основной путь архива на сервере. Контейнерный путь показан как техническая деталь.",
-    storageContainerPath: "Технический путь Docker",
-    storageOperationsOpen: "Открыть экран хранилища",
-    autoFreeSpace: "Автоосвобождение места",
-    autoFreeSpaceHelp: "Выкл.: система предупреждает о нехватке места и не удаляет записи автоматически. Вкл.: при свободном месте ниже 5% сервер может удалить самые старые записи, принадлежащие KM VMS, которые прошли безопасные проверки метаданных.",
-    autoFreeSpaceCritical: "Ниже 1% свободного места запись может быть временно остановлена для защиты диска. Это не разрешает удаление без ручного разрешения.",
-    autoFreeSpaceThresholds: "Пороги: предупреждение ниже 10%, автоочистка ниже 5%, критическая защита ниже 1%.",
-    retentionWorkflow: "Регламент хранения",
-    retentionWorkflowText: "Предпросмотр показывает кандидатов на удаление по сроку хранения и квоте без удаления файлов.",
-    retentionDryRun: "Предпросмотр",
-    retentionApply: "Удалить по плану",
-    retentionConfirm: "Подтверждаю необратимое удаление найденных кандидатов на удаление по регламенту хранения",
-    retentionEmpty: "Кандидатов нет.",
-    retentionPreviewReady: "Кандидаты: {count}; объём: {bytes}.",
-    retentionResultReady: "Удалено: {deleted}; пропущено: {skipped}; ошибки: {failed}; освобождено: {bytes}.",
-    retentionBlocked: "Блокеры",
-    retentionByCamera: "По камерам",
-    retentionReasons: "Причины",
-    reconciliationWorkflow: "Проверка архива",
-    reconciliationWorkflowText: "Проверка без применения сканирует архив без удаления файлов и показывает проблемы по классификациям.",
-    reconciliationDryRun: "Проверить",
-    reconciliationApply: "Применить безопасно",
-    reconciliationConfirm: "Подтверждаю: файлы не удаляются, обновляются только безопасные поля метаданных и статуса; осиротевшие, внешние, неизвестные и старые файлы без метаданных не удаляются и не импортируются",
-    reconciliationEmpty: "Проверка ещё не выполнялась.",
-    reconciliationPreviewReady: "Проблемы: {problems}; кандидаты на проверку: {cleanup}; строк метаданных: {rows}.",
-    reconciliationResultReady: "Метаданные обновлены: {updated}; удалено файлов: {deleted}; проблемы: {problems}.",
-    reconciliationDeletedFilesZero: "Эта проверка не удаляет файлы автоматически. Кандидаты на очистку показаны только для проверки.",
-    reconciliationClasses: {
-      missing_file: "файл отсутствует",
-      orphan_file: "файл без записи в базе",
-      orphan_metadata: "запись без файла / осиротевшая запись",
-      pre_metadata_km_vms_file: "старый файл KM VMS без новых метаданных",
-      legacy_archive_file: "старый архивный файл",
-      partial_file: "частичный файл / запись ещё не завершена",
-      zero_size_file: "нулевой размер",
-      corrupted_file: "повреждённый файл",
-      stale_writing_segment: "зависшая запись",
-      foreign_file: "чужой файл",
-      unknown_file: "неизвестный файл",
-    },
-    hostPath: "Путь на сервере",
-    hostPathUnknown: "Определяется в docker-compose",
-    validate: "Тест",
     recording: "Формат записи",
     compatibility: "Макс. совместимость",
     compatibilityHelp: "Сейчас используется MP4. Удобнее для плееров.",
@@ -271,10 +224,6 @@ const TEXT = {
     toasts: {
       saveOkTitle: "Настройки сохранены",
       saveOkText: "Изменения успешно применены",
-      storageOkTitle: "Хранилище доступно",
-      storageOkText: "Свободно: {free}",
-      retentionOkTitle: "Регламент хранения проверен",
-      retentionApplyTitle: "Регламент хранения выполнен",
       hardwareOkTitle: "Аппаратные возможности проверены",
       hardwareOkText: "Доступно: {modes}",
       hardwareFallbackTitle: "Режим изменён",
@@ -285,7 +234,6 @@ const TEXT = {
       forbiddenText: "У текущего пользователя нет доступа к настройкам",
       networkTitle: "Сервер недоступен",
       networkText: "Проверьте подключение или состояние сервиса",
-      storageFailTitle: "Хранилище недоступно",
       hardwareFailTitle: "Проверка аппаратных возможностей не выполнена",
       hardwareFailText: "Повторите проверку позже",
       unavailableTitle: "Режим недоступен",
@@ -299,7 +247,6 @@ const TEXT = {
     },
     tooltips: {
       timezone: "Используется для отображения времени, записи файлов и хронологии.",
-      storage: "Папка внутри контейнера. Фактический путь на сервере задаётся в docker-compose.",
       recording: "Определяет формат и поведение записи видео.",
       hardware: "Использует видеоускорение сервера для обработки видео.",
       auto: "Система сама выбирает оптимальное ускорение.",
@@ -328,50 +275,6 @@ const TEXT = {
     english: "English",
     timezone: "Timezone",
     timezoneHelp: "Defines interface time, archive timestamps, and chronology.",
-    storage: "Storage",
-    storageText: "Primary archive path on the server. The container path is shown as a technical detail.",
-    storageContainerPath: "Technical Docker path",
-    storageOperationsOpen: "Open Storage Operations",
-    autoFreeSpace: "Auto free-space cleanup",
-    autoFreeSpaceHelp: "Off: the system warns about low disk space and does not delete recordings automatically. On: below 5% free space the server may delete the oldest owned recordings that pass metadata safety checks.",
-    autoFreeSpaceCritical: "Below 1% free space recording may be temporarily suspended to protect the disk. This does not allow deletion without opt-in enabled.",
-    autoFreeSpaceThresholds: "Thresholds: warning below 10%, auto cleanup below 5%, critical protection below 1%.",
-    retentionWorkflow: "Retention workflow",
-    retentionWorkflowText: "Preview shows retention-days and quota deletion candidates without deleting files.",
-    retentionDryRun: "Preview",
-    retentionApply: "Delete by plan",
-    retentionConfirm: "I confirm irreversible deletion of the listed retention candidates",
-    retentionEmpty: "No candidates.",
-    retentionPreviewReady: "Candidates: {count}; size: {bytes}.",
-    retentionResultReady: "Deleted: {deleted}; skipped: {skipped}; failed: {failed}; freed: {bytes}.",
-    retentionBlocked: "Blockers",
-    retentionByCamera: "By camera",
-    retentionReasons: "Reasons",
-    reconciliationWorkflow: "Archive integrity check",
-    reconciliationWorkflowText: "Dry-run scans the archive without deleting files and shows classification counts.",
-    reconciliationDryRun: "Scan",
-    reconciliationApply: "Apply-safe",
-    reconciliationConfirm: "I confirm: files will not be deleted, only safe metadata/status fields may be updated; orphan/foreign/unknown/pre-metadata files will not be removed or imported",
-    reconciliationEmpty: "No scan has been run yet.",
-    reconciliationPreviewReady: "Problems: {problems}; cleanup review: {cleanup}; metadata rows: {rows}.",
-    reconciliationResultReady: "Metadata updated: {updated}; deleted files: {deleted}; problems: {problems}.",
-    reconciliationDeletedFilesZero: "Stage 2 never deletes files automatically. Cleanup candidates are shown for review only.",
-    reconciliationClasses: {
-      missing_file: "missing file",
-      orphan_file: "file without DB record",
-      orphan_metadata: "metadata without file",
-      pre_metadata_km_vms_file: "old KM VMS file without new metadata",
-      legacy_archive_file: "legacy archive file",
-      partial_file: "partial / still writing",
-      zero_size_file: "zero-size",
-      corrupted_file: "corrupted file",
-      stale_writing_segment: "stale writing",
-      foreign_file: "foreign file",
-      unknown_file: "unknown file",
-    },
-    hostPath: "Server path",
-    hostPathUnknown: "Defined in docker-compose",
-    validate: "Test",
     recording: "Recording format",
     compatibility: "Maximum compatibility",
     compatibilityHelp: "Current mapping: MP4. Easier to open in players.",
@@ -509,10 +412,6 @@ const TEXT = {
     toasts: {
       saveOkTitle: "Settings saved",
       saveOkText: "Changes applied successfully",
-      storageOkTitle: "Storage available",
-      storageOkText: "Free: {free}",
-      retentionOkTitle: "Retention preview ready",
-      retentionApplyTitle: "Retention applied",
       hardwareOkTitle: "Hardware capabilities checked",
       hardwareOkText: "Available: {modes}",
       hardwareFallbackTitle: "Mode changed",
@@ -523,7 +422,6 @@ const TEXT = {
       forbiddenText: "User permissions are limited.",
       networkTitle: "Server unavailable",
       networkText: "Check connection or service status",
-      storageFailTitle: "Storage unavailable",
       hardwareFailTitle: "Hardware capability check failed",
       hardwareFailText: "Try checking again later",
       unavailableTitle: "Mode unavailable",
@@ -537,7 +435,6 @@ const TEXT = {
     },
     tooltips: {
       timezone: "Used for time display, recording timestamps, and chronology.",
-      storage: "Folder inside the container. The real server path is defined in docker-compose.",
       recording: "Defines recording format and behavior.",
       hardware: "Uses server video acceleration for video processing.",
       auto: "The system selects the best available acceleration.",
@@ -611,7 +508,6 @@ function normalizedError(err, lang, context = "generic") {
   const t = settingsTextFor(lang);
   const message = String(err?.message || "");
   const detail = parseErrorDetail(message);
-  const storage = detail?.storage || detail?.detail?.storage;
   const lower = message.toLowerCase();
 
   if (lower.includes("not authenticated") || lower.includes("invalid token") || message.includes("401")) {
@@ -622,10 +518,6 @@ function normalizedError(err, lang, context = "generic") {
   }
   if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("server is unavailable")) {
     return { variant: "error", title: t.toasts.networkTitle, text: t.toasts.networkText };
-  }
-  if (storage?.error || context === "storage") {
-    const reason = storage?.error || detail?.detail || (message && !message.startsWith("{") ? message : t.toasts.networkText);
-    return { variant: "error", title: t.toasts.storageFailTitle, text: reason };
   }
   if (context === "hardware") {
     return { variant: "error", title: t.toasts.hardwareFailTitle, text: t.toasts.hardwareFailText };
@@ -680,21 +572,13 @@ export default function SettingsPage() {
   const [auditFilters, setAuditFilters] = useState({ category: "", severity: "", actor: "", target: "", since: "1440", q: "" });
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState("");
-  const [retentionPreview, setRetentionPreview] = useState(null);
-  const [retentionResult, setRetentionResult] = useState(null);
-  const [retentionBusy, setRetentionBusy] = useState(false);
-  const [retentionConfirmed, setRetentionConfirmed] = useState(false);
-  const [reconciliationPreview, setReconciliationPreview] = useState(null);
-  const [reconciliationResult, setReconciliationResult] = useState(null);
-  const [reconciliationBusy, setReconciliationBusy] = useState(false);
-  const [reconciliationConfirmed, setReconciliationConfirmed] = useState(false);
   const [bugReportText, setBugReportText] = useState("");
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
   const toastTimerRef = useRef(null);
   const lang = languageOf(draft || savedDraft);
   const t = settingsTextFor(lang);
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
-  const anyBusy = saving || hardwareChecking || retentionBusy || reconciliationBusy;
+  const anyBusy = saving || hardwareChecking;
   const canManageMaintenance = Boolean(currentUser?.permissions?.includes("manage_settings"));
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
@@ -879,143 +763,6 @@ export default function SettingsPage() {
     const nextLanguage = normalizeLocale(event.target.value);
     patch("language", nextLanguage);
     persistLocale(nextLanguage);
-  }
-
-  function reasonEntries(source) {
-    const counts = source?.reason_counts || source?.observability || {};
-    return Object.entries(counts)
-      .filter(([, value]) => Number(value) > 0)
-      .slice(0, 6);
-  }
-
-  function cameraRows(source) {
-    return Object.values(source?.per_camera || {})
-      .filter((row) => Number(row?.bytes_freed || row?.deleted_count || row?.skipped_count || row?.failed_count) > 0)
-      .slice(0, 6);
-  }
-
-  function retentionSummaryText(source, mode = "preview") {
-    if (!source) return "";
-    if (mode === "result") {
-      return t.retentionResultReady
-        .replace("{deleted}", String(source.deleted_count || 0))
-        .replace("{skipped}", String(source.skipped_count || 0))
-        .replace("{failed}", String(source.failed_count || 0))
-        .replace("{bytes}", formatBytes(source.bytes_freed || 0));
-    }
-    return t.retentionPreviewReady
-      .replace("{count}", String(source.planned_count || 0))
-      .replace("{bytes}", formatBytes(source.estimated_freed_bytes ?? source.bytes_freed ?? 0));
-  }
-
-  function reconciliationProblemCount(source) {
-    const counts = source?.classification_counts || source?.counts || {};
-    const ok = Number(counts.ok_owned_finalized || 0);
-    const skipped = Number(counts.skipped || 0);
-    const total = Object.values(counts).reduce((sum, value) => sum + Number(value || 0), 0);
-    return Math.max(0, total - ok - skipped);
-  }
-
-  function reconciliationCleanupCount(source) {
-    return Number(source?.cleanup_candidates_summary?.count ?? source?.cleanup_candidates?.count ?? 0);
-  }
-
-  function reconciliationClassRows(source) {
-    const counts = source?.classification_counts || source?.counts || {};
-    return Object.entries(t.reconciliationClasses || {})
-      .map(([key, label]) => ({ key, label, count: Number(counts[key] || 0) }))
-      .filter((row) => row.count > 0)
-      .slice(0, 10);
-  }
-
-  function reconciliationSummaryText(source, mode = "preview") {
-    if (!source) return "";
-    if (mode === "result") {
-      return t.reconciliationResultReady
-        .replace("{updated}", String(source.apply_safe_summary?.updated_metadata_count ?? source.updated_metadata_count ?? 0))
-        .replace("{deleted}", String(source.apply_safe_summary?.deleted_files_count ?? source.deleted_files_count ?? 0))
-        .replace("{problems}", String(reconciliationProblemCount(source)));
-    }
-    return t.reconciliationPreviewReady
-      .replace("{problems}", String(reconciliationProblemCount(source)))
-      .replace("{cleanup}", String(reconciliationCleanupCount(source)))
-      .replace("{rows}", String(source.total_metadata_rows_checked || 0));
-  }
-
-  async function runRetentionPreview() {
-    if (retentionBusy) return;
-    setRetentionBusy(true);
-    setRetentionResult(null);
-    setRetentionConfirmed(false);
-    try {
-      const preview = await apiFetch("/recordings/retention/dry-run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      setRetentionPreview(preview);
-      showToast({ variant: "success", title: t.toasts.retentionOkTitle, text: retentionSummaryText(preview) });
-    } catch (err) {
-      showToast(normalizedError(err, lang));
-    } finally {
-      setRetentionBusy(false);
-    }
-  }
-
-  async function applyRetentionPlan() {
-    if (retentionBusy || !retentionPreview?.planned_count || !retentionConfirmed) return;
-    setRetentionBusy(true);
-    try {
-      const result = await apiFetch("/recordings/retention/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
-      });
-      setRetentionResult(result);
-      setRetentionPreview(null);
-      setRetentionConfirmed(false);
-      showToast({ variant: "success", title: t.toasts.retentionApplyTitle, text: retentionSummaryText(result, "result") });
-    } catch (err) {
-      showToast(normalizedError(err, lang));
-    } finally {
-      setRetentionBusy(false);
-    }
-  }
-
-  async function runReconciliationPreview() {
-    if (reconciliationBusy) return;
-    setReconciliationBusy(true);
-    setReconciliationResult(null);
-    setReconciliationConfirmed(false);
-    try {
-      const preview = await apiFetch("/storage/reconciliation/summary");
-      setReconciliationPreview(preview);
-      showToast({ variant: "success", title: t.reconciliationWorkflow, text: reconciliationSummaryText(preview) });
-    } catch (err) {
-      showToast(normalizedError(err, lang));
-    } finally {
-      setReconciliationBusy(false);
-    }
-  }
-
-  async function applyReconciliationSafe() {
-    if (reconciliationBusy || !reconciliationPreview || !reconciliationConfirmed) return;
-    setReconciliationBusy(true);
-    try {
-      const result = await apiFetch("/storage/reconcile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "apply_safe" }),
-      });
-      setReconciliationResult(result);
-      setReconciliationPreview(null);
-      setReconciliationConfirmed(false);
-      showToast({ variant: "success", title: t.reconciliationApply, text: reconciliationSummaryText(result, "result") });
-    } catch (err) {
-      showToast(normalizedError(err, lang));
-    } finally {
-      setReconciliationBusy(false);
-    }
   }
 
   async function openUsersModal() {
@@ -1360,13 +1107,6 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          <OperatorProblemBanners
-            domains={["storage", "retention", "reconciliation", "recorder"]}
-            className="settingsWarnings"
-            limit={5}
-            currentUser={currentUser}
-          />
-
           {!draft ? null : (
             <div className="settingsReferenceLayout">
               <section className="settingsPanel">
@@ -1405,100 +1145,6 @@ export default function SettingsPage() {
                       ) : null}
                       {UTC_TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
                     </select>
-                  </div>
-                </div>
-
-                <div className="settingsRow">
-                  <div className="settingsRowIcon"><img src="/assets/icons/ui/storage.png" alt="" /></div>
-                  <div className="settingsRowText">
-                    <label htmlFor="settings-storage">{t.storage}<InfoTip text={t.tooltips.storage} /></label>
-                    <span>{t.storageText}</span>
-                    <small>{draft.archive_primary_path || draft.storage_host_path || draft.storage_root || draft.storage_path || ""}</small>
-                    {draft.storage_root ? <small>{t.storageContainerPath}: {draft.storage_root}</small> : null}
-                    {draft.storage_recordings_path ? <small>{draft.storage_recordings_path}</small> : null}
-                    {draft.storage_change_requires ? <small>{draft.storage_change_requires}</small> : null}
-                  </div>
-                  <div className="settingsRowControl">
-                    <Link className="button secondary small settingsUsersAddButton" href="/storage">
-                      {t.storageOperationsOpen}
-                    </Link>
-                  </div>
-                </div>
-
-                <div className="settingsRow">
-                  <div className="settingsRowIcon"><img src="/assets/icons/ui/storage.png" alt="" /></div>
-                  <div className="settingsRowText">
-                    <label htmlFor="settings-auto-free-space">{t.autoFreeSpace}</label>
-                    <span>{t.autoFreeSpaceHelp}</span>
-                    <small>{t.autoFreeSpaceThresholds}</small>
-                    <small>{t.autoFreeSpaceCritical}</small>
-                    {draft.recording_suspended_by_low_disk ? <small>{lang === "en" ? "Recording is currently suspended by critical low-disk protection." : "Запись сейчас остановлена критической защитой диска."}</small> : null}
-                  </div>
-                  <div className="settingsRowControl settingsRowControlMeta">
-                    <label className="settingsModalCheck">
-                      <input
-                        id="settings-auto-free-space"
-                        type="checkbox"
-                        checked={Boolean(draft.auto_free_space_cleanup_enabled)}
-                        onChange={(event) => patch("auto_free_space_cleanup_enabled", event.target.checked)}
-                        disabled={saving}
-                      />
-                      <span>{draft.auto_free_space_cleanup_enabled ? "ON" : "OFF"}</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="settingsRow">
-                  <div className="settingsRowIcon"><img src="/assets/icons/ui/recordings.png" alt="" /></div>
-                  <div className="settingsRowText">
-                    <label>{t.retentionWorkflow}</label>
-                    <span>{t.retentionWorkflowText}</span>
-                    {retentionPreview ? <small>{retentionSummaryText(retentionPreview)}</small> : <small>{t.retentionEmpty}</small>}
-                    {retentionPreview && reasonEntries(retentionPreview).length ? (
-                      <small>{t.retentionBlocked}: {reasonEntries(retentionPreview).map(([key, value]) => `${key}: ${value}`).join(", ")}</small>
-                    ) : null}
-                    {retentionPreview && cameraRows(retentionPreview).length ? (
-                      <small>{t.retentionByCamera}: {cameraRows(retentionPreview).map((row) => `${row.camera_id || "-"}: ${formatBytes(row.bytes_freed || 0)}`).join(", ")}</small>
-                    ) : null}
-                    {retentionResult ? <small>{retentionSummaryText(retentionResult, "result")}</small> : null}
-                  </div>
-                  <div className="settingsRowControl settingsRowControlMeta">
-                    <button className="button secondary small settingsUsersAddButton" onClick={runRetentionPreview} disabled={retentionBusy || saving}>
-                      {retentionBusy ? t.checking : t.retentionDryRun}
-                    </button>
-                    <label className="settingsModalCheck">
-                      <input type="checkbox" checked={retentionConfirmed} onChange={(event) => setRetentionConfirmed(event.target.checked)} disabled={!retentionPreview?.planned_count || retentionBusy || saving} />
-                      <span>{t.retentionConfirm}</span>
-                    </label>
-                    <button className="button small dangerButton" onClick={applyRetentionPlan} disabled={!retentionPreview?.planned_count || !retentionConfirmed || retentionBusy || saving}>
-                      {t.retentionApply}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="settingsRow">
-                  <div className="settingsRowIcon"><img src="/assets/icons/ui/recordings.png" alt="" /></div>
-                  <div className="settingsRowText">
-                    <label>{t.reconciliationWorkflow}</label>
-                    <span>{t.reconciliationWorkflowText}</span>
-                    {reconciliationPreview ? <small>{reconciliationSummaryText(reconciliationPreview)}</small> : <small>{t.reconciliationEmpty}</small>}
-                    {reconciliationClassRows(reconciliationPreview || reconciliationResult).length ? (
-                      <small>{reconciliationClassRows(reconciliationPreview || reconciliationResult).map((row) => `${row.label}: ${row.count}`).join(", ")}</small>
-                    ) : null}
-                    <small>{t.reconciliationDeletedFilesZero}</small>
-                    {reconciliationResult ? <small>{reconciliationSummaryText(reconciliationResult, "result")}</small> : null}
-                  </div>
-                  <div className="settingsRowControl settingsRowControlMeta">
-                    <button className="button secondary small settingsUsersAddButton" onClick={runReconciliationPreview} disabled={reconciliationBusy || saving}>
-                      {reconciliationBusy ? t.checking : t.reconciliationDryRun}
-                    </button>
-                    <label className="settingsModalCheck">
-                      <input type="checkbox" checked={reconciliationConfirmed} onChange={(event) => setReconciliationConfirmed(event.target.checked)} disabled={!reconciliationPreview || reconciliationBusy || saving} />
-                      <span>{t.reconciliationConfirm}</span>
-                    </label>
-                    <button className="button small" onClick={applyReconciliationSafe} disabled={!reconciliationPreview || !reconciliationConfirmed || reconciliationBusy || saving}>
-                      {t.reconciliationApply}
-                    </button>
                   </div>
                 </div>
 

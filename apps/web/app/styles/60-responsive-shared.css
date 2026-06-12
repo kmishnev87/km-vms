@@ -152,14 +152,32 @@
   }
 
   .storageOpsHeader,
-  .storageOpsOverview,
   .storageOpsSectionHead,
   .storageOpsSummaryRow {
     flex-direction: column;
     align-items: stretch;
   }
 
+  .storageOpsOverview {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsHealthAction {
+    padding-left: 0;
+    padding-top: 10px;
+    border-left: 0;
+    border-top: 1px solid rgba(148, 163, 184, 0.35);
+  }
+
   .storageOpsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsRootForm {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsDetails div {
     grid-template-columns: 1fr;
   }
 

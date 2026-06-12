@@ -65,9 +65,9 @@ const requiredRuText = [
     reason: "RU System Status eyebrow must not render as System Health.",
   },
   {
-    file: "apps/web/app/settings/page.js",
-    text: 'retentionWorkflow: "Регламент хранения"',
-    reason: "RU Storage retention workflow heading must be Russian.",
+    file: "apps/web/lib/i18n.js",
+    text: 'retention: "Хранение записей"',
+    reason: "RU Storage retention heading must be Russian on the Storage page.",
   },
   {
     file: "apps/web/components/AuditDiagnosticsEntries.js",
@@ -90,18 +90,11 @@ const ruVisibleOffenders = [
     reason: "System Status RU eyebrow was the known visible offender.",
   },
   {
-    file: "apps/web/app/settings/page.js",
-    segmentStart: "  ru: {",
+    file: "apps/web/lib/i18n.js",
+    segmentStart: "    storagePage: {",
     segmentEnd: "  en: {",
-    pattern: /retentionWorkflow:\s*"Retention workflow"/,
-    reason: "Settings RU retention workflow heading was the known visible offender.",
-  },
-  {
-    file: "apps/web/app/settings/page.js",
-    segmentStart: "  ru: {",
-    segmentEnd: "  en: {",
-    pattern: /retention-кандидатов|owned записи|metadata-проверки|opt-in|metadata\/status|legacy archive file|Stage 2|orphan\/foreign\/unknown\/pre-metadata/,
-    reason: "Settings RU Storage/retention copy must not expose known hybrid English remnants.",
+    pattern: /retentionWorkflow:\s*"Retention workflow"|retention-кандидатов|owned записи|metadata-проверки|opt-in|metadata\/status|legacy archive file|Stage 2|orphan\/foreign\/unknown\/pre-metadata/,
+    reason: "Storage RU retention copy must not expose known hybrid English remnants.",
   },
   {
     file: "apps/web/components/AuditDiagnosticsEntries.js",

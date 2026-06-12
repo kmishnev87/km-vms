@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Layout from "../../components/Layout";
 import { apiFetch, canAccessPath, forbiddenMessage } from "../../lib/api";
@@ -9,11 +8,14 @@ import { useI18n, useLocaleText } from "../../lib/i18n";
 import {
   boolLabel,
   cameraStorageRows,
+  factLabel,
+  factTone,
   formatBytes,
   formatDateTime,
   formatPercent,
+  humanBlockerReason,
   lowDiskPolicyText,
-  policyStateLabel,
+  primaryStorageActionText,
   statusLabel,
   topReasonEntries,
 } from "../../lib/storageOperations";
@@ -38,18 +40,18 @@ function Badge({ label, tone = "neutral" }) {
   return <span className={`storageOpsBadge storageOpsBadge-${tone}`}>{label}</span>;
 }
 
-function SummaryRow({ label, value }) {
+function SummaryRow({ label, value, tone = "neutral" }) {
   return (
-    <div className="storageOpsSummaryRow">
+    <div className={`storageOpsSummaryRow storageOpsSummaryRow-${tone}`}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
   );
 }
 
-function Section({ title, children, action = null }) {
+function Section({ title, children, action = null, className = "" }) {
   return (
-    <section className="storageOpsSection">
+    <section className={`storageOpsSection ${className}`}>
       <div className="storageOpsSectionHead">
         <h2>{title}</h2>
         {action}
@@ -59,21 +61,89 @@ function Section({ title, children, action = null }) {
   );
 }
 
-function reasonText(summary, copy) {
+function reasonText(summary, copy, language) {
   const entries = topReasonEntries(summary);
   if (!entries.length) return copy.noReasons;
+  return entries.map(([key, value]) => `${humanBlockerReason(key, language)}: ${value}`).join(", ");
+}
+
+function blockerText(blockers, copy, language) {
+  const list = Array.isArray(blockers) ? blockers : [];
+  if (!list.length) return copy.noReasons;
+  return list.map((item) => humanBlockerReason(item, language)).join(" ");
+}
+
+function retentionSummaryText(source, copy) {
+  if (!source) return copy.retentionNoPreview;
+  return copy.retentionPreviewReady
+    .replace("{count}", String(source.planned_count || source.deleted_count || 0))
+    .replace("{bytes}", formatBytes(source.estimated_freed_bytes ?? source.bytes_freed ?? 0));
+}
+
+function reconciliationSummaryText(source, copy) {
+  if (!source) return copy.reconciliationNoPreview;
+  const problems = source.problem_file_count ?? source.problems_count ?? source.missing_file_count ?? 0;
+  const cleanup = source.cleanup_candidate_count ?? source.cleanup_candidates_count ?? 0;
+  const rows = source.total_metadata_rows_checked ?? source.checked_count ?? 0;
+  return copy.reconciliationPreviewReady
+    .replace("{problems}", String(problems))
+    .replace("{cleanup}", String(cleanup))
+    .replace("{rows}", String(rows));
+}
+
+function healthTone(operations, pathHealth, capacity, policy, reconciliation) {
+  if (!operations?.status && !capacity?.total_bytes) return "unknown";
+  if (pathHealth?.readable == null || pathHealth?.writable == null || pathHealth?.available == null) return "unknown";
+  if (operations?.status === "critical" || operations?.status === "unavailable" || policy?.recording_suspended_by_low_disk || pathHealth?.writable === false) {
+    return "error";
+  }
+  if (
+    operations?.status === "warning" ||
+    operations?.status === "degraded" ||
+    policy?.state === "warning" ||
+    policy?.state === "cleanup_threshold" ||
+    pathHealth?.available === false ||
+    reconciliation?.problem_file_count > 0
+  ) {
+    return "warning";
+  }
+  return "ok";
+}
+
+function healthTitle(copy, tone) {
+  if (tone === "ok") return copy.healthOkTitle;
+  if (tone === "warning") return copy.healthWarningTitle;
+  if (tone === "error") return copy.healthCriticalTitle;
+  return copy.healthUnknownTitle;
+}
+
+function healthText(copy, tone) {
+  if (tone === "ok") return copy.healthOkText;
+  if (tone === "warning") return copy.healthWarningText;
+  if (tone === "error") return copy.healthCriticalText;
+  return copy.healthUnknownText;
+}
+
+function storageSourceLabel(value, copy) {
+  const source = String(value || "");
   const labels = {
-    missing_file: copy.reasonMissingFile,
-    orphan_file: copy.reasonOrphanFile,
-    invalid_path: copy.reasonInvalidPath,
-    path_outside_storage: copy.reasonOutsideStorage,
-    unknown: copy.reasonUnknown,
+    host_bind_env: copy.sourceDeployConfig,
+    installer_host_snapshot: copy.sourceInstallerSnapshot,
+    setup_wizard: copy.sourceSetupWizard,
+    database: copy.sourceDatabase,
   };
-  return entries.map(([key, value]) => `${labels[key] || String(key).replaceAll("_", " ")}: ${value}`).join(", ");
+  return labels[source] || (source ? source.replaceAll("_", " ") : "-");
+}
+
+function archiveRootLabel(root, copy) {
+  const label = String(root?.label || root?.name || root?.id || "");
+  if (/^default archive$/i.test(label) || /^default$/i.test(label)) return copy.defaultArchive;
+  return label || copy.defaultArchive;
 }
 
 export default function StorageOperationsPage() {
   const [status, setStatus] = useState(null);
+  const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
@@ -81,6 +151,12 @@ export default function StorageOperationsPage() {
   const [rootPath, setRootPath] = useState("");
   const [rootAction, setRootAction] = useState("");
   const [rootMessage, setRootMessage] = useState("");
+  const [retentionPreview, setRetentionPreview] = useState(null);
+  const [retentionResult, setRetentionResult] = useState(null);
+  const [retentionConfirmed, setRetentionConfirmed] = useState(false);
+  const [reconciliationPreview, setReconciliationPreview] = useState(null);
+  const [reconciliationResult, setReconciliationResult] = useState(null);
+  const [reconciliationConfirmed, setReconciliationConfirmed] = useState(false);
   const [migrationResult, setMigrationResult] = useState(null);
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { locale: language, t } = useI18n();
@@ -91,8 +167,12 @@ export default function StorageOperationsPage() {
   const loadStatus = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setRefreshing(true);
     try {
-      const data = await apiFetch("/storage/status");
+      const [data, settingsData] = await Promise.all([
+        apiFetch("/storage/status"),
+        apiFetch("/settings").catch(() => null),
+      ]);
       setStatus(data);
+      setSettings(settingsData);
       setError("");
       setAccessDenied(false);
       return true;
@@ -149,6 +229,28 @@ export default function StorageOperationsPage() {
   const migrationPreview = operations.migration_preview || status?.migration_preview || {};
   const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
   const usagePercent = Number(capacity.usage_percent || 0);
+  const tone = healthTone(operations, pathHealth, capacity, policy, reconciliation);
+  const autoFreeEnabled = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
+  const primaryActionText = primaryStorageActionText({ operations, pathHealth, capacity, policy, reconciliation, migrationPreview }, language);
+
+  async function setAutoFreeSpace(nextEnabled) {
+    setRootAction("auto-free");
+    setRootMessage("");
+    try {
+      const updated = await apiFetch("/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_free_space_cleanup_enabled: Boolean(nextEnabled) }),
+      });
+      setSettings(updated);
+      setRootMessage(nextEnabled ? copy.autoFreeEnabled : copy.autoFreeDisabled);
+      await loadStatus({ silent: true });
+    } catch (err) {
+      setRootMessage(err?.message || copy.autoFreeChangeFailed);
+    } finally {
+      setRootAction("");
+    }
+  }
 
   async function validateRoot() {
     if (!rootPath.trim()) return;
@@ -200,6 +302,78 @@ export default function StorageOperationsPage() {
       await loadStatus({ silent: true });
     } catch (err) {
       setRootMessage(err?.message || copy.rootNotSwitched);
+    } finally {
+      setRootAction("");
+    }
+  }
+
+  async function runRetentionPreview() {
+    setRootAction("retention-preview");
+    setRetentionResult(null);
+    setRetentionConfirmed(false);
+    try {
+      const preview = await apiFetch("/recordings/retention/dry-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      setRetentionPreview(preview);
+    } catch (err) {
+      setRootMessage(err?.message || copy.previewFailed);
+    } finally {
+      setRootAction("");
+    }
+  }
+
+  async function applyRetentionPlan() {
+    if (!retentionPreview?.planned_count || !retentionConfirmed) return;
+    setRootAction("retention-apply");
+    try {
+      const result = await apiFetch("/recordings/retention/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      setRetentionResult(result);
+      setRetentionPreview(null);
+      setRetentionConfirmed(false);
+      await loadStatus({ silent: true });
+    } catch (err) {
+      setRootMessage(err?.message || copy.applyBlocked);
+    } finally {
+      setRootAction("");
+    }
+  }
+
+  async function runReconciliationPreview() {
+    setRootAction("reconciliation-preview");
+    setReconciliationResult(null);
+    setReconciliationConfirmed(false);
+    try {
+      const preview = await apiFetch("/storage/reconciliation/summary");
+      setReconciliationPreview(preview);
+    } catch (err) {
+      setRootMessage(err?.message || copy.previewFailed);
+    } finally {
+      setRootAction("");
+    }
+  }
+
+  async function applyReconciliationSafe() {
+    if (!reconciliationPreview || !reconciliationConfirmed) return;
+    setRootAction("reconciliation-apply");
+    try {
+      const result = await apiFetch("/storage/reconcile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "apply_safe" }),
+      });
+      setReconciliationResult(result);
+      setReconciliationPreview(null);
+      setReconciliationConfirmed(false);
+      await loadStatus({ silent: true });
+    } catch (err) {
+      setRootMessage(err?.message || copy.applyBlocked);
     } finally {
       setRootAction("");
     }
@@ -272,125 +446,127 @@ export default function StorageOperationsPage() {
           <div className="storageOpsState storageOpsState-error">{error}</div>
         ) : (
           <>
-            <section className="storageOpsOverview">
-              <div>
+            <section className={`storageOpsOverview storageOpsOverview-${tone}`}>
+              <div className="storageOpsHealthMain">
                 <span className="storageOpsEyebrow">{copy.lastCheck}: {formatDateTime(operations.checked_at, language)}</span>
-                <strong>{statusLabel(operations.status, language)}</strong>
-                <p>{lowDiskPolicyText(policy, language)}</p>
+                <strong>{healthTitle(copy, tone)}</strong>
+                <p>{healthText(copy, tone)}</p>
               </div>
-              <div className="storageOpsBadges">
-                <Badge label={`${copy.read}: ${boolLabel(pathHealth.readable, language)}`} tone={pathHealth.readable ? "ok" : "error"} />
-                <Badge label={`${copy.write}: ${boolLabel(pathHealth.writable, language)}`} tone={pathHealth.writable ? "ok" : "error"} />
-                <Badge label={`${copy.availability}: ${boolLabel(pathHealth.available, language)}`} tone={pathHealth.available ? "ok" : "error"} />
+              <div className="storageOpsHealthMetrics">
+                <Stat label={copy.total} value={formatBytes(capacity.total_bytes)} />
+                <Stat label={copy.used} value={`${formatBytes(capacity.used_bytes)} / ${formatPercent(capacity.usage_percent)}`} />
+                <Stat label={copy.free} value={`${formatBytes(capacity.free_bytes)} / ${formatPercent(capacity.free_percent)}`} tone={tone === "error" ? "error" : tone === "warning" ? "warning" : "neutral"} />
+                <Badge label={`${copy.read}: ${factLabel(pathHealth.readable, language)}`} tone={factTone(pathHealth.readable)} />
+                <Badge label={`${copy.write}: ${factLabel(pathHealth.writable, language)}`} tone={factTone(pathHealth.writable)} />
+                <Badge label={`${copy.availability}: ${factLabel(pathHealth.available, language)}`} tone={factTone(pathHealth.available)} />
+              </div>
+              <div className="storageOpsHealthAction">
+                <strong>{copy.primaryAction}</strong>
+                <span>{primaryActionText}</span>
               </div>
             </section>
 
             <div className="storageOpsGrid">
-              <Section title={copy.archivePath}>
-                <div className="storageOpsStats">
-                  <Stat label="NAS/server" value={storageContract.archive_primary_path || storageContract.archive_host_path || storageContract.storage_host_path || "-"} />
-                  <Stat label="Docker" value={storageContract.storage_container_path || storageContract.container_runtime_storage_root || status?.container_runtime_storage_root || "/storage/archive"} />
-                  <Stat label={copy.source} value={storageContract.archive_primary_path_source || "-"} />
-                </div>
-              </Section>
-
-              <Section title={copy.capacity}>
+              <Section title={copy.archiveSpace} className="storageOpsSection-wide">
                 <div className="storageOpsCapacityBar" aria-label={copy.storageUsage}>
                   <span style={{ width: `${Math.max(0, Math.min(100, usagePercent))}%` }} />
                 </div>
                 <div className="storageOpsStats">
                   <Stat label={copy.total} value={formatBytes(capacity.total_bytes)} />
                   <Stat label={copy.used} value={`${formatBytes(capacity.used_bytes)} / ${formatPercent(capacity.usage_percent)}`} />
-                  <Stat label={copy.free} value={`${formatBytes(capacity.free_bytes)} / ${formatPercent(capacity.free_percent)}`} tone={policy.state === "critical" ? "error" : policy.state === "warning" || policy.state === "cleanup_threshold" ? "warning" : "neutral"} />
+                  <Stat label={copy.free} value={`${formatBytes(capacity.free_bytes)} / ${formatPercent(capacity.free_percent)}`} />
+                  <Stat label={copy.archiveSize} value={formatBytes(owned.size_bytes)} />
+                  <Stat label={copy.segments} value={String(owned.segments_count || 0)} />
+                  <Stat label={copy.foreignSkipped} value={String(owned.skipped_foreign_metadata_rows || 0)} />
+                  <Stat label={copy.deletedExcluded} value={String(owned.deleted_metadata_rows_excluded || 0)} />
                 </div>
+                <SummaryRow label={copy.ownershipBoundary} value={copy.ownershipBoundaryText} />
               </Section>
 
-              <Section title={copy.lowDiskPolicy}>
+              <Section title={copy.safeActions}>
+                <div className="storageOpsActions storageOpsActionsColumn">
+                  <button className="button secondary small" type="button" onClick={runReconciliationPreview} disabled={!!rootAction}>{rootAction === "reconciliation-preview" ? copy.checking : copy.reconciliationDryRun}</button>
+                  <button className="button secondary small" type="button" onClick={runRetentionPreview} disabled={!!rootAction}>{rootAction === "retention-preview" ? copy.calculating : copy.retentionDryRun}</button>
+                  <button className="button secondary small" type="button" onClick={refreshMigrationPreview} disabled={!!rootAction}>{rootAction === "preview" ? copy.calculating : copy.refreshPreview}</button>
+                </div>
+                <div className="storageOpsNote">{copy.safeActionNote}</div>
+                {rootMessage ? <div className="storageOpsNote storageOpsNoteStrong">{rootMessage}</div> : null}
+              </Section>
+
+              <Section title={copy.archivePath} className="storageOpsSection-diagnostics">
                 <div className="storageOpsStats">
-                  <Stat label={copy.policy} value={policyStateLabel(policy, language)} tone={policy.auto_free_space_cleanup_enabled ? "ok" : "neutral"} />
-                  <Stat label={copy.warning} value={`<${policy.warning_threshold_percent ?? 10}% ${copy.freeSuffix}`} />
-                  <Stat label={copy.autoFree} value={policy.auto_free_space_cleanup_enabled ? `<${policy.cleanup_threshold_percent ?? 5}% ${copy.freeSuffix}` : copy.off} />
-                  <Stat label={copy.critical} value={`<${policy.critical_threshold_percent ?? 1}% ${copy.freeSuffix}`} tone={policy.recording_suspended_by_low_disk ? "error" : "neutral"} />
+                  <Stat label={copy.archiveRootLocation} value={storageContract.archive_primary_path || storageContract.archive_host_path || storageContract.storage_host_path || "-"} />
+                  <Stat label={copy.source} value={storageSourceLabel(storageContract.archive_primary_path_source, copy)} />
                 </div>
-                <div className="storageOpsNote">
-                  {copy.lowDiskNote}
-                </div>
-                <SummaryRow label={copy.recordingSuspended} value={boolLabel(policy.recording_suspended_by_low_disk, language)} />
+                <SummaryRow label={copy.accessExplanation} value={pathHealth.available === false ? copy.accessLimitedText : copy.accessOkText} tone={pathHealth.available === false ? "warning" : "neutral"} />
               </Section>
 
               <Section title={copy.autoFreeSpace}>
                 <div className="storageOpsStats">
-                  <Stat label={copy.state} value={autoCleanup.enabled ? copy.on : copy.off} />
+                  <Stat label={copy.state} value={autoFreeEnabled ? copy.on : copy.off} tone={autoFreeEnabled ? "ok" : "neutral"} />
                   <Stat label={copy.lastRun} value={formatDateTime(autoCleanup.last_finished_at || autoCleanup.last_started_at, language)} />
                   <Stat label={copy.deleted} value={String(autoCleanup.last_summary?.deleted_count || 0)} />
                   <Stat label={copy.freed} value={formatBytes(autoCleanup.last_summary?.bytes_freed)} />
                 </div>
-                <div className="storageOpsNote">{copy.autoFreeNote}</div>
-                <SummaryRow label={copy.blockersReasons} value={reasonText(autoCleanup.last_summary, copy)} />
-                {autoCleanup.last_error ? <SummaryRow label={copy.lastError} value={autoCleanup.last_error} /> : null}
-              </Section>
-
-              <Section title={copy.kmArchive}>
-                <div className="storageOpsStats">
-                  <Stat label={copy.archiveSize} value={formatBytes(owned.size_bytes)} />
-                  <Stat label={copy.segments} value={String(owned.segments_count || 0)} />
-                  <Stat label={copy.filesPresent} value={String(owned.existing_file_count || 0)} />
-                  <Stat label={copy.problems} value={String(owned.problem_file_count || 0)} tone={owned.problem_file_count ? "warning" : "neutral"} />
+                <div className="storageOpsActions">
+                  <button className="button secondary small" type="button" onClick={() => setAutoFreeSpace(!autoFreeEnabled)} disabled={!!rootAction}>
+                    {rootAction === "auto-free" ? copy.saving : autoFreeEnabled ? copy.disableAutoFree : copy.enableAutoFree}
+                  </button>
                 </div>
-                <SummaryRow label={copy.missingFiles} value={String(owned.missing_file_count || 0)} />
-                <SummaryRow label={copy.foreignSkipped} value={String(owned.skipped_foreign_metadata_rows || 0)} />
-                <SummaryRow label={copy.deletedExcluded} value={String(owned.deleted_metadata_rows_excluded || 0)} />
+                <div className="storageOpsNote">{copy.lowDiskNote}</div>
+                <div className="storageOpsNote">{copy.autoFreeNote}</div>
+                <SummaryRow label={copy.blockersReasons} value={reasonText(autoCleanup.last_summary, copy, language)} />
               </Section>
 
-              <Section title={copy.retention} action={<Link className="button secondary small" href="/settings">{copy.openWorkflow}</Link>}>
+              <Section title={copy.retention}>
                 <div className="storageOpsStats">
                   <Stat label={copy.state} value={statusLabel(retention.last_status, language)} />
                   <Stat label={copy.lastRun} value={formatDateTime(retention.last_finished_at || retention.last_started_at, language)} />
                   <Stat label={copy.deleted} value={String(retention.last_summary?.deleted_count || 0)} />
-                  <Stat label={copy.skippedErrors} value={`${retention.last_summary?.skipped_count || 0} / ${retention.last_summary?.failed_count || 0}`} />
+                  <Stat label={copy.freed} value={formatBytes(retention.last_summary?.bytes_freed)} />
                 </div>
-                <SummaryRow label={copy.reasonsBlockers} value={reasonText(retention.last_summary, copy)} />
-                <SummaryRow label={copy.freed} value={formatBytes(retention.last_summary?.bytes_freed)} />
+                <SummaryRow label={copy.preview} value={retentionSummaryText(retentionPreview || retentionResult, copy)} />
+                <div className="storageOpsActions">
+                  <button className="button secondary small" type="button" onClick={runRetentionPreview} disabled={!!rootAction}>{rootAction === "retention-preview" ? copy.calculating : copy.retentionDryRun}</button>
+                  <label className="storageOpsConfirm">
+                    <input type="checkbox" checked={retentionConfirmed} onChange={(event) => setRetentionConfirmed(event.target.checked)} disabled={!retentionPreview?.planned_count || !!rootAction} />
+                    <span>{copy.retentionConfirm}</span>
+                  </label>
+                  <button className="button small dangerButton" type="button" onClick={applyRetentionPlan} disabled={!retentionPreview?.planned_count || !retentionConfirmed || !!rootAction}>{rootAction === "retention-apply" ? copy.applying : copy.retentionApply}</button>
+                </div>
+                <div className="storageOpsNote">{copy.retentionSafetyNote}</div>
               </Section>
 
-              <Section title={copy.integrity} action={<Link className="button secondary small" href="/settings">{copy.openCheck}</Link>}>
+              <Section title={copy.integrity}>
                 <div className="storageOpsStats">
                   <Stat label={copy.state} value={statusLabel(reconciliation.status, language)} tone={reconciliation.problem_file_count ? "warning" : "neutral"} />
                   <Stat label={copy.problems} value={String(reconciliation.problem_file_count || 0)} />
                   <Stat label={copy.candidates} value={String(reconciliation.cleanup_candidate_count || 0)} />
                   <Stat label={copy.lastCheck} value={formatDateTime(reconciliation.last_checked_at, language)} />
                 </div>
-                <SummaryRow label={copy.missingNoMetadata} value={`${reconciliation.missing_file_count || 0} / ${reconciliation.orphan_file_count || 0}`} />
-                <SummaryRow label={copy.invalidOutside} value={`${reconciliation.invalid_path_count || 0} / ${reconciliation.path_outside_storage_count || 0}`} />
-                <div className="storageOpsNote">{copy.integrityNote}</div>
-              </Section>
-
-              <Section title={copy.namespaceState}>
-                <div className="storageOpsStats">
-                  <Stat label="Namespace" value={namespace.storage_namespace || "-"} />
-                  <Stat label={copy.namespaceExists} value={boolLabel(namespace.namespace_exists, language)} />
-                  <Stat label={copy.scanMode} value={namespace.scan_mode || "-"} />
-                  <Stat label={copy.partialLimited} value={`${boolLabel(namespace.partial, language)} / ${boolLabel(namespace.scan_limited, language)}`} />
+                <SummaryRow label={copy.preview} value={reconciliationSummaryText(reconciliationPreview || reconciliationResult, copy)} />
+                <div className="storageOpsActions">
+                  <button className="button secondary small" type="button" onClick={runReconciliationPreview} disabled={!!rootAction}>{rootAction === "reconciliation-preview" ? copy.checking : copy.reconciliationDryRun}</button>
+                  <label className="storageOpsConfirm">
+                    <input type="checkbox" checked={reconciliationConfirmed} onChange={(event) => setReconciliationConfirmed(event.target.checked)} disabled={!reconciliationPreview || !!rootAction} />
+                    <span>{copy.reconciliationConfirm}</span>
+                  </label>
+                  <button className="button small" type="button" onClick={applyReconciliationSafe} disabled={!reconciliationPreview || !reconciliationConfirmed || !!rootAction}>{rootAction === "reconciliation-apply" ? copy.applying : copy.reconciliationApply}</button>
                 </div>
-                {namespace.partial_reason ? <SummaryRow label={copy.partialScanReason} value={namespace.partial_reason} /> : null}
+                <div className="storageOpsNote">{copy.integrityNote}</div>
               </Section>
 
               <Section title={copy.archiveRoots}>
                 <div className="storageOpsNote">{copy.rootsNote}</div>
-                <div className="storageOpsStats">
-                  <Stat label={copy.rootsCount} value={String(archiveRoots.length || 0)} />
-                  <Stat label={copy.active} value={(archiveRoots.find((root) => root.is_active)?.label || archiveRoots.find((root) => root.is_active)?.id || "-")} />
-                  <Stat label={copy.previewOnlyMigration} value={migrationPreview.apply_available === false ? copy.yes : copy.no} />
-                </div>
                 <div className="storageOpsTableWrap">
-                  <table className="storageOpsTable">
+                  <table className="storageOpsTable storageOpsTable-compact">
                     <thead>
                       <tr><th>{copy.root}</th><th>{copy.state}</th><th>{copy.records}</th><th>{copy.size}</th><th>{copy.action}</th></tr>
                     </thead>
                     <tbody>
                       {archiveRoots.map((root) => (
                         <tr key={root.id}>
-                          <td><strong>{root.label || root.id}</strong><span>{root.is_active ? copy.activeRoot : copy.oldInactive}</span></td>
+                          <td><strong>{archiveRootLabel(root, copy)}</strong><span>{root.is_active ? copy.activeRoot : copy.oldInactive}</span></td>
                           <td>{root.is_available ? copy.available : (root.problem || copy.unavailable)}</td>
                           <td>{root.segments_count || 0}</td>
                           <td>{formatBytes(root.size_bytes)}</td>
@@ -401,34 +577,50 @@ export default function StorageOperationsPage() {
                     </tbody>
                   </table>
                 </div>
-                <div className="storageOpsRootForm">
-                  <input className="input" value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder="/storage/archive2" />
-                  <button className="button secondary small" type="button" onClick={validateRoot} disabled={!!rootAction || !rootPath.trim()}>{rootAction === "validate" ? copy.validating : copy.validate}</button>
-                  <button className="button small" type="button" onClick={addRoot} disabled={!!rootAction || !rootPath.trim()}>{rootAction === "add" ? copy.adding : copy.add}</button>
-                </div>
-                {rootMessage ? <div className="storageOpsNote">{rootMessage}</div> : null}
+                <details className="storageOpsDetails storageOpsAdvancedRoot">
+                  <summary>{copy.addArchiveRoot}</summary>
+                  <div className="storageOpsAdvancedRootBody">
+                    <div className="storageOpsNote">{copy.addArchiveRootNote}</div>
+                    <div className="storageOpsRootForm">
+                      <input className="input" value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder={copy.archiveRootPlaceholder} />
+                      <button className="button secondary small" type="button" onClick={validateRoot} disabled={!!rootAction || !rootPath.trim()}>{rootAction === "validate" ? copy.validating : copy.validate}</button>
+                      <button className="button small" type="button" onClick={addRoot} disabled={!!rootAction || !rootPath.trim()}>{rootAction === "add" ? copy.adding : copy.add}</button>
+                    </div>
+                  </div>
+                </details>
               </Section>
 
               <Section title={copy.migrationPreview}>
                 <div className="storageOpsStats">
                   <Stat label={copy.move} value={`${migrationPreview.total_would_move_count || 0} / ${formatBytes(migrationPreview.total_would_move_bytes)}`} />
                   <Stat label={copy.willStay} value={String(migrationPreview.total_would_stay_count || 0)} />
+                  <Stat label={copy.previewOnlyMigration} value={copy.yes} />
                   <Stat label={copy.blockers} value={String((migrationPreview.blockers || []).length)} tone={(migrationPreview.blockers || []).length ? "warning" : "neutral"} />
                   <Stat label={copy.applyState} value={migrationPreview.apply_available ? copy.available : copy.unavailable} tone={migrationPreview.apply_available ? "ok" : "warning"} />
                 </div>
                 <div className="storageOpsNote">{copy.migrationNote}</div>
                 <div className="storageOpsActions">
-                  <button className="button secondary small" type="button" onClick={() => refreshMigrationPreview()} disabled={!!rootAction}>{rootAction === "preview" ? copy.calculating : copy.refreshPreview}</button>
-                  <button className="button small" type="button" onClick={() => applyMigration()} disabled={!!rootAction || !migrationPreview.apply_available}>{rootAction === "apply-migration" ? copy.applying : copy.applyMigration}</button>
+                  <button className="button secondary small" type="button" onClick={refreshMigrationPreview} disabled={!!rootAction}>{rootAction === "preview" ? copy.calculating : copy.refreshPreview}</button>
+                  <button className="button small" type="button" onClick={applyMigration} disabled={!!rootAction || !migrationPreview.apply_available}>{rootAction === "apply-migration" ? copy.applying : copy.applyMigration}</button>
                 </div>
-                {migrationPreview.blockers?.length ? (
-                  <SummaryRow label={copy.blockers} value={migrationPreview.blockers.map((item) => item.reason || copy.reasonUnknown).join(", ")} />
-                ) : null}
-                {migrationResult ? (
-                  <div className="storageOpsNote">
-                    {copy.applyReport}: {statusLabel(migrationResult.status, language)}; {copy.executed}: {(migrationResult.executed || []).length}; {copy.sourcePreserved}: {boolLabel(migrationResult.source_preserved, language)}; {copy.cleanupPending}: {boolLabel(migrationResult.cleanup_pending, language)}
-                  </div>
-                ) : null}
+                {(migrationPreview.blockers || []).length ? <SummaryRow label={copy.blockers} value={blockerText(migrationPreview.blockers, copy, language)} tone="warning" /> : null}
+                {migrationResult ? <SummaryRow label={copy.applyReport} value={`${statusLabel(migrationResult.status, language)}; ${copy.executed}: ${(migrationResult.executed || []).length}; ${copy.sourcePreserved}: ${boolLabel(migrationResult.source_preserved, language)}; ${copy.cleanupPending}: ${boolLabel(migrationResult.cleanup_pending, language)}`} /> : null}
+              </Section>
+
+              <Section title={copy.diagnostics}>
+                <details className="storageOpsDetails">
+                  <summary>{copy.technicalDetails}</summary>
+                  <dl>
+                    <div><dt>{copy.namespaceState}</dt><dd>{namespace.storage_namespace || "-"}</dd></div>
+                    <div><dt>{copy.namespaceExists}</dt><dd>{boolLabel(namespace.namespace_exists, language)}</dd></div>
+                    <div><dt>{copy.scanMode}</dt><dd>{namespace.scan_mode || "-"}</dd></div>
+                    <div><dt>{copy.partialScanReason}</dt><dd>{namespace.partial_reason || "-"}</dd></div>
+                    <div><dt>{copy.dockerPath}</dt><dd>{storageContract.storage_container_path || storageContract.container_runtime_storage_root || status?.container_runtime_storage_root || "/storage/archive"}</dd></div>
+                    <div><dt>{copy.missingNoMetadata}</dt><dd>{`${reconciliation.missing_file_count || 0} / ${reconciliation.orphan_file_count || 0}`}</dd></div>
+                    <div><dt>{copy.reasonOrphanFile}</dt><dd>{String(reconciliation.orphan_file_count || 0)}</dd></div>
+                    <div><dt>{copy.invalidOutside}</dt><dd>{`${reconciliation.invalid_path_count || 0} / ${reconciliation.path_outside_storage_count || 0}`}</dd></div>
+                  </dl>
+                </details>
               </Section>
             </div>
 
@@ -468,8 +660,8 @@ export default function StorageOperationsPage() {
                 <div className="storageOpsRecent">
                   {recent.items.map((item, index) => (
                     <div className="storageOpsRecentItem" key={`${item.type || "operation"}-${index}`}>
-                      <strong>{item.title || item.type}</strong>
-                      <span>{item.summary || item.status}</span>
+                      <strong>{item.title || statusLabel(item.type, language)}</strong>
+                      <span>{item.summary || statusLabel(item.status, language)}</span>
                     </div>
                   ))}
                 </div>
