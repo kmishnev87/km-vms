@@ -16,7 +16,7 @@ from app.db.session import Base
 from app.models.setup_lock import SetupLock
 from app.models.user import User
 from app.routers.settings import SetupRequest, setup
-from app.services.setup_storage import CONTAINER_ARCHIVE_PATH, SELECTION_FILE
+from app.services.setup_storage import CONTAINER_ARCHIVE_PATH, SELECTION_CONTROL_FILE, SELECTION_FILE
 from app.services.system_settings import get_system_settings, update_system_settings
 
 
@@ -50,7 +50,7 @@ def db():
         tmp.cleanup()
 
 
-def write_storage_selection(apply_status="applied_restart_required"):
+def write_storage_selection(apply_status="active"):
     control = Path(settings.storage_install_control)
     control.mkdir(parents=True, exist_ok=True)
     selected = str(control.parent / "host archive with spaces")
@@ -66,6 +66,21 @@ def write_storage_selection(apply_status="applied_restart_required"):
                 "selected_at": "2026-05-07T00:00:00Z",
                 "apply_status": apply_status,
             }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (control / SELECTION_CONTROL_FILE).write_text(
+        "\n".join(
+            [
+                "schema_version=1",
+                f"selected_host_path={selected}",
+                f"selected_mount_path={Path(selected).parent}",
+                f"folder_name={Path(selected).name}",
+                f"container_archive_path={CONTAINER_ARCHIVE_PATH}",
+                "candidate_id=stage4-test-candidate",
+                f"apply_status={apply_status}",
+            ]
         )
         + "\n",
         encoding="utf-8",

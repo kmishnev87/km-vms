@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-REPO_URL_DEFAULT="https://github.com/kmishnev87/km-vms.git"
+GITHUB_REPO_DEFAULT=""
 BRANCH_DEFAULT="main"
 HTTP_PORT_DEFAULT="8088"
 API_PORT_DEFAULT="18000"
@@ -9,16 +9,28 @@ PROJECT_NAME_DEFAULT="km-vms"
 TZ_DEFAULT="Asia/Yekaterinburg"
 
 APP_DIR="${KM_VMS_APP_DIR:-}"
-REPO_URL="${KM_VMS_REPO_URL:-$REPO_URL_DEFAULT}"
+REPO_URL="${KM_VMS_REPO_URL:-}"
+GITHUB_REPO="${KM_VMS_GITHUB_REPO:-$GITHUB_REPO_DEFAULT}"
 BRANCH="${KM_VMS_BRANCH:-$BRANCH_DEFAULT}"
 HTTP_PORT="${KM_VMS_HTTP_PORT:-$HTTP_PORT_DEFAULT}"
 API_PORT="${KM_VMS_API_PORT:-}"
 PROJECT_NAME="${KM_VMS_PROJECT_NAME:-$PROJECT_NAME_DEFAULT}"
 SOURCE_DIR="${KM_VMS_SOURCE_DIR:-}"
 DOCKER_COMPOSE_BIN="${KM_VMS_DOCKER_COMPOSE:-}"
+GITHUB_TOKEN_FILE="${KM_VMS_GITHUB_TOKEN_FILE:-}"
+GITHUB_TOKEN_ENV_NAME="${KM_VMS_GITHUB_TOKEN_ENV:-}"
+GITHUB_PRIVATE="${KM_VMS_GITHUB_PRIVATE:-0}"
 YES="${KM_VMS_YES:-0}"
 DRY_RUN=0
 APP_DIR_CREATED=0
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_URL_EXPLICIT=0
+SOURCE_MODE="github-tarball"
+SOURCE_COMMIT_SHA=""
+SOURCE_PROVENANCE_KIND="github-tarball"
+GITHUB_TOKEN=""
+GITHUB_TOKEN_CONFIG=""
+GITHUB_TOKEN_SOURCE="none"
 
 usage() {
   cat <<'EOF'
@@ -29,8 +41,13 @@ Usage:
 
 Options:
   --app-dir <path>       Installation directory.
-  --repo-url <url>       Git repository URL. Default: public KM VMS repo.
-  --branch <branch>      Git branch/tag to clone. Default: main.
+  --github-repo <repo>   GitHub repository as owner/name for tarball acquisition.
+  --repo-url <url>       Generic Git URL fallback for git-based acquisition.
+  --branch <branch>      Git branch/tag/ref. Default: main.
+  --ref <ref>            Alias for --branch.
+  --github-private       Require a GitHub token for source acquisition.
+  --github-token-file    Read GitHub token from a local file.
+  --github-token-env     Read GitHub token from the named environment variable.
   --http-port <port>     Host HTTP port for nginx. Default: 8088.
   --project-name <name>  Compose project/container prefix. Default: km-vms.
   --source-dir <path>    Development/testing mode: copy local product source.
@@ -39,9 +56,10 @@ Options:
   --help                 Show this help.
 
 Environment equivalents:
-  KM_VMS_APP_DIR, KM_VMS_REPO_URL, KM_VMS_BRANCH, KM_VMS_HTTP_PORT,
-  KM_VMS_API_PORT, KM_VMS_PROJECT_NAME, KM_VMS_SOURCE_DIR,
-  KM_VMS_DOCKER_COMPOSE, KM_VMS_YES=1.
+  KM_VMS_APP_DIR, KM_VMS_GITHUB_REPO, KM_VMS_REPO_URL, KM_VMS_BRANCH,
+  KM_VMS_GITHUB_PRIVATE=1, KM_VMS_GITHUB_TOKEN, KM_VMS_GITHUB_TOKEN_FILE,
+  KM_VMS_GITHUB_TOKEN_ENV, KM_VMS_HTTP_PORT, KM_VMS_API_PORT,
+  KM_VMS_PROJECT_NAME, KM_VMS_SOURCE_DIR, KM_VMS_DOCKER_COMPOSE, KM_VMS_YES=1.
 EOF
 }
 
@@ -87,11 +105,36 @@ while [ "$#" -gt 0 ]; do
     --repo-url)
       [ "$#" -ge 2 ] || fail "--repo-url requires a value"
       REPO_URL="$2"
+      REPO_URL_EXPLICIT=1
+      shift 2
+      ;;
+    --github-repo)
+      [ "$#" -ge 2 ] || fail "--github-repo requires a value"
+      GITHUB_REPO="$2"
       shift 2
       ;;
     --branch)
       [ "$#" -ge 2 ] || fail "--branch requires a value"
       BRANCH="$2"
+      shift 2
+      ;;
+    --ref)
+      [ "$#" -ge 2 ] || fail "--ref requires a value"
+      BRANCH="$2"
+      shift 2
+      ;;
+    --github-private)
+      GITHUB_PRIVATE=1
+      shift
+      ;;
+    --github-token-file)
+      [ "$#" -ge 2 ] || fail "--github-token-file requires a value"
+      GITHUB_TOKEN_FILE="$2"
+      shift 2
+      ;;
+    --github-token-env)
+      [ "$#" -ge 2 ] || fail "--github-token-env requires a value"
+      GITHUB_TOKEN_ENV_NAME="$2"
       shift 2
       ;;
     --http-port)
@@ -126,10 +169,6 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
-
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
-}
 
 normalize_path() {
   value="$1"
@@ -183,6 +222,36 @@ path_equal_or_nested() {
   esac
 }
 
+km_vms_command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+load_compose_common() {
+  helper=""
+  if [ -f "$SCRIPT_DIR/km-vms-compose-common.sh" ]; then
+    helper="$SCRIPT_DIR/km-vms-compose-common.sh"
+  elif [ -n "$APP_DIR" ] && [ -f "$APP_DIR/scripts/km-vms-compose-common.sh" ]; then
+    helper="$APP_DIR/scripts/km-vms-compose-common.sh"
+  fi
+  [ -n "$helper" ] || fail "km-vms-compose-common.sh was not found. Local installs must run from the unpacked repo; GitHub installs load it after source acquisition."
+  # shellcheck disable=SC1090
+  . "$helper"
+}
+
+validate_github_repo() {
+  value="$(printf '%s' "$1" | tr -d '[:space:]')"
+  printf '%s' "$value" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || fail "GitHub repo must be in owner/name format."
+  printf '%s\n' "$value"
+}
+
+validate_ref() {
+  value="$1"
+  [ -n "$value" ] || fail "Git ref must not be empty."
+  case "$value" in
+    *[\;\|\&\`\>\<\(\)]*|*'$('*|*'$'*|*"	"*) fail "Git ref contains unsafe characters." ;;
+  esac
+}
+
 validate_port() {
   port="$1"
   case "$port" in
@@ -192,6 +261,145 @@ validate_port() {
   if [ "$port" -lt 1024 ]; then
     confirm "Port $port is privileged and may require elevated host privileges. Continue?"
   fi
+}
+
+read_hidden() {
+  prompt="$1"
+  if ! [ -t 0 ]; then
+    fail "$prompt requires an interactive terminal or a secure token env/file source."
+  fi
+  if km_vms_command_exists stty; then
+    old_state=$(stty -g 2>/dev/null || true)
+    printf '%s' "$prompt" >&2
+    stty -echo 2>/dev/null || true
+    IFS= read -r value || true
+    stty "$old_state" 2>/dev/null || true
+    printf '\n' >&2
+  else
+    printf '%s' "$prompt" >&2
+    IFS= read -r value || true
+  fi
+  printf '%s' "$value"
+}
+
+load_github_token() {
+  GITHUB_TOKEN=""
+  GITHUB_TOKEN_SOURCE="none"
+  if [ -n "${KM_VMS_GITHUB_TOKEN:-}" ]; then
+    GITHUB_TOKEN="${KM_VMS_GITHUB_TOKEN}"
+    GITHUB_TOKEN_SOURCE="env:KM_VMS_GITHUB_TOKEN"
+  elif [ -n "$GITHUB_TOKEN_ENV_NAME" ]; then
+    GITHUB_TOKEN=$(printenv "$GITHUB_TOKEN_ENV_NAME" 2>/dev/null || true)
+    [ -n "$GITHUB_TOKEN" ] || fail "Environment variable for GitHub token is empty: $GITHUB_TOKEN_ENV_NAME"
+    GITHUB_TOKEN_SOURCE="env:$GITHUB_TOKEN_ENV_NAME"
+  elif [ -n "$GITHUB_TOKEN_FILE" ]; then
+    [ -f "$GITHUB_TOKEN_FILE" ] || fail "GitHub token file does not exist: $GITHUB_TOKEN_FILE"
+    GITHUB_TOKEN=$(tr -d '\r\n' < "$GITHUB_TOKEN_FILE")
+    [ -n "$GITHUB_TOKEN" ] || fail "GitHub token file is empty: $GITHUB_TOKEN_FILE"
+    GITHUB_TOKEN_SOURCE="file"
+  elif [ "$GITHUB_PRIVATE" = "1" ]; then
+    GITHUB_TOKEN=$(read_hidden 'GitHub token (repo read-only contents) > ')
+    [ -n "$GITHUB_TOKEN" ] || fail "GitHub token is required for private repository install."
+    GITHUB_TOKEN_SOURCE="interactive"
+  fi
+}
+
+prepare_github_token_config() {
+  [ -n "$GITHUB_TOKEN" ] || return 0
+  km_vms_command_exists mktemp || fail "mktemp is required for secure GitHub token handling."
+  GITHUB_TOKEN_CONFIG=$(mktemp "${TMPDIR:-/tmp}/km-vms-github-token.XXXXXX")
+  chmod 600 "$GITHUB_TOKEN_CONFIG" 2>/dev/null || true
+  {
+    printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN"
+    printf 'header = "Accept: application/vnd.github+json"\n'
+    printf 'header = "X-GitHub-Api-Version: 2022-11-28"\n'
+  } > "$GITHUB_TOKEN_CONFIG"
+}
+
+clear_github_token() {
+  GITHUB_TOKEN=""
+  unset GITHUB_TOKEN
+  if [ -n "$GITHUB_TOKEN_CONFIG" ] && [ -f "$GITHUB_TOKEN_CONFIG" ]; then
+    rm -f "$GITHUB_TOKEN_CONFIG"
+  fi
+  GITHUB_TOKEN_CONFIG=""
+}
+
+require_download_client() {
+  if km_vms_command_exists curl; then
+    DOWNLOAD_CLIENT="curl"
+    return 0
+  fi
+  if km_vms_command_exists wget; then
+    DOWNLOAD_CLIENT="wget"
+    return 0
+  fi
+  fail "curl or wget is required for GitHub tarball acquisition."
+}
+
+http_download() {
+  url="$1"
+  output="$2"
+  require_download_client
+  if [ "$DOWNLOAD_CLIENT" = "curl" ]; then
+    if [ -n "$GITHUB_TOKEN_CONFIG" ]; then
+      curl -fsSL --config "$GITHUB_TOKEN_CONFIG" "$url" -o "$output" || return 1
+    else
+      curl -fsSL "$url" -o "$output" || return 1
+    fi
+    return 0
+  fi
+  [ -z "$GITHUB_TOKEN_CONFIG" ] || fail "Private GitHub install requires curl for secure token handling."
+  wget -qO "$output" "$url" || return 1
+}
+
+github_api_text() {
+  url="$1"
+  require_download_client
+  if [ "$DOWNLOAD_CLIENT" = "curl" ]; then
+    if [ -n "$GITHUB_TOKEN_CONFIG" ]; then
+      curl -fsSL --config "$GITHUB_TOKEN_CONFIG" "$url"
+    else
+      curl -fsSL "$url"
+    fi
+    return $?
+  fi
+  [ -z "$GITHUB_TOKEN_CONFIG" ] || fail "Private GitHub API calls require curl for secure token handling."
+  wget -qO- "$url"
+}
+
+resolve_github_commit_sha() {
+  payload=$(github_api_text "https://api.github.com/repos/$GITHUB_REPO/commits/$BRANCH" 2>/dev/null || true)
+  SOURCE_COMMIT_SHA=$(printf '%s\n' "$payload" | sed -n 's/^[[:space:]]*"sha"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F]\{40\}\)".*/\1/p' | head -n 1)
+}
+
+safe_extract_tarball() {
+  archive="$1"
+  destination="$2"
+  km_vms_command_exists tar || fail "tar is required for GitHub tarball acquisition."
+  km_vms_command_exists mktemp || fail "mktemp is required for tarball extraction."
+  listing=$(mktemp "${TMPDIR:-/tmp}/km-vms-tar-list.XXXXXX")
+  extract_dir=$(mktemp -d "${TMPDIR:-/tmp}/km-vms-extract.XXXXXX")
+  tar -tzf "$archive" > "$listing" || acquisition_fail "Cannot inspect GitHub tarball."
+  top=""
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    case "$entry" in
+      /*|../*|*/../*) acquisition_fail "Refusing unsafe tarball entry path." ;;
+    esac
+    entry_top=${entry%%/*}
+    if [ -z "$top" ]; then
+      top="$entry_top"
+    elif [ "$entry_top" != "$top" ]; then
+      acquisition_fail "GitHub tarball has multiple top-level roots."
+    fi
+  done < "$listing"
+  [ -n "$top" ] || acquisition_fail "GitHub tarball is empty."
+  tar -xzf "$archive" -C "$extract_dir" || acquisition_fail "Cannot extract GitHub tarball."
+  [ -d "$extract_dir/$top" ] || acquisition_fail "GitHub tarball root is missing after extraction."
+  (cd "$extract_dir/$top" && tar -cf - .) | (cd "$destination" && tar -xf -) || acquisition_fail "Cannot populate app dir from GitHub tarball."
+  rm -f "$listing"
+  rm -rf "$extract_dir"
 }
 
 derive_api_port() {
@@ -209,11 +417,11 @@ derive_api_port() {
 
 port_busy() {
   port="$1"
-  if command_exists ss; then
+  if km_vms_command_exists ss; then
     ss -ltn 2>/dev/null | grep -q "[.:]$port "
     return $?
   fi
-  if command_exists netstat; then
+  if km_vms_command_exists netstat; then
     netstat -ltn 2>/dev/null | grep -q "[.:]$port "
     return $?
   fi
@@ -221,71 +429,16 @@ port_busy() {
 }
 
 detect_compose() {
-  if [ -n "$DOCKER_COMPOSE_BIN" ]; then
-    validate_compose_override "$DOCKER_COMPOSE_BIN"
-    return 0
-  fi
-  if command_exists docker && docker compose version >/dev/null 2>&1; then
-    COMPOSE_KIND="plugin"
-    COMPOSE_BIN="docker"
-    return 0
-  fi
-  if command_exists docker-compose && docker-compose version >/dev/null 2>&1; then
-    COMPOSE_KIND="standalone"
-    COMPOSE_BIN="docker-compose"
-    return 0
-  fi
-  fail "Docker Compose was not found. Install Docker with the compose plugin, or docker-compose."
-}
-
-validate_compose_override() {
-  override="$1"
-  if [ "$override" = "docker compose" ]; then
-    command_exists docker || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker was not found."
-    docker compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker compose is not available."
-    COMPOSE_KIND="plugin"
-    COMPOSE_BIN="docker"
-    return 0
-  fi
-  case "$override" in
-    *[\;\|\&\`\>\<\(\)]*|*'$('*|*'$'*|*" "*|*"	"*) fail "KM_VMS_DOCKER_COMPOSE contains unsafe characters or spaces." ;;
-  esac
-  case "$override" in
-    docker)
-      command_exists docker || fail "KM_VMS_DOCKER_COMPOSE=docker but docker was not found."
-      docker compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=docker but docker compose is not available."
-      COMPOSE_KIND="plugin"
-      COMPOSE_BIN="docker"
-      return 0
-      ;;
-    docker-compose)
-      command_exists docker-compose || fail "KM_VMS_DOCKER_COMPOSE=docker-compose but docker-compose was not found."
-      docker-compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=docker-compose is not usable."
-      COMPOSE_KIND="standalone"
-      COMPOSE_BIN="docker-compose"
-      return 0
-      ;;
-    *)
-      [ -x "$override" ] || fail "KM_VMS_DOCKER_COMPOSE must be docker, docker-compose, or an executable path."
-      "$override" version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE executable is not a usable compose command."
-      COMPOSE_KIND="standalone"
-      COMPOSE_BIN="$override"
-      return 0
-      ;;
-  esac
+  km_vms_detect_compose "$DOCKER_COMPOSE_BIN" || fail "Docker Compose was not found. Checked KM_VMS_DOCKER_COMPOSE, PATH docker compose/docker-compose, and known NAS vendor paths."
 }
 
 compose_cmd() {
-  if [ "$COMPOSE_KIND" = "plugin" ]; then
-    docker compose "$@"
-  else
-    "$COMPOSE_BIN" "$@"
-  fi
+  km_vms_compose_cmd "$@"
 }
 
 check_docker() {
   detect_compose
-  if command_exists docker; then
+  if km_vms_command_exists docker; then
     docker version >/dev/null 2>&1 || fail "Docker is not reachable for the current user."
     docker info >/dev/null 2>&1 || fail "Docker daemon is not reachable for the current user."
   elif [ "$COMPOSE_KIND" != "standalone" ]; then
@@ -309,11 +462,11 @@ safe_project_name() {
 }
 
 random_secret() {
-  if command_exists openssl; then
+  if km_vms_command_exists openssl; then
     openssl rand -hex 32
     return
   fi
-  if [ -r /dev/urandom ] && command_exists od; then
+  if [ -r /dev/urandom ] && km_vms_command_exists od; then
     od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
     printf '\n'
     return
@@ -346,6 +499,7 @@ write_env() {
     printf 'API_PORT=%s\n' "$API_PORT"
     printf 'COMPOSE_PROJECT_NAME=%s\n' "$PROJECT_NAME"
     printf 'KM_VMS_CONTAINER_PREFIX=%s\n' "$PROJECT_NAME"
+    printf 'KM_VMS_HOST_APP_DIR=%s\n' "$APP_DIR"
     printf 'NEXT_PUBLIC_API_BASE_URL=/api\n'
     printf 'LIVE_HWACCEL_MODE=auto\n'
     printf 'LIVE_HWACCEL_BACKEND=auto\n'
@@ -362,19 +516,47 @@ write_env() {
 write_metadata() {
   metadata="$APP_DIR/.km-vms-install.json"
   created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
-  source_summary="git"
-  [ -n "$SOURCE_DIR" ] && source_summary="source-dir"
+  source_summary="$SOURCE_MODE"
   {
     printf '{\n'
     printf '  "app_dir": "%s",\n' "$APP_DIR"
     printf '  "project_name": "%s",\n' "$PROJECT_NAME"
     printf '  "http_port": "%s",\n' "$HTTP_PORT"
     printf '  "compose_command": "%s",\n' "$COMPOSE_KIND"
+    printf '  "compose_bin": "%s",\n' "$COMPOSE_BIN"
     printf '  "created_at": "%s",\n' "$created_at"
     printf '  "source_mode": "%s",\n' "$source_summary"
     printf '  "setup_url": "http://localhost:%s/setup"\n' "$HTTP_PORT"
     printf '}\n'
   } > "$metadata"
+}
+
+write_source_provenance() {
+  provenance="$APP_DIR/.km-vms-source.json"
+  created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
+  {
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "recorded_at": "%s",\n' "$created_at"
+    printf '  "source_kind": "%s",\n' "$SOURCE_PROVENANCE_KIND"
+    if [ "$SOURCE_PROVENANCE_KIND" = "github-tarball" ]; then
+      printf '  "github_repo": "%s",\n' "$GITHUB_REPO"
+      printf '  "ref": "%s",\n' "$BRANCH"
+      if [ -n "$SOURCE_COMMIT_SHA" ]; then
+        printf '  "commit_sha": "%s"\n' "$SOURCE_COMMIT_SHA"
+      else
+        printf '  "commit_sha": null\n'
+      fi
+    elif [ "$SOURCE_PROVENANCE_KIND" = "git-clone" ]; then
+      printf '  "repo_url": "%s",\n' "$REPO_URL"
+      printf '  "ref": "%s",\n' "$BRANCH"
+      printf '  "commit_sha": null\n'
+    else
+      printf '  "source_dir": "%s",\n' "$SOURCE_DIR"
+      printf '  "commit_sha": null\n'
+    fi
+    printf '}\n'
+  } > "$provenance"
 }
 
 validate_source_dir() {
@@ -387,10 +569,12 @@ validate_source_dir() {
   [ -d "$SOURCE_DIR/apps/api" ] || fail "Source directory is missing apps/api: $SOURCE_DIR"
   [ -d "$SOURCE_DIR/apps/web" ] || fail "Source directory is missing apps/web: $SOURCE_DIR"
   [ -f "$SOURCE_DIR/deploy/nginx/default.conf" ] || fail "Source directory is missing deploy/nginx/default.conf: $SOURCE_DIR"
-  command_exists tar || fail "tar is required for --source-dir copy mode"
+  km_vms_command_exists tar || fail "tar is required for --source-dir copy mode"
 }
 
 copy_source_dir() {
+  SOURCE_MODE="source-dir"
+  SOURCE_PROVENANCE_KIND="source-dir"
   info "Copying product source from --source-dir development/testing mode..."
   (
     cd "$SOURCE_DIR"
@@ -438,8 +622,30 @@ copy_source_dir() {
 }
 
 clone_repo() {
-  command_exists git || fail "git is required for repository acquisition."
+  km_vms_command_exists git || fail "git is required for repository acquisition."
+  SOURCE_MODE="git-clone"
+  SOURCE_PROVENANCE_KIND="git-clone"
   git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR" || acquisition_fail "Repository acquisition failed."
+}
+
+acquire_github_tarball() {
+  [ -n "$GITHUB_REPO" ] || fail "GitHub repo is required for tarball acquisition."
+  GITHUB_REPO=$(validate_github_repo "$GITHUB_REPO")
+  load_github_token
+  prepare_github_token_config
+  SOURCE_MODE="github-tarball"
+  SOURCE_PROVENANCE_KIND="github-tarball"
+  km_vms_command_exists mktemp || fail "mktemp is required for GitHub tarball acquisition."
+  archive=$(mktemp "${TMPDIR:-/tmp}/km-vms-source.XXXXXX.tar.gz")
+  tarball_url="https://api.github.com/repos/$GITHUB_REPO/tarball/$BRANCH"
+  if ! http_download "$tarball_url" "$archive"; then
+    clear_github_token
+    acquisition_fail "GitHub tarball acquisition failed. If the repository is private, rerun with --github-private and a secure token source."
+  fi
+  resolve_github_commit_sha
+  safe_extract_tarball "$archive" "$APP_DIR"
+  rm -f "$archive"
+  clear_github_token
 }
 
 prepare_app_dir() {
@@ -469,7 +675,7 @@ probe_write() {
 }
 
 lan_hint() {
-  if command_exists hostname; then
+  if km_vms_command_exists hostname; then
     ip=$(hostname -I 2>/dev/null | awk '{print $1}' || true)
     if [ -n "$ip" ]; then
       printf 'LAN setup URL hint: http://%s:%s/setup\n' "$ip" "$HTTP_PORT"
@@ -484,15 +690,27 @@ print_plan() {
   info "OS: $(uname -s 2>/dev/null || printf unknown)"
   info "Arch: $(uname -m 2>/dev/null || printf unknown)"
   info "User: $(id -un 2>/dev/null || printf unknown)"
-  info "Compose: $COMPOSE_KIND"
+  info "Compose: $COMPOSE_KIND via $COMPOSE_BIN"
+  version=$(km_vms_compose_version || true)
+  [ -n "$version" ] && info "Compose version: $version"
   info "App dir: $APP_DIR"
   info "HTTP port: $HTTP_PORT"
   info "API port: $API_PORT"
   info "Project name: $PROJECT_NAME"
   if [ -n "$SOURCE_DIR" ]; then
     info "Source mode: --source-dir development/testing copy"
+  elif [ -n "$REPO_URL" ]; then
+    info "Source mode: git clone from configured repo URL"
+    info "Repo URL: $REPO_URL"
   else
-    info "Source mode: git clone from configured repo"
+    info "Source mode: GitHub tarball acquisition"
+    info "GitHub repo: $GITHUB_REPO"
+    info "Git ref: $BRANCH"
+    if [ "$GITHUB_PRIVATE" = "1" ] || [ -n "${KM_VMS_GITHUB_TOKEN:-}" ] || [ -n "$GITHUB_TOKEN_FILE" ] || [ -n "$GITHUB_TOKEN_ENV_NAME" ]; then
+      info "GitHub token mode: enabled via secure input path"
+    else
+      info "GitHub token mode: public/no token"
+    fi
   fi
 }
 
@@ -505,6 +723,8 @@ if [ -z "$APP_DIR" ]; then
 fi
 
 PROJECT_NAME=$(safe_project_name "$PROJECT_NAME")
+[ -z "$GITHUB_REPO" ] || GITHUB_REPO=$(validate_github_repo "$GITHUB_REPO")
+validate_ref "$BRANCH"
 APP_DIR=$(normalize_path "$APP_DIR")
 [ -n "$SOURCE_DIR" ] && SOURCE_DIR=$(normalize_path "$SOURCE_DIR")
 is_dangerous_app_dir "$APP_DIR" && fail "Refusing dangerous app dir: $APP_DIR"
@@ -512,7 +732,6 @@ validate_port "$HTTP_PORT"
 derive_api_port
 validate_port "$API_PORT"
 validate_source_dir
-check_docker
 
 if port_busy "$HTTP_PORT"; then
   fail "HTTP port is already listening: $HTTP_PORT"
@@ -521,9 +740,10 @@ if port_busy "$API_PORT"; then
   fail "API port is already listening: $API_PORT"
 fi
 
-print_plan
-
 if [ "$DRY_RUN" = "1" ]; then
+  load_compose_common
+  check_docker
+  print_plan
   info "Dry-run complete. No files were written and compose was not started."
   exit 0
 fi
@@ -534,8 +754,10 @@ probe_write
 if [ ! -f "$APP_DIR/docker-compose.yml" ]; then
   if [ -n "$SOURCE_DIR" ]; then
     copy_source_dir
-  else
+  elif [ -n "$REPO_URL" ]; then
     clone_repo
+  else
+    acquire_github_tarball
   fi
 fi
 
@@ -543,8 +765,13 @@ fi
 [ -f "$APP_DIR/deploy/nginx/default.conf" ] || fail "Project acquisition is incomplete: deploy/nginx/default.conf is missing."
 [ -f "$APP_DIR/scripts/km-vms-storage-discovery.sh" ] || fail "Project acquisition is incomplete: scripts/km-vms-storage-discovery.sh is missing."
 
+load_compose_common
+check_docker
+print_plan
+
 write_env
 write_metadata
+write_source_provenance
 sh "$APP_DIR/scripts/km-vms-storage-discovery.sh" --app-dir "$APP_DIR" >/dev/null
 
 (

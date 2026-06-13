@@ -85,7 +85,6 @@ services:
       - ./data/install-control:/install-control
       - ./data/previews:/storage/previews
       - ./data/exports:/storage/exports
-      - /var/run/docker.sock:/var/run/docker.sock
     devices:
       - /dev/dri:/dev/dri
     group_add:
@@ -95,6 +94,24 @@ services:
       - "${RENDER_GID:-109}"
     ports:
       - "${API_PORT:-18000}:8000"
+    networks:
+      - vms-net
+
+  setup-helper:
+    image: docker:27-cli
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-setup-helper
+    restart: "no"
+    depends_on:
+      api:
+        condition: service_started
+    working_dir: ${KM_VMS_HOST_APP_DIR:-/host-app}
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      KM_VMS_SETUP_APP_DIR: ${KM_VMS_HOST_APP_DIR:-/host-app}
+    command: ["sh", "${KM_VMS_HOST_APP_DIR:-/host-app}/scripts/km-vms-setup-activation-helper.sh"]
+    volumes:
+      - ./:${KM_VMS_HOST_APP_DIR:-/host-app}
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - vms-net
 

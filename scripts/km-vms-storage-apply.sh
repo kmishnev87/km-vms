@@ -3,6 +3,7 @@ set -eu
 
 APP_DIR=""
 DOCKER_COMPOSE_BIN="${KM_VMS_DOCKER_COMPOSE:-${KMVMS_DOCKER_COMPOSE:-}}"
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 usage() {
   cat <<'EOF'
@@ -11,7 +12,7 @@ KM VMS storage apply helper
 Usage:
   sh scripts/km-vms-storage-apply.sh --app-dir <path>
 
-Reads data/install-control/storage-selection.json and updates only the
+Reads data/install-control/storage-selection.control and updates only the
 SURVEILLANCE_ROOT line in .env. Does not print .env contents or secrets.
 Restart containers after running this helper.
 EOF
@@ -22,11 +23,19 @@ fail() {
   exit 1
 }
 
+. "$SCRIPT_DIR/km-vms-compose-common.sh"
+
 safe_realpath() {
   value="$1"
   if command -v realpath >/dev/null 2>&1; then
-    realpath -m "$value"
-    return
+    if realpath -m "$value" >/dev/null 2>&1; then
+      realpath -m "$value"
+      return
+    fi
+    if [ -e "$value" ]; then
+      realpath "$value"
+      return
+    fi
   fi
   if [ -d "$value" ]; then
     (cd "$value" && pwd -P)
@@ -59,57 +68,29 @@ json_escape() {
   printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
 }
 
-detect_compose() {
-  if [ -n "$DOCKER_COMPOSE_BIN" ]; then
-    if [ "$DOCKER_COMPOSE_BIN" = "docker compose" ]; then
-      command -v docker >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker was not found"
-      docker compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker compose is not available"
-      COMPOSE_KIND="plugin"
-      COMPOSE_BIN="docker"
-      return 0
-    fi
-    case "$DOCKER_COMPOSE_BIN" in
-      *[\;\|\&\`\>\<\(\)]*|*'$('*|*'$'*|*" "*|*"	"*) fail "KM_VMS_DOCKER_COMPOSE contains unsafe characters or spaces" ;;
+read_control_value() {
+  file="$1"
+  key="$2"
+  [ -f "$file" ] || fail "$(basename "$file") not found"
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "$key="*)
+        printf '%s\n' "${line#*=}"
+        return 0
+        ;;
     esac
-    if [ "$DOCKER_COMPOSE_BIN" = "docker" ]; then
-      command -v docker >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=docker but docker was not found"
-      docker compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=docker but docker compose is not available"
-      COMPOSE_KIND="plugin"
-      COMPOSE_BIN="docker"
-      return 0
-    fi
-    if [ "$DOCKER_COMPOSE_BIN" = "docker-compose" ]; then
-      command -v docker-compose >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=docker-compose but docker-compose was not found"
-      COMPOSE_KIND="standalone"
-      COMPOSE_BIN="docker-compose"
-      return 0
-    fi
-    [ -x "$DOCKER_COMPOSE_BIN" ] || fail "KM_VMS_DOCKER_COMPOSE must be docker, docker-compose, docker compose, or an executable path"
-    COMPOSE_KIND="standalone"
-    COMPOSE_BIN="$DOCKER_COMPOSE_BIN"
-    return 0
-  fi
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    COMPOSE_KIND="plugin"
-    COMPOSE_BIN="docker"
-    return 0
-  fi
-  if command -v docker-compose >/dev/null 2>&1; then
-    COMPOSE_KIND="standalone"
-    COMPOSE_BIN="docker-compose"
-    return 0
-  fi
+  done < "$file"
   return 1
+}
+
+detect_compose() {
+  km_vms_detect_compose "$DOCKER_COMPOSE_BIN"
 }
 
 compose_config_check() {
   [ -f "$APP_DIR/docker-compose.yml" ] || return 0
   if detect_compose; then
-    if [ "$COMPOSE_KIND" = "plugin" ]; then
-      (cd "$APP_DIR" && docker compose --env-file "$ENV_FILE" config >/dev/null)
-    else
-      (cd "$APP_DIR" && "$COMPOSE_BIN" --env-file "$ENV_FILE" config >/dev/null)
-    fi
+    (cd "$APP_DIR" && km_vms_compose_cmd --env-file "$ENV_FILE" config >/dev/null)
   fi
 }
 
@@ -132,19 +113,19 @@ done
 
 [ -n "$APP_DIR" ] || fail "--app-dir is required"
 ENV_FILE="$APP_DIR/.env"
-SELECTION_FILE="$APP_DIR/data/install-control/storage-selection.json"
+SELECTION_FILE="$APP_DIR/data/install-control/storage-selection.control"
 STATUS_FILE="$APP_DIR/data/install-control/storage-apply-status.json"
 [ -f "$ENV_FILE" ] || fail ".env not found"
-[ -f "$SELECTION_FILE" ] || fail "storage-selection.json not found"
+[ -f "$SELECTION_FILE" ] || fail "storage-selection.control not found"
 
-selected_path=$(sed -n 's/.*"selected_host_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SELECTION_FILE" | head -n 1)
-selected_mount=$(sed -n 's/.*"selected_mount_path"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SELECTION_FILE" | head -n 1)
-folder_name=$(sed -n 's/.*"folder_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SELECTION_FILE" | head -n 1)
-apply_status=$(sed -n 's/.*"apply_status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$SELECTION_FILE" | head -n 1)
-[ -n "$selected_path" ] || fail "selected_host_path not found in selection file"
-[ -n "$selected_mount" ] || fail "selected_mount_path not found in selection file"
-[ -n "$folder_name" ] || fail "folder_name not found in selection file"
-[ -z "$apply_status" ] || [ "$apply_status" = "pending_host_helper_restart_required" ] || fail "selection is not pending host helper apply"
+selected_path=$(read_control_value "$SELECTION_FILE" selected_host_path || true)
+selected_mount=$(read_control_value "$SELECTION_FILE" selected_mount_path || true)
+folder_name=$(read_control_value "$SELECTION_FILE" folder_name || true)
+apply_status=$(read_control_value "$SELECTION_FILE" apply_status || true)
+[ -n "$selected_path" ] || fail "selected_host_path not found in selection control file"
+[ -n "$selected_mount" ] || fail "selected_mount_path not found in selection control file"
+[ -n "$folder_name" ] || fail "folder_name not found in selection control file"
+[ -z "$apply_status" ] || [ "$apply_status" = "pending_host_helper_restart_required" ] || [ "$apply_status" = "activation_requested" ] || fail "selection is not pending storage activation"
 case "$selected_path" in
   /*) ;;
   *) fail "selected_host_path must be absolute" ;;
@@ -161,35 +142,45 @@ case "$selected_path" in
   "$selected_mount/$folder_name") ;;
   *) fail "selected_host_path must match selected_mount_path/folder_name" ;;
 esac
-selected_mount_real=$(safe_realpath "$selected_mount")
-selected_path_real=$(safe_realpath "$selected_path")
+fs_selected_mount="${KM_VMS_SELECTED_MOUNT_CONTAINER:-$selected_mount}"
+fs_selected_path="${KM_VMS_SELECTED_PATH_CONTAINER:-$selected_path}"
+case "$fs_selected_mount" in
+  /*) ;;
+  *) fail "filesystem selected mount must be absolute" ;;
+esac
+case "$fs_selected_path" in
+  "$fs_selected_mount/$folder_name") ;;
+  *) fail "filesystem selected path must match filesystem mount/folder_name" ;;
+esac
+selected_mount_real=$(safe_realpath "$fs_selected_mount")
+selected_path_real=$(safe_realpath "$fs_selected_path")
 reject_sensitive_path "$selected_mount_real"
-reject_sensitive_path "$selected_path_real"
+reject_sensitive_path "$selected_path"
 same_or_child "$selected_mount_real" "$selected_path_real" || fail "selected_host_path escapes selected_mount_path"
 [ "$selected_mount_real" != "$selected_path_real" ] || fail "selected_host_path must be a child folder"
 [ -d "$selected_mount_real" ] || fail "selected_mount_path does not exist"
 [ -r "$selected_mount_real" ] || fail "selected_mount_path is not readable"
 [ -x "$selected_mount_real" ] || fail "selected_mount_path is not searchable"
 [ -w "$selected_mount_real" ] || fail "selected_mount_path is not writable"
-[ ! -L "$selected_mount" ] || fail "selected_mount_path must not be a symlink"
-if [ -e "$selected_path" ]; then
-  [ -d "$selected_path" ] || fail "selected_host_path exists and is not a directory"
-  [ ! -L "$selected_path" ] || fail "selected_host_path must not be a symlink"
-  [ -r "$selected_path" ] || fail "selected_host_path is not readable"
-  [ -x "$selected_path" ] || fail "selected_host_path is not searchable"
-  find "$selected_path" -mindepth 1 -maxdepth 1 >/dev/null || fail "cannot list selected_host_path"
-  if [ "$(find "$selected_path" -mindepth 1 -maxdepth 1 ! -name '.km-vms-storage-root.json' | wc -l | tr -d ' ')" -gt 0 ] && [ ! -f "$selected_path/.km-vms-storage-root.json" ]; then
+[ ! -L "$fs_selected_mount" ] || fail "selected_mount_path must not be a symlink"
+if [ -e "$fs_selected_path" ]; then
+  [ -d "$fs_selected_path" ] || fail "selected_host_path exists and is not a directory"
+  [ ! -L "$fs_selected_path" ] || fail "selected_host_path must not be a symlink"
+  [ -r "$fs_selected_path" ] || fail "selected_host_path is not readable"
+  [ -x "$fs_selected_path" ] || fail "selected_host_path is not searchable"
+  find "$fs_selected_path" -mindepth 1 -maxdepth 1 >/dev/null || fail "cannot list selected_host_path"
+  if [ "$(find "$fs_selected_path" -mindepth 1 -maxdepth 1 ! -name '.km-vms-storage-root.json' | wc -l | tr -d ' ')" -gt 0 ] && [ ! -f "$fs_selected_path/.km-vms-storage-root.json" ]; then
     fail "selected_host_path is non-empty and has no KM VMS marker"
   fi
 else
   [ -d "$selected_mount_real" ] || fail "selected_mount_path does not exist"
-  mkdir "$selected_path" || fail "cannot create selected_host_path"
-  chmod 750 "$selected_path" 2>/dev/null || true
+  mkdir "$fs_selected_path" || fail "cannot create selected_host_path"
+  chmod 750 "$fs_selected_path" 2>/dev/null || true
 fi
-[ -r "$selected_path" ] || fail "selected_host_path is not readable"
-[ -x "$selected_path" ] || fail "selected_host_path is not searchable"
-[ -w "$selected_path" ] || fail "selected_host_path is not writable"
-probe="$selected_path/.km-vms-write-test.$$"
+[ -r "$fs_selected_path" ] || fail "selected_host_path is not readable"
+[ -x "$fs_selected_path" ] || fail "selected_host_path is not searchable"
+[ -w "$fs_selected_path" ] || fail "selected_host_path is not writable"
+probe="$fs_selected_path/.km-vms-write-test.$$"
 printf 'km-vms-storage-write-test\n' > "$probe" || fail "cannot write test file"
 if command -v sync >/dev/null 2>&1; then
   sync "$probe" 2>/dev/null || sync 2>/dev/null || true
@@ -198,7 +189,7 @@ readback=$(cat "$probe" 2>/dev/null || true)
 rm -f "$probe" || fail "cannot remove write test file"
 [ ! -e "$probe" ] || fail "write test file was not removed"
 [ "$readback" = "km-vms-storage-write-test" ] || fail "write test readback failed"
-if [ ! -f "$selected_path/.km-vms-storage-root.json" ]; then
+if [ ! -f "$fs_selected_path/.km-vms-storage-root.json" ]; then
   created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
   {
     printf '{\n'
@@ -208,7 +199,7 @@ if [ ! -f "$selected_path/.km-vms-storage-root.json" ]; then
     printf '  "selected_host_path": "%s",\n' "$(json_escape "$selected_path")"
     printf '  "container_archive_path": "/storage/archive"\n'
     printf '}\n'
-  } > "$selected_path/.km-vms-storage-root.json" || fail "cannot write KM VMS storage marker"
+  } > "$fs_selected_path/.km-vms-storage-root.json" || fail "cannot write KM VMS storage marker"
 fi
 
 backup="$ENV_FILE.stage2-storage.bak"

@@ -4,13 +4,15 @@ set -eu
 APP_DIR="${KM_VMS_APP_DIR:-}"
 PROJECT_NAME="${KM_VMS_PROJECT_NAME:-}"
 DOCKER_COMPOSE_BIN="${KM_VMS_DOCKER_COMPOSE:-}"
+VERIFY_STORAGE_SELECTION=0
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 usage() {
   cat <<'EOF'
 KM VMS safe restart helper
 
 Usage:
-  sh scripts/km-vms-restart.sh --app-dir <path> [--project-name <name>] [--help]
+  sh scripts/km-vms-restart.sh --app-dir <path> [--project-name <name>] [--verify-storage-selection] [--help]
 
 Environment equivalents:
   KM_VMS_APP_DIR, KM_VMS_PROJECT_NAME, KM_VMS_DOCKER_COMPOSE.
@@ -25,42 +27,7 @@ fail() {
   exit 1
 }
 
-validate_compose_override() {
-  override="$1"
-  if [ "$override" = "docker compose" ]; then
-    command_exists docker || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker was not found."
-    docker compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=\"docker compose\" but docker compose is not available."
-    COMPOSE_KIND="plugin"
-    COMPOSE_BIN="docker"
-    return 0
-  fi
-  case "$override" in
-    *[\;\|\&\`\>\<\(\)]*|*'$('*|*'$'*|*" "*|*"	"*) fail "KM_VMS_DOCKER_COMPOSE contains unsafe characters or spaces." ;;
-  esac
-  case "$override" in
-    docker)
-      command_exists docker || fail "KM_VMS_DOCKER_COMPOSE=docker but docker was not found."
-      docker compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=docker but docker compose is not available."
-      COMPOSE_KIND="plugin"
-      COMPOSE_BIN="docker"
-      return 0
-      ;;
-    docker-compose)
-      command_exists docker-compose || fail "KM_VMS_DOCKER_COMPOSE=docker-compose but docker-compose was not found."
-      docker-compose version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE=docker-compose is not usable."
-      COMPOSE_KIND="standalone"
-      COMPOSE_BIN="docker-compose"
-      return 0
-      ;;
-    *)
-      [ -x "$override" ] || fail "KM_VMS_DOCKER_COMPOSE must be docker, docker-compose, or an executable path."
-      "$override" version >/dev/null 2>&1 || fail "KM_VMS_DOCKER_COMPOSE executable is not a usable compose command."
-      COMPOSE_KIND="standalone"
-      COMPOSE_BIN="$override"
-      return 0
-      ;;
-  esac
-}
+. "$SCRIPT_DIR/km-vms-compose-common.sh"
 
 safe_project_name() {
   value="$1"
@@ -71,36 +38,10 @@ safe_project_name() {
       ;;
   esac
   if printf '%s' "$value" | grep -Eq '^[a-z][a-z0-9_-]*$'; then
-      printf '%s\n' "$value"
-      return 0
+    printf '%s\n' "$value"
+    return 0
   fi
   fail "Project name must start with a lowercase letter and contain only lowercase letters, digits, dashes or underscores."
-}
-
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --app-dir)
-      [ "$#" -ge 2 ] || fail "--app-dir requires a value"
-      APP_DIR="$2"
-      shift 2
-      ;;
-    --project-name)
-      [ "$#" -ge 2 ] || fail "--project-name requires a value"
-      PROJECT_NAME="$2"
-      shift 2
-      ;;
-    --help|-h)
-      usage
-      exit 0
-      ;;
-    *)
-      fail "Unknown option: $1"
-      ;;
-  esac
-done
-
-command_exists() {
-  command -v "$1" >/dev/null 2>&1
 }
 
 normalize_path() {
@@ -120,36 +61,128 @@ normalize_path() {
   fi
 }
 
+json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'
+}
+
+read_control_value() {
+  file="$1"
+  key="$2"
+  [ -f "$file" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      "$key="*)
+        printf '%s\n' "${line#*=}"
+        return 0
+        ;;
+    esac
+  done < "$file"
+  return 1
+}
+
 detect_compose() {
-  if [ -n "$DOCKER_COMPOSE_BIN" ]; then
-    validate_compose_override "$DOCKER_COMPOSE_BIN"
-    return 0
-  fi
-  if command_exists docker && docker compose version >/dev/null 2>&1; then
-    COMPOSE_KIND="plugin"
-    COMPOSE_BIN="docker"
-    return 0
-  fi
-  if command_exists docker-compose && docker-compose version >/dev/null 2>&1; then
-    COMPOSE_KIND="standalone"
-    COMPOSE_BIN="docker-compose"
-    return 0
-  fi
-  fail "Docker Compose was not found."
+  km_vms_detect_compose "$DOCKER_COMPOSE_BIN" || fail "Docker Compose was not found. Checked KM_VMS_DOCKER_COMPOSE, PATH docker compose/docker-compose, and known NAS vendor paths."
 }
 
 compose_cmd() {
-  if [ "$COMPOSE_KIND" = "plugin" ]; then
-    docker compose "$@"
-  else
-    "$COMPOSE_BIN" "$@"
-  fi
+  km_vms_compose_cmd "$@"
 }
+
+write_apply_status() {
+  status="$1"
+  note="$2"
+  selected_path="$3"
+  created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
+  {
+    printf '{\n'
+    printf '  "schema_version": 2,\n'
+    printf '  "status": "%s",\n' "$(json_escape "$status")"
+    printf '  "selected_host_path": "%s",\n' "$(json_escape "$selected_path")"
+    printf '  "container_archive_path": "/storage/archive",\n'
+    printf '  "updated_at": "%s"' "$(json_escape "$created_at")"
+    if [ -n "$note" ]; then
+      printf ',\n  "note": "%s"\n' "$(json_escape "$note")"
+    else
+      printf '\n'
+    fi
+    printf '}\n'
+  } > "$STATUS_FILE"
+  chmod 600 "$STATUS_FILE" 2>/dev/null || true
+}
+
+wait_for_marker() {
+  service="$1"
+  selected_path="$2"
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    marker=$(compose_cmd --env-file "$ENV_FILE" exec -T "$service" sh -c 'cat /storage/archive/.km-vms-storage-root.json 2>/dev/null' || true)
+    if [ -n "$marker" ] && printf '%s' "$marker" | grep -F "\"selected_host_path\": \"$selected_path\"" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+verify_storage_selection() {
+  [ -f "$SELECTION_CONTROL_FILE" ] || fail "storage-selection.control not found for verification"
+  selected_path=$(read_control_value "$SELECTION_CONTROL_FILE" selected_host_path || true)
+  [ -n "$selected_path" ] || fail "selected_host_path missing in storage-selection.control"
+  write_apply_status "activation_in_progress" "Waiting for recreated services to expose the selected storage marker." "$selected_path"
+  wait_for_marker api "$selected_path" || fail "API service did not expose the selected archive marker after restart"
+  wait_for_marker recorder "$selected_path" || fail "Recorder service did not expose the selected archive marker after restart"
+  verified_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
+  {
+    printf '{\n'
+    printf '  "schema_version": 2,\n'
+    printf '  "status": "active",\n'
+    printf '  "selected_host_path": "%s",\n' "$(json_escape "$selected_path")"
+    printf '  "container_archive_path": "/storage/archive",\n'
+    printf '  "verified_at": "%s",\n' "$(json_escape "$verified_at")"
+    printf '  "runtime_proof": {\n'
+    printf '    "type": "container_marker_visibility",\n'
+    printf '    "services": ["api", "recorder"]\n'
+    printf '  }\n'
+    printf '}\n'
+  } > "$STATUS_FILE"
+  chmod 600 "$STATUS_FILE" 2>/dev/null || true
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --app-dir)
+      [ "$#" -ge 2 ] || fail "--app-dir requires a value"
+      APP_DIR="$2"
+      shift 2
+      ;;
+    --project-name)
+      [ "$#" -ge 2 ] || fail "--project-name requires a value"
+      PROJECT_NAME="$2"
+      shift 2
+      ;;
+    --verify-storage-selection)
+      VERIFY_STORAGE_SELECTION=1
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "Unknown option: $1"
+      ;;
+  esac
+done
 
 [ -n "$APP_DIR" ] || fail "--app-dir or KM_VMS_APP_DIR is required."
 APP_DIR=$(normalize_path "$APP_DIR")
 [ -f "$APP_DIR/docker-compose.yml" ] || fail "docker-compose.yml not found in app dir: $APP_DIR"
 [ -f "$APP_DIR/.env" ] || fail ".env not found in app dir: $APP_DIR"
+ENV_FILE="$APP_DIR/.env"
+SELECTION_FILE="$APP_DIR/data/install-control/storage-selection.json"
+SELECTION_CONTROL_FILE="$APP_DIR/data/install-control/storage-selection.control"
+STATUS_FILE="$APP_DIR/data/install-control/storage-apply-status.json"
 
 detect_compose
 
@@ -162,7 +195,15 @@ fi
 (
   cd "$APP_DIR"
   compose_cmd "$@" config >/dev/null
-  compose_cmd "$@" up -d
+  if [ "$VERIFY_STORAGE_SELECTION" = "1" ]; then
+    compose_cmd "$@" up -d --force-recreate api recorder web nginx
+  else
+    compose_cmd "$@" up -d
+  fi
 )
+
+if [ "$VERIFY_STORAGE_SELECTION" = "1" ]; then
+  verify_storage_selection
+fi
 
 printf 'KM VMS restart command completed for %s\n' "$APP_DIR"

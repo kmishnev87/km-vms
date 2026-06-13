@@ -754,6 +754,23 @@
   gap: 14px;
 }
 
+.setupIntroGrid,
+.setupOwnerGrid,
+.setupStorageGrid {
+  display: grid;
+  gap: 14px;
+}
+
+.setupIntroGrid,
+.setupOwnerGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.setupStorageGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
 .setupPane h2 {
   margin: 0;
   color: #0f172a;
@@ -770,6 +787,29 @@
 
 .setupActionField {
   align-self: end;
+}
+
+.setupPrimaryAction {
+  min-height: 48px;
+  width: 100%;
+}
+
+.setupStorageStatus {
+  align-content: start;
+}
+
+.setupStatusNote,
+.setupStatusError {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+}
+
+.setupStatusNote {
+  color: #334155;
+}
+
+.setupStatusError {
+  color: #991b1b;
 }
 
 .setupReviewGrid {

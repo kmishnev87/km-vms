@@ -1,33 +1,41 @@
 # KM VMS Installation
 
-KM VMS is installed on NAS/server systems through `scripts/install.sh`. The installer is POSIX `sh` compatible and does not require host Python, Node, npm, or global package installation.
+KM VMS is installed on NAS/server systems through `scripts/install.sh`. The installer is POSIX `sh` compatible and does not require host Python, Node, npm, or a package manager bootstrap.
 
 Supported platform class: TerraMaster, Synology, QNAP, TrueNAS, Unraid, and generic Linux servers with Docker and Docker Compose. The installer does not hardcode vendor storage paths; choose an app directory explicitly.
 
-Interactive install:
+## Supported Install Shapes
 
-```sh
-sh scripts/install.sh --app-dir "$HOME/km-vms"
-```
+1. Local unpacked repository already present on the NAS.
+2. GitHub tarball acquisition without `git`.
+3. Generic `git clone` acquisition only when you explicitly pass `--repo-url`.
 
-Non-interactive install:
+Local unpacked repository install:
 
 ```sh
 sh scripts/install.sh --app-dir "$HOME/km-vms" --http-port 8088 --project-name km-vms --yes
 ```
 
-Public download shape for future releases:
+Private GitHub repository install without `git`:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/install.sh | sh -s -- --app-dir "$HOME/km-vms"
-wget -qO- https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/install.sh | sh -s -- --app-dir "$HOME/km-vms"
+sh /path/to/km-vms-install.sh \
+  --app-dir "$HOME/km-vms" \
+  --github-repo OWNER/REPO \
+  --branch main \
+  --github-private \
+  --http-port 8088 \
+  --project-name km-vms
 ```
+
+The private GitHub path prompts for a token with hidden input when no secure env/file token source is supplied. Use a read-only token with repository contents access only. Obtain `km-vms-install.sh` from an authorized source for your private repository; do not rely on a public `raw.githubusercontent.com` URL for a private repo. If the token is exposed, revoke and rotate it.
 
 ## Prerequisites
 
 - Docker must already be installed.
 - Docker Compose plugin (`docker compose`) is preferred; `docker-compose` fallback is supported.
-- If Compose is installed outside `PATH`, set `KM_VMS_DOCKER_COMPOSE` to `docker`, `docker-compose`, exact friendly alias `docker compose`, or an executable compose path. Other command strings with spaces or shell metacharacters are rejected; helpers do not use `eval` or `sh -c` for this value.
+- Compose detection order is: explicit override (`KM_VMS_DOCKER_COMPOSE` / `KMVMS_DOCKER_COMPOSE`), `docker compose` in `PATH`, `docker-compose` in `PATH`, then known NAS vendor paths such as TerraMaster DockerEngine locations.
+- If you need an explicit override, set `KM_VMS_DOCKER_COMPOSE` to `docker`, `docker-compose`, exact friendly alias `docker compose`, or an executable compose path. Other command strings with spaces or shell metacharacters are rejected; helpers do not use `eval` or `sh -c` for this value.
 - The current user must be allowed to run Docker commands.
 - The installer never installs Docker or packages automatically.
 
@@ -54,6 +62,11 @@ The compose file keeps the existing production-compatible default project identi
 
 Stage 1 uses `<app-dir>/data/archive` as a provisional host archive mount when the user has not selected a storage root. The stable container archive path remains `/storage/archive`.
 
+The installer also records non-secret provenance files:
+
+- `.km-vms-install.json`: app dir, ports, compose command, source mode, setup URL;
+- `.km-vms-source.json`: GitHub repo/ref and commit SHA when available, or source-dir / git-clone provenance without secrets.
+
 ## Storage Discovery And Selection
 
 Stage 2 adds host-side storage discovery for setup mode. The installer runs:
@@ -62,18 +75,13 @@ Stage 2 adds host-side storage discovery for setup mode. The installer runs:
 sh scripts/km-vms-storage-discovery.sh --app-dir "$HOME/km-vms"
 ```
 
-The helper writes a sanitized, non-secret snapshot to `<app-dir>/data/install-control/storage-discovery.json`. Setup mode reads that snapshot, shows NAS/server host paths as the primary user-facing choice with capacity/writable/safety details, and keeps `/storage/archive` as the stable container bind path.
+The helper writes a sanitized, non-secret snapshot to `<app-dir>/data/install-control/storage-discovery.json`. Setup mode reads that snapshot, shows only primary user-facing NAS roots in the main dropdown, offers a controlled manual-root fallback, and keeps `/storage/archive` as the stable container bind path.
 
-The setup page only accepts a single folder name under a discovered host candidate. Absolute paths, separators, traversal, control characters, dangerous system paths, pseudo filesystems, and non-empty unmarked folders are rejected server-side. The selected folder receives `.km-vms-storage-root.json` after a write/delete probe succeeds.
+The setup page accepts a single folder name under a discovered or manually approved host root. Absolute paths, separators, traversal, control characters, dangerous system paths, pseudo filesystems, and non-empty unmarked folders are rejected server-side. Safe Unicode/Cyrillic folder names are supported. The selected folder receives `.km-vms-storage-root.json` after a write/delete probe succeeds.
 
-After choosing storage in setup mode, apply the host bind mount with:
+After choosing storage in setup mode, KM VMS now queues activation automatically through the bounded setup helper. The operator does not run `km-vms-storage-apply.sh` or `km-vms-restart.sh` manually from the shell after clicking in the wizard.
 
-```sh
-sh scripts/km-vms-storage-apply.sh --app-dir "$HOME/km-vms"
-sh scripts/km-vms-restart.sh --app-dir "$HOME/km-vms"
-```
-
-`km-vms-storage-apply.sh` updates only `SURVEILLANCE_ROOT` in `.env`, writes a non-secret `data/install-control/storage-apply-status.json` status, validates compose config, and reports `applied_restart_required` until the stack is restarted. It does not print `.env`, regenerate secrets, create users/settings, delete DB/volumes/archive data, run `docker compose down -v`, or run `docker system prune`.
+`km-vms-storage-apply.sh` still updates only `SURVEILLANCE_ROOT` in `.env`, writes a non-secret `data/install-control/storage-apply-status.json` status, validates compose config, and reports `applied_restart_required` until the restart helper verifies the active mount. It does not print `.env`, regenerate secrets, create users/settings, delete DB/volumes/archive data, run `docker compose down -v`, or run `docker system prune`.
 
 Restart diagnostics:
 - validate config first: `KM_VMS_DOCKER_COMPOSE="docker compose" sh scripts/km-vms-restart.sh --app-dir "$HOME/km-vms" --project-name km-vms`;
@@ -81,9 +89,9 @@ Restart diagnostics:
 - previous Git HEAD may be recorded in service artifacts as diagnostic context only;
 - full backup/restore/rollback belongs to the future Database / Backup / Upgrade Safety PRO chapter. For now, do not use `down -v`, do not prune Docker, and do not delete production DB, volumes, archive roots or recordings.
 
-The apply helper reads `<app-dir>/data/install-control/storage-selection.json`, revalidates the selected single child folder on the host, blocks symlink/path escapes and non-empty unmarked folders, writes the KM VMS marker only after a write/delete probe, updates only `SURVEILLANCE_ROOT` in `.env`, creates a `.env.stage2-storage.bak` backup, and does not print secrets. Do not use broad `chmod`/`chown` on storage roots and do not point KM VMS at a folder containing foreign archive files unless it already has the KM VMS marker.
+The API writes both JSON status files for the wizard and shell-safe line-based control files for host helpers. The apply helper reads `<app-dir>/data/install-control/storage-selection.control`, revalidates the selected single child folder on the host, blocks symlink/path escapes and non-empty unmarked folders, writes the KM VMS marker only after a write/delete probe, updates only `SURVEILLANCE_ROOT` in `.env`, creates a `.env.stage2-storage.bak` backup, and does not print secrets. The setup helper reads `<app-dir>/data/install-control/storage-activation-request.control`, then runs the safe restart helper and waits until the recreated API and recorder containers expose the selected marker through `/storage/archive` before the wizard unlocks `Next`. After first-run setup completes, the API writes `data/install-control/setup-complete.json`; the setup helper exits and becomes inert. The API container does not mount `/var/run/docker.sock`; Docker socket access is confined to the setup-only helper path.
 
-After restart, authorized settings/storage screens show the selected NAS/server host archive path as the primary archive path. `/storage/archive` remains the secondary Docker/container path used by the API and recorder containers.
+After activation, authorized settings/storage screens show the selected NAS/server host archive path as the primary archive path. `/storage/archive` remains the stable Docker/container path used by the API and recorder containers.
 
 ## Setup Mode
 

@@ -359,6 +359,9 @@
 
   .setupSteps,
   .settingsGrid,
+  .setupIntroGrid,
+  .setupOwnerGrid,
+  .setupStorageGrid,
   .setupReviewGrid {
     grid-template-columns: 1fr;
   }

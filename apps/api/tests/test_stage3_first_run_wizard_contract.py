@@ -19,7 +19,7 @@ from app.models.audit_event import AuditEvent
 from app.models.system_settings import SystemSettings
 from app.models.user import User
 from app.routers.settings import SetupRequest, setup, setup_storage_discovery, system_status
-from app.services.setup_storage import CONTAINER_ARCHIVE_PATH, SELECTION_FILE
+from app.services.setup_storage import APPLY_STATUS_FILE, CONTAINER_ARCHIVE_PATH, SELECTION_FILE, SETUP_COMPLETE_FILE
 from app.services.system_settings import get_system_settings
 
 
@@ -71,7 +71,7 @@ def assert_no_partial_owner(db):
     assert db.query(User).count() == 0
 
 
-def write_storage_selection(host_path: str | None = None, apply_status: str = "pending_host_helper_restart_required"):
+def write_storage_selection(host_path: str | None = None, apply_status: str = "active"):
     control = Path(settings.storage_install_control)
     control.mkdir(parents=True, exist_ok=True)
     selected = host_path or str(control.parent / "host-archive")
@@ -86,6 +86,18 @@ def write_storage_selection(host_path: str | None = None, apply_status: str = "p
                 "candidate_id": "stage3-test-candidate",
                 "selected_at": "2026-05-07T00:00:00Z",
                 "apply_status": apply_status,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (control / APPLY_STATUS_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "status": apply_status,
+                "selected_host_path": selected,
+                "container_archive_path": CONTAINER_ARCHIVE_PATH,
             }
         )
         + "\n",
@@ -190,7 +202,7 @@ def test_setup_rejects_missing_storage_confirmation_without_partial_owner(db):
 
 
 def test_setup_rejects_naked_container_storage_confirmation(db):
-    write_storage_selection(CONTAINER_ARCHIVE_PATH)
+    write_storage_selection(CONTAINER_ARCHIVE_PATH, apply_status="active")
 
     with pytest.raises(HTTPException) as exc:
         setup(payload(), db=db, request=FakeRequest())
@@ -246,3 +258,25 @@ def test_concurrent_setup_attempts_create_exactly_one_owner(db):
         assert get_system_settings(session).system_initialized is True
     finally:
         session.close()
+
+
+def test_setup_writes_setup_complete_signal_for_activation_helper(db):
+    write_storage_selection()
+
+    result = setup(payload(), db=db, request=FakeRequest())
+
+    control = Path(settings.storage_install_control)
+    setup_complete = json.loads((control / SETUP_COMPLETE_FILE).read_text(encoding="utf-8"))
+    assert result["ok"] is True
+    assert setup_complete["status"] == "completed"
+
+
+def test_setup_rejects_non_active_storage_confirmation_without_partial_owner(db):
+    write_storage_selection(apply_status="activation_requested")
+
+    with pytest.raises(HTTPException) as exc:
+        setup(payload(), db=db, request=FakeRequest())
+
+    assert exc.value.status_code == 422
+    assert "storage_apply_status_not_active" in str(exc.value.detail)
+    assert_no_partial_owner(db)

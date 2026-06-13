@@ -4,14 +4,11 @@ import io
 import json
 import os
 import re
-import socket
 import subprocess
 import threading
-import time
 import zipfile
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -54,6 +51,7 @@ from app.services.storage_contract import storage_contract
 from app.services.setup_storage import (
     build_preview as build_setup_storage_preview,
     discovery_snapshot as setup_storage_discovery_snapshot,
+    mark_setup_completed,
     persist_selection as persist_setup_storage_selection,
     require_storage_confirmation as require_setup_storage_confirmation,
     storage_confirmation_status as setup_storage_confirmation_status,
@@ -82,7 +80,6 @@ SENSITIVE_KEY_RE = re.compile(r"(password|secret|token|authorization|encryption_
 RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://)([^@\s/]+)@", re.IGNORECASE)
 BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
 TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token|media_token)=)[^&\s]+", re.IGNORECASE)
-DOCKER_SOCKET = Path("/var/run/docker.sock")
 SETUP_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 SETUP_LOCK = threading.Lock()
 
@@ -127,6 +124,7 @@ class StorageValidateRequest(BaseModel):
 class SetupStorageSelectionRequest(BaseModel):
     candidate_id: str = Field(min_length=1, max_length=200)
     folder_name: str = Field(min_length=1, max_length=100)
+    manual_root_path: str | None = Field(default=None, max_length=1024)
 
 
 class UpdateDryRunRequest(BaseModel):
@@ -176,7 +174,7 @@ def setup_storage_status(db: Session = Depends(get_db)):
 def setup_storage_preview(payload: SetupStorageSelectionRequest, db: Session = Depends(get_db)):
     require_setup_mode(db)
     try:
-        return build_setup_storage_preview(payload.candidate_id, payload.folder_name)
+        return build_setup_storage_preview(payload.candidate_id, payload.folder_name, payload.manual_root_path)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
@@ -185,7 +183,7 @@ def setup_storage_preview(payload: SetupStorageSelectionRequest, db: Session = D
 def setup_storage_validate(payload: SetupStorageSelectionRequest, db: Session = Depends(get_db)):
     require_setup_mode(db)
     try:
-        return validate_setup_storage_folder(payload.candidate_id, payload.folder_name)
+        return validate_setup_storage_folder(payload.candidate_id, payload.folder_name, payload.manual_root_path)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
@@ -194,7 +192,7 @@ def setup_storage_validate(payload: SetupStorageSelectionRequest, db: Session = 
 def setup_storage_apply(payload: SetupStorageSelectionRequest, db: Session = Depends(get_db)):
     require_setup_mode(db)
     try:
-        return persist_setup_storage_selection(payload.candidate_id, payload.folder_name)
+        return persist_setup_storage_selection(payload.candidate_id, payload.folder_name, payload.manual_root_path)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
 
@@ -529,6 +527,7 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request
             db.commit()
             db.refresh(system)
             db.refresh(admin)
+            mark_setup_completed()
         except HTTPException as exc:
             db.rollback()
             audit_setup_failed(db, request, "owner_already_exists", exc.status_code)
@@ -846,83 +845,6 @@ def chronology_diagnostics(db: Session) -> dict:
     return {"items": rows}
 
 
-def decode_chunked_http_body(body: bytes) -> bytes:
-    chunks = []
-    idx = 0
-    while idx < len(body):
-        line_end = body.find(b"\r\n", idx)
-        if line_end < 0:
-            return body
-        size_raw = body[idx:line_end].split(b";", 1)[0]
-        try:
-            size = int(size_raw, 16)
-        except ValueError:
-            return body
-        idx = line_end + 2
-        if size == 0:
-            break
-        chunks.append(body[idx:idx + size])
-        idx += size + 2
-    return b"".join(chunks)
-
-
-def strip_docker_stream_frames(body: bytes) -> bytes:
-    frames = []
-    idx = 0
-    while idx + 8 <= len(body):
-        header = body[idx:idx + 8]
-        if header[0] not in {1, 2} or header[1:4] != b"\x00\x00\x00":
-            return body
-        size = int.from_bytes(header[4:8], "big")
-        idx += 8
-        frames.append(body[idx:idx + size])
-        idx += size
-    return b"".join(frames) if frames else body
-
-
-def docker_logs_via_socket(container: str, mode: str) -> str:
-    if not DOCKER_SOCKET.exists():
-        raise FileNotFoundError(f"{DOCKER_SOCKET} is not mounted")
-
-    params = "stdout=1&stderr=1&timestamps=1"
-    if mode == "extended":
-        params += f"&since={int(time.time()) - 1800}"
-    else:
-        params += f"&since={int(time.time()) - 600}"
-    path = f"/containers/{quote(container, safe='')}/logs?{params}"
-    request = (
-        f"GET {path} HTTP/1.1\r\n"
-        "Host: docker\r\n"
-        "Connection: close\r\n"
-        "\r\n"
-    ).encode("ascii")
-
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
-        sock.settimeout(20)
-        sock.connect(str(DOCKER_SOCKET))
-        sock.sendall(request)
-        chunks = []
-        while True:
-            data = sock.recv(65536)
-            if not data:
-                break
-            chunks.append(data)
-
-    response = b"".join(chunks)
-    header_end = response.find(b"\r\n\r\n")
-    if header_end < 0:
-        return response.decode("utf-8", errors="replace")
-
-    headers = response[:header_end].decode("iso-8859-1", errors="replace")
-    body = response[header_end + 4:]
-    if "transfer-encoding: chunked" in headers.lower():
-        body = decode_chunked_http_body(body)
-    body = strip_docker_stream_frames(body)
-    if not headers.startswith("HTTP/1.1 200") and not headers.startswith("HTTP/1.0 200"):
-        return f"Docker API error for {container}\n{headers}\n{body.decode('utf-8', errors='replace')}"
-    return body.decode("utf-8", errors="replace")
-
-
 def docker_logs_via_cli(container: str, mode: str) -> str:
     cmd = ["docker", "logs"]
     if mode == "extended":
@@ -951,16 +873,9 @@ def docker_logs_via_cli(container: str, mode: str) -> str:
 
 def run_docker_logs(container: str, mode: str) -> str:
     try:
-        return redact_text(docker_logs_via_socket(container, mode))
-    except Exception as socket_exc:
-        try:
-            return redact_text(docker_logs_via_cli(container, mode))
-        except Exception as cli_exc:
-            return (
-                f"Docker logs unavailable for {container}\n"
-                f"socket_error={socket_exc}\n"
-                f"cli_error={cli_exc}\n"
-            )
+        return redact_text(docker_logs_via_cli(container, mode))
+    except Exception as cli_exc:
+        return f"Docker logs unavailable for {container}\ncli_error={cli_exc}\n"
 
 
 def write_docker_logs(bundle: zipfile.ZipFile, mode: str) -> None:

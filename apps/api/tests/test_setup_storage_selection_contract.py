@@ -23,9 +23,13 @@ from app.routers.settings import (
     system_status,
 )
 from app.services.setup_storage import (
+    ACTIVATION_REQUEST_FILE,
+    ACTIVATION_REQUEST_CONTROL_FILE,
+    APPLY_STATUS_FILE,
     CONTAINER_ARCHIVE_PATH,
     DISCOVERY_FILE,
     SELECTION_FILE,
+    SELECTION_CONTROL_FILE,
     discovery_snapshot,
     validate_folder_name,
 )
@@ -88,10 +92,10 @@ def test_discovery_uses_host_snapshot_and_sanitizes_blocked_paths(db):
 
     assert payload["status"] == "ready"
     assert payload["container_archive_path"] == CONTAINER_ARCHIVE_PATH
-    assert by_id["var"]["safety_status"] == "blocked"
-    assert by_id["var"]["reason"] == "dangerous_system_path"
-    assert by_id["overlay"]["safety_status"] == "blocked"
     assert by_id["nas"]["safety_status"] == "allowed"
+    assert "var" not in by_id
+    assert "overlay" not in by_id
+    assert payload["hidden_candidate_count"] == 2
     for key in ("total_bytes", "used_bytes", "free_bytes", "writable", "safety_status", "reason"):
         assert key in by_id["nas"]
 
@@ -108,7 +112,7 @@ def test_blocked_candidate_cannot_be_applied(db):
         setup_storage_apply(payload, db=session)
 
     assert exc.value.status_code == 422
-    assert "blocked" in str(exc.value.detail)
+    assert "storage candidate is not available" in str(exc.value.detail)
 
 
 def test_authorized_settings_exposes_host_archive_path_without_public_status_leak(db, monkeypatch):
@@ -127,7 +131,7 @@ def test_authorized_settings_exposes_host_archive_path_without_public_status_lea
     assert "/mnt/km-vms-archive" not in str(public_payload)
 
 
-def test_preview_apply_write_pending_selection_without_secrets(db):
+def test_preview_apply_queues_activation_without_secrets(db):
     session, root = db
     mount = root / "host-storage"
     mount.mkdir()
@@ -135,29 +139,40 @@ def test_preview_apply_write_pending_selection_without_secrets(db):
         root,
         [{"id": "host-storage", "path": str(mount), "filesystem_type": "ext4", "writable": True}],
     )
-    payload = SetupStorageSelectionRequest(candidate_id="host-storage", folder_name="KM-VMS-Recordings")
+    payload = SetupStorageSelectionRequest(candidate_id="manual", folder_name="KM-VMS-Recordings", manual_root_path=str(mount))
 
     preview = setup_storage_preview(payload, db=session)
     result = setup_storage_apply(payload, db=session)
     selection = json.loads((root / "install-control" / SELECTION_FILE).read_text(encoding="utf-8"))
+    selection_control = (root / "install-control" / SELECTION_CONTROL_FILE).read_text(encoding="utf-8")
+    activation_request = json.loads((root / "install-control" / ACTIVATION_REQUEST_FILE).read_text(encoding="utf-8"))
+    activation_request_control = (root / "install-control" / ACTIVATION_REQUEST_CONTROL_FILE).read_text(encoding="utf-8")
+    apply_state = json.loads((root / "install-control" / APPLY_STATUS_FILE).read_text(encoding="utf-8"))
 
     assert preview["final_host_path"] == str(mount / "KM-VMS-Recordings")
     assert result["container_archive_path"] == CONTAINER_ARCHIVE_PATH
-    assert result["apply_status"] == "pending_host_helper_restart_required"
+    assert result["apply_status"] == "activation_requested"
     assert result["host_validation_required"] is True
-    assert result["write_test"] == {"ok": False, "reason": "pending_host_helper"}
+    assert result["write_test"] == {"ok": False, "reason": "activation_helper_pending"}
     assert not (mount / "KM-VMS-Recordings").exists()
     assert selection["selected_host_path"] == str(mount / "KM-VMS-Recordings")
     assert selection["selected_mount_path"] == str(mount)
     assert selection["folder_name"] == "KM-VMS-Recordings"
+    assert f"selected_host_path={mount / 'KM-VMS-Recordings'}" in selection_control
+    assert f"selected_mount_path={mount}" in selection_control
+    assert "folder_name=KM-VMS-Recordings" in selection_control
+    assert activation_request["status"] == "requested"
+    assert "status=requested" in activation_request_control
+    assert f"selected_host_path={mount / 'KM-VMS-Recordings'}" in activation_request_control
+    assert apply_state["status"] == "activation_requested"
     assert "password" not in json.dumps(selection).lower()
 
     status_payload = setup_storage_status(db=session)
-    assert status_payload["ready"] is True
+    assert status_payload["ready"] is False
     assert status_payload["selected_host_path"] == str(mount / "KM-VMS-Recordings")
     assert status_payload["container_archive_path"] == CONTAINER_ARCHIVE_PATH
-    assert status_payload["status"] == "pending_host_helper_restart_required"
-    assert status_payload["next_action"] == "run_storage_apply_helper_and_restart"
+    assert status_payload["status"] == "activation_requested"
+    assert status_payload["next_action"] == "wait_for_storage_activation"
 
 
 def test_non_empty_unmarked_folder_is_blocked(db):
@@ -168,7 +183,7 @@ def test_non_empty_unmarked_folder_is_blocked(db):
     (target / "existing.mp4").write_bytes(b"not ours")
     write_discovery(root, [{"id": "host-storage", "path": str(mount), "filesystem_type": "ext4", "writable": True}])
 
-    payload = SetupStorageSelectionRequest(candidate_id="host-storage", folder_name="Archive")
+    payload = SetupStorageSelectionRequest(candidate_id="manual", folder_name="Archive", manual_root_path=str(mount))
 
     with pytest.raises(HTTPException) as exc:
         setup_storage_apply(payload, db=session)
@@ -192,6 +207,18 @@ def test_setup_storage_endpoints_close_after_initialization(db):
 
 
 def test_folder_name_rejects_paths_traversal_and_control_characters():
-    for value in ("/absolute", "../escape", "nested/path", "nested\\path", "bad\nname"):
+    for value in ("/absolute", "../escape", "nested/path", "nested\\path", 'bad"name', "bad\nname"):
         with pytest.raises(ValueError):
             validate_folder_name(value)
+
+
+def test_folder_name_accepts_safe_unicode_and_manual_root(db):
+    session, root = db
+    manual_root = root / "manual-root"
+    manual_root.mkdir()
+    payload = SetupStorageSelectionRequest(candidate_id="manual", folder_name="Архив KM VMS", manual_root_path=str(manual_root))
+
+    preview = setup_storage_preview(payload, db=session)
+
+    assert preview["selected_mount_path"] == str(manual_root)
+    assert preview["final_host_path"] == str(manual_root / "Архив KM VMS")

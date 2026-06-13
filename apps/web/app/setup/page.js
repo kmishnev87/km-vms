@@ -4,15 +4,28 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LanguageSelect, localeMetadata, normalizeLocale, useI18n, useLocaleText } from "../../lib/i18n";
 
-
 const USERNAME_RE = /^[A-Za-z0-9_.-]{2,64}$/;
+const ACTIVATION_STATUSES = new Set(["activation_requested", "activation_in_progress", "applied_restart_required"]);
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let size = bytes;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit += 1;
+  }
+  return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
+}
 
 export default function SetupPage() {
   const router = useRouter();
+  const { setLocale } = useI18n();
+  const t = useLocaleText("setup");
   const [step, setStep] = useState(0);
   const [language, setLanguage] = useState("ru");
-  const { setLocale } = useI18n();
-  const setupText = useLocaleText("setup");
   const [form, setForm] = useState({
     username: "admin",
     system_name: "KM VMS",
@@ -29,23 +42,30 @@ export default function SetupPage() {
     candidates: [],
     candidateId: "",
     folderName: "KM-VMS-Recordings",
+    manualPathSupported: false,
+    manualRootPath: "",
     preview: null,
+    previewError: "",
     confirmation: null,
     message: "",
     error: "",
   });
 
-  const t = setupText;
   const ownerValid = USERNAME_RE.test(form.username.trim()) && form.password.length >= 8 && form.password === form.password_confirm;
   const systemNameValid = form.system_name.trim().length <= 80 && !/[\x00-\x1f]/.test(form.system_name);
-  const storageReady = Boolean(storageState.confirmation?.ready && storageState.confirmation?.selected_host_path);
   const recordingValid = Boolean(form.timezone.trim()) && ["mkv", "mp4"].includes(form.recording_format);
-  const canAdvance = [systemNameValid, ownerValid, storageReady, recordingValid, systemNameValid && ownerValid && storageReady && recordingValid][step];
 
+  const usingManualRoot = storageState.candidateId === "manual";
   const selectedCandidate = useMemo(
     () => storageState.candidates.find((candidate) => candidate.id === storageState.candidateId),
     [storageState.candidates, storageState.candidateId],
   );
+  const selectedRootPath = usingManualRoot ? storageState.manualRootPath.trim() : (selectedCandidate?.path || "");
+  const storageStatus = storageState.confirmation?.status || "";
+  const storageReady = Boolean(storageState.confirmation?.ready && storageState.confirmation?.selected_host_path);
+  const activationInProgress = ACTIVATION_STATUSES.has(storageState.confirmation?.apply_status || storageStatus);
+  const actionLabel = storageState.preview?.action === "create_and_select" ? t.storageCreateSelect : t.storageCheckSelect;
+  const canAdvance = [systemNameValid, ownerValid, storageReady, recordingValid, systemNameValid && ownerValid && storageReady && recordingValid][step];
 
   function patch(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -57,30 +77,20 @@ export default function SetupPage() {
     setLocale(normalized);
   }
 
-  function storageConfirmationFromApply(data) {
-    return data?.storage_confirmation || {
-      ready: Boolean(data?.final_host_path),
-      selected_host_path: data?.final_host_path || null,
-      container_archive_path: data?.container_archive_path || "/storage/archive",
-      status: data?.apply_status || "unavailable",
-      apply_status: data?.apply_status || null,
-      restart_required: data?.apply_status !== "active",
-      manual_action_required: data?.apply_status !== "active",
-      next_action: data?.apply_status === "pending_host_helper_restart_required" ? "run_storage_apply_helper_and_restart" : "select_and_validate_storage",
-    };
+  function storageStatusText(status) {
+    if (status === "active") return t.storageStatusActive;
+    if (status === "activation_requested") return t.storageStatusQueued;
+    if (status === "activation_in_progress") return t.storageStatusActivating;
+    if (status === "applied_restart_required") return t.storageStatusRestarting;
+    if (status === "activation_failed" || status === "validation_failed") return t.storageStatusFailed;
+    return t.storageStatusUnavailable;
   }
 
-  function formatBytes(value) {
-    const bytes = Number(value || 0);
-    if (!bytes) return "-";
-    const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-    let size = bytes;
-    let unit = 0;
-    while (size >= 1024 && unit < units.length - 1) {
-      size /= 1024;
-      unit += 1;
-    }
-    return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
+  function nextActionText(nextAction) {
+    if (nextAction === "continue_setup") return t.storageNextContinue;
+    if (nextAction === "wait_for_storage_activation") return t.storageNextWait;
+    if (nextAction === "resolve_storage_activation_error") return t.storageNextFix;
+    return t.storageNextSelect;
   }
 
   function candidateText(candidate) {
@@ -92,14 +102,25 @@ export default function SetupPage() {
       `${t.storageUsed}: ${formatBytes(candidate.used_bytes)}`,
       `${t.storageFree}: ${formatBytes(candidate.free_bytes)}${freePercent === null ? "" : ` (${freePercent}%)`}`,
       candidate.writable ? t.storageWritable : t.storageReadOnly,
-      candidate.safety_status === "allowed" ? t.storageAllowed : t.storageBlocked,
-      candidate.reason ? `${t.storageReason}: ${candidate.reason}` : "",
+      candidate.recommended ? t.storageRecommended : "",
     ].filter(Boolean).join(" | ");
+  }
+
+  function storageDisabledReason() {
+    if (storageState.loading) return t.storageLoading;
+    if (!storageState.candidates.length && !storageState.manualPathSupported) return t.storageUnavailable;
+    if (!selectedRootPath) return usingManualRoot ? t.storageManualRootRequired : t.storageRootRequired;
+    if (!storageState.folderName.trim()) return t.storageFolderRequired;
+    if (storageState.previewError) return storageState.previewError;
+    if (activationInProgress) return t.storageActivationBusy;
+    if (!storageState.preview) return t.storagePreviewPending;
+    if (storageState.preview.blockers?.length) return t.storageBlockedByPreview;
+    return "";
   }
 
   useEffect(() => {
     fetch("/api/system/status")
-      .then((response) => response.ok ? response.json() : null)
+      .then((response) => (response.ok ? response.json() : null))
       .then((status) => {
         if (status?.initialized) router.replace("/login");
       })
@@ -108,31 +129,88 @@ export default function SetupPage() {
 
   useEffect(() => {
     fetch("/api/setup/storage/discovery")
-      .then((response) => response.ok ? response.json() : null)
+      .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         const candidates = data?.candidates || [];
-        const allowed = candidates.filter((item) => item.safety_status === "allowed");
+        const nextCandidateId = candidates.find((item) => item.recommended)?.id || candidates[0]?.id || (data?.manual_path_supported ? "manual" : "");
         setStorageState((current) => ({
           ...current,
           loading: false,
           candidates,
-          candidateId: allowed[0]?.id || "",
-          error: allowed.length ? "" : t.storageUnavailable,
+          manualPathSupported: Boolean(data?.manual_path_supported),
+          candidateId: current.candidateId || nextCandidateId,
+          error: candidates.length || data?.manual_path_supported ? "" : t.storageUnavailable,
         }));
       })
       .catch(() => setStorageState((current) => ({ ...current, loading: false, error: t.storageUnavailable })));
   }, [t.storageUnavailable]);
 
   useEffect(() => {
-    fetch("/api/setup/storage/status")
-      .then((response) => response.ok ? response.json() : null)
-      .then((data) => {
-        if (!data?.ready) return;
+    let cancelled = false;
+    async function loadStatus() {
+      try {
+        const response = await fetch("/api/setup/storage/status");
+        const data = response.ok ? await response.json() : null;
+        if (!data || cancelled) return;
         patch("storage_path", data.selected_host_path || "");
-        setStorageState((current) => ({ ...current, confirmation: data, preview: data, message: data.status || "" }));
+        setStorageState((current) => ({
+          ...current,
+          confirmation: data,
+          message: data.apply_status ? storageStatusText(data.apply_status) : "",
+          error: data.apply_status === "activation_failed" ? (data.apply_state?.error || t.storageActivationFailed) : current.error,
+        }));
+      } catch {
+        if (!cancelled) {
+          setStorageState((current) => ({ ...current, error: current.error || t.storageStatusUnavailable }));
+        }
+      }
+    }
+    loadStatus();
+    let timer = null;
+    if (activationInProgress) {
+      timer = setInterval(loadStatus, 2500);
+    }
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [activationInProgress, t.storageActivationFailed, t.storageStatusUnavailable]);
+
+  useEffect(() => {
+    if (step !== 2 || busy) return undefined;
+    const folderName = storageState.folderName.trim();
+    if (!folderName || !selectedRootPath) {
+      setStorageState((current) => ({ ...current, preview: null, previewError: "" }));
+      return undefined;
+    }
+    if (!storageState.candidateId) return undefined;
+    let cancelled = false;
+    const body = {
+      candidate_id: usingManualRoot ? "manual" : storageState.candidateId,
+      folder_name: folderName,
+      manual_root_path: usingManualRoot ? storageState.manualRootPath.trim() : null,
+    };
+    fetch("/api/setup/storage/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => null);
+        if (cancelled) return;
+        if (!response.ok) {
+          setStorageState((current) => ({ ...current, preview: null, previewError: data?.detail || t.storagePreviewFailed }));
+          return;
+        }
+        setStorageState((current) => ({ ...current, preview: data, previewError: "" }));
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => {
+        if (!cancelled) setStorageState((current) => ({ ...current, preview: null, previewError: t.storagePreviewFailed }));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [busy, selectedRootPath, step, storageState.candidateId, storageState.folderName, storageState.manualRootPath, t.storagePreviewFailed, usingManualRoot]);
 
   function validateCurrentStep() {
     if (step === 0 && !systemNameValid) return t.required;
@@ -141,8 +219,8 @@ export default function SetupPage() {
       if (!form.password || !form.password_confirm) return t.required;
       if (form.password !== form.password_confirm) return t.mismatch;
     }
+    if (step === 2 && !storageReady) return storageDisabledReason() || t.storageBlockedReady;
     if (step === 3 && !recordingValid) return t.required;
-    if (step === 2 && !storageReady) return t.storageBlockedReady;
     return "";
   }
 
@@ -173,45 +251,42 @@ export default function SetupPage() {
     setStep(index);
   }
 
-  function nextStep() {
-    goToStep(Math.min(step + 1, t.steps.length - 1));
-  }
-
   async function selectStorage() {
+    const reason = storageDisabledReason();
+    if (reason) {
+      setStorageState((current) => ({ ...current, error: reason }));
+      return;
+    }
     setStorageState((current) => ({ ...current, error: "", message: "" }));
     try {
-      const payload = { candidate_id: storageState.candidateId, folder_name: storageState.folderName };
-      const previewResponse = await fetch("/api/setup/storage/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const previewData = await previewResponse.json().catch(() => null);
-      if (!previewResponse.ok) throw new Error(previewData?.detail || "Storage preview failed");
+      const payload = {
+        candidate_id: usingManualRoot ? "manual" : storageState.candidateId,
+        folder_name: storageState.folderName.trim(),
+        manual_root_path: usingManualRoot ? storageState.manualRootPath.trim() : null,
+      };
       const applyResponse = await fetch("/api/setup/storage/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       const applyData = await applyResponse.json().catch(() => null);
-      if (!applyResponse.ok) throw new Error(applyData?.detail || "Storage validation failed");
-      const confirmation = storageConfirmationFromApply(applyData);
-      patch("storage_path", confirmation.selected_host_path || "");
+      if (!applyResponse.ok) throw new Error(applyData?.detail || t.storageActivationFailed);
+      patch("storage_path", applyData?.storage_confirmation?.selected_host_path || applyData?.final_host_path || "");
       setStorageState((current) => ({
         ...current,
-        preview: applyData,
-        confirmation,
-        message: applyData.apply_status === "pending_host_helper_restart_required" ? t.storagePending : (applyData.apply_status || "selected"),
+        confirmation: applyData.storage_confirmation || current.confirmation,
+        message: t.storageSelectionQueued,
+        error: "",
       }));
     } catch (err) {
-      setStorageState((current) => ({ ...current, error: err?.message || "Storage selection failed" }));
+      setStorageState((current) => ({ ...current, error: err?.message || t.storageActivationFailed }));
     }
   }
 
-  async function submit(e) {
-    e.preventDefault();
+  async function submit(event) {
+    event.preventDefault();
     if (!systemNameValid || !ownerValid || !storageReady || !recordingValid) {
-      setError(t.required);
+      setError(validateCurrentStep() || t.required);
       return;
     }
     setError("");
@@ -220,11 +295,17 @@ export default function SetupPage() {
       const response = await fetch("/api/setup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, username: form.username.trim(), system_name: form.system_name.trim() || null, storage_path: storageState.confirmation?.selected_host_path || "", language }),
+        body: JSON.stringify({
+          ...form,
+          username: form.username.trim(),
+          system_name: form.system_name.trim() || null,
+          storage_path: storageState.confirmation?.selected_host_path || "",
+          language,
+        }),
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.error || data?.detail?.storage?.error || "Setup failed");
+        throw new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.error || data?.detail?.storage?.error || data?.detail?.storage_confirmation || t.storageActivationFailed);
       }
       router.replace("/login");
     } catch (err) {
@@ -242,12 +323,17 @@ export default function SetupPage() {
             <h1>{t.title}</h1>
             <p>{t.subtitle}</p>
           </div>
-          <LanguageSelect className="select setupLang" value={language} onChange={changeLanguage} aria-label={t.language} />
         </div>
 
         <div className="setupSteps" aria-label="Setup progress">
           {t.steps.map((label, index) => (
-            <button className={`setupStep ${index === step ? "active" : ""} ${index < step ? "done" : ""}`} type="button" key={label} onClick={() => goToStep(index)} disabled={busy || !canVisitStep(index)}>
+            <button
+              className={`setupStep ${index === step ? "active" : ""} ${index < step ? "done" : ""}`}
+              type="button"
+              key={label}
+              onClick={() => goToStep(index)}
+              disabled={busy || !canVisitStep(index)}
+            >
               <span>{index + 1}</span>
               <strong>{label}</strong>
             </button>
@@ -259,22 +345,24 @@ export default function SetupPage() {
             <section className="setupPane">
               <h2>{t.welcomeTitle}</h2>
               <p>{t.welcomeText}</p>
-              <label className="settingsField">
-                <span>{t.systemName}</span>
-                <input className="input" value={form.system_name} onChange={(e) => patch("system_name", e.target.value)} maxLength={80} />
-                <small>{t.systemNameHelp}</small>
-              </label>
-              <label className="settingsField">
-                <span>{t.language}</span>
-                <LanguageSelect className="select" value={language} onChange={changeLanguage} aria-label={t.language} />
-              </label>
+              <div className="setupIntroGrid">
+                <label className="settingsField">
+                  <span>{t.systemName}</span>
+                  <input className="input" value={form.system_name} onChange={(e) => patch("system_name", e.target.value)} maxLength={80} />
+                  <small>{t.systemNameHelp}</small>
+                </label>
+                <label className="settingsField">
+                  <span>{t.language}</span>
+                  <LanguageSelect className="select" value={language} onChange={changeLanguage} aria-label={t.language} />
+                </label>
+              </div>
             </section>
           ) : null}
 
           {step === 1 ? (
             <section className="setupPane">
               <h2>{t.ownerTitle}</h2>
-              <div className="settingsGrid">
+              <div className="setupOwnerGrid">
                 <label className="settingsField">
                   <span>{t.username}</span>
                   <input className="input" value={form.username} onChange={(e) => patch("username", e.target.value)} autoComplete="username" />
@@ -296,48 +384,88 @@ export default function SetupPage() {
             <section className="setupPane">
               <h2>{t.storageTitle}</h2>
               <p>{t.storageHelp}</p>
-              <div className="settingsGrid">
+              <div className="setupStorageGrid">
                 <label className="settingsField settingsFull">
-                  <span>{t.storageTitle}</span>
+                  <span>{t.storageRootLabel}</span>
                   <select
                     className="select"
                     value={storageState.candidateId}
-                    onChange={(e) => setStorageState((current) => ({ ...current, candidateId: e.target.value, preview: null, confirmation: null }))}
-                    disabled={storageState.loading || !storageState.candidates.some((candidate) => candidate.safety_status === "allowed")}
+                    onChange={(event) => {
+                      const nextId = event.target.value;
+                      setStorageState((current) => ({
+                        ...current,
+                        candidateId: nextId,
+                        preview: null,
+                        previewError: "",
+                        confirmation: current.confirmation?.apply_status === "active" ? current.confirmation : null,
+                        message: "",
+                        error: "",
+                      }));
+                    }}
+                    disabled={storageState.loading || busy || activationInProgress}
                   >
                     {storageState.candidates.map((candidate) => (
-                      <option value={candidate.id} key={candidate.id} disabled={candidate.safety_status !== "allowed"}>
-                        {candidate.label} - {candidate.safety_status === "allowed" ? t.storageAllowed : t.storageBlocked} - {t.storageFree}: {formatBytes(candidate.free_bytes)}
+                      <option value={candidate.id} key={candidate.id}>
+                        {candidate.label}{candidate.recommended ? ` · ${t.storageRecommended}` : ""} · {t.storageFree}: {formatBytes(candidate.free_bytes)}
                       </option>
                     ))}
+                    {storageState.manualPathSupported ? <option value="manual">{t.storageManualOption}</option> : null}
                   </select>
-                  {selectedCandidate ? <small>{selectedCandidate.path}: {candidateText(selectedCandidate)}</small> : null}
+                  {selectedCandidate ? <small>{selectedCandidate.path}: {candidateText(selectedCandidate)}</small> : <small>{t.storageManualFallback}</small>}
                 </label>
+
+                {usingManualRoot ? (
+                  <label className="settingsField settingsFull">
+                    <span>{t.storageManualRoot}</span>
+                    <input
+                      className="input"
+                      value={storageState.manualRootPath}
+                      onChange={(event) => setStorageState((current) => ({ ...current, manualRootPath: event.target.value, preview: null, previewError: "", confirmation: null, message: "", error: "" }))}
+                      placeholder={t.storageManualRootPlaceholder}
+                      disabled={busy || activationInProgress}
+                    />
+                    <small>{t.storageManualRootHelp}</small>
+                  </label>
+                ) : null}
+
                 <label className="settingsField">
                   <span>{t.storageFolder}</span>
-                  <input className="input" value={storageState.folderName} onChange={(e) => setStorageState((current) => ({ ...current, folderName: e.target.value, preview: null, confirmation: null }))} disabled={!storageState.candidates.length} />
+                  <input
+                    className="input"
+                    value={storageState.folderName}
+                    onChange={(event) => setStorageState((current) => ({ ...current, folderName: event.target.value, preview: null, previewError: "", confirmation: null, message: "", error: "" }))}
+                    disabled={busy || activationInProgress}
+                  />
                 </label>
+
                 <div className="settingsField setupActionField">
-                  <span>&nbsp;</span>
-                  <button className="button secondary small" type="button" onClick={selectStorage} disabled={!storageState.candidateId || busy}>
-                    {t.storageApply}
+                  <span>{t.storageActionLabel}</span>
+                  <button className="button setupPrimaryAction" type="button" onClick={selectStorage} disabled={Boolean(storageDisabledReason()) || busy}>
+                    {actionLabel}
                   </button>
                 </div>
-                <div className="settingsStatus settingsFull compact">
+
+                <div className="settingsStatus settingsFull compact setupStorageStatus">
                   <strong>{t.storagePreview}</strong>
-                  <span>{storageState.confirmation?.selected_host_path || t.storageBlockedReady}</span>
+                  <span>{storageState.preview?.final_host_path || storageState.confirmation?.selected_host_path || t.storageRootRequired}</span>
                   <strong>{t.storageTechnical}</strong>
-                  <span>{storageState.confirmation?.container_archive_path || "/storage/archive"}</span>
-                  <strong>Status</strong>
-                  <span>{storageState.confirmation?.status || "unavailable"}</span>
-                  {storageState.confirmation?.next_action ? (
+                  <span>{storageState.confirmation?.container_archive_path || storageState.preview?.container_archive_path || "/storage/archive"}</span>
+                  <strong>{t.status}</strong>
+                  <span>{storageStatusText(storageState.confirmation?.status || storageState.preview?.status)}</span>
+                  <strong>{t.nextAction}</strong>
+                  <span>{nextActionText(storageState.confirmation?.next_action)}</span>
+                  <strong>{t.storageFolderState}</strong>
+                  <span>{storageState.preview?.exists ? t.storageFolderExists : t.storageFolderWillBeCreated}</span>
+                  {selectedCandidate ? (
                     <>
-                      <strong>{t.nextAction}</strong>
-                      <span>{storageState.confirmation.next_action}</span>
+                      <strong>{t.storageFree}</strong>
+                      <span>{formatBytes(selectedCandidate.free_bytes)}</span>
                     </>
                   ) : null}
-                  {storageState.message ? <span>{storageState.message}</span> : null}
-                  {storageState.error ? <span>{storageState.error}</span> : null}
+                  {storageState.message ? <span className="setupStatusNote">{storageState.message}</span> : null}
+                  {storageState.previewError ? <span className="setupStatusError">{storageState.previewError}</span> : null}
+                  {storageState.error ? <span className="setupStatusError">{storageState.error}</span> : null}
+                  {!storageReady ? <span className="setupStatusNote">{storageDisabledReason() || t.storageBlockedReady}</span> : null}
                 </div>
               </div>
             </section>
@@ -372,8 +500,8 @@ export default function SetupPage() {
                 <span>{t.username}</span><strong>{form.username.trim()}</strong>
                 <span>{t.storagePreview}</span><strong>{storageState.confirmation?.selected_host_path || t.storageBlockedReady}</strong>
                 <span>{t.storageTechnical}</span><strong>{storageState.confirmation?.container_archive_path || "/storage/archive"}</strong>
-                <span>Status</span><strong>{storageState.confirmation?.status || "unavailable"}</strong>
-                <span>{t.nextAction}</span><strong>{storageState.confirmation?.next_action || "-"}</strong>
+                <span>{t.status}</span><strong>{storageStatusText(storageState.confirmation?.status)}</strong>
+                <span>{t.nextAction}</span><strong>{nextActionText(storageState.confirmation?.next_action)}</strong>
                 <span>{t.timezone}</span><strong>{form.timezone}</strong>
                 <span>{t.format}</span><strong>{form.recording_format.toUpperCase()}</strong>
               </div>
@@ -389,7 +517,7 @@ export default function SetupPage() {
             {t.back}
           </button>
           {step < t.steps.length - 1 ? (
-            <button className="button" type="button" onClick={nextStep} disabled={busy || !canAdvance}>
+            <button className="button" type="button" onClick={() => goToStep(Math.min(step + 1, t.steps.length - 1))} disabled={busy || !canAdvance}>
               {t.next}
             </button>
           ) : (
