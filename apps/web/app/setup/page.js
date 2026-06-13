@@ -3,9 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LanguageSelect, localeMetadata, normalizeLocale, useI18n, useLocaleText } from "../../lib/i18n";
+import { UTC_TIMEZONES, offsetFromTimezone, timezoneValueForSettings } from "../../lib/settingsPageHelpers";
 
 const USERNAME_RE = /^[A-Za-z0-9_.-]{2,64}$/;
 const ACTIVATION_STATUSES = new Set(["activation_requested", "activation_in_progress", "applied_restart_required"]);
+const SETUP_DRAFT_KEY = "kmvms.setupWizardDraft.v1";
+const SETUP_DRAFT_VERSION = 1;
+const SETUP_SUBMIT_TIMEOUT_MS = 30000;
 
 function formatBytes(value) {
   const bytes = Number(value || 0);
@@ -20,6 +24,58 @@ function formatBytes(value) {
   return `${size >= 10 || unit === 0 ? Math.round(size) : size.toFixed(1)} ${units[unit]}`;
 }
 
+function safeReadDraft() {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.sessionStorage.getItem(SETUP_DRAFT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (parsed?.version !== SETUP_DRAFT_VERSION || typeof parsed?.form !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function safeWriteDraft(payload) {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.setItem(SETUP_DRAFT_KEY, JSON.stringify(payload));
+  } catch {
+    // Browser storage can be disabled; setup must still work without draft persistence.
+  }
+}
+
+function safeClearDraft() {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(SETUP_DRAFT_KEY);
+  } catch {}
+}
+
+function sanitizeDraftStep(value) {
+  const step = Number(value);
+  return Number.isInteger(step) && step >= 0 && step <= 4 ? step : 0;
+}
+
+function setupErrorMessage(data, fallback) {
+  const detail = data?.detail;
+  if (typeof detail === "string") return detail;
+  if (detail?.error) return detail.error;
+  if (detail?.storage?.error) return detail.storage.error;
+  if (detail?.storage_confirmation) return detail.storage_confirmation;
+  if (Array.isArray(detail) && detail[0]?.msg) return detail[0].msg;
+  return fallback;
+}
+
+function setupTimezoneValue(timezone) {
+  const normalized = timezoneValueForSettings(timezone);
+  const direct = UTC_TIMEZONES.find((zone) => zone.value === normalized);
+  if (direct) return direct.value;
+  const offset = offsetFromTimezone(normalized);
+  return UTC_TIMEZONES.find((zone) => zone.offset === offset)?.value || "UTC";
+}
+
 export default function SetupPage() {
   const router = useRouter();
   const { setLocale } = useI18n();
@@ -31,12 +87,14 @@ export default function SetupPage() {
     system_name: "KM VMS",
     password: "",
     password_confirm: "",
-    timezone: "Asia/Yekaterinburg",
+    timezone: "Etc/GMT-5",
     storage_path: "",
     recording_format: "mkv",
   });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [submitState, setSubmitState] = useState("idle");
+  const [draftLoaded, setDraftLoaded] = useState(false);
   const [storageState, setStorageState] = useState({
     loading: true,
     candidates: [],
@@ -45,6 +103,8 @@ export default function SetupPage() {
     manualPathSupported: false,
     manualRootPath: "",
     preview: null,
+    previewing: false,
+    applying: false,
     previewError: "",
     confirmation: null,
     message: "",
@@ -64,7 +124,11 @@ export default function SetupPage() {
   const storageStatus = storageState.confirmation?.status || "";
   const storageReady = Boolean(storageState.confirmation?.ready && storageState.confirmation?.selected_host_path);
   const activationInProgress = ACTIVATION_STATUSES.has(storageState.confirmation?.apply_status || storageStatus);
-  const actionLabel = storageState.preview?.action === "create_and_select" ? t.storageCreateSelect : t.storageCheckSelect;
+  const actionLabel = storageState.previewing
+    ? t.storageChecking
+    : storageState.preview?.action === "create_and_select"
+      ? t.storageCreateSelect
+      : t.storageCheckSelect;
   const canAdvance = [systemNameValid, ownerValid, storageReady, recordingValid, systemNameValid && ownerValid && storageReady && recordingValid][step];
 
   function patch(key, value) {
@@ -106,16 +170,37 @@ export default function SetupPage() {
     ].filter(Boolean).join(" | ");
   }
 
-  function storageDisabledReason() {
+  function storageInputReason() {
     if (storageState.loading) return t.storageLoading;
     if (!storageState.candidates.length && !storageState.manualPathSupported) return t.storageUnavailable;
     if (!selectedRootPath) return usingManualRoot ? t.storageManualRootRequired : t.storageRootRequired;
     if (!storageState.folderName.trim()) return t.storageFolderRequired;
-    if (storageState.previewError) return storageState.previewError;
     if (activationInProgress) return t.storageActivationBusy;
-    if (!storageState.preview) return t.storagePreviewPending;
-    if (storageState.preview.blockers?.length) return t.storageBlockedByPreview;
     return "";
+  }
+
+  function storageDisabledReason() {
+    return storageInputReason()
+      || (storageState.preview?.blockers?.length ? t.storageBlockedByPreview : "")
+      || "";
+  }
+
+  function storageActionDisabledReason() {
+    return storageInputReason() || (storageState.applying ? t.storagePreviewRunning : "");
+  }
+
+  function buildStoragePayload() {
+    return {
+      candidate_id: usingManualRoot ? "manual" : storageState.candidateId,
+      folder_name: storageState.folderName.trim(),
+      manual_root_path: usingManualRoot ? storageState.manualRootPath.trim() : null,
+    };
+  }
+
+  async function requestJson(url, options = {}) {
+    const response = await fetch(url, options);
+    const data = await response.json().catch(() => null);
+    return { response, data };
   }
 
   useEffect(() => {
@@ -126,6 +211,46 @@ export default function SetupPage() {
       })
       .catch(() => {});
   }, [router]);
+
+  useEffect(() => {
+    const draft = safeReadDraft();
+    if (!draft) {
+      setDraftLoaded(true);
+      return;
+    }
+    const draftForm = draft.form || {};
+    setForm((current) => ({
+      ...current,
+      username: typeof draftForm.username === "string" ? draftForm.username : current.username,
+      system_name: typeof draftForm.system_name === "string" ? draftForm.system_name : current.system_name,
+      timezone: typeof draftForm.timezone === "string" ? setupTimezoneValue(draftForm.timezone) : current.timezone,
+      recording_format: ["mkv", "mp4"].includes(draftForm.recording_format) ? draftForm.recording_format : current.recording_format,
+      password: "",
+      password_confirm: "",
+    }));
+    if (draft.language) {
+      const normalized = normalizeLocale(draft.language);
+      setLanguage(normalized);
+      setLocale(normalized);
+    }
+    setStep(sanitizeDraftStep(draft.step));
+    setDraftLoaded(true);
+  }, [setLocale]);
+
+  useEffect(() => {
+    if (!draftLoaded) return;
+    safeWriteDraft({
+      version: SETUP_DRAFT_VERSION,
+      step,
+      language,
+      form: {
+        username: form.username,
+        system_name: form.system_name,
+        timezone: setupTimezoneValue(form.timezone),
+        recording_format: form.recording_format,
+      },
+    });
+  }, [draftLoaded, form.username, form.system_name, form.timezone, form.recording_format, language, step]);
 
   useEffect(() => {
     fetch("/api/setup/storage/discovery")
@@ -155,10 +280,16 @@ export default function SetupPage() {
         patch("storage_path", data.selected_host_path || "");
         setStorageState((current) => ({
           ...current,
+          candidateId: data.selection?.candidate_id || current.candidateId,
+          folderName: data.selection?.folder_name || current.folderName,
           confirmation: data,
           message: data.apply_status ? storageStatusText(data.apply_status) : "",
           error: data.apply_status === "activation_failed" ? (data.apply_state?.error || t.storageActivationFailed) : current.error,
         }));
+        if (data.ready) {
+          const nextStep = !form.password ? 1 : Math.max(step, 3);
+          if (step < nextStep) setStep(nextStep);
+        }
       } catch {
         if (!cancelled) {
           setStorageState((current) => ({ ...current, error: current.error || t.storageStatusUnavailable }));
@@ -180,16 +311,13 @@ export default function SetupPage() {
     if (step !== 2 || busy) return undefined;
     const folderName = storageState.folderName.trim();
     if (!folderName || !selectedRootPath) {
-      setStorageState((current) => ({ ...current, preview: null, previewError: "" }));
+      setStorageState((current) => ({ ...current, preview: null, previewing: false, previewError: "" }));
       return undefined;
     }
     if (!storageState.candidateId) return undefined;
     let cancelled = false;
-    const body = {
-      candidate_id: usingManualRoot ? "manual" : storageState.candidateId,
-      folder_name: folderName,
-      manual_root_path: usingManualRoot ? storageState.manualRootPath.trim() : null,
-    };
+    const body = buildStoragePayload();
+    setStorageState((current) => ({ ...current, previewing: true, previewError: "" }));
     fetch("/api/setup/storage/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -199,13 +327,13 @@ export default function SetupPage() {
         const data = await response.json().catch(() => null);
         if (cancelled) return;
         if (!response.ok) {
-          setStorageState((current) => ({ ...current, preview: null, previewError: data?.detail || t.storagePreviewFailed }));
+          setStorageState((current) => ({ ...current, preview: null, previewing: false, previewError: data?.detail || t.storagePreviewFailed }));
           return;
         }
-        setStorageState((current) => ({ ...current, preview: data, previewError: "" }));
+        setStorageState((current) => ({ ...current, preview: data, previewing: false, previewError: "" }));
       })
       .catch(() => {
-        if (!cancelled) setStorageState((current) => ({ ...current, preview: null, previewError: t.storagePreviewFailed }));
+        if (!cancelled) setStorageState((current) => ({ ...current, preview: null, previewing: false, previewError: t.storagePreviewFailed }));
       });
     return () => {
       cancelled = true;
@@ -252,51 +380,65 @@ export default function SetupPage() {
   }
 
   async function selectStorage() {
-    const reason = storageDisabledReason();
+    const reason = storageActionDisabledReason();
     if (reason) {
       setStorageState((current) => ({ ...current, error: reason }));
       return;
     }
-    setStorageState((current) => ({ ...current, error: "", message: "" }));
+    setStorageState((current) => ({ ...current, error: "", message: "", previewing: true, applying: true }));
     try {
-      const payload = {
-        candidate_id: usingManualRoot ? "manual" : storageState.candidateId,
-        folder_name: storageState.folderName.trim(),
-        manual_root_path: usingManualRoot ? storageState.manualRootPath.trim() : null,
-      };
-      const applyResponse = await fetch("/api/setup/storage/apply", {
+      const payload = buildStoragePayload();
+      const previewResult = await requestJson("/api/setup/storage/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const applyData = await applyResponse.json().catch(() => null);
+      if (!previewResult.response.ok) throw new Error(previewResult.data?.detail || t.storagePreviewFailed);
+      if (previewResult.data?.blockers?.length) {
+        setStorageState((current) => ({ ...current, preview: previewResult.data, previewing: false, applying: false, error: t.storageBlockedByPreview }));
+        return;
+      }
+      setStorageState((current) => ({ ...current, preview: previewResult.data, previewError: "" }));
+      const { response: applyResponse, data: applyData } = await requestJson("/api/setup/storage/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
       if (!applyResponse.ok) throw new Error(applyData?.detail || t.storageActivationFailed);
       patch("storage_path", applyData?.storage_confirmation?.selected_host_path || applyData?.final_host_path || "");
       setStorageState((current) => ({
         ...current,
+        previewing: false,
+        applying: false,
         confirmation: applyData.storage_confirmation || current.confirmation,
         message: t.storageSelectionQueued,
         error: "",
       }));
     } catch (err) {
-      setStorageState((current) => ({ ...current, error: err?.message || t.storageActivationFailed }));
+      setStorageState((current) => ({ ...current, previewing: false, applying: false, error: err?.message || t.storageActivationFailed }));
     }
   }
 
   async function submit(event) {
     event.preventDefault();
+    if (busy) return;
     if (!systemNameValid || !ownerValid || !storageReady || !recordingValid) {
       setError(validateCurrentStep() || t.required);
       return;
     }
     setError("");
     setBusy(true);
+    setSubmitState("submitting");
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), SETUP_SUBMIT_TIMEOUT_MS);
     try {
       const response = await fetch("/api/setup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
         body: JSON.stringify({
           ...form,
+          timezone: setupTimezoneValue(form.timezone),
           username: form.username.trim(),
           system_name: form.system_name.trim() || null,
           storage_path: storageState.confirmation?.selected_host_path || "",
@@ -305,12 +447,22 @@ export default function SetupPage() {
       });
       const data = await response.json().catch(() => null);
       if (!response.ok) {
-        throw new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.error || data?.detail?.storage?.error || data?.detail?.storage_confirmation || t.storageActivationFailed);
+        setSubmitState("server_error");
+        throw new Error(setupErrorMessage(data, t.setupSubmitFailed));
       }
+      setSubmitState("success");
+      safeClearDraft();
       router.replace("/login");
     } catch (err) {
-      setError(err?.message || "Setup failed");
+      if (err?.name === "AbortError") {
+        setSubmitState("timeout");
+        setError(t.setupSubmitTimeout);
+      } else {
+        setSubmitState("network_error");
+        setError(err?.message || t.setupSubmitFailed);
+      }
     } finally {
+      window.clearTimeout(timeoutId);
       setBusy(false);
     }
   }
@@ -397,7 +549,7 @@ export default function SetupPage() {
                         candidateId: nextId,
                         preview: null,
                         previewError: "",
-                        confirmation: current.confirmation?.apply_status === "active" ? current.confirmation : null,
+                        confirmation: current.confirmation?.apply_status === "active" && current.confirmation?.selected_host_path === current.preview?.final_host_path ? current.confirmation : null,
                         message: "",
                         error: "",
                       }));
@@ -420,7 +572,7 @@ export default function SetupPage() {
                     <input
                       className="input"
                       value={storageState.manualRootPath}
-                      onChange={(event) => setStorageState((current) => ({ ...current, manualRootPath: event.target.value, preview: null, previewError: "", confirmation: null, message: "", error: "" }))}
+                      onChange={(event) => setStorageState((current) => ({ ...current, manualRootPath: event.target.value, preview: null, previewing: false, previewError: "", confirmation: null, message: "", error: "" }))}
                       placeholder={t.storageManualRootPlaceholder}
                       disabled={busy || activationInProgress}
                     />
@@ -433,16 +585,17 @@ export default function SetupPage() {
                   <input
                     className="input"
                     value={storageState.folderName}
-                    onChange={(event) => setStorageState((current) => ({ ...current, folderName: event.target.value, preview: null, previewError: "", confirmation: null, message: "", error: "" }))}
+                    onChange={(event) => setStorageState((current) => ({ ...current, folderName: event.target.value, preview: null, previewing: false, previewError: "", confirmation: null, message: "", error: "" }))}
                     disabled={busy || activationInProgress}
                   />
                 </label>
 
                 <div className="settingsField setupActionField">
                   <span>{t.storageActionLabel}</span>
-                  <button className="button setupPrimaryAction" type="button" onClick={selectStorage} disabled={Boolean(storageDisabledReason()) || busy}>
+                  <button className="button setupPrimaryAction" type="button" onClick={selectStorage} disabled={Boolean(storageActionDisabledReason()) || busy}>
                     {actionLabel}
                   </button>
+                  <small>{storageActionDisabledReason() || (storageState.previewError ? t.storageRetryAvailable : t.storageActionReady)}</small>
                 </div>
 
                 <div className="settingsStatus settingsFull compact setupStorageStatus">
@@ -465,7 +618,7 @@ export default function SetupPage() {
                   {storageState.message ? <span className="setupStatusNote">{storageState.message}</span> : null}
                   {storageState.previewError ? <span className="setupStatusError">{storageState.previewError}</span> : null}
                   {storageState.error ? <span className="setupStatusError">{storageState.error}</span> : null}
-                  {!storageReady ? <span className="setupStatusNote">{storageDisabledReason() || t.storageBlockedReady}</span> : null}
+                  {!storageReady ? <span className="setupStatusNote">{storageDisabledReason() || storageState.previewError || t.storageActionReady}</span> : null}
                 </div>
               </div>
             </section>
@@ -477,7 +630,9 @@ export default function SetupPage() {
               <div className="settingsGrid">
                 <label className="settingsField">
                   <span>{t.timezone}</span>
-                  <input className="input" value={form.timezone} onChange={(e) => patch("timezone", e.target.value)} />
+                  <select className="select setupTimezoneSelect" value={setupTimezoneValue(form.timezone)} onChange={(e) => patch("timezone", e.target.value)}>
+                    {UTC_TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
+                  </select>
                 </label>
                 <label className="settingsField">
                   <span>{t.format}</span>
@@ -502,7 +657,7 @@ export default function SetupPage() {
                 <span>{t.storageTechnical}</span><strong>{storageState.confirmation?.container_archive_path || "/storage/archive"}</strong>
                 <span>{t.status}</span><strong>{storageStatusText(storageState.confirmation?.status)}</strong>
                 <span>{t.nextAction}</span><strong>{nextActionText(storageState.confirmation?.next_action)}</strong>
-                <span>{t.timezone}</span><strong>{form.timezone}</strong>
+                <span>{t.timezone}</span><strong>{UTC_TIMEZONES.find((zone) => zone.value === setupTimezoneValue(form.timezone))?.label || "GMT+00:00"}</strong>
                 <span>{t.format}</span><strong>{form.recording_format.toUpperCase()}</strong>
               </div>
               <p>{t.reviewNote}</p>
@@ -512,6 +667,7 @@ export default function SetupPage() {
         </div>
 
         {error ? <div className="authError">{error}</div> : null}
+        {submitState === "timeout" ? <div className="settingsAlert error">{t.setupSubmitTimeoutHelp}</div> : null}
         <div className="setupActions">
           <button className="button secondary" type="button" onClick={() => setStep((current) => Math.max(current - 1, 0))} disabled={busy || step === 0}>
             {t.back}
