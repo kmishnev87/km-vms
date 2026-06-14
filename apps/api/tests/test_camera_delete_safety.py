@@ -1,5 +1,6 @@
 import sys
 import tempfile
+import stat
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -425,6 +426,42 @@ def test_manual_camera_test_without_camera_id_still_builds_explicit_url(db, monk
 
     assert result["ok"] is True
     assert captured["cmd"][-1].startswith("rtsp://operator:")
+
+
+def test_captured_preview_is_readable_by_static_nginx_mount(tmp_path, monkeypatch):
+    original_storage_previews = settings.storage_previews
+    settings.storage_previews = str(tmp_path / "previews")
+    preview_path = settings.camera_test_preview_path("stage6preview")
+
+    def fake_run(cmd, **kwargs):
+        Path(cmd[-1]).write_bytes(b"jpg")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(cameras_module.subprocess, "run", fake_run)
+    try:
+        assert cameras_module.capture_camera_preview("rtsp://camera.local/live", "tcp", preview_path)
+        assert stat.S_IMODE(preview_path.parent.stat().st_mode) == 0o755
+        assert stat.S_IMODE(preview_path.stat().st_mode) == 0o644
+    finally:
+        settings.storage_previews = original_storage_previews
+
+
+def test_attached_camera_preview_is_readable_by_static_nginx_mount(tmp_path):
+    original_storage_previews = settings.storage_previews
+    settings.storage_previews = str(tmp_path / "previews")
+    source = settings.camera_test_preview_path("stage6copy")
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_bytes(b"jpg")
+
+    try:
+        cameras_module.attach_test_preview_to_camera("stage6copy", 42)
+        destination = settings.camera_preview_path(42)
+        assert destination.exists()
+        assert not source.exists()
+        assert stat.S_IMODE(destination.parent.stat().st_mode) == 0o755
+        assert stat.S_IMODE(destination.stat().st_mode) == 0o644
+    finally:
+        settings.storage_previews = original_storage_previews
 
 
 def test_camera_delete_preview_does_not_mutate_files_or_metadata(db):

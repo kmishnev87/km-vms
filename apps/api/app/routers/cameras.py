@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import json
@@ -1067,8 +1068,36 @@ def safe_preview_token(value: str | None) -> str | None:
     return None
 
 
+def ensure_static_preview_permissions(path: Path, *, include_file: bool = False) -> None:
+    preview_root = Path(settings.storage_previews)
+    directories = [preview_root]
+    try:
+        relative_parent = path.parent.relative_to(preview_root)
+        current = preview_root
+        for part in relative_parent.parts:
+            current = current / part
+            directories.append(current)
+    except ValueError:
+        directories.append(path.parent)
+
+    for directory in directories:
+        try:
+            if directory.exists():
+                os.chmod(directory, 0o755)
+        except OSError:
+            pass
+
+    if include_file:
+        try:
+            if path.exists():
+                os.chmod(path, 0o644)
+        except OSError:
+            pass
+
+
 def capture_camera_preview(input_url: str, transport: str, output_path: Path) -> bool:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_static_preview_permissions(output_path)
     cmd = [
         "ffmpeg",
         "-y",
@@ -1093,7 +1122,10 @@ def capture_camera_preview(input_url: str, transport: str, output_path: Path) ->
     if result.returncode != 0:
         output_path.unlink(missing_ok=True)
         return False
-    return output_path.exists() and output_path.stat().st_size > 0
+    preview_ready = output_path.exists() and output_path.stat().st_size > 0
+    if preview_ready:
+        ensure_static_preview_permissions(output_path, include_file=True)
+    return preview_ready
 
 
 def test_preview_destination(payload: dict) -> tuple[Path, str, str]:
@@ -1115,7 +1147,9 @@ def attach_test_preview_to_camera(token: str | None, camera_id: int) -> None:
         return
     destination = settings.camera_preview_path(camera_id)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    ensure_static_preview_permissions(destination)
     shutil.copyfile(source, destination)
+    ensure_static_preview_permissions(destination, include_file=True)
     source.unlink(missing_ok=True)
 
 

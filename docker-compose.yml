@@ -169,7 +169,6 @@ services:
     volumes:
       - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ./data/exports:/var/www/exports:ro
-      - ./data/previews:/var/www/previews:ro
     networks:
       - vms-net
 

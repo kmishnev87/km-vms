@@ -39,6 +39,23 @@ def test_install_docs_do_not_claim_false_public_pipe_install():
     assert "setup-complete.json" in docs
 
 
+def test_install_script_creates_nginx_readable_preview_root():
+    script = read("scripts/install.sh")
+
+    assert 'mkdir -p "$archive_dir" "$backup_dir" "$APP_DIR/data/previews" "$APP_DIR/data/exports" "$APP_DIR/data/install-control"' in script
+    assert 'chmod 755 "$APP_DIR/data/previews" 2>/dev/null || true' in script
+
+
+def test_previews_are_proxied_to_api_not_read_directly_by_nginx():
+    compose = read("docker-compose.yml")
+    nginx = read("deploy/nginx/default.conf")
+    nginx_section = compose.split("  nginx:", 1)[1].split("networks:", 1)[0]
+
+    assert "proxy_pass http://api:8000/previews/;" in nginx
+    assert "alias /var/www/previews/;" not in nginx
+    assert "./data/previews:/var/www/previews" not in nginx_section
+
+
 def test_setup_activation_helper_is_bounded_and_inert_after_setup():
     helper = read("scripts/km-vms-setup-activation-helper.sh")
     compose = read("docker-compose.yml")

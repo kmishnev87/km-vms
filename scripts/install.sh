@@ -481,6 +481,7 @@ write_env() {
   backup_dir="$APP_DIR/data/backups/db"
   mkdir -p "$archive_dir" "$backup_dir" "$APP_DIR/data/previews" "$APP_DIR/data/exports" "$APP_DIR/data/install-control"
   chmod 700 "$backup_dir" 2>/dev/null || true
+  chmod 755 "$APP_DIR/data/previews" 2>/dev/null || true
   pg_secret=$(random_secret)
   jwt_secret=$(random_secret)
   enc_secret=$(random_secret)

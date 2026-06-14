@@ -15,6 +15,7 @@ from app.routers.chronology import router as chronology_router
 from app.routers.hardware import router as hardware_router
 from app.routers.live import router as live_router
 from app.routers.maintenance import migrations_router, overview_router as maintenance_overview_router, restore_router, router as maintenance_router
+from app.routers.previews import router as previews_router
 from app.routers.recordings import router as recordings_router
 from app.routers.deps import require_permission
 from app.routers.settings import router as settings_router
@@ -126,6 +127,7 @@ app.include_router(settings_router)
 app.include_router(users_router)
 app.include_router(cameras_router)
 app.include_router(viewer_cameras_router)
+app.include_router(previews_router)
 app.include_router(recordings_router)
 app.include_router(storage_router)
 app.include_router(hardware_router)
