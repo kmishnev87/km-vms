@@ -58,6 +58,11 @@ function sanitizeDraftStep(value) {
   return Number.isInteger(step) && step >= 0 && step <= 4 ? step : 0;
 }
 
+function restoreDraftStep(value) {
+  const step = sanitizeDraftStep(value);
+  return step > 2 ? 2 : step;
+}
+
 function setupErrorMessage(data, fallback) {
   const detail = data?.detail;
   if (typeof detail === "string") return detail;
@@ -127,7 +132,7 @@ export default function SetupPage() {
   const actionLabel = storageState.preview?.action === "create_and_select"
     ? t.storageCreateSelect
     : t.storageCheckSelect;
-  const canAdvance = [systemNameValid, ownerValid, storageReady, recordingValid, systemNameValid && ownerValid && storageReady && recordingValid][step];
+  const canAdvance = [systemNameValid, storageReady, ownerValid, recordingValid, systemNameValid && storageReady && ownerValid && recordingValid][step];
 
   function patch(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -243,7 +248,7 @@ export default function SetupPage() {
       setLanguage(normalized);
       setLocale(normalized);
     }
-    setStep(sanitizeDraftStep(draft.step));
+    setStep(restoreDraftStep(draft.step));
     setDraftLoaded(true);
   }, [setLocale]);
 
@@ -297,7 +302,7 @@ export default function SetupPage() {
           error: data.apply_status === "activation_failed" ? (data.apply_state?.error || t.storageActivationFailed) : current.error,
         }));
         if (data.ready) {
-          const nextStep = !form.password ? 1 : Math.max(step, 3);
+          const nextStep = !form.password ? 2 : Math.max(step, 3);
           if (step < nextStep) setStep(nextStep);
         }
       } catch {
@@ -318,7 +323,7 @@ export default function SetupPage() {
   }, [activationInProgress, t.storageActivationFailed, t.storageStatusUnavailable]);
 
   useEffect(() => {
-    if (step !== 2 || busy) return undefined;
+    if (step !== 1 || busy) return undefined;
     const folderName = storageState.folderName.trim();
     if (!folderName || !selectedRootPath) {
       setStorageState((current) => ({ ...current, preview: null, previewing: false, previewError: "" }));
@@ -352,12 +357,12 @@ export default function SetupPage() {
 
   function validateCurrentStep() {
     if (step === 0 && !systemNameValid) return t.required;
-    if (step === 1) {
+    if (step === 1 && !storageReady) return storageDisabledReason() || t.storageBlockedReady;
+    if (step === 2) {
       if (!USERNAME_RE.test(form.username.trim())) return t.invalidUsername;
       if (!form.password || !form.password_confirm) return t.required;
       if (form.password !== form.password_confirm) return t.mismatch;
     }
-    if (step === 2 && !storageReady) return storageDisabledReason() || t.storageBlockedReady;
     if (step === 3 && !recordingValid) return t.required;
     return "";
   }
@@ -365,9 +370,9 @@ export default function SetupPage() {
   function canVisitStep(index) {
     if (index <= step) return true;
     if (index === 1) return systemNameValid;
-    if (index === 2) return ownerValid;
-    if (index === 3) return ownerValid && storageReady;
-    return systemNameValid && ownerValid && storageReady && recordingValid;
+    if (index === 2) return systemNameValid && storageReady;
+    if (index === 3) return systemNameValid && storageReady && ownerValid;
+    return systemNameValid && storageReady && ownerValid && recordingValid;
   }
 
   function goToStep(index) {
@@ -524,29 +529,6 @@ export default function SetupPage() {
 
           {step === 1 ? (
             <section className="setupPane">
-              <h2>{t.ownerTitle}</h2>
-              <div className="setupFormGrid setupOwnerGrid">
-                <label className="setupField setupOwnerLogin">
-                  <span className="setupFieldLabel">{t.username}</span>
-                  <input className="input" value={form.username} onChange={(e) => patch("username", e.target.value)} autoComplete="username" />
-                  <small className="setupFieldHint">{t.usernameHelp}</small>
-                </label>
-                <label className="setupField setupOwnerPassword">
-                  <span className="setupFieldLabel">{t.password}</span>
-                  <input className="input" type="password" value={form.password} onChange={(e) => patch("password", e.target.value)} autoComplete="new-password" />
-                  <small className="setupFieldHint" aria-hidden="true">&nbsp;</small>
-                </label>
-                <label className="setupField setupOwnerConfirm">
-                  <span className="setupFieldLabel">{t.passwordConfirm}</span>
-                  <input className="input" type="password" value={form.password_confirm} onChange={(e) => patch("password_confirm", e.target.value)} autoComplete="new-password" />
-                  <small className="setupFieldHint" aria-hidden="true">&nbsp;</small>
-                </label>
-              </div>
-            </section>
-          ) : null}
-
-          {step === 2 ? (
-            <section className="setupPane">
               <h2>{t.storageTitle}</h2>
               <p>{t.storageHelp}</p>
               <div className="setupStorageGrid">
@@ -636,6 +618,29 @@ export default function SetupPage() {
                   {storageState.error ? <span className="setupStatusError">{storageState.error}</span> : null}
                   {!storageReady ? <span className="setupStatusNote">{storageDisabledReason() || storageState.previewError || t.storageActionReady}</span> : null}
                 </div>
+              </div>
+            </section>
+          ) : null}
+
+          {step === 2 ? (
+            <section className="setupPane">
+              <h2>{t.ownerTitle}</h2>
+              <div className="setupFormGrid setupOwnerGrid">
+                <label className="setupField setupOwnerLogin">
+                  <span className="setupFieldLabel">{t.username}</span>
+                  <input className="input" value={form.username} onChange={(e) => patch("username", e.target.value)} autoComplete="username" />
+                  <small className="setupFieldHint">{t.usernameHelp}</small>
+                </label>
+                <label className="setupField setupOwnerPassword">
+                  <span className="setupFieldLabel">{t.password}</span>
+                  <input className="input" type="password" value={form.password} onChange={(e) => patch("password", e.target.value)} autoComplete="new-password" />
+                  <small className="setupFieldHint" aria-hidden="true">&nbsp;</small>
+                </label>
+                <label className="setupField setupOwnerConfirm">
+                  <span className="setupFieldLabel">{t.passwordConfirm}</span>
+                  <input className="input" type="password" value={form.password_confirm} onChange={(e) => patch("password_confirm", e.target.value)} autoComplete="new-password" />
+                  <small className="setupFieldHint" aria-hidden="true">&nbsp;</small>
+                </label>
               </div>
             </section>
           ) : null}

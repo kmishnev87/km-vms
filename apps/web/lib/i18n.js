@@ -550,7 +550,7 @@ export const DICTIONARIES = {
     setup: {
       title: "Первый запуск KM VMS",
       subtitle: "Пошагово создайте владельца системы и подтвердите базовые параметры.",
-      steps: ["Язык", "Владелец", "Хранилище", "Запись", "Проверка"],
+      steps: ["Язык", "Хранилище", "Владелец", "Запись", "Проверка"],
       welcomeTitle: "Добро пожаловать",
       welcomeText: "Этот мастер выполняется один раз до входа в систему.",
       systemName: "Имя системы",
@@ -1124,7 +1124,7 @@ export const DICTIONARIES = {
     setup: {
       title: "KM VMS first run",
       subtitle: "Create the system owner and confirm baseline settings step by step.",
-      steps: ["Language", "Owner", "Storage", "Recording", "Review"],
+      steps: ["Language", "Storage", "Owner", "Recording", "Review"],
       welcomeTitle: "Welcome",
       welcomeText: "This wizard runs once before the first sign-in.",
       systemName: "System name",
@@ -1698,7 +1698,7 @@ export const DICTIONARIES = {
     setup: {
       title: "KM VMS 首次运行",
       subtitle: "逐步创建系统所有者并确认基础设置。",
-      steps: ["语言", "所有者", "存储", "录像", "检查"],
+      steps: ["语言", "存储", "所有者", "录像", "检查"],
       welcomeTitle: "欢迎",
       welcomeText: "此向导在首次登录前只运行一次。",
       systemName: "系统名称",
@@ -2072,7 +2072,7 @@ const TEXT_TRANSLATIONS = {
 DICTIONARIES.ru.setup = {
   title: "Первый запуск KM VMS",
   subtitle: "Пошагово создайте владельца системы и подтвердите базовые параметры.",
-  steps: ["Язык", "Владелец", "Хранилище", "Запись", "Проверка"],
+  steps: ["Язык", "Хранилище", "Владелец", "Запись", "Проверка"],
   welcomeTitle: "Добро пожаловать",
   welcomeText: "Этот мастер выполняется один раз до входа в систему.",
   systemName: "Имя системы",

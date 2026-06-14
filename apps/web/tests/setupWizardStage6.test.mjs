@@ -20,12 +20,18 @@ assert.doesNotMatch(setupPage, /<option value=\{form\.timezone\}>/, "setup wizar
 assert.match(setupPage, /setupFormGrid setupFormGrid-two/, "setup wizard aligns two-column fields through a dedicated setup grid");
 assert.match(setupPage, /setupOwnerGrid[\s\S]*setupOwnerPassword[\s\S]*setupOwnerConfirm/, "owner password confirmation is grouped under the password field");
 assert.match(setupPage, /setupStorageFolder[\s\S]*setupActionField/, "storage folder input and action button share the setup field rhythm");
+assert.match(setupPage, /canAdvance = \[systemNameValid, storageReady, ownerValid, recordingValid/, "setup wizard applies storage before owner credentials");
+assert.match(setupPage, /if \(step === 1 && !storageReady\)/, "storage validation runs before owner password validation");
+assert.match(setupPage, /if \(step === 2\)[\s\S]{0,220}form\.password/, "owner password validation runs after storage is active");
+assert.match(setupPage, /step !== 1 \|\| busy/, "storage preview runs only on the storage step");
 assert.match(setupPage, /candidate_id: usingManualRoot \? "manual"/, "manual root mode uses explicit backend contract");
 assert.match(setupPage, /storageReady = Boolean\(storageState\.confirmation\?\.ready/, "Next gate depends on active storage readiness");
 assert.match(setupPage, /storageStatusText\(storageState\.confirmation\?\.status/, "operator UI maps backend statuses before rendering");
 assert.match(setupPage, /SETUP_DRAFT_KEY = "kmvms\.setupWizardDraft\.v1"/, "setup wizard uses versioned non-secret draft storage");
 assert.match(setupPage, /window\.sessionStorage\.setItem\(SETUP_DRAFT_KEY/, "setup wizard persists non-secret draft in sessionStorage");
 assert.match(setupPage, /password:\s*""/, "setup wizard clears password fields while restoring draft");
+assert.match(setupPage, /function restoreDraftStep/, "setup wizard caps draft resume because passwords are not persisted");
+assert.match(setupPage, /return step > 2 \? 2 : step/, "draft restore returns to owner step after reload instead of showing an invalid final review");
 assert.doesNotMatch(setupPage, /sessionStorage\.setItem[\s\S]{0,500}password_confirm/, "setup wizard does not persist password confirmation");
 assert.match(setupPage, /AbortController/, "final setup submit uses abortable request");
 assert.match(setupPage, /SETUP_SUBMIT_TIMEOUT_MS = 30000/, "final setup submit has bounded timeout");
@@ -43,6 +49,8 @@ assert.match(setupPage, /\{storageState\.applying \? t\.storageChecking : action
 assert.match(setupPage, /data\.ready[\s\S]{0,200}setStep/, "setup wizard resumes from backend active storage state");
 assert.doesNotMatch(setupPage, />Status</, "setup page does not hardcode raw English status labels");
 assert.doesNotMatch(setupPage, /pending_host_helper_restart_required|run_storage_apply_helper_and_restart/, "setup page does not leak old helper-only status codes");
+assert.match(i18n, /steps: \["Язык", "Хранилище", "Владелец", "Запись", "Проверка"\]/, "Russian setup steps put storage before owner credentials");
+assert.match(i18n, /steps: \["Language", "Storage", "Owner", "Recording", "Review"\]/, "English setup steps put storage before owner credentials");
 assert.match(i18n, /Русский/, "language selector uses readable Russian label");
 assert.match(i18n, /Первый запуск KM VMS/, "setup wizard Russian copy is not mojibake");
 
