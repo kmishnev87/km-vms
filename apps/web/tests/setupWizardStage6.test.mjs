@@ -31,6 +31,10 @@ assert.match(setupPage, /AbortController/, "final setup submit uses abortable re
 assert.match(setupPage, /SETUP_SUBMIT_TIMEOUT_MS = 30000/, "final setup submit has bounded timeout");
 assert.match(setupPage, /async function recoverCompletedSetup/, "final setup submit can recover when the server completed but the client timed out");
 assert.match(setupPage, /AbortError[\s\S]{0,180}recoverCompletedSetup\(\)/, "AbortError path checks backend completion before resetting the operator");
+assert.doesNotMatch(setupPage, /<form className="setupCard setupWizard"/, "setup wizard does not use implicit browser form submit");
+assert.doesNotMatch(setupPage, /onSubmit=\{/, "setup wizard completion is not wired through form submit");
+assert.doesNotMatch(setupPage, /type="submit"/, "setup wizard has no implicit submit button");
+assert.match(setupPage, /key="setup-finish"[\s\S]{0,120}type="button"[\s\S]{0,120}onClick=\{submitSetup\}/, "finish action is an explicit button click");
 assert.match(setupPage, /storageActionDisabledReason\(\)[\s\S]*storageInputReason\(\)/, "storage action has a dedicated disabled gate");
 assert.doesNotMatch(setupPage, /storageActionDisabledReason\(\)[\s\S]{0,250}!storageState\.preview/, "storage action is not disabled solely by missing preview");
 assert.match(setupPage, /const actionLabel = storageState\.preview\?\.action === "create_and_select"/, "storage action label is driven by the confirmed preview action");

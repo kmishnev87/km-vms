@@ -429,8 +429,7 @@ export default function SetupPage() {
     }
   }
 
-  async function submit(event) {
-    event.preventDefault();
+  async function submitSetup() {
     if (busy) return;
     if (!systemNameValid || !ownerValid || !storageReady || !recordingValid) {
       setError(validateCurrentStep() || t.required);
@@ -480,7 +479,7 @@ export default function SetupPage() {
 
   return (
     <div className="setupPage">
-      <form className="setupCard setupWizard" onSubmit={submit}>
+      <div className="setupCard setupWizard">
         <div className="setupHeader">
           <div>
             <h1>{t.title}</h1>
@@ -691,16 +690,16 @@ export default function SetupPage() {
             {t.back}
           </button>
           {step < t.steps.length - 1 ? (
-            <button className="button" type="button" onClick={() => goToStep(Math.min(step + 1, t.steps.length - 1))} disabled={busy || !canAdvance}>
+            <button key="setup-next" className="button" type="button" onClick={() => goToStep(Math.min(step + 1, t.steps.length - 1))} disabled={busy || !canAdvance}>
               {t.next}
             </button>
           ) : (
-            <button className="button" type="submit" disabled={busy || !canAdvance}>
+            <button key="setup-finish" className="button" type="button" onClick={submitSetup} disabled={busy || !canAdvance}>
               {busy ? t.busy : t.submit}
             </button>
           )}
         </div>
-      </form>
+      </div>
     </div>
   );
 }
