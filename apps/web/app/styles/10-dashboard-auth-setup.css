@@ -766,17 +766,6 @@
   gap: 16px;
 }
 
-.setupWizard .settingsField {
-  gap: 7px;
-  min-height: 86px;
-}
-
-.setupWizard .settingsField > span,
-.setupActionField > span {
-  min-height: 17px;
-  line-height: 17px;
-}
-
 .setupWizard .input,
 .setupWizard .select {
   min-height: 44px;
@@ -794,21 +783,70 @@
   max-width: 240px;
 }
 
-.setupIntroGrid,
-.setupOwnerGrid,
+.setupFormGrid,
 .setupStorageGrid {
   display: grid;
   gap: 14px 16px;
 }
 
-.setupIntroGrid,
-.setupOwnerGrid {
+.setupFormGrid-two {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.setupOwnerGrid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    "login password"
+    ". confirm";
+}
+
+.setupOwnerLogin {
+  grid-area: login;
+}
+
+.setupOwnerPassword {
+  grid-area: password;
+}
+
+.setupOwnerConfirm {
+  grid-area: confirm;
 }
 
 .setupStorageGrid {
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.48fr);
   align-items: start;
+}
+
+.setupFull {
+  grid-column: 1 / -1;
+}
+
+.setupField {
+  display: grid;
+  grid-template-rows: 18px 44px minmax(18px, auto);
+  gap: 6px;
+  min-width: 0;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.setupFieldLabel {
+  min-width: 0;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setupFieldHint {
+  min-width: 0;
+  min-height: 18px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .setupPane h2 {
@@ -826,8 +864,7 @@
 }
 
 .setupActionField {
-  align-self: end;
-  min-height: 88px;
+  align-self: start;
 }
 
 .setupPrimaryAction {
@@ -957,10 +994,17 @@
     border-bottom: 0;
   }
 
-  .setupIntroGrid,
+  .setupFormGrid-two,
   .setupOwnerGrid,
   .setupStorageGrid {
     grid-template-columns: 1fr;
+  }
+
+  .setupOwnerGrid {
+    grid-template-areas:
+      "login"
+      "password"
+      "confirm";
   }
 
   .setupTimezoneSelect {

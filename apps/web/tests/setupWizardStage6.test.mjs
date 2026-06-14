@@ -17,6 +17,9 @@ assert.match(setupPage, /timezone:\s*"Etc\/GMT-5"/, "setup wizard default timezo
 assert.match(setupPage, /className="select setupTimezoneSelect"/, "setup wizard renders timezone as a select, not a free text input");
 assert.match(setupPage, /UTC_TIMEZONES\.map/, "setup wizard offers sorted GMT/UTC timezone choices");
 assert.doesNotMatch(setupPage, /<option value=\{form\.timezone\}>/, "setup wizard does not expose raw IANA timezone text as a selectable option");
+assert.match(setupPage, /setupFormGrid setupFormGrid-two/, "setup wizard aligns two-column fields through a dedicated setup grid");
+assert.match(setupPage, /setupOwnerGrid[\s\S]*setupOwnerPassword[\s\S]*setupOwnerConfirm/, "owner password confirmation is grouped under the password field");
+assert.match(setupPage, /setupStorageFolder[\s\S]*setupActionField/, "storage folder input and action button share the setup field rhythm");
 assert.match(setupPage, /candidate_id: usingManualRoot \? "manual"/, "manual root mode uses explicit backend contract");
 assert.match(setupPage, /storageReady = Boolean\(storageState\.confirmation\?\.ready/, "Next gate depends on active storage readiness");
 assert.match(setupPage, /storageStatusText\(storageState\.confirmation\?\.status/, "operator UI maps backend statuses before rendering");
@@ -26,8 +29,13 @@ assert.match(setupPage, /password:\s*""/, "setup wizard clears password fields w
 assert.doesNotMatch(setupPage, /sessionStorage\.setItem[\s\S]{0,500}password_confirm/, "setup wizard does not persist password confirmation");
 assert.match(setupPage, /AbortController/, "final setup submit uses abortable request");
 assert.match(setupPage, /SETUP_SUBMIT_TIMEOUT_MS = 30000/, "final setup submit has bounded timeout");
+assert.match(setupPage, /async function recoverCompletedSetup/, "final setup submit can recover when the server completed but the client timed out");
+assert.match(setupPage, /AbortError[\s\S]{0,180}recoverCompletedSetup\(\)/, "AbortError path checks backend completion before resetting the operator");
 assert.match(setupPage, /storageActionDisabledReason\(\)[\s\S]*storageInputReason\(\)/, "storage action has a dedicated disabled gate");
 assert.doesNotMatch(setupPage, /storageActionDisabledReason\(\)[\s\S]{0,250}!storageState\.preview/, "storage action is not disabled solely by missing preview");
+assert.match(setupPage, /const actionLabel = storageState\.preview\?\.action === "create_and_select"/, "storage action label is driven by the confirmed preview action");
+assert.doesNotMatch(setupPage, /const actionLabel = storageState\.previewing/, "background preview state must not leave the storage button stuck on checking");
+assert.match(setupPage, /\{storageState\.applying \? t\.storageChecking : actionLabel\}/, "storage button shows checking only during the operator action");
 assert.match(setupPage, /data\.ready[\s\S]{0,200}setStep/, "setup wizard resumes from backend active storage state");
 assert.doesNotMatch(setupPage, />Status</, "setup page does not hardcode raw English status labels");
 assert.doesNotMatch(setupPage, /pending_host_helper_restart_required|run_storage_apply_helper_and_restart/, "setup page does not leak old helper-only status codes");

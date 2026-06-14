@@ -70,7 +70,8 @@ function reasonText(summary, copy, language) {
 function blockerText(blockers, copy, language) {
   const list = Array.isArray(blockers) ? blockers : [];
   if (!list.length) return copy.noReasons;
-  return list.map((item) => humanBlockerReason(item, language)).join(" ");
+  const labels = list.map((item) => humanBlockerReason(item, language));
+  return Array.from(new Set(labels)).join(" ");
 }
 
 function retentionSummaryText(source, copy) {

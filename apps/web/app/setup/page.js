@@ -124,11 +124,9 @@ export default function SetupPage() {
   const storageStatus = storageState.confirmation?.status || "";
   const storageReady = Boolean(storageState.confirmation?.ready && storageState.confirmation?.selected_host_path);
   const activationInProgress = ACTIVATION_STATUSES.has(storageState.confirmation?.apply_status || storageStatus);
-  const actionLabel = storageState.previewing
-    ? t.storageChecking
-    : storageState.preview?.action === "create_and_select"
-      ? t.storageCreateSelect
-      : t.storageCheckSelect;
+  const actionLabel = storageState.preview?.action === "create_and_select"
+    ? t.storageCreateSelect
+    : t.storageCheckSelect;
   const canAdvance = [systemNameValid, ownerValid, storageReady, recordingValid, systemNameValid && ownerValid && storageReady && recordingValid][step];
 
   function patch(key, value) {
@@ -201,6 +199,18 @@ export default function SetupPage() {
     const response = await fetch(url, options);
     const data = await response.json().catch(() => null);
     return { response, data };
+  }
+
+  async function recoverCompletedSetup() {
+    const response = await fetch("/api/system/status").catch(() => null);
+    const status = response?.ok ? await response.json().catch(() => null) : null;
+    if (status?.initialized && !status?.setup_required) {
+      setSubmitState("success");
+      safeClearDraft();
+      router.replace("/login");
+      return true;
+    }
+    return false;
   }
 
   useEffect(() => {
@@ -455,6 +465,7 @@ export default function SetupPage() {
       router.replace("/login");
     } catch (err) {
       if (err?.name === "AbortError") {
+        if (await recoverCompletedSetup()) return;
         setSubmitState("timeout");
         setError(t.setupSubmitTimeout);
       } else {
@@ -497,15 +508,16 @@ export default function SetupPage() {
             <section className="setupPane">
               <h2>{t.welcomeTitle}</h2>
               <p>{t.welcomeText}</p>
-              <div className="setupIntroGrid">
-                <label className="settingsField">
-                  <span>{t.systemName}</span>
+              <div className="setupFormGrid setupFormGrid-two">
+                <label className="setupField">
+                  <span className="setupFieldLabel">{t.systemName}</span>
                   <input className="input" value={form.system_name} onChange={(e) => patch("system_name", e.target.value)} maxLength={80} />
-                  <small>{t.systemNameHelp}</small>
+                  <small className="setupFieldHint">{t.systemNameHelp}</small>
                 </label>
-                <label className="settingsField">
-                  <span>{t.language}</span>
+                <label className="setupField">
+                  <span className="setupFieldLabel">{t.language}</span>
                   <LanguageSelect className="select" value={language} onChange={changeLanguage} aria-label={t.language} />
+                  <small className="setupFieldHint" aria-hidden="true">&nbsp;</small>
                 </label>
               </div>
             </section>
@@ -514,19 +526,21 @@ export default function SetupPage() {
           {step === 1 ? (
             <section className="setupPane">
               <h2>{t.ownerTitle}</h2>
-              <div className="setupOwnerGrid">
-                <label className="settingsField">
-                  <span>{t.username}</span>
+              <div className="setupFormGrid setupOwnerGrid">
+                <label className="setupField setupOwnerLogin">
+                  <span className="setupFieldLabel">{t.username}</span>
                   <input className="input" value={form.username} onChange={(e) => patch("username", e.target.value)} autoComplete="username" />
-                  <small>{t.usernameHelp}</small>
+                  <small className="setupFieldHint">{t.usernameHelp}</small>
                 </label>
-                <label className="settingsField">
-                  <span>{t.password}</span>
+                <label className="setupField setupOwnerPassword">
+                  <span className="setupFieldLabel">{t.password}</span>
                   <input className="input" type="password" value={form.password} onChange={(e) => patch("password", e.target.value)} autoComplete="new-password" />
+                  <small className="setupFieldHint" aria-hidden="true">&nbsp;</small>
                 </label>
-                <label className="settingsField">
-                  <span>{t.passwordConfirm}</span>
+                <label className="setupField setupOwnerConfirm">
+                  <span className="setupFieldLabel">{t.passwordConfirm}</span>
                   <input className="input" type="password" value={form.password_confirm} onChange={(e) => patch("password_confirm", e.target.value)} autoComplete="new-password" />
+                  <small className="setupFieldHint" aria-hidden="true">&nbsp;</small>
                 </label>
               </div>
             </section>
@@ -537,8 +551,8 @@ export default function SetupPage() {
               <h2>{t.storageTitle}</h2>
               <p>{t.storageHelp}</p>
               <div className="setupStorageGrid">
-                <label className="settingsField settingsFull">
-                  <span>{t.storageRootLabel}</span>
+                <label className="setupField setupFull">
+                  <span className="setupFieldLabel">{t.storageRootLabel}</span>
                   <select
                     className="select"
                     value={storageState.candidateId}
@@ -548,6 +562,8 @@ export default function SetupPage() {
                         ...current,
                         candidateId: nextId,
                         preview: null,
+                        previewing: false,
+                        applying: false,
                         previewError: "",
                         confirmation: current.confirmation?.apply_status === "active" && current.confirmation?.selected_host_path === current.preview?.final_host_path ? current.confirmation : null,
                         message: "",
@@ -563,39 +579,40 @@ export default function SetupPage() {
                     ))}
                     {storageState.manualPathSupported ? <option value="manual">{t.storageManualOption}</option> : null}
                   </select>
-                  {selectedCandidate ? <small>{selectedCandidate.path}: {candidateText(selectedCandidate)}</small> : <small>{t.storageManualFallback}</small>}
+                  <small className="setupFieldHint">{selectedCandidate ? `${selectedCandidate.path}: ${candidateText(selectedCandidate)}` : t.storageManualFallback}</small>
                 </label>
 
                 {usingManualRoot ? (
-                  <label className="settingsField settingsFull">
-                    <span>{t.storageManualRoot}</span>
+                  <label className="setupField setupFull">
+                    <span className="setupFieldLabel">{t.storageManualRoot}</span>
                     <input
                       className="input"
                       value={storageState.manualRootPath}
-                      onChange={(event) => setStorageState((current) => ({ ...current, manualRootPath: event.target.value, preview: null, previewing: false, previewError: "", confirmation: null, message: "", error: "" }))}
+                      onChange={(event) => setStorageState((current) => ({ ...current, manualRootPath: event.target.value, preview: null, previewing: false, applying: false, previewError: "", confirmation: null, message: "", error: "" }))}
                       placeholder={t.storageManualRootPlaceholder}
                       disabled={busy || activationInProgress}
                     />
-                    <small>{t.storageManualRootHelp}</small>
+                    <small className="setupFieldHint">{t.storageManualRootHelp}</small>
                   </label>
                 ) : null}
 
-                <label className="settingsField">
-                  <span>{t.storageFolder}</span>
+                <label className="setupField setupStorageFolder">
+                  <span className="setupFieldLabel">{t.storageFolder}</span>
                   <input
                     className="input"
                     value={storageState.folderName}
-                    onChange={(event) => setStorageState((current) => ({ ...current, folderName: event.target.value, preview: null, previewing: false, previewError: "", confirmation: null, message: "", error: "" }))}
+                    onChange={(event) => setStorageState((current) => ({ ...current, folderName: event.target.value, preview: null, previewing: false, applying: false, previewError: "", confirmation: null, message: "", error: "" }))}
                     disabled={busy || activationInProgress}
                   />
+                  <small className="setupFieldHint">{storageState.previewing && !storageState.applying ? t.storagePreviewRunning : "\u00a0"}</small>
                 </label>
 
-                <div className="settingsField setupActionField">
-                  <span>{t.storageActionLabel}</span>
+                <div className="setupField setupActionField">
+                  <span className="setupFieldLabel">{t.storageActionLabel}</span>
                   <button className="button setupPrimaryAction" type="button" onClick={selectStorage} disabled={Boolean(storageActionDisabledReason()) || busy}>
-                    {actionLabel}
+                    {storageState.applying ? t.storageChecking : actionLabel}
                   </button>
-                  <small>{storageActionDisabledReason() || (storageState.previewError ? t.storageRetryAvailable : t.storageActionReady)}</small>
+                  <small className="setupFieldHint">{storageActionDisabledReason() || (storageState.previewError ? t.storageRetryAvailable : t.storageActionReady)}</small>
                 </div>
 
                 <div className="settingsStatus settingsFull compact setupStorageStatus">
@@ -627,20 +644,21 @@ export default function SetupPage() {
           {step === 3 ? (
             <section className="setupPane">
               <h2>{t.recordingTitle}</h2>
-              <div className="settingsGrid">
-                <label className="settingsField">
-                  <span>{t.timezone}</span>
+              <div className="setupFormGrid setupFormGrid-two">
+                <label className="setupField">
+                  <span className="setupFieldLabel">{t.timezone}</span>
                   <select className="select setupTimezoneSelect" value={setupTimezoneValue(form.timezone)} onChange={(e) => patch("timezone", e.target.value)}>
                     {UTC_TIMEZONES.map((zone) => <option key={zone.value} value={zone.value}>{zone.label}</option>)}
                   </select>
+                  <small className="setupFieldHint" aria-hidden="true">&nbsp;</small>
                 </label>
-                <label className="settingsField">
-                  <span>{t.format}</span>
+                <label className="setupField">
+                  <span className="setupFieldLabel">{t.format}</span>
                   <select className="select" value={form.recording_format} onChange={(e) => patch("recording_format", e.target.value)}>
                     <option value="mkv">MKV</option>
                     <option value="mp4">MP4</option>
                   </select>
-                  <small>{t.formatHelp}</small>
+                  <small className="setupFieldHint">{t.formatHelp}</small>
                 </label>
               </div>
             </section>

@@ -189,6 +189,46 @@ export function humanBlockerReason(reason, language = "ru") {
       en: "Path outside safe storage",
       "zh-CN": "路径在安全存储之外",
     },
+    namespace_missing: {
+      ru: "Не создана папка пространства KM VMS: kmvms/recordings",
+      en: "KM VMS namespace folder is missing: kmvms/recordings",
+      "zh-CN": "缺少 KM VMS 命名空间文件夹：kmvms/recordings",
+    },
+    archive_root_namespace_mismatch: {
+      ru: "Корень архива относится к другому пространству хранения",
+      en: "Archive root belongs to a different storage namespace",
+      "zh-CN": "归档根目录属于不同的存储命名空间",
+    },
+    archive_root_unavailable: {
+      ru: "Корень архива недоступен",
+      en: "Archive root is unavailable",
+      "zh-CN": "归档根目录不可用",
+    },
+    archive_root_not_writable: {
+      ru: "Корень архива недоступен для записи",
+      en: "Archive root is not writable",
+      "zh-CN": "归档根目录不可写",
+    },
+    archive_root_missing: {
+      ru: "Корень архива не найден",
+      en: "Archive root is missing",
+      "zh-CN": "找不到归档根目录",
+    },
+    root_missing: {
+      ru: "Путь архива не найден",
+      en: "Archive path is missing",
+      "zh-CN": "找不到归档路径",
+    },
+    root_not_directory: {
+      ru: "Путь архива не является папкой",
+      en: "Archive path is not a directory",
+      "zh-CN": "归档路径不是目录",
+    },
+    root_not_readable: {
+      ru: "Путь архива недоступен для чтения",
+      en: "Archive path is not readable",
+      "zh-CN": "归档路径不可读",
+    },
   };
   return labels[code]?.[language] || labels[code]?.ru || (code ? String(code).replaceAll("_", " ") : statusLabel("unknown", language));
 }

@@ -44,6 +44,8 @@ assert.equal(onText.includes("приостановлена"), true);
 
 assert.match(context.humanBlockerReason("active_recording_jobs"), /идет запись/);
 assert.match(context.humanBlockerReason("active_recording_jobs", "en"), /recording is active/);
+assert.match(context.humanBlockerReason("namespace_missing", "en"), /namespace folder is missing/);
+assert.match(context.humanBlockerReason("archive_root_not_writable", "en"), /not writable/);
 assert.equal(context.factLabel(undefined), "Не проверено");
 assert.equal(context.factTone(undefined), "unknown");
 assert.equal(context.factLabel(false), "Нет");

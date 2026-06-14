@@ -71,6 +71,10 @@ def test_setup_activation_helper_is_bounded_and_inert_after_setup():
     assert "read_control_value" in helper
     assert "read_control_value" in storage_apply
     assert "read_control_value" in restart
+    assert 'namespace_path="$fs_selected_path/kmvms/recordings"' in storage_apply
+    assert 'mkdir -p "$namespace_path"' in storage_apply
+    assert '[ ! -L "$fs_selected_path/kmvms" ]' in storage_apply
+    assert '[ ! -L "$namespace_path" ]' in storage_apply
     for old_json_sed in (
         '"selected_host_path"[[:space:]]*:',
         '"selected_mount_path"[[:space:]]*:',

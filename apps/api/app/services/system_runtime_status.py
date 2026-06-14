@@ -519,6 +519,7 @@ def _normalize_retention_status(value: Any) -> str:
 def _build_retention_domain(db: Session, now: datetime, ctx) -> dict[str, Any]:
     state = automatic_retention_status()
     free_space_state = auto_free_space_status()
+    camera_count = db.query(Camera).count()
     policy_count = db.query(Camera).filter(Camera.retention_days.isnot(None)).count()
     deleted_segments_count = db.query(RecordingSegment).filter(RecordingSegment.status == SEGMENT_STATUS_DELETED).count()
     last_status = state.get("last_status")
@@ -544,7 +545,7 @@ def _build_retention_domain(db: Session, now: datetime, ctx) -> dict[str, Any]:
         severity = "unknown"
         _append_reason(reasons, "retention_unknown")
 
-    if policy_count <= 0:
+    if camera_count > 0 and policy_count <= 0:
         _append_reason(reasons, "retention_policy_risk")
 
     return {
@@ -561,6 +562,7 @@ def _build_retention_domain(db: Session, now: datetime, ctx) -> dict[str, Any]:
         "last_finished_at_system": _system_time(state.get("last_finished_at"), ctx),
         "last_run_age_seconds": _retention_last_run_age_seconds(state, now),
         "policy_count": int(policy_count),
+        "camera_count": int(camera_count),
         "deleted_segments_count": int(deleted_segments_count),
         "summary": {
             "run_count": int(state.get("run_count") or 0),

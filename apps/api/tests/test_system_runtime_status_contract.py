@@ -406,6 +406,15 @@ def test_retention_no_evidence_is_unknown_and_failed_state_is_error(db):
     assert camera.name in rendered(failed_payload)
 
 
+def test_fresh_install_without_cameras_does_not_report_retention_policy_risk(db):
+    payload = build_operator_runtime_status(db)
+    retention = payload["domains"]["retention"]
+
+    assert retention["camera_count"] == 0
+    assert retention["policy_count"] == 0
+    assert "retention_policy_risk" not in retention["reason_codes"]
+
+
 @pytest.mark.parametrize("last_status", ["ok", "completed", "success", "completed_successfully", "succeeded"])
 def test_retention_success_statuses_map_to_ok(db, last_status):
     add_camera(db)

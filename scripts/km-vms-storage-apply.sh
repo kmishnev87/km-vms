@@ -201,6 +201,17 @@ if [ ! -f "$fs_selected_path/.km-vms-storage-root.json" ]; then
     printf '}\n'
   } > "$fs_selected_path/.km-vms-storage-root.json" || fail "cannot write KM VMS storage marker"
 fi
+namespace_path="$fs_selected_path/kmvms/recordings"
+if [ -e "$fs_selected_path/kmvms" ] && [ ! -d "$fs_selected_path/kmvms" ]; then
+  fail "KM VMS namespace parent exists and is not a directory"
+fi
+if [ -e "$namespace_path" ] && [ ! -d "$namespace_path" ]; then
+  fail "KM VMS recordings namespace exists and is not a directory"
+fi
+[ ! -L "$fs_selected_path/kmvms" ] || fail "KM VMS namespace parent must not be a symlink"
+[ ! -L "$namespace_path" ] || fail "KM VMS recordings namespace must not be a symlink"
+mkdir -p "$namespace_path" || fail "cannot create KM VMS recordings namespace"
+chmod 750 "$fs_selected_path/kmvms" "$namespace_path" 2>/dev/null || true
 
 backup="$ENV_FILE.stage2-storage.bak"
 tmp="$ENV_FILE.tmp.$$"

@@ -33,6 +33,7 @@ assert.match(storagePage, /apiFetch\("\/recordings\/retention\/run"/, "/storage 
 assert.match(storagePage, /apiFetch\("\/storage\/reconciliation\/summary"/, "/storage owns archive integrity preview");
 assert.match(storagePage, /apiFetch\("\/storage\/reconcile"/, "/storage owns archive integrity apply");
 assert.match(storagePage, /humanBlockerReason\(item, language\)/, "blocked actions use human wording");
+assert.match(storagePage, /Array\.from\(new Set\(labels\)\)\.join\(" "\)/, "duplicate blocked action labels are collapsed before rendering");
 assert.match(storagePage, /storageSourceLabel\(storageContract\.archive_primary_path_source, copy\)/, "backend source codes are mapped before display");
 assert.match(storagePage, /<details className="storageOpsDetails">/, "technical details are collapsed");
 assert.match(storagePage, /primaryStorageActionText\(\{ operations, pathHealth, capacity, policy, reconciliation, migrationPreview \}, language\)/, "primary action is reason-prioritized");
