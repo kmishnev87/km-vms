@@ -119,6 +119,49 @@ sh scripts/km-vms-restart.sh --app-dir "$HOME/km-vms"
 
 The helper validates compose files, reuses existing `.env`, does not regenerate secrets, does not wipe database/storage, and does not create owner/settings.
 
+## Terminal Update
+
+Installed KM VMS instances can be updated in place from a GitHub tarball without requiring `git` on the NAS/server:
+
+```sh
+cd "$HOME/km-vms"
+sh scripts/update.sh --github-repo OWNER/REPO --branch main --yes
+```
+
+Run a non-mutating plan first:
+
+```sh
+cd "$HOME/km-vms"
+sh scripts/update.sh --github-repo OWNER/REPO --branch main --dry-run
+```
+
+For a private GitHub repository, use one of the secure token paths:
+
+```sh
+KM_VMS_GITHUB_TOKEN_FILE=/path/to/read-only-token \
+  sh scripts/update.sh --github-repo OWNER/REPO --branch main --github-private --yes
+
+KM_VMS_GITHUB_TOKEN=... \
+  sh scripts/update.sh --github-repo OWNER/REPO --branch main --github-private --yes
+
+sh scripts/update.sh \
+  --github-repo OWNER/REPO \
+  --branch main \
+  --github-private \
+  --github-token-env KM_VMS_GITHUB_TOKEN \
+  --yes
+```
+
+The token is used only for GitHub API requests and must be read-only for repository contents. The updater does not print the token, does not embed it in URLs, and does not write it to `.km-vms-update.json`, `.km-vms-source.json`, reports or logs.
+
+The updater overlays only product source/configuration paths: `apps/`, `deploy/`, `docs/`, `scripts/`, compose files, `.dockerignore`, `.gitignore`, and `.env.example`. It preserves `.env`, `.env.*`, `data/`, PostgreSQL/Redis data, previews, exports, install-control files, selected storage roots and recordings. It validates the app directory, validates the downloaded source tree, rejects path traversal and symlinks in the update source, reuses `scripts/km-vms-compose-common.sh`, runs compose config validation, then runs `up -d --build`.
+
+The updater must not run `down -v`, `docker system prune`, delete Docker volumes, regenerate secrets, change the selected storage path, create users/settings, or automatically run database migrations. If a future release needs explicit migration orchestration, use the dedicated migration/update stage instead of treating `update.sh` as a hidden migrator.
+
+The rollback is not implemented in Stage 6.0.7. If the update fails before the overlay phase, app source files are not changed. If it fails after overlay starts, source files may be partially updated; fix the reported failed phase and rerun the same update, or restore from an external backup if the app cannot recover. The updater writes sanitized status to `.km-vms-update.json`.
+
+The in-app update UI, helper container, release manifest API and progress polling are future stage work. Terminal update is the bounded base mechanism.
+
 ## Database Schema Versioning
 
 Stage 2 of Database / Backup / Upgrade Safety introduces API-owned schema version metadata. The API bootstrap keeps the existing `create_all` and manual compatibility ALTER flow for now, then records the current managed schema baseline and an immutable adoption/history event in DB metadata tables.
