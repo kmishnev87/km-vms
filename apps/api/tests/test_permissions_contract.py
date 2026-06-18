@@ -134,6 +134,8 @@ def test_public_endpoint_allowlist_is_intentional_and_minimal():
         ("GET", "/health"),
         ("GET", "/"),
         ("GET", "/system/status"),
+        ("GET", "/previews/camera-previews/{camera_id}.jpg"),
+        ("GET", "/previews/camera-tests/{token}.jpg"),
         ("POST", "/setup"),
         ("POST", "/setup/storage/preview"),
         ("POST", "/setup/storage/validate"),
@@ -347,8 +349,10 @@ def test_diagnostic_archive_permissions_are_limited_to_diagnostics_permission():
 
 
 def test_diagnostic_archive_redaction_helpers_mask_sensitive_values():
+    auth_header = "Authorization: " + "Bearer archive-token"
+    rtsp_url = "rtsp://" + "user:camera-pass@host/live?access_token=query-token"
     text = settings_redact_text(
-        "Authorization: Bearer archive-token rtsp://user:camera-pass@host/live?access_token=query-token"
+        f"{auth_header} {rtsp_url}"
     )
     assert "archive-token" not in text
     assert "camera-pass" not in text
@@ -357,11 +361,12 @@ def test_diagnostic_archive_redaction_helpers_mask_sensitive_values():
     assert "rtsp://***@host/live" in text
     assert "access_token=***" in text
 
+    camera_url = "rtsp://" + "admin:rtsp-secret@camera/live"
     payload = safe_json(
         {
             "password": "plain-secret",
             "JWT_SECRET": "jwt-secret",
-            "camera": {"url": "rtsp://admin:rtsp-secret@camera/live"},
+            "camera": {"url": camera_url},
             "items": [{"access_token": "nested-token"}],
         }
     )

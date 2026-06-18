@@ -33,6 +33,9 @@ from app.services.upgrade_report import build_upgrade_report
 from test_schema_migration_runner_stage3 import seed_state
 
 
+UPDATE_RELEASE_ID = "cccccccccccccccccccccccccccccccccccccccc"
+
+
 class FakeRequest:
     headers = {}
     client = SimpleNamespace(host="127.0.0.1")
@@ -100,18 +103,21 @@ def auth_headers(user):
 
 def manifest(path: Path, **overrides):
     payload = {
-        "latest_version": "9.9.9",
-        "release_id": "stage13-update-release",
-        "build_id": "stage13-update-build",
-        "severity": "recommended",
-        "release_notes": "Safe update apply contract test.",
-        "affected_domains": ["db", "cameras", "settings", "recordings"],
-        "required_schema_version": CURRENT_SCHEMA_VERSION,
-        "migration_risk": "ordinary",
-        "backup_required": False,
-        "restore_validation_required": False,
-        "recording_stop_required": False,
-        "manual_steps": [],
+        "schema_version": 1,
+        "channel": "stable",
+        "version": "9.9.9",
+        "git_ref": "main",
+        "commit": UPDATE_RELEASE_ID,
+        "published_at": "2026-06-18T00:00:00Z",
+        "title": "Stage 13 Update Apply Contract Regression",
+        "summary": "Safe update apply contract test.",
+        "release_notes_url": None,
+        "breaking_changes": [],
+        "requires_backup": False,
+        "requires_manual_action": False,
+        "requires_migration": False,
+        "minimum_current_version": None,
+        "artifacts": {"source": {"type": "github_tarball", "repo": "kmishnev87/km-vms", "ref": "main"}},
     }
     payload.update(overrides)
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -174,7 +180,7 @@ def test_update_candidate_preflight_is_sanitized_and_apply_blocked(tmp_path, mon
 
     assert payload["status"] == "blocked"
     assert payload["reason"] == "update_apply_not_available_for_release"
-    assert payload["release_id"] == "stage13-update-release"
+    assert payload["release_id"] == UPDATE_RELEASE_ID
     assert payload["release_validated"] is True
     assert payload["report"]["compose_plan"]["manual_intervention_required"] is True
     assert payload["report"]["preservation"]["camera_credentials"]["raw_values_included"] is False
@@ -185,7 +191,7 @@ def test_update_candidate_preflight_is_sanitized_and_apply_blocked(tmp_path, mon
     assert "password" not in rendered.lower()
 
     with pytest.raises(UpdateMaintenanceBlocked) as exc:
-        apply_update_maintenance(db, confirm=True, release_id="stage13-update-release")
+        apply_update_maintenance(db, confirm=True, release_id=UPDATE_RELEASE_ID)
     assert exc.value.status == "update_apply_not_available_for_release"
     assert exc.value.diagnostics["can_apply"] is False
     engine.dispose()
@@ -197,7 +203,7 @@ def test_update_apply_confirmation_and_release_reference_are_checked(tmp_path, m
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(release))
 
     with pytest.raises(UpdateMaintenanceBlocked) as confirm:
-        apply_update_maintenance(db, confirm=False, release_id="stage13-update-release")
+        apply_update_maintenance(db, confirm=False, release_id=UPDATE_RELEASE_ID)
     assert confirm.value.status == "confirmation_required"
 
     with pytest.raises(UpdateMaintenanceBlocked) as mismatch:
@@ -217,7 +223,7 @@ def test_update_simulated_apply_requires_backup_before_any_apply_step(tmp_path, 
 
     monkeypatch.setattr("app.services.update_maintenance.create_backup_before_upgrade", fake_backup)
 
-    result = apply_update_maintenance(db, confirm=True, release_id="stage13-update-release", allow_simulated_apply_for_tests=True)
+    result = apply_update_maintenance(db, confirm=True, release_id=UPDATE_RELEASE_ID, allow_simulated_apply_for_tests=True)
 
     assert order == ["backup"]
     assert result["backup_status"] == "verified"
@@ -230,25 +236,14 @@ def test_update_simulated_apply_requires_backup_before_any_apply_step(tmp_path, 
 def test_update_apply_public_payload_contract_and_permissions(client_db):
     client, _db, owner, operator = client_db
 
-    assert client.post("/system/update/dry-run", json={}).status_code == 401
-    assert client.post("/system/update/dry-run", json={}, headers=auth_headers(operator)).status_code == 403
-    assert client.post("/system/update/dry-run", json={}, headers=auth_headers(owner)).status_code == 200
-
-    dangerous = ["url", "release_url", "package_url", "package_path", "manifest_path", "registry_token", "backup_root", "backup_path", "backup_dir", "path", "source_path", "destination", "compose_file", "command", "image", "db_url", "database_url", "connection_string"]
-    for endpoint in ["/system/update/dry-run", "/system/update/apply"]:
-        for field in dangerous:
-            payload = {field: "/tmp/client-controlled"}
-            if endpoint.endswith("/apply"):
-                payload.update({"confirm": True, "release_id": "stage13-update-release"})
-            response = client.post(endpoint, json=payload, headers=auth_headers(owner))
-            assert response.status_code == 422
-
-    rejected = client.post("/system/update/apply", json={"confirm": False, "release_id": "stage13-update-release"}, headers=auth_headers(owner))
-    assert rejected.status_code == 409
+    assert client.post("/system/update/dry-run", json={}).status_code == 404
+    assert client.post("/system/update/dry-run", json={}, headers=auth_headers(operator)).status_code == 404
+    assert client.post("/system/update/dry-run", json={}, headers=auth_headers(owner)).status_code == 404
+    assert client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner)).status_code == 404
 
     rows = {(item.method, item.path, item.decision) for item in ENDPOINT_PERMISSIONS}
-    assert ("POST", "/system/update/dry-run", "manage_settings") in rows
-    assert ("POST", "/system/update/apply", "manage_settings") in rows
+    assert ("POST", "/system/update/dry-run", "manage_settings") not in rows
+    assert ("POST", "/system/update/apply", "manage_settings") not in rows
 
 
 def test_update_maintenance_report_and_upgrade_report_are_read_only(tmp_path):
