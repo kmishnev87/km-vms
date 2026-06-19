@@ -42,10 +42,16 @@ assert.equal(settingsHelpers.includes("MAINTENANCE_DRY_RUN_ENDPOINTS"), true);
 assert.equal(settingsHelpers.includes("/system/db-adoption/dry-run"), true);
 assert.equal(settingsHelpers.includes("/system/migrations/dry-run"), true);
 assert.equal(settingsHelpers.includes("/system/restore/dry-run"), true);
-assert.equal(settingsHelpers.includes("/system/update/dry-run"), true);
-assert.equal(settingsPage.includes("applyRetentionPlan"), true);
-assert.equal(settingsPage.includes("applyReconciliationSafe"), true);
-assert.equal(settingsPage.includes("/system/update/apply"), false);
+assert.equal(settingsHelpers.includes("/system/update/check"), true);
+assert.equal(settingsPage.includes("/system/update/apply"), true);
+assert.equal(settingsPage.includes("/system/update/apply/status"), true);
+assert.equal(settingsPage.includes("window.confirm(t.updateApplyConfirm)"), true);
+assert.equal(settingsPage.includes("expected_manifest_version"), true);
+assert.equal(settingsPage.includes("expected_manifest_commit"), true);
+assert.equal(settingsPage.includes('type="password"'), true);
+assert.equal(settingsPage.includes("github-token"), false);
+assert.equal(settingsPage.includes("localStorage"), false);
+assert.equal(settingsPage.includes("sessionStorage"), false);
 assert.equal(settingsPage.includes("/system/migrations/apply"), false);
 assert.equal(settingsPage.includes("/system/restore/apply"), false);
 assert.equal(settingsPage.includes("/system/db-adoption/apply"), false);
@@ -104,3 +110,4 @@ assert.equal(maintenanceReportPreview.includes("t.maintenanceFlows?.db_adoption"
 
 assert.equal(css.includes(".settingsMaintenanceModal"), true);
 assert.equal(css.includes(".settingsMaintenanceGrid"), true);
+assert.equal(css.includes(".settingsUpdateApplyPanel"), true);

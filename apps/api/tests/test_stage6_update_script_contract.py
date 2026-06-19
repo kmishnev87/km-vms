@@ -2,6 +2,9 @@ import os
 import re
 import subprocess
 import tempfile
+import importlib.util
+import json
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -62,6 +65,143 @@ def test_update_script_reuses_compose_helper_and_github_tarball_without_git_requ
     assert ".km-vms-update.json" in script
 
 
+def test_update_helper_failure_steps_match_failed_phase():
+    helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
+    spec = importlib.util.spec_from_file_location("km_vms_update_helper_contract", helper_path)
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    assert helper.failed_steps("preflight_failed") == [
+        {"name": "request", "status": "completed"},
+        {"name": "preflight", "status": "failed"},
+        {"name": "apply", "status": "pending"},
+        {"name": "health_check", "status": "pending"},
+    ]
+    assert helper.failed_steps("apply_failed") == [
+        {"name": "request", "status": "completed"},
+        {"name": "preflight", "status": "completed"},
+        {"name": "apply", "status": "failed"},
+        {"name": "health_check", "status": "pending"},
+    ]
+    assert helper.failed_steps("health_check_failed") == [
+        {"name": "request", "status": "completed"},
+        {"name": "preflight", "status": "completed"},
+        {"name": "apply", "status": "completed"},
+        {"name": "health_check", "status": "failed"},
+    ]
+
+
+def test_update_helper_requires_mounted_host_app_dir_for_compose(tmp_path):
+    helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
+    spec = importlib.util.spec_from_file_location("km_vms_update_helper_host_dir_contract", helper_path)
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    helper.HOST_APP_DIR = None
+    try:
+        helper.compose_app_dir()
+    except helper.HelperError as exc:
+        assert exc.category == "helper_host_app_dir_missing"
+    else:
+        raise AssertionError("compose_app_dir accepted missing host app dir")
+
+    app_dir = tmp_path / "app"
+    (app_dir / "scripts").mkdir(parents=True)
+    (app_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (app_dir / "scripts" / "update.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+    helper.HOST_APP_DIR = app_dir
+    assert helper.compose_app_dir() == app_dir
+
+
+def test_update_helper_classifies_health_check_failure_from_metadata(tmp_path):
+    helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
+    spec = importlib.util.spec_from_file_location("km_vms_update_helper_failure_contract", helper_path)
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    (tmp_path / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "failed_phase": "health_check"}), encoding="utf-8")
+    exc = helper.classify_apply_failure(tmp_path, "health stderr")
+    assert exc.category == "health_check_failed"
+    assert "health stderr" in str(exc)
+
+    (tmp_path / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "failed_phase": "rebuild_recreate"}), encoding="utf-8")
+    assert helper.classify_apply_failure(tmp_path, "apply stderr").category == "apply_failed"
+
+
+def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tmp_path, monkeypatch):
+    helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
+    spec = importlib.util.spec_from_file_location("km_vms_update_helper_pin_contract", helper_path)
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    app_dir = tmp_path / "app"
+    control_dir = app_dir / "data" / "update-control"
+    (app_dir / "scripts").mkdir(parents=True)
+    control_dir.mkdir(parents=True)
+    (app_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (app_dir / "scripts" / "update.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+    helper.HOST_APP_DIR = app_dir
+    helper.STATUS_FILE = control_dir / "update-status.json"
+
+    expected = "d" * 40
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if "--dry-run" not in command:
+            (app_dir / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "status": "success", "commit_sha": expected}), encoding="utf-8")
+            (app_dir / ".km-vms-source.json").write_text(json.dumps({"schema_version": 1, "commit_sha": expected}), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+    request = {
+        "schema_version": 1,
+        "request_id": "stage609-pin",
+        "requested_at": "2026-06-19T00:00:00Z",
+        "intent": "apply_update",
+        "confirmed": True,
+        "source": {
+            "kind": "trusted_manifest",
+            "source_type": "github_tarball",
+            "repo": "owner/repo",
+            "ref": "main",
+            "commit": expected,
+            "apply_ref": expected,
+        },
+    }
+
+    assert helper.run_update(request) == 0
+    assert commands[0][:6] == ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", expected]
+    assert "main" not in commands[0]
+    status = json.loads((control_dir / "update-status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "completed"
+    assert status["commit_verified"] is True
+    assert status["installed_commit"] == expected
+
+
+def test_update_helper_rejects_commit_mismatch_after_success(tmp_path):
+    helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
+    spec = importlib.util.spec_from_file_location("km_vms_update_helper_commit_mismatch_contract", helper_path)
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    expected = "e" * 40
+    installed = "f" * 40
+    (tmp_path / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "status": "success", "commit_sha": installed}), encoding="utf-8")
+    try:
+        helper.verify_installed_commit(tmp_path, expected)
+    except helper.HelperError as exc:
+        assert exc.category == "commit_mismatch"
+        assert exc.phase == "commit_verification"
+    else:
+        raise AssertionError("commit mismatch was accepted")
+
+
 def test_update_script_forbids_destructive_runtime_data_and_docker_actions():
     script = read("scripts/update.sh")
     compact = re.sub(r"\s+", " ", script)
@@ -83,6 +223,10 @@ def test_update_script_forbids_destructive_runtime_data_and_docker_actions():
         assert pattern not in compact
 
     assert 'compose_cmd --env-file "$APP_DIR/.env" up -d --build' in script
+    assert 'KM_VMS_UPDATE_HELPER_MODE' in script
+    assert 'up -d --build postgres redis api recorder web nginx' in script
+    assert "health_attempts=60" in script
+    assert 'health_targets="http://nginx/api/health http://api:8000/health"' in script
     assert "no app source changes are made before the overlay phase" in script
     assert "partially updated" in script
 
@@ -397,8 +541,8 @@ def test_docs_describe_terminal_update_without_future_stage_claims():
         ".env",
         "data/",
         "rollback is not implemented",
-        "in-app update UI",
-        "future stage",
+        "bounded in-app apply orchestration",
+        "dedicated `update-helper` service",
     ):
         assert required in docs
 

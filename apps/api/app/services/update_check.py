@@ -480,6 +480,8 @@ def _result_payload(result: UpdateCheckResult) -> dict[str, Any]:
             "next_recommended_action": "future_stage_609_apply_helper_required" if payload["status"] == "update_available" else "no_update_apply_action",
         }
     )
+    helper_enabled = str(os.getenv("KMVMS_UPDATE_HELPER_ENABLED") or os.getenv("KM_VMS_UPDATE_HELPER_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+    payload["can_apply_from_ui"] = bool(payload["status"] == "update_available" and not payload["blockers"] and helper_enabled)
     return payload
 
 

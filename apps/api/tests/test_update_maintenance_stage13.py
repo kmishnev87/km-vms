@@ -239,11 +239,12 @@ def test_update_apply_public_payload_contract_and_permissions(client_db):
     assert client.post("/system/update/dry-run", json={}).status_code == 404
     assert client.post("/system/update/dry-run", json={}, headers=auth_headers(operator)).status_code == 404
     assert client.post("/system/update/dry-run", json={}, headers=auth_headers(owner)).status_code == 404
-    assert client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner)).status_code == 404
+    assert client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(operator)).status_code == 403
+    assert client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner)).status_code == 409
 
     rows = {(item.method, item.path, item.decision) for item in ENDPOINT_PERMISSIONS}
     assert ("POST", "/system/update/dry-run", "manage_settings") not in rows
-    assert ("POST", "/system/update/apply", "manage_settings") not in rows
+    assert ("POST", "/system/update/apply", "manage_settings") in rows
 
 
 def test_update_maintenance_report_and_upgrade_report_are_read_only(tmp_path):

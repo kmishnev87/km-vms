@@ -97,6 +97,9 @@ assert.equal(maintenanceStatusText("blocked", maintenanceText), "Blocked");
 assert.equal(maintenanceStatusText("", maintenanceText), "Unknown");
 assert.equal(maintenanceStatusClass("ok"), "ok");
 assert.equal(maintenanceStatusClass("adoptable"), "warning");
+assert.equal(maintenanceStatusClass("queued"), "warning");
+assert.equal(maintenanceStatusClass("completed"), "ok");
+assert.equal(maintenanceStatusClass("failed"), "blocked");
 assert.equal(maintenanceStatusClass("blocked"), "blocked");
 assert.deepEqual(
   maintenanceDetailRows({
@@ -107,7 +110,7 @@ assert.deepEqual(
   }, maintenanceText),
   [["Pending", 2], ["Artifacts", "1/3"], ["Current", "1"], ["Target", "2"], ["Backup", "Backup required"]]
 );
-assert.equal(MAINTENANCE_DRY_RUN_ENDPOINTS.update.path, "/system/update/dry-run");
+assert.equal(MAINTENANCE_DRY_RUN_ENDPOINTS.update.path, "/system/update/check");
 
 assert.equal(auditMessage({ message_ru: "Привет", message_en: "Hello" }, "en"), "Hello");
 assert.equal(auditLabel("severity", "warning", "en"), "Warning");

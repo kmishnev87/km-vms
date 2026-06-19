@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     storage_root: str = "/storage/archive"
     kmvms_db_backup_root: str = "/storage/backups/db"
     storage_install_control: str = "/install-control"
+    update_control_root: str = "/update-control"
+    kmvms_update_helper_enabled: bool = False
+    kmvms_update_source_private: bool = False
+    kmvms_update_token_configured: bool = False
     storage_previews: str = "/storage/previews"
     storage_exports: str = "/storage/exports"
 

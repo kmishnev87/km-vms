@@ -169,7 +169,7 @@ export const MAINTENANCE_DRY_RUN_ENDPOINTS = {
   db_adoption: { path: "/system/db-adoption/dry-run", body: {} },
   migration: { path: "/system/migrations/dry-run", body: {} },
   restore: { path: "/system/restore/dry-run", body: {} },
-  update: { path: "/system/update/dry-run", body: {} },
+  update: { path: "/system/update/check", body: {} },
 };
 
 export function maintenanceFlowRows(overview) {
@@ -183,9 +183,9 @@ export function maintenanceStatusText(status, t) {
 }
 
 export function maintenanceStatusClass(status) {
-  if (["ok", "current", "available", "adopted", "already_adopted"].includes(status)) return "ok";
-  if (["blocked", "no_artifacts", "not_configured"].includes(status)) return "blocked";
-  if (["adoptable", "limited"].includes(status)) return "warning";
+  if (["ok", "current", "available", "adopted", "already_adopted", "completed", "update_available"].includes(status)) return "ok";
+  if (["blocked", "no_artifacts", "not_configured", "failed", "cancelled"].includes(status)) return "blocked";
+  if (["adoptable", "limited", "queued", "preflight", "applying", "rebuilding", "restarting", "health_check"].includes(status)) return "warning";
   return "neutral";
 }
 

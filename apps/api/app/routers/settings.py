@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -62,6 +62,13 @@ from app.services.schema_versioning import schema_version_status
 from app.services.backup_before_upgrade import BackupExecutionConfig, BackupSafetyBlocked, build_backup_plan, create_backup_before_upgrade
 from app.services.upgrade_report import build_upgrade_report, upgrade_report_text_summary
 from app.services.update_check import UpdateCheckBlocked, build_update_status, run_update_check
+from app.services.update_apply import (
+    UpdateApplyBlocked,
+    cancel_update_apply,
+    read_update_apply_status,
+    reject_forbidden_apply_fields,
+    request_update_apply,
+)
 from app.services.timezone_contract import format_system_iso, timezone_context, timezone_metadata, utc_now_storage
 
 router = APIRouter(tags=["settings"])
@@ -124,6 +131,14 @@ class SetupStorageSelectionRequest(BaseModel):
     candidate_id: str = Field(min_length=1, max_length=200)
     folder_name: str = Field(min_length=1, max_length=100)
     manual_root_path: str | None = Field(default=None, max_length=1024)
+
+
+class UpdateApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = False
+    expected_manifest_version: str | None = Field(default=None, max_length=80)
+    expected_manifest_commit: str | None = Field(default=None, max_length=40)
 
 
 @router.get("/system/status")
@@ -291,6 +306,86 @@ def system_update_check(
             "classification": (result.get("classification") or {}).get("classification"),
             "raw_manifest_exposed": False,
         },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    return result
+
+
+@router.post("/system/update/apply")
+def system_update_apply(
+    payload: UpdateApplyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        reject_forbidden_apply_fields(payload.model_dump(exclude_none=True))
+        result = request_update_apply(
+            db,
+            confirm=payload.confirm,
+            expected_manifest_version=payload.expected_manifest_version,
+            expected_manifest_commit=payload.expected_manifest_commit,
+            actor=current_user,
+        )
+    except UpdateApplyBlocked as exc:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="system",
+            event_type="system.update_apply_blocked",
+            severity="warning",
+            message_ru="Product update apply request was blocked.",
+            message_en="Product update apply request was blocked.",
+            target_type="update_apply",
+            metadata={"code": exc.code, "summary": audit_redact_text(str(exc))[:300]},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail={"code": exc.code, "message": str(exc), **exc.diagnostics})
+    create_event(
+        db=db,
+        actor=current_user,
+        category="system",
+        event_type="system.update_apply_requested",
+        severity="warning",
+        message_ru="Product update apply request was queued for helper execution.",
+        message_en="Product update apply request was queued for helper execution.",
+        target_type="update_apply",
+        target_id=result.get("request_id"),
+        metadata={"request_id": result.get("request_id"), "api_docker_socket": False, "api_shell_execution": False},
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    return result
+
+
+@router.get("/system/update/apply/status")
+def system_update_apply_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    return read_update_apply_status()
+
+
+@router.post("/system/update/apply/cancel")
+def system_update_apply_cancel(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    result = cancel_update_apply()
+    create_event(
+        db=db,
+        actor=current_user,
+        category="system",
+        event_type="system.update_apply_cancel_requested",
+        severity="info" if result.get("status") == "cancelled" else "warning",
+        message_ru="Product update apply cancel was requested.",
+        message_en="Product update apply cancel was requested.",
+        target_type="update_apply",
+        target_id=result.get("request_id"),
+        metadata={"status": result.get("status"), "can_cancel": result.get("can_cancel")},
         ip_address=request_ip(request),
         user_agent=request_user_agent(request),
     )

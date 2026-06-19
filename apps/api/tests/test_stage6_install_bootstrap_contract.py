@@ -70,6 +70,8 @@ def test_setup_activation_helper_is_bounded_and_inert_after_setup():
     assert "/system/status" in helper
     assert '"initialized"[[:space:]]*:[[:space:]]*true' in helper
     assert "KM_VMS_HOST_APP_DIR" in compose
+    assert "KMVMS_UPDATE_MANIFEST_PATH" in compose
+    assert "KMVMS_UPDATE_CHANNEL_ID" in compose
     assert "KM_VMS_HOST_APP_DIR" in script
     assert 'exit 0' in helper
     assert "km-vms-storage-apply.sh" in helper
@@ -80,11 +82,20 @@ def test_setup_activation_helper_is_bounded_and_inert_after_setup():
     assert "down -v" not in helper
     assert "docker system prune" not in helper
     assert "setup-helper:" in compose
-    assert compose.count("/var/run/docker.sock:/var/run/docker.sock") == 1
+    assert compose.count("/var/run/docker.sock:/var/run/docker.sock") == 2
     api_section = compose.split("  api:", 1)[1].split("  setup-helper:", 1)[0]
-    helper_section = compose.split("  setup-helper:", 1)[1].split("  recorder:", 1)[0]
+    helper_section = compose.split("  setup-helper:", 1)[1].split("  update-helper:", 1)[0]
+    update_helper_section = compose.split("  update-helper:", 1)[1].split("  recorder:", 1)[0]
     assert "/var/run/docker.sock:/var/run/docker.sock" not in api_section
     assert "/var/run/docker.sock:/var/run/docker.sock" in helper_section
+    assert "/var/run/docker.sock:/var/run/docker.sock" in update_helper_section
+    assert "ports:" not in update_helper_section
+    assert "km-vms-update-helper.py" in update_helper_section
+    assert "working_dir: /host-app" in update_helper_section
+    assert "KM_VMS_UPDATE_APP_DIR: /host-app" in update_helper_section
+    assert "KM_VMS_UPDATE_HOST_APP_DIR" in update_helper_section
+    assert "- ./:/host-app" in update_helper_section
+    assert "- ./:${KM_VMS_HOST_APP_DIR:-/host-app}" in update_helper_section
     assert "read_control_value" in helper
     assert "read_control_value" in storage_apply
     assert "read_control_value" in restart

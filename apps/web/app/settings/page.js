@@ -125,6 +125,16 @@ const TEXT = {
     maintenanceNoHistory: "История действий не найдена",
     maintenanceGeneratedAt: "Сформирован",
     maintenanceWarnings: "Предупреждения",
+    updateApplyTitle: "Применение обновления",
+    updateApplyCheck: "Проверить обновление",
+    updateApplyStart: "Применить обновление",
+    updateApplyConfirm: "Запустить обновление KM VMS? Система выполнит проверку, применит trusted release через helper и может временно перезапустить сервисы.",
+    updateApplyQueued: "Запрос обновления передан helper.",
+    updateApplyUnavailable: "Применение недоступно для текущего состояния.",
+    updateApplyConnection: "Сервис может временно перезапускаться; опрос статуса продолжится автоматически.",
+    updateCurrent: "Текущая",
+    updateLatest: "Доступная",
+    updateSource: "Источник",
     maintenanceLabels: {
       pending: "Ожидают",
       artifacts: "Артефакты",
@@ -313,6 +323,16 @@ const TEXT = {
     maintenanceNoHistory: "No action history found",
     maintenanceGeneratedAt: "Generated",
     maintenanceWarnings: "Warnings",
+    updateApplyTitle: "Update apply",
+    updateApplyCheck: "Check update",
+    updateApplyStart: "Apply update",
+    updateApplyConfirm: "Start KM VMS update? The system will run preflight, apply the trusted release through the helper and may temporarily restart services.",
+    updateApplyQueued: "Update request was handed to the helper.",
+    updateApplyUnavailable: "Apply is unavailable for the current state.",
+    updateApplyConnection: "Services may restart temporarily; status polling will continue automatically.",
+    updateCurrent: "Current",
+    updateLatest: "Latest",
+    updateSource: "Source",
     maintenanceLabels: {
       pending: "Pending",
       artifacts: "Artifacts",
@@ -472,6 +492,16 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceNoHistory: "未找到操作历史",
   maintenanceGeneratedAt: "生成时间",
   maintenanceWarnings: "警告",
+  updateApplyTitle: "应用更新",
+  updateApplyCheck: "检查更新",
+  updateApplyStart: "应用更新",
+  updateApplyConfirm: "启动 KM VMS 更新？系统将执行预检查，通过 helper 应用受信任版本，并可能短暂重启服务。",
+  updateApplyQueued: "更新请求已交给 helper。",
+  updateApplyUnavailable: "当前状态不可应用更新。",
+  updateApplyConnection: "服务可能会短暂重启；状态轮询会自动继续。",
+  updateCurrent: "当前",
+  updateLatest: "可用",
+  updateSource: "来源",
   maintenanceLabels: {
     pending: "待处理",
     artifacts: "工件",
@@ -564,6 +594,9 @@ export default function SettingsPage() {
   const [maintenanceBusy, setMaintenanceBusy] = useState("");
   const [maintenanceActionResult, setMaintenanceActionResult] = useState(null);
   const [maintenanceReport, setMaintenanceReport] = useState(null);
+  const [updateStatus, setUpdateStatus] = useState(null);
+  const [updateApplyStatus, setUpdateApplyStatus] = useState(null);
+  const [updateApplyTransientError, setUpdateApplyTransientError] = useState("");
   const [diagnosticChoiceOpen, setDiagnosticChoiceOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
   const [auditEvents, setAuditEvents] = useState([]);
@@ -583,6 +616,10 @@ export default function SettingsPage() {
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
   const languageIcon = lang === "en" ? "/assets/icons/ui/language-en.png" : "/assets/icons/ui/language-ru.png";
+  const updateLatest = updateStatus?.latest || updateStatus?.latest_release || {};
+  const updateInstalled = updateStatus?.installed_build || updateStatus?.installed || {};
+  const updateApplyRunning = ["queued", "starting_helper", "preflight", "downloading", "extracting", "validating_source", "applying", "compose_config", "rebuilding", "restarting", "health_check"].includes(updateApplyStatus?.status || "");
+  const updateApplyAllowed = Boolean(updateStatus?.can_apply_from_ui && !updateApplyRunning && !maintenanceBusy);
 
   useEffect(() => {
     load();
@@ -605,8 +642,17 @@ export default function SettingsPage() {
   useEffect(() => {
     if (maintenanceModalOpen && canManageMaintenance) {
       loadMaintenanceOverview();
+      loadUpdateApplySurface({ silent: true });
     }
   }, [maintenanceModalOpen, canManageMaintenance]);
+
+  useEffect(() => {
+    if (!maintenanceModalOpen || !canManageMaintenance) return undefined;
+    const active = ["queued", "starting_helper", "preflight", "downloading", "extracting", "validating_source", "applying", "compose_config", "rebuilding", "restarting", "health_check"].includes(updateApplyStatus?.status || "");
+    if (!active) return undefined;
+    const timer = window.setInterval(() => loadUpdateApplySurface({ silent: true }), 5000);
+    return () => window.clearInterval(timer);
+  }, [maintenanceModalOpen, canManageMaintenance, updateApplyStatus?.status]);
 
   function showToast(nextToast) {
     setToast(nextToast);
@@ -850,6 +896,7 @@ export default function SettingsPage() {
     setMaintenanceActionResult(null);
     setMaintenanceReport(null);
     setMaintenanceError("");
+    setUpdateApplyTransientError("");
   }
 
   async function loadMaintenanceOverview() {
@@ -866,6 +913,24 @@ export default function SettingsPage() {
     }
   }
 
+  async function loadUpdateApplySurface({ silent = false } = {}) {
+    if (!canManageMaintenance) return;
+    if (!silent) setMaintenanceBusy("update-status");
+    try {
+      const [statusData, applyData] = await Promise.all([
+        apiFetch("/system/update/status"),
+        apiFetch("/system/update/apply/status"),
+      ]);
+      setUpdateStatus(statusData);
+      setUpdateApplyStatus(applyData);
+      setUpdateApplyTransientError("");
+    } catch (err) {
+      setUpdateApplyTransientError(humanErrorText(String(err?.message || ""), t.updateApplyConnection));
+    } finally {
+      if (!silent) setMaintenanceBusy("");
+    }
+  }
+
   async function runMaintenanceDryRun(flowKey) {
     const config = MAINTENANCE_DRY_RUN_ENDPOINTS[flowKey];
     if (!config || maintenanceBusy) return;
@@ -878,12 +943,48 @@ export default function SettingsPage() {
         body: JSON.stringify(config.body),
       });
       setMaintenanceActionResult({ flowKey, status: result?.status || "ok", reason: result?.reason || result?.blocked_reason || "" });
+      if (flowKey === "update") {
+        setUpdateStatus(result);
+        try {
+          setUpdateApplyStatus(await apiFetch("/system/update/apply/status"));
+        } catch (statusErr) {
+          setUpdateApplyTransientError(humanErrorText(String(statusErr?.message || ""), t.updateApplyConnection));
+        }
+      }
       showToast({ variant: "success", title: t.maintenanceDryRunResult, text: maintenanceStatusText(result?.status, t) });
       await loadMaintenanceOverview();
     } catch (err) {
       const message = humanErrorText(String(err?.message || ""), t.maintenanceLoadError);
       setMaintenanceActionResult({ flowKey, status: "blocked", reason: message });
       showToast({ variant: "warning", title: t.maintenanceDryRun, text: message });
+    } finally {
+      setMaintenanceBusy("");
+    }
+  }
+
+  async function startUpdateApply() {
+    if (maintenanceBusy) return;
+    if (!window.confirm(t.updateApplyConfirm)) return;
+    setMaintenanceBusy("update-apply");
+    setMaintenanceActionResult(null);
+    try {
+      const latest = updateStatus?.latest || updateStatus?.latest_release || {};
+      const result = await apiFetch("/system/update/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirm: true,
+          expected_manifest_version: latest.version || latest.latest_version || null,
+          expected_manifest_commit: latest.commit || latest.build_id || null,
+        }),
+      });
+      setUpdateApplyStatus(result?.apply_status || result);
+      showToast({ variant: "success", title: t.updateApplyTitle, text: t.updateApplyQueued });
+      await loadUpdateApplySurface({ silent: true });
+    } catch (err) {
+      const message = humanErrorText(String(err?.message || ""), t.updateApplyUnavailable);
+      setMaintenanceActionResult({ flowKey: "update", status: "blocked", reason: message });
+      showToast({ variant: "warning", title: t.updateApplyTitle, text: message });
     } finally {
       setMaintenanceBusy("");
     }
@@ -1458,6 +1559,32 @@ export default function SettingsPage() {
                       <strong>{maintenanceOverview.history?.last_action?.available ? maintenanceOverview.history.last_action.status : t.maintenanceNoHistory}</strong>
                       <small>{maintenanceOverview.history?.last_action?.reason || t.maintenanceLimitedHistory}</small>
                     </div>
+                  </section>
+
+                  <section className="settingsUpdateApplyPanel">
+                    <div className="settingsUpdateApplyHead">
+                      <div>
+                        <h3>{t.updateApplyTitle}</h3>
+                        <p>{updateApplyTransientError || t.updateApplyConnection}</p>
+                      </div>
+                      <span className={`settingsMaintenanceStatus ${maintenanceStatusClass(updateApplyStatus?.status || updateStatus?.status)}`}>
+                        {maintenanceStatusText(updateApplyStatus?.status || updateStatus?.status, t)}
+                      </span>
+                    </div>
+                    <dl className="settingsUpdateApplyFacts">
+                      <div><dt>{t.updateCurrent}</dt><dd>{updateInstalled.app_version || updateStatus?.installed?.installed_version || "-"}</dd></div>
+                      <div><dt>{t.updateLatest}</dt><dd>{updateLatest.version || updateLatest.latest_version || "-"}</dd></div>
+                      <div><dt>{t.updateSource}</dt><dd>{updateLatest.git_ref || updateLatest.source_ref || updateStatus?.source_channel?.source_channel_id || "-"}</dd></div>
+                    </dl>
+                    <div className="settingsUpdateApplyActions">
+                      <button type="button" className="button secondary small" onClick={() => runMaintenanceDryRun("update")} disabled={Boolean(maintenanceBusy)}>
+                        {maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
+                      </button>
+                      <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
+                        {maintenanceBusy === "update-apply" || updateApplyRunning ? t.checking : t.updateApplyStart}
+                      </button>
+                    </div>
+                    {updateApplyStatus?.error?.message ? <small className="settingsUpdateApplyError">{updateApplyStatus.error.message}</small> : null}
                   </section>
 
                   {maintenanceActionResult ? (

@@ -121,6 +121,16 @@ write_update_metadata() {
 fail() {
   message="$*"
   printf 'ERROR [%s]: %s\n' "$PHASE" "$message" >&2
+  if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] && [ -n "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
+    case "$PHASE" in
+      rebuild_recreate|health_check)
+        (
+          cd "$APP_DIR"
+          compose_cmd --env-file "$APP_DIR/.env" up -d postgres redis api recorder web nginx >/dev/null 2>&1
+        ) || true
+        ;;
+    esac
+  fi
   if [ "$DRY_RUN" != "1" ] && [ -n "$APP_DIR" ] && [ -d "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
     write_update_metadata "failed" "$message" 2>/dev/null || true
   fi
@@ -579,7 +589,14 @@ rebuild_recreate() {
   PHASE="rebuild_recreate"
   (
     cd "$APP_DIR"
-    compose_cmd --env-file "$APP_DIR/.env" up -d --build
+    if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then
+      compose_cmd --env-file "$APP_DIR/.env" up -d --build postgres redis api recorder web nginx || {
+        sleep 5
+        compose_cmd --env-file "$APP_DIR/.env" up -d --build postgres redis api recorder web nginx
+      }
+    else
+      compose_cmd --env-file "$APP_DIR/.env" up -d --build
+    fi
   ) || fail "Compose rebuild/recreate failed."
 }
 
@@ -588,11 +605,21 @@ health_check() {
   http_port=$(read_env_value HTTP_PORT)
   [ -n "$http_port" ] || http_port="8088"
   if command_exists curl; then
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
-      if curl -fsS "http://127.0.0.1:$http_port/api/health" >/dev/null 2>&1; then
-        return 0
-      fi
+    health_targets="http://127.0.0.1:$http_port/api/health"
+    health_attempts=12
+    if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then
+      health_targets="http://nginx/api/health http://api:8000/health"
+      health_attempts=60
+    fi
+    health_i=1
+    while [ "$health_i" -le "$health_attempts" ]; do
+      for health_target in $health_targets; do
+        if curl -fsS "$health_target" >/dev/null 2>&1; then
+          return 0
+        fi
+      done
       sleep 5
+      health_i=$((health_i + 1))
     done
     fail "Health check did not return healthy at /api/health."
   fi

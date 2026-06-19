@@ -57,6 +57,12 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       STORAGE_ROOT: /storage/archive
+      UPDATE_CONTROL_ROOT: /update-control
+      KMVMS_UPDATE_MANIFEST_PATH: ${KMVMS_UPDATE_MANIFEST_PATH:-}
+      KMVMS_UPDATE_CHANNEL_ID: ${KMVMS_UPDATE_CHANNEL_ID:-stable}
+      KMVMS_UPDATE_HELPER_ENABLED: "true"
+      KMVMS_UPDATE_SOURCE_PRIVATE: ${KMVMS_UPDATE_SOURCE_PRIVATE:-false}
+      KMVMS_UPDATE_TOKEN_CONFIGURED: ${KMVMS_UPDATE_TOKEN_CONFIGURED:-false}
       KMVMS_DB_BACKUP_ROOT: ${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
       STORAGE_HOST_ROOT: ${SURVEILLANCE_ROOT:-}
       STORAGE_INSTALL_CONTROL: /install-control
@@ -83,6 +89,7 @@ services:
       - ${SURVEILLANCE_ROOT}:/storage/archive
       - ${KMVMS_HOST_DB_BACKUP_ROOT:-./data/backups/db}:${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
       - ./data/install-control:/install-control
+      - ./data/update-control:/update-control
       - ./data/previews:/storage/previews
       - ./data/exports:/storage/exports
     devices:
@@ -110,6 +117,31 @@ services:
       KM_VMS_SETUP_APP_DIR: ${KM_VMS_HOST_APP_DIR:-/host-app}
     command: ["sh", "${KM_VMS_HOST_APP_DIR:-/host-app}/scripts/km-vms-setup-activation-helper.sh"]
     volumes:
+      - ./:${KM_VMS_HOST_APP_DIR:-/host-app}
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - vms-net
+
+  update-helper:
+    build:
+      context: ./apps/update-helper
+      dockerfile: Dockerfile
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-update-helper
+    restart: unless-stopped
+    working_dir: /host-app
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      KM_VMS_UPDATE_APP_DIR: /host-app
+      KM_VMS_UPDATE_HOST_APP_DIR: ${KM_VMS_HOST_APP_DIR:-}
+      KM_VMS_GITHUB_PRIVATE: ${KMVMS_UPDATE_SOURCE_PRIVATE:-0}
+      KMVMS_UPDATE_SOURCE_PRIVATE: ${KMVMS_UPDATE_SOURCE_PRIVATE:-0}
+      KM_VMS_GITHUB_TOKEN_FILE: ${KM_VMS_GITHUB_TOKEN_FILE:-}
+      KM_VMS_GITHUB_TOKEN: ${KM_VMS_GITHUB_TOKEN:-}
+      KM_VMS_DOCKER_COMPOSE: ${KM_VMS_DOCKER_COMPOSE:-}
+      KM_VMS_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-tnas-vms}
+    command: ["python3", "/host-app/scripts/km-vms-update-helper.py"]
+    volumes:
+      - ./:/host-app
       - ./:${KM_VMS_HOST_APP_DIR:-/host-app}
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
