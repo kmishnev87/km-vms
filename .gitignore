@@ -1,13 +1,54 @@
 .env
+.env.*
+
+# Local operator workspace and generated stage artifacts.
+Working folder/
 *.tar.gz
 *.zip
+*service-artifacts*
+*code-only*
+*Validation-Report*
+*Work-Report*
+browser-facts*.json
+
+# Runtime data and sensitive local outputs.
 data/
 backups/
+logs/
+recordings/
+previews/
+exports/
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql
+
+# Secrets and private infrastructure files.
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.csr
+*.ovpn
+wg*.conf
+id_rsa*
+id_ed25519*
+*token*
+*secret*
+*credential*
+
+# Build/cache outputs.
 node_modules/
 .next/
 apps/web/node_modules/
 apps/web/.next/
 __pycache__/
 *.pyc
+.pytest_cache/
+coverage/
+dist/
+build/
 .DS_Store
 *.bak
