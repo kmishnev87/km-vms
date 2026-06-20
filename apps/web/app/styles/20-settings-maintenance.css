@@ -1099,9 +1099,8 @@
   align-items: center;
 }
 
-.settingsMaintenanceGrid {
+.settingsMaintenanceList {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1109,34 +1108,40 @@
   min-width: 0;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  background: #f8fafc;
-  padding: 12px;
+  background: #ffffff;
+  padding: 14px;
   display: grid;
-  gap: 9px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 16px;
+  align-items: start;
 }
 
 .settingsMaintenanceFlowHead {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
+  min-width: 0;
 }
 
 .settingsMaintenanceFlow h3,
+.settingsUpdateApplyHead h3,
 .settingsMaintenanceReportPreview h3 {
   margin: 0;
   color: #0f172a;
   font-size: 14px;
   line-height: 1.25;
+  font-weight: 700;
 }
 
 .settingsMaintenanceFlow p {
+  grid-column: 1 / -1;
   margin: 0;
-  min-height: 34px;
-  color: #475569;
+  color: #64748b;
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+  max-width: 100%;
 }
 
 .settingsMaintenanceStatus {
@@ -1171,17 +1176,22 @@
 
 .settingsMaintenanceFlow dl,
 .settingsMaintenanceReportPreview dl {
+  grid-column: 1 / -1;
   margin: 0;
   display: grid;
-  gap: 5px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, auto);
+  grid-auto-flow: column;
+  gap: 6px 16px;
+  align-content: start;
 }
 
 .settingsMaintenanceFlow dl div,
 .settingsMaintenanceReportPreview dl div {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(88px, 0.36fr) minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: minmax(120px, 0.42fr) minmax(0, 1fr);
+  gap: 12px;
   color: #475569;
   font-size: 12px;
   line-height: 1.3;
@@ -1198,8 +1208,23 @@
 
 .settingsMaintenanceFlow dt,
 .settingsMaintenanceReportPreview dt {
-  color: #334155;
-  font-weight: 900;
+  color: #64748b;
+  font-weight: 700;
+}
+
+.settingsMaintenanceFlowActions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.settingsMaintenanceFlowActions .button {
+  width: auto;
+  min-width: 116px;
+  max-width: 100%;
+  justify-content: center;
 }
 
 .settingsMaintenanceReport,
@@ -1207,9 +1232,9 @@
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #ffffff;
-  padding: 12px;
+  padding: 14px;
   display: grid;
-  gap: 10px;
+  gap: 10px 16px;
 }
 
 .settingsMaintenanceReport {
@@ -1220,7 +1245,7 @@
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #ffffff;
-  padding: 12px;
+  padding: 14px;
   display: grid;
   gap: 12px;
 }
@@ -1232,11 +1257,9 @@
   gap: 12px;
 }
 
-.settingsUpdateApplyHead h3 {
-  margin: 0 0 4px;
-  color: #0f172a;
-  font-size: 15px;
-  line-height: 1.25;
+.settingsUpdateApplyHead > div {
+  display: grid;
+  gap: 4px;
 }
 
 .settingsUpdateApplyHead p {
@@ -1249,35 +1272,63 @@
 .settingsUpdateApplyFacts {
   margin: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, auto);
+  grid-auto-flow: column;
+  gap: 6px 16px;
 }
 
 .settingsUpdateApplyFacts div {
   min-width: 0;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  background: #f8fafc;
-  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: minmax(120px, 0.42fr) minmax(0, 1fr);
+  gap: 12px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.3;
 }
 
 .settingsUpdateApplyFacts dt {
   color: #64748b;
-  font-size: 11px;
-  font-weight: 900;
-  text-transform: uppercase;
+  font-weight: 700;
 }
 
 .settingsUpdateApplyFacts dd {
-  margin: 3px 0 0;
+  margin: 0;
   color: #0f172a;
-  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyNotice,
+.settingsUpdateApplyWarnings {
+  margin: 0;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settingsUpdateApplyNotice {
+  padding: 8px 10px;
+}
+
+.settingsUpdateApplyWarnings {
+  padding: 8px 10px 8px 28px;
+  display: grid;
+  gap: 4px;
+}
+
+.settingsUpdateApplyWarnings li {
   overflow-wrap: anywhere;
 }
 
 .settingsUpdateApplyActions {
   display: flex;
   flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 8px;
 }
 
@@ -1305,6 +1356,7 @@
   color: #0f172a;
   font-size: 14px;
   line-height: 1.25;
+  font-weight: 700;
   overflow-wrap: anywhere;
 }
 
@@ -1339,8 +1391,16 @@
 }
 
 @media (max-width: 760px) {
-  .settingsMaintenanceGrid,
-  .settingsMaintenanceReport {
+  .settingsMaintenanceReport,
+  .settingsMaintenanceFlow,
+  .settingsUpdateApplyFacts,
+  .settingsMaintenanceFlow dl,
+  .settingsMaintenanceReportPreview dl {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsUpdateApplyHead {
+    display: grid;
     grid-template-columns: 1fr;
   }
 
@@ -1349,12 +1409,21 @@
     justify-content: center;
   }
 
-  .settingsUpdateApplyHead {
-    display: grid;
+  .settingsMaintenanceFlowActions {
+    grid-column: 1;
+    grid-row: auto;
+    justify-content: stretch;
   }
 
-  .settingsUpdateApplyFacts {
-    grid-template-columns: 1fr;
+  .settingsMaintenanceFlowActions .button,
+  .settingsUpdateApplyActions .button {
+    width: 100%;
+  }
+
+  .settingsMaintenanceFlow dl div,
+  .settingsMaintenanceReportPreview dl div,
+  .settingsUpdateApplyFacts div {
+    grid-template-columns: minmax(96px, 0.42fr) minmax(0, 1fr);
   }
 }
 
@@ -1665,4 +1734,3 @@
   line-height: 1;
   justify-self: end;
 }
-

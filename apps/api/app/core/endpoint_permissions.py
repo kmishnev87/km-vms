@@ -77,7 +77,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("system", "GET", "/system/restore/status", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only restore artifact status; no restore or backup."),
     EndpointPermission("system", "POST", "/system/restore/dry-run", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only restore preflight; no current backup or restore."),
     EndpointPermission("system", "POST", "/system/restore/apply", PERMISSION_MANAGE_SETTINGS, "require_permission", "Explicit restore apply; protected, confirmed, and safety-gated."),
-    EndpointPermission("system", "GET", "/system/maintenance/overview", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only maintenance UX overview for adoption, migration, restore, update and report summaries."),
+    EndpointPermission("system", "GET", "/system/maintenance/overview", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only maintenance UX overview for adoption, migration, restore and report summaries."),
     EndpointPermission("diagnostics", "GET", "/system/upgrade/report", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Read-only sanitized upgrade/backup/restore report; no backup, restore or migration execution."),
     EndpointPermission("system", "GET", "/system/update/status", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only safe update status; no network check or update apply."),
     EndpointPermission("system", "POST", "/system/update/check", PERMISSION_MANAGE_SETTINGS, "require_permission", "Manual safe update check against trusted configured source only; no arbitrary URL, download, restart, migration, backup or restore."),

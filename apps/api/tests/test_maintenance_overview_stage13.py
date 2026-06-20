@@ -73,7 +73,7 @@ def test_maintenance_overview_is_read_only_sanitized_and_complete(client_db):
 
     assert payload["read_only"] is True
     assert payload["side_effects"]["db_mutated"] is False
-    assert set(payload["flows"]) == {"db_adoption", "migration", "restore", "update"}
+    assert set(payload["flows"]) == {"db_adoption", "migration", "restore"}
     assert payload["upgrade_report"]["available"] is True
     assert payload["upgrade_report"]["download_endpoint"] == "/system/upgrade/report"
     assert payload["history"]["durable_history"] == "limited"

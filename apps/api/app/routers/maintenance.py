@@ -21,7 +21,6 @@ from app.services.restore_maintenance import (
     dry_run_restore_maintenance,
     inspect_restore_maintenance,
 )
-from app.services.update_maintenance import inspect_update_maintenance
 from app.services.upgrade_report import build_upgrade_report
 
 
@@ -99,7 +98,6 @@ def maintenance_overview(
     adoption = inspect_db_adoption(db, include_backup_plan=False, actor=current_user)
     migrations = inspect_migration_maintenance(db, include_backup_plan=False, actor=current_user)
     restore = inspect_restore_maintenance(actor=current_user)
-    update = inspect_update_maintenance(db, actor=current_user)
     report = build_upgrade_report(db)
     return {
         "status": "ok",
@@ -115,7 +113,6 @@ def maintenance_overview(
             "db_adoption": _safe_flow_summary("db_adoption", adoption),
             "migration": _safe_flow_summary("migration", migrations),
             "restore": _safe_flow_summary("restore", restore),
-            "update": _safe_flow_summary("update", update),
         },
         "upgrade_report": {
             "available": True,

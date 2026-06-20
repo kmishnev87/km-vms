@@ -33,6 +33,7 @@ export const HARDWARE_OPTIONS = ["auto", "qsv", "amf", "nvenc", "cpu", "vaapi"];
 export const AUDIT_CATEGORIES = ["auth", "users", "settings", "cameras", "live", "records", "chronology", "security", "diagnostics", "system", "recorder", "storage", "retention", "reconciliation"];
 export const AUDIT_SEVERITIES = ["info", "warning", "error", "security"];
 export const AUDIT_LIMIT = 50;
+export const UPDATE_APPLY_RUNNING_STATUSES = ["queued", "starting_helper", "preflight", "downloading", "extracting", "validating_source", "applying", "compose_config", "rebuilding", "restarting", "health_check"];
 const AUDIT_LABELS = {
   category: {
     auth: { ru: "Авторизация", en: "Auth", "zh-CN": "授权" },
@@ -169,24 +170,148 @@ export const MAINTENANCE_DRY_RUN_ENDPOINTS = {
   db_adoption: { path: "/system/db-adoption/dry-run", body: {} },
   migration: { path: "/system/migrations/dry-run", body: {} },
   restore: { path: "/system/restore/dry-run", body: {} },
-  update: { path: "/system/update/check", body: {} },
 };
 
 export function maintenanceFlowRows(overview) {
   const flows = overview?.flows || {};
-  return ["db_adoption", "migration", "restore", "update"].map((key) => ({ key, ...(flows[key] || {}) }));
+  return ["db_adoption", "migration", "restore"].map((key) => ({ key, ...(flows[key] || {}) }));
 }
 
 export function maintenanceStatusText(status, t) {
   const key = status || "unknown";
-  return t.maintenanceStatuses?.[key] || key;
+  const labels = t.maintenanceStatuses || {};
+  return labels[key] || labels.unknown || t.maintenanceStatusUnknown || "Unknown";
 }
 
 export function maintenanceStatusClass(status) {
-  if (["ok", "current", "available", "adopted", "already_adopted", "completed", "update_available"].includes(status)) return "ok";
+  if (["ok", "current", "available", "adopted", "already_adopted", "complete", "completed", "drift_known_safe", "draft_known_safe", "update_available"].includes(status)) return "ok";
   if (["blocked", "no_artifacts", "not_configured", "failed", "cancelled"].includes(status)) return "blocked";
-  if (["adoptable", "limited", "queued", "preflight", "applying", "rebuilding", "restarting", "health_check"].includes(status)) return "warning";
+  if (["adoptable", "limited", "queued", "starting_helper", "preflight", "downloading", "extracting", "validating_source", "applying", "compose_config", "rebuilding", "restarting", "health_check", "reconnecting", "checking"].includes(status)) return "warning";
   return "neutral";
+}
+
+export function updateApplyIsRunning(status) {
+  return UPDATE_APPLY_RUNNING_STATUSES.includes(status || "");
+}
+
+export function updateApplyEffectiveStatus(updateStatus, applyStatus, transientError = "") {
+  const status = applyStatus?.status || updateStatus?.status || "unknown";
+  if (transientError && updateApplyIsRunning(status)) return "reconnecting";
+  if (status === "completed" && applyStatus?.expected_commit && applyStatus?.commit_verified === false) return "failed";
+  return status;
+}
+
+export function shortCommit(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.length > 12 ? `${text.slice(0, 12)}...` : text;
+}
+
+export function updateApplyFactRows(updateStatus, applyStatus, t) {
+  const latest = updateStatus?.latest || updateStatus?.latest_release || {};
+  const installed = updateStatus?.installed_build || updateStatus?.installed || {};
+  const labels = t.maintenanceLabels || {};
+  const targetCommit = latest.commit || latest.build_id || applyStatus?.expected_commit || applyStatus?.source?.commit || "";
+  const installedCommit = applyStatus?.installed_commit || installed.git_commit || installed.installed_commit || "";
+  const sourceRef = latest.git_ref || latest.source_ref || applyStatus?.source?.apply_ref || applyStatus?.source?.ref || updateStatus?.source_channel?.source_channel_id || "";
+  const verification = applyStatus?.expected_commit
+    ? (applyStatus.commit_verified ? t.updateCommitVerified : t.updateCommitPending)
+    : t.updateCommitUnavailable;
+  return [
+    [labels.current, installed.app_version || updateStatus?.installed?.installed_version || "-"],
+    [labels.available, latest.version || latest.latest_version || "-"],
+    [labels.source, sourceRef || "-"],
+    [labels.installedCommit, shortCommit(installedCommit) || "-"],
+    [labels.targetCommit, shortCommit(targetCommit) || "-"],
+    [labels.verification, verification],
+  ];
+}
+
+export function updateApplyRecoveryText(status, applyStatus, t) {
+  const effective = status || "unknown";
+  if (effective === "reconnecting") return t.updateApplyRecoveryReconnecting;
+  if (effective === "completed" && applyStatus?.commit_verified) return t.updateApplyRecoveryCompleted;
+  if (effective === "completed" && applyStatus?.expected_commit && applyStatus?.commit_verified === false) return t.updateApplyRecoveryCommitMismatch;
+  if (effective === "failed") return t.updateApplyRecoveryFailed;
+  if (effective === "blocked" || effective === "not_configured") return t.updateApplyRecoveryBlocked;
+  if (updateApplyIsRunning(effective)) return t.updateApplyRecoveryRunning;
+  if (effective === "current") return t.updateApplyRecoveryCurrent;
+  if (effective === "update_available") return t.updateApplyRecoveryAvailable;
+  return t.updateApplyRecoveryUnknown;
+}
+
+function normalizeUpdateNoticeCode(item) {
+  const raw = String(item?.code || item?.category || item?.reason || item?.status || item?.phase || "").trim().toLowerCase();
+  if (raw) return raw;
+  const message = String(item?.message || item?.error_message || "").trim().toLowerCase();
+  if (!message) return "";
+  if (message.includes("installed source metadata is unavailable or invalid")) return "source_metadata_invalid";
+  if (message.includes("last update metadata is unavailable or invalid")) return "update_metadata_invalid";
+  if (message.includes("source metadata schema is unsupported")) return "source_metadata_unsupported_schema";
+  if (message.includes("update metadata schema is unsupported")) return "update_metadata_unsupported_schema";
+  if (message.includes("installed commit value is not a valid")) return "installed_commit_invalid";
+  if (message.includes("trusted manifest") && message.includes("not configured")) return "trusted_manifest_not_configured";
+  if (message.includes("commit does not match")) return "commit_mismatch";
+  if (message.includes("token") && (message.includes("missing") || message.includes("configured"))) return "token_not_configured";
+  if (message.includes("migration")) return "requires_migration";
+  if (message.includes("backup")) return "requires_backup";
+  if (message.includes("manual")) return "requires_manual_action";
+  return "";
+}
+
+export function formatUpdateNotice(item, t, lang = "ru") {
+  const code = normalizeUpdateNoticeCode(item);
+  const labels = t.updateWarningLabels || {};
+  if (code && labels[code]) return labels[code];
+  if (code.startsWith("source_metadata_") && labels.source_metadata_invalid) return labels.source_metadata_invalid;
+  if (code.startsWith("update_metadata_") && labels.update_metadata_invalid) return labels.update_metadata_invalid;
+  if ((code === "requires_migration" || code === "release_requires_migration" || code === "migration_required") && labels.requires_migration) return labels.requires_migration;
+  if ((code === "requires_backup" || code === "release_requires_backup" || code === "backup_required") && labels.requires_backup) return labels.requires_backup;
+  if ((code === "requires_manual_action" || code === "manual_action_required") && labels.requires_manual_action) return labels.requires_manual_action;
+  if ((code === "trusted_manifest_not_configured" || code === "manifest_not_configured" || code === "not_configured") && labels.trusted_manifest_not_configured) return labels.trusted_manifest_not_configured;
+  if ((code === "private_token_missing" || code === "token_not_configured") && labels.token_not_configured) return labels.token_not_configured;
+  const raw = String(item?.message || item?.error_message || item?.code || "").trim();
+  if (lang === "en" && raw && !/stack|trace|authorization|bearer|token|secret|\.env|rtsp:|onvif/i.test(raw) && raw.length <= 140) {
+    return labels[code] || raw;
+  }
+  return t.updateWarningGeneric || "Update warning is present.";
+}
+
+function normalizeMaintenanceBackendText(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  const lower = raw.toLowerCase();
+  if (lower === "schema metadata is already valid.") return "schema_metadata_valid";
+  if (lower === "schema metadata is already valid") return "schema_metadata_valid";
+  if (lower === "schema is current; no pending migrations.") return "schema_current_no_pending_migrations";
+  if (lower === "schema is current; no pending migrations") return "schema_current_no_pending_migrations";
+  if (lower === "no valid restore artifacts are available in configured backup root.") return "restore_no_valid_artifacts";
+  if (lower === "no valid restore artifacts are available in the configured backup root.") return "restore_no_valid_artifacts";
+  if (lower.includes("no durable maintenance action history is available")) return "maintenance_history_limited";
+  if (/^[a-z0-9_:-]+$/.test(lower)) return lower.replaceAll(":", "_").replaceAll("-", "_");
+  return lower;
+}
+
+export function formatMaintenanceMessage(value, t, lang = "ru", context = "status") {
+  const key = normalizeMaintenanceBackendText(value);
+  const labels = t.maintenanceMessageLabels || {};
+  if (key && labels[key]) return labels[key];
+  if (key && t.maintenanceStatuses?.[key]) return t.maintenanceStatuses[key];
+  if (context === "action" || context === "blocker" || context === "error") {
+    return t.maintenanceActionFallback || t.maintenanceMessageFallback || maintenanceStatusText("unknown", t);
+  }
+  return t.maintenanceMessageFallback || maintenanceStatusText("unknown", t);
+}
+
+export function buildUpdateApplyConfirmation(t, updateStatus) {
+  const latest = updateStatus?.latest || updateStatus?.latest_release || {};
+  const installed = updateStatus?.installed_build || updateStatus?.installed || {};
+  const lines = [t.updateApplyConfirm];
+  if (installed.app_version || updateStatus?.installed?.installed_version) lines.push(`${t.updateCurrent}: ${installed.app_version || updateStatus?.installed?.installed_version}`);
+  if (latest.version || latest.latest_version) lines.push(`${t.updateLatest}: ${latest.version || latest.latest_version}`);
+  if (latest.commit || latest.build_id) lines.push(`${t.maintenanceLabels?.targetCommit}: ${shortCommit(latest.commit || latest.build_id)}`);
+  lines.push(t.updateApplyConfirmRestart);
+  return lines.filter(Boolean).join("\n");
 }
 
 export function maintenanceDetailRows(flow, t) {
