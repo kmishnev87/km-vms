@@ -22,6 +22,7 @@ UPDATE_INTERVAL = timedelta(hours=24)
 MANUAL_RATE_LIMIT = timedelta(minutes=15)
 MAX_METADATA_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 64 * 1024
+MAX_PUBLIC_COMMIT_BYTES = 512 * 1024
 MAX_TEXT = 300
 PUBLIC_REPO_DEFAULT = "kmishnev87/km-vms"
 PUBLIC_RELEASE_MANIFEST_URL_DEFAULT = f"https://raw.githubusercontent.com/{PUBLIC_REPO_DEFAULT}/main/release/km-vms-release.json"
@@ -495,14 +496,32 @@ def _read_public_release_payload(url: str) -> dict[str, Any]:
 
 
 def _resolve_public_commit(source_repo: str, source_ref: str) -> str | None:
+    if SHA_RE.fullmatch(source_ref):
+        return source_ref.lower()
     if not SAFE_REPO_RE.fullmatch(source_repo) or not SAFE_REF_RE.fullmatch(source_ref):
         return None
-    encoded_ref = urllib.parse.quote(source_ref, safe="")
-    url = f"https://api.github.com/repos/{source_repo}/commits/{encoded_ref}"
+    encoded_ref = urllib.parse.quote(source_ref, safe="/")
+    for kind in ("heads", "tags"):
+        url = f"https://api.github.com/repos/{source_repo}/git/ref/{kind}/{encoded_ref}"
+        request = urllib.request.Request(url, headers={"User-Agent": "KM-VMS-Update-Check/0.7.1", "Accept": "application/vnd.github+json"})
+        try:
+            with urllib.request.urlopen(request, timeout=_public_timeout_seconds()) as response:  # nosec B310 - public GitHub ref metadata only
+                data = response.read(MAX_MANIFEST_BYTES + 1)
+            payload = json.loads(data.decode("utf-8"))
+        except Exception:
+            continue
+        obj = payload.get("object") if isinstance(payload, dict) else None
+        sha = _safe_field("sha", obj.get("sha") if isinstance(obj, dict) else None, max_length=40)
+        if sha and SHA_RE.fullmatch(sha):
+            return sha.lower()
+    encoded_commit_ref = urllib.parse.quote(source_ref, safe="")
+    url = f"https://api.github.com/repos/{source_repo}/commits/{encoded_commit_ref}"
     request = urllib.request.Request(url, headers={"User-Agent": "KM-VMS-Update-Check/0.7.1", "Accept": "application/vnd.github+json"})
     try:
         with urllib.request.urlopen(request, timeout=_public_timeout_seconds()) as response:  # nosec B310 - public GitHub commit metadata only
-            data = response.read(MAX_MANIFEST_BYTES + 1)
+            data = response.read(MAX_PUBLIC_COMMIT_BYTES + 1)
+        if len(data) > MAX_PUBLIC_COMMIT_BYTES:
+            return None
         payload = json.loads(data.decode("utf-8"))
     except Exception:
         return None

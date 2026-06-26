@@ -267,16 +267,80 @@ def test_public_release_provider_reads_remote_descriptor_without_token(tmp_path,
             "source_kind": "github-release",
             "source_repo": "kmishnev87/km-vms",
             "source_ref": "main",
-            "commit_sha": "b" * 40,
+            "commit_sha": None,
             "published_at": "2026-06-26T00:00:00Z",
         },
     )
+    monkeypatch.setattr(update_check_module, "_resolve_public_commit", lambda repo, ref: "b" * 40)
 
     result = run_update_check(db)
 
     assert result["status"] == "update_available"
     assert result["available_release"]["version"] == "0.7.2"
+    assert result["available_release"]["commit_sha"] == "b" * 40
     assert result["available_release"]["provider"] == "public_github_release"
+    assert result["can_apply_from_ui"] is False
+
+
+def test_public_release_provider_missing_commit_keeps_apply_disabled(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(app_root / ".km-vms-release.json", version="0.7.1", commit_sha="a" * 40)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.delenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", raising=False)
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "1")
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_MANIFEST_URL", "https://raw.githubusercontent.com/kmishnev87/km-vms/main/release/km-vms-release.json")
+
+    from app.services import update_check as update_check_module
+
+    monkeypatch.setattr(
+        update_check_module,
+        "_read_public_release_payload",
+        lambda url: {
+            "schema_version": 1,
+            "version": "0.7.2",
+            "title": "Public provider without commit",
+            "summary": "Public provider summary.",
+            "release_channel": "public-github",
+            "source_kind": "github-release",
+            "source_repo": "kmishnev87/km-vms",
+            "source_ref": "main",
+            "commit_sha": None,
+            "published_at": "2026-06-26T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(update_check_module, "_resolve_public_commit", lambda repo, ref: None)
+
+    result = run_update_check(db)
+
+    assert result["status"] == "blocked"
+    assert result["available_release"]["commit_sha"] is None
+    assert result["available_release"]["provider"] == "public_github_release"
+    assert result["can_apply_from_ui"] is False
+    assert [blocker["code"] for blocker in result["blockers"]] == ["trusted_commit_missing"]
+
+
+def test_local_release_descriptor_is_not_default_available_provider(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    app_root = tmp_path / "app"
+    (app_root / "release").mkdir(parents=True)
+    _release_identity(app_root / ".km-vms-release.json", version="0.7.1", commit_sha="a" * 40)
+    (app_root / "release/km-vms-release.json").write_text(
+        json.dumps({"schema_version": 1, "version": "0.7.2", "source_ref": "main", "commit_sha": "b" * 40}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.delenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", raising=False)
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "0")
+
+    result = run_update_check(db)
+
+    assert result["status"] == "not_configured"
+    assert result["available_release"] is None
+    assert result["manifest_source_status"] == "not_configured"
     assert result["can_apply_from_ui"] is False
 
 
