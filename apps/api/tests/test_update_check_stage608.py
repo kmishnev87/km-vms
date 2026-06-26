@@ -17,6 +17,7 @@ from app.models.system_settings import SystemSettings
 from app.models.user import User
 from app.routers import settings as settings_router
 from app.services.update_check import (
+    UpdateCheckBlocked,
     compare_versions,
     read_installed_update_state,
     read_trusted_local_manifest,
@@ -68,11 +69,35 @@ def _manifest(path: Path, **overrides):
     return path
 
 
+def _release_identity(path: Path, **overrides):
+    payload = {
+        "schema_version": 1,
+        "product": "KM VMS",
+        "version": "0.7.0",
+        "title": "Installed release",
+        "summary": "Installed release identity.",
+        "source_kind": "github-release",
+        "source_repo": "kmishnev87/km-vms",
+        "source_ref": "main",
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "installed_by": "test",
+        "metadata_source": "official_update",
+    }
+    payload.update(overrides)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 @pytest.fixture(autouse=True)
 def clean_update_env(monkeypatch):
     reset_update_check_cache_for_tests()
     for name in [
         "KMVMS_UPDATE_MANIFEST_PATH",
+        "KMVMS_UPDATE_MANIFEST_FORCE_LOCAL",
+        "KMVMS_PUBLIC_RELEASE_MANIFEST_PATH",
+        "KMVMS_PUBLIC_RELEASE_MANIFEST_URL",
+        "KMVMS_PUBLIC_RELEASE_PROVIDER",
+        "KMVMS_PUBLIC_RELEASE_TIMEOUT_SECONDS",
         "KMVMS_UPDATE_CHANNEL_ID",
         "KMVMS_BUILD_METADATA_FILE",
         "KMVMS_BUILD_ID",
@@ -84,6 +109,8 @@ def clean_update_env(monkeypatch):
         "KM_VMS_APP_DIR",
     ]:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", "1")
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "0")
     yield
     reset_update_check_cache_for_tests()
 
@@ -92,6 +119,7 @@ def test_missing_metadata_degrades_without_manifest_configuration(tmp_path, monk
     _engine, db = sqlite_session(tmp_path)
     _seed(db)
     monkeypatch.setenv("KMVMS_APP_ROOT", str(tmp_path / "missing-root"))
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_MANIFEST_PATH", str(tmp_path / "missing-public-release.json"))
 
     status = settings_router.system_update_status(db=db, current_user=object())
 
@@ -139,6 +167,7 @@ def test_metadata_reader_normalizes_success_and_redacts_token_like_fields(tmp_pa
     rendered = json.dumps(installed.__dict__, default=str)
 
     assert installed.metadata_validity == "valid"
+    assert installed.status == "identity_incomplete"
     assert installed.installed_commit == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     assert installed.last_update_status == "success"
     assert "token_should_not_echo" not in rendered
@@ -202,6 +231,7 @@ def test_same_commit_is_current_and_no_false_update(tmp_path, monkeypatch):
     app_root = tmp_path / "app"
     app_root.mkdir()
     commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    _release_identity(app_root / ".km-vms-release.json", version="9.9.9", commit_sha=commit)
     (app_root / ".km-vms-source.json").write_text(json.dumps({"schema_version": 1, "source_kind": "github-tarball", "commit_sha": commit}), encoding="utf-8")
     monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(_manifest(tmp_path / "release.json", commit=commit, version="9.9.9")))
@@ -212,10 +242,86 @@ def test_same_commit_is_current_and_no_false_update(tmp_path, monkeypatch):
     assert result["can_apply_from_ui"] is False
 
 
+def test_public_release_provider_reads_remote_descriptor_without_token(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(app_root / ".km-vms-release.json", version="0.7.1", commit_sha="a" * 40)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.delenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", raising=False)
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "1")
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_MANIFEST_URL", "https://raw.githubusercontent.com/kmishnev87/km-vms/main/release/km-vms-release.json")
+
+    from app.services import update_check as update_check_module
+
+    monkeypatch.setattr(
+        update_check_module,
+        "_read_public_release_payload",
+        lambda url: {
+            "schema_version": 1,
+            "version": "0.7.2",
+            "title": "Public provider",
+            "summary": "Public provider summary.",
+            "release_channel": "public-github",
+            "source_kind": "github-release",
+            "source_repo": "kmishnev87/km-vms",
+            "source_ref": "main",
+            "commit_sha": "b" * 40,
+            "published_at": "2026-06-26T00:00:00Z",
+        },
+    )
+
+    result = run_update_check(db)
+
+    assert result["status"] == "update_available"
+    assert result["available_release"]["version"] == "0.7.2"
+    assert result["available_release"]["provider"] == "public_github_release"
+    assert result["can_apply_from_ui"] is False
+
+
+def test_public_release_provider_failure_is_sanitized(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(app_root / ".km-vms-release.json", version="0.7.1", commit_sha="a" * 40)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.delenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", raising=False)
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "1")
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_MANIFEST_URL", "https://raw.githubusercontent.com/kmishnev87/km-vms/main/release/km-vms-release.json")
+
+    from app.services import update_check as update_check_module
+
+    def raise_unavailable(_url):
+        raise UpdateCheckBlocked(
+            "provider_unavailable",
+            {"summary": "Public release metadata is temporarily unavailable.", "error_category": "public_provider_unavailable"},
+        )
+
+    monkeypatch.setattr(update_check_module, "_read_public_release_payload", raise_unavailable)
+
+    result = run_update_check(db)
+
+    assert result["status"] == "check_failed"
+    assert result["available_release"] is None
+    assert result["can_apply_from_ui"] is False
+    assert result["errors"] == [
+        {
+            "code": "provider_unavailable",
+            "summary": "Public release metadata is temporarily unavailable.",
+            "error_category": "public_provider_unavailable",
+        }
+    ]
+
+
 def test_same_version_without_commit_is_current_or_unknown(tmp_path, monkeypatch):
     _engine, db = sqlite_session(tmp_path)
     _seed(db)
-    monkeypatch.setenv("KMVMS_BUILD_METADATA_FILE", str(tmp_path / "missing-build.json"))
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(app_root / ".km-vms-release.json", version="1.0.0", commit_sha="a" * 40)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(_manifest(tmp_path / "release.json", version="1.0.0", commit=None)))
 
     result = run_update_check(db)
@@ -227,14 +333,18 @@ def test_same_version_without_commit_is_current_or_unknown(tmp_path, monkeypatch
 def test_update_available_and_blockers_are_conservative(tmp_path, monkeypatch):
     _engine, db = sqlite_session(tmp_path)
     _seed(db)
-    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(_manifest(tmp_path / "release.json", version="9.0.0", commit=None)))
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(app_root / ".km-vms-release.json", version="0.7.0", commit_sha="a" * 40)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(_manifest(tmp_path / "release.json", version="9.0.0", commit="b" * 40)))
 
     available = run_update_check(db)
     assert available["status"] == "update_available"
     assert available["can_apply_from_ui"] is False
 
     reset_update_check_cache_for_tests()
-    blocked_manifest = _manifest(tmp_path / "blocked.json", version="9.0.0", commit=None, requires_backup=True, requires_manual_action=True, requires_migration=True)
+    blocked_manifest = _manifest(tmp_path / "blocked.json", version="9.0.0", commit="c" * 40, requires_backup=True, requires_manual_action=True, requires_migration=True)
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(blocked_manifest))
     blocked = run_update_check(db)
 
@@ -246,6 +356,10 @@ def test_update_available_and_blockers_are_conservative(tmp_path, monkeypatch):
 def test_minimum_current_version_blocks_incompatible_release(tmp_path, monkeypatch):
     _engine, db = sqlite_session(tmp_path)
     _seed(db)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(app_root / ".km-vms-release.json", version="0.7.0", commit_sha="a" * 40)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(_manifest(tmp_path / "release.json", version="9.0.0", commit=None, minimum_current_version="2.0.0")))
 
     result = run_update_check(db)
@@ -258,6 +372,8 @@ def test_request_body_cannot_supply_arbitrary_source_and_endpoint_is_registered(
     _engine, db = sqlite_session(tmp_path)
     _seed(db)
     owner = db.query(User).filter(User.role == ROLE_OWNER).first()
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(tmp_path / "missing-root"))
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_MANIFEST_PATH", str(tmp_path / "missing-public-release.json"))
 
     result = settings_router.system_update_check(request=FakeRequest(), db=db, current_user=owner)
 
@@ -288,6 +404,8 @@ def test_manual_rate_limit_and_startup_are_read_only(tmp_path):
 def test_diagnostic_archive_includes_update_status_without_running_apply(tmp_path, monkeypatch):
     _engine, db = sqlite_session(tmp_path)
     _seed(db)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(tmp_path / "missing-root"))
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_MANIFEST_PATH", str(tmp_path / "missing-public-release.json"))
     monkeypatch.setattr(settings_router, "storage_diagnostics", lambda: {"status": "ok"})
     monkeypatch.setattr(settings_router, "build_storage_monitoring_summary", lambda db: {"status": "ok"})
     monkeypatch.setattr(settings_router, "reconciliation_diagnostics", lambda db: {"status": "ok"})

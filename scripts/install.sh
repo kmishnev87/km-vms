@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-GITHUB_REPO_DEFAULT=""
+GITHUB_REPO_DEFAULT="kmishnev87/km-vms"
 BRANCH_DEFAULT="main"
 HTTP_PORT_DEFAULT="8088"
 API_PORT_DEFAULT="18000"
@@ -560,6 +560,57 @@ write_source_provenance() {
   } > "$provenance"
 }
 
+release_descriptor_value() {
+  key="$1"
+  file="$APP_DIR/release/km-vms-release.json"
+  [ -f "$file" ] || return 0
+  sed -n "s/^[[:space:]]*\"$key\"[[:space:]]*:[[:space:]]*\"\(.*\)\"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p" "$file" | head -n 1
+}
+
+write_release_identity() {
+  identity="$APP_DIR/.km-vms-release.json"
+  tmp_identity="$identity.tmp.$$"
+  installed_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
+  version=$(release_descriptor_value version)
+  title=$(release_descriptor_value title)
+  summary=$(release_descriptor_value summary)
+  channel=$(release_descriptor_value release_channel)
+  source_kind=$(release_descriptor_value source_kind)
+  source_repo=$(release_descriptor_value source_repo)
+  source_ref=$(release_descriptor_value source_ref)
+  [ -n "$version" ] || version="0.7.1"
+  [ -n "$title" ] || title="Public GitHub Release Identity and Drift-Proof Update Status"
+  [ -n "$summary" ] || summary="Public GitHub install/update identity and update status hardening."
+  [ -n "$channel" ] || channel="public-github"
+  [ -n "$source_kind" ] || source_kind="github-release"
+  [ -n "$source_repo" ] || source_repo="$GITHUB_REPO"
+  [ -n "$source_ref" ] || source_ref="$BRANCH"
+  [ ! -d "$identity" ] || fail "Release identity path is a directory and cannot be mounted by Docker Compose: $identity"
+  {
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "product": "KM VMS",\n'
+    printf '  "version": "%s",\n' "$(json_escape "$version")"
+    printf '  "title": "%s",\n' "$(json_escape "$title")"
+    printf '  "summary": "%s",\n' "$(json_escape "$summary")"
+    printf '  "release_channel": "%s",\n' "$(json_escape "$channel")"
+    printf '  "source_kind": "%s",\n' "$(json_escape "$source_kind")"
+    printf '  "source_repo": "%s",\n' "$(json_escape "$source_repo")"
+    printf '  "source_ref": "%s",\n' "$(json_escape "$source_ref")"
+    if [ -n "$SOURCE_COMMIT_SHA" ]; then
+      printf '  "commit_sha": "%s",\n' "$(json_escape "$SOURCE_COMMIT_SHA")"
+    else
+      printf '  "commit_sha": null,\n'
+    fi
+    printf '  "installed_at": "%s",\n' "$(json_escape "$installed_at")"
+    printf '  "installed_by": "install",\n'
+    printf '  "metadata_status": "%s",\n' "$(if [ -n "$SOURCE_COMMIT_SHA" ]; then printf complete; else printf partial; fi)"
+    printf '  "metadata_source": "official_install"\n'
+    printf '}\n'
+  } > "$tmp_identity"
+  mv "$tmp_identity" "$identity"
+}
+
 validate_source_dir() {
   [ -n "$SOURCE_DIR" ] || return 0
   is_dangerous_source_dir "$SOURCE_DIR" && fail "Refusing dangerous source dir: $SOURCE_DIR"
@@ -773,6 +824,7 @@ print_plan
 write_env
 write_metadata
 write_source_provenance
+write_release_identity
 sh "$APP_DIR/scripts/km-vms-storage-discovery.sh" --app-dir "$APP_DIR" >/dev/null
 
 (

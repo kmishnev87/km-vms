@@ -6,9 +6,15 @@ Supported platform class: TerraMaster, Synology, QNAP, TrueNAS, Unraid, and gene
 
 ## Supported Install Shapes
 
-1. Local unpacked repository already present on the NAS.
-2. GitHub tarball acquisition without `git`.
+1. Public GitHub tarball acquisition without `git`.
+2. Local unpacked repository already present on the NAS.
 3. Generic `git clone` acquisition only when you explicitly pass `--repo-url`.
+
+Public one-line install:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/install.sh | sh -s -- --app-dir "$HOME/km-vms" --http-port 8088 --project-name km-vms --yes
+```
 
 Local unpacked repository install:
 
@@ -65,7 +71,8 @@ Stage 1 uses `<app-dir>/data/archive` as a provisional host archive mount when t
 The installer also records non-secret provenance files:
 
 - `.km-vms-install.json`: app dir, ports, compose command, source mode, setup URL;
-- `.km-vms-source.json`: GitHub repo/ref and commit SHA when available, or source-dir / git-clone provenance without secrets.
+- `.km-vms-source.json`: GitHub repo/ref and commit SHA when available, or source-dir / git-clone provenance without secrets;
+- `.km-vms-release.json`: installed public release identity, version, title, summary, source repo/ref and commit SHA without secrets.
 
 ## Storage Discovery And Selection
 
@@ -125,15 +132,17 @@ Installed KM VMS instances can be updated in place from a GitHub tarball without
 
 ```sh
 cd "$HOME/km-vms"
-sh scripts/update.sh --github-repo OWNER/REPO --branch main --yes
+sh scripts/update.sh --branch main --yes
 ```
 
 Run a non-mutating plan first:
 
 ```sh
 cd "$HOME/km-vms"
-sh scripts/update.sh --github-repo OWNER/REPO --branch main --dry-run
+sh scripts/update.sh --branch main --dry-run
 ```
+
+The public default repository is `kmishnev87/km-vms`, so the normal install/update path does not require a GitHub token. Pass `--github-repo OWNER/REPO` only for forks, mirrors or private deployments.
 
 For a private GitHub repository, use one of the secure token paths:
 
@@ -154,11 +163,11 @@ sh scripts/update.sh \
 
 The token is used only for GitHub API requests and must be read-only for repository contents. The updater does not print the token, does not embed it in URLs, and does not write it to `.km-vms-update.json`, `.km-vms-source.json`, reports or logs.
 
-The updater overlays only product source/configuration paths: `apps/`, `deploy/`, `docs/`, `scripts/`, compose files, `.dockerignore`, `.gitignore`, and `.env.example`. It preserves `.env`, `.env.*`, `data/`, PostgreSQL/Redis data, previews, exports, install-control files, selected storage roots and recordings. It validates the app directory, validates the downloaded source tree, rejects path traversal and symlinks in the update source, reuses `scripts/km-vms-compose-common.sh`, runs compose config validation, then runs `up -d --build`.
+The updater overlays only product source/configuration paths: `apps/`, `deploy/`, `docs/`, `release/`, `scripts/`, compose files, `.dockerignore`, `.gitignore`, and `.env.example`. It preserves `.env`, `.env.*`, `data/`, PostgreSQL/Redis data, previews, exports, install-control files, selected storage roots and recordings. It validates the app directory, validates the downloaded source tree, rejects path traversal and symlinks in the update source, reuses `scripts/km-vms-compose-common.sh`, runs compose config validation, then runs `up -d --build`.
 
 The updater must not run `down -v`, `docker system prune`, delete Docker volumes, regenerate secrets, change the selected storage path, create users/settings, or automatically run database migrations. If a future release needs explicit migration orchestration, use the dedicated migration/update stage instead of treating `update.sh` as a hidden migrator.
 
-The rollback is not implemented in Stage 6.0.7. If the update fails before the overlay phase, app source files are not changed. If it fails after overlay starts, source files may be partially updated; fix the reported failed phase and rerun the same update, or restore from an external backup if the app cannot recover. The updater writes sanitized status to `.km-vms-update.json`.
+The rollback is not implemented in Stage 6.0.7. If the update fails before the overlay phase, app source files are not changed. If it fails after overlay starts, source files may be partially updated; fix the reported failed phase and rerun the same update, or restore from an external backup if the app cannot recover. The updater writes sanitized status to `.km-vms-update.json` and refreshes `.km-vms-release.json` from `release/km-vms-release.json`.
 
 The read-only update status and release manifest check API is available through protected owner/admin endpoints. The in-app update apply UI, helper container and progress polling remain future stage work. Terminal update is still the bounded base mechanism for applying updates.
 
@@ -172,7 +181,7 @@ The schema status is available to owner/admin users through the protected schema
 
 Stage 3 adds the API-owned deterministic migration runner contract on top of `schema_version_state` and `schema_migration_history`. The runner builds a read-only ordered plan before legacy `create_all` and manual compatibility ALTER can mask unsafe drift, classifies migrations as `metadata_only`, `additive_safe`, `risky_requires_backup`, or `manual_only`, and executes only eligible safe migrations through the controlled runner path.
 
-The current product schema is already at the accepted Stage 2 baseline, so Stage 3 does not register a real production schema migration. Runner behavior is validated with isolated test-only migration registries and disposable PostgreSQL scenarios. `risky_requires_backup` and `manual_only` migrations are planned but not executed before backup safety and manual authorization rules are satisfied. Existing live production adoption/version metadata remains deferred unless explicitly authorized. `APP_BUILD_VERSION` remains a temporary metadata value; installed build/release/source-channel versioning belongs to Stage 7.
+The current product schema is already at the accepted Stage 2 baseline, so Stage 3 does not register a real production schema migration. Runner behavior is validated with isolated test-only migration registries and disposable PostgreSQL scenarios. `risky_requires_backup` and `manual_only` migrations are planned but not executed before backup safety and manual authorization rules are satisfied. Existing live production adoption/version metadata remains deferred unless explicitly authorized. Installed release identity is now recorded separately from schema versioning through `.km-vms-release.json`.
 
 Stage 4 adds the backup-before-upgrade safety contract. The backend can build a read-only backup plan, create a controlled DB backup for PostgreSQL or file-backed SQLite/test DBs, write a manifest and sanitized metadata snapshot next to the backup artifact, and verify existence, size, checksum, recency and manifest consistency. DB backup artifacts are sensitive: they may contain users, password hashes, encrypted camera credentials, audit metadata and recording metadata. They must be stored outside the product Git tree, outside Working folder/service artifacts, outside archive/video folders, with restrictive permissions where the platform supports them. Video archive files and recordings are excluded from DB backup. Service/code/diagnostic archives must not include real DB dumps or backups.
 
@@ -184,7 +193,7 @@ Backup manifests record `restore_validation_status = not_performed_stage5_deferr
 
 Stage 5 adds restore validation for Stage 4 PostgreSQL custom-format DB backups. Restore validation is backend-owned and internal: it restores with `pg_restore` only into an explicitly disposable PostgreSQL target whose database name uses the Stage 5 disposable prefix, refuses the source/current/live database, refuses targets that already contain KM VMS product tables, validates owner login contract, users, cameras, settings, schema version/history, migration plan readability, recording/archive metadata and audit summary, then writes a separate restore-validation manifest. The original backup dump and manifest are not mutated. Video archive files are not restored by Stage 5; only DB metadata paths are validated.
 
-Stage 6 adds a read-only upgrade report for diagnostics. The report summarizes app/build version source, schema version, migration history, migration runner plan, production adoption/migration state, backup status, restore-validation status, backup-root contract/evidence and operator warnings. It is exposed through the protected `/system/upgrade/report` API and included in diagnostic archives as `upgrade/report.json` plus `upgrade/summary.txt`. Report generation does not create backups, run restore validation, execute migrations, write schema/adoption metadata or run backup-root marker/write probes. When no safe product-owned backup or restore-validation status source is connected, the report uses `source_unavailable`/unknown semantics instead of claiming `not_performed`; service-level test manifests are labelled test/disposable and are not accepted from browser/API users. The report separates configured backup-root contract from proven persistence evidence, so a configured persistent contract is not treated as host-mount proof. Redaction status is scoped to checked outputs rather than a blanket artifact pass. Backup paths are represented as sanitized labels, and diagnostic archives must not include real DB dumps, backup artifacts, restore artifacts, `.env` files, secrets, password hashes, RTSP credentials or video archive files. Installed build identity is supplied by the Stage 7 metadata model, and video archive restore remains outside DB restore validation.
+Stage 6 adds a read-only upgrade report for diagnostics. The report summarizes app/build version source, schema version, migration history, migration runner plan, production adoption/migration state, backup status, restore-validation status, backup-root contract/evidence and operator warnings. It is exposed through the protected `/system/upgrade/report` API and included in diagnostic archives as `upgrade/report.json` plus `upgrade/summary.txt`. Report generation does not create backups, run restore validation, execute migrations, write schema/adoption metadata or run backup-root marker/write probes. When no safe product-owned backup or restore-validation status source is connected, the report uses `source_unavailable`/unknown semantics instead of claiming `not_performed`; service-level test manifests are labelled test/disposable and are not accepted from browser/API users. The report separates configured backup-root contract from proven persistence evidence, so a configured persistent contract is not treated as host-mount proof. Redaction status is scoped to checked outputs rather than a blanket artifact pass. Backup paths are represented as sanitized labels, and diagnostic archives must not include real DB dumps, backup artifacts, restore artifacts, `.env` files, secrets, password hashes, RTSP credentials or video archive files. Installed release identity is supplied by the Stage 6.1.2 metadata model, and video archive restore remains outside DB restore validation.
 
 Stage 6.0.8 adds the safe product update status and release manifest check contract. Installed source/update identity is read from sanitized `.km-vms-source.json` and `.km-vms-update.json` metadata plus non-secret build metadata/env (`KMVMS_BUILD_METADATA_FILE`, `KMVMS_BUILD_ID`, `KMVMS_GIT_COMMIT`, `KMVMS_BUILD_TIME`, `KMVMS_INSTALL_SOURCE`, `KMVMS_SOURCE_CHANNEL_ID`) with a development fallback when release metadata is unavailable; app/build version remains separate from DB schema version. Update checking is disabled/not configured by default. This stage supports only a trusted server-configured local/static release manifest through `KMVMS_UPDATE_MANIFEST_PATH` and optional `KMVMS_UPDATE_CHANNEL_ID`; it does not accept arbitrary URLs, repo/ref/token/path values from API/UI users and does not implement remote internet fetching. Protected owner/admin endpoints `/system/update/status` and `/system/update/check` expose only normalized sanitized status, release summary, current/latest comparison and blockers/warnings. Diagnostic archives include cached update status as `update/status.json` and in the upgrade report, but archive creation does not trigger network/update checks and must not include update packages, DB dumps, restore artifacts, `.env` files or secrets.
 
@@ -208,4 +217,4 @@ sh scripts/install.sh --app-dir /tmp/km-vms-stage1-install-test --http-port 1808
 
 ## Future Stages
 
-Future work may add a trusted remote/signed release channel and a separate explicit update-apply workflow. Stage 7 only checks and reports.
+Future work may add a trusted remote/signed release channel, automatic update notifications, rollback and backup-aware apply orchestration.

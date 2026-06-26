@@ -208,23 +208,46 @@ export function shortCommit(value) {
 }
 
 export function updateApplyFactRows(updateStatus, applyStatus, t) {
+  const installedRelease = updateStatus?.installed_release || {};
+  const availableRelease = updateStatus?.available_release || {};
+  const latest = updateStatus?.latest || updateStatus?.latest_release || {};
+  const installed = updateStatus?.installed_build || updateStatus?.installed || {};
+  const labels = t.maintenanceLabels || {};
+  const comparison = updateStatus?.comparison || {};
+  const status = comparison.status || updateStatus?.status || "unknown";
+  const title = availableRelease.title || latest.title || installedRelease.title || "-";
+  const summary = availableRelease.summary || latest.release_notes_summary || installedRelease.summary || "-";
+  const verification = applyStatus?.expected_commit
+    ? (applyStatus.commit_verified ? t.updateCommitVerified : t.updateCommitPending)
+    : t.updateCommitUnavailable;
+  return [
+    [labels.current, installedRelease.version || installed.app_version || updateStatus?.installed?.installed_version || "-"],
+    [labels.available, availableRelease.version || latest.version || latest.latest_version || "-"],
+    [labels.releaseTitle || "Release", title],
+    [labels.releaseSummary || "Summary", summary],
+    [labels.status || "Status", maintenanceStatusText(status, t)],
+    [labels.verification, verification],
+  ];
+}
+
+export function updateApplyTechnicalRows(updateStatus, applyStatus, t) {
+  const installedRelease = updateStatus?.installed_release || {};
+  const availableRelease = updateStatus?.available_release || {};
+  const evidence = updateStatus?.evidence || {};
   const latest = updateStatus?.latest || updateStatus?.latest_release || {};
   const installed = updateStatus?.installed_build || updateStatus?.installed || {};
   const labels = t.maintenanceLabels || {};
   const targetCommit = latest.commit || latest.build_id || applyStatus?.expected_commit || applyStatus?.source?.commit || "";
   const installedCommit = applyStatus?.installed_commit || installed.git_commit || installed.installed_commit || "";
-  const sourceRef = latest.git_ref || latest.source_ref || applyStatus?.source?.apply_ref || applyStatus?.source?.ref || updateStatus?.source_channel?.source_channel_id || "";
-  const verification = applyStatus?.expected_commit
-    ? (applyStatus.commit_verified ? t.updateCommitVerified : t.updateCommitPending)
-    : t.updateCommitUnavailable;
+  const sourceRef = availableRelease.tag || latest.git_ref || latest.source_ref || applyStatus?.source?.apply_ref || applyStatus?.source?.ref || updateStatus?.source_channel?.source_channel_id || "";
   return [
-    [labels.current, installed.app_version || updateStatus?.installed?.installed_version || "-"],
-    [labels.available, latest.version || latest.latest_version || "-"],
     [labels.source, sourceRef || "-"],
-    [labels.installedCommit, shortCommit(installedCommit) || "-"],
-    [labels.targetCommit, shortCommit(targetCommit) || "-"],
-    [labels.verification, verification],
-  ];
+    [labels.installedCommit, installedRelease.commit_short || shortCommit(installedCommit) || "-"],
+    [labels.targetCommit, availableRelease.commit_short || shortCommit(targetCommit) || "-"],
+    [labels.gitHead || "Git HEAD", evidence.git_head_short || shortCommit(evidence.git_head) || "-"],
+    [labels.metadataSource || "Metadata", installedRelease.metadata_source || "-"],
+    [labels.provider || "Provider", availableRelease.provider || updateStatus?.source_channel?.trusted_source_type || "-"],
+  ].filter(([, value]) => value !== "-");
 }
 
 export function updateApplyRecoveryText(status, applyStatus, t) {
@@ -237,6 +260,9 @@ export function updateApplyRecoveryText(status, applyStatus, t) {
   if (updateApplyIsRunning(effective)) return t.updateApplyRecoveryRunning;
   if (effective === "current") return t.updateApplyRecoveryCurrent;
   if (effective === "update_available") return t.updateApplyRecoveryAvailable;
+  if (effective === "identity_incomplete" || effective === "installed_identity_drift" || effective === "metadata_stale") return t.updateApplyRecoveryIdentity;
+  if (effective === "provider_unavailable" || effective === "no_release_published") return t.updateApplyRecoveryProvider;
+  if (effective === "installed_newer_than_available") return t.updateApplyRecoveryInstalledNewer;
   return t.updateApplyRecoveryUnknown;
 }
 

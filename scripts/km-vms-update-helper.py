@@ -226,6 +226,12 @@ def verify_installed_commit(update_dir: Path, expected_commit: str) -> tuple[str
         source_commit = safe_text(source_metadata.get("commit_sha"), 40)
         if source_commit and source_commit != expected_commit:
             raise HelperError("commit_mismatch", "Installed source commit does not match the trusted manifest commit.", phase="commit_verification", diagnostics={"installed_commit": source_commit})
+    release_metadata = read_json(update_dir / ".km-vms-release.json")
+    if not release_metadata:
+        raise HelperError("commit_missing", "Installed release identity is missing after successful apply.", phase="commit_verification")
+    release_commit = safe_text(release_metadata.get("commit_sha"), 40)
+    if release_commit != expected_commit:
+        raise HelperError("commit_mismatch", "Installed release identity commit does not match the trusted manifest commit.", phase="commit_verification", diagnostics={"installed_commit": release_commit or "missing"})
     return installed_commit, expected_commit
 
 

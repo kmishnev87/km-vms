@@ -1300,6 +1300,23 @@
   overflow-wrap: anywhere;
 }
 
+.settingsUpdateApplyTechnical {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 10px;
+}
+
+.settingsUpdateApplyTechnical summary {
+  cursor: pointer;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.settingsUpdateApplyTechnical .settingsUpdateApplyFacts {
+  margin-top: 10px;
+}
+
 .settingsUpdateApplyNotice,
 .settingsUpdateApplyWarnings {
   margin: 0;

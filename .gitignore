@@ -1,5 +1,9 @@
 .env
 .env.*
+.km-vms-install.json
+.km-vms-release.json
+.km-vms-source.json
+.km-vms-update.json
 
 # Local operator workspace and generated stage artifacts.
 Working folder/
@@ -50,5 +54,6 @@ __pycache__/
 coverage/
 dist/
 build/
+tmp/
 .DS_Store
 *.bak

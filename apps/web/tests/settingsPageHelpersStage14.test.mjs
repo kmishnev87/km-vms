@@ -33,6 +33,7 @@ import {
   shortCommit,
   updateApplyEffectiveStatus,
   updateApplyFactRows,
+  updateApplyTechnicalRows,
   updateApplyIsRunning,
   updateApplyRecoveryText,
   userCanBeDeleted,
@@ -78,7 +79,18 @@ assert.equal(formatBytes(2 * 1024 ** 4), "2.0 TB");
 assert.equal(formatAuditTimestamp("not-a-date", "ru"), "not-a-date");
 
 const maintenanceText = {
-  maintenanceStatuses: { ok: "OK", blocked: "Blocked", complete: "Complete", drift_known_safe: "Known-safe drift", unknown: "Unknown" },
+  maintenanceStatuses: {
+    ok: "OK",
+    blocked: "Blocked",
+    complete: "Complete",
+    drift_known_safe: "Known-safe drift",
+    update_available: "Update available",
+    identity_incomplete: "Identity incomplete",
+    installed_identity_drift: "Install drift",
+    provider_unavailable: "Provider unavailable",
+    installed_newer_than_available: "Installed newer",
+    unknown: "Unknown",
+  },
   maintenanceMessageFallback: "Safe fallback",
   maintenanceActionFallback: "Action fallback",
   maintenanceMessageLabels: {
@@ -103,6 +115,12 @@ const maintenanceText = {
     source: "Source",
     targetCommit: "Target commit",
     verification: "Commit check",
+    releaseTitle: "Release",
+    releaseSummary: "Changes",
+    status: "Status",
+    gitHead: "Git HEAD",
+    metadataSource: "Metadata",
+    provider: "Provider",
   },
   maintenanceBackupRequired: "Backup required",
   maintenanceBackupNotRequired: "Backup not required",
@@ -119,6 +137,9 @@ const maintenanceText = {
   updateApplyRecoveryReconnecting: "Reconnecting",
   updateApplyRecoveryRunning: "Running",
   updateApplyRecoveryUnknown: "Unknown",
+  updateApplyRecoveryIdentity: "Identity",
+  updateApplyRecoveryProvider: "Provider",
+  updateApplyRecoveryInstalledNewer: "Installed newer",
   updateCommitPending: "Pending",
   updateCommitUnavailable: "Unavailable",
   updateCommitVerified: "Verified",
@@ -129,6 +150,7 @@ const maintenanceText = {
     requires_migration: "Migration localized",
     trusted_manifest_not_configured: "Manifest localized",
     commit_mismatch: "Commit mismatch localized",
+    trusted_commit_missing: "Trusted commit localized",
   },
 };
 const overview = {
@@ -166,16 +188,39 @@ assert.equal(updateApplyEffectiveStatus({}, { status: "completed", expected_comm
 assert.equal(shortCommit("1234567890abcdef"), "1234567890ab...");
 const updateStatus = {
   status: "update_available",
-  installed_build: { app_version: "6.0.9", git_commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
-  latest_release: { version: "6.1.0", commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", git_ref: "stable" },
+  installed_release: {
+    version: "0.7.0",
+    title: "Installed release",
+    commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    metadata_source: "official_update",
+  },
+  available_release: {
+    version: "0.7.1",
+    title: "Public release identity",
+    summary: "Readable update status",
+    commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    provider: "public_github_release",
+  },
+  comparison: { status: "update_available" },
+  evidence: { git_head: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+  installed_build: { app_version: "0.7.0", git_commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
+  latest_release: { version: "0.7.1", commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", git_ref: "stable" },
 };
 assert.deepEqual(updateApplyFactRows(updateStatus, { expected_commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", commit_verified: false }, maintenanceText), [
-  ["Current", "6.0.9"],
-  ["Available", "6.1.0"],
+  ["Current", "0.7.0"],
+  ["Available", "0.7.1"],
+  ["Release", "Public release identity"],
+  ["Changes", "Readable update status"],
+  ["Status", "Update available"],
+  ["Commit check", "Pending"],
+]);
+assert.deepEqual(updateApplyTechnicalRows(updateStatus, { expected_commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, maintenanceText), [
   ["Source", "stable"],
   ["Installed commit", "aaaaaaaaaaaa..."],
   ["Target commit", "bbbbbbbbbbbb..."],
-  ["Commit check", "Pending"],
+  ["Git HEAD", "aaaaaaaaaaaa..."],
+  ["Metadata", "official_update"],
+  ["Provider", "public_github_release"],
 ]);
 assert.equal(updateApplyRecoveryText("completed", { expected_commit: "b", commit_verified: true }, maintenanceText), "Completed");
 assert.equal(updateApplyRecoveryText("blocked", {}, maintenanceText), "Blocked");
@@ -184,6 +229,9 @@ assert.equal(updateApplyRecoveryText("rebuilding", {}, maintenanceText), "Runnin
 assert.equal(updateApplyRecoveryText("reconnecting", {}, maintenanceText), "Reconnecting");
 assert.equal(updateApplyRecoveryText("current", {}, maintenanceText), "Current");
 assert.equal(updateApplyRecoveryText("update_available", {}, maintenanceText), "Available");
+assert.equal(updateApplyRecoveryText("identity_incomplete", {}, maintenanceText), "Identity");
+assert.equal(updateApplyRecoveryText("provider_unavailable", {}, maintenanceText), "Provider");
+assert.equal(updateApplyRecoveryText("installed_newer_than_available", {}, maintenanceText), "Installed newer");
 assert.equal(updateApplyRecoveryText("not-a-real-status", {}, maintenanceText), "Unknown");
 assert.match(buildUpdateApplyConfirmation(maintenanceText, updateStatus), /Target commit: bbbbbbbbbbbb\.\.\./);
 assert.equal(formatUpdateNotice({ code: "source_metadata_invalid", message: "Installed source metadata is unavailable or invalid." }, maintenanceText, "ru"), "Source metadata localized");

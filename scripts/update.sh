@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-GITHUB_REPO="${KM_VMS_GITHUB_REPO:-}"
+GITHUB_REPO="${KM_VMS_GITHUB_REPO:-kmishnev87/km-vms}"
 BRANCH="${KM_VMS_BRANCH:-main}"
 GITHUB_PRIVATE="${KM_VMS_GITHUB_PRIVATE:-0}"
 GITHUB_TOKEN_FILE="${KM_VMS_GITHUB_TOKEN_FILE:-}"
@@ -466,6 +466,7 @@ validate_source_tree() {
   [ -f "$source/scripts/install.sh" ] || fail "Source tree is missing scripts/install.sh."
   [ -f "$source/scripts/km-vms-compose-common.sh" ] || fail "Source tree is missing scripts/km-vms-compose-common.sh."
   [ -f "$source/docs/INSTALL.md" ] || fail "Source tree is missing docs/INSTALL.md."
+  [ -f "$source/release/km-vms-release.json" ] || fail "Source tree is missing release/km-vms-release.json."
   if [ -f "$source/scripts/update.sh" ]; then
     info "Source tree includes scripts/update.sh."
   else
@@ -538,7 +539,7 @@ copy_allowed_path() {
   source="$TMP_ROOT/source"
   [ -e "$source/$relative" ] || return 0
   case "$relative" in
-    apps|deploy|docs|scripts)
+    apps|deploy|docs|release|scripts)
       preserve_update_script=0
       if [ "$relative" = "scripts" ] && [ ! -f "$source/scripts/update.sh" ] && [ -f "$APP_DIR/scripts/update.sh" ]; then
         cp "$APP_DIR/scripts/update.sh" "$TMP_ROOT/update.sh.preserved" || fail "Failed to preserve current update.sh."
@@ -572,7 +573,7 @@ copy_allowed_path() {
 overlay_source() {
   PHASE="overlay"
   OVERLAY_STARTED=1
-  for relative in apps deploy docs scripts docker-compose.yml docker-compose.pytest.yml .dockerignore .gitignore .env.example; do
+  for relative in apps deploy docs release scripts docker-compose.yml docker-compose.pytest.yml .dockerignore .gitignore .env.example; do
     copy_allowed_path "$relative"
   done
 }
@@ -646,6 +647,59 @@ write_source_provenance() {
   } > "$provenance"
 }
 
+release_descriptor_value() {
+  key="$1"
+  file="$APP_DIR/release/km-vms-release.json"
+  [ -f "$file" ] || return 0
+  sed -n "s/^[[:space:]]*\"$key\"[[:space:]]*:[[:space:]]*\"\(.*\)\"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p" "$file" | head -n 1
+}
+
+write_release_identity() {
+  metadata_status="${1:-}"
+  identity="$APP_DIR/.km-vms-release.json"
+  tmp_identity="$identity.tmp.$$"
+  installed_at=$(metadata_time)
+  version=$(release_descriptor_value version)
+  title=$(release_descriptor_value title)
+  summary=$(release_descriptor_value summary)
+  channel=$(release_descriptor_value release_channel)
+  source_kind=$(release_descriptor_value source_kind)
+  source_repo=$(release_descriptor_value source_repo)
+  source_ref=$(release_descriptor_value source_ref)
+  [ -n "$version" ] || version="0.7.1"
+  [ -n "$title" ] || title="Public GitHub Release Identity and Drift-Proof Update Status"
+  [ -n "$summary" ] || summary="Public GitHub install/update identity and update status hardening."
+  [ -n "$channel" ] || channel="public-github"
+  [ -n "$source_kind" ] || source_kind="github-release"
+  [ -n "$source_repo" ] || source_repo="$GITHUB_REPO"
+  [ -n "$source_ref" ] || source_ref="$BRANCH"
+  [ -n "$metadata_status" ] || metadata_status="$(if [ -n "$SOURCE_COMMIT_SHA" ]; then printf complete; else printf partial; fi)"
+  [ ! -d "$identity" ] || fail "Release identity path is a directory and cannot be mounted by Docker Compose: $identity"
+  {
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "product": "KM VMS",\n'
+    printf '  "version": "%s",\n' "$(json_escape "$version")"
+    printf '  "title": "%s",\n' "$(json_escape "$title")"
+    printf '  "summary": "%s",\n' "$(json_escape "$summary")"
+    printf '  "release_channel": "%s",\n' "$(json_escape "$channel")"
+    printf '  "source_kind": "%s",\n' "$(json_escape "$source_kind")"
+    printf '  "source_repo": "%s",\n' "$(json_escape "$source_repo")"
+    printf '  "source_ref": "%s",\n' "$(json_escape "$source_ref")"
+    if [ -n "$SOURCE_COMMIT_SHA" ]; then
+      printf '  "commit_sha": "%s",\n' "$(json_escape "$SOURCE_COMMIT_SHA")"
+    else
+      printf '  "commit_sha": null,\n'
+    fi
+    printf '  "installed_at": "%s",\n' "$(json_escape "$installed_at")"
+    printf '  "installed_by": "%s",\n' "$(if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then printf in_app_helper; else printf terminal_update; fi)"
+    printf '  "metadata_status": "%s",\n' "$(json_escape "$metadata_status")"
+    printf '  "metadata_source": "%s"\n' "$(if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then printf helper; else printf official_update; fi)"
+    printf '}\n'
+  } > "$tmp_identity"
+  mv "$tmp_identity" "$identity"
+}
+
 print_plan() {
   info "KM VMS update plan"
   info "App dir: $APP_DIR"
@@ -658,7 +712,7 @@ print_plan() {
     info "GitHub token mode: public/no token"
   fi
   info "Compose: ${COMPOSE_KIND:-unknown} via ${COMPOSE_BIN:-unknown}"
-  info "Would update: apps deploy docs scripts docker-compose.yml docker-compose.pytest.yml .dockerignore .gitignore .env.example"
+  info "Would update: apps deploy docs release scripts docker-compose.yml docker-compose.pytest.yml .dockerignore .gitignore .env.example"
   info "Would preserve: $PRESERVED_PATHS"
   info "Rollback: not implemented in Stage 6.0.7; failures after overlay may leave source partially updated."
 }
@@ -684,10 +738,12 @@ fi
 
 confirm "Apply KM VMS update now?"
 overlay_source
+write_release_identity "precompose"
 compose_config
 rebuild_recreate
 health_check
 write_source_provenance
+write_release_identity
 postflight_preservation
 PHASE="metadata_write"
 write_update_metadata "success" ""

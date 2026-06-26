@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.sanitization import redact_text
+from app.core.version import APP_VERSION
 from app.db.session import SessionLocal
 from app.routers.audit import router as audit_router
 from app.routers.auth import router as auth_router
@@ -47,7 +48,7 @@ logging.getLogger("uvicorn.access").addFilter(AccessLogRedactionFilter())
 
 app = FastAPI(
     title="TNAS VMS API",
-    version="1.0.0",
+    version=APP_VERSION,
 )
 
 app.add_middleware(
@@ -93,7 +94,7 @@ def root():
     return {
         "name": "TNAS VMS API",
         "status": "ok",
-        "version": "1.0.0",
+        "version": APP_VERSION,
     }
 
 

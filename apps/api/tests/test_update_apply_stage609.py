@@ -67,11 +67,36 @@ def manifest(path: Path, **overrides):
     return path
 
 
+def release_identity(path: Path, **overrides):
+    payload = {
+        "schema_version": 1,
+        "product": "KM VMS",
+        "version": "0.7.0",
+        "title": "Installed release",
+        "summary": "Installed release identity.",
+        "source_kind": "github-release",
+        "source_repo": "kmishnev87/km-vms",
+        "source_ref": "main",
+        "commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "installed_by": "test",
+        "metadata_source": "official_update",
+    }
+    payload.update(overrides)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch, tmp_path):
     reset_update_check_cache_for_tests()
     for name in [
         "KMVMS_UPDATE_MANIFEST_PATH",
+        "KMVMS_UPDATE_MANIFEST_FORCE_LOCAL",
+        "KMVMS_PUBLIC_RELEASE_MANIFEST_PATH",
+        "KMVMS_PUBLIC_RELEASE_MANIFEST_URL",
+        "KMVMS_PUBLIC_RELEASE_PROVIDER",
+        "KMVMS_PUBLIC_RELEASE_TIMEOUT_SECONDS",
+        "KMVMS_APP_ROOT",
         "KMVMS_BUILD_ID",
         "KMVMS_GIT_COMMIT",
         "KMVMS_BUILD_METADATA_FILE",
@@ -79,6 +104,12 @@ def clean_env(monkeypatch, tmp_path):
         "KM_VMS_GITHUB_TOKEN_FILE",
     ]:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", "1")
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "0")
+    app_root = tmp_path / "app-root"
+    app_root.mkdir()
+    release_identity(app_root / ".km-vms-release.json")
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
     monkeypatch.setattr(settings, "update_control_root", str(tmp_path / "update-control"))
     monkeypatch.setattr(settings, "kmvms_update_helper_enabled", True)
     monkeypatch.setattr(settings, "kmvms_update_source_private", False)
@@ -190,7 +221,7 @@ def test_manifest_blockers_current_and_missing_helper_prevent_apply(client_db, t
     assert blocked.status_code == 409
     assert blocked.json()["detail"]["code"] in {"requires_backup", "unsupported_release_requirements"}
 
-    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "current.json", version="1.0.0", commit=None)))
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "current.json", version="0.7.0", commit="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
     reset_update_check_cache_for_tests()
     current = client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner))
     assert current.status_code == 409

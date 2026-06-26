@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -14,12 +17,16 @@ from app.core.version import installed_build_metadata
 from app.models.system_settings import SystemSettings
 
 
-UPDATE_REPORT_VERSION = "stage608.update_status.v1"
+UPDATE_REPORT_VERSION = "stage612.update_status.v1"
 UPDATE_INTERVAL = timedelta(hours=24)
 MANUAL_RATE_LIMIT = timedelta(minutes=15)
 MAX_METADATA_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_TEXT = 300
+PUBLIC_REPO_DEFAULT = "kmishnev87/km-vms"
+PUBLIC_RELEASE_MANIFEST_URL_DEFAULT = f"https://raw.githubusercontent.com/{PUBLIC_REPO_DEFAULT}/main/release/km-vms-release.json"
+PUBLIC_RELEASE_TIMEOUT_SECONDS = 5
+RELEASE_DESCRIPTOR_RELATIVE = Path("release/km-vms-release.json")
 SAFE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SAFE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,119}$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
@@ -62,14 +69,24 @@ class UpdateInstalledState:
     status: str
     installed_version: str | None
     installed_commit: str | None
+    installed_title: str | None
+    installed_summary: str | None
     source_kind: str | None
     repo: str | None
     ref: str | None
     channel: str | None
+    release_channel: str | None
+    installed_at: str | None
+    installed_by: str | None
+    metadata_source: str | None
     last_update_status: str | None
     last_update_finished_at: str | None
     last_failed_phase: str | None
     metadata_validity: str
+    identity_validity: str
+    git_head: str | None
+    legacy_source_commit: str | None
+    legacy_update_commit: str | None
     warnings: list[UpdateMetadataWarning] = field(default_factory=list)
 
 
@@ -174,54 +191,130 @@ def _metadata_paths(root: Path | None = None) -> tuple[Path, Path]:
     return base / ".km-vms-source.json", base / ".km-vms-update.json"
 
 
+def _release_identity_path(root: Path | None = None) -> Path:
+    return (root or _app_root()) / ".km-vms-release.json"
+
+
+def _release_descriptor_path(root: Path | None = None) -> Path:
+    return (root or _app_root()) / RELEASE_DESCRIPTOR_RELATIVE
+
+
+def _read_git_head(root: Path | None = None) -> str | None:
+    base = root or _app_root()
+    git_dir = base / ".git"
+    try:
+        if git_dir.is_file():
+            text = git_dir.read_text(encoding="utf-8", errors="ignore").strip()
+            if text.startswith("gitdir:"):
+                git_dir = (base / text.split(":", 1)[1].strip()).resolve()
+        head_path = git_dir / "HEAD"
+        if not head_path.is_file():
+            return None
+        head = head_path.read_text(encoding="utf-8", errors="ignore").strip()
+        if SHA_RE.fullmatch(head):
+            return head.lower()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            ref_path = git_dir / ref
+            if ref_path.is_file():
+                value = ref_path.read_text(encoding="utf-8", errors="ignore").strip()
+                return value.lower() if SHA_RE.fullmatch(value) else None
+    except Exception:
+        return None
+    return None
+
+
 def read_installed_update_state(*, app_root: Path | None = None) -> UpdateInstalledState:
     build = installed_build_metadata()
     source_path, update_path = _metadata_paths(app_root)
+    release_path = _release_identity_path(app_root)
     source_payload, source_validity = _read_json_file(source_path)
     update_payload, update_validity = _read_json_file(update_path)
+    release_payload, release_validity = _read_json_file(release_path)
+    git_head = _read_git_head(app_root)
     warnings: list[UpdateMetadataWarning] = []
-    if source_validity != "valid":
+    if release_validity != "valid":
+        warnings.append(UpdateMetadataWarning("release_identity_" + release_validity, "Installed release identity is unavailable or invalid.", field=".km-vms-release.json"))
+    if source_validity not in {"valid", "missing"}:
         warnings.append(UpdateMetadataWarning("source_metadata_" + source_validity, "Installed source metadata is unavailable or invalid.", field=".km-vms-source.json"))
-    if update_validity != "valid":
+    if update_validity not in {"valid", "missing"}:
         warnings.append(UpdateMetadataWarning("update_metadata_" + update_validity, "Last update metadata is unavailable or invalid.", field=".km-vms-update.json"))
 
     source = source_payload or {}
     update = update_payload or {}
+    release = release_payload or {}
     source_schema = source.get("schema_version")
     update_schema = update.get("schema_version")
+    release_schema = release.get("schema_version")
+    if release_payload and release_schema != 1:
+        warnings.append(UpdateMetadataWarning("release_identity_unsupported_schema", "Installed release identity schema is unsupported.", field="schema_version"))
     if source_payload and source_schema != 1:
         warnings.append(UpdateMetadataWarning("source_metadata_unsupported_schema", "Installed source metadata schema is unsupported.", field="schema_version"))
     if update_payload and update_schema != 1:
         warnings.append(UpdateMetadataWarning("update_metadata_unsupported_schema", "Last update metadata schema is unsupported.", field="schema_version"))
 
-    repo = _safe_field("github_repo", source.get("github_repo") or update.get("github_repo"), max_length=160)
-    ref = _safe_field("ref", source.get("ref") or update.get("ref"), max_length=120)
-    commit = _safe_field("commit_sha", source.get("commit_sha") or update.get("commit_sha") or build.get("git_commit"), max_length=40)
+    legacy_source_commit = _safe_field("commit_sha", source.get("commit_sha"), max_length=40)
+    legacy_update_commit = _safe_field("commit_sha", update.get("commit_sha"), max_length=40)
+    repo = _safe_field("source_repo", release.get("source_repo") or source.get("github_repo") or update.get("github_repo"), max_length=160)
+    ref = _safe_field("source_ref", release.get("source_ref") or source.get("ref") or update.get("ref"), max_length=120)
+    commit = _safe_field("commit_sha", release.get("commit_sha") or build.get("git_commit"), max_length=40)
+    if not commit and release_validity != "valid":
+        commit = _safe_field("commit_sha", legacy_source_commit or legacy_update_commit, max_length=40)
     if commit and not SHA_RE.fullmatch(commit):
         warnings.append(UpdateMetadataWarning("installed_commit_invalid", "Installed commit value is not a valid SHA-like value.", field="commit_sha"))
         commit = None
-    version = _safe_field("app_version", build.get("app_version"), max_length=80)
+    for code, value in (("legacy_source_commit_invalid", legacy_source_commit), ("legacy_update_commit_invalid", legacy_update_commit)):
+        if value and not SHA_RE.fullmatch(value):
+            warnings.append(UpdateMetadataWarning(code, "Legacy update metadata commit value is not valid.", field="commit_sha"))
+    if git_head and commit and git_head.lower() != commit.lower():
+        warnings.append(UpdateMetadataWarning("installed_identity_drift", "Installed release identity does not match the deployed git HEAD.", severity="high", field=".km-vms-release.json"))
+    if commit and legacy_source_commit and legacy_source_commit.lower() != commit.lower():
+        warnings.append(UpdateMetadataWarning("legacy_source_metadata_mismatch", "Legacy source metadata does not match installed release identity.", field=".km-vms-source.json"))
+    if commit and legacy_update_commit and legacy_update_commit.lower() != commit.lower():
+        warnings.append(UpdateMetadataWarning("legacy_update_metadata_mismatch", "Legacy update metadata does not match installed release identity.", field=".km-vms-update.json"))
+    version = _safe_field("version", release.get("version"), max_length=80)
+    if not version and build.get("metadata_source") != "development_fallback":
+        version = _safe_field("app_version", build.get("app_version"), max_length=80)
     last_status = _safe_field("status", update.get("status"), max_length=40)
     last_failed_phase = _safe_field("failed_phase", update.get("failed_phase"), max_length=80)
-    metadata_validity = "valid" if source_validity == "valid" and update_validity in {"valid", "missing"} else ("missing" if source_validity == "missing" and update_validity == "missing" else "invalid")
-    if metadata_validity == "missing":
-        status = "metadata_missing"
-    elif metadata_validity == "invalid":
-        status = "metadata_invalid"
+    legacy_validity = "valid" if source_validity == "valid" and update_validity in {"valid", "missing"} else ("missing" if source_validity == "missing" and update_validity == "missing" else "invalid")
+    if release_validity == "valid" and commit and git_head and git_head.lower() != commit.lower():
+        status = "installed_identity_drift"
+        identity_validity = "drift"
+    elif release_validity == "valid":
+        status = "known"
+        identity_validity = "valid"
+    elif legacy_validity == "valid":
+        status = "identity_incomplete"
+        identity_validity = "missing"
+    elif legacy_validity == "missing":
+        status = "identity_incomplete"
+        identity_validity = "missing"
     else:
-        status = "unknown"
+        status = "metadata_invalid"
+        identity_validity = "invalid"
     return UpdateInstalledState(
         status=status,
         installed_version=version,
         installed_commit=commit,
-        source_kind=_safe_field("source_kind", source.get("source_kind") or update.get("source_kind") or build.get("install_source"), max_length=80),
+        installed_title=_safe_field("title", release.get("title"), max_length=160),
+        installed_summary=_safe_field("summary", release.get("summary"), max_length=800),
+        source_kind=_safe_field("source_kind", release.get("source_kind") or source.get("source_kind") or update.get("source_kind") or build.get("install_source"), max_length=80),
         repo=repo,
         ref=ref,
-        channel=_safe_field("channel", os.getenv("KMVMS_UPDATE_CHANNEL_ID") or build.get("source_channel_id") or ref, max_length=80),
+        channel=_safe_field("channel", os.getenv("KMVMS_UPDATE_CHANNEL_ID") or release.get("source_channel") or build.get("source_channel_id") or ref, max_length=80),
+        release_channel=_safe_field("release_channel", release.get("release_channel"), max_length=80),
+        installed_at=_safe_timestamp(release.get("installed_at")),
+        installed_by=_safe_field("installed_by", release.get("installed_by"), max_length=80),
+        metadata_source=_safe_field("metadata_source", release.get("metadata_source") or build.get("metadata_source"), max_length=80),
         last_update_status=last_status,
         last_update_finished_at=_safe_timestamp(update.get("finished_at")),
         last_failed_phase=last_failed_phase,
-        metadata_validity=metadata_validity,
+        metadata_validity=legacy_validity,
+        identity_validity=identity_validity,
+        git_head=git_head,
+        legacy_source_commit=legacy_source_commit,
+        legacy_update_commit=legacy_update_commit,
         warnings=warnings,
     )
 
@@ -349,6 +442,131 @@ def _manifest_path() -> Path | None:
     return Path(raw) if raw else None
 
 
+def _public_release_descriptor_path() -> Path | None:
+    raw = os.getenv("KMVMS_PUBLIC_RELEASE_MANIFEST_PATH")
+    if raw:
+        path = Path(raw)
+        return path if path.exists() else None
+    return None
+
+
+def _public_provider_enabled() -> bool:
+    return str(os.getenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "1")).strip().lower() not in {"0", "false", "no", "off", "disabled"}
+
+
+def _public_release_descriptor_url() -> str | None:
+    if not _public_provider_enabled():
+        return None
+    url = _sanitize_text(os.getenv("KMVMS_PUBLIC_RELEASE_MANIFEST_URL") or PUBLIC_RELEASE_MANIFEST_URL_DEFAULT, max_length=300)
+    if not url or not url.startswith("https://"):
+        return None
+    return url
+
+
+def _public_timeout_seconds() -> float:
+    raw = os.getenv("KMVMS_PUBLIC_RELEASE_TIMEOUT_SECONDS")
+    if not raw:
+        return PUBLIC_RELEASE_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return PUBLIC_RELEASE_TIMEOUT_SECONDS
+    return min(max(value, 1.0), 15.0)
+
+
+def _read_public_release_payload(url: str) -> dict[str, Any]:
+    if not url.startswith("https://"):
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release provider URL must use HTTPS.", "error_category": "provider_url_invalid"})
+    request = urllib.request.Request(url, headers={"User-Agent": "KM-VMS-Update-Check/0.7.1", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=_public_timeout_seconds()) as response:  # nosec B310 - public HTTPS release metadata only
+            data = response.read(MAX_MANIFEST_BYTES + 1)
+    except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, OSError):
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is temporarily unavailable.", "error_category": "public_provider_unavailable"})
+    if len(data) > MAX_MANIFEST_BYTES:
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is too large.", "error_category": "public_provider_too_large"})
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except Exception:
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is not valid JSON.", "error_category": "public_provider_invalid_json"})
+    if not isinstance(payload, dict):
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata must be a JSON object.", "error_category": "public_provider_invalid_shape"})
+    return payload
+
+
+def _resolve_public_commit(source_repo: str, source_ref: str) -> str | None:
+    if not SAFE_REPO_RE.fullmatch(source_repo) or not SAFE_REF_RE.fullmatch(source_ref):
+        return None
+    encoded_ref = urllib.parse.quote(source_ref, safe="")
+    url = f"https://api.github.com/repos/{source_repo}/commits/{encoded_ref}"
+    request = urllib.request.Request(url, headers={"User-Agent": "KM-VMS-Update-Check/0.7.1", "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=_public_timeout_seconds()) as response:  # nosec B310 - public GitHub commit metadata only
+            data = response.read(MAX_MANIFEST_BYTES + 1)
+        payload = json.loads(data.decode("utf-8"))
+    except Exception:
+        return None
+    sha = _safe_field("sha", payload.get("sha") if isinstance(payload, dict) else None, max_length=40)
+    return sha.lower() if sha and SHA_RE.fullmatch(sha) else None
+
+
+def _manifest_from_release_payload(payload: dict[str, Any], *, resolve_commit: bool = False) -> UpdateManifestSummary:
+    if payload.get("schema_version") != 1:
+        raise UpdateCheckBlocked("check_failed", {"summary": "Public release descriptor schema_version is unsupported.", "error_category": "manifest_schema_invalid"})
+    source_repo = _safe_field("source_repo", payload.get("source_repo"), max_length=160) or PUBLIC_REPO_DEFAULT
+    source_ref = _safe_field("source_ref", payload.get("source_ref"), max_length=120) or "main"
+    commit = _manifest_text(payload, "commit_sha", max_length=40)
+    if commit and not SHA_RE.fullmatch(commit):
+        raise UpdateCheckBlocked("check_failed", {"summary": "Public release descriptor commit_sha is invalid.", "error_category": "manifest_schema_invalid"})
+    if not commit and resolve_commit:
+        commit = _resolve_public_commit(source_repo, source_ref)
+    normalized = {
+        "schema_version": 1,
+        "channel": _safe_field("release_channel", payload.get("release_channel"), max_length=80) or "public-github",
+        "version": _manifest_text(payload, "version", required=True, max_length=80),
+        "git_ref": source_ref,
+        "commit": commit,
+        "published_at": _safe_timestamp(payload.get("published_at")),
+        "title": _manifest_text(payload, "title", max_length=160),
+        "summary": _manifest_text(payload, "summary", max_length=800),
+        "release_notes_url": None,
+        "breaking_changes": _string_list(payload.get("changelog")),
+        "requires_backup": bool(payload.get("requires_backup") is True),
+        "requires_manual_action": bool(payload.get("requires_manual_action") is True),
+        "requires_migration": bool(payload.get("requires_migration") is True),
+        "minimum_current_version": None,
+        "artifacts": {"source": {"type": "github_tarball", "repo": source_repo, "ref": commit or source_ref}},
+    }
+    return _normalize_manifest(normalized)
+
+
+def _manifest_from_release_descriptor(path: Path) -> UpdateManifestSummary:
+    payload, validity = _read_json_file(path)
+    if validity != "valid" or not payload:
+        raise UpdateCheckBlocked("check_failed", {"summary": "Public release descriptor is unavailable or invalid.", "error_category": "release_descriptor_" + validity})
+    return _manifest_from_release_payload(payload, resolve_commit=False)
+
+
+def _manifest_from_public_release_url(url: str) -> UpdateManifestSummary:
+    payload = _read_public_release_payload(url)
+    return _manifest_from_release_payload(payload, resolve_commit=True)
+
+
+def _available_release_source_path(manifest_path_for_test_only: str | Path | None = None) -> tuple[Path | str | None, str]:
+    if manifest_path_for_test_only:
+        return Path(manifest_path_for_test_only), "local_static_manifest"
+    local = _manifest_path()
+    if local and str(os.getenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        return local, "local_static_manifest"
+    public = _public_release_descriptor_path()
+    if public:
+        return public, "public_github_release"
+    public_url = _public_release_descriptor_url()
+    if public_url:
+        return public_url, "public_github_release"
+    return None, "not_configured"
+
+
 def _system_row(db: Session) -> SystemSettings | None:
     try:
         return db.query(SystemSettings).first()
@@ -382,8 +600,14 @@ def _warning(code: str, message: str, severity: str = "info") -> UpdateMetadataW
 def _compare(installed: UpdateInstalledState, latest: UpdateManifestSummary) -> tuple[str, list[UpdateBlocker], list[UpdateMetadataWarning]]:
     blockers: list[UpdateBlocker] = []
     warnings: list[UpdateMetadataWarning] = []
+    if installed.status in {"installed_identity_drift", "identity_incomplete", "metadata_invalid"}:
+        blockers.append(_blocker(installed.status, "Installed release identity is incomplete or does not match deployed source evidence."))
+        return installed.status, blockers, warnings
     if installed.installed_commit and latest.commit and installed.installed_commit.lower() == latest.commit.lower():
         return "current", blockers, warnings
+    if installed.git_head and latest.commit and installed.git_head.lower() == latest.commit.lower() and not installed.installed_commit:
+        blockers.append(_blocker("identity_incomplete", "Deployed source matches the release but installed release identity is missing."))
+        return "identity_incomplete", blockers, warnings
     if latest.minimum_current_version:
         current = _semver(installed.installed_version)
         minimum = _semver(latest.minimum_current_version)
@@ -398,17 +622,22 @@ def _compare(installed: UpdateInstalledState, latest: UpdateManifestSummary) -> 
         blockers.append(_blocker("requires_migration", "Release requires migration support outside Stage 6.0.8."))
     if blockers:
         return "blocked", blockers, warnings
-    if installed.installed_version and latest.version and installed.installed_version == latest.version and not latest.commit:
+    ordering = compare_versions(installed.installed_version, latest.version)["ordering"]
+    if ordering == "same_version" and not latest.commit:
         warnings.append(_warning("commit_evidence_missing", "Version matches but commit evidence is unavailable."))
         return "current_or_unknown", blockers, warnings
-    ordering = compare_versions(installed.installed_version, latest.version)["ordering"]
+    if not latest.commit:
+        blockers.append(_blocker("trusted_commit_missing", "Available release does not include commit evidence required for apply."))
+        if ordering == "newer_available":
+            return "blocked", blockers, warnings
+        return "unknown", blockers, warnings
     if ordering == "newer_available":
         return "update_available", blockers, warnings
     if ordering == "same_version":
         return "current_or_unknown", blockers, warnings
     if ordering == "installed_newer_than_channel":
-        blockers.append(_blocker("installed_newer_than_manifest", "Installed version is newer than trusted manifest version."))
-        return "blocked", blockers, warnings
+        blockers.append(_blocker("installed_newer_than_available", "Installed version is newer than available release."))
+        return "installed_newer_than_available", blockers, warnings
     warnings.append(_warning("comparison_evidence_insufficient", "Installed/latest comparison evidence is insufficient."))
     return "unknown", blockers, warnings
 
@@ -417,9 +646,53 @@ def _result_payload(result: UpdateCheckResult) -> dict[str, Any]:
     payload = _asdict(result)
     installed = payload["installed"]
     latest = payload["latest"]
+    available_release = None if latest is None else {
+        "version": latest["version"],
+        "title": latest["title"],
+        "summary": latest["summary"],
+        "changelog": latest["breaking_changes"],
+        "published_at": latest["published_at"],
+        "tag": latest["source_ref"] or latest["git_ref"],
+        "commit_sha": latest["commit"],
+        "commit_short": latest["commit"][:12] if latest["commit"] else None,
+        "provider": payload["manifest_source_status"],
+        "requires_backup": latest["requires_backup"],
+        "requires_manual_action": latest["requires_manual_action"],
+        "requires_migration": latest["requires_migration"],
+    }
+    installed_release = {
+        "version": installed["installed_version"],
+        "title": installed["installed_title"],
+        "summary": installed["installed_summary"],
+        "commit_sha": installed["installed_commit"],
+        "commit_short": installed["installed_commit"][:12] if installed["installed_commit"] else None,
+        "source_kind": installed["source_kind"],
+        "source_repo": installed["repo"],
+        "source_ref": installed["ref"],
+        "release_channel": installed["release_channel"] or installed["channel"],
+        "installed_at": installed["installed_at"],
+        "installed_by": installed["installed_by"],
+        "metadata_status": installed["identity_validity"],
+        "metadata_source": installed["metadata_source"],
+    }
+    evidence = {
+        "git_head": installed["git_head"],
+        "git_head_short": installed["git_head"][:12] if installed["git_head"] else None,
+        "legacy_source_commit": installed["legacy_source_commit"],
+        "legacy_update_commit": installed["legacy_update_commit"],
+            "drift_detected": installed["status"] == "installed_identity_drift",
+    }
     payload.update(
         {
             "report_version": UPDATE_REPORT_VERSION,
+            "installed_release": installed_release,
+            "available_release": available_release,
+            "comparison": {
+                "status": payload["status"],
+                "can_apply_from_ui": False,
+                "reason_code": payload["blockers"][0]["code"] if payload["blockers"] else payload["status"],
+            },
+            "evidence": evidence,
             "installed_build": {
                 "status": installed["status"],
                 "app_version": installed["installed_version"],
@@ -445,9 +718,9 @@ def _result_payload(result: UpdateCheckResult) -> dict[str, Any]:
             "source_channel": {
                 "status": payload["manifest_source_status"],
                 "source_channel_id": installed["channel"],
-                "trusted_source_type": "local_static_manifest" if payload["manifest_source_status"] == "configured" else "not_configured",
+                "trusted_source_type": payload["manifest_source_status"],
                 "arbitrary_url_supported": False,
-                "remote_check_status": "remote_check_not_implemented",
+                "remote_check_status": "public_github_release_metadata" if payload["manifest_source_status"] == "public_github_release" else "local_or_not_configured",
             },
             "classification": {
                 "availability": payload["status"],
@@ -477,20 +750,22 @@ def _result_payload(result: UpdateCheckResult) -> dict[str, Any]:
                 "restore_executed": False,
             },
             "raw_manifest_exposed": False,
-            "next_recommended_action": "future_stage_609_apply_helper_required" if payload["status"] == "update_available" else "no_update_apply_action",
+            "next_recommended_action": "apply_update_when_confirmed" if payload["status"] == "update_available" else "no_update_apply_action",
         }
     )
     helper_enabled = str(os.getenv("KMVMS_UPDATE_HELPER_ENABLED") or os.getenv("KM_VMS_UPDATE_HELPER_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
-    payload["can_apply_from_ui"] = bool(payload["status"] == "update_available" and not payload["blockers"] and helper_enabled)
+    payload["can_apply_from_ui"] = bool(payload["status"] == "update_available" and not payload["blockers"] and helper_enabled and latest and latest.get("commit"))
+    payload["comparison"]["can_apply_from_ui"] = payload["can_apply_from_ui"]
     return payload
 
 
 def build_update_status(db: Session, *, now: datetime | None = None) -> dict[str, Any]:
     installed = read_installed_update_state()
-    manifest_configured = _manifest_path() is not None
+    source_path, source_status = _available_release_source_path()
+    manifest_configured = source_path is not None
     warnings = list(installed.warnings)
     if not manifest_configured:
-        warnings.append(_warning("trusted_manifest_not_configured", "No trusted release manifest source is configured."))
+        warnings.append(_warning("no_release_published", "No public release metadata is available."))
     status = "not_configured" if not manifest_configured else installed.status
     result = UpdateCheckResult(
         status=status,
@@ -499,7 +774,7 @@ def build_update_status(db: Session, *, now: datetime | None = None) -> dict[str
         blockers=[],
         warnings=warnings,
         checked_at=_iso(now),
-        manifest_source_status="configured" if manifest_configured else "not_configured",
+        manifest_source_status=source_status if manifest_configured else "not_configured",
     )
     payload = _result_payload(result)
     payload["schedule"] = _schedule(db, now=now)
@@ -516,14 +791,14 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
     if manual and _LAST_MANUAL_CHECK_AT and now - _LAST_MANUAL_CHECK_AT < MANUAL_RATE_LIMIT:
         raise UpdateCheckBlocked("manual_update_check_rate_limited", {"summary": "Manual update check is rate-limited.", "retry_after_seconds": int((MANUAL_RATE_LIMIT - (now - _LAST_MANUAL_CHECK_AT)).total_seconds())})
     installed = read_installed_update_state()
-    source_path = Path(manifest_path_for_test_only) if manifest_path_for_test_only else _manifest_path()
+    source_path, source_status = _available_release_source_path(manifest_path_for_test_only)
     if not source_path:
         result = UpdateCheckResult(
             status="not_configured",
             installed=installed,
             latest=None,
             blockers=[],
-            warnings=[*installed.warnings, _warning("trusted_manifest_not_configured", "No trusted release manifest source is configured.")],
+            warnings=[*installed.warnings, _warning("no_release_published", "No public release metadata is available.")],
             checked_at=_iso(now),
             manifest_source_status="not_configured",
         )
@@ -535,7 +810,12 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
         return payload
     try:
         _CHECK_IN_PROGRESS = True
-        latest = read_trusted_local_manifest(source_path)
+        if source_status == "public_github_release" and isinstance(source_path, str):
+            latest = _manifest_from_public_release_url(source_path)
+        elif source_status == "public_github_release":
+            latest = _manifest_from_release_descriptor(source_path)
+        else:
+            latest = read_trusted_local_manifest(source_path)
         status, blockers, compare_warnings = _compare(installed, latest)
         result = UpdateCheckResult(
             status=status,
@@ -544,7 +824,7 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
             blockers=blockers,
             warnings=[*installed.warnings, *compare_warnings],
             checked_at=_iso(now),
-            manifest_source_status="configured",
+            manifest_source_status=source_status,
         )
         payload = _result_payload(result)
         payload["schedule"] = _schedule(db, now=now)

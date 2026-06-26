@@ -63,6 +63,8 @@ def test_update_script_reuses_compose_helper_and_github_tarball_without_git_requ
     assert "Authorization: Bearer" in script
     assert ".km-vms-source.json" in script
     assert ".km-vms-update.json" in script
+    assert ".km-vms-release.json" in script
+    assert "kmishnev87/km-vms" in script
 
 
 def test_update_helper_failure_steps_match_failed_phase():
@@ -155,6 +157,7 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
         if "--dry-run" not in command:
             (app_dir / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "status": "success", "commit_sha": expected}), encoding="utf-8")
             (app_dir / ".km-vms-source.json").write_text(json.dumps({"schema_version": 1, "commit_sha": expected}), encoding="utf-8")
+            (app_dir / ".km-vms-release.json").write_text(json.dumps({"schema_version": 1, "commit_sha": expected}), encoding="utf-8")
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr(helper.subprocess, "run", fake_run)
@@ -238,6 +241,7 @@ def test_update_overlay_allowlist_and_recursive_denylist_are_present():
         "apps",
         "deploy",
         "docs",
+        "release",
         "scripts",
         "docker-compose.yml",
         "docker-compose.pytest.yml",
@@ -316,6 +320,7 @@ def test_update_script_validates_source_app_paths_and_rejects_traversal_and_syml
         "Source tree is missing scripts/install.sh",
         "Source tree is missing scripts/km-vms-compose-common.sh",
         "Source tree is missing docs/INSTALL.md",
+        "Source tree is missing release/km-vms-release.json",
         "Source tree includes scripts/update.sh",
         "Source tree does not include scripts/update.sh",
         "Run update.sh from a KM VMS app directory",
@@ -344,6 +349,8 @@ def test_update_script_locking_preservation_dry_run_and_metadata_contracts():
         "schema_version",
         "github_repo",
         "commit_sha",
+        ".km-vms-release.json",
+        "write_release_identity",
         "updated_paths_summary",
         "preserved_paths_summary",
         "error_message",
@@ -354,6 +361,13 @@ def test_update_script_locking_preservation_dry_run_and_metadata_contracts():
     metadata_block = script.split("write_update_metadata()", 1)[1].split("fail()", 1)[0]
     assert "GITHUB_TOKEN" not in metadata_block
     assert "KM_VMS_GITHUB_TOKEN" not in metadata_block
+
+    overlay_i = script.index("overlay_source\n")
+    precompose_identity_i = script.index('write_release_identity "precompose"\n')
+    compose_config_i = script.index("compose_config\n")
+    final_identity_i = script.index("write_release_identity\n")
+    assert overlay_i < precompose_identity_i < compose_config_i < final_identity_i
+    assert "Release identity path is a directory and cannot be mounted by Docker Compose" in script
 
 
 def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_stubbed():
@@ -371,6 +385,7 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
             (root / "deploy/nginx").mkdir(parents=True)
             (root / "scripts").mkdir(parents=True)
             (root / "docs").mkdir(parents=True)
+            (root / "release").mkdir(parents=True)
             (root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
             (root / "deploy/nginx/default.conf").write_text("# nginx\n", encoding="utf-8")
             (root / "scripts/install.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
@@ -378,13 +393,14 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
                 "\n".join(
                     [
                         "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
-                        "km_vms_compose_cmd() { :; }",
+                        "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; :; }",
                     ]
                 )
                 + "\n",
                 encoding="utf-8",
             )
             (root / "docs/INSTALL.md").write_text("# install\n", encoding="utf-8")
+            (root / "release/km-vms-release.json").write_text('{"schema_version":1,"version":"0.7.1"}\n', encoding="utf-8")
         (source / "scripts/update.sh").write_text(script, encoding="utf-8")
         (app / "scripts/update.sh").write_text(script, encoding="utf-8")
         (app / ".env").write_text("HTTP_PORT=18181\nCOMPOSE_PROJECT_NAME=kmvmsfixture\n", encoding="utf-8")
@@ -434,6 +450,7 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
             (root / "deploy/nginx").mkdir(parents=True)
             (root / "scripts").mkdir(parents=True)
             (root / "docs").mkdir(parents=True)
+            (root / "release").mkdir(parents=True)
             (root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
             (root / "docker-compose.pytest.yml").write_text("services: {}\n", encoding="utf-8")
             (root / ".dockerignore").write_text("data\n", encoding="utf-8")
@@ -445,13 +462,14 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
                 "\n".join(
                     [
                         "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
-                        "km_vms_compose_cmd() { :; }",
+                        "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; :; }",
                     ]
                 )
                 + "\n",
                 encoding="utf-8",
             )
             (root / "docs/INSTALL.md").write_text("# install\n", encoding="utf-8")
+            (root / "release/km-vms-release.json").write_text('{"schema_version":1,"version":"0.7.1"}\n', encoding="utf-8")
         (source / "scripts/update.sh").write_text(script, encoding="utf-8")
         (app / "scripts/update.sh").write_text(script, encoding="utf-8")
         (app / ".env").write_text("HTTP_PORT=18182\nCOMPOSE_PROJECT_NAME=kmvmsfixture\n", encoding="utf-8")
@@ -527,6 +545,8 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
             assert (app / relative).exists(), relative
         assert (app / ".env").read_text(encoding="utf-8").startswith("HTTP_PORT=18182")
         assert (app / "data/sentinel.txt").read_text(encoding="utf-8") == "keep\n"
+        assert (app / ".km-vms-release.json").is_file()
+        assert json.loads((app / ".km-vms-release.json").read_text(encoding="utf-8"))["metadata_status"] in {"complete", "partial"}
 
 
 def test_docs_describe_terminal_update_without_future_stage_claims():
@@ -534,8 +554,10 @@ def test_docs_describe_terminal_update_without_future_stage_claims():
 
     for required in (
         "## Terminal Update",
-        "sh scripts/update.sh --github-repo OWNER/REPO --branch main --yes",
-        "sh scripts/update.sh --github-repo OWNER/REPO --branch main --dry-run",
+        "curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/install.sh",
+        "sh scripts/update.sh --branch main --yes",
+        "sh scripts/update.sh --branch main --dry-run",
+        ".km-vms-release.json",
         "--github-private",
         "KM_VMS_GITHUB_TOKEN",
         ".env",

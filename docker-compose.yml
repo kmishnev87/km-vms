@@ -57,6 +57,7 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
       STORAGE_ROOT: /storage/archive
+      KMVMS_APP_ROOT: /app
       UPDATE_CONTROL_ROOT: /update-control
       KMVMS_UPDATE_MANIFEST_PATH: ${KMVMS_UPDATE_MANIFEST_PATH:-}
       KMVMS_UPDATE_CHANNEL_ID: ${KMVMS_UPDATE_CHANNEL_ID:-stable}
@@ -90,6 +91,9 @@ services:
       - ${KMVMS_HOST_DB_BACKUP_ROOT:-./data/backups/db}:${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
       - ./data/install-control:/install-control
       - ./data/update-control:/update-control
+      - ./release:/app/release:ro
+      - ./.km-vms-release.json:/app/.km-vms-release.json:ro
+      - ./.km-vms-source.json:/app/.km-vms-source.json:ro
       - ./data/previews:/storage/previews
       - ./data/exports:/storage/exports
     devices:

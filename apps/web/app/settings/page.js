@@ -44,6 +44,7 @@ import {
   buildUpdateApplyConfirmation,
   updateApplyEffectiveStatus,
   updateApplyFactRows,
+  updateApplyTechnicalRows,
   updateApplyIsRunning,
   updateApplyRecoveryText,
   userCanBeDeleted,
@@ -151,6 +152,10 @@ const TEXT = {
     updateApplyRecoveryReconnecting: "Сервисы могут перезапускаться. Интерфейс продолжит опрос и перечитает статус после восстановления API.",
     updateApplyRecoveryRunning: "Helper выполняет обновление. Не закрывайте питание NAS и дождитесь итогового статуса.",
     updateApplyRecoveryUnknown: "Статус обновления пока неизвестен. Обновите проверку или дождитесь ответа API.",
+    updateApplyRecoveryIdentity: "Метаданные установки неполные или расходятся с текущим кодом. Обновление заблокировано до принятия release identity.",
+    updateApplyRecoveryProvider: "Публичный release descriptor пока недоступен. Повторите проверку позже или проверьте настройки сервера.",
+    updateApplyRecoveryInstalledNewer: "Установленная версия новее опубликованной. Применение заблокировано, чтобы не откатить систему назад.",
+    updateApplyTechnicalDetails: "Технические детали",
     updateCommitPending: "Ожидает подтверждения",
     updateCommitUnavailable: "Нет данных",
     updateCommitVerified: "Commit подтверждён",
@@ -171,6 +176,12 @@ const TEXT = {
       source: "Источник",
       targetCommit: "Целевой commit",
       verification: "Проверка commit",
+      releaseTitle: "Релиз",
+      releaseSummary: "Изменения",
+      status: "Статус",
+      gitHead: "Git HEAD",
+      metadataSource: "Метаданные",
+      provider: "Провайдер",
     },
     maintenanceFlows: {
       db_adoption: "Принятие БД",
@@ -209,6 +220,12 @@ const TEXT = {
       restarting: "Перезапуск",
       starting_helper: "Запуск helper",
       update_available: "Есть обновление",
+      identity_incomplete: "Неполная идентичность",
+      installed_identity_drift: "Расхождение установки",
+      metadata_stale: "Устаревшие метаданные",
+      provider_unavailable: "Источник недоступен",
+      no_release_published: "Релиз не опубликован",
+      installed_newer_than_available: "Установленная версия новее",
       validating_source: "Проверка источника",
       limited: "Ограничено",
       unknown: "Неизвестно",
@@ -235,6 +252,11 @@ const TEXT = {
       update_metadata_unavailable: "Метаданные последнего обновления недоступны.",
       update_metadata_unsupported_schema: "Схема метаданных последнего обновления не поддерживается.",
       installed_commit_invalid: "Установленный commit имеет некорректный формат.",
+      trusted_commit_missing: "У опубликованного релиза нет подтверждённого commit.",
+      identity_incomplete: "Метаданные установленного релиза неполные.",
+      installed_identity_drift: "Метаданные релиза расходятся с текущим Git HEAD.",
+      no_release_published: "Публичный release descriptor не найден.",
+      installed_newer_than_available: "Установленная версия новее опубликованной.",
       trusted_manifest_not_configured: "Trusted release manifest не настроен на сервере.",
       check_failed: "Проверка обновления не завершилась штатно.",
       commit_mismatch: "Установленный commit не совпадает с trusted release commit.",
@@ -423,6 +445,10 @@ const TEXT = {
     updateApplyRecoveryReconnecting: "Services may be restarting. The UI will continue polling and reread status when the API returns.",
     updateApplyRecoveryRunning: "The helper is applying the update. Keep the NAS powered and wait for the final status.",
     updateApplyRecoveryUnknown: "Update status is not known yet. Refresh the check or wait for the API response.",
+    updateApplyRecoveryIdentity: "Installed release metadata is incomplete or does not match the current code. Apply is blocked until release identity is adopted.",
+    updateApplyRecoveryProvider: "The public release descriptor is not available yet. Check again later or verify server settings.",
+    updateApplyRecoveryInstalledNewer: "Installed version is newer than the published release. Apply is blocked to avoid downgrading the system.",
+    updateApplyTechnicalDetails: "Technical details",
     updateCommitPending: "Pending verification",
     updateCommitUnavailable: "No data",
     updateCommitVerified: "Commit verified",
@@ -443,6 +469,12 @@ const TEXT = {
       source: "Source",
       targetCommit: "Target commit",
       verification: "Commit check",
+      releaseTitle: "Release",
+      releaseSummary: "Changes",
+      status: "Status",
+      gitHead: "Git HEAD",
+      metadataSource: "Metadata",
+      provider: "Provider",
     },
     maintenanceFlows: {
       db_adoption: "DB adoption",
@@ -481,6 +513,12 @@ const TEXT = {
       restarting: "Restarting",
       starting_helper: "Starting helper",
       update_available: "Update available",
+      identity_incomplete: "Identity incomplete",
+      installed_identity_drift: "Install drift",
+      metadata_stale: "Stale metadata",
+      provider_unavailable: "Source unavailable",
+      no_release_published: "No release published",
+      installed_newer_than_available: "Installed is newer",
       validating_source: "Validating source",
       limited: "Limited",
       unknown: "Unknown",
@@ -507,6 +545,11 @@ const TEXT = {
       update_metadata_unavailable: "Last update metadata is unavailable.",
       update_metadata_unsupported_schema: "Last update metadata schema is unsupported.",
       installed_commit_invalid: "Installed commit value is not valid.",
+      trusted_commit_missing: "Published release has no verified commit.",
+      identity_incomplete: "Installed release metadata is incomplete.",
+      installed_identity_drift: "Release metadata does not match the current Git HEAD.",
+      no_release_published: "Public release descriptor was not found.",
+      installed_newer_than_available: "Installed version is newer than the published release.",
       trusted_manifest_not_configured: "Trusted release manifest is not configured on the server.",
       check_failed: "Update check did not complete successfully.",
       commit_mismatch: "Installed commit does not match the trusted release commit.",
@@ -666,6 +709,10 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyRecoveryReconnecting: "服务可能正在重启。界面会继续轮询，并在 API 恢复后重新读取状态。",
   updateApplyRecoveryRunning: "Helper 正在应用更新。请保持 NAS 供电并等待最终状态。",
   updateApplyRecoveryUnknown: "更新状态暂时未知。请刷新检查或等待 API 响应。",
+  updateApplyRecoveryIdentity: "已安装版本元数据不完整或与当前代码不一致。在接管 release identity 前无法应用更新。",
+  updateApplyRecoveryProvider: "公共 release descriptor 暂不可用。请稍后重新检查或核对服务器设置。",
+  updateApplyRecoveryInstalledNewer: "已安装版本高于已发布版本。为避免降级，应用更新已被阻止。",
+  updateApplyTechnicalDetails: "技术详情",
   updateCommitPending: "等待验证",
   updateCommitUnavailable: "无数据",
   updateCommitVerified: "Commit 已验证",
@@ -686,6 +733,12 @@ const ZH_TEXT_OVERRIDES = {
     source: "来源",
     targetCommit: "目标 commit",
     verification: "Commit 检查",
+    releaseTitle: "版本",
+    releaseSummary: "变更",
+    status: "状态",
+    gitHead: "Git HEAD",
+    metadataSource: "元数据",
+    provider: "提供方",
   },
   maintenanceFlows: {
     db_adoption: "数据库接管",
@@ -724,6 +777,12 @@ const ZH_TEXT_OVERRIDES = {
     restarting: "重启中",
     starting_helper: "启动 helper",
     update_available: "有可用更新",
+    identity_incomplete: "身份信息不完整",
+    installed_identity_drift: "安装存在差异",
+    metadata_stale: "元数据已过期",
+    provider_unavailable: "来源不可用",
+    no_release_published: "未发布版本",
+    installed_newer_than_available: "已安装版本更高",
     validating_source: "验证来源",
     limited: "受限",
     unknown: "未知",
@@ -750,6 +809,11 @@ const ZH_TEXT_OVERRIDES = {
     update_metadata_unavailable: "最近更新元数据不可用。",
     update_metadata_unsupported_schema: "不支持最近更新元数据结构。",
     installed_commit_invalid: "已安装 commit 格式无效。",
+    trusted_commit_missing: "已发布版本缺少已验证 commit。",
+    identity_incomplete: "已安装版本元数据不完整。",
+    installed_identity_drift: "版本元数据与当前 Git HEAD 不一致。",
+    no_release_published: "未找到公共 release descriptor。",
+    installed_newer_than_available: "已安装版本高于已发布版本。",
     trusted_manifest_not_configured: "服务器未配置 trusted release manifest。",
     check_failed: "更新检查未正常完成。",
     commit_mismatch: "已安装 commit 与 trusted release commit 不一致。",
@@ -849,6 +913,7 @@ export default function SettingsPage() {
   const updateApplyRunning = updateApplyIsRunning(updateApplyStatus?.status || "");
   const updateApplyAllowed = Boolean(updateStatus?.can_apply_from_ui && !updateApplyRunning && !maintenanceBusy);
   const updateApplyFacts = updateApplyFactRows(updateStatus, updateApplyStatus, t);
+  const updateApplyTechnicalFacts = updateApplyTechnicalRows(updateStatus, updateApplyStatus, t);
   const updateApplyRecovery = updateApplyRecoveryText(updateApplyEffective, updateApplyStatus, t);
   const updateApplyWarnings = [
     ...(Array.isArray(updateStatus?.blockers) ? updateStatus.blockers : []),
@@ -1831,6 +1896,16 @@ export default function SettingsPage() {
                         <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
                       ))}
                     </dl>
+                    {updateApplyTechnicalFacts.length ? (
+                      <details className="settingsUpdateApplyTechnical">
+                        <summary>{t.updateApplyTechnicalDetails}</summary>
+                        <dl className="settingsUpdateApplyFacts">
+                          {updateApplyTechnicalFacts.map(([label, value]) => (
+                            <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
+                          ))}
+                        </dl>
+                      </details>
+                    ) : null}
                     {updateApplyTransientError ? <div className="settingsUpdateApplyNotice">{updateApplyTransientError}</div> : null}
                     {updateApplyWarnings.length ? (
                       <ul className="settingsUpdateApplyWarnings">

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "product": "KM VMS",
+  "version": "0.7.1",
+  "title": "Public GitHub Release Identity and Drift-Proof Update Status",
+  "summary": "Adds public GitHub install/update identity, release status hardening, and user-readable update information.",
+  "release_channel": "public-github",
+  "source_kind": "github-release",
+  "source_repo": "kmishnev87/km-vms",
+  "source_ref": "main",
+  "commit_sha": null,
+  "published_at": null,
+  "requires_backup": false,
+  "requires_manual_action": false,
+  "requires_migration": false,
+  "changelog": [
+    "Public GitHub source becomes the default install/update path.",
+    "Installed release identity is recorded in .km-vms-release.json.",
+    "Update status detects stale metadata and avoids false update prompts."
+  ]
+}
