@@ -192,13 +192,18 @@ After acceptance and only by explicit operator command, the release publication 
 ```sh
 git status --short --branch
 git diff --check
-git tag -a v0.7.2 -m "KM VMS v0.7.2"
+git tag -a vX.Y.Z -m "KM VMS vX.Y.Z"
 git push origin main
-git push origin v0.7.2
-gh release create v0.7.2 --title "KM VMS v0.7.2" --notes-file <release-notes.md>
+git push origin vX.Y.Z
+sh scripts/km-vms-publish-github-release.sh --check --tag vX.Y.Z
+KM_VMS_GITHUB_RELEASE_TOKEN_FILE=/secure/path/km-vms-github-release-token \
+  sh scripts/km-vms-publish-github-release.sh --publish --tag vX.Y.Z
 ```
 
-After publication, validate that the tag points to the intended commit, the GitHub Release exists, the raw descriptor for the tag is readable, and NAS Settings -> Maintenance sees the expected installed/available semantic versions. Stage 6.1.3 does not implement Stage 6.1.4 public/security hardening, fallback admin password cleanup, rollback, backup orchestration, tag automation, or automatic GitHub Release publishing.
+The GitHub Release token must be stored outside the repository and outside generated artifacts. Point `KM_VMS_GITHUB_RELEASE_TOKEN_FILE` at that secret file, or use `KM_VMS_GITHUB_RELEASE_TOKEN` only for controlled operator shells. The publish helper runs after commit/tag/push; it does not create commits or tags. Its `--check` mode performs read-only local/public validation without requiring a token, while `--publish` requires a token and either creates the GitHub Release object or confirms the existing object matches the tag and commit evidence.
+If `--tag` is used, it must match the current `release/km-vms-release.json` `tag` / `source_ref`; the helper does not validate arbitrary historical releases against the current descriptor.
+
+After publication, validate that the tag points to the intended commit, the GitHub Release exists, the raw descriptor for the tag is readable, and NAS Settings -> Maintenance sees the expected installed/available semantic versions. Stage 6.1.3 does not implement Stage 6.1.4 public/security hardening, fallback admin password cleanup, rollback, backup orchestration or tag automation.
 
 ## Database Schema Versioning
 

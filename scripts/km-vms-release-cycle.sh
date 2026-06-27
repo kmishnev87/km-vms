@@ -202,7 +202,9 @@ def print_release_commands(version: str) -> None:
     print(f"git tag -a {tag} -m \"KM VMS {tag}\"")
     print("git push origin main")
     print(f"git push origin {tag}")
-    print(f"gh release create {tag} --title \"KM VMS {tag}\" --notes-file <release-notes.md>")
+    print(f"sh scripts/km-vms-publish-github-release.sh --check --tag {tag}")
+    print("KM_VMS_GITHUB_RELEASE_TOKEN_FILE=/secure/path/km-vms-github-release-token \\")
+    print(f"  sh scripts/km-vms-publish-github-release.sh --publish --tag {tag}")
 
 
 if prepare_version:

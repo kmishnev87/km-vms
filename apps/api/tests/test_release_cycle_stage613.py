@@ -104,5 +104,7 @@ def test_stage613_release_cycle_script_prints_publication_preview_only():
     )
 
     assert "git tag -a v0.7.2" in result.stdout
-    assert "gh release create v0.7.2" in result.stdout
+    assert "gh release create" not in result.stdout
+    assert "sh scripts/km-vms-publish-github-release.sh --check --tag v0.7.2" in result.stdout
+    assert "sh scripts/km-vms-publish-github-release.sh --publish --tag v0.7.2" in result.stdout
     assert "run only after operator acceptance" in result.stdout
