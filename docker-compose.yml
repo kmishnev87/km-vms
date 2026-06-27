@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: vms
       POSTGRES_USER: vms
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       TZ: ${TZ:-Asia/Yekaterinburg}
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
@@ -53,9 +53,9 @@ services:
       APP_ENV: production
       APP_HOST: 0.0.0.0
       APP_PORT: 8000
-      DATABASE_URL: postgresql+psycopg://vms:${POSTGRES_PASSWORD}@postgres:5432/vms
-      JWT_SECRET: ${JWT_SECRET}
-      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      DATABASE_URL: postgresql+psycopg://vms:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/vms
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
       STORAGE_ROOT: /storage/archive
       KMVMS_APP_ROOT: /app
       UPDATE_CONTROL_ROOT: /update-control
@@ -83,9 +83,6 @@ services:
       LIVE_CLEANUP_INTERVAL_SECONDS: 10
       LIVE_START_TIMEOUT_SECONDS: 20
       LIVE_MAX_CONCURRENT_TRANSCODES: 0
-      ADMIN_USERNAME: ${ADMIN_USERNAME}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      ADMIN_FULL_NAME: ${ADMIN_FULL_NAME}
     volumes:
       - ${SURVEILLANCE_ROOT}:/storage/archive
       - ${KMVMS_HOST_DB_BACKUP_ROOT:-./data/backups/db}:${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
@@ -164,7 +161,7 @@ services:
         condition: service_healthy
     environment:
       TZ: ${TZ:-Asia/Yekaterinburg}
-      DATABASE_URL: postgresql+psycopg://vms:${POSTGRES_PASSWORD}@postgres:5432/vms
+      DATABASE_URL: postgresql+psycopg://vms:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/vms
       STORAGE_ROOT: /storage/archive
       DEFAULT_RECORD_STREAM: main
       SEGMENT_DURATION_SEC: 300

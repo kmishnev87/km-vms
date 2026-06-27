@@ -24,16 +24,13 @@ services:
       TZ: ${TZ:-Asia/Yekaterinburg}
       APP_ENV: production
       DATABASE_URL: sqlite:////tmp/kmvms-pytest/db.sqlite3
-      JWT_SECRET: kmvms-pytest-jwt-secret
-      ENCRYPTION_KEY: kmvms-pytest-encryption-key-32bytes
+      JWT_SECRET: kmvms-pytest-jwt-secret-32-bytes-minimum
+      ENCRYPTION_KEY: kmvms-pytest-encryption-key-32-bytes-minimum
       STORAGE_ROOT: /tmp/kmvms-pytest/archive
       STORAGE_PREVIEWS: /tmp/kmvms-pytest/previews
       STORAGE_EXPORTS: /tmp/kmvms-pytest/exports
       STORAGE_HOST_ROOT: ""
       SURVEILLANCE_ROOT: ""
-      ADMIN_USERNAME: pytest_admin
-      ADMIN_PASSWORD: pytest_admin_password
-      ADMIN_FULL_NAME: Pytest Admin
       PYTEST_ADDOPTS: --cache-clear -p no:cacheprovider
       KMVMS_STAGE2_POSTGRES_URL: ${KMVMS_STAGE2_POSTGRES_URL:-postgresql+psycopg://kmvms_pytest:kmvms_pytest_password@postgres-test:5432/kmvms_pytest}
       KMVMS_STAGE3_POSTGRES_URL: ${KMVMS_STAGE3_POSTGRES_URL:-postgresql+psycopg://kmvms_pytest:kmvms_pytest_password@postgres-test:5432/kmvms_pytest}

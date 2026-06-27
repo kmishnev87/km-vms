@@ -30,10 +30,12 @@ def test_install_script_exposes_private_github_no_git_contract():
         assert required in helper
 
 
-def test_install_docs_do_not_claim_false_public_pipe_install():
+def test_install_docs_include_public_pipe_install_without_token_requirement():
     docs = read("docs/INSTALL.md")
 
-    assert "curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/install.sh | sh -s --" not in docs
+    assert "curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/install.sh | sh -s --" in docs
+    public_install_section = docs.split("Public one-line install:", 1)[1].split("Private GitHub repository install without `git`:", 1)[0]
+    assert "--github-token" not in public_install_section
     assert "Private GitHub repository install without `git`" in docs
     assert "The operator does not run `km-vms-storage-apply.sh` or `km-vms-restart.sh` manually" in docs
     assert "setup-complete.json" in docs

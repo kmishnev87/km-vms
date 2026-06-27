@@ -58,9 +58,10 @@ When `.env` is absent, the installer generates it with strong random values for:
 - `POSTGRES_PASSWORD`
 - `JWT_SECRET`
 - `ENCRYPTION_KEY`
-- internal bootstrap `ADMIN_PASSWORD`
+
 
 Secrets are not printed. Existing `.env` is preserved; overwrite is not implemented in Stage 1.0.
+Production startup requires non-empty generated/configured `POSTGRES_PASSWORD`, `JWT_SECRET`, and `ENCRYPTION_KEY`; placeholder or weak API secrets are rejected instead of falling back to public defaults.
 
 The generated environment includes the compose/backend variables used by the current product, including `SURVEILLANCE_ROOT`, `HTTP_PORT`, `API_PORT`, `NEXT_PUBLIC_API_BASE_URL`, `COMPOSE_PROJECT_NAME`, and `KM_VMS_CONTAINER_PREFIX`. If `KM_VMS_API_PORT` is not provided, the installer derives a non-default API port from the selected HTTP port so disposable installs do not collide with an existing stack.
 
@@ -115,6 +116,7 @@ http://<NAS-IP>:<http-port>/setup
 ```
 
 The first owner account is created only through the setup page. Fresh uninitialized startup does not create a hidden admin. Existing initialized systems keep their users and owner state.
+The installer does not create or ship a default admin password. If an older deployment may have used a legacy fallback credential, change that account through the UI/API or create a new owner/admin and disable the legacy account; KM VMS does not auto-detect or reset such passwords.
 
 ## Restart After Setup
 

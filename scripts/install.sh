@@ -485,7 +485,6 @@ write_env() {
   pg_secret=$(random_secret)
   jwt_secret=$(random_secret)
   enc_secret=$(random_secret)
-  admin_secret=$(random_secret)
   umask 077
   {
     printf 'TZ=%s\n' "$TZ_DEFAULT"
@@ -507,9 +506,6 @@ write_env() {
     printf 'LIVE_HWACCEL_DEVICE=/dev/dri/renderD128\n'
     printf 'VIDEO_GID=44\n'
     printf 'RENDER_GID=109\n'
-    printf 'ADMIN_USERNAME=admin\n'
-    printf 'ADMIN_PASSWORD=%s\n' "$admin_secret"
-    printf 'ADMIN_FULL_NAME=Admin\n'
   } > "$env_file"
   chmod 600 "$env_file" 2>/dev/null || true
 }

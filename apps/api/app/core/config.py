@@ -1,4 +1,4 @@
-from pydantic import field_validator
+from pydantic import ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pathlib import Path
 
@@ -43,10 +43,6 @@ class Settings(BaseSettings):
     automatic_retention_max_candidates: int = 25
     automatic_retention_max_bytes: int = 1 * 1024 * 1024 * 1024
 
-    admin_username: str = "admin"
-    admin_password: str = "Admin_Change_Me_2026"
-    admin_full_name: str = "Administrator"
-
     model_config = SettingsConfigDict(
         env_file=".env",
         extra="ignore",
@@ -61,6 +57,34 @@ class Settings(BaseSettings):
         if isinstance(value, str) and value.strip().lower() in {"", "0", "none", "null", "unlimited", "off"}:
             return 0
         return value
+
+    @field_validator("jwt_secret", "encryption_key")
+    @classmethod
+    def validate_security_secret(cls, value: str, info: ValidationInfo) -> str:
+        text = str(value or "").strip()
+        field_name = info.field_name or "secret"
+        weak_values = {
+            "generate_with_scripts_install",
+            "changeme",
+            "change_me",
+            "change-me",
+            "default",
+            "password",
+            "secret",
+            "none",
+            "null",
+            "undefined",
+            "jwt_secret",
+            "encryption_key",
+        }
+        if not text:
+            raise ValueError(f"{field_name} is required")
+        if text.lower() in weak_values:
+            raise ValueError(f"{field_name} must not use a public placeholder")
+        app_env = str((info.data or {}).get("app_env") or "production").strip().lower()
+        if app_env not in {"dev", "development", "local", "test"} and len(text) < 32:
+            raise ValueError(f"{field_name} must be at least 32 characters in production")
+        return text
 
     def cors_origins(self) -> list[str]:
         raw = str(self.cors_allowed_origins or "").strip()
