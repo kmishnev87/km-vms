@@ -132,17 +132,17 @@ Installed KM VMS instances can be updated in place from a GitHub tarball without
 
 ```sh
 cd "$HOME/km-vms"
-sh scripts/update.sh --branch main --yes
+sh scripts/update.sh --branch v0.7.2 --yes
 ```
 
 Run a non-mutating plan first:
 
 ```sh
 cd "$HOME/km-vms"
-sh scripts/update.sh --branch main --dry-run
+sh scripts/update.sh --branch v0.7.2 --dry-run
 ```
 
-The public default repository is `kmishnev87/km-vms`, so the normal install/update path does not require a GitHub token. Pass `--github-repo OWNER/REPO` only for forks, mirrors or private deployments.
+The public default repository is `kmishnev87/km-vms`, so the normal install/update path does not require a GitHub token. Normal product releases use immutable semantic tags such as `v0.7.2`; moving `main` is a development/bootstrap source, not the authoritative update channel for regular users. Pass `--github-repo OWNER/REPO` only for forks, mirrors or private deployments.
 
 For a private GitHub repository, use one of the secure token paths:
 
@@ -169,7 +169,34 @@ The updater must not run `down -v`, `docker system prune`, delete Docker volumes
 
 The rollback is not implemented in Stage 6.0.7. If the update fails before the overlay phase, app source files are not changed. If it fails after overlay starts, source files may be partially updated; fix the reported failed phase and rerun the same update, or restore from an external backup if the app cannot recover. The updater writes sanitized status to `.km-vms-update.json` and refreshes `.km-vms-release.json` from `release/km-vms-release.json`.
 
-The read-only update status and release manifest check API is available through protected owner/admin endpoints. The in-app update apply UI, helper container and progress polling remain future stage work. Terminal update is still the bounded base mechanism for applying updates.
+The read-only update status and release manifest check API is available through protected owner/admin endpoints. The in-app apply helper uses the same bounded update mechanism and must pin apply to trusted release evidence. Public available-update discovery prefers semantic Git tags and resolves the tag to immutable commit evidence before enabling apply. If GitHub, tags, release metadata or commit evidence are unavailable, update apply remains disabled and the status/check response reports a sanitized provider warning.
+
+## Normal Release Cycle
+
+KM VMS release train versions are semantic: `0.7.1`, `0.7.2`, `0.7.3`, and so on. Stage closeout means the implementation has been accepted in the repository; a GitHub Release is the explicit publication step that follows operator authorization.
+
+Release preparation is checked with:
+
+```sh
+sh scripts/km-vms-release-cycle.sh --check
+sh scripts/km-vms-release-cycle.sh --dry-run --prepare-version 0.7.3
+sh scripts/km-vms-release-cycle.sh --print-github-release-commands --version 0.7.3
+```
+
+The helper validates version consistency across API, web package files and `release/km-vms-release.json`. It also validates that the descriptor uses the Stage 6.1.3 evidence model: the public release tag `vX.Y.Z` resolves to the immutable commit SHA. The descriptor in the repository is allowed to have `commit_sha: null` before publication; readiness for an official release depends on the tag/GitHub evidence after the accepted commit exists.
+
+After acceptance and only by explicit operator command, the release publication flow is:
+
+```sh
+git status --short --branch
+git diff --check
+git tag -a v0.7.2 -m "KM VMS v0.7.2"
+git push origin main
+git push origin v0.7.2
+gh release create v0.7.2 --title "KM VMS v0.7.2" --notes-file <release-notes.md>
+```
+
+After publication, validate that the tag points to the intended commit, the GitHub Release exists, the raw descriptor for the tag is readable, and NAS Settings -> Maintenance sees the expected installed/available semantic versions. Stage 6.1.3 does not implement Stage 6.1.4 public/security hardening, fallback admin password cleanup, rollback, backup orchestration, tag automation, or automatic GitHub Release publishing.
 
 ## Database Schema Versioning
 

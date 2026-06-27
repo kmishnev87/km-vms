@@ -666,7 +666,7 @@ write_release_identity() {
   source_kind=$(release_descriptor_value source_kind)
   source_repo=$(release_descriptor_value source_repo)
   source_ref=$(release_descriptor_value source_ref)
-  [ -n "$version" ] || version="0.7.1"
+  [ -n "$version" ] || version="0.7.2"
   [ -n "$title" ] || title="Public GitHub Release Identity and Drift-Proof Update Status"
   [ -n "$summary" ] || summary="Public GitHub install/update identity and update status hardening."
   [ -n "$channel" ] || channel="public-github"

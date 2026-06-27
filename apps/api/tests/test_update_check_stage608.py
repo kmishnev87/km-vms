@@ -96,6 +96,7 @@ def clean_update_env(monkeypatch):
         "KMVMS_UPDATE_MANIFEST_FORCE_LOCAL",
         "KMVMS_PUBLIC_RELEASE_MANIFEST_PATH",
         "KMVMS_PUBLIC_RELEASE_MANIFEST_URL",
+        "KMVMS_PUBLIC_RELEASE_PROVIDER_MODE",
         "KMVMS_PUBLIC_RELEASE_PROVIDER",
         "KMVMS_PUBLIC_RELEASE_TIMEOUT_SECONDS",
         "KMVMS_UPDATE_CHANNEL_ID",
@@ -251,10 +252,11 @@ def test_public_release_provider_reads_remote_descriptor_without_token(tmp_path,
     monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
     monkeypatch.delenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", raising=False)
     monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "1")
-    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_MANIFEST_URL", "https://raw.githubusercontent.com/kmishnev87/km-vms/main/release/km-vms-release.json")
 
     from app.services import update_check as update_check_module
 
+    monkeypatch.setattr(update_check_module, "_discover_latest_public_release_tag", lambda repo: "v0.7.2")
+    monkeypatch.setattr(update_check_module, "_resolve_public_tag_commit", lambda repo, tag: "b" * 40)
     monkeypatch.setattr(
         update_check_module,
         "_read_public_release_payload",
@@ -266,12 +268,11 @@ def test_public_release_provider_reads_remote_descriptor_without_token(tmp_path,
             "release_channel": "public-github",
             "source_kind": "github-release",
             "source_repo": "kmishnev87/km-vms",
-            "source_ref": "main",
+            "source_ref": "v0.7.2",
             "commit_sha": None,
             "published_at": "2026-06-26T00:00:00Z",
         },
     )
-    monkeypatch.setattr(update_check_module, "_resolve_public_commit", lambda repo, ref: "b" * 40)
 
     result = run_update_check(db)
 
@@ -291,10 +292,11 @@ def test_public_release_provider_missing_commit_keeps_apply_disabled(tmp_path, m
     monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
     monkeypatch.delenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", raising=False)
     monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "1")
-    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_MANIFEST_URL", "https://raw.githubusercontent.com/kmishnev87/km-vms/main/release/km-vms-release.json")
 
     from app.services import update_check as update_check_module
 
+    monkeypatch.setattr(update_check_module, "_discover_latest_public_release_tag", lambda repo: "v0.7.2")
+    monkeypatch.setattr(update_check_module, "_resolve_public_tag_commit", lambda repo, tag: None)
     monkeypatch.setattr(
         update_check_module,
         "_read_public_release_payload",
@@ -311,15 +313,14 @@ def test_public_release_provider_missing_commit_keeps_apply_disabled(tmp_path, m
             "published_at": "2026-06-26T00:00:00Z",
         },
     )
-    monkeypatch.setattr(update_check_module, "_resolve_public_commit", lambda repo, ref: None)
 
     result = run_update_check(db)
 
-    assert result["status"] == "blocked"
-    assert result["available_release"]["commit_sha"] is None
-    assert result["available_release"]["provider"] == "public_github_release"
+    assert result["status"] == "check_failed"
+    assert result["available_release"] is None
     assert result["can_apply_from_ui"] is False
-    assert [blocker["code"] for blocker in result["blockers"]] == ["trusted_commit_missing"]
+    assert result["errors"][0]["code"] == "provider_unavailable"
+    assert result["errors"][0]["error_category"] == "public_tag_evidence_missing"
 
 
 def test_local_release_descriptor_is_not_default_available_provider(tmp_path, monkeypatch):
@@ -353,17 +354,16 @@ def test_public_release_provider_failure_is_sanitized(tmp_path, monkeypatch):
     monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
     monkeypatch.delenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", raising=False)
     monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "1")
-    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_MANIFEST_URL", "https://raw.githubusercontent.com/kmishnev87/km-vms/main/release/km-vms-release.json")
 
     from app.services import update_check as update_check_module
 
-    def raise_unavailable(_url):
+    def raise_unavailable(_repo):
         raise UpdateCheckBlocked(
             "provider_unavailable",
             {"summary": "Public release metadata is temporarily unavailable.", "error_category": "public_provider_unavailable"},
         )
 
-    monkeypatch.setattr(update_check_module, "_read_public_release_payload", raise_unavailable)
+    monkeypatch.setattr(update_check_module, "_discover_latest_public_release_tag", raise_unavailable)
 
     result = run_update_check(db)
 

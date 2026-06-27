@@ -25,11 +25,12 @@ MAX_MANIFEST_BYTES = 64 * 1024
 MAX_PUBLIC_COMMIT_BYTES = 512 * 1024
 MAX_TEXT = 300
 PUBLIC_REPO_DEFAULT = "kmishnev87/km-vms"
-PUBLIC_RELEASE_MANIFEST_URL_DEFAULT = f"https://raw.githubusercontent.com/{PUBLIC_REPO_DEFAULT}/main/release/km-vms-release.json"
+PUBLIC_RELEASE_DESCRIPTOR_RELATIVE = "release/km-vms-release.json"
 PUBLIC_RELEASE_TIMEOUT_SECONDS = 5
 RELEASE_DESCRIPTOR_RELATIVE = Path("release/km-vms-release.json")
 SAFE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SAFE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,119}$")
+SAFE_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
 SEMVER_RE = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)(?:[-+][A-Za-z0-9._-]+)?$")
 SENSITIVE_KEY_RE = re.compile(r"(password|passwd|secret|token|authorization|jwt|credential|private[_-]?key|cookie|session)", re.IGNORECASE)
@@ -458,10 +459,14 @@ def _public_provider_enabled() -> bool:
 def _public_release_descriptor_url() -> str | None:
     if not _public_provider_enabled():
         return None
-    url = _sanitize_text(os.getenv("KMVMS_PUBLIC_RELEASE_MANIFEST_URL") or PUBLIC_RELEASE_MANIFEST_URL_DEFAULT, max_length=300)
+    url = _sanitize_text(os.getenv("KMVMS_PUBLIC_RELEASE_MANIFEST_URL"), max_length=300)
     if not url or not url.startswith("https://"):
         return None
     return url
+
+
+def _public_provider_mode() -> str:
+    return str(os.getenv("KMVMS_PUBLIC_RELEASE_PROVIDER_MODE") or "release_tag").strip().lower()
 
 
 def _public_timeout_seconds() -> float:
@@ -493,6 +498,77 @@ def _read_public_release_payload(url: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata must be a JSON object.", "error_category": "public_provider_invalid_shape"})
     return payload
+
+
+def _read_public_json_url(url: str, *, max_bytes: int = MAX_MANIFEST_BYTES) -> Any:
+    if not url.startswith("https://"):
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release provider URL must use HTTPS.", "error_category": "provider_url_invalid"})
+    request = urllib.request.Request(url, headers={"User-Agent": "KM-VMS-Update-Check/0.7.2", "Accept": "application/vnd.github+json"})
+    try:
+        with urllib.request.urlopen(request, timeout=_public_timeout_seconds()) as response:  # nosec B310 - public GitHub release metadata only
+            data = response.read(max_bytes + 1)
+    except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, OSError):
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is temporarily unavailable.", "error_category": "public_provider_unavailable"})
+    if len(data) > max_bytes:
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is too large.", "error_category": "public_provider_too_large"})
+    try:
+        return json.loads(data.decode("utf-8"))
+    except Exception:
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is not valid JSON.", "error_category": "public_provider_invalid_json"})
+
+
+def _tag_version_key(tag: str) -> tuple[int, int, int] | None:
+    version = _semver(tag)
+    return version if version is not None else None
+
+
+def _public_release_repo() -> str | None:
+    repo = _safe_field("repo", os.getenv("KMVMS_PUBLIC_RELEASE_REPO") or PUBLIC_REPO_DEFAULT, max_length=160)
+    return repo if repo and SAFE_REPO_RE.fullmatch(repo) else None
+
+
+def _discover_latest_public_release_tag(source_repo: str) -> str | None:
+    refs_url = f"https://api.github.com/repos/{source_repo}/git/matching-refs/tags/v"
+    payload = _read_public_json_url(refs_url)
+    if not isinstance(payload, list):
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release tags response is invalid.", "error_category": "public_provider_invalid_shape"})
+    tags: list[str] = []
+    for item in payload[:200]:
+        ref = item.get("ref") if isinstance(item, dict) else None
+        if not isinstance(ref, str) or not ref.startswith("refs/tags/"):
+            continue
+        tag = ref.rsplit("/", 1)[-1]
+        if SAFE_TAG_RE.fullmatch(tag) and _tag_version_key(tag):
+            tags.append(tag)
+    if not tags:
+        return None
+    return sorted(tags, key=lambda value: _tag_version_key(value) or (0, 0, 0), reverse=True)[0]
+
+
+def _resolve_public_tag_commit(source_repo: str, tag: str) -> str | None:
+    if not SAFE_REPO_RE.fullmatch(source_repo) or not SAFE_TAG_RE.fullmatch(tag):
+        return None
+    encoded_tag = urllib.parse.quote(tag, safe="")
+    try:
+        payload = _read_public_json_url(f"https://api.github.com/repos/{source_repo}/git/ref/tags/{encoded_tag}")
+    except UpdateCheckBlocked:
+        return None
+    obj = payload.get("object") if isinstance(payload, dict) else None
+    obj_type = _safe_field("type", obj.get("type") if isinstance(obj, dict) else None, max_length=40)
+    sha = _safe_field("sha", obj.get("sha") if isinstance(obj, dict) else None, max_length=40)
+    if obj_type == "commit" and sha and SHA_RE.fullmatch(sha):
+        return sha.lower()
+    if obj_type == "tag" and sha and SHA_RE.fullmatch(sha):
+        try:
+            tag_payload = _read_public_json_url(f"https://api.github.com/repos/{source_repo}/git/tags/{sha}")
+        except UpdateCheckBlocked:
+            return None
+        tag_obj = tag_payload.get("object") if isinstance(tag_payload, dict) else None
+        tag_sha = _safe_field("sha", tag_obj.get("sha") if isinstance(tag_obj, dict) else None, max_length=40)
+        tag_type = _safe_field("type", tag_obj.get("type") if isinstance(tag_obj, dict) else None, max_length=40)
+        if tag_type == "commit" and tag_sha and SHA_RE.fullmatch(tag_sha):
+            return tag_sha.lower()
+    return None
 
 
 def _resolve_public_commit(source_repo: str, source_ref: str) -> str | None:
@@ -533,7 +609,7 @@ def _manifest_from_release_payload(payload: dict[str, Any], *, resolve_commit: b
     if payload.get("schema_version") != 1:
         raise UpdateCheckBlocked("check_failed", {"summary": "Public release descriptor schema_version is unsupported.", "error_category": "manifest_schema_invalid"})
     source_repo = _safe_field("source_repo", payload.get("source_repo"), max_length=160) or PUBLIC_REPO_DEFAULT
-    source_ref = _safe_field("source_ref", payload.get("source_ref"), max_length=120) or "main"
+    source_ref = _safe_field("source_ref", payload.get("source_ref") or payload.get("tag"), max_length=120) or "main"
     commit = _manifest_text(payload, "commit_sha", max_length=40)
     if commit and not SHA_RE.fullmatch(commit):
         raise UpdateCheckBlocked("check_failed", {"summary": "Public release descriptor commit_sha is invalid.", "error_category": "manifest_schema_invalid"})
@@ -571,6 +647,26 @@ def _manifest_from_public_release_url(url: str) -> UpdateManifestSummary:
     return _manifest_from_release_payload(payload, resolve_commit=True)
 
 
+def _manifest_from_public_release_tag(source_repo: str, tag: str) -> UpdateManifestSummary:
+    commit = _resolve_public_tag_commit(source_repo, tag)
+    if not commit:
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release tag evidence is unavailable.", "error_category": "public_tag_evidence_missing"})
+    encoded_tag = urllib.parse.quote(tag, safe="")
+    url = f"https://raw.githubusercontent.com/{source_repo}/{encoded_tag}/{PUBLIC_RELEASE_DESCRIPTOR_RELATIVE}"
+    payload = _read_public_release_payload(url)
+    payload["source_repo"] = source_repo
+    payload["source_ref"] = tag
+    payload["commit_sha"] = commit
+    return _manifest_from_release_payload(payload, resolve_commit=False)
+
+
+def _manifest_from_latest_public_release_tag(source_repo: str) -> UpdateManifestSummary:
+    tag = _discover_latest_public_release_tag(source_repo)
+    if not tag:
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "No public semver release tags are available.", "error_category": "public_release_tags_missing"})
+    return _manifest_from_public_release_tag(source_repo, tag)
+
+
 def _available_release_source_path(manifest_path_for_test_only: str | Path | None = None) -> tuple[Path | str | None, str]:
     if manifest_path_for_test_only:
         return Path(manifest_path_for_test_only), "local_static_manifest"
@@ -581,8 +677,14 @@ def _available_release_source_path(manifest_path_for_test_only: str | Path | Non
     if public:
         return public, "public_github_release"
     public_url = _public_release_descriptor_url()
-    if public_url:
-        return public_url, "public_github_release"
+    if public_url and _public_provider_mode() in {"development_raw", "raw", "raw_main"}:
+        return public_url, "public_github_release_development"
+    public_repo = _public_release_repo()
+    if public_repo and _public_provider_enabled():
+        explicit_tag = _safe_field("tag", os.getenv("KMVMS_PUBLIC_RELEASE_TAG"), max_length=80)
+        if explicit_tag and SAFE_TAG_RE.fullmatch(explicit_tag):
+            return f"tag:{public_repo}:{explicit_tag}", "public_github_release"
+        return f"latest-tag:{public_repo}", "public_github_release"
     return None, "not_configured"
 
 
@@ -829,7 +931,12 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
         return payload
     try:
         _CHECK_IN_PROGRESS = True
-        if source_status == "public_github_release" and isinstance(source_path, str):
+        if source_status == "public_github_release" and isinstance(source_path, str) and source_path.startswith("latest-tag:"):
+            latest = _manifest_from_latest_public_release_tag(source_path.split(":", 1)[1])
+        elif source_status == "public_github_release" and isinstance(source_path, str) and source_path.startswith("tag:"):
+            _, repo, tag = source_path.split(":", 2)
+            latest = _manifest_from_public_release_tag(repo, tag)
+        elif source_status == "public_github_release_development" and isinstance(source_path, str):
             latest = _manifest_from_public_release_url(source_path)
         elif source_status == "public_github_release":
             latest = _manifest_from_release_descriptor(source_path)

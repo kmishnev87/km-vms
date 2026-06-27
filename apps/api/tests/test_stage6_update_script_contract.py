@@ -555,8 +555,10 @@ def test_docs_describe_terminal_update_without_future_stage_claims():
     for required in (
         "## Terminal Update",
         "curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/install.sh",
-        "sh scripts/update.sh --branch main --yes",
-        "sh scripts/update.sh --branch main --dry-run",
+        "sh scripts/update.sh --branch v0.7.2 --yes",
+        "sh scripts/update.sh --branch v0.7.2 --dry-run",
+        "sh scripts/km-vms-release-cycle.sh --check",
+        "git tag -a v0.7.2",
         ".km-vms-release.json",
         "--github-private",
         "KM_VMS_GITHUB_TOKEN",
