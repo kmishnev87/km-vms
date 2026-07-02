@@ -17,11 +17,11 @@ def test_stage613_versions_are_consistent():
     lock = _json("apps/web/package-lock.json")
     descriptor = _json("release/km-vms-release.json")
 
-    assert 'APP_VERSION = "0.7.3"' in version_py
-    assert package["version"] == "0.7.3"
-    assert lock["version"] == "0.7.3"
-    assert lock["packages"][""]["version"] == "0.7.3"
-    assert descriptor["version"] == "0.7.3"
+    assert 'APP_VERSION = "0.7.4"' in version_py
+    assert package["version"] == "0.7.4"
+    assert lock["version"] == "0.7.4"
+    assert lock["packages"][""]["version"] == "0.7.4"
+    assert descriptor["version"] == "0.7.4"
 
 
 def test_stage613_release_descriptor_uses_semver_tag_evidence_model():
@@ -29,9 +29,9 @@ def test_stage613_release_descriptor_uses_semver_tag_evidence_model():
 
     assert descriptor["schema_version"] == 1
     assert descriptor["product"] == "KM VMS"
-    assert descriptor["version"] == "0.7.3"
-    assert descriptor["tag"] == "v0.7.3"
-    assert descriptor["source_ref"] == "v0.7.3"
+    assert descriptor["version"] == "0.7.4"
+    assert descriptor["tag"] == "v0.7.4"
+    assert descriptor["source_ref"] == "v0.7.4"
     assert descriptor["source_repo"] == "kmishnev87/km-vms"
     assert descriptor["evidence_model"] == "semver_tag_resolves_to_commit"
     assert descriptor["commit_sha"] is None
@@ -58,7 +58,7 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files():
         check=True,
     )
     dry_run = subprocess.run(
-        ["sh", "scripts/km-vms-release-cycle.sh", "--dry-run", "--prepare-version", "0.7.4", "--allow-dirty"],
+        ["sh", "scripts/km-vms-release-cycle.sh", "--dry-run", "--prepare-version", "0.7.5", "--allow-dirty"],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,
@@ -67,7 +67,7 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files():
     )
 
     assert "release-cycle check PASS" in check.stdout
-    assert "DRY-RUN: would prepare release version 0.7.4" in dry_run.stdout
+    assert "DRY-RUN: would prepare release version 0.7.5" in dry_run.stdout
     assert before == {path: path.read_bytes() for path in tracked}
 
 

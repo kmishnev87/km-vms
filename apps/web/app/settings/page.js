@@ -45,6 +45,8 @@ import {
   updateApplyEffectiveStatus,
   updateApplyFactRows,
   updateApplyTechnicalRows,
+  updateApplyStepRows,
+  updateApplyButtonText,
   updateApplyIsRunning,
   updateApplyRecoveryText,
   userCanBeDeleted,
@@ -151,11 +153,17 @@ const TEXT = {
     updateApplyRecoveryFailed: "Обновление завершилось ошибкой. Проверьте санитизированный статус и повторите после устранения причины.",
     updateApplyRecoveryReconnecting: "Сервисы могут перезапускаться. Интерфейс продолжит опрос и перечитает статус после восстановления API.",
     updateApplyRecoveryRunning: "Helper выполняет обновление. Не закрывайте питание NAS и дождитесь итогового статуса.",
+    updateApplyRecoveryStalled: "Статус обновления давно не менялся. Не запускайте повторно, пока helper или lock могут быть активны; проверьте состояние сервера.",
     updateApplyRecoveryUnknown: "Статус обновления пока неизвестен. Обновите проверку или дождитесь ответа API.",
     updateApplyRecoveryIdentity: "Метаданные установки неполные или расходятся с текущим кодом. Обновление заблокировано до принятия release identity.",
     updateApplyRecoveryProvider: "Публичный release descriptor пока недоступен. Повторите проверку позже или проверьте настройки сервера.",
     updateApplyRecoveryInstalledNewer: "Установленная версия новее опубликованной. Применение заблокировано, чтобы не откатить систему назад.",
     updateApplyTechnicalDetails: "Технические детали",
+    updateApplyProgress: "Ход обновления",
+    updateApplyButtonRunning: "Идёт обновление",
+    updateApplyButtonRebuilding: "Пересборка",
+    updateApplyButtonHealth: "Проверка здоровья",
+    updateApplyButtonVerification: "Проверка commit",
     updateCommitPending: "Ожидает подтверждения",
     updateCommitUnavailable: "Нет данных",
     updateCommitVerified: "Commit подтверждён",
@@ -176,6 +184,10 @@ const TEXT = {
       source: "Источник",
       targetCommit: "Целевой commit",
       verification: "Проверка commit",
+      currentStep: "Текущий шаг",
+      lastProgress: "Последний прогресс",
+      elapsed: "Прошло",
+      releaseIdentity: "Идентичность релиза",
       releaseTitle: "Релиз",
       releaseSummary: "Изменения",
       status: "Статус",
@@ -203,6 +215,7 @@ const TEXT = {
       complete: "Завершено",
       completed: "Завершено",
       compose_config: "Проверка compose",
+      commit_verification: "Проверка commit",
       drift_known_safe: "Известное безопасное расхождение",
       draft_known_safe: "Известный безопасный черновик",
       downloading: "Загрузка",
@@ -210,6 +223,8 @@ const TEXT = {
       failed: "Ошибка",
       health_check: "Проверка здоровья",
       applying: "Применение",
+      acquire_source: "Получение источника",
+      overlay: "Накатка файлов",
       no_artifacts: "Нет артефактов",
       not_configured: "Не настроено",
       not_cancelable: "Отмена недоступна",
@@ -218,6 +233,7 @@ const TEXT = {
       rebuilding: "Пересборка",
       reconnecting: "Переподключение",
       restarting: "Перезапуск",
+      stalled: "Зависло",
       starting_helper: "Запуск helper",
       update_available: "Есть обновление",
       identity_incomplete: "Неполная идентичность",
@@ -444,11 +460,17 @@ const TEXT = {
     updateApplyRecoveryFailed: "Update failed. Review the sanitized status and retry after fixing the cause.",
     updateApplyRecoveryReconnecting: "Services may be restarting. The UI will continue polling and reread status when the API returns.",
     updateApplyRecoveryRunning: "The helper is applying the update. Keep the NAS powered and wait for the final status.",
+    updateApplyRecoveryStalled: "Update status has not changed recently. Do not retry while the helper or lock may still be active; check server status first.",
     updateApplyRecoveryUnknown: "Update status is not known yet. Refresh the check or wait for the API response.",
     updateApplyRecoveryIdentity: "Installed release metadata is incomplete or does not match the current code. Apply is blocked until release identity is adopted.",
     updateApplyRecoveryProvider: "The public release descriptor is not available yet. Check again later or verify server settings.",
     updateApplyRecoveryInstalledNewer: "Installed version is newer than the published release. Apply is blocked to avoid downgrading the system.",
     updateApplyTechnicalDetails: "Technical details",
+    updateApplyProgress: "Update progress",
+    updateApplyButtonRunning: "Updating",
+    updateApplyButtonRebuilding: "Rebuilding",
+    updateApplyButtonHealth: "Health check",
+    updateApplyButtonVerification: "Commit check",
     updateCommitPending: "Pending verification",
     updateCommitUnavailable: "No data",
     updateCommitVerified: "Commit verified",
@@ -469,6 +491,10 @@ const TEXT = {
       source: "Source",
       targetCommit: "Target commit",
       verification: "Commit check",
+      currentStep: "Current step",
+      lastProgress: "Last progress",
+      elapsed: "Elapsed",
+      releaseIdentity: "Release identity",
       releaseTitle: "Release",
       releaseSummary: "Changes",
       status: "Status",
@@ -496,6 +522,7 @@ const TEXT = {
       complete: "Complete",
       completed: "Completed",
       compose_config: "Compose check",
+      commit_verification: "Commit check",
       drift_known_safe: "Known-safe drift",
       draft_known_safe: "Known-safe draft",
       downloading: "Downloading",
@@ -503,6 +530,8 @@ const TEXT = {
       failed: "Failed",
       health_check: "Health check",
       applying: "Applying",
+      acquire_source: "Acquire source",
+      overlay: "Overlay files",
       no_artifacts: "No artifacts",
       not_configured: "Not configured",
       not_cancelable: "Not cancelable",
@@ -511,6 +540,7 @@ const TEXT = {
       rebuilding: "Rebuilding",
       reconnecting: "Reconnecting",
       restarting: "Restarting",
+      stalled: "Stalled",
       starting_helper: "Starting helper",
       update_available: "Update available",
       identity_incomplete: "Identity incomplete",
@@ -708,11 +738,17 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyRecoveryFailed: "更新失败。请查看脱敏状态并在修复原因后重试。",
   updateApplyRecoveryReconnecting: "服务可能正在重启。界面会继续轮询，并在 API 恢复后重新读取状态。",
   updateApplyRecoveryRunning: "Helper 正在应用更新。请保持 NAS 供电并等待最终状态。",
+  updateApplyRecoveryStalled: "更新状态已经较久没有变化。helper 或锁可能仍处于活动状态时不要重复启动，请先检查服务器状态。",
   updateApplyRecoveryUnknown: "更新状态暂时未知。请刷新检查或等待 API 响应。",
   updateApplyRecoveryIdentity: "已安装版本元数据不完整或与当前代码不一致。在接管 release identity 前无法应用更新。",
   updateApplyRecoveryProvider: "公共 release descriptor 暂不可用。请稍后重新检查或核对服务器设置。",
   updateApplyRecoveryInstalledNewer: "已安装版本高于已发布版本。为避免降级，应用更新已被阻止。",
   updateApplyTechnicalDetails: "技术详情",
+  updateApplyProgress: "更新进度",
+  updateApplyButtonRunning: "正在更新",
+  updateApplyButtonRebuilding: "重建中",
+  updateApplyButtonHealth: "健康检查",
+  updateApplyButtonVerification: "Commit 检查",
   updateCommitPending: "等待验证",
   updateCommitUnavailable: "无数据",
   updateCommitVerified: "Commit 已验证",
@@ -733,6 +769,10 @@ const ZH_TEXT_OVERRIDES = {
     source: "来源",
     targetCommit: "目标 commit",
     verification: "Commit 检查",
+    currentStep: "当前步骤",
+    lastProgress: "最近进度",
+    elapsed: "已用时间",
+    releaseIdentity: "版本标识",
     releaseTitle: "版本",
     releaseSummary: "变更",
     status: "状态",
@@ -760,6 +800,7 @@ const ZH_TEXT_OVERRIDES = {
     complete: "已完成",
     completed: "已完成",
     compose_config: "Compose 检查",
+    commit_verification: "Commit 检查",
     drift_known_safe: "已知安全的差异",
     draft_known_safe: "已知安全的草稿",
     downloading: "下载中",
@@ -767,6 +808,8 @@ const ZH_TEXT_OVERRIDES = {
     failed: "失败",
     health_check: "健康检查",
     applying: "应用中",
+    acquire_source: "获取来源",
+    overlay: "覆盖文件",
     no_artifacts: "无工件",
     not_configured: "未配置",
     not_cancelable: "不可取消",
@@ -775,6 +818,7 @@ const ZH_TEXT_OVERRIDES = {
     rebuilding: "重建中",
     reconnecting: "重新连接",
     restarting: "重启中",
+    stalled: "停滞",
     starting_helper: "启动 helper",
     update_available: "有可用更新",
     identity_incomplete: "身份信息不完整",
@@ -911,9 +955,11 @@ export default function SettingsPage() {
   const languageIcon = lang === "en" ? "/assets/icons/ui/language-en.png" : "/assets/icons/ui/language-ru.png";
   const updateApplyEffective = updateApplyEffectiveStatus(updateStatus, updateApplyStatus, updateApplyTransientError);
   const updateApplyRunning = updateApplyIsRunning(updateApplyStatus?.status || "");
-  const updateApplyAllowed = Boolean(updateStatus?.can_apply_from_ui && !updateApplyRunning && !maintenanceBusy);
+  const updateApplyAllowed = Boolean(updateStatus?.can_apply_from_ui && !updateApplyRunning && !updateApplyStatus?.is_stale && !maintenanceBusy);
   const updateApplyFacts = updateApplyFactRows(updateStatus, updateApplyStatus, t);
   const updateApplyTechnicalFacts = updateApplyTechnicalRows(updateStatus, updateApplyStatus, t);
+  const updateApplySteps = updateApplyStepRows(updateApplyStatus, t);
+  const updateApplyPrimaryText = updateApplyButtonText(updateApplyStatus, t);
   const updateApplyRecovery = updateApplyRecoveryText(updateApplyEffective, updateApplyStatus, t);
   const updateApplyWarnings = [
     ...(Array.isArray(updateStatus?.blockers) ? updateStatus.blockers : []),
@@ -1906,6 +1952,19 @@ export default function SettingsPage() {
                         </dl>
                       </details>
                     ) : null}
+                    {updateApplySteps.length ? (
+                      <div className="settingsUpdateApplyTimeline" aria-label={t.updateApplyProgress}>
+                        <span>{t.updateApplyProgress}</span>
+                        <ol>
+                          {updateApplySteps.map((step) => (
+                            <li className={`is-${step.status}`} key={step.name}>
+                              <strong>{step.label}</strong>
+                              <small>{step.statusLabel}</small>
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
+                    ) : null}
                     {updateApplyTransientError ? <div className="settingsUpdateApplyNotice">{updateApplyTransientError}</div> : null}
                     {updateApplyWarnings.length ? (
                       <ul className="settingsUpdateApplyWarnings">
@@ -1919,10 +1978,11 @@ export default function SettingsPage() {
                         {maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
                       </button>
                       <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
-                        {maintenanceBusy === "update-apply" || updateApplyRunning ? t.checking : t.updateApplyStart}
+                        {maintenanceBusy === "update-apply" || updateApplyRunning ? updateApplyPrimaryText : t.updateApplyStart}
                       </button>
                     </div>
                     {updateApplyStatus?.error?.message ? <small className="settingsUpdateApplyError">{formatMaintenanceMessage(updateApplyStatus.error.message, t, lang, "error")}</small> : null}
+                    {updateApplyStatus?.error?.operator_action ? <small className="settingsUpdateApplyError">{formatMaintenanceMessage(updateApplyStatus.error.operator_action, t, lang, "error")}</small> : null}
                   </section>
 
                   {maintenanceActionResult ? (

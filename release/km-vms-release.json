@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.3",
-  "tag": "v0.7.3",
-  "title": "Public Security Hardening",
-  "summary": "Removes public fallback admin defaults and hardens first-run/bootstrap credential hygiene.",
+  "version": "0.7.4",
+  "tag": "v0.7.4",
+  "title": "In-App Update Apply Reliability and Progress Visibility",
+  "summary": "Hardens Jellyfin FFmpeg build networking and adds granular in-app update progress, heartbeat, stale detection and operator guidance.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.3",
+  "source_ref": "v0.7.4",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,8 +16,8 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Removes the legacy admin-password environment/bootstrap contract from production configuration.",
-    "Keeps first-run owner creation explicit through the setup flow without hidden default credentials.",
-    "Adds public hygiene coverage for dangerous fallback admin defaults."
+    "Bounds Jellyfin FFmpeg repository/key download and apt install with IPv4, timeout and retry controls.",
+    "Adds granular update apply progress, heartbeat and stale/stalled visibility in Settings maintenance.",
+    "Classifies Docker build and Jellyfin repository failures with sanitized operator actions."
   ]
 }

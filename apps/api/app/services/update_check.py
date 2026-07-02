@@ -81,6 +81,7 @@ class UpdateInstalledState:
     installed_at: str | None
     installed_by: str | None
     metadata_source: str | None
+    release_metadata_status: str | None
     last_update_status: str | None
     last_update_finished_at: str | None
     last_failed_phase: str | None
@@ -257,6 +258,9 @@ def read_installed_update_state(*, app_root: Path | None = None) -> UpdateInstal
 
     legacy_source_commit = _safe_field("commit_sha", source.get("commit_sha"), max_length=40)
     legacy_update_commit = _safe_field("commit_sha", update.get("commit_sha"), max_length=40)
+    release_metadata_status = _safe_field("metadata_status", release.get("metadata_status"), max_length=40)
+    if release_validity == "valid" and release_metadata_status in {"precompose", "partial"}:
+        warnings.append(UpdateMetadataWarning("release_identity_" + release_metadata_status, "Installed release identity was written before update verification completed.", severity="high", field=".km-vms-release.json"))
     repo = _safe_field("source_repo", release.get("source_repo") or source.get("github_repo") or update.get("github_repo"), max_length=160)
     ref = _safe_field("source_ref", release.get("source_ref") or source.get("ref") or update.get("ref"), max_length=120)
     commit = _safe_field("commit_sha", release.get("commit_sha") or build.get("git_commit"), max_length=40)
@@ -280,7 +284,10 @@ def read_installed_update_state(*, app_root: Path | None = None) -> UpdateInstal
     last_status = _safe_field("status", update.get("status"), max_length=40)
     last_failed_phase = _safe_field("failed_phase", update.get("failed_phase"), max_length=80)
     legacy_validity = "valid" if source_validity == "valid" and update_validity in {"valid", "missing"} else ("missing" if source_validity == "missing" and update_validity == "missing" else "invalid")
-    if release_validity == "valid" and commit and git_head and git_head.lower() != commit.lower():
+    if release_validity == "valid" and release_metadata_status in {"precompose", "partial"}:
+        status = "identity_incomplete"
+        identity_validity = release_metadata_status
+    elif release_validity == "valid" and commit and git_head and git_head.lower() != commit.lower():
         status = "installed_identity_drift"
         identity_validity = "drift"
     elif release_validity == "valid":
@@ -309,6 +316,7 @@ def read_installed_update_state(*, app_root: Path | None = None) -> UpdateInstal
         installed_at=_safe_timestamp(release.get("installed_at")),
         installed_by=_safe_field("installed_by", release.get("installed_by"), max_length=80),
         metadata_source=_safe_field("metadata_source", release.get("metadata_source") or build.get("metadata_source"), max_length=80),
+        release_metadata_status=release_metadata_status,
         last_update_status=last_status,
         last_update_finished_at=_safe_timestamp(update.get("finished_at")),
         last_failed_phase=last_failed_phase,
@@ -793,7 +801,8 @@ def _result_payload(result: UpdateCheckResult) -> dict[str, Any]:
         "release_channel": installed["release_channel"] or installed["channel"],
         "installed_at": installed["installed_at"],
         "installed_by": installed["installed_by"],
-        "metadata_status": installed["identity_validity"],
+        "metadata_status": installed["release_metadata_status"] or installed["identity_validity"],
+        "identity_validity": installed["identity_validity"],
         "metadata_source": installed["metadata_source"],
     }
     evidence = {

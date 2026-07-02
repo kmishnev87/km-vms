@@ -33,7 +33,7 @@ export const HARDWARE_OPTIONS = ["auto", "qsv", "amf", "nvenc", "cpu", "vaapi"];
 export const AUDIT_CATEGORIES = ["auth", "users", "settings", "cameras", "live", "records", "chronology", "security", "diagnostics", "system", "recorder", "storage", "retention", "reconciliation"];
 export const AUDIT_SEVERITIES = ["info", "warning", "error", "security"];
 export const AUDIT_LIMIT = 50;
-export const UPDATE_APPLY_RUNNING_STATUSES = ["queued", "starting_helper", "preflight", "downloading", "extracting", "validating_source", "applying", "compose_config", "rebuilding", "restarting", "health_check"];
+export const UPDATE_APPLY_RUNNING_STATUSES = ["queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification"];
 const AUDIT_LABELS = {
   category: {
     auth: { ru: "Авторизация", en: "Auth", "zh-CN": "授权" },
@@ -185,8 +185,8 @@ export function maintenanceStatusText(status, t) {
 
 export function maintenanceStatusClass(status) {
   if (["ok", "current", "available", "adopted", "already_adopted", "complete", "completed", "drift_known_safe", "draft_known_safe", "update_available"].includes(status)) return "ok";
-  if (["blocked", "no_artifacts", "not_configured", "failed", "cancelled"].includes(status)) return "blocked";
-  if (["adoptable", "limited", "queued", "starting_helper", "preflight", "downloading", "extracting", "validating_source", "applying", "compose_config", "rebuilding", "restarting", "health_check", "reconnecting", "checking"].includes(status)) return "warning";
+  if (["blocked", "no_artifacts", "not_configured", "failed", "cancelled", "stalled"].includes(status)) return "blocked";
+  if (["adoptable", "limited", "queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification", "reconnecting", "checking"].includes(status)) return "warning";
   return "neutral";
 }
 
@@ -195,10 +195,23 @@ export function updateApplyIsRunning(status) {
 }
 
 export function updateApplyEffectiveStatus(updateStatus, applyStatus, transientError = "") {
-  const status = applyStatus?.status || updateStatus?.status || "unknown";
+  const status = applyStatus?.effective_status || applyStatus?.status || updateStatus?.status || "unknown";
+  if (applyStatus?.is_stale || status === "stalled") return "stalled";
   if (transientError && updateApplyIsRunning(status)) return "reconnecting";
   if (status === "completed" && applyStatus?.expected_commit && applyStatus?.commit_verified === false) return "failed";
   return status;
+}
+
+export function formatDurationSeconds(value) {
+  const seconds = Number(value);
+  if (!Number.isFinite(seconds) || seconds < 0) return "-";
+  if (seconds < 60) return `${Math.floor(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.floor(seconds % 60);
+  if (minutes < 60) return rest ? `${minutes}m ${rest}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  return mins ? `${hours}h ${mins}m` : `${hours}h`;
 }
 
 export function shortCommit(value) {
@@ -227,6 +240,9 @@ export function updateApplyFactRows(updateStatus, applyStatus, t) {
     [labels.releaseSummary || "Summary", summary],
     [labels.status || "Status", maintenanceStatusText(status, t)],
     [labels.verification, verification],
+    [labels.currentStep || "Current step", maintenanceStatusText(applyStatus?.current_step || applyStatus?.phase || status, t)],
+    [labels.lastProgress || "Last progress", formatDurationSeconds(applyStatus?.last_progress_age_seconds)],
+    [labels.elapsed || "Elapsed", formatDurationSeconds(applyStatus?.elapsed_seconds)],
   ];
 }
 
@@ -246,12 +262,14 @@ export function updateApplyTechnicalRows(updateStatus, applyStatus, t) {
     [labels.targetCommit, availableRelease.commit_short || shortCommit(targetCommit) || "-"],
     [labels.gitHead || "Git HEAD", evidence.git_head_short || shortCommit(evidence.git_head) || "-"],
     [labels.metadataSource || "Metadata", installedRelease.metadata_source || "-"],
+    [labels.releaseIdentity || "Release identity", applyStatus?.release_identity?.metadata_status || installedRelease.metadata_status || "-"],
     [labels.provider || "Provider", availableRelease.provider || updateStatus?.source_channel?.trusted_source_type || "-"],
   ].filter(([, value]) => value !== "-");
 }
 
 export function updateApplyRecoveryText(status, applyStatus, t) {
   const effective = status || "unknown";
+  if (effective === "stalled") return applyStatus?.error?.operator_action || t.updateApplyRecoveryStalled;
   if (effective === "reconnecting") return t.updateApplyRecoveryReconnecting;
   if (effective === "completed" && applyStatus?.commit_verified) return t.updateApplyRecoveryCompleted;
   if (effective === "completed" && applyStatus?.expected_commit && applyStatus?.commit_verified === false) return t.updateApplyRecoveryCommitMismatch;
@@ -264,6 +282,25 @@ export function updateApplyRecoveryText(status, applyStatus, t) {
   if (effective === "provider_unavailable" || effective === "no_release_published") return t.updateApplyRecoveryProvider;
   if (effective === "installed_newer_than_available") return t.updateApplyRecoveryInstalledNewer;
   return t.updateApplyRecoveryUnknown;
+}
+
+export function updateApplyStepRows(applyStatus, t) {
+  const steps = Array.isArray(applyStatus?.steps) ? applyStatus.steps : [];
+  return steps.slice(0, 12).map((step) => ({
+    name: step?.name || "unknown",
+    label: maintenanceStatusText(step?.name || "unknown", t),
+    status: step?.status || "pending",
+    statusLabel: maintenanceStatusText(step?.status || "pending", t),
+  }));
+}
+
+export function updateApplyButtonText(applyStatus, t) {
+  const step = applyStatus?.current_step || applyStatus?.phase || applyStatus?.status;
+  if (!updateApplyIsRunning(applyStatus?.status || "")) return t.updateApplyStart;
+  if (step === "rebuilding") return t.updateApplyButtonRebuilding || maintenanceStatusText("rebuilding", t);
+  if (step === "health_check") return t.updateApplyButtonHealth || maintenanceStatusText("health_check", t);
+  if (step === "commit_verification") return t.updateApplyButtonVerification || maintenanceStatusText("commit_verification", t);
+  return t.updateApplyButtonRunning || maintenanceStatusText(step, t);
 }
 
 function normalizeUpdateNoticeCode(item) {

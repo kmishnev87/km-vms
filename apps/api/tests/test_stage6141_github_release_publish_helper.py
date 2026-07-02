@@ -18,12 +18,12 @@ def _fake_git_env(tmp_path):
 set -eu
 case "$1 $2 $3" in
   "remote get-url origin") printf '%s\\n' 'https://github.com/kmishnev87/km-vms.git' ;;
-  "rev-parse --verify v0.7.3^{{commit}}") printf '%s\\n' '{SHA}' ;;
+  "rev-parse --verify v0.7.4^{{commit}}") printf '%s\\n' '{SHA}' ;;
   "ls-remote --tags origin")
-    if [ "$4" = "v0.7.3^{{}}" ]; then
-      printf '%s\\t%s\\n' '{SHA}' 'refs/tags/v0.7.3^{{}}'
-    elif [ "$4" = "v0.7.3" ]; then
-      printf '%s\\t%s\\n' '{SHA}' 'refs/tags/v0.7.3'
+    if [ "$4" = "v0.7.4^{{}}" ]; then
+      printf '%s\\t%s\\n' '{SHA}' 'refs/tags/v0.7.4^{{}}'
+    elif [ "$4" = "v0.7.4" ]; then
+      printf '%s\\t%s\\n' '{SHA}' 'refs/tags/v0.7.4'
     fi
     ;;
   "merge-base --is-ancestor {SHA}") exit 0 ;;
@@ -97,7 +97,7 @@ def test_stage6141_check_does_not_require_token(tmp_path):
 
 def test_stage6141_check_with_matching_tag_works(tmp_path):
     result = subprocess.run(
-        ["sh", "scripts/km-vms-publish-github-release.sh", "--check", "--tag", "v0.7.3"],
+        ["sh", "scripts/km-vms-publish-github-release.sh", "--check", "--tag", "v0.7.4"],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,
@@ -106,7 +106,7 @@ def test_stage6141_check_with_matching_tag_works(tmp_path):
     )
 
     assert result.returncode == 0
-    assert "descriptor version 0.7.3 matches v0.7.3" in result.stdout
+    assert "descriptor version 0.7.4 matches v0.7.4" in result.stdout
 
 
 def test_stage6141_check_with_mismatched_tag_fails_before_release_lookup(tmp_path):

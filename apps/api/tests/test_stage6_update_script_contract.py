@@ -74,24 +74,14 @@ def test_update_helper_failure_steps_match_failed_phase():
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
 
-    assert helper.failed_steps("preflight_failed") == [
-        {"name": "request", "status": "completed"},
-        {"name": "preflight", "status": "failed"},
-        {"name": "apply", "status": "pending"},
-        {"name": "health_check", "status": "pending"},
-    ]
-    assert helper.failed_steps("apply_failed") == [
-        {"name": "request", "status": "completed"},
-        {"name": "preflight", "status": "completed"},
-        {"name": "apply", "status": "failed"},
-        {"name": "health_check", "status": "pending"},
-    ]
-    assert helper.failed_steps("health_check_failed") == [
-        {"name": "request", "status": "completed"},
-        {"name": "preflight", "status": "completed"},
-        {"name": "apply", "status": "completed"},
-        {"name": "health_check", "status": "failed"},
-    ]
+    def statuses(steps):
+        return {step["name"]: step["status"] for step in steps}
+
+    assert statuses(helper.failed_steps("preflight_failed"))["preflight"] == "failed"
+    assert statuses(helper.failed_steps("apply_failed"))["overlay"] == "failed"
+    assert statuses(helper.failed_steps("health_check_failed"))["health_check"] == "failed"
+    assert statuses(helper.failed_steps("docker_build_failed"))["rebuilding"] == "failed"
+    assert statuses(helper.failed_steps("compose_config_failed"))["compose_config"] == "failed"
 
 
 def test_update_helper_requires_mounted_host_app_dir_for_compose(tmp_path):
@@ -130,7 +120,7 @@ def test_update_helper_classifies_health_check_failure_from_metadata(tmp_path):
     assert "health stderr" in str(exc)
 
     (tmp_path / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "failed_phase": "rebuild_recreate"}), encoding="utf-8")
-    assert helper.classify_apply_failure(tmp_path, "apply stderr").category == "apply_failed"
+    assert helper.classify_apply_failure(tmp_path, "apply stderr").category == "docker_build_failed"
 
 
 def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tmp_path, monkeypatch):
@@ -152,7 +142,7 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
     expected = "d" * 40
     commands = []
 
-    def fake_run(command, **kwargs):
+    def fake_run_child(command, request_arg, update_dir, env, **kwargs):
         commands.append(command)
         if "--dry-run" not in command:
             (app_dir / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "status": "success", "commit_sha": expected}), encoding="utf-8")
@@ -160,7 +150,7 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
             (app_dir / ".km-vms-release.json").write_text(json.dumps({"schema_version": 1, "commit_sha": expected}), encoding="utf-8")
         return SimpleNamespace(returncode=0, stderr="")
 
-    monkeypatch.setattr(helper.subprocess, "run", fake_run)
+    monkeypatch.setattr(helper, "run_child_with_progress", fake_run_child)
     request = {
         "schema_version": 1,
         "request_id": "stage609-pin",
@@ -558,7 +548,7 @@ def test_docs_describe_terminal_update_without_future_stage_claims():
         "sh scripts/update.sh --branch v0.7.2 --yes",
         "sh scripts/update.sh --branch v0.7.2 --dry-run",
         "sh scripts/km-vms-release-cycle.sh --check",
-        "git tag -a v0.7.2",
+        "git tag -a vX.Y.Z",
         ".km-vms-release.json",
         "--github-private",
         "KM_VMS_GITHUB_TOKEN",

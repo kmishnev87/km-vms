@@ -36,6 +36,8 @@ import {
   updateApplyTechnicalRows,
   updateApplyIsRunning,
   updateApplyRecoveryText,
+  updateApplyStepRows,
+  updateApplyButtonText,
   userCanBeDeleted,
   userCanBeManaged,
 } from "../lib/settingsPageHelpers.js";
@@ -89,6 +91,11 @@ const maintenanceText = {
     installed_identity_drift: "Install drift",
     provider_unavailable: "Provider unavailable",
     installed_newer_than_available: "Installed newer",
+    rebuilding: "Rebuilding",
+    health_check: "Health check",
+    commit_verification: "Commit check",
+    running: "Running",
+    pending: "Pending",
     unknown: "Unknown",
   },
   maintenanceMessageFallback: "Safe fallback",
@@ -140,6 +147,9 @@ const maintenanceText = {
   updateApplyRecoveryIdentity: "Identity",
   updateApplyRecoveryProvider: "Provider",
   updateApplyRecoveryInstalledNewer: "Installed newer",
+  updateApplyButtonRebuilding: "Rebuilding",
+  updateApplyButtonHealth: "Health check",
+  updateApplyButtonVerification: "Commit check",
   updateCommitPending: "Pending",
   updateCommitUnavailable: "Unavailable",
   updateCommitVerified: "Verified",
@@ -213,6 +223,9 @@ assert.deepEqual(updateApplyFactRows(updateStatus, { expected_commit: "bbbbbbbbb
   ["Changes", "Readable update status"],
   ["Status", "Update available"],
   ["Commit check", "Pending"],
+  ["Current step", "Update available"],
+  ["Last progress", "-"],
+  ["Elapsed", "-"],
 ]);
 assert.deepEqual(updateApplyTechnicalRows(updateStatus, { expected_commit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }, maintenanceText), [
   ["Source", "stable"],
@@ -233,6 +246,12 @@ assert.equal(updateApplyRecoveryText("identity_incomplete", {}, maintenanceText)
 assert.equal(updateApplyRecoveryText("provider_unavailable", {}, maintenanceText), "Provider");
 assert.equal(updateApplyRecoveryText("installed_newer_than_available", {}, maintenanceText), "Installed newer");
 assert.equal(updateApplyRecoveryText("not-a-real-status", {}, maintenanceText), "Unknown");
+assert.equal(updateApplyButtonText({ status: "rebuilding", current_step: "rebuilding" }, maintenanceText), "Rebuilding");
+assert.equal(updateApplyButtonText({ status: "health_check", current_step: "health_check" }, maintenanceText), "Health check");
+assert.deepEqual(updateApplyStepRows({ steps: [{ name: "rebuilding", status: "running" }, { name: "health_check", status: "pending" }] }, maintenanceText), [
+  { name: "rebuilding", label: "Rebuilding", status: "running", statusLabel: "Running" },
+  { name: "health_check", label: "Health check", status: "pending", statusLabel: "Pending" },
+]);
 assert.match(buildUpdateApplyConfirmation(maintenanceText, updateStatus), /Target commit: bbbbbbbbbbbb\.\.\./);
 assert.equal(formatUpdateNotice({ code: "source_metadata_invalid", message: "Installed source metadata is unavailable or invalid." }, maintenanceText, "ru"), "Source metadata localized");
 assert.equal(formatUpdateNotice({ message: "Installed source metadata is unavailable or invalid." }, maintenanceText, "ru"), "Source metadata localized");

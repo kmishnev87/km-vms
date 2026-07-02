@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
+import tempfile
 import time
 import uuid
 from datetime import datetime
@@ -18,9 +20,11 @@ CONTROL_DIR = APP_DIR / "data" / "update-control"
 REQUEST_FILE = CONTROL_DIR / "update-request.json"
 STATUS_FILE = CONTROL_DIR / "update-status.json"
 HISTORY_FILE = CONTROL_DIR / "update-helper-history.json"
+PROGRESS_FILE = CONTROL_DIR / "update-progress.json"
 POLL_SECONDS = int(os.getenv("KM_VMS_UPDATE_HELPER_POLL_SECONDS") or "2")
 MAX_CONTROL_BYTES = 64 * 1024
 TERMINAL = {"completed", "failed", "cancelled", "blocked"}
+STEP_ORDER = ["queued", "preflight", "acquire_source", "extracting", "validating_source", "overlay", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification"]
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 SENSITIVE_VALUE_RE = re.compile(
     r"(github_pat_[A-Za-z0-9_]+|ghp_[A-Za-z0-9_]+|Bearer\s+[A-Za-z0-9._~+/=-]+|rtsp://[^@\s]+@|postgresql://[^:\s]+:[^@\s]+@|-----BEGIN [^-]*PRIVATE KEY-----)",
@@ -86,10 +90,21 @@ def save_history(processed: set[str]) -> None:
 
 
 def error_payload(category: str, message: str) -> dict[str, str]:
+    action = "Review sanitized update status and use terminal recovery if needed."
+    if category in {"build_network_dependency_failed", "jellyfin_ffmpeg_repo_unavailable"}:
+        action = "External FFmpeg repository or network dependency failed during API image build. Retry after repository connectivity is restored or use the documented terminal recovery path."
+    elif category == "docker_build_failed":
+        action = "Docker image rebuild failed. Review sanitized update status and retry after the build cause is fixed."
+    elif category == "compose_config_failed":
+        action = "Compose configuration failed. Review server-side compose configuration before retrying."
+    elif category == "health_check_failed":
+        action = "Containers were recreated but API health did not recover. Review service status before retrying."
+    elif category == "commit_mismatch":
+        action = "Installed commit did not match trusted release evidence. Treat the update as failed and retry only after checking the release source."
     return {
         "category": safe_text(category, 80) or "helper_error",
         "message": safe_text(message, 1000) or "Update helper failed.",
-        "operator_action": "Review sanitized update status and use terminal recovery if needed.",
+        "operator_action": action,
     }
 
 
@@ -127,42 +142,52 @@ def base_status(request: dict[str, Any], status: str, phase: str, steps: list[di
     }
 
 
-def failed_steps(category: str) -> list[dict[str, str]]:
+def failed_steps(category: str, phase: str | None = None) -> list[dict[str, str]]:
     if category == "preflight_failed":
-        return [
-            {"name": "request", "status": "completed"},
-            {"name": "preflight", "status": "failed"},
-            {"name": "apply", "status": "pending"},
-            {"name": "health_check", "status": "pending"},
-        ]
+        return steps_for("preflight", failed=True)
+    if category == "compose_config_failed":
+        return steps_for("compose_config", failed=True)
+    if category in {"jellyfin_ffmpeg_repo_unavailable", "build_network_dependency_failed", "docker_build_failed"}:
+        return steps_for("rebuilding", failed=True)
+    if category == "apply_timeout":
+        timeout_phase = phase if phase in STEP_ORDER else "rebuilding"
+        return steps_for(timeout_phase, failed=True)
     if category == "apply_failed":
-        return [
-            {"name": "request", "status": "completed"},
-            {"name": "preflight", "status": "completed"},
-            {"name": "apply", "status": "failed"},
-            {"name": "health_check", "status": "pending"},
-        ]
+        return steps_for("overlay", failed=True)
     if category == "health_check_failed":
-        return [
-            {"name": "request", "status": "completed"},
-            {"name": "preflight", "status": "completed"},
-            {"name": "apply", "status": "completed"},
-            {"name": "health_check", "status": "failed"},
-        ]
+        return steps_for("health_check", failed=True)
     if category in {"commit_mismatch", "commit_missing", "metadata_invalid"}:
-        return [
-            {"name": "request", "status": "completed"},
-            {"name": "preflight", "status": "completed"},
-            {"name": "apply", "status": "completed"},
-            {"name": "health_check", "status": "completed"},
-            {"name": "commit_verification", "status": "failed"},
-        ]
-    return [
-        {"name": "request", "status": "failed"},
-        {"name": "preflight", "status": "pending"},
-        {"name": "apply", "status": "pending"},
-        {"name": "health_check", "status": "pending"},
-    ]
+        return steps_for("commit_verification", failed=True)
+    return steps_for("queued", failed=True)
+
+
+def steps_for(current_step: str, failed: bool = False) -> list[dict[str, str]]:
+    normalized = "rebuilding" if current_step == "restarting" else current_step
+    if normalized not in STEP_ORDER:
+        normalized = "preflight"
+    current_index = STEP_ORDER.index(normalized)
+    steps: list[dict[str, str]] = []
+    for index, name in enumerate(STEP_ORDER):
+        if index < current_index:
+            state = "completed"
+        elif index == current_index:
+            state = "failed" if failed else "running"
+        else:
+            state = "pending"
+        steps.append({"name": name, "status": state})
+    return steps
+
+
+def read_progress(request_id: str | None = None) -> dict[str, Any] | None:
+    try:
+        payload = read_json(PROGRESS_FILE)
+    except Exception:
+        return None
+    if not payload:
+        return None
+    if request_id and payload.get("request_id") not in {None, request_id}:
+        return None
+    return payload
 
 
 def validate_request(request: dict[str, Any]) -> None:
@@ -207,8 +232,35 @@ def classify_apply_failure(update_dir: Path, stderr: str) -> HelperError:
     except HelperError:
         metadata = None
     failed_phase = metadata.get("failed_phase") if metadata else None
+    error_text = " ".join(
+        str(part or "")
+        for part in [
+            stderr,
+            metadata.get("error_message") if metadata else "",
+            failed_phase or "",
+        ]
+    )
+    lowered = error_text.lower()
     if failed_phase == "health_check":
         return HelperError("health_check_failed", stderr or "Update health check failed.")
+    if failed_phase == "compose_config":
+        return HelperError("compose_config_failed", "Docker Compose configuration validation failed.")
+    if failed_phase == "rebuild_recreate":
+        if any(token in lowered for token in ("jellyfin", "repo.jellyfin.org", "jellyfin_team.gpg.key", "jellyfin-ffmpeg")):
+            return HelperError(
+                "jellyfin_ffmpeg_repo_unavailable",
+                "External Jellyfin FFmpeg repository/key download or apt install failed or timed out during API image build. Source overlay may already have been applied if the failure happened after precompose.",
+            )
+        if any(token in lowered for token in ("curl", "apt-get", "timeout", "timed out", "temporary failure", "could not resolve", "connection")):
+            return HelperError(
+                "build_network_dependency_failed",
+                "A network dependency failed or timed out during Docker image build. Source overlay may already have been applied if the failure happened after precompose.",
+            )
+        return HelperError("docker_build_failed", "Docker image rebuild failed during update apply.")
+    if any(token in lowered for token in ("jellyfin", "repo.jellyfin.org", "jellyfin_team.gpg.key", "jellyfin-ffmpeg")):
+        return HelperError("jellyfin_ffmpeg_repo_unavailable", "External Jellyfin FFmpeg repository/key download or apt install failed or timed out during API image build.")
+    if any(token in lowered for token in ("docker build", "build failed", "compose rebuild")):
+        return HelperError("docker_build_failed", "Docker image rebuild failed during update apply.")
     return HelperError("apply_failed", stderr or "Update apply failed.")
 
 
@@ -245,40 +297,101 @@ def run_update(request: dict[str, Any]) -> int:
     env = os.environ.copy()
     env["KM_VMS_UPDATE_HELPER_MODE"] = "1"
     env["KM_VMS_UPDATE_CONTROL_REQUEST_ID"] = str(request["request_id"])
-    steps = [
-        {"name": "request", "status": "completed"},
-        {"name": "preflight", "status": "running"},
-        {"name": "apply", "status": "pending"},
-        {"name": "health_check", "status": "pending"},
-    ]
+    env["KM_VMS_UPDATE_PROGRESS_FILE"] = str(PROGRESS_FILE)
+    try:
+        PROGRESS_FILE.unlink()
+    except FileNotFoundError:
+        pass
+    steps = steps_for("preflight")
     write_json(STATUS_FILE, base_status(request, "preflight", "preflight", steps))
-    dry = subprocess.run([*common, "--dry-run"], cwd=update_dir, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=1800, check=False)
+    dry = run_child_with_progress([*common, "--dry-run"], request, update_dir, env, timeout_seconds=1800, default_step="preflight", status_value="preflight")
     if dry.returncode != 0:
         raise HelperError("preflight_failed", dry.stderr.strip() or "Update preflight failed.")
-    steps = [
-        {"name": "request", "status": "completed"},
-        {"name": "preflight", "status": "completed"},
-        {"name": "apply", "status": "running"},
-        {"name": "health_check", "status": "pending"},
-    ]
-    write_json(STATUS_FILE, base_status(request, "applying", "applying", steps))
-    apply = subprocess.run(common, cwd=update_dir, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, timeout=7200, check=False)
+    write_json(STATUS_FILE, base_status(request, "applying", "acquire_source", steps_for("acquire_source")))
+    apply = run_child_with_progress(common, request, update_dir, env, timeout_seconds=7200, default_step="acquire_source", status_value="applying")
     if apply.returncode != 0:
         raise classify_apply_failure(update_dir, apply.stderr.strip())
+    write_json(STATUS_FILE, base_status(request, "applying", "commit_verification", steps_for("commit_verification")))
     installed_commit, expected_commit = verify_installed_commit(update_dir, expected_commit)
-    steps = [
-        {"name": "request", "status": "completed"},
-        {"name": "preflight", "status": "completed"},
-        {"name": "apply", "status": "completed"},
-        {"name": "health_check", "status": "completed"},
-        {"name": "commit_verification", "status": "completed"},
-    ]
+    steps = [{"name": name, "status": "completed"} for name in STEP_ORDER]
     completed = base_status(request, "completed", "completed", steps)
     completed["commit_verified"] = True
     completed["installed_commit"] = installed_commit
     completed["expected_commit"] = expected_commit
     write_json(STATUS_FILE, completed)
     return 0
+
+
+def run_child_with_progress(command: list[str], request: dict[str, Any], update_dir: Path, env: dict[str, str], *, timeout_seconds: int, default_step: str, status_value: str) -> subprocess.CompletedProcess[str]:
+    request_id = str(request.get("request_id") or "")
+    started = time.monotonic()
+    stderr_path: Path | None = None
+    process: subprocess.Popen[bytes] | None = None
+    last_step = default_step if default_step in STEP_ORDER else "preflight"
+    try:
+        with tempfile.NamedTemporaryFile("w+b", prefix="km-vms-update-stderr-", delete=False) as stderr_file:
+            stderr_path = Path(stderr_file.name)
+            process = subprocess.Popen(
+                command,
+                cwd=update_dir,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_file,
+                start_new_session=True,
+            )
+            while True:
+                if process.poll() is not None:
+                    break
+                if time.monotonic() - started > timeout_seconds:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except (OSError, ProcessLookupError):
+                        process.kill()
+                    try:
+                        process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    try:
+                        stderr_file.flush()
+                    except OSError:
+                        pass
+                    tail = read_stderr_tail(stderr_path) if stderr_path else ""
+                    message = "Update helper child process exceeded the bounded timeout."
+                    if tail:
+                        message = f"{message} Last sanitized stderr tail: {tail}"
+                    raise HelperError("apply_timeout", message, phase=last_step)
+                progress = read_progress(request_id)
+                step = safe_text(progress.get("current_step") if progress else default_step, 80) or default_step
+                phase = safe_text(progress.get("phase") if progress else step, 80) or step
+                if step in STEP_ORDER:
+                    last_step = step
+                elif phase in STEP_ORDER:
+                    last_step = phase
+                status_payload = base_status(request, status_value, phase, steps_for(step))
+                status_payload["current_step"] = step
+                write_json(STATUS_FILE, status_payload)
+                time.sleep(POLL_SECONDS)
+        stderr_tail = read_stderr_tail(stderr_path)
+        return subprocess.CompletedProcess(command, process.returncode if process else 1, "", stderr_tail)
+    finally:
+        if stderr_path:
+            try:
+                stderr_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def read_stderr_tail(path: Path, *, limit: int = 1200) -> str:
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as stream:
+            if size > limit * 4:
+                stream.seek(max(0, size - limit * 4))
+            data = stream.read()
+    except OSError:
+        return ""
+    text = data.decode("utf-8", errors="replace")
+    return safe_text(text[-limit:], limit) or ""
 
 
 def should_process(request: dict[str, Any], processed: set[str]) -> bool:
@@ -311,7 +424,7 @@ def main() -> int:
             save_history(processed)
         except HelperError as exc:
             request = read_json(REQUEST_FILE) or {"request_id": None, "requested_at": utcnow(), "source": {}}
-            failed = base_status(request, "failed", exc.phase, failed_steps(exc.category), error_payload(exc.category, str(exc)))
+            failed = base_status(request, "failed", exc.phase, failed_steps(exc.category, exc.phase), error_payload(exc.category, str(exc)))
             if exc.diagnostics.get("installed_commit"):
                 failed["installed_commit"] = safe_text(exc.diagnostics.get("installed_commit"), 40)
             write_json(STATUS_FILE, failed)

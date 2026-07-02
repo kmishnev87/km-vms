@@ -4,7 +4,7 @@ import json
 import os
 import re
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,8 @@ REQUEST_SCHEMA_VERSION = 1
 STATUS_SCHEMA_VERSION = 1
 MAX_CONTROL_BYTES = 64 * 1024
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "blocked"}
-RUNNING_STATUSES = {"queued", "starting_helper", "preflight", "downloading", "extracting", "validating_source", "applying", "compose_config", "rebuilding", "restarting", "health_check"}
+RUNNING_STATUSES = {"queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification"}
+STALE_AFTER_SECONDS = 180
 FORBIDDEN_REQUEST_FIELDS = {
     "url",
     "repo",
@@ -59,6 +60,19 @@ def _utcnow() -> datetime:
 
 def _iso(value: datetime | None = None) -> str:
     return (value or _utcnow()).isoformat() + "Z"
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    text = _safe_string(value, max_length=80)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def _control_root() -> Path:
@@ -194,6 +208,12 @@ def _base_status(status_value: str = "idle", phase: str = "idle", *, request_id:
         "current_step": phase,
         "started_at": None,
         "updated_at": now,
+        "elapsed_seconds": None,
+        "last_progress_age_seconds": None,
+        "stale_after_seconds": STALE_AFTER_SECONDS,
+        "is_stale": False,
+        "effective_status": status_value,
+        "release_identity": None,
         "source": None,
         "steps": [],
         "can_cancel": status_value == "queued",
@@ -233,6 +253,26 @@ def read_update_apply_status() -> dict[str, Any]:
             "commit_verified": bool(payload.get("commit_verified")),
         }
     )
+    now = _utcnow()
+    started_at = _parse_iso(sanitized.get("started_at"))
+    updated_at = _parse_iso(sanitized.get("updated_at"))
+    elapsed_seconds = int((now - started_at).total_seconds()) if started_at else None
+    last_progress_age_seconds = int((now - updated_at).total_seconds()) if updated_at else None
+    is_stale = bool(str(sanitized.get("status")) in RUNNING_STATUSES and last_progress_age_seconds is not None and last_progress_age_seconds > STALE_AFTER_SECONDS)
+    sanitized["elapsed_seconds"] = elapsed_seconds
+    sanitized["last_progress_age_seconds"] = last_progress_age_seconds
+    sanitized["stale_after_seconds"] = STALE_AFTER_SECONDS
+    sanitized["is_stale"] = is_stale
+    sanitized["effective_status"] = "stalled" if is_stale else sanitized.get("status")
+    release_payload, release_state = _read_json(Path(os.getenv("KMVMS_APP_ROOT") or os.getenv("KM_VMS_APP_DIR") or Path.cwd()) / ".km-vms-release.json")
+    if release_state == "valid" and release_payload:
+        sanitized["release_identity"] = {
+            "metadata_status": _safe_string(release_payload.get("metadata_status"), max_length=40),
+            "metadata_source": _safe_string(release_payload.get("metadata_source"), max_length=80),
+            "commit_sha": _safe_string(release_payload.get("commit_sha"), max_length=40),
+        }
+    elif release_state != "missing":
+        sanitized["release_identity"] = {"metadata_status": release_state}
     rendered = json.dumps(sanitized, ensure_ascii=False)
     if SENSITIVE_VALUE_RE.search(rendered):
         blocked = _base_status("blocked", "status_redaction", request_id=sanitized.get("request_id"))
@@ -257,7 +297,7 @@ def request_update_apply(db: Session, *, confirm: bool, expected_manifest_versio
     if not source["repo"] or not source["ref"] or not source["source_type"] or not source["commit"] or not source["apply_ref"]:
         raise UpdateApplyBlocked("trusted_source_incomplete", "Trusted release source is incomplete.")
     now = _iso()
-    request_id = "stage609-" + uuid.uuid4().hex
+    request_id = "update-" + uuid.uuid4().hex
     request = {
         "schema_version": REQUEST_SCHEMA_VERSION,
         "request_id": request_id,

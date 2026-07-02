@@ -28,6 +28,7 @@ PRESERVED_PATHS=".env .env.* data data/postgres data/redis data/previews data/ex
 PREFLIGHT_ENV_CKSUM=""
 POSTFLIGHT_ENV_CKSUM=""
 PREFLIGHT_DATA_PATHS=""
+UPDATE_PROGRESS_FILE="${KM_VMS_UPDATE_PROGRESS_FILE:-}"
 
 usage() {
   cat <<'EOF'
@@ -68,6 +69,45 @@ command_exists() {
 
 metadata_time() {
   date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date
+}
+
+progress_step_name() {
+  case "$1" in
+    init|validate_app_dir|compose_detection|preflight_preservation) printf preflight ;;
+    acquire) printf acquire_source ;;
+    extract) printf extracting ;;
+    validate_source_tree) printf validating_source ;;
+    overlay) printf overlay ;;
+    compose_config) printf compose_config ;;
+    rebuild_recreate) printf rebuilding ;;
+    health_check) printf health_check ;;
+    metadata_write|postflight_preservation) printf commit_verification ;;
+    cleanup) printf completed ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+write_helper_progress() {
+  [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] || return 0
+  [ -n "$UPDATE_PROGRESS_FILE" ] || return 0
+  status="${1:-running}"
+  message="${2:-}"
+  now=$(metadata_time)
+  step=$(progress_step_name "$PHASE")
+  tmp_progress="$UPDATE_PROGRESS_FILE.tmp.$$"
+  mkdir -p "$(dirname "$UPDATE_PROGRESS_FILE")" 2>/dev/null || return 0
+  {
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "status": "%s",\n' "$(json_escape "$status")"
+    printf '  "phase": "%s",\n' "$(json_escape "$PHASE")"
+    printf '  "current_step": "%s",\n' "$(json_escape "$step")"
+    printf '  "updated_at": "%s",\n' "$(json_escape "$now")"
+    printf '  "request_id": "%s",\n' "$(json_escape "${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}")"
+    printf '  "message": "%s"\n' "$(json_escape "$message")"
+    printf '}\n'
+  } > "$tmp_progress" 2>/dev/null || return 0
+  mv "$tmp_progress" "$UPDATE_PROGRESS_FILE" 2>/dev/null || true
 }
 
 write_update_metadata() {
@@ -121,6 +161,7 @@ write_update_metadata() {
 fail() {
   message="$*"
   printf 'ERROR [%s]: %s\n' "$PHASE" "$message" >&2
+  write_helper_progress "failed" "$message" 2>/dev/null || true
   if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] && [ -n "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
     case "$PHASE" in
       rebuild_recreate|health_check)
@@ -248,6 +289,7 @@ is_dangerous_app_dir() {
 
 validate_app_dir() {
   PHASE="validate_app_dir"
+  write_helper_progress "running" "Validating installed app directory."
   resolve_app_dir
   is_dangerous_app_dir "$APP_DIR" && fail "Refusing dangerous app dir: $APP_DIR"
   [ -f "$APP_DIR/docker-compose.yml" ] || fail "Missing docker-compose.yml in app dir."
@@ -260,6 +302,7 @@ validate_app_dir() {
 
 load_compose_common() {
   PHASE="compose_detection"
+  write_helper_progress "running" "Detecting Docker Compose."
   # shellcheck disable=SC1090
   . "$APP_DIR/scripts/km-vms-compose-common.sh"
   km_vms_detect_compose "$DOCKER_COMPOSE_BIN" || fail "Docker Compose was not found. Checked KM_VMS_DOCKER_COMPOSE, PATH docker compose/docker-compose, and known NAS vendor paths."
@@ -437,6 +480,7 @@ safe_extract_tarball() {
 
 acquire_source() {
   PHASE="acquire"
+  write_helper_progress "running" "Acquiring trusted source archive."
   [ -n "$GITHUB_REPO" ] || fail "GitHub repo is required. Pass --github-repo owner/name or KM_VMS_GITHUB_REPO."
   GITHUB_REPO=$(validate_github_repo "$GITHUB_REPO")
   validate_ref "$BRANCH"
@@ -452,12 +496,14 @@ acquire_source() {
   fi
   resolve_github_commit_sha
   PHASE="extract"
+  write_helper_progress "running" "Extracting trusted source archive."
   safe_extract_tarball "$archive" "$TMP_ROOT/source"
   clear_github_token
 }
 
 validate_source_tree() {
   PHASE="validate_source_tree"
+  write_helper_progress "running" "Validating trusted source tree."
   source="$TMP_ROOT/source"
   [ -f "$source/docker-compose.yml" ] || fail "Source tree is missing docker-compose.yml."
   [ -d "$source/apps/api" ] || fail "Source tree is missing apps/api."
@@ -478,6 +524,7 @@ validate_source_tree() {
 
 preflight_preservation() {
   PHASE="preflight_preservation"
+  write_helper_progress "running" "Checking preservation contract."
   PREFLIGHT_ENV_CKSUM=$(cksum "$APP_DIR/.env" 2>/dev/null | awk '{print $1 ":" $2}' || printf unavailable)
   PREFLIGHT_DATA_PATHS=""
   for path in data data/postgres data/redis data/previews data/exports data/install-control; do
@@ -493,6 +540,7 @@ preflight_preservation() {
 
 postflight_preservation() {
   PHASE="postflight_preservation"
+  write_helper_progress "running" "Verifying preservation contract."
   POSTFLIGHT_ENV_CKSUM=$(cksum "$APP_DIR/.env" 2>/dev/null | awk '{print $1 ":" $2}' || printf unavailable)
   [ "$PREFLIGHT_ENV_CKSUM" = "$POSTFLIGHT_ENV_CKSUM" ] || fail ".env checksum changed during update."
   for path in $PREFLIGHT_DATA_PATHS; do
@@ -572,6 +620,7 @@ copy_allowed_path() {
 
 overlay_source() {
   PHASE="overlay"
+  write_helper_progress "running" "Applying product source overlay."
   OVERLAY_STARTED=1
   for relative in apps deploy docs release scripts docker-compose.yml docker-compose.pytest.yml .dockerignore .gitignore .env.example; do
     copy_allowed_path "$relative"
@@ -580,6 +629,7 @@ overlay_source() {
 
 compose_config() {
   PHASE="compose_config"
+  write_helper_progress "running" "Validating Docker Compose config."
   (
     cd "$APP_DIR"
     compose_cmd --env-file "$APP_DIR/.env" config >/dev/null
@@ -588,6 +638,7 @@ compose_config() {
 
 rebuild_recreate() {
   PHASE="rebuild_recreate"
+  write_helper_progress "running" "Rebuilding and recreating containers."
   (
     cd "$APP_DIR"
     if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then
@@ -603,6 +654,7 @@ rebuild_recreate() {
 
 health_check() {
   PHASE="health_check"
+  write_helper_progress "running" "Checking API health after update."
   http_port=$(read_env_value HTTP_PORT)
   [ -n "$http_port" ] || http_port="8088"
   if command_exists curl; then
@@ -629,6 +681,7 @@ health_check() {
 
 write_source_provenance() {
   PHASE="metadata_write"
+  write_helper_progress "running" "Writing source metadata."
   provenance="$APP_DIR/.km-vms-source.json"
   recorded_at=$(metadata_time)
   {
@@ -718,6 +771,7 @@ print_plan() {
 }
 
 PHASE="init"
+write_helper_progress "running" "Starting update."
 validate_app_dir
 PROJECT_NAME="${PROJECT_NAME:-$(read_env_value COMPOSE_PROJECT_NAME)}"
 safe_project_name "$PROJECT_NAME"
@@ -746,8 +800,10 @@ write_source_provenance
 write_release_identity
 postflight_preservation
 PHASE="metadata_write"
+write_helper_progress "running" "Writing successful update metadata."
 write_update_metadata "success" ""
 PHASE="cleanup"
+write_helper_progress "completed" "Update completed."
 info "KM VMS update completed."
 info "Updated paths: $UPDATED_PATHS"
 info "Preserved paths: $PRESERVED_PATHS"
