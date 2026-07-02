@@ -16,6 +16,7 @@ from app.services.update_check import run_update_check
 REQUEST_SCHEMA_VERSION = 1
 STATUS_SCHEMA_VERSION = 1
 MAX_CONTROL_BYTES = 64 * 1024
+MAX_APPLY_HISTORY_ITEMS = 10
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "blocked"}
 RUNNING_STATUSES = {"queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification"}
 STALE_AFTER_SECONDS = 180
@@ -85,6 +86,10 @@ def _request_path() -> Path:
 
 def _status_path() -> Path:
     return _control_root() / "update-status.json"
+
+
+def _apply_history_path() -> Path:
+    return _control_root() / "update-apply-history.json"
 
 
 def _lock_path() -> Path:
@@ -198,6 +203,73 @@ def _running_status(payload: dict[str, Any] | None) -> bool:
     return str(payload.get("status") or "") in RUNNING_STATUSES
 
 
+def _safe_steps(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    steps: list[dict[str, str]] = []
+    for item in value[:12]:
+        if not isinstance(item, dict):
+            continue
+        steps.append(
+            {
+                "name": _safe_string(item.get("name"), max_length=80) or "unknown",
+                "status": _safe_string(item.get("status"), max_length=40) or "pending",
+            }
+        )
+    return steps
+
+
+def _sanitize_apply_history_item(item: Any) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    error = item.get("error") if isinstance(item.get("error"), dict) else None
+    sanitized = {
+        "request_id": _safe_string(item.get("request_id"), max_length=80),
+        "status": _safe_string(item.get("status"), max_length=40),
+        "phase": _safe_string(item.get("phase"), max_length=80),
+        "started_at": _safe_string(item.get("started_at"), max_length=80),
+        "finished_at": _safe_string(item.get("finished_at") or item.get("updated_at"), max_length=80),
+        "updated_at": _safe_string(item.get("updated_at"), max_length=80),
+        "expected_commit": _safe_string(item.get("expected_commit"), max_length=40),
+        "installed_commit": _safe_string(item.get("installed_commit"), max_length=40),
+        "commit_verified": bool(item.get("commit_verified")),
+        "source": {
+            "kind": _safe_string(source.get("kind"), max_length=80),
+            "repo": _safe_string(source.get("repo"), max_length=160),
+            "ref": _safe_string(source.get("ref"), max_length=120),
+            "commit": _safe_string(source.get("commit"), max_length=40),
+            "apply_ref": _safe_string(source.get("apply_ref"), max_length=40),
+        }
+        if source
+        else None,
+        "steps": _safe_steps(item.get("steps")),
+        "error": {
+            "category": _safe_string(error.get("category"), max_length=80),
+            "message": _safe_string(error.get("message"), max_length=300),
+            "operator_action": _safe_string(error.get("operator_action"), max_length=300),
+        }
+        if error
+        else None,
+        "history_detail_status": _safe_string(item.get("history_detail_status"), max_length=80) or "step_timestamps_unavailable",
+    }
+    rendered = json.dumps(sanitized, ensure_ascii=False)
+    if SENSITIVE_VALUE_RE.search(rendered):
+        return None
+    return sanitized
+
+
+def _read_apply_history() -> dict[str, Any]:
+    payload, state = _read_json(_apply_history_path())
+    if state == "missing":
+        return {"available": False, "state": "missing", "items": [], "last": None, "max_items": MAX_APPLY_HISTORY_ITEMS}
+    if state != "valid" or not payload:
+        return {"available": False, "state": state, "items": [], "last": None, "max_items": MAX_APPLY_HISTORY_ITEMS}
+    raw_items = payload.get("items") if isinstance(payload.get("items"), list) else []
+    items = [item for item in (_sanitize_apply_history_item(raw) for raw in raw_items[-MAX_APPLY_HISTORY_ITEMS:]) if item]
+    return {"available": bool(items), "state": "valid", "items": items, "last": items[-1] if items else None, "max_items": MAX_APPLY_HISTORY_ITEMS}
+
+
 def _base_status(status_value: str = "idle", phase: str = "idle", *, request_id: str | None = None) -> dict[str, Any]:
     now = _iso()
     return {
@@ -226,16 +298,24 @@ def _base_status(status_value: str = "idle", phase: str = "idle", *, request_id:
             "helper_public_ports": False,
         },
         "error": None,
+        "last_apply_summary": None,
+        "apply_history": {"available": False, "state": "missing", "items": [], "last": None, "max_items": MAX_APPLY_HISTORY_ITEMS},
     }
 
 
 def read_update_apply_status() -> dict[str, Any]:
+    apply_history = _read_apply_history()
     payload, state = _read_json(_status_path())
     if state == "missing":
-        return _base_status()
+        base = _base_status()
+        base["apply_history"] = apply_history
+        base["last_apply_summary"] = apply_history["last"]
+        return base
     if state != "valid":
         status_payload = _base_status("blocked", "status_read")
         status_payload["error"] = _safe_error("status_" + state, "Update status file is unavailable or invalid.")
+        status_payload["apply_history"] = apply_history
+        status_payload["last_apply_summary"] = apply_history["last"]
         return status_payload
     sanitized = _base_status(str(payload.get("status") or "unknown"), str(payload.get("phase") or payload.get("current_step") or "unknown"), request_id=_safe_string(payload.get("request_id"), max_length=80))
     sanitized.update(
@@ -244,13 +324,15 @@ def read_update_apply_status() -> dict[str, Any]:
             "started_at": _safe_string(payload.get("started_at"), max_length=80),
             "updated_at": _safe_string(payload.get("updated_at"), max_length=80) or _iso(),
             "source": payload.get("source") if isinstance(payload.get("source"), dict) else None,
-            "steps": payload.get("steps") if isinstance(payload.get("steps"), list) else [],
+            "steps": _safe_steps(payload.get("steps")),
             "can_cancel": bool(payload.get("can_cancel")) and str(payload.get("status")) == "queued",
             "rollback_supported": False,
             "error": payload.get("error") if isinstance(payload.get("error"), dict) else None,
             "expected_commit": _safe_string(payload.get("expected_commit"), max_length=40),
             "installed_commit": _safe_string(payload.get("installed_commit"), max_length=40),
             "commit_verified": bool(payload.get("commit_verified")),
+            "apply_history": apply_history,
+            "last_apply_summary": apply_history["last"],
         }
     )
     now = _utcnow()

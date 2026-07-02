@@ -71,7 +71,7 @@ const appRoutes = walkFiles(resolve(webRoot, "app"))
 
 assert.equal(appRoutes.some((file) => file === "update/page.js" || file.startsWith("update/")), false);
 assert.equal(settingsPage.includes("settingsUpdateApplyTimeline"), true);
-assert.equal(settingsPage.includes("updateApplyStepRows(updateApplyStatus, t)"), true);
+assert.equal(settingsPage.includes("updateApplyOperatorModel(updateStatus, updateApplyStatus, t, lang"), true);
 assert.equal(settingsPage.includes("updateApplyButtonText(updateApplyStatus, t)"), true);
 assert.equal(settingsPage.includes("updateApplyStatus?.is_stale"), true);
 assert.equal(settingsPage.includes("operator_action"), true);

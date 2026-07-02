@@ -267,6 +267,124 @@ export function updateApplyTechnicalRows(updateStatus, applyStatus, t) {
   ].filter(([, value]) => value !== "-");
 }
 
+function updateApplyReleaseValue(updateStatus, key) {
+  const installedRelease = updateStatus?.installed_release || {};
+  const availableRelease = updateStatus?.available_release || {};
+  const latest = updateStatus?.latest || updateStatus?.latest_release || {};
+  const installed = updateStatus?.installed_build || updateStatus?.installed || {};
+  if (key === "currentVersion") return installedRelease.version || installed.app_version || updateStatus?.installed?.installed_version || "-";
+  if (key === "availableVersion") return availableRelease.version || latest.version || latest.latest_version || "-";
+  if (key === "title") return availableRelease.title || latest.title || installedRelease.title || latest.release_notes_summary || "-";
+  if (key === "summary") return availableRelease.summary || latest.release_notes_summary || installedRelease.summary || "";
+  if (key === "installedAt") return installedRelease.installed_at || installed.installed_at || "";
+  if (key === "targetCommit") return availableRelease.commit || latest.commit || latest.build_id || "";
+  if (key === "installedCommit") return installedRelease.commit || installedRelease.commit_sha || installed.git_commit || installed.installed_commit || "";
+  if (key === "metadataStatus") return installedRelease.metadata_status || installedRelease.identity_validity || "";
+  return "";
+}
+
+function releaseConfirmedText(value, t) {
+  const key = String(value || "").trim().toLowerCase();
+  if (["adopted", "already_adopted", "official_update", "valid"].includes(key)) return t.yes || "Yes";
+  if (!key) return "-";
+  return maintenanceStatusText(key, t);
+}
+
+function formatApplyDate(value, lang = "ru") {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value).slice(0, 80);
+  return new Intl.DateTimeFormat(lang === "en" ? "en-US" : lang === "zh-CN" ? "zh-CN" : "ru-RU", {
+    year: "2-digit",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function applyStepIcon(status) {
+  if (status === "completed") return "check";
+  if (status === "failed") return "alert";
+  if (status === "running") return "pulse";
+  return "dot";
+}
+
+export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "ru", transientError = "") {
+  const effective = updateApplyEffectiveStatus(updateStatus, applyStatus, transientError);
+  const comparison = updateStatus?.comparison || {};
+  const status = comparison.status || updateStatus?.status || effective || "unknown";
+  const running = updateApplyIsRunning(applyStatus?.status || "");
+  const canApply = Boolean(updateStatus?.can_apply_from_ui && !running && !applyStatus?.is_stale);
+  const lastSummary = applyStatus?.last_apply_summary || null;
+  const currentVersion = updateApplyReleaseValue(updateStatus, "currentVersion");
+  const availableVersion = updateApplyReleaseValue(updateStatus, "availableVersion");
+  const targetCommit = updateApplyReleaseValue(updateStatus, "targetCommit") || applyStatus?.expected_commit || applyStatus?.source?.commit || "";
+  const installedCommit = applyStatus?.installed_commit || updateApplyReleaseValue(updateStatus, "installedCommit");
+  const commitVerified = Boolean(
+    applyStatus?.commit_verified ||
+    lastSummary?.commit_verified ||
+    (installedCommit && targetCommit && installedCommit === targetCommit)
+  );
+  const terminalSuccess = effective === "completed" && commitVerified;
+  const current = status === "current" && !canApply && !running;
+  const available = status === "update_available" && canApply;
+  const failed = ["failed", "blocked", "stalled", "check_failed", "identity_incomplete", "installed_identity_drift", "metadata_stale", "provider_unavailable", "no_release_published", "installed_newer_than_available"].includes(effective) || ["check_failed", "identity_incomplete", "installed_identity_drift", "metadata_stale", "provider_unavailable", "no_release_published", "installed_newer_than_available"].includes(status);
+  const severity = failed ? "blocked" : running || available || transientError ? "warning" : "ok";
+  const headlineKey = terminalSuccess ? "completed" : current ? "current" : available ? "available" : running ? "running" : failed ? "blocked" : "current";
+  const headline = t.updateApplyHeadlines?.[headlineKey] || maintenanceStatusText(terminalSuccess ? "completed" : status, t);
+  const summary = t.updateApplySummaries?.[headlineKey] || updateApplyRecoveryText(effective, applyStatus, t);
+  const updateResult = terminalSuccess
+    ? (t.updateApplyResults?.completedVerified || headline)
+    : t.updateApplyResults?.[headlineKey] || headline;
+  const finishedAt = lastSummary?.finished_at || (terminalSuccess ? applyStatus?.updated_at : "") || updateApplyReleaseValue(updateStatus, "installedAt");
+  const elapsed = running
+    ? formatDurationSeconds(applyStatus?.elapsed_seconds)
+    : lastSummary?.elapsed_seconds
+      ? formatDurationSeconds(lastSummary.elapsed_seconds)
+      : "-";
+  const stepsSource = Array.isArray(applyStatus?.steps) && applyStatus.steps.length
+    ? applyStatus
+    : Array.isArray(lastSummary?.steps) && lastSummary.steps.length
+      ? lastSummary
+      : null;
+  const timeline = updateApplyStepRows(stepsSource || {}, t).map((step) => ({
+    ...step,
+    icon: applyStepIcon(step.status),
+    timeLabel: step.time_label || (step.status === "completed" ? t.updateApplyStepDone : step.statusLabel),
+  }));
+  const detailUnavailable = Boolean((lastSummary?.history_detail_status || applyStatus?.apply_history?.state === "missing") && !timeline.some((step) => step.timeLabel && /:/.test(step.timeLabel)));
+  const safeTimeline = timeline.length ? timeline : [
+    { name: "current", label: current ? t.updateApplyTimelineCurrent : maintenanceStatusText(status, t), status: severity === "blocked" ? "failed" : "completed", statusLabel: maintenanceStatusText(severity === "blocked" ? "failed" : "completed", t), icon: severity === "blocked" ? "alert" : "check", timeLabel: formatApplyDate(finishedAt, lang) },
+  ];
+  return {
+    status: effective,
+    severity,
+    headline,
+    summary,
+    updateResult,
+    currentVersion,
+    availableVersion,
+    releaseTitle: updateApplyReleaseValue(updateStatus, "title"),
+    releaseSummary: updateApplyReleaseValue(updateStatus, "summary"),
+    installedAt: formatApplyDate(updateApplyReleaseValue(updateStatus, "installedAt"), lang),
+    finishedAt: formatApplyDate(finishedAt, lang),
+    elapsed,
+    lastProgress: running ? formatDurationSeconds(applyStatus?.last_progress_age_seconds) : "",
+    commitStatus: commitVerified ? t.updateCommitVerified : targetCommit ? t.updateCommitPending : t.updateCommitUnavailable,
+    commitVerified,
+    installedCommitShort: shortCommit(installedCommit) || "-",
+    targetCommitShort: shortCommit(targetCommit) || "-",
+    metadataStatus: releaseConfirmedText(updateApplyReleaseValue(updateStatus, "metadataStatus") || applyStatus?.release_identity?.metadata_status, t),
+    canApply,
+    canCheck: true,
+    showApplyButton: canApply || running,
+    timeline: safeTimeline.slice(0, 12),
+    detailUnavailable,
+    diagnosticsRows: updateApplyTechnicalRows(updateStatus, applyStatus, t),
+  };
+}
+
 export function updateApplyRecoveryText(status, applyStatus, t) {
   const effective = status || "unknown";
   if (effective === "stalled") return applyStatus?.error?.operator_action || t.updateApplyRecoveryStalled;
@@ -291,6 +409,7 @@ export function updateApplyStepRows(applyStatus, t) {
     label: maintenanceStatusText(step?.name || "unknown", t),
     status: step?.status || "pending",
     statusLabel: maintenanceStatusText(step?.status || "pending", t),
+    ...((step?.time_label || step?.completed_at || step?.updated_at) ? { time_label: step?.time_label || step?.completed_at || step?.updated_at } : {}),
   }));
 }
 

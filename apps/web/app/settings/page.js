@@ -20,7 +20,6 @@ import {
   configureSettingsPageHelpers,
   formatAuditTimestamp,
   formatMaintenanceMessage,
-  formatUpdateNotice,
   hardwareOptionState,
   humanErrorText,
   languageOf,
@@ -42,13 +41,9 @@ import {
   sortedUsersForTable,
   timezoneValueForSettings,
   buildUpdateApplyConfirmation,
-  updateApplyEffectiveStatus,
-  updateApplyFactRows,
-  updateApplyTechnicalRows,
-  updateApplyStepRows,
+  updateApplyOperatorModel,
   updateApplyButtonText,
   updateApplyIsRunning,
-  updateApplyRecoveryText,
   userCanBeDeleted,
   userCanBeManaged,
 } from "../../lib/settingsPageHelpers";
@@ -114,7 +109,7 @@ const TEXT = {
     security: "Безопасность",
     securityText: "Журнал логирования, сбор диагностических логов и отчёт об ошибке.",
     maintenance: "Обслуживание",
-    maintenanceText: "Обслуживание БД, миграций, восстановления и отчёта; обновление применяется отдельным подтверждённым блоком.",
+    maintenanceText: "Обновление, обслуживание: БД, миграций, восстановления и отчёта.",
     maintenanceOverview: "Обзор обслуживания",
     maintenanceRefresh: "Обновить",
     maintenanceLoadError: "Обзор обслуживания недоступен.",
@@ -131,6 +126,8 @@ const TEXT = {
     maintenanceBackupNotRequired: "Резервная копия не требуется",
     maintenanceConfirmationRequired: "Нужно подтверждение",
     maintenanceUnsupported: "Действие заблокировано или не поддерживается",
+    yes: "Да",
+    no: "Нет",
     maintenanceLastAction: "Последнее действие",
     maintenanceNoHistory: "История действий не найдена",
     maintenanceGeneratedAt: "Сформирован",
@@ -162,8 +159,38 @@ const TEXT = {
     updateApplyProgress: "Ход обновления",
     updateApplyButtonRunning: "Идёт обновление",
     updateApplyButtonRebuilding: "Пересборка",
-    updateApplyButtonHealth: "Проверка здоровья",
+    updateApplyButtonHealth: "Тестирование",
     updateApplyButtonVerification: "Проверка commit",
+    updateApplyHeadlines: {
+      current: "Система актуальна",
+      available: "Доступно обновление",
+      running: "Обновление выполняется",
+      completed: "Завершено успешно",
+      blocked: "Требуется внимание",
+    },
+    updateApplySummaries: {
+      current: "Установленная версия совпадает с опубликованным релизом.",
+      available: "Проверьте релиз и запустите применение, когда будете готовы.",
+      running: "Helper применяет обновление и обновляет прогресс автоматически.",
+      completed: "Обновление установлено и подтверждено.",
+      blocked: "Применение сейчас заблокировано; подробности есть в диагностике.",
+    },
+    updateApplyResults: {
+      completedVerified: "Завершено успешно",
+      current: "Актуально",
+      available: "Доступно обновление",
+      running: "Выполняется",
+      blocked: "Требуется внимание",
+    },
+    updateApplyReleaseChanges: "Что изменилось в этом релизе",
+    updateApplyLastState: "Последний прогресс",
+    updateApplyStepDone: "Готово",
+    updateApplyTimelineCurrent: "Текущая версия",
+    updateApplyHistoryLimited: "Детальная история шагов для прошлого применения не записана.",
+    updateApplyDiagnostics: "Диагностика",
+    updateApplySupportTitle: "Нужна помощь поддержки?",
+    updateApplySupportText: "Скачайте диагностический отчёт и передайте его поддержке. Технические детали включены в отчёт.",
+    updateApplySupportAction: "Скачать диагностический отчёт",
     updateCommitPending: "Ожидает подтверждения",
     updateCommitUnavailable: "Нет данных",
     updateCommitVerified: "Commit подтверждён",
@@ -178,7 +205,7 @@ const TEXT = {
       available: "Доступная версия",
       backup: "Резервная копия",
       confirm: "Подтверждение",
-      apply: "Применение",
+      apply: "Обновление",
       installedCommit: "Установленный commit",
       reportId: "ID отчёта",
       source: "Источник",
@@ -187,10 +214,11 @@ const TEXT = {
       currentStep: "Текущий шаг",
       lastProgress: "Последний прогресс",
       elapsed: "Прошло",
-      releaseIdentity: "Идентичность релиза",
+      completedAt: "Завершено",
+      releaseIdentity: "Релиз подтверждён",
       releaseTitle: "Релиз",
       releaseSummary: "Изменения",
-      status: "Статус",
+      status: "Обновление",
       gitHead: "Git HEAD",
       metadataSource: "Метаданные",
       provider: "Провайдер",
@@ -221,8 +249,10 @@ const TEXT = {
       downloading: "Загрузка",
       extracting: "Распаковка",
       failed: "Ошибка",
-      health_check: "Проверка здоровья",
-      applying: "Применение",
+      health_check: "Тестирование",
+      request: "Запрос",
+      applying: "Обновление",
+      apply: "Обновление",
       acquire_source: "Получение источника",
       overlay: "Накатка файлов",
       no_artifacts: "Нет артефактов",
@@ -233,6 +263,8 @@ const TEXT = {
       rebuilding: "Пересборка",
       reconnecting: "Переподключение",
       restarting: "Перезапуск",
+      running: "Выполняется",
+      pending: "Ожидает",
       stalled: "Зависло",
       starting_helper: "Запуск helper",
       update_available: "Есть обновление",
@@ -421,7 +453,7 @@ const TEXT = {
     security: "Security",
     securityText: "Logging journal, diagnostic logs collection and bug report.",
     maintenance: "Maintenance",
-    maintenanceText: "Database, migration, restore and report maintenance; updates apply through the dedicated confirmed panel.",
+    maintenanceText: "Updates and maintenance: database, migrations, restore, and reports.",
     maintenanceOverview: "Maintenance overview",
     maintenanceRefresh: "Refresh",
     maintenanceLoadError: "Maintenance overview is unavailable.",
@@ -438,6 +470,8 @@ const TEXT = {
     maintenanceBackupNotRequired: "Backup not required",
     maintenanceConfirmationRequired: "Confirmation required",
     maintenanceUnsupported: "Action blocked or unsupported",
+    yes: "Yes",
+    no: "No",
     maintenanceLastAction: "Last action",
     maintenanceNoHistory: "No action history found",
     maintenanceGeneratedAt: "Generated",
@@ -469,8 +503,38 @@ const TEXT = {
     updateApplyProgress: "Update progress",
     updateApplyButtonRunning: "Updating",
     updateApplyButtonRebuilding: "Rebuilding",
-    updateApplyButtonHealth: "Health check",
+    updateApplyButtonHealth: "Testing",
     updateApplyButtonVerification: "Commit check",
+    updateApplyHeadlines: {
+      current: "System is current",
+      available: "Update available",
+      running: "Update is running",
+      completed: "Completed successfully",
+      blocked: "Attention required",
+    },
+    updateApplySummaries: {
+      current: "Installed version matches the published release.",
+      available: "Review the release and apply it when ready.",
+      running: "The helper is applying the update and refreshing progress automatically.",
+      completed: "Update is installed and verified.",
+      blocked: "Apply is currently blocked; diagnostics contain safe details.",
+    },
+    updateApplyResults: {
+      completedVerified: "Completed successfully",
+      current: "Current",
+      available: "Update available",
+      running: "Running",
+      blocked: "Attention required",
+    },
+    updateApplyReleaseChanges: "What changed in this release",
+    updateApplyLastState: "Latest progress",
+    updateApplyStepDone: "Done",
+    updateApplyTimelineCurrent: "Current version",
+    updateApplyHistoryLimited: "Detailed step history was not recorded for the previous apply.",
+    updateApplyDiagnostics: "Diagnostics",
+    updateApplySupportTitle: "Need support?",
+    updateApplySupportText: "Download the diagnostic report and send it to support. Technical details are included in the report.",
+    updateApplySupportAction: "Download diagnostic report",
     updateCommitPending: "Pending verification",
     updateCommitUnavailable: "No data",
     updateCommitVerified: "Commit verified",
@@ -494,10 +558,11 @@ const TEXT = {
       currentStep: "Current step",
       lastProgress: "Last progress",
       elapsed: "Elapsed",
-      releaseIdentity: "Release identity",
+      completedAt: "Completed",
+      releaseIdentity: "Release verified",
       releaseTitle: "Release",
       releaseSummary: "Changes",
-      status: "Status",
+      status: "Update",
       gitHead: "Git HEAD",
       metadataSource: "Metadata",
       provider: "Provider",
@@ -528,8 +593,10 @@ const TEXT = {
       downloading: "Downloading",
       extracting: "Extracting",
       failed: "Failed",
-      health_check: "Health check",
-      applying: "Applying",
+      health_check: "Testing",
+      request: "Request",
+      applying: "Updating",
+      apply: "Update",
       acquire_source: "Acquire source",
       overlay: "Overlay files",
       no_artifacts: "No artifacts",
@@ -540,6 +607,8 @@ const TEXT = {
       rebuilding: "Rebuilding",
       reconnecting: "Reconnecting",
       restarting: "Restarting",
+      running: "Running",
+      pending: "Pending",
       stalled: "Stalled",
       starting_helper: "Starting helper",
       update_available: "Update available",
@@ -699,7 +768,7 @@ const TEXT = {
 
 const ZH_TEXT_OVERRIDES = {
   maintenance: "维护",
-  maintenanceText: "数据库、迁移、恢复和报告维护；更新通过独立确认面板应用。",
+  maintenanceText: "更新与维护：数据库、迁移、恢复和报告。",
   maintenanceOverview: "维护概览",
   maintenanceRefresh: "刷新",
   maintenanceLoadError: "维护概览不可用。",
@@ -716,6 +785,8 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceBackupNotRequired: "不需要备份",
   maintenanceConfirmationRequired: "需要确认",
   maintenanceUnsupported: "操作被阻止或不受支持",
+  yes: "是",
+  no: "否",
   maintenanceLastAction: "最近操作",
   maintenanceNoHistory: "未找到操作历史",
   maintenanceGeneratedAt: "生成时间",
@@ -747,8 +818,38 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyProgress: "更新进度",
   updateApplyButtonRunning: "正在更新",
   updateApplyButtonRebuilding: "重建中",
-  updateApplyButtonHealth: "健康检查",
+  updateApplyButtonHealth: "测试",
   updateApplyButtonVerification: "Commit 检查",
+  updateApplyHeadlines: {
+    current: "系统已是最新",
+    available: "有可用更新",
+    running: "正在应用更新",
+    completed: "已成功完成",
+    blocked: "需要处理",
+  },
+  updateApplySummaries: {
+    current: "已安装版本与已发布版本一致。",
+    available: "请检查版本信息，准备好后应用更新。",
+    running: "Helper 正在应用更新，并会自动刷新进度。",
+    completed: "更新已安装并验证。",
+    blocked: "当前无法应用；诊断中包含安全详情。",
+  },
+  updateApplyResults: {
+    completedVerified: "已成功完成",
+    current: "当前",
+    available: "有可用更新",
+    running: "进行中",
+    blocked: "需要处理",
+  },
+  updateApplyReleaseChanges: "此版本的变更",
+  updateApplyLastState: "最新进度",
+  updateApplyStepDone: "完成",
+  updateApplyTimelineCurrent: "当前版本",
+  updateApplyHistoryLimited: "此前应用未记录详细步骤历史。",
+  updateApplyDiagnostics: "诊断",
+  updateApplySupportTitle: "需要支持帮助？",
+  updateApplySupportText: "下载诊断报告并发送给支持人员。技术详情已包含在报告中。",
+  updateApplySupportAction: "下载诊断报告",
   updateCommitPending: "等待验证",
   updateCommitUnavailable: "无数据",
   updateCommitVerified: "Commit 已验证",
@@ -772,10 +873,11 @@ const ZH_TEXT_OVERRIDES = {
     currentStep: "当前步骤",
     lastProgress: "最近进度",
     elapsed: "已用时间",
-    releaseIdentity: "版本标识",
+    completedAt: "完成时间",
+    releaseIdentity: "版本已确认",
     releaseTitle: "版本",
     releaseSummary: "变更",
-    status: "状态",
+    status: "更新",
     gitHead: "Git HEAD",
     metadataSource: "元数据",
     provider: "提供方",
@@ -806,8 +908,10 @@ const ZH_TEXT_OVERRIDES = {
     downloading: "下载中",
     extracting: "解压中",
     failed: "失败",
-    health_check: "健康检查",
-    applying: "应用中",
+    health_check: "测试",
+    request: "请求",
+    applying: "更新中",
+    apply: "更新",
     acquire_source: "获取来源",
     overlay: "覆盖文件",
     no_artifacts: "无工件",
@@ -818,6 +922,8 @@ const ZH_TEXT_OVERRIDES = {
     rebuilding: "重建中",
     reconnecting: "重新连接",
     restarting: "重启中",
+    running: "进行中",
+    pending: "等待中",
     stalled: "停滞",
     starting_helper: "启动 helper",
     update_available: "有可用更新",
@@ -953,18 +1059,16 @@ export default function SettingsPage() {
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
   const languageIcon = lang === "en" ? "/assets/icons/ui/language-en.png" : "/assets/icons/ui/language-ru.png";
-  const updateApplyEffective = updateApplyEffectiveStatus(updateStatus, updateApplyStatus, updateApplyTransientError);
   const updateApplyRunning = updateApplyIsRunning(updateApplyStatus?.status || "");
   const updateApplyAllowed = Boolean(updateStatus?.can_apply_from_ui && !updateApplyRunning && !updateApplyStatus?.is_stale && !maintenanceBusy);
-  const updateApplyFacts = updateApplyFactRows(updateStatus, updateApplyStatus, t);
-  const updateApplyTechnicalFacts = updateApplyTechnicalRows(updateStatus, updateApplyStatus, t);
-  const updateApplySteps = updateApplyStepRows(updateApplyStatus, t);
   const updateApplyPrimaryText = updateApplyButtonText(updateApplyStatus, t);
-  const updateApplyRecovery = updateApplyRecoveryText(updateApplyEffective, updateApplyStatus, t);
-  const updateApplyWarnings = [
-    ...(Array.isArray(updateStatus?.blockers) ? updateStatus.blockers : []),
-    ...(Array.isArray(updateStatus?.warnings) ? updateStatus.warnings : []),
-  ].slice(0, 3);
+  const updateApplyOperator = updateApplyOperatorModel(updateStatus, updateApplyStatus, t, lang, updateApplyTransientError);
+  const updateApplyProblem = Boolean(
+    updateApplyTransientError ||
+    updateApplyStatus?.error?.message ||
+    updateApplyOperator.severity === "blocked" ||
+    ["failed", "stalled", "blocked", "check_failed", "identity_incomplete", "installed_identity_drift", "metadata_stale", "provider_unavailable", "no_release_published", "installed_newer_than_available"].includes(updateApplyOperator.status)
+  );
 
   useEffect(() => {
     load();
@@ -1680,7 +1784,6 @@ export default function SettingsPage() {
                   <div className="settingsRowText">
                     <label>{t.maintenance}</label>
                     <span>{t.maintenanceText}</span>
-                    <small>{t.maintenanceNoApply}</small>
                   </div>
                   <div className="settingsRowControl settingsRowControlMeta">
                     <button className="button secondary small settingsUsersAddButton" onClick={openMaintenanceModal} disabled={!canManageMaintenance}>
@@ -1884,7 +1987,7 @@ export default function SettingsPage() {
               {maintenanceLoading && !maintenanceOverview ? <div className="settingsJournalEmpty">{t.checking}</div> : null}
 
               {maintenanceOverview ? (
-                <>
+                <div className="settingsMaintenanceContent">
                   <div className="settingsMaintenanceList">
                     {maintenanceFlowRows(maintenanceOverview).map((flow) => (
                       <article className="settingsMaintenanceFlow" key={flow.key}>
@@ -1928,58 +2031,100 @@ export default function SettingsPage() {
                   </section>
 
                   <section className="settingsUpdateApplyPanel">
-                    <div className="settingsUpdateApplyHead">
-                      <div>
-                        <h3>{t.updateApplyTitle}</h3>
-                        <p>{updateApplyRecovery}</p>
+                    <h3>{t.updateApplyTitle}</h3>
+                    <div className={`settingsUpdateApplyHero is-${updateApplyOperator.severity}`}>
+                      <div className="settingsUpdateApplyHeroState">
+                        <span className="settingsUpdateApplyHeroIcon" aria-hidden="true">
+                          {updateApplyOperator.severity === "blocked" ? "!" : updateApplyOperator.severity === "warning" ? "..." : "✓"}
+                        </span>
+                        <div>
+                          <strong>{updateApplyOperator.headline}</strong>
+                          <p>{updateApplyOperator.summary}</p>
+                          <dl className="settingsUpdateApplyVersionRows">
+                            <div>
+                              <dt>{t.maintenanceLabels.current}</dt>
+                              <dd>{updateApplyOperator.currentVersion}</dd>
+                            </div>
+                            <div>
+                              <dt>{t.maintenanceLabels.available}</dt>
+                              <dd>{updateApplyOperator.availableVersion}</dd>
+                            </div>
+                          </dl>
+                        </div>
                       </div>
-                      <span className={`settingsMaintenanceStatus ${maintenanceStatusClass(updateApplyEffective)}`}>
-                        {maintenanceStatusText(updateApplyEffective, t)}
-                      </span>
+                      <dl className="settingsUpdateApplyHeroFacts">
+                        <div>
+                          <dt>{t.maintenanceLabels.releaseTitle}</dt>
+                          <dd>{updateApplyOperator.releaseTitle}</dd>
+                          {updateApplyOperator.availableVersion && updateApplyOperator.availableVersion !== "-" ? (
+                            <small>{updateApplyOperator.availableVersion}</small>
+                          ) : null}
+                        </div>
+                        <div>
+                          <dt>{t.maintenanceLabels.completedAt}</dt>
+                          <dd>{updateApplyOperator.finishedAt}</dd>
+                        </div>
+                      </dl>
                     </div>
-                    <dl className="settingsUpdateApplyFacts">
-                      {updateApplyFacts.map(([label, value]) => (
-                        <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
-                      ))}
-                    </dl>
-                    {updateApplyTechnicalFacts.length ? (
-                      <details className="settingsUpdateApplyTechnical">
-                        <summary>{t.updateApplyTechnicalDetails}</summary>
-                        <dl className="settingsUpdateApplyFacts">
-                          {updateApplyTechnicalFacts.map(([label, value]) => (
-                            <div key={label}><dt>{label}</dt><dd>{value}</dd></div>
-                          ))}
-                        </dl>
-                      </details>
+
+                    <div className="settingsUpdateApplyTimeline" aria-label={t.updateApplyProgress}>
+                      <ol>
+                        {updateApplyOperator.timeline.map((step) => (
+                          <li className={`is-${step.status}`} key={step.name}>
+                            <span className="settingsUpdateApplyTimelineDot" aria-hidden="true">
+                              {step.icon === "alert" ? "!" : step.icon === "pulse" ? "•" : "✓"}
+                            </span>
+                            <strong>{step.label}</strong>
+                            <small>{step.timeLabel}</small>
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+
+                    {updateApplyOperator.lastProgress ? (
+                      <div className="settingsUpdateApplyProgressRule">
+                        <span>{t.maintenanceLabels.lastProgress}</span>
+                        <strong>{updateApplyOperator.lastProgress}</strong>
+                      </div>
                     ) : null}
-                    {updateApplySteps.length ? (
-                      <div className="settingsUpdateApplyTimeline" aria-label={t.updateApplyProgress}>
-                        <span>{t.updateApplyProgress}</span>
-                        <ol>
-                          {updateApplySteps.map((step) => (
-                            <li className={`is-${step.status}`} key={step.name}>
-                              <strong>{step.label}</strong>
-                              <small>{step.statusLabel}</small>
-                            </li>
-                          ))}
-                        </ol>
+
+                    <div className="settingsUpdateApplySummaryGrid">
+                      <section>
+                        <span>{t.updateApplyReleaseChanges}</span>
+                        <p>{updateApplyOperator.releaseSummary || updateApplyOperator.summary}</p>
+                      </section>
+                      <section>
+                        <span>{t.updateApplyLastState}</span>
+                        <dl>
+                          <div><dt>{t.maintenanceLabels.status}</dt><dd>{updateApplyOperator.updateResult}</dd></div>
+                          <div><dt>{t.maintenanceLabels.verification}</dt><dd>{updateApplyOperator.commitStatus}</dd></div>
+                          <div><dt>{t.maintenanceLabels.releaseIdentity}</dt><dd>{updateApplyOperator.metadataStatus}</dd></div>
+                        </dl>
+                      </section>
+                    </div>
+
+                    {updateApplyProblem ? (
+                      <div className="settingsUpdateApplySupport">
+                        <div>
+                          <strong>{t.updateApplySupportTitle}</strong>
+                          <p>{t.updateApplySupportText}</p>
+                          {updateApplyOperator.detailUnavailable ? <small>{t.updateApplyHistoryLimited}</small> : null}
+                        </div>
+                        <button type="button" className="button secondary small" onClick={downloadMaintenanceReport} disabled={Boolean(maintenanceBusy)}>
+                          {maintenanceBusy === "report-download" ? t.checking : t.updateApplySupportAction}
+                        </button>
                       </div>
                     ) : null}
                     {updateApplyTransientError ? <div className="settingsUpdateApplyNotice">{updateApplyTransientError}</div> : null}
-                    {updateApplyWarnings.length ? (
-                      <ul className="settingsUpdateApplyWarnings">
-                        {updateApplyWarnings.map((item) => (
-                          <li key={item.code || item.message}>{formatUpdateNotice(item, t, lang)}</li>
-                        ))}
-                      </ul>
-                    ) : null}
                     <div className="settingsUpdateApplyActions">
                       <button type="button" className="button secondary small" onClick={runUpdateCheck} disabled={Boolean(maintenanceBusy)}>
                         {maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
                       </button>
-                      <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
-                        {maintenanceBusy === "update-apply" || updateApplyRunning ? updateApplyPrimaryText : t.updateApplyStart}
-                      </button>
+                      {updateApplyOperator.showApplyButton ? (
+                        <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
+                          {maintenanceBusy === "update-apply" || updateApplyRunning ? updateApplyPrimaryText : t.updateApplyStart}
+                        </button>
+                      ) : null}
                     </div>
                     {updateApplyStatus?.error?.message ? <small className="settingsUpdateApplyError">{formatMaintenanceMessage(updateApplyStatus.error.message, t, lang, "error")}</small> : null}
                     {updateApplyStatus?.error?.operator_action ? <small className="settingsUpdateApplyError">{formatMaintenanceMessage(updateApplyStatus.error.operator_action, t, lang, "error")}</small> : null}
@@ -2005,7 +2150,7 @@ export default function SettingsPage() {
                       </dl>
                     </section>
                   ) : null}
-                </>
+                </div>
               ) : null}
             </div>
           </div>

@@ -34,10 +34,12 @@ assert.equal(settingsHelpers.includes('update: { path: "/system/update/check", b
 assert.equal(settingsPage.includes("buildUpdateApplyConfirmation(t, updateStatus)"), true);
 assert.equal(settingsPage.includes("expected_manifest_version"), true);
 assert.equal(settingsPage.includes("expected_manifest_commit"), true);
-assert.equal(settingsPage.includes("updateApplyEffectiveStatus"), true);
-assert.equal(settingsPage.includes("updateApplyRecoveryText"), true);
-assert.equal(settingsPage.includes("updateApplyFactRows"), true);
-assert.equal(settingsPage.includes("formatUpdateNotice(item, t, lang)"), true);
+assert.equal(settingsPage.includes("updateApplyOperatorModel"), true);
+assert.equal(settingsHelpers.includes("updateApplyEffectiveStatus"), true);
+assert.equal(settingsHelpers.includes("updateApplyRecoveryText"), true);
+assert.equal(settingsHelpers.includes("updateApplyFactRows"), true);
+assert.equal(settingsPage.includes("settingsUpdateApplySupport"), true);
+assert.equal(settingsPage.includes("formatUpdateNotice(item, t, lang)"), false);
 assert.equal(settingsPage.includes("{item.message || item.code}"), false);
 assert.equal(settingsHelpers.includes("commit_verified === false"), true);
 assert.equal(settingsHelpers.includes("expected_commit"), true);

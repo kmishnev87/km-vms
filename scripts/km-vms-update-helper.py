@@ -21,8 +21,10 @@ REQUEST_FILE = CONTROL_DIR / "update-request.json"
 STATUS_FILE = CONTROL_DIR / "update-status.json"
 HISTORY_FILE = CONTROL_DIR / "update-helper-history.json"
 PROGRESS_FILE = CONTROL_DIR / "update-progress.json"
+APPLY_HISTORY_FILE = CONTROL_DIR / "update-apply-history.json"
 POLL_SECONDS = int(os.getenv("KM_VMS_UPDATE_HELPER_POLL_SECONDS") or "2")
 MAX_CONTROL_BYTES = 64 * 1024
+MAX_APPLY_HISTORY_ITEMS = 10
 TERMINAL = {"completed", "failed", "cancelled", "blocked"}
 STEP_ORDER = ["queued", "preflight", "acquire_source", "extracting", "validating_source", "overlay", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification"]
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
@@ -87,6 +89,32 @@ def load_history() -> set[str]:
 
 def save_history(processed: set[str]) -> None:
     write_json(HISTORY_FILE, {"schema_version": 1, "updated_at": utcnow(), "processed_request_ids": sorted(processed)[-100:]})
+
+
+def append_apply_history(status_payload: dict[str, Any]) -> None:
+    try:
+        existing = read_json(APPLY_HISTORY_FILE) or {"items": []}
+        items = existing.get("items") if isinstance(existing.get("items"), list) else []
+        entry = {
+            "request_id": safe_text(status_payload.get("request_id"), 80),
+            "status": safe_text(status_payload.get("status"), 40),
+            "phase": safe_text(status_payload.get("phase"), 80),
+            "started_at": safe_text(status_payload.get("started_at"), 80),
+            "finished_at": safe_text(status_payload.get("updated_at"), 80),
+            "updated_at": safe_text(status_payload.get("updated_at"), 80),
+            "expected_commit": safe_text(status_payload.get("expected_commit"), 40),
+            "installed_commit": safe_text(status_payload.get("installed_commit"), 40),
+            "commit_verified": bool(status_payload.get("commit_verified")),
+            "source": status_payload.get("source") if isinstance(status_payload.get("source"), dict) else None,
+            "steps": status_payload.get("steps")[:12] if isinstance(status_payload.get("steps"), list) else [],
+            "error": status_payload.get("error") if isinstance(status_payload.get("error"), dict) else None,
+            "history_detail_status": "step_timestamps_unavailable",
+        }
+        deduped = [item for item in items if not isinstance(item, dict) or item.get("request_id") != entry["request_id"]]
+        deduped.append(entry)
+        write_json(APPLY_HISTORY_FILE, {"schema_version": 1, "updated_at": utcnow(), "max_items": MAX_APPLY_HISTORY_ITEMS, "items": deduped[-MAX_APPLY_HISTORY_ITEMS:]})
+    except Exception:
+        return
 
 
 def error_payload(category: str, message: str) -> dict[str, str]:
@@ -319,6 +347,7 @@ def run_update(request: dict[str, Any]) -> int:
     completed["installed_commit"] = installed_commit
     completed["expected_commit"] = expected_commit
     write_json(STATUS_FILE, completed)
+    append_apply_history(completed)
     return 0
 
 
@@ -428,6 +457,7 @@ def main() -> int:
             if exc.diagnostics.get("installed_commit"):
                 failed["installed_commit"] = safe_text(exc.diagnostics.get("installed_commit"), 40)
             write_json(STATUS_FILE, failed)
+            append_apply_history(failed)
             if request.get("request_id"):
                 processed = load_history()
                 processed.add(str(request["request_id"]))

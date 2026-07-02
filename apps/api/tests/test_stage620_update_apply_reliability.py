@@ -218,6 +218,74 @@ def test_stage621_update_apply_request_id_uses_neutral_prefix():
     assert 'request_id = "stage609-" + uuid.uuid4().hex' not in text
 
 
+def test_stage622_helper_writes_bounded_sanitized_apply_history(tmp_path, monkeypatch):
+    helper = load_update_helper_module()
+    history = tmp_path / "update-apply-history.json"
+    monkeypatch.setattr(helper, "APPLY_HISTORY_FILE", history)
+
+    for index in range(12):
+        helper.append_apply_history(
+            {
+                "request_id": f"update-{index}",
+                "status": "completed",
+                "phase": "completed",
+                "started_at": "2026-07-02T00:00:00Z",
+                "updated_at": "2026-07-02T00:01:00Z",
+                "expected_commit": "a" * 40,
+                "installed_commit": "a" * 40,
+                "commit_verified": True,
+                "source": {"kind": "github-tarball", "repo": "owner/repo", "ref": "v0.7.4", "commit": "a" * 40, "apply_ref": "a" * 40},
+                "steps": [{"name": "commit_verification", "status": "completed"}],
+            }
+        )
+
+    payload = json.loads(history.read_text(encoding="utf-8"))
+
+    assert payload["max_items"] == 10
+    assert len(payload["items"]) == 10
+    assert payload["items"][0]["request_id"] == "update-2"
+    assert payload["items"][-1]["history_detail_status"] == "step_timestamps_unavailable"
+    assert "github_pat_" not in history.read_text(encoding="utf-8")
+
+
+def test_stage622_api_exposes_last_apply_summary_without_fake_step_times(tmp_path, monkeypatch):
+    control = tmp_path / "control"
+    control.mkdir()
+    (control / "update-apply-history.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "max_items": 10,
+                "items": [
+                    {
+                        "request_id": "update-stage622",
+                        "status": "completed",
+                        "phase": "completed",
+                        "started_at": "2026-07-02T00:00:00Z",
+                        "finished_at": "2026-07-02T00:04:00Z",
+                        "updated_at": "2026-07-02T00:04:00Z",
+                        "expected_commit": "a" * 40,
+                        "installed_commit": "a" * 40,
+                        "commit_verified": True,
+                        "steps": [{"name": "commit_verification", "status": "completed"}],
+                        "history_detail_status": "step_timestamps_unavailable",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(settings, "update_control_root", str(control))
+
+    status = read_update_apply_status()
+
+    assert status["status"] == "idle"
+    assert status["apply_history"]["available"] is True
+    assert status["last_apply_summary"]["request_id"] == "update-stage622"
+    assert status["last_apply_summary"]["history_detail_status"] == "step_timestamps_unavailable"
+    assert "time_label" not in status["last_apply_summary"]["steps"][0]
+
+
 def test_stage620_api_status_derives_stale_running_status(tmp_path, monkeypatch):
     control = tmp_path / "control"
     control.mkdir()
@@ -273,7 +341,7 @@ def test_stage620_precompose_release_identity_is_not_verified_success(tmp_path, 
     assert any(item.code == "release_identity_precompose" for item in installed.warnings)
 
 
-def test_stage620_scripts_compile_and_release_descriptor_targets_074():
+def test_stage620_scripts_compile_and_release_descriptor_targets_current_release():
     subprocess.run(["sh", "-n", "scripts/update.sh"], cwd=ROOT, check=True)
     fd, cfile = tempfile.mkstemp(suffix=".pyc")
     os.close(fd)
@@ -283,6 +351,6 @@ def test_stage620_scripts_compile_and_release_descriptor_targets_074():
         Path(cfile).unlink(missing_ok=True)
     descriptor = json.loads((ROOT / "release/km-vms-release.json").read_text(encoding="utf-8"))
 
-    assert descriptor["version"] == "0.7.4"
-    assert descriptor["tag"] == "v0.7.4"
-    assert descriptor["source_ref"] == "v0.7.4"
+    assert descriptor["version"] == "0.7.5"
+    assert descriptor["tag"] == "v0.7.5"
+    assert descriptor["source_ref"] == "v0.7.5"

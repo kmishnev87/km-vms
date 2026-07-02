@@ -6,9 +6,22 @@ import { saveAuthToken } from "../../lib/api";
 import { loadCurrentUser } from "../../lib/currentUser";
 import { useLocaleText } from "../../lib/i18n";
 
+const LAST_USERNAME_KEY = "km_vms_last_username";
+
+function loadLastUsername() {
+  if (typeof window === "undefined") return "";
+  return window.localStorage.getItem(LAST_USERNAME_KEY) || "";
+}
+
+function saveLastUsername(value) {
+  if (typeof window === "undefined") return;
+  const username = String(value || "").trim();
+  if (username) window.localStorage.setItem(LAST_USERNAME_KEY, username);
+}
+
 export default function LoginPage() {
   const router = useRouter();
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [staySignedIn, setStaySignedIn] = useState(false);
   const [error, setError] = useState("");
@@ -16,6 +29,7 @@ export default function LoginPage() {
   const text = useLocaleText("login");
 
   useEffect(() => {
+    setUsername(loadLastUsername());
     fetch("/api/system/status")
       .then((response) => response.ok ? response.json() : null)
       .then((status) => {
@@ -28,13 +42,14 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     setBusy(true);
+    const normalizedUsername = username.trim();
 
     try {
       const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          username,
+          username: normalizedUsername,
           password,
           stay_signed_in: staySignedIn,
         }),
@@ -47,6 +62,7 @@ export default function LoginPage() {
       }
       if (!data?.access_token) throw new Error(text.noToken);
 
+      saveLastUsername(normalizedUsername);
       saveAuthToken(data.access_token, {
         persistent: staySignedIn,
         expiresAt: data.expires_at,
