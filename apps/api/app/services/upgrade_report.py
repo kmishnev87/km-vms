@@ -461,6 +461,7 @@ def build_upgrade_report(
             )
         )
 
+    update_check = _safe_jsonable(build_update_status(db))
     report = {
         "report_version": REPORT_VERSION,
         "report_id": f"kmvms-upgrade-report-{uuid.uuid4().hex[:12]}",
@@ -522,7 +523,7 @@ def build_upgrade_report(
             "read_only": True,
             "side_effects": {"db_mutated": False, "backup_created": False, "migration_executed": False},
         },
-        "update_check": build_update_status(db),
+        "update_check": update_check,
         "update_maintenance": {
             "status": update_maintenance.get("status"),
             "reason": _sanitize(update_maintenance.get("reason")),

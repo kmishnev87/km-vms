@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.5",
-  "tag": "v0.7.5",
-  "title": "Settings Update Apply Operator UX Redesign and Login UX Polish",
-  "summary": "Redesigns the Settings maintenance update-apply operator view, hides technical diagnostics in healthy states, and remembers the last successful login username locally without storing passwords.",
+  "version": "0.7.6",
+  "tag": "v0.7.6",
+  "title": "Maintenance Overview Secret Gate Dofix",
+  "summary": "Fixes the maintenance overview report safety gate so normal public release text cannot break the Settings maintenance window.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.5",
+  "source_ref": "v0.7.6",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,8 +16,8 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Redesigns Settings maintenance update apply into a polished operator-facing flow with release, progress and result sections.",
-    "Hides raw diagnostics in healthy update states and keeps commit verification in the latest progress summary.",
-    "Removes the hardcoded admin login default and remembers only the last successful username in the local browser."
+    "Sanitizes update status release text before the maintenance overview safety gate.",
+    "Keeps diagnostic archive upgrade reports stable with the public GitHub release provider.",
+    "Prevents normal public release wording from causing a maintenance overview server error."
   ]
 }

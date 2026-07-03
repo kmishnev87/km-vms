@@ -21,6 +21,7 @@ from app.models.user import User
 from app.routers import settings as settings_router
 from app.services.backup_before_upgrade import BackupExecutionConfig, create_backup_before_upgrade
 from app.services.schema_versioning import CURRENT_BASELINE_ID, CURRENT_SCHEMA_VERSION, CURRENT_STATE_ID
+from app.services import upgrade_report as upgrade_report_module
 from app.services.upgrade_report import build_upgrade_report, upgrade_report_text_summary
 from test_schema_migration_runner_stage3 import seed_state
 
@@ -154,6 +155,35 @@ def test_upgrade_report_versions_migrations_and_warnings_are_safe(tmp_path):
         assert forbidden not in rendered
 
 
+def test_upgrade_report_sanitizes_update_check_release_text_before_secret_gate(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    _seed_basic(db)
+
+    def fake_update_status(_db):
+        return {
+            "status": "current",
+            "installed_release": {
+                "version": "0.7.5",
+                "title": "Login UX polish",
+                "summary": "Remembers the last username without storing passwords.",
+            },
+            "available_release": {
+                "version": "0.7.5",
+                "title": "Login UX polish",
+                "summary": "Remembers the last username without storing passwords.",
+            },
+        }
+
+    monkeypatch.setattr(upgrade_report_module, "build_update_status", fake_update_status)
+
+    report = build_upgrade_report(db)
+
+    rendered = json.dumps(report["update_check"], ensure_ascii=False)
+    assert "passwords" not in rendered
+    assert "redacted=***" in rendered
+    assert report["redaction"]["redaction_status"] == "scoped_check_passed"
+
+
 def test_upgrade_report_backup_manifest_without_restore_source_does_not_claim_not_performed(tmp_path):
     _engine, db = sqlite_session(tmp_path)
     _seed_basic(db)
@@ -263,6 +293,7 @@ def test_diagnostic_archive_includes_upgrade_report_and_excludes_forbidden_artif
     monkeypatch.setattr(settings_router.live_manager, "debug", lambda: {})
     monkeypatch.setattr(settings_router, "recordings_diagnostics", lambda: {"count": 0})
     monkeypatch.setattr(settings_router, "chronology_diagnostics", lambda db: {"items": []})
+    monkeypatch.setattr(upgrade_report_module, "build_update_status", lambda db: {"status": "not_configured"})
 
     archive = settings_router.build_log_archive(db, mode="normal", include_logs=False)
     with zipfile.ZipFile(archive) as bundle:
