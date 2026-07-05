@@ -370,24 +370,46 @@
     height: 58px;
     min-height: 58px;
     padding: 5px 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .topNav::-webkit-scrollbar {
+    display: none;
   }
 
   .topNavInner {
-    width: 100%;
+    width: max-content;
+    min-width: 100%;
     padding: 0 8px;
-    gap: 6px;
+    gap: 8px;
   }
 
   .topBrand {
+    flex: 0 0 auto;
     min-width: 64px;
     height: 34px;
     padding: 0 8px;
   }
 
+  .topNavItems,
+  .topNavRight {
+    flex: 0 0 auto;
+    min-width: max-content;
+    gap: 8px;
+  }
+
+  .topNavRight {
+    margin-left: 0;
+  }
+
   .topNavItem {
+    flex: 0 0 46px;
     height: 46px;
-    width: 48px;
-    min-width: 48px;
+    width: 46px;
+    min-width: 46px;
   }
 
   .topNavButton {

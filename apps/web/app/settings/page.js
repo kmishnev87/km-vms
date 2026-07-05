@@ -23,10 +23,12 @@ import {
   hardwareOptionState,
   humanErrorText,
   languageOf,
-  maintenanceDetailRows,
-  maintenanceFlowRows,
+  maintenanceBackupManagerModel,
+  maintenanceBackupOperationResultText,
+  maintenanceReadinessRows,
   maintenanceStatusClass,
   maintenanceStatusText,
+  maintenanceWarningModel,
   passwordConfirmMessage,
   passwordHint,
   passwordLengthMessage,
@@ -115,10 +117,83 @@ const TEXT = {
     maintenanceLoadError: "Обзор обслуживания недоступен.",
     maintenanceLimitedHistory: "Долговременная история ограничена: показаны текущий статус и последний безопасный отчёт.",
     maintenanceReport: "Отчёт обслуживания",
-    maintenanceReportView: "Показать отчёт",
-    maintenanceReportDownload: "Скачать JSON",
-    maintenanceReportReady: "Санитизированный отчёт доступен.",
+    maintenanceReportDownload: "Скачать отчёт",
+    maintenanceReportReady: "Отчёт подготовлен. Конфиденциальные данные скрыты.",
     maintenanceReportUnavailable: "Отчёт недоступен.",
+    maintenanceBackupCreate: "Создать резервную копию БД",
+    maintenanceBackupCreating: "Создание копии...",
+    maintenanceBackupCreateConfirm: "Создать резервную копию базы данных KM VMS? Видеоархивы и записи камер в эту копию не входят.",
+    maintenanceBackupCreated: "Резервная копия БД создана.",
+    maintenanceBackupCreateFailed: "Не удалось создать резервную копию БД.",
+    maintenanceBackupScope: "Резервная копия включает базу данных и служебные метаданные. Видеоархивы и записи камер не копируются.",
+    maintenanceBackupResult: "Последняя резервная копия",
+    maintenanceBackupsTitle: "Резервные копии",
+    maintenanceBackupsText: "Создание, проверка и удаление копий базы и служебных метаданных.",
+    maintenanceBackupCreateShort: "Создать",
+    maintenanceBackupCheck: "Проверить",
+    maintenanceBackupDelete: "Удалить",
+    maintenanceBackupDeleting: "Удаление...",
+    maintenanceBackupDeleted: "Резервная копия удалена.",
+    maintenanceBackupDeleteFailed: "Не удалось удалить резервную копию.",
+    maintenanceBackupDeleteConfirm: "Удалить резервную копию от {date}? Это удалит только продуктовые файлы этой копии. Видеоархивы не затрагиваются.",
+    maintenanceBackupRestore: "Восстановить",
+    maintenanceBackupRestoreAvailable: "Восстановление доступно",
+    maintenanceBackupRestoreUnavailable: "Восстановление в рабочую базу пока недоступно",
+    maintenanceBackupRestoreUnavailableReason: "Сейчас доступна безопасная проверка копии во временной базе. Восстановление рабочей базы будет отдельным защищённым сценарием.",
+    maintenanceBackupStatusEmpty: "Резервных копий пока нет.",
+    maintenanceBackupStatusReady: "Резервных копий: {count}",
+    maintenanceBackupCopyOne: "копия",
+    maintenanceBackupCopyMany: "копий",
+    maintenanceBackupNoCopies: "Нет копий",
+    maintenanceBackupLatest: "Последняя копия",
+    maintenanceBackupProblems: "Проблемных",
+    maintenanceBackupSize: "Размер",
+    maintenanceBackupSchema: "Схема",
+    maintenanceBackupList: "Последние копии",
+    maintenanceBackupNothingToCheck: "Проверять пока нечего",
+    maintenanceBackupOperationLabels: {
+      check: "Проверка",
+      create: "Создание",
+      delete: "Удаление",
+    },
+    maintenanceBackupStatuses: {
+      valid: "Готова",
+      verified: "Готова",
+      available: "Доступна",
+      no_artifacts: "Нет копий",
+      blocked: "Проверка заблокирована",
+      invalid: "Проблема",
+      check_failed: "Проверка не прошла",
+      problem: "Проблема",
+    },
+    maintenanceBackupCheckStatuses: {
+      valid: "Проверка пройдена",
+      verified: "Проверка пройдена",
+      available: "Копия доступна для проверки",
+      no_artifacts: "Проверять пока нечего",
+      blocked: "Проверка заблокирована",
+      invalid: "Копия повреждена или неполная",
+      check_failed: "Проверка не прошла",
+      fallback: "Статус проверки получен",
+    },
+    maintenanceBackupCreateStatuses: {
+      created: "Резервная копия создана",
+      verified: "Резервная копия создана",
+      valid: "Резервная копия создана",
+      completed: "Резервная копия создана",
+      blocked: "Создание заблокировано",
+      failed: "Не удалось создать резервную копию",
+      fallback: "Статус создания получен",
+    },
+    maintenanceBackupDeleteStatuses: {
+      deleted: "Резервная копия удалена",
+      deleted_with_missing_files: "Резервная копия удалена; часть файлов уже отсутствовала",
+      blocked: "Удаление заблокировано",
+      failed: "Не удалось удалить резервную копию",
+      delete_failed: "Не удалось удалить резервную копию",
+      not_found: "Резервная копия уже не найдена",
+      fallback: "Статус удаления получен",
+    },
     maintenanceDryRun: "Проверить",
     maintenanceDryRunResult: "Проверка выполнена.",
     maintenanceNoApply: "Обновление применяется только через подтверждённый helper-процесс.",
@@ -131,7 +206,28 @@ const TEXT = {
     maintenanceLastAction: "Последнее действие",
     maintenanceNoHistory: "История действий не найдена",
     maintenanceGeneratedAt: "Сформирован",
-    maintenanceWarnings: "Предупреждения",
+    maintenanceWarnings: "Диагностика",
+    maintenanceWarningDetails: "Показать детали",
+    maintenanceWarningHide: "Скрыть детали",
+    maintenanceSupportStatusOk: "Без критичных проблем",
+    maintenanceWarningActionable: "Требуют внимания",
+    maintenanceWarningInfo: "Информационные ограничения",
+    maintenanceWarningSupport: "Для поддержки",
+    maintenanceWarningNone: "Активных предупреждений нет.",
+    maintenanceSupportReportAction: "Скачайте отчёт и передайте поддержке.",
+    maintenanceWarningGeneric: {
+      actionable: { title: "Требуется проверка", summary: "Есть состояние, которое может мешать обслуживанию.", action: "Скачайте отчёт и устраните причину по его данным." },
+      informational: { title: "Ограничение диагностики", summary: "Это не авария: отчёт честно фиксирует, что часть проверки не выполнялась автоматически.", action: "Ничего делать не нужно, если система работает штатно." },
+      support: { title: "Деталь для поддержки", summary: "Пункт важен для диагностики, но не всегда требует действий пользователя.", action: "Скачайте отчёт, если нужна помощь." },
+    },
+    maintenanceWarningLabels: {
+      backup_status_source_unavailable: { title: "Нет подключённого источника статуса резервной копии", summary: "Отчёт не нашёл отдельный безопасный источник, который подтверждает состояние резервной копии в диагностике только для чтения.", action: "Используйте блок резервных копий для создания или проверки копии." },
+      restore_validation_status_source_unavailable: { title: "Нет источника проверки восстановления", summary: "Диагностика не получила отдельное подтверждение, что резервную копию уже проверяли во временной базе.", action: "Запустите проверку копии в блоке резервных копий." },
+      backup_root_persistence_unknown: { title: "Папка резервных копий не проверялась записью", summary: "Отчёт не выполнял пробную запись в папку резервных копий, чтобы не менять систему без команды.", action: "Это информационное ограничение отчёта." },
+      video_archive_restore_not_covered: { title: "Видеоархивы не входят в резервную копию БД", summary: "Резервная копия защищает базу и служебные метаданные, но не копирует записи камер.", action: "Хранение видеоархива проверяется отдельно." },
+      production_adoption_deferred: { title: "Служебное принятие БД отложено", summary: "Диагностика работает только для чтения и не меняет служебные метаданные без отдельного действия.", action: "Если система работает штатно, действий не требуется." },
+      installed_build_development_fallback: { title: "Метаданные сборки неполные", summary: "Установленная среда не дала полный источник метаданных сборки.", action: "Проверьте идентичность релиза при следующем обновлении." },
+    },
     maintenanceMessageFallback: "Статус получен, подробности недоступны.",
     maintenanceActionFallback: "Действие сейчас недоступно. Проверьте состояние системы и повторите позже.",
     updateApplyTitle: "Применение обновления",
@@ -140,14 +236,15 @@ const TEXT = {
     updateApplyConfirm: "Запустить обновление KM VMS? Система выполнит проверку, применит trusted release через helper и может временно перезапустить сервисы.",
     updateApplyConfirmRestart: "Сервисы могут временно перезапуститься; статус продолжит обновляться после восстановления API.",
     updateApplyQueued: "Запрос обновления передан helper.",
-    updateApplyUnavailable: "Применение недоступно для текущего состояния.",
+    updateApplyUnavailable: "Обновление сейчас не запускается: причина показана в блоке выше.",
     updateApplyConnection: "Сервис может временно перезапускаться; опрос статуса продолжится автоматически.",
     updateApplyRecoveryAvailable: "Проверьте целевую версию и commit, затем запустите применение.",
     updateApplyRecoveryBlocked: "Устраните блокировку в trusted release или настройках сервера и повторите проверку.",
     updateApplyRecoveryCommitMismatch: "Установленный commit не совпал с trusted release commit. Считайте обновление неуспешным и повторите после проверки серверного источника.",
     updateApplyRecoveryCompleted: "Обновление завершено, установленный commit подтверждён.",
     updateApplyRecoveryCurrent: "Установленная версия соответствует trusted release.",
-    updateApplyRecoveryFailed: "Обновление завершилось ошибкой. Проверьте санитизированный статус и повторите после устранения причины.",
+    updateApplyRecoveryFailed: "Обновление завершилось ошибкой. Проверьте статус обновления и повторите после устранения причины.",
+    updateApplyRecoveryCheckFailed: "Проверка обновления не завершилась. Повторите проверку или скачайте отчёт для поддержки.",
     updateApplyRecoveryReconnecting: "Сервисы могут перезапускаться. Интерфейс продолжит опрос и перечитает статус после восстановления API.",
     updateApplyRecoveryRunning: "Helper выполняет обновление. Не закрывайте питание NAS и дождитесь итогового статуса.",
     updateApplyRecoveryStalled: "Статус обновления давно не менялся. Не запускайте повторно, пока helper или lock могут быть активны; проверьте состояние сервера.",
@@ -183,6 +280,8 @@ const TEXT = {
       blocked: "Требуется внимание",
     },
     updateApplyReleaseChanges: "Что изменилось в этом релизе",
+    updateApplyReleaseTitleFallback: "Опубликованный релиз",
+    updateApplyReleaseSummaryFallback: "Описание релиза не локализовано. Техническое название доступно в диагностическом отчёте.",
     updateApplyLastState: "Последний прогресс",
     updateApplyStepDone: "Готово",
     updateApplyTimelineCurrent: "Текущая версия",
@@ -226,8 +325,61 @@ const TEXT = {
     maintenanceFlows: {
       db_adoption: "Принятие БД",
       migration: "Миграции",
-      restore: "Восстановление",
+      restore: "Проверка резервной копии",
       update: "Обновление",
+    },
+    maintenanceReadinessTitle: "Готовность базы и восстановления",
+    maintenanceReadinessText: "Состояние служебных операций, которые нужны только при обновлении, переносе или восстановлении системы.",
+    maintenanceSupportTitle: "Диагностика для поддержки",
+    maintenanceSupportText: "Если обслуживание выглядит непонятно или заблокировано, скачайте безопасный отчёт и передайте его поддержке.",
+    maintenanceReadinessTitles: {
+      db_identity: "База данных",
+      db_schema: "Структура БД",
+      backup_restore_check: "Проверка резервной копии",
+    },
+    maintenanceOperatorStatuses: {
+      ok: "В порядке",
+      attention: "Проверьте",
+      blocked: "Требуется внимание",
+      unavailable: "Нет данных",
+      action_available: "Можно выполнить",
+    },
+    maintenanceOperatorSummaries: {
+      db_identity_ok: "Приложение распознаёт эту базу как свою. Дополнительные действия не нужны.",
+      db_identity_adoptable: "Базу можно безопасно принять после резервной копии и явного подтверждения.",
+      db_identity_blocked: "База не готова к принятию. Нужна диагностика перед любыми действиями.",
+      db_schema_current: "Структура базы актуальна для текущей версии приложения.",
+      db_schema_pending: "Для этой версии приложения ожидаются изменения структуры базы.",
+      db_schema_blocked: "Проверка структуры базы заблокирована. Нужна диагностика.",
+      backup_restore_no_artifacts: "В настроенной папке нет проверенных резервных копий для восстановления.",
+      backup_restore_artifacts_available: "Есть резервные копии, которые можно проверить во временной базе.",
+      backup_restore_validation_available: "Можно выполнить безопасную проверку восстановления во временной базе.",
+      backup_restore_blocked: "Проверка резервной копии заблокирована. Нужна диагностика.",
+    },
+    maintenanceOperatorActions: {
+      db_identity_check_optional: "Обычно этот пункт не требует действий.",
+      db_identity_apply_requires_confirmation: "Принятие меняет только служебные метаданные и требует отдельного подтверждения.",
+      migration_check_optional: "Обычно этот пункт не требует действий.",
+      migration_apply_requires_confirmation: "Миграции применяются только после резервной копии и отдельного подтверждения.",
+      backup_restore_create_backup_first: "Сначала должна появиться валидная резервная копия.",
+      backup_restore_check_available: "Проверка выполняется отдельно от рабочей базы.",
+      download_support_report: "Скачайте диагностический отчёт для поддержки.",
+      check_status: "Можно выполнить безопасную проверку состояния.",
+    },
+    maintenanceCheckActions: {
+      db_adoption: "Проверить БД",
+      migration: "Проверить миграции",
+      restore: "Проверить копию",
+    },
+    maintenanceFactLabels: {
+      metadata_present: "Метаданные",
+      already_adopted: "Принята",
+      current_version: "Текущая",
+      target_version: "Целевая",
+      pending_count: "Ожидают",
+      valid_artifacts: "Копии",
+      temporary_validation: "Временная проверка",
+      current_product_restore: "Восстановление в рабочую БД",
     },
     maintenanceStatuses: {
       ok: "OK",
@@ -242,9 +394,11 @@ const TEXT = {
       check_failed: "Проверка не прошла",
       complete: "Завершено",
       completed: "Завершено",
+      valid: "Проверено",
+      verified: "Проверено",
       compose_config: "Проверка compose",
       commit_verification: "Проверка commit",
-      drift_known_safe: "Известное безопасное расхождение",
+      drift_known_safe: "Без критичных проблем",
       draft_known_safe: "Известный безопасный черновик",
       downloading: "Загрузка",
       extracting: "Распаковка",
@@ -284,7 +438,7 @@ const TEXT = {
       restore_no_valid_artifacts: "В настроенной папке резервных копий нет подходящих артефактов восстановления.",
       update_apply_not_available_for_release: "Применение этого релиза из интерфейса недоступно.",
       maintenance_history_limited: "Долговременная история ограничена: показаны текущий статус и последний безопасный отчёт.",
-      drift_known_safe: "Известное безопасное расхождение.",
+      drift_known_safe: "Без критичных проблем.",
       draft_known_safe: "Известный безопасный черновик.",
       complete: "Завершено.",
       completed: "Завершено.",
@@ -459,10 +613,83 @@ const TEXT = {
     maintenanceLoadError: "Maintenance overview is unavailable.",
     maintenanceLimitedHistory: "Durable history is limited: current status and the latest safe report are shown.",
     maintenanceReport: "Maintenance report",
-    maintenanceReportView: "View report",
-    maintenanceReportDownload: "Download JSON",
-    maintenanceReportReady: "Sanitized report is available.",
+    maintenanceReportDownload: "Download report",
+    maintenanceReportReady: "Report is ready. Sensitive data is hidden.",
     maintenanceReportUnavailable: "Report is unavailable.",
+    maintenanceBackupCreate: "Create DB backup",
+    maintenanceBackupCreating: "Creating backup...",
+    maintenanceBackupCreateConfirm: "Create a KM VMS database backup? Camera recordings and video archives are not included.",
+    maintenanceBackupCreated: "DB backup was created.",
+    maintenanceBackupCreateFailed: "Failed to create DB backup.",
+    maintenanceBackupScope: "The backup includes the database and service metadata only. Camera recordings and video archives are not copied.",
+    maintenanceBackupResult: "Latest backup",
+    maintenanceBackupsTitle: "Backups",
+    maintenanceBackupsText: "Create, check, and delete database and service metadata backups.",
+    maintenanceBackupCreateShort: "Create",
+    maintenanceBackupCheck: "Check",
+    maintenanceBackupDelete: "Delete",
+    maintenanceBackupDeleting: "Deleting...",
+    maintenanceBackupDeleted: "Backup was deleted.",
+    maintenanceBackupDeleteFailed: "Failed to delete backup.",
+    maintenanceBackupDeleteConfirm: "Delete the backup from {date}? Only product-owned files for this backup are removed. Video archives are not affected.",
+    maintenanceBackupRestore: "Restore",
+    maintenanceBackupRestoreAvailable: "Restore is available",
+    maintenanceBackupRestoreUnavailable: "Restore to the working database is not available yet",
+    maintenanceBackupRestoreUnavailableReason: "A safe check in a temporary database is available now. Working database restore will be a separate protected flow.",
+    maintenanceBackupStatusEmpty: "No backups yet.",
+    maintenanceBackupStatusReady: "Backups: {count}",
+    maintenanceBackupCopyOne: "backup",
+    maintenanceBackupCopyMany: "backups",
+    maintenanceBackupNoCopies: "No backups",
+    maintenanceBackupLatest: "Latest backup",
+    maintenanceBackupProblems: "Problematic",
+    maintenanceBackupSize: "Size",
+    maintenanceBackupSchema: "Schema",
+    maintenanceBackupList: "Recent backups",
+    maintenanceBackupNothingToCheck: "Nothing to check yet",
+    maintenanceBackupOperationLabels: {
+      check: "Check",
+      create: "Create",
+      delete: "Delete",
+    },
+    maintenanceBackupStatuses: {
+      valid: "Ready",
+      verified: "Ready",
+      available: "Available",
+      no_artifacts: "No backups",
+      blocked: "Check blocked",
+      invalid: "Problem",
+      check_failed: "Check failed",
+      problem: "Problem",
+    },
+    maintenanceBackupCheckStatuses: {
+      valid: "Check passed",
+      verified: "Check passed",
+      available: "Backup is available to check",
+      no_artifacts: "Nothing to check yet",
+      blocked: "Check is blocked",
+      invalid: "Backup is damaged or incomplete",
+      check_failed: "Check failed",
+      fallback: "Check status received",
+    },
+    maintenanceBackupCreateStatuses: {
+      created: "Backup was created",
+      verified: "Backup was created",
+      valid: "Backup was created",
+      completed: "Backup was created",
+      blocked: "Create is blocked",
+      failed: "Failed to create backup",
+      fallback: "Create status received",
+    },
+    maintenanceBackupDeleteStatuses: {
+      deleted: "Backup was deleted",
+      deleted_with_missing_files: "Backup was deleted; some files were already missing",
+      blocked: "Delete is blocked",
+      failed: "Failed to delete backup",
+      delete_failed: "Failed to delete backup",
+      not_found: "Backup is no longer found",
+      fallback: "Delete status received",
+    },
     maintenanceDryRun: "Check",
     maintenanceDryRunResult: "Check completed.",
     maintenanceNoApply: "Updates apply only through the confirmed helper process.",
@@ -475,7 +702,28 @@ const TEXT = {
     maintenanceLastAction: "Last action",
     maintenanceNoHistory: "No action history found",
     maintenanceGeneratedAt: "Generated",
-    maintenanceWarnings: "Warnings",
+    maintenanceWarnings: "Diagnostics",
+    maintenanceWarningDetails: "Show details",
+    maintenanceWarningHide: "Hide details",
+    maintenanceSupportStatusOk: "No critical issues",
+    maintenanceWarningActionable: "Need attention",
+    maintenanceWarningInfo: "Informational limitations",
+    maintenanceWarningSupport: "For support",
+    maintenanceWarningNone: "No active warnings.",
+    maintenanceSupportReportAction: "Download the report and send it to support.",
+    maintenanceWarningGeneric: {
+      actionable: { title: "Check required", summary: "A condition may affect maintenance.", action: "Download the report and fix the cause using its details." },
+      informational: { title: "Diagnostic limitation", summary: "This is not an outage: the report records that a check did not run automatically.", action: "No action is required if the system works normally." },
+      support: { title: "Support detail", summary: "This item helps diagnostics but does not always require user action.", action: "Download the report if support is needed." },
+    },
+    maintenanceWarningLabels: {
+      backup_status_source_unavailable: { title: "No connected backup status source", summary: "The report did not find a separate safe source proving backup status in read-only diagnostics.", action: "Use the backup block to create or check a backup." },
+      restore_validation_status_source_unavailable: { title: "No restore-check source", summary: "Diagnostics did not receive separate evidence that a backup was checked in a temporary database.", action: "Run backup check in the backup block." },
+      backup_root_persistence_unknown: { title: "Backup folder was not write-probed", summary: "The report did not write-probe the backup folder because it must not mutate the system without command.", action: "This is an informational report limitation." },
+      video_archive_restore_not_covered: { title: "Video archive is not in DB backup", summary: "The backup protects database and service metadata, but not camera recordings.", action: "Video archive storage is checked separately." },
+      production_adoption_deferred: { title: "Service DB adoption is deferred", summary: "Diagnostics are read-only and do not change service metadata without a separate action.", action: "No action is required if the system works normally." },
+      installed_build_development_fallback: { title: "Build metadata is incomplete", summary: "The installed environment did not provide the full build metadata source.", action: "Check release identity during the next update." },
+    },
     maintenanceMessageFallback: "Status received; details are unavailable.",
     maintenanceActionFallback: "The action is currently unavailable. Check system status and try again later.",
     updateApplyTitle: "Update apply",
@@ -484,14 +732,15 @@ const TEXT = {
     updateApplyConfirm: "Start KM VMS update? The system will run preflight, apply the trusted release through the helper and may temporarily restart services.",
     updateApplyConfirmRestart: "Services may restart temporarily; status polling will resume after the API is available.",
     updateApplyQueued: "Update request was handed to the helper.",
-    updateApplyUnavailable: "Apply is unavailable for the current state.",
+    updateApplyUnavailable: "Update cannot start now: the reason is shown above.",
     updateApplyConnection: "Services may restart temporarily; status polling will continue automatically.",
     updateApplyRecoveryAvailable: "Check the target version and commit, then start apply.",
     updateApplyRecoveryBlocked: "Fix the trusted release or server-side configuration blocker and run check again.",
     updateApplyRecoveryCommitMismatch: "Installed commit does not match the trusted release commit. Treat the update as failed and retry after checking the server-side source.",
     updateApplyRecoveryCompleted: "Update completed and the installed commit is verified.",
     updateApplyRecoveryCurrent: "Installed version matches the trusted release.",
-    updateApplyRecoveryFailed: "Update failed. Review the sanitized status and retry after fixing the cause.",
+    updateApplyRecoveryFailed: "Update failed. Review the update status and retry after fixing the cause.",
+    updateApplyRecoveryCheckFailed: "Update check did not complete. Run the check again or download the report for support.",
     updateApplyRecoveryReconnecting: "Services may be restarting. The UI will continue polling and reread status when the API returns.",
     updateApplyRecoveryRunning: "The helper is applying the update. Keep the NAS powered and wait for the final status.",
     updateApplyRecoveryStalled: "Update status has not changed recently. Do not retry while the helper or lock may still be active; check server status first.",
@@ -527,6 +776,8 @@ const TEXT = {
       blocked: "Attention required",
     },
     updateApplyReleaseChanges: "What changed in this release",
+    updateApplyReleaseTitleFallback: "Published release",
+    updateApplyReleaseSummaryFallback: "Release notes are not localized. The technical title is available in the diagnostic report.",
     updateApplyLastState: "Latest progress",
     updateApplyStepDone: "Done",
     updateApplyTimelineCurrent: "Current version",
@@ -570,8 +821,61 @@ const TEXT = {
     maintenanceFlows: {
       db_adoption: "DB adoption",
       migration: "Migrations",
-      restore: "Restore",
+      restore: "Backup restore check",
       update: "Update",
+    },
+    maintenanceReadinessTitle: "Database and recovery readiness",
+    maintenanceReadinessText: "Service operations used only during updates, migration, transfer, or recovery.",
+    maintenanceSupportTitle: "Diagnostics for support",
+    maintenanceSupportText: "If maintenance looks unclear or blocked, download the safe report and send it to support.",
+    maintenanceReadinessTitles: {
+      db_identity: "Database",
+      db_schema: "DB structure",
+      backup_restore_check: "Backup restore check",
+    },
+    maintenanceOperatorStatuses: {
+      ok: "Healthy",
+      attention: "Check",
+      blocked: "Needs attention",
+      unavailable: "No data",
+      action_available: "Action available",
+    },
+    maintenanceOperatorSummaries: {
+      db_identity_ok: "The app recognizes this database as its own. No action is needed.",
+      db_identity_adoptable: "The database can be adopted safely after a backup and explicit confirmation.",
+      db_identity_blocked: "The database is not ready for adoption. Diagnostics are required before any action.",
+      db_schema_current: "The database structure is current for this app version.",
+      db_schema_pending: "This app version has pending database structure changes.",
+      db_schema_blocked: "Database structure check is blocked. Diagnostics are required.",
+      backup_restore_no_artifacts: "No verified backup copies are available in the configured backup folder.",
+      backup_restore_artifacts_available: "Backup copies are available and can be checked in a temporary database.",
+      backup_restore_validation_available: "A safe restore check can run in a temporary database.",
+      backup_restore_blocked: "Backup restore check is blocked. Diagnostics are required.",
+    },
+    maintenanceOperatorActions: {
+      db_identity_check_optional: "This item usually needs no action.",
+      db_identity_apply_requires_confirmation: "Adoption changes only service metadata and requires separate confirmation.",
+      migration_check_optional: "This item usually needs no action.",
+      migration_apply_requires_confirmation: "Migrations apply only after a backup and separate confirmation.",
+      backup_restore_create_backup_first: "A valid backup copy must exist first.",
+      backup_restore_check_available: "The check runs separately from the working database.",
+      download_support_report: "Download the diagnostic report for support.",
+      check_status: "A safe status check can be run.",
+    },
+    maintenanceCheckActions: {
+      db_adoption: "Check DB",
+      migration: "Check migrations",
+      restore: "Check backup",
+    },
+    maintenanceFactLabels: {
+      metadata_present: "Metadata",
+      already_adopted: "Adopted",
+      current_version: "Current",
+      target_version: "Target",
+      pending_count: "Pending",
+      valid_artifacts: "Copies",
+      temporary_validation: "Temporary check",
+      current_product_restore: "Restore to working DB",
     },
     maintenanceStatuses: {
       ok: "OK",
@@ -586,9 +890,11 @@ const TEXT = {
       check_failed: "Check failed",
       complete: "Complete",
       completed: "Completed",
+      valid: "Verified",
+      verified: "Verified",
       compose_config: "Compose check",
       commit_verification: "Commit check",
-      drift_known_safe: "Known-safe drift",
+      drift_known_safe: "No critical issues",
       draft_known_safe: "Known-safe draft",
       downloading: "Downloading",
       extracting: "Extracting",
@@ -628,7 +934,7 @@ const TEXT = {
       restore_no_valid_artifacts: "No valid restore artifacts are available in the configured backup root.",
       update_apply_not_available_for_release: "In-app apply is not available for this release.",
       maintenance_history_limited: "Durable history is limited: current status and the latest safe report are shown.",
-      drift_known_safe: "Known-safe drift.",
+      drift_known_safe: "No critical issues.",
       draft_known_safe: "Known-safe draft.",
       complete: "Complete.",
       completed: "Completed.",
@@ -774,10 +1080,83 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceLoadError: "维护概览不可用。",
   maintenanceLimitedHistory: "持久历史记录有限：仅显示当前状态和最新安全报告。",
   maintenanceReport: "维护报告",
-  maintenanceReportView: "查看报告",
-  maintenanceReportDownload: "下载 JSON",
-  maintenanceReportReady: "已提供脱敏报告。",
+  maintenanceReportDownload: "下载报告",
+  maintenanceReportReady: "报告已准备好，敏感数据已隐藏。",
   maintenanceReportUnavailable: "报告不可用。",
+  maintenanceBackupCreate: "创建数据库备份",
+  maintenanceBackupCreating: "正在创建备份...",
+  maintenanceBackupCreateConfirm: "创建 KM VMS 数据库备份？摄像机录像和视频归档不会包含在此备份中。",
+  maintenanceBackupCreated: "数据库备份已创建。",
+  maintenanceBackupCreateFailed: "无法创建数据库备份。",
+  maintenanceBackupScope: "备份仅包含数据库和服务元数据，不会复制摄像机录像和视频归档。",
+  maintenanceBackupResult: "最新备份",
+  maintenanceBackupsTitle: "备份",
+  maintenanceBackupsText: "创建、检查和删除数据库及服务元数据备份。",
+  maintenanceBackupCreateShort: "创建",
+  maintenanceBackupCheck: "检查",
+  maintenanceBackupDelete: "删除",
+  maintenanceBackupDeleting: "正在删除...",
+  maintenanceBackupDeleted: "备份已删除。",
+  maintenanceBackupDeleteFailed: "无法删除备份。",
+  maintenanceBackupDeleteConfirm: "删除 {date} 的备份？只会删除此备份的产品文件，不会影响视频归档。",
+  maintenanceBackupRestore: "恢复",
+  maintenanceBackupRestoreAvailable: "可恢复",
+  maintenanceBackupRestoreUnavailable: "暂不能恢复到工作数据库",
+  maintenanceBackupRestoreUnavailableReason: "现在只能在临时数据库中安全检查备份。恢复工作数据库将作为单独受保护流程实现。",
+  maintenanceBackupStatusEmpty: "还没有备份。",
+  maintenanceBackupStatusReady: "备份数量：{count}",
+  maintenanceBackupCopyOne: "个备份",
+  maintenanceBackupCopyMany: "个备份",
+  maintenanceBackupNoCopies: "无备份",
+  maintenanceBackupLatest: "最新备份",
+  maintenanceBackupProblems: "问题项",
+  maintenanceBackupSize: "大小",
+  maintenanceBackupSchema: "结构",
+  maintenanceBackupList: "最近备份",
+  maintenanceBackupNothingToCheck: "暂无可检查的备份",
+  maintenanceBackupOperationLabels: {
+    check: "检查",
+    create: "创建",
+    delete: "删除",
+  },
+  maintenanceBackupStatuses: {
+    valid: "就绪",
+    verified: "就绪",
+    available: "可用",
+    no_artifacts: "无备份",
+    blocked: "检查被阻止",
+    invalid: "有问题",
+    check_failed: "检查失败",
+    problem: "有问题",
+  },
+  maintenanceBackupCheckStatuses: {
+    valid: "检查通过",
+    verified: "检查通过",
+    available: "备份可检查",
+    no_artifacts: "暂无可检查的备份",
+    blocked: "检查被阻止",
+    invalid: "备份已损坏或不完整",
+    check_failed: "检查失败",
+    fallback: "已收到检查状态",
+  },
+  maintenanceBackupCreateStatuses: {
+    created: "备份已创建",
+    verified: "备份已创建",
+    valid: "备份已创建",
+    completed: "备份已创建",
+    blocked: "创建被阻止",
+    failed: "无法创建备份",
+    fallback: "已收到创建状态",
+  },
+  maintenanceBackupDeleteStatuses: {
+    deleted: "备份已删除",
+    deleted_with_missing_files: "备份已删除；部分文件此前已不存在",
+    blocked: "删除被阻止",
+    failed: "无法删除备份",
+    delete_failed: "无法删除备份",
+    not_found: "备份已不存在",
+    fallback: "已收到删除状态",
+  },
   maintenanceDryRun: "检查",
   maintenanceDryRunResult: "检查已完成。",
   maintenanceNoApply: "更新只会通过已确认的 helper 流程应用。",
@@ -790,7 +1169,28 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceLastAction: "最近操作",
   maintenanceNoHistory: "未找到操作历史",
   maintenanceGeneratedAt: "生成时间",
-  maintenanceWarnings: "警告",
+  maintenanceWarnings: "诊断",
+  maintenanceWarningDetails: "显示详情",
+  maintenanceWarningHide: "隐藏详情",
+  maintenanceSupportStatusOk: "无关键问题",
+  maintenanceWarningActionable: "需要处理",
+  maintenanceWarningInfo: "信息限制",
+  maintenanceWarningSupport: "给支持人员",
+  maintenanceWarningNone: "没有活动警告。",
+  maintenanceSupportReportAction: "下载报告并发送给支持人员。",
+  maintenanceWarningGeneric: {
+    actionable: { title: "需要检查", summary: "某个状态可能影响维护。", action: "下载报告，并根据其中的信息修复原因。" },
+    informational: { title: "诊断限制", summary: "这不是故障：报告只是说明部分检查未自动执行。", action: "系统正常时无需操作。" },
+    support: { title: "支持信息", summary: "此项有助于诊断，但不一定需要用户操作。", action: "需要支持时请下载报告。" },
+  },
+  maintenanceWarningLabels: {
+    backup_status_source_unavailable: { title: "没有连接的备份状态来源", summary: "只读诊断未找到可证明备份状态的独立安全来源。", action: "请在备份区创建或检查备份。" },
+    restore_validation_status_source_unavailable: { title: "没有恢复检查来源", summary: "诊断未收到备份已在临时数据库中检查的独立证据。", action: "请在备份区运行备份检查。" },
+    backup_root_persistence_unknown: { title: "备份目录未执行写入探测", summary: "报告没有写入测试备份目录，因为不能在没有命令时改变系统。", action: "这是报告的信息性限制。" },
+    video_archive_restore_not_covered: { title: "视频归档不在数据库备份内", summary: "备份保护数据库和服务元数据，但不复制摄像机录像。", action: "视频归档存储需单独检查。" },
+    production_adoption_deferred: { title: "服务数据库接管已延后", summary: "诊断是只读的，不会在没有单独操作时更改服务元数据。", action: "系统正常时无需操作。" },
+    installed_build_development_fallback: { title: "Build 元数据不完整", summary: "已安装环境没有提供完整 build 元数据来源。", action: "下次更新时检查 release identity。" },
+  },
   maintenanceMessageFallback: "已收到状态，详细信息不可用。",
   maintenanceActionFallback: "该操作当前不可用。请检查系统状态后重试。",
   updateApplyTitle: "应用更新",
@@ -799,14 +1199,15 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyConfirm: "启动 KM VMS 更新？系统将执行预检查，通过 helper 应用受信任版本，并可能短暂重启服务。",
   updateApplyConfirmRestart: "服务可能会短暂重启；API 恢复后状态轮询会继续。",
   updateApplyQueued: "更新请求已交给 helper。",
-  updateApplyUnavailable: "当前状态不可应用更新。",
+  updateApplyUnavailable: "现在无法启动更新：原因显示在上方。",
   updateApplyConnection: "服务可能会短暂重启；状态轮询会自动继续。",
   updateApplyRecoveryAvailable: "检查目标版本和 commit，然后启动应用。",
   updateApplyRecoveryBlocked: "修复受信任版本或服务器配置阻塞项后重新检查。",
   updateApplyRecoveryCommitMismatch: "已安装 commit 与受信任版本 commit 不一致。请将更新视为失败，并检查服务器端来源后重试。",
   updateApplyRecoveryCompleted: "更新已完成，已安装 commit 已验证。",
   updateApplyRecoveryCurrent: "已安装版本与受信任版本一致。",
-  updateApplyRecoveryFailed: "更新失败。请查看脱敏状态并在修复原因后重试。",
+  updateApplyRecoveryFailed: "更新失败。请查看更新状态，并在修复原因后重试。",
+  updateApplyRecoveryCheckFailed: "更新检查未完成。请重新检查，或下载报告并发送给支持人员。",
   updateApplyRecoveryReconnecting: "服务可能正在重启。界面会继续轮询，并在 API 恢复后重新读取状态。",
   updateApplyRecoveryRunning: "Helper 正在应用更新。请保持 NAS 供电并等待最终状态。",
   updateApplyRecoveryStalled: "更新状态已经较久没有变化。helper 或锁可能仍处于活动状态时不要重复启动，请先检查服务器状态。",
@@ -842,6 +1243,8 @@ const ZH_TEXT_OVERRIDES = {
     blocked: "需要处理",
   },
   updateApplyReleaseChanges: "此版本的变更",
+  updateApplyReleaseTitleFallback: "已发布版本",
+  updateApplyReleaseSummaryFallback: "版本说明尚未本地化。技术名称可在诊断报告中查看。",
   updateApplyLastState: "最新进度",
   updateApplyStepDone: "完成",
   updateApplyTimelineCurrent: "当前版本",
@@ -885,8 +1288,61 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceFlows: {
     db_adoption: "数据库接管",
     migration: "迁移",
-    restore: "恢复",
+    restore: "备份恢复检查",
     update: "更新",
+  },
+  maintenanceReadinessTitle: "数据库与恢复准备状态",
+  maintenanceReadinessText: "仅在更新、迁移、迁移安装或恢复时使用的维护状态。",
+  maintenanceSupportTitle: "支持诊断",
+  maintenanceSupportText: "如果维护状态不清楚或被阻止，请下载安全报告并发送给支持人员。",
+  maintenanceReadinessTitles: {
+    db_identity: "数据库",
+    db_schema: "数据库结构",
+    backup_restore_check: "备份恢复检查",
+  },
+  maintenanceOperatorStatuses: {
+    ok: "正常",
+    attention: "需要检查",
+    blocked: "需要处理",
+    unavailable: "无数据",
+    action_available: "可执行操作",
+  },
+  maintenanceOperatorSummaries: {
+    db_identity_ok: "应用已识别此数据库为当前系统数据库，无需额外操作。",
+    db_identity_adoptable: "可在备份和明确确认后安全接管数据库。",
+    db_identity_blocked: "数据库尚未准备好接管，执行任何操作前需要诊断。",
+    db_schema_current: "数据库结构已适配当前应用版本。",
+    db_schema_pending: "当前应用版本有待执行的数据库结构变更。",
+    db_schema_blocked: "数据库结构检查被阻止，需要诊断。",
+    backup_restore_no_artifacts: "配置的备份目录中没有可验证的恢复备份。",
+    backup_restore_artifacts_available: "已有备份，可在临时数据库中检查恢复。",
+    backup_restore_validation_available: "可在临时数据库中执行安全恢复检查。",
+    backup_restore_blocked: "备份恢复检查被阻止，需要诊断。",
+  },
+  maintenanceOperatorActions: {
+    db_identity_check_optional: "此项通常不需要操作。",
+    db_identity_apply_requires_confirmation: "接管只会更改服务元数据，并需要单独确认。",
+    migration_check_optional: "此项通常不需要操作。",
+    migration_apply_requires_confirmation: "迁移只会在备份后并经过单独确认才会执行。",
+    backup_restore_create_backup_first: "需要先有有效备份。",
+    backup_restore_check_available: "检查会在工作数据库之外执行。",
+    download_support_report: "下载诊断报告并发送给支持人员。",
+    check_status: "可以执行安全状态检查。",
+  },
+  maintenanceCheckActions: {
+    db_adoption: "检查数据库",
+    migration: "检查迁移",
+    restore: "检查备份",
+  },
+  maintenanceFactLabels: {
+    metadata_present: "元数据",
+    already_adopted: "已接管",
+    current_version: "当前",
+    target_version: "目标",
+    pending_count: "待处理",
+    valid_artifacts: "备份",
+    temporary_validation: "临时检查",
+    current_product_restore: "恢复到工作数据库",
   },
   maintenanceStatuses: {
     ok: "正常",
@@ -901,9 +1357,11 @@ const ZH_TEXT_OVERRIDES = {
     check_failed: "检查失败",
     complete: "已完成",
     completed: "已完成",
+    valid: "已验证",
+    verified: "已验证",
     compose_config: "Compose 检查",
     commit_verification: "Commit 检查",
-    drift_known_safe: "已知安全的差异",
+    drift_known_safe: "无关键问题",
     draft_known_safe: "已知安全的草稿",
     downloading: "下载中",
     extracting: "解压中",
@@ -943,7 +1401,7 @@ const ZH_TEXT_OVERRIDES = {
     restore_no_valid_artifacts: "配置的备份根目录中没有可用的恢复工件。",
     update_apply_not_available_for_release: "此版本不支持在界面内应用。",
     maintenance_history_limited: "持久历史记录有限：仅显示当前状态和最新安全报告。",
-    drift_known_safe: "已知安全的差异。",
+    drift_known_safe: "无关键问题。",
     draft_known_safe: "已知安全的草稿。",
     complete: "已完成。",
     completed: "已完成。",
@@ -1036,7 +1494,9 @@ export default function SettingsPage() {
   const [maintenanceError, setMaintenanceError] = useState("");
   const [maintenanceBusy, setMaintenanceBusy] = useState("");
   const [maintenanceActionResult, setMaintenanceActionResult] = useState(null);
-  const [maintenanceReport, setMaintenanceReport] = useState(null);
+  const [maintenanceBackupResult, setMaintenanceBackupResult] = useState(null);
+  const [maintenanceConfirm, setMaintenanceConfirm] = useState(null);
+  const [maintenanceWarningsOpen, setMaintenanceWarningsOpen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState(null);
   const [updateApplyStatus, setUpdateApplyStatus] = useState(null);
   const [updateApplyTransientError, setUpdateApplyTransientError] = useState("");
@@ -1063,6 +1523,11 @@ export default function SettingsPage() {
   const updateApplyAllowed = Boolean(updateStatus?.can_apply_from_ui && !updateApplyRunning && !updateApplyStatus?.is_stale && !maintenanceBusy);
   const updateApplyPrimaryText = updateApplyButtonText(updateApplyStatus, t);
   const updateApplyOperator = updateApplyOperatorModel(updateStatus, updateApplyStatus, t, lang, updateApplyTransientError);
+  const maintenanceBackupManager = useMemo(() => maintenanceBackupManagerModel(maintenanceOverview, t, lang), [maintenanceOverview, t, lang]);
+  const maintenanceWarnings = useMemo(() => maintenanceWarningModel(maintenanceOverview, t), [maintenanceOverview, t]);
+  const maintenanceBackupResultModel = useMemo(() => (
+    maintenanceBackupResult ? maintenanceBackupOperationResultText(maintenanceBackupResult, t) : null
+  ), [maintenanceBackupResult, t]);
   const updateApplyProblem = Boolean(
     updateApplyTransientError ||
     updateApplyStatus?.error?.message ||
@@ -1343,7 +1808,8 @@ export default function SettingsPage() {
   function closeMaintenanceModal() {
     setMaintenanceModalOpen(false);
     setMaintenanceActionResult(null);
-    setMaintenanceReport(null);
+    setMaintenanceBackupResult(null);
+    setMaintenanceConfirm(null);
     setMaintenanceError("");
     setUpdateApplyTransientError("");
   }
@@ -1353,7 +1819,10 @@ export default function SettingsPage() {
     setMaintenanceLoading(true);
     setMaintenanceError("");
     try {
-      setMaintenanceOverview(await apiFetch("/system/maintenance/overview"));
+      const overview = await apiFetch("/system/maintenance/overview");
+      setMaintenanceOverview(overview);
+      const artifacts = overview?.flows?.restore?.details?.artifacts;
+      if (!Array.isArray(artifacts) || artifacts.length === 0) setMaintenanceBackupResult(null);
     } catch (err) {
       setMaintenanceOverview(null);
       setMaintenanceError(humanErrorText(String(err?.message || ""), t.maintenanceLoadError));
@@ -1380,7 +1849,7 @@ export default function SettingsPage() {
     }
   }
 
-  async function runMaintenanceDryRun(flowKey) {
+  async function runMaintenanceDryRun(flowKey, bodyOverride = null) {
     const config = MAINTENANCE_DRY_RUN_ENDPOINTS[flowKey];
     if (!config || maintenanceBusy) return;
     setMaintenanceBusy(flowKey);
@@ -1389,15 +1858,93 @@ export default function SettingsPage() {
       const result = await apiFetch(config.path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(config.body),
+        body: JSON.stringify(bodyOverride || config.body),
       });
       setMaintenanceActionResult({ flowKey, status: result?.status || "ok", reason: result?.reason || result?.blocked_reason || "" });
+      if (flowKey === "restore") {
+        setMaintenanceBackupResult({ kind: "check", status: result?.status || "ok", reason: result?.reason || result?.blocked_reason || "" });
+      }
       showToast({ variant: "success", title: t.maintenanceDryRunResult, text: maintenanceStatusText(result?.status, t) });
       await loadMaintenanceOverview();
     } catch (err) {
       const message = humanErrorText(String(err?.message || ""), t.maintenanceLoadError);
       setMaintenanceActionResult({ flowKey, status: "blocked", reason: message });
       showToast({ variant: "warning", title: t.maintenanceDryRun, text: message });
+    } finally {
+      setMaintenanceBusy("");
+    }
+  }
+
+  async function createMaintenanceBackup() {
+    if (maintenanceBusy) return;
+    setMaintenanceConfirm({
+      kind: "backup-create",
+      title: t.maintenanceBackupCreate,
+      text: t.maintenanceBackupCreateConfirm,
+      confirmLabel: t.maintenanceBackupCreateShort,
+      danger: false,
+      onConfirm: performMaintenanceBackupCreate,
+    });
+  }
+
+  async function performMaintenanceBackupCreate() {
+    setMaintenanceBusy("backup-create");
+    setMaintenanceConfirm(null);
+    setMaintenanceActionResult(null);
+    try {
+      const result = await apiFetch("/system/backup/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: "manual_admin", confirm: true }),
+      });
+      setMaintenanceBackupResult({ kind: "create", ...result });
+      showToast({ variant: "success", title: t.maintenanceBackupCreate, text: t.maintenanceBackupCreated });
+      await loadMaintenanceOverview();
+    } catch (err) {
+      const message = humanErrorText(String(err?.message || ""), t.maintenanceBackupCreateFailed);
+      setMaintenanceBackupResult({ kind: "create", status: "blocked", reason: message });
+      showToast({ variant: "warning", title: t.maintenanceBackupCreate, text: message });
+    } finally {
+      setMaintenanceBusy("");
+    }
+  }
+
+  async function checkMaintenanceBackup(artifactId = "") {
+    const body = artifactId ? { artifact_id: artifactId, target_kind: "temporary_validation_db" } : {};
+    await runMaintenanceDryRun("restore", body);
+  }
+
+  function requestDeleteMaintenanceBackup(artifact) {
+    if (!artifact?.id || maintenanceBusy) return;
+    setMaintenanceConfirm({
+      kind: "backup-delete",
+      title: t.maintenanceBackupDelete,
+      text: t.maintenanceBackupDeleteConfirm.replace("{date}", artifact.createdAt || "-"),
+      confirmLabel: t.maintenanceBackupDelete,
+      danger: true,
+      artifact,
+      onConfirm: () => deleteMaintenanceBackup(artifact),
+    });
+  }
+
+  async function deleteMaintenanceBackup(artifact) {
+    if (!artifact?.id || maintenanceBusy) return;
+    setMaintenanceBusy("backup-delete");
+    setMaintenanceConfirm(null);
+    setMaintenanceActionResult(null);
+    try {
+      const result = await apiFetch(`/system/restore/artifacts/${encodeURIComponent(artifact.id)}/delete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      setMaintenanceBackupResult({ kind: "delete", ...result });
+      showToast({ variant: "success", title: t.maintenanceBackupDelete, text: t.maintenanceBackupDeleted });
+      await loadMaintenanceOverview();
+    } catch (err) {
+      const message = humanErrorText(String(err?.message || ""), t.maintenanceBackupDeleteFailed);
+      setMaintenanceBackupResult({ kind: "delete", status: "blocked", reason: message });
+      showToast({ variant: "warning", title: t.maintenanceBackupDelete, text: message });
     } finally {
       setMaintenanceBusy("");
     }
@@ -1453,21 +2000,6 @@ export default function SettingsPage() {
       const message = humanErrorText(String(err?.message || ""), t.updateApplyUnavailable);
       setMaintenanceActionResult({ flowKey: "update", status: "blocked", reason: message });
       showToast({ variant: "warning", title: t.updateApplyTitle, text: message });
-    } finally {
-      setMaintenanceBusy("");
-    }
-  }
-
-  async function viewMaintenanceReport() {
-    if (maintenanceBusy) return;
-    setMaintenanceBusy("report");
-    try {
-      const report = await apiFetch("/system/upgrade/report");
-      setMaintenanceReport(report);
-      showToast({ variant: "success", title: t.maintenanceReport, text: t.maintenanceReportReady });
-    } catch (err) {
-      setMaintenanceReport(null);
-      showToast({ variant: "warning", title: t.maintenanceReport, text: humanErrorText(String(err?.message || ""), t.maintenanceReportUnavailable) });
     } finally {
       setMaintenanceBusy("");
     }
@@ -1899,6 +2431,24 @@ export default function SettingsPage() {
           </div>
         ) : null}
 
+        {maintenanceConfirm ? (
+          <div className="settingsModalOverlay settingsConfirmOverlay" role="presentation">
+            <div className="settingsConfirmModal settingsMaintenanceConfirmModal" role="dialog" aria-modal="true" aria-label={maintenanceConfirm.title}>
+              <button type="button" className="settingsModalClose settingsConfirmClose" onClick={() => setMaintenanceConfirm(null)} aria-label={t.close}>×</button>
+              <p>
+                <span>{maintenanceConfirm.title}</span>
+                <strong>{maintenanceConfirm.text}</strong>
+              </p>
+              <div className="settingsModalActions">
+                <button type="button" className="button secondary small" onClick={() => setMaintenanceConfirm(null)} disabled={Boolean(maintenanceBusy)}>{t.cancel}</button>
+                <button type="button" className={`button small ${maintenanceConfirm.danger ? "dangerButton" : ""}`} onClick={maintenanceConfirm.onConfirm} disabled={Boolean(maintenanceBusy)}>
+                  {maintenanceBusy === "backup-delete" ? t.maintenanceBackupDeleting : maintenanceConfirm.confirmLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {userModal ? (
           <div className="settingsModalOverlay" role="presentation">
             <form className="settingsUserModal" onSubmit={submitUserModal}>
@@ -1966,21 +2516,21 @@ export default function SettingsPage() {
         {maintenanceModalOpen ? (
           <div className="settingsModalOverlay" role="presentation">
             <div className="settingsMaintenanceModal" role="dialog" aria-modal="true" aria-label={t.maintenanceOverview}>
-              <div className="settingsUserModalHeader">
+              <div className="settingsMaintenanceModalHeader">
                 <h2>{t.maintenanceOverview}</h2>
-                <button type="button" className="settingsModalClose" onClick={closeMaintenanceModal} aria-label={t.close}>×</button>
-              </div>
-
-              <div className="settingsMaintenanceToolbar">
-                <button type="button" className="button secondary small" onClick={loadMaintenanceOverview} disabled={maintenanceLoading || Boolean(maintenanceBusy)}>
-                  {maintenanceLoading ? t.checking : t.maintenanceRefresh}
-                </button>
-                <button type="button" className="button secondary small" onClick={viewMaintenanceReport} disabled={Boolean(maintenanceBusy)}>
-                  {maintenanceBusy === "report" ? t.checking : t.maintenanceReportView}
-                </button>
-                <button type="button" className="button secondary small" onClick={downloadMaintenanceReport} disabled={Boolean(maintenanceBusy)}>
-                  {maintenanceBusy === "report-download" ? t.checking : t.maintenanceReportDownload}
-                </button>
+                <div className="settingsMaintenanceModalActions">
+                  <button
+                    type="button"
+                    className="settingsMaintenanceIconButton"
+                    onClick={loadMaintenanceOverview}
+                    disabled={maintenanceLoading || Boolean(maintenanceBusy)}
+                    title={t.maintenanceRefresh}
+                    aria-label={t.maintenanceRefresh}
+                  >
+                    ↻
+                  </button>
+                  <button type="button" className="settingsMaintenanceIconButton" onClick={closeMaintenanceModal} aria-label={t.close}>×</button>
+                </div>
               </div>
 
               {maintenanceError ? <div className="settingsJournalEmpty error">{maintenanceError}</div> : null}
@@ -1988,48 +2538,6 @@ export default function SettingsPage() {
 
               {maintenanceOverview ? (
                 <div className="settingsMaintenanceContent">
-                  <div className="settingsMaintenanceList">
-                    {maintenanceFlowRows(maintenanceOverview).map((flow) => (
-                      <article className="settingsMaintenanceFlow" key={flow.key}>
-                        <div className="settingsMaintenanceFlowHead">
-                          <h3>{t.maintenanceFlows?.[flow.key] || flow.key}</h3>
-                          <span className={`settingsMaintenanceStatus ${maintenanceStatusClass(flow.status)}`}>
-                            {maintenanceStatusText(flow.status, t)}
-                          </span>
-                        </div>
-                        <p>{formatMaintenanceMessage(flow.reason, t, lang)}</p>
-                        <dl>
-                          {maintenanceDetailRows(flow, t).map(([label, value]) => (
-                            <div key={label}>
-                              <dt>{label}</dt>
-                              <dd>{String(value)}</dd>
-                            </div>
-                          ))}
-                        </dl>
-                        <div className="settingsMaintenanceFlowActions">
-                      <button type="button" className="button secondary small" onClick={() => runMaintenanceDryRun(flow.key)} disabled={Boolean(maintenanceBusy)}>
-                            {maintenanceBusy === flow.key ? t.checking : t.maintenanceDryRun}
-                          </button>
-                        </div>
-                      </article>
-                    ))}
-                  </div>
-
-                  <section className="settingsMaintenanceReport">
-                    <div>
-                      <span>{t.maintenanceReport}</span>
-                      <strong>{maintenanceStatusText(maintenanceOverview.upgrade_report?.status, t)}</strong>
-                      <small>
-                        {t.maintenanceGeneratedAt}: {maintenanceOverview.upgrade_report?.generated_at || "-"} · {t.maintenanceWarnings}: {maintenanceOverview.upgrade_report?.warnings_count ?? 0}
-                      </small>
-                    </div>
-                    <div>
-                      <span>{t.maintenanceLastAction}</span>
-                      <strong>{maintenanceOverview.history?.last_action?.available ? maintenanceStatusText(maintenanceOverview.history.last_action.status, t) : t.maintenanceNoHistory}</strong>
-                      <small>{formatMaintenanceMessage(maintenanceOverview.history?.last_action?.reason, t, lang)}</small>
-                    </div>
-                  </section>
-
                   <section className="settingsUpdateApplyPanel">
                     <h3>{t.updateApplyTitle}</h3>
                     <div className={`settingsUpdateApplyHero is-${updateApplyOperator.severity}`}>
@@ -2039,7 +2547,7 @@ export default function SettingsPage() {
                         </span>
                         <div>
                           <strong>{updateApplyOperator.headline}</strong>
-                          <p>{updateApplyOperator.summary}</p>
+                          {updateApplyOperator.showHeroSummary ? <p>{updateApplyOperator.summary}</p> : null}
                           <dl className="settingsUpdateApplyVersionRows">
                             <div>
                               <dt>{t.maintenanceLabels.current}</dt>
@@ -2072,10 +2580,10 @@ export default function SettingsPage() {
                         {updateApplyOperator.timeline.map((step) => (
                           <li className={`is-${step.status}`} key={step.name}>
                             <span className="settingsUpdateApplyTimelineDot" aria-hidden="true">
-                              {step.icon === "alert" ? "!" : step.icon === "pulse" ? "•" : "✓"}
+                              {step.icon === "alert" ? "!" : step.icon === "pulse" ? "•" : step.icon === "check" ? "✓" : ""}
                             </span>
                             <strong>{step.label}</strong>
-                            <small>{step.timeLabel}</small>
+                            {step.timeLabel ? <small>{step.timeLabel}</small> : null}
                           </li>
                         ))}
                       </ol>
@@ -2130,6 +2638,158 @@ export default function SettingsPage() {
                     {updateApplyStatus?.error?.operator_action ? <small className="settingsUpdateApplyError">{formatMaintenanceMessage(updateApplyStatus.error.operator_action, t, lang, "error")}</small> : null}
                   </section>
 
+                  <section className="settingsMaintenanceReadiness">
+                    <div className="settingsMaintenanceReadinessHead">
+                      <div>
+                        <h3>{t.maintenanceReadinessTitle}</h3>
+                        <p>{t.maintenanceReadinessText}</p>
+                      </div>
+                    </div>
+                    <div className="settingsMaintenanceReadinessGrid">
+                      {maintenanceReadinessRows(maintenanceOverview, t).map((row) => (
+                        <article className={`settingsMaintenanceReadinessItem is-${row.userStatus}`} key={row.key}>
+                          <span className="settingsMaintenanceReadinessIcon" aria-hidden="true">
+                            {row.userStatus === "ok" ? "✓" : row.userStatus === "blocked" ? "!" : "i"}
+                          </span>
+                          <div className="settingsMaintenanceReadinessBody">
+                            <div className="settingsMaintenanceReadinessTitle">
+                              <h4>{row.title}</h4>
+                              <span className={`settingsMaintenanceStatus ${row.statusClass}`}>{row.statusLabel}</span>
+                            </div>
+                            <p>{row.summary}</p>
+                            {row.facts.length ? (
+                              <dl>
+                                {row.facts.map(([label, value]) => (
+                                  <div key={label}>
+                                    <dt>{label}</dt>
+                                    <dd>{String(value)}</dd>
+                                  </div>
+                                ))}
+                              </dl>
+                            ) : null}
+                            {row.action ? <small>{row.action}</small> : null}
+                          </div>
+                          {row.showCheck ? (
+                            <button type="button" className="button secondary small" onClick={() => runMaintenanceDryRun(row.key)} disabled={Boolean(maintenanceBusy)}>
+                              {maintenanceBusy === row.key ? t.checking : row.checkLabel}
+                            </button>
+                          ) : null}
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+
+                  <section className="settingsMaintenanceBackupManager">
+                    <div className="settingsMaintenanceBackupHead">
+                      <div>
+                        <h3>{t.maintenanceBackupsTitle}</h3>
+                        <p>{t.maintenanceBackupsText}</p>
+                      </div>
+                      <div className="settingsMaintenanceBackupCounts">
+                        <strong>{maintenanceBackupManager.statusText}</strong>
+                        {maintenanceBackupManager.problemCount ? <span>{t.maintenanceBackupProblems}: {maintenanceBackupManager.problemCount}</span> : null}
+                      </div>
+                    </div>
+                    <div className="settingsMaintenanceBackupSummary">
+                      <div>
+                        <span>{t.maintenanceBackupLatest}</span>
+                        <strong>{maintenanceBackupManager.latestCreatedAt}</strong>
+                      </div>
+                      <div>
+                        <span>{t.status}</span>
+                        <strong>{maintenanceBackupManager.latestStatus}</strong>
+                      </div>
+                      <div>
+                        <span>{t.maintenanceBackupRestore}</span>
+                        <strong>{maintenanceBackupManager.restoreSupported ? t.yes : t.no}</strong>
+                      </div>
+                    </div>
+                    <p className="settingsMaintenanceBackupScope">{t.maintenanceBackupScope}</p>
+                    <div className="settingsMaintenanceBackupActions">
+                      <button type="button" className="button secondary small" onClick={createMaintenanceBackup} disabled={Boolean(maintenanceBusy)}>
+                        {maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreateShort}
+                      </button>
+                      <button type="button" className="button secondary small" onClick={() => checkMaintenanceBackup(maintenanceBackupManager.latest?.artifact_id)} disabled={Boolean(maintenanceBusy) || !maintenanceBackupManager.canCheck}>
+                        {maintenanceBusy === "restore" ? t.checking : maintenanceBackupManager.canCheck ? t.maintenanceBackupCheck : t.maintenanceBackupNothingToCheck}
+                      </button>
+                      <button type="button" className="button secondary small" disabled title={maintenanceBackupManager.restoreReason}>
+                        {t.maintenanceBackupRestore}
+                      </button>
+                    </div>
+                    <div className="settingsMaintenanceBackupRestoreNote">
+                      <strong>{maintenanceBackupManager.restoreText}</strong>
+                      <span>{maintenanceBackupManager.restoreReason}</span>
+                    </div>
+                    {maintenanceBackupManager.artifacts.length ? (
+                      <div className="settingsMaintenanceBackupList">
+                        <div className="settingsMaintenanceBackupListHead">
+                          <span>{t.maintenanceBackupList}</span>
+                        </div>
+                        {maintenanceBackupManager.artifacts.map((artifact) => (
+                          <article className={`settingsMaintenanceBackupItem ${artifact.valid ? "is-valid" : "is-problem"}`} key={artifact.id}>
+                            <div>
+                              <strong>{artifact.createdAt}</strong>
+                              <span>{artifact.status} · {t.maintenanceBackupSize}: {artifact.size} · {t.maintenanceBackupSchema}: {artifact.schema}</span>
+                            </div>
+                            <div className="settingsMaintenanceBackupItemActions">
+                              <button type="button" className="settingsMaintenanceMiniButton" onClick={() => checkMaintenanceBackup(artifact.id)} disabled={Boolean(maintenanceBusy) || !artifact.canCheck} title={t.maintenanceBackupCheck} aria-label={t.maintenanceBackupCheck}>✓</button>
+                              <button type="button" className="settingsMaintenanceMiniButton danger" onClick={() => requestDeleteMaintenanceBackup(artifact)} disabled={Boolean(maintenanceBusy) || !artifact.deletable} title={t.maintenanceBackupDelete} aria-label={t.maintenanceBackupDelete}>×</button>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    ) : null}
+                    {maintenanceBackupResultModel ? (
+                      <small className="settingsMaintenanceBackupResult">
+                        {maintenanceBackupResultModel.label}: {maintenanceBackupResultModel.text}
+                        {maintenanceBackupResult.reason && maintenanceBackupResultModel.showReason
+                          ? ` · ${formatMaintenanceMessage(maintenanceBackupResult.reason, t, lang, "action")}`
+                          : ""}
+                      </small>
+                    ) : null}
+                  </section>
+
+                  <section className="settingsMaintenanceSupport">
+                    <div className="settingsMaintenanceSupportMain">
+                      <div className="settingsMaintenanceSupportCopy">
+                        <strong>{t.maintenanceSupportTitle}</strong>
+                        <p>{t.maintenanceSupportText}</p>
+                      </div>
+                      <div className="settingsMaintenanceSupportStatus">
+                        <span className={maintenanceWarnings.groups.actionable ? "is-attention" : "is-ok"}>
+                          {maintenanceWarnings.groups.actionable ? `${t.maintenanceWarningActionable}: ${maintenanceWarnings.groups.actionable}` : t.maintenanceSupportStatusOk}
+                        </span>
+                        <small>
+                          {t.maintenanceReport}: {maintenanceStatusText(maintenanceOverview.upgrade_report?.status, t)} · {t.maintenanceLastAction}: {maintenanceOverview.history?.last_action?.available ? maintenanceStatusText(maintenanceOverview.history.last_action.status, t) : t.maintenanceNoHistory}
+                        </small>
+                      </div>
+                      <div className="settingsMaintenanceWarningGroups">
+                        <span>{t.maintenanceWarningActionable}: {maintenanceWarnings.groups.actionable}</span>
+                        <span>{t.maintenanceWarningInfo}: {maintenanceWarnings.groups.informational}</span>
+                        <span>{t.maintenanceWarningSupport}: {maintenanceWarnings.groups.support}</span>
+                      </div>
+                    </div>
+                    <div className="settingsMaintenanceSupportActions">
+                      <button type="button" className="button secondary small" onClick={downloadMaintenanceReport} disabled={Boolean(maintenanceBusy)}>
+                        {maintenanceBusy === "report-download" ? t.checking : t.maintenanceReportDownload}
+                      </button>
+                      <button type="button" className="button secondary small" onClick={() => setMaintenanceWarningsOpen((value) => !value)} disabled={!maintenanceWarnings.total}>
+                        {maintenanceWarningsOpen ? t.maintenanceWarningHide : t.maintenanceWarningDetails}
+                      </button>
+                    </div>
+                    {maintenanceWarningsOpen ? (
+                      <div className="settingsMaintenanceWarningsList">
+                        {maintenanceWarnings.items.length ? maintenanceWarnings.items.map((item) => (
+                          <article className={`is-${item.classification}`} key={`${item.code}-${item.title}`}>
+                            <strong>{item.title}</strong>
+                            <p>{item.summary}</p>
+                            <small>{item.action}</small>
+                          </article>
+                        )) : <p>{t.maintenanceWarningNone}</p>}
+                      </div>
+                    ) : null}
+                  </section>
+
                   {maintenanceActionResult ? (
                     <div className={`settingsMaintenanceResult ${maintenanceStatusClass(maintenanceActionResult.status)}`}>
                       <strong>{t.maintenanceFlows?.[maintenanceActionResult.flowKey] || maintenanceActionResult.flowKey}: {maintenanceStatusText(maintenanceActionResult.status, t)}</strong>
@@ -2137,19 +2797,6 @@ export default function SettingsPage() {
                     </div>
                   ) : null}
 
-                  {maintenanceReport ? (
-                    <section className="settingsMaintenanceReportPreview">
-                      <h3>{t.maintenanceReport}</h3>
-                      <dl>
-                        <div><dt>{t.maintenanceLabels?.reportId}</dt><dd>{maintenanceReport.report_id || "-"}</dd></div>
-                        <div><dt>{t.maintenanceGeneratedAt}</dt><dd>{maintenanceReport.generated_at || "-"}</dd></div>
-                        <div><dt>{t.maintenanceWarnings}</dt><dd>{(maintenanceReport.warnings || []).length}</dd></div>
-                        <div><dt>{t.maintenanceFlows?.db_adoption}</dt><dd>{maintenanceStatusText(maintenanceReport.db_adoption?.status, t)}</dd></div>
-                        <div><dt>{t.maintenanceFlows?.migration}</dt><dd>{maintenanceStatusText(maintenanceReport.migration_maintenance?.status, t)}</dd></div>
-                        <div><dt>{t.maintenanceFlows?.restore}</dt><dd>{maintenanceStatusText(maintenanceReport.restore_maintenance?.status, t)}</dd></div>
-                      </dl>
-                    </section>
-                  ) : null}
                 </div>
               ) : null}
             </div>

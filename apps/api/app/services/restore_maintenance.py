@@ -34,6 +34,7 @@ TARGET_TEMPORARY_VALIDATION_DB = "temporary_validation_db"
 TARGET_CURRENT_PRODUCT_DB = "current_product_db"
 TARGET_KINDS = {TARGET_TEMPORARY_VALIDATION_DB, TARGET_CURRENT_PRODUCT_DB}
 TEMPORARY_VALIDATION_DB_PREFIX = "kmvms_stage5_stage13_restore_validation_"
+BACKUP_ARTIFACT_ID_RE = re.compile(r"^kmvms-db-\d{8}T\d{6}Z-[a-f0-9]{12}$")
 SENSITIVE_RE = re.compile(
     r"(password|passwd|secret|token|authorization|jwt|rtsp://|postgresql://|sqlite:///)[^,\s\"']*",
     re.IGNORECASE,
@@ -87,6 +88,47 @@ def _artifact_id(manifest: dict[str, Any], manifest_path: Path) -> str:
     return backup_id or manifest_path.name.removesuffix(".manifest.json")
 
 
+def _parse_backup_created_at(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _backup_timestamp_from_name(path: Path) -> datetime | None:
+    match = re.search(r"kmvms-db-(\d{8}T\d{6})Z-[a-f0-9]{12}", path.name)
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%Y%m%dT%H%M%S")
+    except Exception:
+        return None
+
+
+def _manifest_sort_key(path: Path) -> tuple[float, str]:
+    created_at: datetime | None = None
+    try:
+        manifest = _read_json(path)
+        created_at = _parse_backup_created_at(manifest.get("created_at"))
+    except Exception:
+        created_at = None
+    created_at = created_at or _backup_timestamp_from_name(path)
+    if created_at:
+        return (created_at.timestamp(), path.name)
+    try:
+        return (path.stat().st_mtime, path.name)
+    except Exception:
+        return (0.0, path.name)
+
+
+def _newest_manifest_paths(root: Path, *, limit: int) -> list[Path]:
+    safe_limit = max(0, min(int(limit or 0), 100))
+    paths = _manifest_paths(root)
+    return sorted(paths, key=_manifest_sort_key, reverse=True)[:safe_limit]
+
+
 def _manifest_for_artifact(artifact_id: str, *, backup_root: str | None = None) -> tuple[Path, dict[str, Any]]:
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{6,160}", artifact_id or ""):
         raise RestoreMaintenanceBlocked("artifact_invalid", {"status": "blocked", "reason": "Restore artifact reference is invalid."})
@@ -99,6 +141,61 @@ def _manifest_for_artifact(artifact_id: str, *, backup_root: str | None = None) 
         if artifact_id in {_artifact_id(manifest, manifest_path), manifest_path.name}:
             return manifest_path, manifest
     raise RestoreMaintenanceBlocked("artifact_not_found", {"status": "blocked", "reason": "Restore artifact was not found."})
+
+
+def _validate_product_backup_artifact_id(artifact_id: str) -> str:
+    value = str(artifact_id or "").strip()
+    if not BACKUP_ARTIFACT_ID_RE.fullmatch(value):
+        raise RestoreMaintenanceBlocked(
+            "artifact_invalid",
+            {"status": "blocked", "reason": "Backup artifact reference is invalid.", "artifact_id_accepted": False},
+        )
+    return value
+
+
+def _inside_root(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _owned_backup_artifact_paths(artifact_id: str, *, backup_root: str | None = None) -> tuple[Path, dict[str, Any], list[Path], list[str]]:
+    safe_id = _validate_product_backup_artifact_id(artifact_id)
+    root = _backup_root(backup_root).expanduser().resolve()
+    manifest_path = root / f"{safe_id}.manifest.json"
+    if not manifest_path.exists():
+        raise RestoreMaintenanceBlocked("artifact_not_found", {"status": "blocked", "reason": "Backup artifact was not found."})
+    if manifest_path.is_symlink():
+        raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup manifest ownership evidence is unsafe."})
+    manifest = _read_json(manifest_path)
+    if manifest.get("backup_id") != safe_id:
+        raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup artifact ownership evidence is incomplete."})
+
+    labels = [
+        f"{safe_id}.manifest.json",
+        Path(str(manifest.get("backup_file_label") or "")).name,
+        Path(str(manifest.get("metadata_file_label") or "")).name,
+    ]
+    if not labels[1] or not labels[2]:
+        raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup artifact ownership evidence is incomplete."})
+    if labels[1] not in {f"{safe_id}.dump", f"{safe_id}.sqlite3"} or labels[2] != f"{safe_id}.metadata.json":
+        raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup artifact file labels are not product-owned."})
+
+    paths: list[Path] = []
+    missing: list[str] = []
+    for label in labels:
+        candidate = (root / label).resolve()
+        if not _inside_root(candidate, root):
+            raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup artifact is outside the configured backup root."})
+        if candidate.is_symlink():
+            raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup artifact ownership evidence is unsafe."})
+        if candidate.exists():
+            paths.append(candidate)
+        else:
+            missing.append(label)
+    return manifest_path, manifest, paths, missing
 
 
 def _schema_version_from_manifest(manifest: dict[str, Any]) -> int | None:
@@ -114,22 +211,25 @@ def _schema_version_from_manifest(manifest: dict[str, Any]) -> int | None:
 
 
 def _artifact_summary(manifest_path: Path, manifest: dict[str, Any], verification: dict[str, Any] | None = None) -> dict[str, Any]:
+    artifact_id = _artifact_id(manifest, manifest_path)
+    deletable = bool(BACKUP_ARTIFACT_ID_RE.fullmatch(artifact_id or ""))
     return {
-        "artifact_id": _artifact_id(manifest, manifest_path),
+        "artifact_id": artifact_id,
         "artifact_label": manifest_path.name,
         "artifact_created_at": _sanitize(manifest.get("created_at"), 80) if manifest.get("created_at") else None,
         "artifact_schema_version": _schema_version_from_manifest(manifest),
         "db_backend": _sanitize(manifest.get("db_backend"), 40),
         "file_size": manifest.get("file_size"),
-        "checksum_sha256": _sanitize(manifest.get("checksum_sha256"), 80),
         "validation_status": (verification or {}).get("status"),
         "valid": bool((verification or {}).get("valid")),
+        "deletable": deletable,
+        "delete_supported": deletable,
     }
 
 
 def list_restore_artifacts(*, backup_root: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
-    for manifest_path in _manifest_paths(_backup_root(backup_root))[:limit]:
+    for manifest_path in _newest_manifest_paths(_backup_root(backup_root), limit=limit):
         try:
             manifest = _read_json(manifest_path)
             verification = verify_backup_manifest(manifest_path)
@@ -141,9 +241,61 @@ def list_restore_artifacts(*, backup_root: str | None = None, limit: int = 20) -
                     "artifact_label": manifest_path.name,
                     "valid": False,
                     "validation_status": "invalid",
+                    "deletable": False,
+                    "delete_supported": False,
                 }
             )
     return items
+
+
+def delete_backup_artifact(
+    *,
+    artifact_id: str,
+    confirm: bool,
+    backup_root: str | None = None,
+    actor: Any = None,
+) -> dict[str, Any]:
+    if not confirm:
+        raise RestoreMaintenanceBlocked(
+            "confirmation_required",
+            {"status": "blocked", "reason": "Explicit confirm=true is required for backup artifact deletion.", "deleted": False},
+        )
+    safe_id = _validate_product_backup_artifact_id(artifact_id)
+    manifest_path, manifest, paths, missing = _owned_backup_artifact_paths(safe_id, backup_root=backup_root)
+    deleted_labels: list[str] = []
+    failed_labels: list[str] = []
+    for path in sorted(paths, key=lambda item: 0 if item == manifest_path else 1, reverse=True):
+        try:
+            label = path.name
+            path.unlink()
+            deleted_labels.append(label)
+        except Exception:
+            failed_labels.append(path.name)
+    if failed_labels:
+        raise RestoreMaintenanceBlocked(
+            "delete_failed",
+            {
+                "status": "blocked",
+                "reason": "Backup artifact could not be fully deleted.",
+                "artifact_id": safe_id,
+                "deleted_count": len(deleted_labels),
+                "failed_count": len(failed_labels),
+                "deleted": False,
+            },
+        )
+    return {
+        "status": "deleted_with_missing_files" if missing else "deleted",
+        "artifact_id": safe_id,
+        "deleted": True,
+        "deleted_count": len(deleted_labels),
+        "missing_count": len(missing),
+        "db_backend": _sanitize(manifest.get("db_backend"), 40),
+        "video_archive_files_deleted": False,
+        "actor": {
+            "user_id": getattr(actor, "id", None),
+            "role": _sanitize(getattr(actor, "role", None), 50) if getattr(actor, "role", None) else None,
+        },
+    }
 
 
 def _compatibility(manifest: dict[str, Any]) -> dict[str, Any]:

@@ -152,6 +152,15 @@ export function formatBytes(value) {
   return `${(bytes / 1024 ** 4).toFixed(1)} TB`;
 }
 
+export function formatFileSize(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes) || bytes < 0) return "-";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
 export function formatAuditTimestamp(value, lang) {
   if (!value) return "";
   const date = new Date(value);
@@ -184,9 +193,9 @@ export function maintenanceStatusText(status, t) {
 }
 
 export function maintenanceStatusClass(status) {
-  if (["ok", "current", "available", "adopted", "already_adopted", "complete", "completed", "drift_known_safe", "draft_known_safe", "update_available"].includes(status)) return "ok";
+  if (["ok", "current", "available", "adopted", "already_adopted", "complete", "completed", "valid", "verified", "drift_known_safe", "draft_known_safe", "update_available"].includes(status)) return "ok";
   if (["blocked", "no_artifacts", "not_configured", "failed", "cancelled", "stalled"].includes(status)) return "blocked";
-  if (["adoptable", "limited", "queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification", "reconnecting", "checking"].includes(status)) return "warning";
+  if (["adoptable", "action_available", "attention", "limited", "unavailable", "queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification", "reconnecting", "checking"].includes(status)) return "warning";
   return "neutral";
 }
 
@@ -283,6 +292,28 @@ function updateApplyReleaseValue(updateStatus, key) {
   return "";
 }
 
+function hasLanguageSignal(value, lang) {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  if (lang === "ru") return /[А-Яа-яЁё]/.test(text);
+  if (lang === "zh-CN") return /[\u3400-\u9fff]/.test(text);
+  return true;
+}
+
+function localizedReleaseValue(updateStatus, key, t, lang) {
+  const value = updateApplyReleaseValue(updateStatus, key);
+  if (!value || value === "-") {
+    return key === "title"
+      ? t.updateApplyReleaseTitleFallback || "-"
+      : t.updateApplyReleaseSummaryFallback || "";
+  }
+  if (hasLanguageSignal(value, lang)) return value;
+  if (lang === "en") return value;
+  return key === "title"
+    ? t.updateApplyReleaseTitleFallback || "-"
+    : t.updateApplyReleaseSummaryFallback || "";
+}
+
 function releaseConfirmedText(value, t) {
   const key = String(value || "").trim().toLowerCase();
   if (["adopted", "already_adopted", "official_update", "valid"].includes(key)) return t.yes || "Yes";
@@ -307,13 +338,56 @@ function applyStepIcon(status) {
   if (status === "completed") return "check";
   if (status === "failed") return "alert";
   if (status === "running") return "pulse";
+  if (status === "idle") return "idle";
   return "dot";
+}
+
+function defaultUpdateApplyTimeline(t) {
+  return ["request", "preflight", "applying", "health_check", "commit_verification"].map((name) => ({
+    name,
+    label: maintenanceStatusText(name, t),
+    status: "idle",
+    statusLabel: "",
+    icon: "idle",
+    timeLabel: "",
+  }));
+}
+
+const UPDATE_APPLY_ATTENTION_STATES = new Set([
+  "failed",
+  "check_failed",
+  "stalled",
+  "reconnecting",
+  "blocked",
+  "cancelled",
+  "canceled",
+]);
+
+const UPDATE_CHECK_BLOCKING_STATES = new Set([
+  "check_failed",
+  "identity_incomplete",
+  "installed_identity_drift",
+  "metadata_stale",
+  "provider_unavailable",
+  "no_release_published",
+  "installed_newer_than_available",
+]);
+
+function normalizedUpdateApplyState(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function isUpdateApplyAttentionState(value) {
+  return UPDATE_APPLY_ATTENTION_STATES.has(normalizedUpdateApplyState(value));
 }
 
 export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "ru", transientError = "") {
   const effective = updateApplyEffectiveStatus(updateStatus, applyStatus, transientError);
   const comparison = updateStatus?.comparison || {};
   const status = comparison.status || updateStatus?.status || effective || "unknown";
+  const normalizedEffective = normalizedUpdateApplyState(effective);
+  const normalizedStatus = normalizedUpdateApplyState(status);
+  const normalizedUpdateStatus = normalizedUpdateApplyState(updateStatus?.status);
   const running = updateApplyIsRunning(applyStatus?.status || "");
   const canApply = Boolean(updateStatus?.can_apply_from_ui && !running && !applyStatus?.is_stale);
   const lastSummary = applyStatus?.last_apply_summary || null;
@@ -329,11 +403,26 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const terminalSuccess = effective === "completed" && commitVerified;
   const current = status === "current" && !canApply && !running;
   const available = status === "update_available" && canApply;
-  const failed = ["failed", "blocked", "stalled", "check_failed", "identity_incomplete", "installed_identity_drift", "metadata_stale", "provider_unavailable", "no_release_published", "installed_newer_than_available"].includes(effective) || ["check_failed", "identity_incomplete", "installed_identity_drift", "metadata_stale", "provider_unavailable", "no_release_published", "installed_newer_than_available"].includes(status);
+  const failed = isUpdateApplyAttentionState(normalizedEffective) ||
+    isUpdateApplyAttentionState(normalizedStatus) ||
+    isUpdateApplyAttentionState(normalizedUpdateStatus) ||
+    UPDATE_CHECK_BLOCKING_STATES.has(normalizedEffective) ||
+    UPDATE_CHECK_BLOCKING_STATES.has(normalizedStatus) ||
+    UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus);
   const severity = failed ? "blocked" : running || available || transientError ? "warning" : "ok";
-  const headlineKey = terminalSuccess ? "completed" : current ? "current" : available ? "available" : running ? "running" : failed ? "blocked" : "current";
+  const headlineKey = terminalSuccess ? "completed" : running ? "running" : failed ? "blocked" : available ? "available" : current ? "current" : "current";
   const headline = t.updateApplyHeadlines?.[headlineKey] || maintenanceStatusText(terminalSuccess ? "completed" : status, t);
-  const summary = t.updateApplySummaries?.[headlineKey] || updateApplyRecoveryText(effective, applyStatus, t);
+  const recoveryStatus = isUpdateApplyAttentionState(normalizedEffective) || UPDATE_CHECK_BLOCKING_STATES.has(normalizedEffective)
+    ? normalizedEffective
+    : isUpdateApplyAttentionState(normalizedUpdateStatus) || UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus)
+      ? normalizedUpdateStatus
+    : isUpdateApplyAttentionState(normalizedStatus) || UPDATE_CHECK_BLOCKING_STATES.has(normalizedStatus)
+      ? normalizedStatus
+      : failed && normalizedStatus && normalizedStatus !== "unknown"
+        ? normalizedStatus
+        : effective;
+  const recoverySummary = updateApplyRecoveryText(recoveryStatus, applyStatus, t);
+  const summary = failed ? recoverySummary : (t.updateApplySummaries?.[headlineKey] || recoverySummary);
   const updateResult = terminalSuccess
     ? (t.updateApplyResults?.completedVerified || headline)
     : t.updateApplyResults?.[headlineKey] || headline;
@@ -343,30 +432,33 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     : lastSummary?.elapsed_seconds
       ? formatDurationSeconds(lastSummary.elapsed_seconds)
       : "-";
-  const stepsSource = Array.isArray(applyStatus?.steps) && applyStatus.steps.length
+  const liveStepsAvailable = Array.isArray(applyStatus?.steps) && applyStatus.steps.length;
+  const historyStepsAvailable = Array.isArray(lastSummary?.steps) && lastSummary.steps.length;
+  const stepsSource = liveStepsAvailable
     ? applyStatus
-    : Array.isArray(lastSummary?.steps) && lastSummary.steps.length
+    : historyStepsAvailable
       ? lastSummary
       : null;
+  const inactiveTimeline = !running;
   const timeline = updateApplyStepRows(stepsSource || {}, t).map((step) => ({
     ...step,
-    icon: applyStepIcon(step.status),
-    timeLabel: step.time_label || (step.status === "completed" ? t.updateApplyStepDone : step.statusLabel),
+    status: inactiveTimeline ? "idle" : step.status,
+    icon: applyStepIcon(inactiveTimeline ? "idle" : step.status),
+    timeLabel: inactiveTimeline ? "" : (step.time_label || (step.status === "running" ? step.statusLabel : "")),
   }));
   const detailUnavailable = Boolean((lastSummary?.history_detail_status || applyStatus?.apply_history?.state === "missing") && !timeline.some((step) => step.timeLabel && /:/.test(step.timeLabel)));
-  const safeTimeline = timeline.length ? timeline : [
-    { name: "current", label: current ? t.updateApplyTimelineCurrent : maintenanceStatusText(status, t), status: severity === "blocked" ? "failed" : "completed", statusLabel: maintenanceStatusText(severity === "blocked" ? "failed" : "completed", t), icon: severity === "blocked" ? "alert" : "check", timeLabel: formatApplyDate(finishedAt, lang) },
-  ];
+  const safeTimeline = timeline.length ? timeline : defaultUpdateApplyTimeline(t);
   return {
     status: effective,
     severity,
     headline,
     summary,
+    showHeroSummary: !terminalSuccess,
     updateResult,
     currentVersion,
     availableVersion,
-    releaseTitle: updateApplyReleaseValue(updateStatus, "title"),
-    releaseSummary: updateApplyReleaseValue(updateStatus, "summary"),
+    releaseTitle: localizedReleaseValue(updateStatus, "title", t, lang),
+    releaseSummary: localizedReleaseValue(updateStatus, "summary", t, lang),
     installedAt: formatApplyDate(updateApplyReleaseValue(updateStatus, "installedAt"), lang),
     finishedAt: formatApplyDate(finishedAt, lang),
     elapsed,
@@ -392,6 +484,7 @@ export function updateApplyRecoveryText(status, applyStatus, t) {
   if (effective === "completed" && applyStatus?.commit_verified) return t.updateApplyRecoveryCompleted;
   if (effective === "completed" && applyStatus?.expected_commit && applyStatus?.commit_verified === false) return t.updateApplyRecoveryCommitMismatch;
   if (effective === "failed") return t.updateApplyRecoveryFailed;
+  if (effective === "check_failed") return t.updateApplyRecoveryCheckFailed || t.updateApplyRecoveryFailed;
   if (effective === "blocked" || effective === "not_configured") return t.updateApplyRecoveryBlocked;
   if (updateApplyIsRunning(effective)) return t.updateApplyRecoveryRunning;
   if (effective === "current") return t.updateApplyRecoveryCurrent;
@@ -509,6 +602,185 @@ export function maintenanceDetailRows(flow, t) {
   if (flow?.requires_confirmation) rows.push([labels.confirm, t.maintenanceConfirmationRequired]);
   if (!flow?.can_apply) rows.push([labels.apply, t.maintenanceUnsupported]);
   return rows.slice(0, 5);
+}
+
+function maintenancePresentation(flow) {
+  return flow?.presentation && typeof flow.presentation === "object" ? flow.presentation : flow || {};
+}
+
+function maintenanceBooleanText(value, t) {
+  if (value === true) return t.yes || "Yes";
+  if (value === false) return t.no || "No";
+  return value === null || value === undefined || value === "" ? "-" : String(value);
+}
+
+export function maintenanceReadinessRows(overview, t) {
+  const flows = overview?.flows || {};
+  const titleLabels = t.maintenanceReadinessTitles || {};
+  const summaries = t.maintenanceOperatorSummaries || {};
+  const actions = t.maintenanceOperatorActions || {};
+  const statusLabels = t.maintenanceOperatorStatuses || {};
+  const checkActions = t.maintenanceCheckActions || {};
+  const factLabels = t.maintenanceFactLabels || {};
+
+  return ["db_adoption", "migration"].map((key) => {
+    const flow = { key, ...(flows[key] || {}) };
+    const presentation = maintenancePresentation(flow);
+    const userStatus = presentation.user_status || "attention";
+    const facts = Array.isArray(presentation.facts) ? presentation.facts : [];
+    return {
+      key,
+      flow,
+      userStatus,
+      statusClass: maintenanceStatusClass(userStatus),
+      statusLabel: statusLabels[userStatus] || maintenanceStatusText(userStatus, t),
+      title: titleLabels[presentation.title_key] || t.maintenanceFlows?.[key] || key,
+      summary: summaries[presentation.summary_key] || formatMaintenanceMessage(flow.reason, t),
+      action: actions[presentation.operator_action_key] || actions.check_status || "",
+      checkLabel: checkActions[key] || t.maintenanceDryRun,
+      canCheck: Boolean(presentation.can_check),
+      showCheck: Boolean(presentation.can_check && userStatus !== "ok"),
+      supportReportAvailable: Boolean(presentation.support_report_available),
+      facts: facts
+        .filter((item) => item && item.value !== null && item.value !== undefined)
+        .map((item) => [factLabels[item.key] || item.key, maintenanceBooleanText(item.value, t)])
+        .slice(0, 3),
+    };
+  });
+}
+
+function backupArtifactStatusLabel(artifact, t) {
+  const labels = t.maintenanceBackupStatuses || {};
+  if (artifact?.valid) return labels.valid || maintenanceStatusText("verified", t);
+  const status = artifact?.validation_status || "problem";
+  return labels[status] || labels.problem || maintenanceStatusText(status, t);
+}
+
+export function maintenanceBackupCheckResultText(status, t) {
+  const labels = t.maintenanceBackupCheckStatuses || {};
+  const key = String(status || "").trim().toLowerCase();
+  if (labels[key]) return labels[key];
+  if (["valid", "verified", "available"].includes(key)) return labels.valid || maintenanceStatusText("verified", t);
+  if (["no_artifacts", "empty"].includes(key)) return labels.no_artifacts || t.maintenanceBackupNothingToCheck || maintenanceStatusText("no_artifacts", t);
+  if (["blocked", "invalid", "check_failed"].includes(key)) return labels[key] || maintenanceStatusText(key, t);
+  return labels.fallback || t.maintenanceMessageFallback || maintenanceStatusText(status, t);
+}
+
+export function maintenanceBackupOperationResultText(result, t) {
+  const kind = String(result?.kind || "check").trim().toLowerCase();
+  const status = String(result?.status || "").trim().toLowerCase();
+  const operationLabels = t.maintenanceBackupOperationLabels || {};
+  if (kind === "create") {
+    const labels = t.maintenanceBackupCreateStatuses || {};
+    const created = ["ok", "created", "verified", "valid", "completed", "complete", "satisfied"].includes(status);
+    const failed = ["blocked", "failed", "error", "backup_failed"].includes(status);
+    return {
+      kind,
+      label: operationLabels.create || t.maintenanceBackupCreate || "Create",
+      text: labels[status] || (created ? t.maintenanceBackupCreated : failed ? t.maintenanceBackupCreateFailed : labels.fallback || t.maintenanceMessageFallback || maintenanceStatusText(status, t)),
+      showReason: !created,
+    };
+  }
+  if (kind === "delete") {
+    const labels = t.maintenanceBackupDeleteStatuses || {};
+    const deleted = ["deleted", "deleted_with_missing_files", "ok", "completed", "complete"].includes(status);
+    const failed = ["blocked", "failed", "error", "delete_failed", "not_found"].includes(status);
+    return {
+      kind,
+      label: operationLabels.delete || t.maintenanceBackupDelete || "Delete",
+      text: labels[status] || (deleted ? t.maintenanceBackupDeleted : failed ? t.maintenanceBackupDeleteFailed : labels.fallback || t.maintenanceMessageFallback || maintenanceStatusText(status, t)),
+      showReason: !deleted,
+    };
+  }
+  const checked = ["valid", "verified", "available"].includes(status);
+  return {
+    kind: "check",
+    label: operationLabels.check || t.maintenanceBackupCheck || "Check",
+    text: maintenanceBackupCheckResultText(status, t),
+    showReason: !checked,
+  };
+}
+
+export function maintenanceBackupManagerModel(overview, t, lang = "ru") {
+  const restore = overview?.flows?.restore || {};
+  const details = restore?.details || {};
+  const artifacts = Array.isArray(details.artifacts) ? details.artifacts : [];
+  const sortedArtifacts = [...artifacts].sort((left, right) => {
+    const leftTime = new Date(left?.artifact_created_at || 0).getTime() || 0;
+    const rightTime = new Date(right?.artifact_created_at || 0).getTime() || 0;
+    return rightTime - leftTime;
+  });
+  const validCount = sortedArtifacts.filter((item) => item?.valid).length;
+  const problemCount = Math.max(0, sortedArtifacts.length - validCount);
+  const latest = sortedArtifacts[0] || null;
+  const productionRestoreSupported = Boolean(details.current_product_restore_supported);
+  const temporaryValidationSupported = Boolean(details.temporary_validation_restore_supported);
+  const copyWord = sortedArtifacts.length === 1 ? t.maintenanceBackupCopyOne : t.maintenanceBackupCopyMany;
+  const renderedCopyWord = String(copyWord || "").includes("{count}")
+    ? String(copyWord || "").replace("{count}", String(sortedArtifacts.length))
+    : `${sortedArtifacts.length} ${copyWord || ""}`.trim();
+  return {
+    total: sortedArtifacts.length,
+    valid: validCount,
+    problem: problemCount,
+    totalCount: sortedArtifacts.length,
+    validCount,
+    problemCount,
+    countText: sortedArtifacts.length ? renderedCopyWord : t.maintenanceBackupNoCopies,
+    latest,
+    latestCreatedAt: latest?.artifact_created_at ? formatAuditTimestamp(latest.artifact_created_at, lang) : "-",
+    latestStatus: latest ? backupArtifactStatusLabel(latest, t) : t.maintenanceBackupNoCopies,
+    statusText: sortedArtifacts.length
+      ? (t.maintenanceBackupStatusReady || "").replace("{count}", String(sortedArtifacts.length)).replace("{copy}", copyWord)
+      : t.maintenanceBackupStatusEmpty,
+    canCheck: Boolean(validCount && temporaryValidationSupported),
+    canDelete: sortedArtifacts.some((item) => item?.deletable),
+    restoreSupported: productionRestoreSupported,
+    restoreText: productionRestoreSupported ? t.maintenanceBackupRestoreAvailable : t.maintenanceBackupRestoreUnavailable,
+    restoreReason: productionRestoreSupported ? "" : t.maintenanceBackupRestoreUnavailableReason,
+    artifacts: sortedArtifacts.slice(0, 6).map((item) => ({
+      id: item.artifact_id,
+      createdAt: item.artifact_created_at ? formatAuditTimestamp(item.artifact_created_at, lang) : "-",
+      size: formatFileSize(item.file_size),
+      status: backupArtifactStatusLabel(item, t),
+      valid: Boolean(item.valid),
+      deletable: Boolean(item.deletable),
+      canDelete: Boolean(item.deletable),
+      canCheck: Boolean(item.valid && temporaryValidationSupported),
+      schema: item.artifact_schema_version ?? "-",
+      backend: item.db_backend || "-",
+      sizeText: formatFileSize(item.file_size),
+    })),
+  };
+}
+
+export function maintenanceWarningModel(overview, t) {
+  const report = overview?.upgrade_report || {};
+  const warnings = Array.isArray(report.warnings) ? report.warnings : [];
+  const labels = t.maintenanceWarningLabels || {};
+  const fallback = t.maintenanceWarningGeneric || {};
+  const commonFallback = t.maintenanceWarningsFallback || {};
+  const groups = report.warning_groups || {};
+  return {
+    total: Number(report.warnings_count ?? report.total ?? warnings.length) || 0,
+    groups: {
+      actionable: Number(groups.actionable || 0),
+      informational: Number(groups.informational || 0),
+      support: Number(groups.support || 0),
+    },
+    items: warnings.slice(0, 10).map((item) => {
+      const code = String(item?.code || "");
+      const copy = labels[code] || fallback[item?.classification] || fallback.informational || commonFallback || {};
+      return {
+        code,
+        classification: item?.classification || "informational",
+        severity: item?.severity || "info",
+        title: copy.title || commonFallback.title || maintenanceStatusText("unknown", t),
+        summary: copy.summary || t.maintenanceMessageFallback,
+        action: copy.action || t.maintenanceSupportReportAction,
+      };
+    }),
+  };
 }
 
 export function auditMessage(event, lang) {

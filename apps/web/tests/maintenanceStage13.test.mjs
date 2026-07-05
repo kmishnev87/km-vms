@@ -35,7 +35,7 @@ function extractBlockAfter(marker) {
 }
 
 assert.equal(settingsPage.includes('apiFetch("/system/maintenance/overview")'), true);
-assert.equal(settingsPage.includes('apiFetch("/system/upgrade/report")'), true);
+assert.equal(settingsPage.includes('apiFetch("/system/upgrade/report")'), false);
 assert.equal(settingsPage.includes('apiFetchBlob("/system/upgrade/report")'), true);
 assert.equal(settingsPage.includes("MAINTENANCE_DRY_RUN_ENDPOINTS"), true);
 assert.equal(settingsHelpers.includes("MAINTENANCE_DRY_RUN_ENDPOINTS"), true);
@@ -102,13 +102,10 @@ for (const label of ["Pending", "Artifacts", "Current", "Target", "Available", "
 }
 assert.equal(maintenanceDetailRows.includes("t.maintenanceLabels"), true);
 
-const reportStart = settingsPage.indexOf('className="settingsMaintenanceReportPreview"');
-assert.notEqual(reportStart, -1, "maintenance report preview not found");
-const maintenanceReportPreview = settingsPage.slice(reportStart, settingsPage.indexOf("</section>", reportStart));
-assert.equal(maintenanceReportPreview.includes("<dt>ID</dt>"), false);
-assert.equal(maintenanceReportPreview.includes("<dt>DB adoption</dt>"), false);
-assert.equal(maintenanceReportPreview.includes("t.maintenanceLabels?.reportId"), true);
-assert.equal(maintenanceReportPreview.includes("t.maintenanceFlows?.db_adoption"), true);
+assert.equal(settingsPage.includes('className="settingsMaintenanceReportPreview"'), false);
+assert.equal(settingsPage.includes("viewMaintenanceReport"), false);
+assert.equal(settingsPage.includes("maintenanceReportView"), false);
+assert.equal(settingsPage.includes("downloadMaintenanceReport"), true);
 
 assert.equal(css.includes(".settingsMaintenanceModal"), true);
 assert.equal(css.includes(".settingsMaintenanceList"), true);

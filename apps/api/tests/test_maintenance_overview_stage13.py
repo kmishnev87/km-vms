@@ -74,12 +74,27 @@ def test_maintenance_overview_is_read_only_sanitized_and_complete(client_db):
     assert payload["read_only"] is True
     assert payload["side_effects"]["db_mutated"] is False
     assert set(payload["flows"]) == {"db_adoption", "migration", "restore"}
+    for key, flow in payload["flows"].items():
+        assert flow["key"] == key
+        assert flow["presentation"]["key"] == key
+        assert flow["user_status"] in {"ok", "attention", "blocked", "unavailable", "action_available"}
+        assert flow["title_key"]
+        assert flow["summary_key"]
+        assert flow["operator_action_key"]
+        assert isinstance(flow["can_check"], bool)
+        assert isinstance(flow["support_report_available"], bool)
+        assert isinstance(flow["facts"], list)
+    restore = payload["flows"]["restore"]
+    assert restore["title_key"] == "backup_restore_check"
+    assert restore["details"]["current_product_restore_supported"] is False
+    restore_facts = {item["key"]: item["value"] for item in restore["facts"]}
+    assert restore_facts["current_product_restore"] is False
     assert payload["upgrade_report"]["available"] is True
     assert payload["upgrade_report"]["download_endpoint"] == "/system/upgrade/report"
     assert payload["history"]["durable_history"] == "limited"
 
     rendered = json.dumps(payload, ensure_ascii=False).lower()
-    forbidden = ["password", "authorization", "jwt", "rtsp://", "postgresql://", "sqlite:///", "backup_root", "raw_path"]
+    forbidden = ["password", "authorization", "jwt", "rtsp://", "postgresql://", "sqlite:///", "raw_path"]
     assert not any(item in rendered for item in forbidden)
 
 

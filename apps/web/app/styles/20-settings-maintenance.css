@@ -1080,6 +1080,7 @@
 }
 
 .settingsMaintenanceModal {
+  box-sizing: border-box;
   width: min(100%, 880px);
   max-height: min(86vh, 780px);
   overflow: auto;
@@ -1090,6 +1091,62 @@
   padding: 18px;
   display: grid;
   gap: 14px;
+}
+
+.settingsMaintenanceModalHeader {
+  position: sticky;
+  top: -18px;
+  z-index: 4;
+  margin: -18px -18px 0;
+  padding: 14px 18px;
+  border-bottom: 1px solid #e4edf5;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settingsMaintenanceModalHeader h2 {
+  min-width: 0;
+  margin: 0;
+  color: #0f172a;
+  font-size: 18px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.settingsMaintenanceModalActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settingsMaintenanceIconButton {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid #d6e0ea;
+  background: #ffffff;
+  color: #334155;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.settingsMaintenanceIconButton:hover:not(:disabled) {
+  border-color: #b9c7d6;
+  background: #f8fbfd;
+}
+
+.settingsMaintenanceIconButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .settingsMaintenanceToolbar {
@@ -1130,8 +1187,7 @@
   min-width: 0;
 }
 
-.settingsMaintenanceFlow h3,
-.settingsMaintenanceReportPreview h3 {
+.settingsMaintenanceFlow h3 {
   margin: 0;
   color: #0f172a;
   font-size: 14px;
@@ -1179,8 +1235,7 @@
   color: #991b1b;
 }
 
-.settingsMaintenanceFlow dl,
-.settingsMaintenanceReportPreview dl {
+.settingsMaintenanceFlow dl {
   grid-column: 1 / -1;
   margin: 0;
   display: grid;
@@ -1191,8 +1246,7 @@
   align-content: start;
 }
 
-.settingsMaintenanceFlow dl div,
-.settingsMaintenanceReportPreview dl div {
+.settingsMaintenanceFlow dl div {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(120px, 0.42fr) minmax(0, 1fr);
@@ -1203,16 +1257,13 @@
 }
 
 .settingsMaintenanceFlow dt,
-.settingsMaintenanceFlow dd,
-.settingsMaintenanceReportPreview dt,
-.settingsMaintenanceReportPreview dd {
+.settingsMaintenanceFlow dd {
   min-width: 0;
   margin: 0;
   overflow-wrap: anywhere;
 }
 
-.settingsMaintenanceFlow dt,
-.settingsMaintenanceReportPreview dt {
+.settingsMaintenanceFlow dt {
   color: #64748b;
   font-weight: 700;
 }
@@ -1232,8 +1283,7 @@
   justify-content: center;
 }
 
-.settingsMaintenanceReport,
-.settingsMaintenanceReportPreview {
+.settingsMaintenanceReport {
   order: 2;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
@@ -1245,6 +1295,438 @@
 
 .settingsMaintenanceReport {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settingsMaintenanceReadiness {
+  order: 1;
+  border: 1px solid #dde6ef;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 16px;
+  display: grid;
+  gap: 14px;
+}
+
+.settingsMaintenanceReadinessHead {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.settingsMaintenanceReadinessHead h3 {
+  margin: 0;
+  color: #182335;
+  font-size: 17px;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.settingsMaintenanceReadinessHead p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.settingsMaintenanceReadinessGrid {
+  display: grid;
+  gap: 8px;
+}
+
+.settingsMaintenanceReadinessItem {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: flex-start;
+  border: 1px solid #e6edf5;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 12px;
+}
+
+.settingsMaintenanceReadinessIcon {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #cfe8d8;
+  background: #eefaf3;
+  color: #15803d;
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.settingsMaintenanceReadinessItem.is-attention .settingsMaintenanceReadinessIcon,
+.settingsMaintenanceReadinessItem.is-action_available .settingsMaintenanceReadinessIcon,
+.settingsMaintenanceReadinessItem.is-unavailable .settingsMaintenanceReadinessIcon {
+  border-color: #f6d982;
+  background: #fff8e6;
+  color: #9a6a09;
+}
+
+.settingsMaintenanceReadinessItem.is-blocked .settingsMaintenanceReadinessIcon {
+  border-color: #f4c5c5;
+  background: #fff0f0;
+  color: #b42318;
+}
+
+.settingsMaintenanceReadinessBody {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.settingsMaintenanceReadinessTitle {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settingsMaintenanceReadinessTitle h4 {
+  min-width: 0;
+  margin: 0;
+  color: #142033;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.settingsMaintenanceReadinessBody p,
+.settingsMaintenanceReadinessBody small {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+.settingsMaintenanceReadinessBody small {
+  color: #475569;
+}
+
+.settingsMaintenanceReadinessBody dl {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settingsMaintenanceReadinessBody dl div {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #e3ebf3;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 3px 8px;
+  color: #475569;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.settingsMaintenanceReadinessBody dt,
+.settingsMaintenanceReadinessBody dd {
+  min-width: 0;
+  margin: 0;
+}
+
+.settingsMaintenanceReadinessBody dt {
+  color: #64748b;
+}
+
+.settingsMaintenanceReadinessBody dd {
+  color: #182335;
+  font-weight: 600;
+}
+
+.settingsMaintenanceBackupCreate {
+  border: 1px solid #e4edf5;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.settingsMaintenanceBackupCreate strong {
+  display: block;
+  color: #142033;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.settingsMaintenanceBackupCreate p,
+.settingsMaintenanceBackupCreate small {
+  display: block;
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settingsMaintenanceBackupManager {
+  order: 2;
+  border: 1px solid #dde6ef;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.settingsMaintenanceBackupHead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.settingsMaintenanceBackupHead h3 {
+  margin: 0;
+  color: #182335;
+  font-size: 18px;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.settingsMaintenanceBackupHead p,
+.settingsMaintenanceBackupScope,
+.settingsMaintenanceBackupRestoreNote span,
+.settingsMaintenanceBackupResult {
+  margin: 4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.settingsMaintenanceBackupCounts {
+  min-width: 150px;
+  border: 1px solid #e4edf5;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 9px 10px;
+  display: grid;
+  gap: 3px;
+  text-align: right;
+}
+
+.settingsMaintenanceBackupCounts strong,
+.settingsMaintenanceBackupSummary strong,
+.settingsMaintenanceBackupRestoreNote strong,
+.settingsMaintenanceBackupItem strong {
+  color: #142033;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.settingsMaintenanceBackupCounts span {
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.settingsMaintenanceBackupSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settingsMaintenanceBackupSummary > div {
+  min-width: 0;
+  border: 1px solid #e4edf5;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 9px 10px;
+  display: grid;
+  gap: 3px;
+}
+
+.settingsMaintenanceBackupSummary span,
+.settingsMaintenanceBackupItem span,
+.settingsMaintenanceBackupListHead span {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.settingsMaintenanceBackupActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settingsMaintenanceBackupRestoreNote {
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+  padding: 10px 12px;
+  display: grid;
+  gap: 3px;
+}
+
+.settingsMaintenanceBackupList {
+  border: 1px solid #e4edf5;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fbfdff;
+}
+
+.settingsMaintenanceBackupListHead,
+.settingsMaintenanceBackupItem {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+}
+
+.settingsMaintenanceBackupListHead {
+  background: #f8fafc;
+  border-bottom: 1px solid #e4edf5;
+}
+
+.settingsMaintenanceBackupItem + .settingsMaintenanceBackupItem {
+  border-top: 1px solid #e4edf5;
+}
+
+.settingsMaintenanceBackupItem > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settingsMaintenanceBackupItem.is-problem {
+  background: #fffaf0;
+}
+
+.settingsMaintenanceBackupItemActions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.settingsMaintenanceMiniButton {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #334155;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  font-weight: 800;
+}
+
+.settingsMaintenanceMiniButton:hover:not(:disabled) {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.settingsMaintenanceMiniButton.danger:hover:not(:disabled) {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.settingsMaintenanceMiniButton:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+
+.settingsMaintenanceWarningGroups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 0;
+}
+
+.settingsMaintenanceWarningGroups span {
+  border: 1px solid #e4edf5;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475569;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.settingsMaintenanceWarningsList {
+  grid-column: 1 / -1;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 14px;
+  right: 14px;
+  z-index: 6;
+  max-height: min(42vh, 340px);
+  overflow: auto;
+  border: 1px solid #dbe6f0;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.14);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.settingsMaintenanceWarningsList article,
+.settingsMaintenanceWarningsList > p {
+  margin: 0;
+  border: 1px solid #e4edf5;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 9px 10px;
+}
+
+.settingsMaintenanceWarningsList article.is-actionable {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.settingsMaintenanceWarningsList article.is-informational {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.settingsMaintenanceWarningsList article.is-support {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.settingsMaintenanceWarningsList strong {
+  color: #142033;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.settingsMaintenanceWarningsList p,
+.settingsMaintenanceWarningsList small {
+  display: block;
+  margin: 3px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .settingsUpdateApplyPanel {
@@ -1268,6 +1750,7 @@
 }
 
 .settingsUpdateApplyHero {
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(250px, 0.82fr) minmax(0, 2.18fr);
   gap: 16px;
@@ -1332,16 +1815,15 @@
 
 .settingsUpdateApplyVersionRows {
   margin: 8px 0 0;
-  display: grid;
-  gap: 4px;
+  display: inline-grid;
+  grid-template-columns: max-content max-content;
+  gap: 4px 12px;
+  align-items: baseline;
+  max-width: 100%;
 }
 
 .settingsUpdateApplyVersionRows div {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(112px, auto) minmax(0, 1fr);
-  gap: 10px;
-  align-items: baseline;
+  display: contents;
 }
 
 .settingsUpdateApplyVersionRows dt {
@@ -1351,6 +1833,7 @@
   font-weight: 500;
   letter-spacing: 0;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .settingsUpdateApplyVersionRows dd {
@@ -1359,9 +1842,14 @@
   font-size: 12px;
   line-height: 1.25;
   font-weight: 500;
+  justify-self: start;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
 }
 
 .settingsUpdateApplyHeroFacts {
+  min-width: 0;
   margin: 0;
   display: grid;
   grid-template-columns: minmax(0, 1.75fr) minmax(150px, 0.75fr);
@@ -1569,6 +2057,12 @@
   color: #94a3b8;
 }
 
+.settingsUpdateApplyTimeline li.is-idle .settingsUpdateApplyTimelineDot {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #94a3b8;
+}
+
 .settingsUpdateApplyTimeline li.is-running {
   color: #92400e;
 }
@@ -1579,6 +2073,10 @@
 
 .settingsUpdateApplyTimeline li.is-failed {
   color: #991b1b;
+}
+
+.settingsUpdateApplyTimeline li.is-idle {
+  color: #64748b;
 }
 
 .settingsUpdateApplyTimeline strong,
@@ -1714,6 +2212,97 @@
   line-height: 1.35;
 }
 
+.settingsMaintenanceSupport {
+  order: 3;
+  position: relative;
+  border: 1px solid #e3ebf3;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 13px 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 12px;
+  align-items: center;
+}
+
+.settingsMaintenanceSupportMain {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.settingsMaintenanceSupportCopy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settingsMaintenanceSupportCopy strong {
+  display: block;
+  color: #182335;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.settingsMaintenanceSupportCopy p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settingsMaintenanceSupportStatus {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settingsMaintenanceSupportStatus span {
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  background: #f0fdf4;
+  color: #166534;
+  padding: 4px 9px;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.settingsMaintenanceSupportStatus span.is-attention {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.settingsMaintenanceSupportStatus small {
+  min-width: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.settingsMaintenanceSupportActions {
+  display: grid;
+  grid-template-columns: minmax(128px, 1fr);
+  gap: 6px;
+  align-items: center;
+  justify-content: end;
+  width: 164px;
+  min-width: 164px;
+}
+
+.settingsMaintenanceSupportActions .button {
+  width: 100%;
+  min-width: 0;
+  padding-left: 10px;
+  padding-right: 10px;
+  justify-content: center;
+}
+
 .settingsMaintenanceReport div {
   min-width: 0;
   display: grid;
@@ -1737,7 +2326,7 @@
 }
 
 .settingsMaintenanceResult {
-  order: 3;
+  order: 4;
   border: 1px solid #dbe3ef;
   border-radius: 8px;
   background: #f8fafc;
@@ -1768,15 +2357,27 @@
 }
 
 @media (max-width: 760px) {
+  .settingsMaintenanceModal {
+    width: calc(100vw - 24px);
+    max-height: min(88vh, 780px);
+  }
+
   .settingsMaintenanceReport,
   .settingsMaintenanceFlow,
+  .settingsMaintenanceSupport,
+  .settingsMaintenanceSupport dl,
+  .settingsMaintenanceBackupCreate,
+  .settingsMaintenanceBackupHead,
+  .settingsMaintenanceBackupCounts,
+  .settingsMaintenanceBackupSummary,
+  .settingsMaintenanceBackupListHead,
+  .settingsMaintenanceBackupItem,
   .settingsUpdateApplyFacts,
   .settingsUpdateApplyHero,
   .settingsUpdateApplyHeroFacts,
   .settingsUpdateApplySupport,
   .settingsUpdateApplySummaryGrid,
-  .settingsMaintenanceFlow dl,
-  .settingsMaintenanceReportPreview dl {
+  .settingsMaintenanceFlow dl {
     grid-template-columns: 1fr;
   }
 
@@ -1785,25 +2386,81 @@
     justify-content: center;
   }
 
+  .settingsUpdateApplyHero {
+    padding: 14px;
+  }
+
+  .settingsUpdateApplyHeroFacts div,
+  .settingsUpdateApplyHeroFacts div:nth-child(1) dt,
+  .settingsUpdateApplyHeroFacts div:nth-child(2) {
+    justify-items: start;
+    text-align: left;
+  }
+
   .settingsMaintenanceFlowActions {
     grid-column: 1;
     grid-row: auto;
     justify-content: stretch;
   }
 
+  .settingsMaintenanceReadinessItem {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .settingsMaintenanceReadinessItem .button {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
+
+  .settingsMaintenanceSupportActions {
+    justify-content: stretch;
+    grid-template-columns: 1fr;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .settingsMaintenanceBackupCounts {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .settingsMaintenanceBackupActions,
+  .settingsMaintenanceBackupItemActions {
+    justify-content: stretch;
+  }
+
+  .settingsUpdateApplyTimeline {
+    overflow-x: visible;
+  }
+
+  .settingsUpdateApplyTimeline ol {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 8px;
+  }
+
+  .settingsUpdateApplyTimeline li {
+    padding: 0;
+  }
+
+  .settingsUpdateApplyTimeline li::before {
+    display: none;
+  }
+
   .settingsMaintenanceFlowActions .button,
+  .settingsMaintenanceReadinessItem .button,
+  .settingsMaintenanceBackupCreate .button,
+  .settingsMaintenanceBackupActions .button,
+  .settingsMaintenanceSupportActions .button,
   .settingsUpdateApplyActions .button {
     width: 100%;
   }
 
   .settingsMaintenanceFlow dl div,
-  .settingsMaintenanceReportPreview dl div,
   .settingsUpdateApplyFacts div {
     grid-template-columns: minmax(96px, 0.42fr) minmax(0, 1fr);
-  }
-
-  .settingsUpdateApplyTimeline ol {
-    min-width: 640px;
   }
 }
 

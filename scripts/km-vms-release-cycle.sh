@@ -59,6 +59,7 @@ SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 SAFE_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
 SAFE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+MAX_PATCH_VERSION = 29
 VERSION_FILES = [
     Path("apps/api/app/core/version.py"),
     Path("apps/web/package.json"),
@@ -80,6 +81,15 @@ def parse_version(value: str) -> tuple[int, int, int]:
     base = value[1:] if value.startswith("v") else value
     main = re.split(r"[-+]", base, 1)[0]
     return tuple(int(part) for part in main.split("."))
+
+
+def validate_patch_cap(version: str, context: str) -> None:
+    major, minor, patch = parse_version(version)
+    if patch > MAX_PATCH_VERSION:
+        fail(
+            f"{context} patch version must be 0..{MAX_PATCH_VERSION}; "
+            f"after {major}.{minor}.{MAX_PATCH_VERSION} use {major}.{minor + 1}.0"
+        )
 
 
 def replace_app_version(text: str, version: str) -> str:
@@ -116,6 +126,7 @@ def validate_descriptor() -> dict:
     version = descriptor.get("version")
     if not isinstance(version, str) or not SEMVER_RE.fullmatch(version):
         fail("release descriptor version must be semantic")
+    validate_patch_cap(version, "release descriptor")
     expected_tag = f"v{version}"
     tag = descriptor.get("tag") or descriptor.get("source_ref")
     if tag != expected_tag or not SAFE_TAG_RE.fullmatch(tag):
@@ -149,6 +160,7 @@ def check_versions() -> None:
     version = unique.pop()
     if not SEMVER_RE.fullmatch(version):
         fail(f"version is not semantic: {version}")
+    validate_patch_cap(version, "--check")
 
 
 def check_dirty() -> None:
@@ -162,6 +174,7 @@ def check_dirty() -> None:
 def prepare(version: str) -> None:
     if not SEMVER_RE.fullmatch(version):
         fail("--prepare-version must be semantic x.y.z")
+    validate_patch_cap(version, "--prepare-version")
     current = versions()["release_descriptor"]
     if parse_version(version) <= parse_version(current):
         fail(f"target version {version} must be greater than current {current}")
@@ -195,6 +208,7 @@ def print_release_commands(version: str) -> None:
         version = versions()["release_descriptor"]
     if not SEMVER_RE.fullmatch(version):
         fail("--version must be semantic x.y.z")
+    validate_patch_cap(version, "--print-github-release-commands")
     tag = f"v{version}"
     print("Release publication commands preview; run only after operator acceptance:")
     print("git status --short --branch")

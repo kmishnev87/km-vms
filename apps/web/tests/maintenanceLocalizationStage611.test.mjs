@@ -106,5 +106,5 @@ for (const forbidden of [
   assert.equal(settingsPage.includes(forbidden), false, `${forbidden} must not render raw backend text`);
 }
 
-assert.equal(settingsPage.includes("formatMaintenanceMessage(flow.reason, t, lang)"), true);
+assert.equal(settingsPage.includes("maintenanceReadinessRows(maintenanceOverview, t)"), true);
 assert.equal(settingsPage.includes("formatMaintenanceMessage(updateApplyStatus.error.message, t, lang, \"error\")"), true);

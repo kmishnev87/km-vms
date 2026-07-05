@@ -175,17 +175,17 @@ The read-only update status and release manifest check API is available through 
 
 ## Normal Release Cycle
 
-KM VMS release train versions are semantic: `0.7.1`, `0.7.2`, `0.7.3`, and so on. Stage closeout means the implementation has been accepted in the repository; a GitHub Release is the explicit publication step that follows operator authorization.
+KM VMS release train versions are semantic `X.Y.Z`. The patch component `Z` is capped at `29`; after `X.Y.29`, the next normal release is `X.(Y+1).0`. Several accepted prompts may be grouped into one release bump when they belong to the same logical work section and the operator has not requested an intermediate release. Stage closeout means the implementation has been accepted in the repository; a GitHub Release is the explicit publication step that follows operator authorization.
 
 Release preparation is checked with:
 
 ```sh
 sh scripts/km-vms-release-cycle.sh --check
-sh scripts/km-vms-release-cycle.sh --dry-run --prepare-version 0.7.3
-sh scripts/km-vms-release-cycle.sh --print-github-release-commands --version 0.7.3
+sh scripts/km-vms-release-cycle.sh --dry-run --prepare-version 0.7.29
+sh scripts/km-vms-release-cycle.sh --print-github-release-commands --version 0.7.29
 ```
 
-The helper validates version consistency across API, web package files and `release/km-vms-release.json`. It also validates that the descriptor uses the Stage 6.1.3 evidence model: the public release tag `vX.Y.Z` resolves to the immutable commit SHA. The descriptor in the repository is allowed to have `commit_sha: null` before publication; readiness for an official release depends on the tag/GitHub evidence after the accepted commit exists.
+The helper validates version consistency across API, web package files and `release/km-vms-release.json`, and rejects patch values above `29`. It also validates that the descriptor uses the Stage 6.1.3 evidence model: the public release tag `vX.Y.Z` resolves to the immutable commit SHA. The descriptor in the repository is allowed to have `commit_sha: null` before publication; readiness for an official release depends on the tag/GitHub evidence after the accepted commit exists.
 
 After acceptance and only by explicit operator command, the release publication flow is:
 

@@ -120,6 +120,7 @@ class BugReportRequest(BaseModel):
 class BackupCreateRequest(BaseModel):
     source: str = Field(default="manual_admin", pattern="^(pre_upgrade|pre_adoption|manual_admin|test)$")
     backup_root: str | None = Field(default=None, max_length=1024)
+    confirm: bool = False
 
 
 class StorageValidateRequest(BaseModel):
@@ -395,13 +396,36 @@ def system_update_apply_cancel(
 @router.post("/system/backup/create")
 def system_backup_create(
     payload: BackupCreateRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
+    if not payload.confirm:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="system",
+            event_type="system.backup_create_blocked",
+            severity="warning",
+            message_ru="Database backup creation was blocked because explicit confirmation is required.",
+            message_en="Database backup creation was blocked because explicit confirmation is required.",
+            target_type="db_backup",
+            metadata={"status": "blocked", "reason": "confirmation_required", "source": audit_redact_text(payload.source)[:80]},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "status": "blocked",
+                "reason": "confirmation_required",
+                "message": "Explicit confirm=true is required for backup creation.",
+            },
+        )
     try:
         config = BackupExecutionConfig(backup_root=Path(payload.backup_root) if payload.backup_root else None, source=payload.source)
         result = create_backup_before_upgrade(db, config=config, migration_plan_summary=build_migration_plan(db))
-        return {
+        response = {
             "backup_id": result["backup_id"],
             "status": result["status"],
             "db_backend": result["db_backend"],
@@ -413,8 +437,62 @@ def system_backup_create(
             "restore_validation_status": result["restore_validation_status"],
             "video_archive_files_included": False,
         }
+        create_event(
+            db=db,
+            actor=current_user,
+            category="system",
+            event_type="system.backup_create_completed",
+            severity="info",
+            message_ru="Database backup was created.",
+            message_en="Database backup was created.",
+            target_type="db_backup",
+            target_id=response["backup_id"],
+            metadata={
+                "status": response["status"],
+                "db_backend": response["db_backend"],
+                "source": response["source"],
+                "file_size": response["file_size"],
+                "restore_validation_status": response["restore_validation_status"],
+                "video_archive_files_included": False,
+            },
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        return response
     except BackupSafetyBlocked as exc:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="system",
+            event_type="system.backup_create_blocked",
+            severity="warning",
+            message_ru="Database backup creation was blocked by safety checks.",
+            message_en="Database backup creation was blocked by safety checks.",
+            target_type="db_backup",
+            metadata={
+                "status": "blocked",
+                "reason": audit_redact_text(str(exc.diagnostics.get("reason") or exc))[:300],
+                "source": audit_redact_text(payload.source)[:80],
+            },
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.diagnostics)
+    except Exception as exc:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="system",
+            event_type="system.backup_create_failed",
+            severity="error",
+            message_ru=f"Database backup creation failed: {type(exc).__name__}",
+            message_en=f"Database backup creation failed: {type(exc).__name__}",
+            target_type="db_backup",
+            metadata={"status": "failed", "error_type": type(exc).__name__, "error": audit_redact_text(str(exc))[:300]},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise
 
 
 @router.get("/system/runtime/status")

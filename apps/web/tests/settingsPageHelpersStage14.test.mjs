@@ -15,8 +15,13 @@ import {
   hardwareOptionState,
   humanErrorText,
   languageOf,
+  maintenanceBackupCheckResultText,
+  maintenanceBackupOperationResultText,
   maintenanceDetailRows,
   maintenanceFlowRows,
+  maintenanceBackupManagerModel,
+  maintenanceReadinessRows,
+  maintenanceWarningModel,
   maintenanceStatusClass,
   maintenanceStatusText,
   payloadFromDraft,
@@ -85,7 +90,9 @@ const maintenanceText = {
     ok: "OK",
     blocked: "Blocked",
     complete: "Complete",
-    drift_known_safe: "Known-safe drift",
+    valid: "Verified",
+    verified: "Verified",
+    drift_known_safe: "No critical issues",
     update_available: "Update available",
     identity_incomplete: "Identity incomplete",
     installed_identity_drift: "Install drift",
@@ -106,8 +113,107 @@ const maintenanceText = {
     restore_no_valid_artifacts: "Restore localized",
     update_apply_not_available_for_release: "Update apply localized",
     maintenance_history_limited: "History localized",
-    drift_known_safe: "Drift localized",
+    drift_known_safe: "No critical issues localized",
     draft_known_safe: "Draft localized",
+  },
+  maintenanceReadinessTitles: {
+    db_identity: "Database identity",
+    db_schema: "Database schema",
+    backup_restore_check: "Backup restore check",
+  },
+  maintenanceOperatorStatuses: {
+    ok: "Healthy",
+    attention: "Check",
+    blocked: "Needs attention",
+    unavailable: "No data",
+    action_available: "Action available",
+  },
+  maintenanceOperatorSummaries: {
+    db_identity_ok: "Database is recognized.",
+    db_schema_current: "Schema is current.",
+    backup_restore_no_artifacts: "No backup copies.",
+  },
+  maintenanceOperatorActions: {
+    db_identity_check_optional: "No action.",
+    migration_check_optional: "No action.",
+    backup_restore_create_backup_first: "Create backup first.",
+    check_status: "Check status.",
+  },
+  maintenanceCheckActions: {
+    db_adoption: "Check DB",
+    migration: "Check migrations",
+    restore: "Check backup",
+  },
+  maintenanceFactLabels: {
+    metadata_present: "Metadata",
+    current_version: "Current",
+    target_version: "Target",
+    pending_count: "Pending",
+    valid_artifacts: "Copies",
+    temporary_validation: "Temporary",
+    current_product_restore: "Production restore",
+  },
+  maintenanceBackupsTitle: "Backups",
+  maintenanceBackupCopyOne: "{count} copy",
+  maintenanceBackupCopyMany: "{count} copies",
+  maintenanceBackupNoCopies: "No copies",
+  maintenanceBackupStatusEmpty: "No backups yet",
+  maintenanceBackupStatusReady: "{count} backups are available.",
+  maintenanceBackupRestoreAvailable: "Restore is available",
+  maintenanceBackupRestoreUnavailable: "Restore is unavailable",
+  maintenanceBackupRestoreUnavailableReason: "Production restore is not enabled.",
+  maintenanceBackupStatuses: {
+    valid: "Verified",
+    verified: "Verified",
+    available: "Available",
+    no_artifacts: "No backups",
+    blocked: "Check blocked",
+    invalid: "Problem",
+    check_failed: "Check failed",
+    unknown: "Unknown",
+  },
+  maintenanceBackupCheckStatuses: {
+    valid: "Check passed",
+    verified: "Check passed",
+    available: "Backup is available",
+    no_artifacts: "Nothing to check",
+    blocked: "Check blocked",
+    invalid: "Backup invalid",
+    check_failed: "Check failed",
+    fallback: "Check status received",
+  },
+  maintenanceBackupOperationLabels: {
+    check: "Check",
+    create: "Create",
+    delete: "Delete",
+  },
+  maintenanceBackupCreateStatuses: {
+    verified: "Backup created",
+    blocked: "Create blocked",
+    fallback: "Create status received",
+  },
+  maintenanceBackupDeleteStatuses: {
+    deleted: "Backup deleted",
+    deleted_with_missing_files: "Backup deleted with already-missing files",
+    blocked: "Delete blocked",
+    fallback: "Delete status received",
+  },
+  maintenanceWarningGroups: {
+    actionable: "Need action",
+    support: "Support",
+    informational: "Information",
+  },
+  maintenanceWarningLabels: {
+    backup_status_source_unavailable: {
+      title: "Backup status unavailable",
+      summary: "Status is not available.",
+      action: "Open backups.",
+    },
+  },
+  maintenanceWarningsFallback: {
+    title: "Warning",
+    summary: "Safe warning.",
+    action: "Open diagnostics.",
   },
   maintenanceLabels: {
     pending: "Pending",
@@ -173,13 +279,18 @@ assert.deepEqual(maintenanceFlowRows(overview).map((row) => row.key), ["db_adopt
 assert.equal(maintenanceStatusText("blocked", maintenanceText), "Blocked");
 assert.equal(maintenanceStatusText("", maintenanceText), "Unknown");
 assert.equal(maintenanceStatusText("complete", maintenanceText), "Complete");
-assert.equal(maintenanceStatusText("drift_known_safe", maintenanceText), "Known-safe drift");
+assert.equal(maintenanceStatusText("valid", maintenanceText), "Verified");
+assert.equal(maintenanceStatusText("drift_known_safe", maintenanceText), "No critical issues");
 assert.equal(maintenanceStatusText("raw_unknown_code", maintenanceText), "Unknown");
 assert.equal(maintenanceStatusClass("ok"), "ok");
 assert.equal(maintenanceStatusClass("adoptable"), "warning");
+assert.equal(maintenanceStatusClass("attention"), "warning");
+assert.equal(maintenanceStatusClass("unavailable"), "warning");
 assert.equal(maintenanceStatusClass("queued"), "warning");
 assert.equal(maintenanceStatusClass("reconnecting"), "warning");
 assert.equal(maintenanceStatusClass("completed"), "ok");
+assert.equal(maintenanceStatusClass("valid"), "ok");
+assert.equal(maintenanceStatusClass("verified"), "ok");
 assert.equal(maintenanceStatusClass("failed"), "blocked");
 assert.equal(maintenanceStatusClass("blocked"), "blocked");
 assert.deepEqual(
@@ -192,6 +303,116 @@ assert.deepEqual(
   [["Pending", 2], ["Artifacts", "1/3"], ["Current", "1"], ["Target", "2"], ["Backup", "Backup required"]]
 );
 assert.equal(MAINTENANCE_DRY_RUN_ENDPOINTS.update, undefined);
+const readinessRows = maintenanceReadinessRows({
+  flows: {
+    db_adoption: {
+      status: "already_adopted",
+      presentation: {
+        user_status: "ok",
+        title_key: "db_identity",
+        summary_key: "db_identity_ok",
+        operator_action_key: "db_identity_check_optional",
+        can_check: true,
+        support_report_available: true,
+        facts: [{ key: "metadata_present", value: true }],
+      },
+    },
+    migration: {
+      status: "current",
+      presentation: {
+        user_status: "ok",
+        title_key: "db_schema",
+        summary_key: "db_schema_current",
+        operator_action_key: "migration_check_optional",
+        can_check: true,
+        facts: [{ key: "pending_count", value: 0 }],
+      },
+    },
+    restore: {
+      status: "no_artifacts",
+      presentation: {
+        user_status: "unavailable",
+        title_key: "backup_restore_check",
+        summary_key: "backup_restore_no_artifacts",
+        operator_action_key: "backup_restore_create_backup_first",
+        can_check: true,
+        facts: [
+          { key: "valid_artifacts", value: "0/0" },
+          { key: "current_product_restore", value: false },
+        ],
+      },
+    },
+  },
+}, maintenanceText);
+assert.deepEqual(readinessRows.map((row) => row.key), ["db_adoption", "migration"]);
+assert.equal(readinessRows[0].title, "Database identity");
+assert.equal(readinessRows[0].summary, "Database is recognized.");
+assert.equal(readinessRows[0].showCheck, false);
+const backupManager = maintenanceBackupManagerModel({
+  flows: {
+    restore: {
+      status: "available",
+      details: {
+        valid_artifact_count: 1,
+        artifact_count: 1,
+        current_product_restore_supported: false,
+        artifacts: [
+          {
+            artifact_id: "kmvms-db-20260704T010203Z-abcdef123456",
+            artifact_created_at: "2026-07-04T01:02:03Z",
+            artifact_schema_version: 7,
+            db_backend: "sqlite",
+            file_size: 2048,
+            validation_status: "verified",
+            valid: true,
+            deletable: true,
+            delete_supported: true,
+          },
+        ],
+      },
+    },
+  },
+}, maintenanceText, "en");
+assert.equal(backupManager.countText, "1 copy");
+assert.equal(backupManager.statusText, "1 backups are available.");
+assert.equal(backupManager.restoreSupported, false);
+assert.equal(backupManager.artifacts[0].canDelete, true);
+assert.equal(backupManager.artifacts[0].sizeText, "2.0 KB");
+assert.doesNotMatch(backupManager.countText, /\/1/);
+assert.equal(maintenanceBackupCheckResultText("valid", maintenanceText), "Check passed");
+assert.equal(maintenanceBackupCheckResultText("verified", maintenanceText), "Check passed");
+assert.equal(maintenanceBackupCheckResultText("available", maintenanceText), "Backup is available");
+assert.equal(maintenanceBackupCheckResultText("no_artifacts", maintenanceText), "Nothing to check");
+assert.equal(maintenanceBackupCheckResultText("check_failed", maintenanceText), "Check failed");
+assert.equal(maintenanceBackupOperationResultText({ kind: "check", status: "valid" }, maintenanceText).text, "Check passed");
+assert.deepEqual(maintenanceBackupOperationResultText({ kind: "create", status: "verified" }, maintenanceText), {
+  kind: "create",
+  label: "Create",
+  text: "Backup created",
+  showReason: false,
+});
+assert.deepEqual(maintenanceBackupOperationResultText({ kind: "delete", status: "deleted" }, maintenanceText), {
+  kind: "delete",
+  label: "Delete",
+  text: "Backup deleted",
+  showReason: false,
+});
+assert.deepEqual(maintenanceBackupOperationResultText({ kind: "delete", status: "deleted_with_missing_files" }, maintenanceText), {
+  kind: "delete",
+  label: "Delete",
+  text: "Backup deleted with already-missing files",
+  showReason: false,
+});
+const warningModel = maintenanceWarningModel({
+  upgrade_report: {
+    warnings_count: 1,
+    warning_groups: { actionable: 0, support: 0, informational: 1 },
+    warnings: [{ code: "backup_status_source_unavailable", classification: "informational" }],
+  },
+}, maintenanceText);
+assert.equal(warningModel.total, 1);
+assert.equal(warningModel.groups.informational, 1);
+assert.equal(warningModel.items[0].title, "Backup status unavailable");
 assert.equal(updateApplyIsRunning("rebuilding"), true);
 assert.equal(updateApplyEffectiveStatus({ status: "update_available" }, { status: "rebuilding" }, "fetch failed"), "reconnecting");
 assert.equal(updateApplyEffectiveStatus({}, { status: "completed", expected_commit: "abc", commit_verified: false }, ""), "failed");
@@ -266,7 +487,7 @@ assert.equal(formatMaintenanceMessage("Schema is current; no pending migrations.
 assert.equal(formatMaintenanceMessage("No valid restore artifacts are available in configured backup root.", maintenanceText, "ru"), "Restore localized");
 assert.equal(formatMaintenanceMessage("update_apply_not_available_for_release", maintenanceText, "ru"), "Update apply localized");
 assert.equal(formatMaintenanceMessage("No durable maintenance action history is available beyond current status and generated upgrade report summary.", maintenanceText, "ru"), "History localized");
-assert.equal(formatMaintenanceMessage("drift_known_safe", maintenanceText, "ru"), "Drift localized");
+assert.equal(formatMaintenanceMessage("drift_known_safe", maintenanceText, "ru"), "No critical issues localized");
 assert.equal(formatMaintenanceMessage("draft_known_safe", maintenanceText, "ru"), "Draft localized");
 assert.equal(formatMaintenanceMessage("unexpected_raw_backend_message", maintenanceText, "ru"), "Safe fallback");
 assert.equal(formatMaintenanceMessage("unexpected_raw_backend_message", maintenanceText, "zh-CN", "action"), "Action fallback");

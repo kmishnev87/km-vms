@@ -18,6 +18,7 @@ from app.services.migration_maintenance import (
 from app.services.restore_maintenance import (
     RestoreMaintenanceBlocked,
     apply_restore_maintenance,
+    delete_backup_artifact,
     dry_run_restore_maintenance,
     inspect_restore_maintenance,
 )
@@ -30,8 +31,67 @@ restore_router = APIRouter(prefix="/system/restore", tags=["maintenance"])
 overview_router = APIRouter(prefix="/system/maintenance", tags=["maintenance"])
 
 
+def _safe_restore_artifacts(payload: dict) -> list[dict]:
+    items = payload.get("artifacts") if isinstance(payload.get("artifacts"), list) else []
+    safe_items = []
+    for item in items[:20]:
+        if not isinstance(item, dict):
+            continue
+        safe_items.append(
+            {
+                "artifact_id": item.get("artifact_id"),
+                "artifact_created_at": item.get("artifact_created_at"),
+                "artifact_schema_version": item.get("artifact_schema_version"),
+                "db_backend": item.get("db_backend"),
+                "file_size": item.get("file_size"),
+                "validation_status": item.get("validation_status"),
+                "valid": bool(item.get("valid")),
+                "deletable": bool(item.get("deletable")),
+                "delete_supported": bool(item.get("delete_supported")),
+            }
+        )
+    return safe_items
+
+
+def _warning_classification(item: dict) -> str:
+    code = str(item.get("code") or "").strip()
+    severity = str(item.get("severity") or "").strip().lower()
+    if code in {
+        "video_archive_restore_not_covered",
+        "backup_root_persistence_unknown",
+        "backup_status_source_unavailable",
+        "restore_validation_status_source_unavailable",
+        "restore_validation_missing_or_not_linked",
+    }:
+        return "informational"
+    if severity in {"high", "critical", "error"}:
+        return "actionable"
+    if severity in {"medium", "warning"}:
+        return "support"
+    return "informational"
+
+
+def _safe_warning_presentations(warnings: list[dict]) -> dict:
+    items = []
+    groups = {"actionable": 0, "informational": 0, "support": 0}
+    for warning in warnings[:20]:
+        if not isinstance(warning, dict):
+            continue
+        classification = _warning_classification(warning)
+        groups[classification] = groups.get(classification, 0) + 1
+        items.append(
+            {
+                "code": warning.get("code"),
+                "severity": warning.get("severity"),
+                "classification": classification,
+                "stage_target": warning.get("stage_target"),
+            }
+        )
+    return {"items": items, "groups": groups, "total": len(warnings)}
+
+
 def _safe_flow_summary(name: str, payload: dict) -> dict:
-    return {
+    summary = {
         "name": name,
         "status": payload.get("status"),
         "reason": payload.get("reason") or payload.get("blocked_reason") or payload.get("apply_blocked_reason"),
@@ -65,7 +125,114 @@ def _safe_flow_summary(name: str, payload: dict) -> dict:
             "available_version": payload.get("available_version"),
             "release_validated": payload.get("release_validated"),
             "apply_status": payload.get("apply_status"),
+            "artifacts": _safe_restore_artifacts(payload) if name == "restore" else None,
+            "current_product_restore_reason": payload.get("current_product_restore_reason") if name == "restore" else None,
         },
+    }
+    presentation = _flow_presentation(name, summary)
+    summary.update(presentation)
+    summary["presentation"] = presentation
+    return summary
+
+
+def _flow_presentation(name: str, flow: dict) -> dict:
+    status = str(flow.get("status") or "unknown")
+    details = flow.get("details") if isinstance(flow.get("details"), dict) else {}
+    can_apply = bool(flow.get("can_apply"))
+    requires_confirmation = bool(flow.get("requires_confirmation"))
+
+    if name == "db_adoption":
+        title_key = "db_identity"
+        facts = [
+            {"key": "metadata_present", "value": bool(details.get("metadata_present"))},
+            {"key": "already_adopted", "value": bool(details.get("already_adopted"))},
+        ]
+        if status in {"already_adopted", "adopted", "drift_known_safe"}:
+            user_status = "ok"
+            summary_key = "db_identity_ok"
+            action_key = "db_identity_check_optional"
+        elif status == "adoptable" or can_apply:
+            user_status = "action_available"
+            summary_key = "db_identity_adoptable"
+            action_key = "db_identity_apply_requires_confirmation"
+        else:
+            user_status = "blocked"
+            summary_key = "db_identity_blocked"
+            action_key = "download_support_report"
+    elif name == "migration":
+        title_key = "db_schema"
+        facts = [
+            {"key": "current_version", "value": details.get("current_version")},
+            {"key": "target_version", "value": details.get("target_version")},
+            {"key": "pending_count", "value": int(details.get("pending_count") or 0)},
+        ]
+        if status == "current":
+            user_status = "ok"
+            summary_key = "db_schema_current"
+            action_key = "migration_check_optional"
+        elif status == "pending" or can_apply:
+            user_status = "action_available"
+            summary_key = "db_schema_pending"
+            action_key = "migration_apply_requires_confirmation"
+        else:
+            user_status = "blocked"
+            summary_key = "db_schema_blocked"
+            action_key = "download_support_report"
+    elif name == "restore":
+        title_key = "backup_restore_check"
+        valid_artifacts = int(details.get("valid_artifact_count") or 0)
+        artifact_count = int(details.get("artifact_count") or 0)
+        temporary_supported = bool(details.get("temporary_validation_restore_supported"))
+        current_supported = bool(details.get("current_product_restore_supported"))
+        facts = [
+            {"key": "valid_artifacts", "value": f"{valid_artifacts}/{artifact_count}"},
+            {"key": "temporary_validation", "value": temporary_supported},
+            {"key": "current_product_restore", "value": current_supported},
+        ]
+        if status == "no_artifacts":
+            user_status = "unavailable"
+            summary_key = "backup_restore_no_artifacts"
+            action_key = "backup_restore_create_backup_first"
+        elif status == "available" and valid_artifacts > 0:
+            user_status = "attention"
+            summary_key = "backup_restore_artifacts_available"
+            action_key = "backup_restore_check_available"
+        elif can_apply:
+            user_status = "action_available"
+            summary_key = "backup_restore_validation_available"
+            action_key = "backup_restore_check_available"
+        else:
+            user_status = "blocked"
+            summary_key = "backup_restore_blocked"
+            action_key = "download_support_report"
+    else:
+        title_key = name
+        facts = []
+        if status in {"ok", "current", "complete", "completed"}:
+            user_status = "ok"
+        elif can_apply:
+            user_status = "action_available"
+        elif status in {"blocked", "failed"}:
+            user_status = "blocked"
+        else:
+            user_status = "attention"
+        summary_key = f"{name}_{user_status}"
+        action_key = "check_status"
+
+    return {
+        "key": name,
+        "user_status": user_status,
+        "title_key": title_key,
+        "summary_key": summary_key,
+        "operator_action_key": action_key,
+        "can_check": name in {"db_adoption", "migration", "restore"},
+        "can_apply": can_apply,
+        "apply_supported": bool(flow.get("apply_supported")),
+        "requires_confirmation": requires_confirmation,
+        "backup_required": bool(flow.get("backup_required")),
+        "dangerous_action": bool(can_apply and requires_confirmation),
+        "support_report_available": True,
+        "facts": facts,
     }
 
 
@@ -99,6 +266,7 @@ def maintenance_overview(
     migrations = inspect_migration_maintenance(db, include_backup_plan=False, actor=current_user)
     restore = inspect_restore_maintenance(actor=current_user)
     report = build_upgrade_report(db)
+    warning_presentations = _safe_warning_presentations(report.get("warnings") or [])
     return {
         "status": "ok",
         "read_only": True,
@@ -120,6 +288,8 @@ def maintenance_overview(
             "generated_at": report.get("generated_at"),
             "status": report.get("status"),
             "warnings_count": len(report.get("warnings") or []),
+            "warnings": warning_presentations["items"],
+            "warning_groups": warning_presentations["groups"],
             "diagnostic_archive": report.get("diagnostic_archive"),
             "download_endpoint": "/system/upgrade/report",
         },
@@ -290,6 +460,12 @@ class RestoreApplyRequest(BaseModel):
     target_kind: str
 
 
+class BackupArtifactDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = False
+
+
 @restore_router.get("/status")
 def restore_status(
     current_user: User = Depends(require_permission("manage_settings")),
@@ -353,6 +529,55 @@ def restore_apply(
             "current_backup_status": result.get("current_backup_status"),
             "video_archive_files_restored": False,
             "migration_auto_apply": False,
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    return result
+
+
+@restore_router.post("/artifacts/{artifact_id}/delete")
+def restore_artifact_delete(
+    artifact_id: str,
+    payload: BackupArtifactDeleteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        result = delete_backup_artifact(artifact_id=artifact_id, confirm=payload.confirm, actor=current_user)
+    except RestoreMaintenanceBlocked as exc:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="system",
+            event_type="system.backup_artifact_delete_blocked" if exc.status != "delete_failed" else "system.backup_artifact_delete_failed",
+            severity="warning",
+            message_ru="Backup artifact delete was blocked.",
+            message_en="Backup artifact delete was blocked.",
+            target_type="db_backup",
+            target_id=artifact_id[:80],
+            metadata={"status": exc.status, "reason": str(exc)[:300]},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.diagnostics)
+
+    create_event(
+        db=db,
+        actor=current_user,
+        category="system",
+        event_type="system.backup_artifact_delete_completed",
+        severity="warning",
+        message_ru="Backup artifact was deleted.",
+        message_en="Backup artifact was deleted.",
+        target_type="db_backup",
+        target_id=result.get("artifact_id"),
+        metadata={
+            "status": result.get("status"),
+            "deleted_count": result.get("deleted_count"),
+            "missing_count": result.get("missing_count"),
+            "video_archive_files_deleted": False,
         },
         ip_address=request_ip(request),
         user_agent=request_user_agent(request),
