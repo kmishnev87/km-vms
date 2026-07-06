@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -19,7 +20,7 @@ from app.main import app
 from app.models.system_settings import SystemSettings
 from app.models.user import User
 from app.services.update_apply import UpdateApplyBlocked, _validate_latest_for_apply, reject_forbidden_apply_fields
-from app.services.update_check import reset_update_check_cache_for_tests
+from app.services.update_check import reset_update_check_cache_for_tests, run_update_check
 
 
 def sqlite_session(tmp_path):
@@ -148,7 +149,11 @@ def test_apply_requires_auth_permission_and_confirmation(client_db, tmp_path, mo
     assert client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(viewer)).status_code == 403
     assert client.post("/system/update/apply", json={"confirm": False}, headers=auth_headers(owner)).status_code == 409
 
-    accepted = client.post("/system/update/apply", json={"confirm": True, "expected_manifest_version": "9.9.9"}, headers=auth_headers(admin))
+    accepted = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(admin),
+    )
     assert accepted.status_code == 200
     assert accepted.json()["status"] == "queued"
 
@@ -158,7 +163,11 @@ def test_apply_writes_bounded_request_and_sanitized_status(client_db, tmp_path, 
     owner = db.query(User).filter(User.role == ROLE_OWNER).one()
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "release.json")))
 
-    response = client.post("/system/update/apply", json={"confirm": True, "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"}, headers=auth_headers(owner))
+    response = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(owner),
+    )
     assert response.status_code == 200
     request_file = Path(settings.update_control_root) / "update-request.json"
     status_file = Path(settings.update_control_root) / "update-status.json"
@@ -174,9 +183,11 @@ def test_apply_writes_bounded_request_and_sanitized_status(client_db, tmp_path, 
     assert request["source"]["ref"] == "main"
     assert request["source"]["commit"] == "cccccccccccccccccccccccccccccccccccccccc"
     assert request["source"]["apply_ref"] == "cccccccccccccccccccccccccccccccccccccccc"
+    assert request["apply_candidate"]["source"] == "live_check"
     assert request["status_path"] == "data/update-control/update-status.json"
     assert status["expected_commit"] == "cccccccccccccccccccccccccccccccccccccccc"
     assert status["source"]["apply_ref"] == "cccccccccccccccccccccccccccccccccccccccc"
+    assert status["apply_candidate"]["source"] == "live_check"
     assert status["side_effects"]["api_docker_socket"] is False
     assert status["side_effects"]["api_shell_execution"] is False
     assert status["side_effects"]["request_controlled_source"] is False
@@ -193,7 +204,11 @@ def test_forbidden_fields_blockers_running_and_private_token_preconditions(clien
     with pytest.raises(Exception):
         reject_forbidden_apply_fields({"token": "ghp_secret"})
 
-    first = client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner))
+    first = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(owner),
+    )
     assert first.status_code == 200
     second = client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner))
     assert second.status_code == 409
@@ -202,7 +217,11 @@ def test_forbidden_fields_blockers_running_and_private_token_preconditions(clien
     reset_update_check_cache_for_tests()
     monkeypatch.setattr(settings, "update_control_root", str(tmp_path / "private-control"))
     monkeypatch.setattr(settings, "kmvms_update_source_private", True)
-    private = client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner))
+    private = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(owner),
+    )
     assert private.status_code == 409
     assert private.json()["detail"]["code"] == "token_not_configured"
 
@@ -218,19 +237,31 @@ def test_manifest_blockers_current_and_missing_helper_prevent_apply(client_db, t
     monkeypatch.setattr(settings, "kmvms_update_helper_enabled", True)
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "blocked.json", requires_backup=True, requires_manual_action=True, requires_migration=True)))
     reset_update_check_cache_for_tests()
-    blocked = client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner))
+    blocked = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(owner),
+    )
     assert blocked.status_code == 409
     assert blocked.json()["detail"]["code"] in {"requires_backup", "unsupported_release_requirements"}
 
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "current.json", version="0.7.0", commit="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")))
     reset_update_check_cache_for_tests()
-    current = client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner))
+    current = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+        headers=auth_headers(owner),
+    )
     assert current.status_code == 409
     assert current.json()["detail"]["code"] == "no_update_available"
 
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "bad-commit.json", version="9.9.10", commit="main")))
     reset_update_check_cache_for_tests()
-    bad_commit = client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner))
+    bad_commit = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.10", "expected_manifest_commit": "main"},
+        headers=auth_headers(owner),
+    )
     assert bad_commit.status_code == 409
     assert bad_commit.json()["detail"]["code"] == "manifest_check_failed"
 
@@ -258,7 +289,11 @@ def test_status_and_cancel_are_sanitized_and_registered(client_db, tmp_path, mon
     owner = db.query(User).filter(User.role == ROLE_OWNER).one()
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "release.json")))
 
-    queued = client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner)).json()
+    queued = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(owner),
+    ).json()
     status_response = client.get("/system/update/apply/status", headers=auth_headers(owner))
     cancel_response = client.post("/system/update/apply/cancel", headers=auth_headers(owner))
     cancelled_status = client.get("/system/update/apply/status", headers=auth_headers(owner)).json()
@@ -266,6 +301,7 @@ def test_status_and_cancel_are_sanitized_and_registered(client_db, tmp_path, mon
     assert status_response.status_code == 200
     assert status_response.json()["request_id"] == queued["request_id"]
     assert status_response.json()["expected_commit"] == "cccccccccccccccccccccccccccccccccccccccc"
+    assert status_response.json()["apply_candidate"]["source"] == "live_check"
     assert status_response.json()["commit_verified"] is False
     assert cancel_response.json()["status"] == "cancelled"
     assert cancelled_status["status"] == "cancelled"
@@ -276,3 +312,133 @@ def test_status_and_cancel_are_sanitized_and_registered(client_db, tmp_path, mon
         ("POST", "/system/update/apply/cancel"),
     ):
         assert (method, path, "manage_settings", (ROLE_OWNER, ROLE_ADMIN)) in rows
+
+
+def test_apply_uses_fresh_trusted_snapshot_when_live_provider_fails(client_db, tmp_path, monkeypatch):
+    client, db = client_db
+    owner = db.query(User).filter(User.role == ROLE_OWNER).one()
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "release.json")))
+    checked = run_update_check(db)
+    assert checked["status"] == "update_available"
+
+    from app.services import update_apply as update_apply_module
+
+    def fail_live_check(*_args, **_kwargs):
+        raise AssertionError("fresh trusted snapshot should avoid live provider during apply")
+
+    monkeypatch.setattr(update_apply_module, "run_update_check", fail_live_check)
+
+    response = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(owner),
+    )
+
+    assert response.status_code == 200
+    request = json.loads((Path(settings.update_control_root) / "update-request.json").read_text(encoding="utf-8"))
+    assert request["apply_candidate"]["source"] == "trusted_snapshot"
+    assert request["source"]["commit"] == "cccccccccccccccccccccccccccccccccccccccc"
+
+
+def test_apply_uses_snapshot_after_transient_failed_recheck(client_db, tmp_path, monkeypatch):
+    client, db = client_db
+    owner = db.query(User).filter(User.role == ROLE_OWNER).one()
+    good_manifest = manifest(tmp_path / "release.json")
+    bad_manifest = tmp_path / "bad-release.json"
+    bad_manifest.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(good_manifest))
+    assert run_update_check(db)["status"] == "update_available"
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(bad_manifest))
+    assert run_update_check(db)["status"] == "check_failed"
+
+    response = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(owner),
+    )
+
+    assert response.status_code == 200
+    request = json.loads((Path(settings.update_control_root) / "update-request.json").read_text(encoding="utf-8"))
+    assert request["apply_candidate"]["source"] == "trusted_snapshot"
+    assert request["source"]["commit"] == "cccccccccccccccccccccccccccccccccccccccc"
+
+
+def test_apply_blocks_stale_trusted_snapshot_without_writing_request(client_db, tmp_path, monkeypatch):
+    client, db = client_db
+    owner = db.query(User).filter(User.role == ROLE_OWNER).one()
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "release.json")))
+    assert run_update_check(db)["status"] == "update_available"
+
+    from app.services import update_apply as update_apply_module
+
+    monkeypatch.setattr(update_apply_module, "trusted_apply_snapshot_status", lambda: {"available": True, "fresh": False, "age_seconds": 901, "fresh_for_seconds": 900})
+
+    response = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(owner),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "trusted_snapshot_stale"
+    assert not (Path(settings.update_control_root) / "update-request.json").exists()
+
+
+def test_apply_blocks_snapshot_expected_mismatches_without_writing_request(client_db, tmp_path, monkeypatch):
+    client, db = client_db
+    owner = db.query(User).filter(User.role == ROLE_OWNER).one()
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "release.json")))
+    assert run_update_check(db)["status"] == "update_available"
+
+    wrong_version = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.8", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(owner),
+    )
+    wrong_commit = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "dddddddddddddddddddddddddddddddddddddddd"},
+        headers=auth_headers(owner),
+    )
+
+    assert wrong_version.status_code == 409
+    assert wrong_version.json()["detail"]["code"] == "manifest_version_changed"
+    assert wrong_commit.status_code == 409
+    assert wrong_commit.json()["detail"]["code"] == "manifest_commit_changed"
+    assert not (Path(settings.update_control_root) / "update-request.json").exists()
+
+
+def test_apply_blocks_if_expected_version_or_commit_missing(client_db, tmp_path, monkeypatch):
+    client, db = client_db
+    owner = db.query(User).filter(User.role == ROLE_OWNER).one()
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "release.json")))
+    assert run_update_check(db)["status"] == "update_available"
+
+    response = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9"},
+        headers=auth_headers(owner),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "update_check_required"
+    assert not (Path(settings.update_control_root) / "update-request.json").exists()
+
+
+def test_apply_blocks_if_installed_identity_changed_after_snapshot(client_db, tmp_path, monkeypatch):
+    client, db = client_db
+    owner = db.query(User).filter(User.role == ROLE_OWNER).one()
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(manifest(tmp_path / "release.json")))
+    assert run_update_check(db)["status"] == "update_available"
+    root = Path(os.environ["KMVMS_APP_ROOT"])
+    release_identity(root / ".km-vms-release.json", version="0.7.0", commit_sha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+
+    response = client.post(
+        "/system/update/apply",
+        json={"confirm": True, "expected_manifest_version": "9.9.9", "expected_manifest_commit": "cccccccccccccccccccccccccccccccccccccccc"},
+        headers=auth_headers(owner),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "trusted_snapshot_invalidated"
+    assert not (Path(settings.update_control_root) / "update-request.json").exists()

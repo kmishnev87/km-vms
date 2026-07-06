@@ -11,7 +11,12 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.services.update_check import run_update_check
+from app.services.update_check import (
+    get_trusted_apply_snapshot,
+    read_installed_update_state,
+    run_update_check,
+    trusted_apply_snapshot_status,
+)
 
 REQUEST_SCHEMA_VERSION = 1
 STATUS_SCHEMA_VERSION = 1
@@ -191,10 +196,57 @@ def _check_token_precondition() -> None:
 
 
 def _validate_expected(latest: dict[str, Any], *, expected_version: str | None, expected_commit: str | None) -> None:
+    if not expected_version or not expected_commit:
+        raise UpdateApplyBlocked("update_check_required", "Run Check update again before applying this release.", diagnostics={"reason": "expected_version_or_commit_missing"})
     if expected_version and expected_version != latest.get("version"):
         raise UpdateApplyBlocked("manifest_version_changed", "Trusted manifest version changed. Refresh update status and retry.")
     if expected_commit and expected_commit != latest.get("commit"):
         raise UpdateApplyBlocked("manifest_commit_changed", "Trusted manifest commit changed. Refresh update status and retry.")
+
+
+def _installed_matches_snapshot(snapshot: dict[str, Any]) -> bool:
+    fingerprint = snapshot.get("installed_fingerprint") if isinstance(snapshot.get("installed_fingerprint"), dict) else {}
+    installed = read_installed_update_state()
+    expected_commit = _safe_string(fingerprint.get("installed_commit"), max_length=40)
+    expected_git_head = _safe_string(fingerprint.get("git_head"), max_length=40)
+    if (fingerprint.get("installed_version") or None) != (installed.installed_version or None):
+        return False
+    if (expected_commit or None) != (installed.installed_commit or None):
+        return False
+    if (expected_git_head or None) != (installed.git_head or None):
+        return False
+    if (fingerprint.get("identity_validity") or None) != (installed.identity_validity or None):
+        return False
+    return True
+
+
+def _snapshot_result(snapshot: dict[str, Any]) -> dict[str, Any]:
+    latest = snapshot.get("latest") if isinstance(snapshot.get("latest"), dict) else {}
+    return {
+        "status": "update_available",
+        "blockers": [],
+        "latest": latest,
+        "manifest_source_status": snapshot.get("manifest_source_status"),
+    }
+
+
+def _select_apply_candidate(db: Session, *, expected_version: str | None, expected_commit: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not expected_version or not expected_commit:
+        raise UpdateApplyBlocked("update_check_required", "Run Check update again before applying this release.", diagnostics={"reason": "expected_version_or_commit_missing"})
+    snapshot_status = trusted_apply_snapshot_status()
+    if snapshot_status.get("available") and not snapshot_status.get("fresh"):
+        raise UpdateApplyBlocked("trusted_snapshot_stale", "Update check is too old. Run Check update again.", diagnostics={"snapshot": snapshot_status})
+    snapshot = get_trusted_apply_snapshot()
+    if snapshot:
+        latest = _validate_latest_for_apply(_snapshot_result(snapshot))
+        _validate_expected(latest, expected_version=expected_version, expected_commit=expected_commit)
+        if not _installed_matches_snapshot(snapshot):
+            raise UpdateApplyBlocked("trusted_snapshot_invalidated", "Installed release identity changed after update check. Run Check update again.", diagnostics={"snapshot": snapshot.get("freshness")})
+        return latest, {"source": "trusted_snapshot", "snapshot": snapshot.get("freshness")}
+    update = run_update_check(db, manual=False)
+    latest = _validate_latest_for_apply(update)
+    _validate_expected(latest, expected_version=expected_version, expected_commit=expected_commit)
+    return latest, {"source": "live_check", "snapshot": snapshot_status}
 
 
 def _running_status(payload: dict[str, Any] | None) -> bool:
@@ -223,6 +275,7 @@ def _sanitize_apply_history_item(item: Any) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
     source = item.get("source") if isinstance(item.get("source"), dict) else {}
+    apply_candidate = item.get("apply_candidate") if isinstance(item.get("apply_candidate"), dict) else None
     error = item.get("error") if isinstance(item.get("error"), dict) else None
     sanitized = {
         "request_id": _safe_string(item.get("request_id"), max_length=80),
@@ -242,6 +295,12 @@ def _sanitize_apply_history_item(item: Any) -> dict[str, Any] | None:
             "apply_ref": _safe_string(source.get("apply_ref"), max_length=40),
         }
         if source
+        else None,
+        "apply_candidate": {
+            "source": _safe_string(apply_candidate.get("source"), max_length=40),
+            "snapshot": apply_candidate.get("snapshot") if isinstance(apply_candidate.get("snapshot"), dict) else None,
+        }
+        if apply_candidate
         else None,
         "steps": _safe_steps(item.get("steps")),
         "error": {
@@ -287,6 +346,7 @@ def _base_status(status_value: str = "idle", phase: str = "idle", *, request_id:
         "effective_status": status_value,
         "release_identity": None,
         "source": None,
+        "apply_candidate": None,
         "steps": [],
         "can_cancel": status_value == "queued",
         "rollback_supported": False,
@@ -324,6 +384,7 @@ def read_update_apply_status() -> dict[str, Any]:
             "started_at": _safe_string(payload.get("started_at"), max_length=80),
             "updated_at": _safe_string(payload.get("updated_at"), max_length=80) or _iso(),
             "source": payload.get("source") if isinstance(payload.get("source"), dict) else None,
+            "apply_candidate": payload.get("apply_candidate") if isinstance(payload.get("apply_candidate"), dict) else None,
             "steps": _safe_steps(payload.get("steps")),
             "can_cancel": bool(payload.get("can_cancel")) and str(payload.get("status")) == "queued",
             "rollback_supported": False,
@@ -371,9 +432,7 @@ def request_update_apply(db: Session, *, confirm: bool, expected_manifest_versio
     current_status = read_update_apply_status()
     if _running_status(current_status) or _lock_path().exists():
         raise UpdateApplyBlocked("update_already_running", "Another update apply is already running.")
-    update = run_update_check(db, manual=False)
-    latest = _validate_latest_for_apply(update)
-    _validate_expected(latest, expected_version=expected_manifest_version, expected_commit=expected_manifest_commit)
+    latest, apply_candidate = _select_apply_candidate(db, expected_version=expected_manifest_version, expected_commit=expected_manifest_commit)
     _check_token_precondition()
     source = _sanitized_source(latest)
     if not source["repo"] or not source["ref"] or not source["source_type"] or not source["commit"] or not source["apply_ref"]:
@@ -390,12 +449,13 @@ def request_update_apply(db: Session, *, confirm: bool, expected_manifest_versio
         },
         "intent": "apply_update",
         "source": source,
+        "apply_candidate": apply_candidate,
         "confirmed": True,
         "preflight_required": True,
         "status_path": "data/update-control/update-status.json",
     }
     status_payload = _base_status("queued", "queued", request_id=request_id)
-    status_payload.update({"started_at": now, "updated_at": now, "source": {"kind": "github-tarball", "repo": source["repo"], "ref": source["ref"], "commit": source["commit"], "apply_ref": source["apply_ref"]}, "expected_commit": source["commit"], "commit_verified": False})
+    status_payload.update({"started_at": now, "updated_at": now, "source": {"kind": "github-tarball", "repo": source["repo"], "ref": source["ref"], "commit": source["commit"], "apply_ref": source["apply_ref"]}, "apply_candidate": apply_candidate, "expected_commit": source["commit"], "commit_verified": False})
     status_payload["steps"] = [
         {"name": "request", "status": "completed"},
         {"name": "preflight", "status": "pending"},

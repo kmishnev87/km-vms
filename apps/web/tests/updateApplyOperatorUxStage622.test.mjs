@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   updateApplyOperatorModel,
+  updateApplyRecoveryText,
   updateApplyStepRows,
 } from "../lib/settingsPageHelpers.js";
 
@@ -46,6 +47,9 @@ const t = {
   updateApplyRecoveryUnknown: "Unknown",
   updateApplyRecoveryRunning: "Running",
   updateApplyRecoveryProvider: "Provider-specific recovery",
+  updateApplyRecoveryLiveCheckFailedWithSnapshot: "Live failed but snapshot available",
+  updateApplyRecoveryRefreshRequired: "Refresh-required recovery",
+  updateApplyRecoveryMissingCommit: "Missing commit recovery",
   updateApplyRecoveryIdentity: "Identity-specific recovery",
   updateApplyRecoveryInstalledNewer: "Installed-newer recovery",
   maintenanceLabels: {
@@ -93,7 +97,9 @@ assert.equal(settingsPage.includes('name="token"'), false);
 assert.equal(settingsPage.includes('name="url"'), false);
 assert.equal(settingsPage.includes('name="repo"'), false);
 assert.equal(settingsPage.includes("reason is shown above"), false);
+assert.equal(settingsPage.includes("The reason is shown in this panel"), false);
 assert.equal(settingsPage.includes("причина показана в блоке выше"), false);
+assert.equal(settingsPage.includes("Причина показана в этом блоке"), false);
 
 for (const label of ["updateApplyHeadlines", "updateApplySummaries", "updateApplyHistoryLimited", "updateApplySupportTitle", "updateApplySupportAction"]) {
   assert.equal(settingsPage.includes(label), true);
@@ -113,6 +119,11 @@ assert.equal(css.includes("white-space: nowrap"), true);
 assert.equal(cssRule(".settingsUpdateApplyVersionRows dd").includes("justify-self: end"), false);
 assert.equal(css.includes(".settingsUpdateApplySupport"), true);
 assert.equal(css.includes("overflow-wrap: anywhere"), true);
+
+assert.equal(updateApplyRecoveryText("provider_unavailable", {}, t), "Provider-specific recovery");
+assert.equal(updateApplyRecoveryText("trusted_snapshot_stale", {}, t), "Refresh-required recovery");
+assert.equal(updateApplyRecoveryText("manifest_commit_changed", {}, t), "Refresh-required recovery");
+assert.equal(updateApplyRecoveryText("trusted_commit_missing", {}, t), "Missing commit recovery");
 
 const current = updateApplyOperatorModel(
   {
@@ -190,6 +201,40 @@ assert.equal(providerUnavailable.headline, "Attention required");
 assert.equal(providerUnavailable.severity, "blocked");
 assert.equal(providerUnavailable.summary, "Provider-specific recovery");
 assert.notEqual(providerUnavailable.summary, t.updateApplySummaries.blocked);
+
+const failedLiveCheckWithSnapshot = updateApplyOperatorModel(
+  {
+    status: "check_failed",
+    can_apply_from_ui: true,
+    comparison: { status: "check_failed", can_apply_from_ui: true, trusted_apply_candidate_status: "fresh" },
+    installed_release: { version: "0.7.3", commit: "a".repeat(40) },
+    trusted_apply_candidate: {
+      available: true,
+      fresh: true,
+      can_apply_from_ui: true,
+      freshness: { age_seconds: 30, fresh_for_seconds: 900 },
+      latest: {
+        version: "0.7.4",
+        title: "Trusted snapshot release",
+        summary: "Snapshot remains usable after provider timeout.",
+        commit: "b".repeat(40),
+        source_ref: "v0.7.4",
+      },
+    },
+  },
+  { status: "idle" },
+  t,
+  "en",
+);
+
+assert.equal(failedLiveCheckWithSnapshot.headline, "Update available");
+assert.equal(failedLiveCheckWithSnapshot.severity, "warning");
+assert.equal(failedLiveCheckWithSnapshot.summary, "Live failed but snapshot available");
+assert.equal(failedLiveCheckWithSnapshot.canApply, true);
+assert.equal(failedLiveCheckWithSnapshot.showApplyButton, true);
+assert.equal(failedLiveCheckWithSnapshot.availableVersion, "0.7.4");
+assert.equal(failedLiveCheckWithSnapshot.targetCommitShort, "bbbbbbbbbbbb...");
+assert.equal(failedLiveCheckWithSnapshot.timeline.length, 5);
 
 const completedWithSteps = updateApplyOperatorModel(
   {

@@ -662,6 +662,46 @@ def test_update_script_recreates_api_until_api_visible_identity_is_complete(tmp_
     assert metadata["validation_summary"]["release_identity_commit_verified"] is True
 
 
+def test_update_script_remediates_api_visible_stale_precompose_identity(tmp_path):
+    expected = "b" * 40
+    compose_function = "\n".join(
+        [
+            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
+            "km_vms_compose_cmd() {",
+            "  if [ \"$1\" = \"--env-file\" ]; then shift 2; fi",
+            "  if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi",
+            "  if [ \"$1\" = \"up\" ]; then case \"$*\" in *'--force-recreate api'*) touch data/api-recreated-after-precompose ;; esac; return 0; fi",
+            "  if [ \"$1\" = \"exec\" ]; then",
+            "    if [ -f data/api-recreated-after-precompose ]; then echo 'complete " + expected + "'; return 0; fi",
+            "    echo 'metadata_status=precompose' >&2; return 11",
+            "  fi",
+            "  :",
+            "}",
+        ]
+    )
+    app, _source, bin_dir = _write_update_shell_fixture(tmp_path, compose_function=compose_function, commit=expected)
+
+    result = subprocess.run(
+        ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", "main", "--yes"],
+        cwd=app,
+        env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    metadata = json.loads((app / ".km-vms-update.json").read_text(encoding="utf-8"))
+
+    assert "API-visible release identity is stale or incomplete" in result.stdout
+    assert (app / "data/api-recreated-after-precompose").is_file()
+    assert json.loads((app / ".km-vms-release.json").read_text(encoding="utf-8"))["metadata_status"] == "complete"
+    assert metadata["status"] == "success"
+    assert metadata["validation_summary"]["release_identity_host_metadata_status"] == "complete"
+    assert metadata["validation_summary"]["release_identity_api_metadata_status"] == "complete"
+    assert metadata["validation_summary"]["release_identity_api_visible"] is True
+    assert metadata["validation_summary"]["release_identity_commit_verified"] is True
+
+
 def test_update_script_rejects_api_visible_complete_with_wrong_commit_stdout(tmp_path):
     expected = "b" * 40
     wrong = "a" * 40

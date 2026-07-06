@@ -185,7 +185,7 @@ sh scripts/km-vms-release-cycle.sh --dry-run --prepare-version 0.7.29
 sh scripts/km-vms-release-cycle.sh --print-github-release-commands --version 0.7.29
 ```
 
-The helper validates version consistency across API, web package files and `release/km-vms-release.json`, and rejects patch values above `29`. It also validates that the descriptor uses the Stage 6.1.3 evidence model: the public release tag `vX.Y.Z` resolves to the immutable commit SHA. The descriptor in the repository is allowed to have `commit_sha: null` before publication; readiness for an official release depends on the tag/GitHub evidence after the accepted commit exists.
+The helper validates version consistency across API, web package files and `release/km-vms-release.json`, and rejects patch values above `29`. It also validates that the descriptor uses the Stage 6.1.3 evidence model: the public release tag `vX.Y.Z` resolves to the immutable commit SHA. The descriptor in the repository is allowed to have `commit_sha: null` because the trusted commit evidence for normal releases is derived from the immutable semver tag. If `commit_sha` is present, it must match the resolved tag commit.
 
 After acceptance and only by explicit operator command, the release publication flow is:
 
@@ -200,7 +200,7 @@ KM_VMS_GITHUB_RELEASE_TOKEN_FILE=/secure/path/km-vms-github-release-token \
   sh scripts/km-vms-publish-github-release.sh --publish --tag vX.Y.Z
 ```
 
-The GitHub Release token must be stored outside the repository and outside generated artifacts. Point `KM_VMS_GITHUB_RELEASE_TOKEN_FILE` at that secret file, or use `KM_VMS_GITHUB_RELEASE_TOKEN` only for controlled operator shells. The publish helper runs after commit/tag/push; it does not create commits or tags. Its `--check` mode performs read-only local/public validation without requiring a token, while `--publish` requires a token and either creates the GitHub Release object or confirms the existing object matches the tag and commit evidence.
+The GitHub Release token must be stored outside the repository and outside generated artifacts. Point `KM_VMS_GITHUB_RELEASE_TOKEN_FILE` at that secret file, or use `KM_VMS_GITHUB_RELEASE_TOKEN` only for controlled operator shells. The publish helper runs after commit/tag/push; it does not create commits or tags and does not mutate product files after publication. Its `--check` mode performs read-only local/public validation without requiring a token, while `--publish` requires a token and either creates the GitHub Release object or confirms the existing object matches the tag and commit evidence. Local installed identity for the working NAS publication environment is synchronized separately with `sh scripts/km-vms-release-cycle.sh --sync-local-release-identity --apply`.
 If `--tag` is used, it must match the current `release/km-vms-release.json` `tag` / `source_ref`; the helper does not validate arbitrary historical releases against the current descriptor.
 
 After publication, validate that the tag points to the intended commit, the GitHub Release exists, the raw descriptor for the tag is readable, and NAS Settings -> Maintenance sees the expected installed/available semantic versions. Stage 6.1.3 does not implement Stage 6.1.4 public/security hardening, fallback admin password cleanup, rollback, backup orchestration or tag automation.

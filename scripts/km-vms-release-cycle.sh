@@ -240,6 +240,7 @@ def print_release_commands(version: str) -> None:
     print(f"sh scripts/km-vms-publish-github-release.sh --check --tag {tag}")
     print("KM_VMS_GITHUB_RELEASE_TOKEN_FILE=data/update-control/.github-release-token \\")
     print(f"  sh scripts/km-vms-publish-github-release.sh --publish --tag {tag}")
+    print("# release/km-vms-release.json commit_sha may remain null; trusted commit evidence is the validated semver tag commit.")
     print(f"sh scripts/km-vms-release-cycle.sh --sync-local-release-identity --apply")
     print("curl -fsS http://127.0.0.1:${HTTP_PORT:-8088}/api/health")
     print("curl -fsS http://127.0.0.1:${HTTP_PORT:-8088}/api/system/update/status")

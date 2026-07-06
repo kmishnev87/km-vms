@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,10 @@ MAX_PUBLIC_COMMIT_BYTES = 512 * 1024
 MAX_TEXT = 300
 PUBLIC_REPO_DEFAULT = "kmishnev87/km-vms"
 PUBLIC_RELEASE_DESCRIPTOR_RELATIVE = "release/km-vms-release.json"
-PUBLIC_RELEASE_TIMEOUT_SECONDS = 5
+PUBLIC_RELEASE_TIMEOUT_SECONDS = 12
+PUBLIC_RELEASE_RETRY_ATTEMPTS = 3
+PUBLIC_RELEASE_RETRY_BACKOFF_SECONDS = 0.25
+TRUSTED_APPLY_SNAPSHOT_FRESH_SECONDS = 15 * 60
 RELEASE_DESCRIPTOR_RELATIVE = Path("release/km-vms-release.json")
 SAFE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 SAFE_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,119}$")
@@ -40,6 +44,7 @@ SENSITIVE_VALUE_RE = re.compile(
 
 _LAST_RESULT: dict[str, Any] | None = None
 _LAST_SUCCESSFUL_RESULT: dict[str, Any] | None = None
+_LAST_TRUSTED_APPLY_SNAPSHOT: dict[str, Any] | None = None
 _CHECK_IN_PROGRESS = False
 
 
@@ -131,6 +136,19 @@ def _utcnow() -> datetime:
 
 def _iso(value: datetime | None = None) -> str:
     return (value or _utcnow()).isoformat() + "Z"
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    text = _sanitize_text(value, max_length=80)
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
 
 
 def _sanitize_text(value: Any, *, max_length: int = MAX_TEXT) -> str | None:
@@ -484,20 +502,46 @@ def _public_timeout_seconds() -> float:
         value = float(raw)
     except ValueError:
         return PUBLIC_RELEASE_TIMEOUT_SECONDS
-    return min(max(value, 1.0), 15.0)
+    return min(max(value, 5.0), 15.0)
+
+
+def _public_retry_attempts() -> int:
+    raw = os.getenv("KMVMS_PUBLIC_RELEASE_RETRY_ATTEMPTS")
+    if not raw:
+        return PUBLIC_RELEASE_RETRY_ATTEMPTS
+    try:
+        value = int(raw)
+    except ValueError:
+        return PUBLIC_RELEASE_RETRY_ATTEMPTS
+    return min(max(value, 1), 5)
+
+
+def _read_public_bytes(url: str, *, accept: str, max_bytes: int, user_agent: str) -> bytes:
+    if not url.startswith("https://"):
+        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release provider URL must use HTTPS.", "error_category": "provider_url_invalid"})
+    request = urllib.request.Request(url, headers={"User-Agent": user_agent, "Accept": accept})
+    last_category = "public_provider_unavailable"
+    for attempt in range(_public_retry_attempts()):
+        try:
+            with urllib.request.urlopen(request, timeout=_public_timeout_seconds()) as response:  # nosec B310 - public HTTPS/GitHub release metadata only
+                data = response.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is too large.", "error_category": "public_provider_too_large"})
+            return data
+        except urllib.error.HTTPError as exc:
+            if exc.code in {500, 502, 503, 504}:
+                last_category = f"public_provider_http_{exc.code}"
+            else:
+                raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is temporarily unavailable.", "error_category": f"public_provider_http_{exc.code}"})
+        except (TimeoutError, urllib.error.URLError, OSError):
+            last_category = "public_provider_retry_exhausted"
+        if attempt + 1 < _public_retry_attempts():
+            time.sleep(PUBLIC_RELEASE_RETRY_BACKOFF_SECONDS * (attempt + 1))
+    raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is temporarily unavailable after retries.", "error_category": last_category})
 
 
 def _read_public_release_payload(url: str) -> dict[str, Any]:
-    if not url.startswith("https://"):
-        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release provider URL must use HTTPS.", "error_category": "provider_url_invalid"})
-    request = urllib.request.Request(url, headers={"User-Agent": "KM-VMS-Update-Check/0.7.1", "Accept": "application/json"})
-    try:
-        with urllib.request.urlopen(request, timeout=_public_timeout_seconds()) as response:  # nosec B310 - public HTTPS release metadata only
-            data = response.read(MAX_MANIFEST_BYTES + 1)
-    except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, OSError):
-        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is temporarily unavailable.", "error_category": "public_provider_unavailable"})
-    if len(data) > MAX_MANIFEST_BYTES:
-        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is too large.", "error_category": "public_provider_too_large"})
+    data = _read_public_bytes(url, accept="application/json", max_bytes=MAX_MANIFEST_BYTES, user_agent="KM-VMS-Update-Check/0.7.10")
     try:
         payload = json.loads(data.decode("utf-8"))
     except Exception:
@@ -508,16 +552,7 @@ def _read_public_release_payload(url: str) -> dict[str, Any]:
 
 
 def _read_public_json_url(url: str, *, max_bytes: int = MAX_MANIFEST_BYTES) -> Any:
-    if not url.startswith("https://"):
-        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release provider URL must use HTTPS.", "error_category": "provider_url_invalid"})
-    request = urllib.request.Request(url, headers={"User-Agent": "KM-VMS-Update-Check/0.7.2", "Accept": "application/vnd.github+json"})
-    try:
-        with urllib.request.urlopen(request, timeout=_public_timeout_seconds()) as response:  # nosec B310 - public GitHub release metadata only
-            data = response.read(max_bytes + 1)
-    except (TimeoutError, urllib.error.URLError, urllib.error.HTTPError, OSError):
-        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is temporarily unavailable.", "error_category": "public_provider_unavailable"})
-    if len(data) > max_bytes:
-        raise UpdateCheckBlocked("provider_unavailable", {"summary": "Public release metadata is too large.", "error_category": "public_provider_too_large"})
+    data = _read_public_bytes(url, accept="application/vnd.github+json", max_bytes=max_bytes, user_agent="KM-VMS-Update-Check/0.7.10")
     try:
         return json.loads(data.decode("utf-8"))
     except Exception:
@@ -586,12 +621,10 @@ def _resolve_public_commit(source_repo: str, source_ref: str) -> str | None:
     encoded_ref = urllib.parse.quote(source_ref, safe="/")
     for kind in ("heads", "tags"):
         url = f"https://api.github.com/repos/{source_repo}/git/ref/{kind}/{encoded_ref}"
-        request = urllib.request.Request(url, headers={"User-Agent": "KM-VMS-Update-Check/0.7.1", "Accept": "application/vnd.github+json"})
         try:
-            with urllib.request.urlopen(request, timeout=_public_timeout_seconds()) as response:  # nosec B310 - public GitHub ref metadata only
-                data = response.read(MAX_MANIFEST_BYTES + 1)
+            data = _read_public_bytes(url, accept="application/vnd.github+json", max_bytes=MAX_MANIFEST_BYTES, user_agent="KM-VMS-Update-Check/0.7.10")
             payload = json.loads(data.decode("utf-8"))
-        except Exception:
+        except (UpdateCheckBlocked, Exception):
             continue
         obj = payload.get("object") if isinstance(payload, dict) else None
         sha = _safe_field("sha", obj.get("sha") if isinstance(obj, dict) else None, max_length=40)
@@ -599,14 +632,10 @@ def _resolve_public_commit(source_repo: str, source_ref: str) -> str | None:
             return sha.lower()
     encoded_commit_ref = urllib.parse.quote(source_ref, safe="")
     url = f"https://api.github.com/repos/{source_repo}/commits/{encoded_commit_ref}"
-    request = urllib.request.Request(url, headers={"User-Agent": "KM-VMS-Update-Check/0.7.1", "Accept": "application/vnd.github+json"})
     try:
-        with urllib.request.urlopen(request, timeout=_public_timeout_seconds()) as response:  # nosec B310 - public GitHub commit metadata only
-            data = response.read(MAX_PUBLIC_COMMIT_BYTES + 1)
-        if len(data) > MAX_PUBLIC_COMMIT_BYTES:
-            return None
+        data = _read_public_bytes(url, accept="application/vnd.github+json", max_bytes=MAX_PUBLIC_COMMIT_BYTES, user_agent="KM-VMS-Update-Check/0.7.10")
         payload = json.loads(data.decode("utf-8"))
-    except Exception:
+    except (UpdateCheckBlocked, Exception):
         return None
     sha = _safe_field("sha", payload.get("sha") if isinstance(payload, dict) else None, max_length=40)
     return sha.lower() if sha and SHA_RE.fullmatch(sha) else None
@@ -718,6 +747,7 @@ def _schedule(db: Session, *, now: datetime | None = None) -> dict[str, Any]:
 
 
 def _cache_payload() -> dict[str, Any]:
+    snapshot = trusted_apply_snapshot_status()
     return {
         "has_last_result": _LAST_RESULT is not None,
         "last_result_status": _LAST_RESULT.get("status") if _LAST_RESULT else None,
@@ -725,7 +755,182 @@ def _cache_payload() -> dict[str, Any]:
         "last_check_status": _LAST_RESULT.get("status") if _LAST_RESULT else None,
         "last_successful_check_status": _LAST_SUCCESSFUL_RESULT.get("status") if _LAST_SUCCESSFUL_RESULT else None,
         "last_successful_check_at": _LAST_SUCCESSFUL_RESULT.get("checked_at") if _LAST_SUCCESSFUL_RESULT else None,
+        "trusted_apply_snapshot": snapshot,
     }
+
+
+def _clone_payload(value: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def _full_commit(value: Any) -> str | None:
+    text = _sanitize_text(value, max_length=40)
+    return text.lower() if text and re.fullmatch(r"^[0-9a-fA-F]{40}$", text) else None
+
+
+def _trusted_apply_snapshot_from_payload(payload: dict[str, Any], *, now: datetime) -> dict[str, Any] | None:
+    latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else None
+    installed = payload.get("installed") if isinstance(payload.get("installed"), dict) else None
+    if payload.get("status") != "update_available" or payload.get("blockers") or not latest or not installed:
+        return None
+    commit = _full_commit(latest.get("commit"))
+    source_repo = _safe_field("source_repo", latest.get("source_repo"), max_length=160)
+    source_ref = _safe_field("source_ref", latest.get("source_ref") or latest.get("git_ref"), max_length=120)
+    source_type = _safe_field("source_type", latest.get("source_type"), max_length=80)
+    if not commit or source_type != "github_tarball" or not source_repo or not source_ref:
+        return None
+    checked_at = _safe_timestamp(payload.get("checked_at")) or _iso(now)
+    snapshot = {
+        "schema_version": 1,
+        "kind": "trusted_apply_candidate_snapshot",
+        "created_at": _iso(now),
+        "checked_at": checked_at,
+        "status": payload.get("status"),
+        "manifest_source_status": _safe_field("manifest_source_status", payload.get("manifest_source_status"), max_length=80),
+        "latest": {
+            "version": _safe_field("version", latest.get("version"), max_length=80),
+            "title": _safe_field("title", latest.get("title"), max_length=160),
+            "summary": _safe_field("summary", latest.get("summary"), max_length=800),
+            "breaking_changes": _string_list(latest.get("breaking_changes")),
+            "published_at": _safe_timestamp(latest.get("published_at")),
+            "channel": _safe_field("channel", latest.get("channel"), max_length=80),
+            "git_ref": _safe_field("git_ref", latest.get("git_ref"), max_length=120),
+            "commit": commit,
+            "requires_backup": bool(latest.get("requires_backup")),
+            "requires_manual_action": bool(latest.get("requires_manual_action")),
+            "requires_migration": bool(latest.get("requires_migration")),
+            "source_type": source_type,
+            "source_repo": source_repo,
+            "source_ref": source_ref,
+        },
+        "installed_fingerprint": {
+            "status": _safe_field("status", installed.get("status"), max_length=80),
+            "installed_version": _safe_field("installed_version", installed.get("installed_version"), max_length=80),
+            "installed_commit": _full_commit(installed.get("installed_commit")),
+            "git_head": _full_commit(installed.get("git_head")),
+            "identity_validity": _safe_field("identity_validity", installed.get("identity_validity"), max_length=80),
+            "release_metadata_status": _safe_field("release_metadata_status", installed.get("release_metadata_status"), max_length=80),
+        },
+        "comparison": {
+            "status": _safe_field("status", (payload.get("comparison") or {}).get("status") if isinstance(payload.get("comparison"), dict) else payload.get("status"), max_length=80),
+            "reason_code": _safe_field("reason_code", (payload.get("comparison") or {}).get("reason_code") if isinstance(payload.get("comparison"), dict) else payload.get("status"), max_length=80),
+        },
+        "blockers": [],
+        "warnings": payload.get("warnings") if isinstance(payload.get("warnings"), list) else [],
+    }
+    rendered = json.dumps(snapshot, ensure_ascii=False)
+    if SENSITIVE_VALUE_RE.search(rendered):
+        return None
+    return snapshot
+
+
+def _store_trusted_apply_snapshot(payload: dict[str, Any], *, now: datetime) -> None:
+    global _LAST_TRUSTED_APPLY_SNAPSHOT
+    snapshot = _trusted_apply_snapshot_from_payload(payload, now=now)
+    if snapshot:
+        _LAST_TRUSTED_APPLY_SNAPSHOT = snapshot
+    elif payload.get("status") != "check_failed":
+        _LAST_TRUSTED_APPLY_SNAPSHOT = None
+
+
+def trusted_apply_snapshot_status(*, now: datetime | None = None) -> dict[str, Any]:
+    now = now or _utcnow()
+    if not _LAST_TRUSTED_APPLY_SNAPSHOT:
+        return {"available": False, "fresh": False, "age_seconds": None, "fresh_for_seconds": TRUSTED_APPLY_SNAPSHOT_FRESH_SECONDS}
+    checked_at = _parse_iso_datetime(_LAST_TRUSTED_APPLY_SNAPSHOT.get("checked_at"))
+    age_seconds = int((now - checked_at).total_seconds()) if checked_at else None
+    fresh = bool(age_seconds is not None and 0 <= age_seconds <= TRUSTED_APPLY_SNAPSHOT_FRESH_SECONDS)
+    latest = _LAST_TRUSTED_APPLY_SNAPSHOT.get("latest") if isinstance(_LAST_TRUSTED_APPLY_SNAPSHOT.get("latest"), dict) else {}
+    return {
+        "available": True,
+        "fresh": fresh,
+        "age_seconds": age_seconds,
+        "fresh_for_seconds": TRUSTED_APPLY_SNAPSHOT_FRESH_SECONDS,
+        "version": latest.get("version"),
+        "commit_short": latest.get("commit", "")[:12] if latest.get("commit") else None,
+        "provider": _LAST_TRUSTED_APPLY_SNAPSHOT.get("manifest_source_status"),
+    }
+
+
+def get_trusted_apply_snapshot(*, now: datetime | None = None) -> dict[str, Any] | None:
+    status = trusted_apply_snapshot_status(now=now)
+    if not status.get("available") or not status.get("fresh"):
+        return None
+    snapshot = _clone_payload(_LAST_TRUSTED_APPLY_SNAPSHOT or {})
+    snapshot["freshness"] = status
+    return snapshot
+
+
+def _installed_matches_snapshot(snapshot: dict[str, Any]) -> bool:
+    fingerprint = snapshot.get("installed_fingerprint") if isinstance(snapshot.get("installed_fingerprint"), dict) else {}
+    installed = read_installed_update_state()
+    expected_commit = _full_commit(fingerprint.get("installed_commit"))
+    expected_git_head = _full_commit(fingerprint.get("git_head"))
+    if (fingerprint.get("installed_version") or None) != (installed.installed_version or None):
+        return False
+    if (expected_commit or None) != (installed.installed_commit or None):
+        return False
+    if (expected_git_head or None) != (installed.git_head or None):
+        return False
+    if (fingerprint.get("identity_validity") or None) != (installed.identity_validity or None):
+        return False
+    return True
+
+
+def _trusted_apply_candidate_payload(*, now: datetime | None = None) -> dict[str, Any]:
+    status = trusted_apply_snapshot_status(now=now)
+    payload: dict[str, Any] = {
+        "available": bool(status.get("available")),
+        "fresh": bool(status.get("fresh")),
+        "can_apply_from_ui": False,
+        "freshness": status,
+        "latest": None,
+        "reason": "no_trusted_candidate",
+    }
+    snapshot = get_trusted_apply_snapshot(now=now)
+    if not snapshot:
+        payload["reason"] = "trusted_snapshot_stale" if status.get("available") else "no_trusted_candidate"
+        return payload
+    latest = snapshot.get("latest") if isinstance(snapshot.get("latest"), dict) else {}
+    commit = _full_commit(latest.get("commit"))
+    helper_enabled = str(os.getenv("KMVMS_UPDATE_HELPER_ENABLED") or os.getenv("KM_VMS_UPDATE_HELPER_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
+    installed_matches = _installed_matches_snapshot(snapshot)
+    payload.update(
+        {
+            "latest": latest,
+            "available_release": {
+                "version": latest.get("version"),
+                "title": latest.get("title"),
+                "summary": latest.get("summary"),
+                "changelog": latest.get("breaking_changes") if isinstance(latest.get("breaking_changes"), list) else [],
+                "published_at": latest.get("published_at"),
+                "tag": latest.get("source_ref") or latest.get("git_ref"),
+                "commit_sha": commit,
+                "commit_short": commit[:12] if commit else None,
+                "provider": snapshot.get("manifest_source_status"),
+            },
+            "source": "trusted_snapshot",
+            "installed_identity_matches": installed_matches,
+            "can_apply_from_ui": bool(helper_enabled and commit and installed_matches),
+            "reason": "fresh_trusted_candidate" if installed_matches else "trusted_snapshot_invalidated",
+        }
+    )
+    rendered = json.dumps(payload, ensure_ascii=False)
+    if SENSITIVE_VALUE_RE.search(rendered):
+        return {"available": False, "fresh": False, "can_apply_from_ui": False, "freshness": status, "latest": None, "reason": "trusted_snapshot_sensitive"}
+    return payload
+
+
+def _attach_trusted_apply_candidate(payload: dict[str, Any], *, now: datetime | None = None) -> dict[str, Any]:
+    candidate = _trusted_apply_candidate_payload(now=now)
+    payload["trusted_apply_candidate"] = candidate
+    if payload.get("status") == "check_failed" and candidate.get("can_apply_from_ui"):
+        payload["can_apply_from_ui"] = True
+        if isinstance(payload.get("comparison"), dict):
+            payload["comparison"]["can_apply_from_ui"] = True
+            payload["comparison"]["trusted_apply_candidate_status"] = "fresh"
+        payload["next_recommended_action"] = "apply_fresh_trusted_candidate_or_retry_check"
+    return payload
 
 
 def _blocker(code: str, message: str, severity: str = "high") -> UpdateBlocker:
@@ -926,6 +1131,7 @@ def build_update_status(db: Session, *, now: datetime | None = None) -> dict[str
     payload["has_last_successful_check"] = _LAST_SUCCESSFUL_RESULT is not None
     payload["last_check_status"] = _LAST_RESULT.get("status") if _LAST_RESULT else None
     payload["last_update_check"] = _LAST_RESULT
+    payload = _attach_trusted_apply_candidate(payload, now=now)
     return payload
 
 
@@ -954,7 +1160,9 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
             payload["last_check_status"] = payload.get("status")
             _LAST_RESULT = payload
             _LAST_SUCCESSFUL_RESULT = payload
+            _store_trusted_apply_snapshot(payload, now=now)
             payload["cache"] = _cache_payload()
+            payload = _attach_trusted_apply_candidate(payload, now=now)
             return payload
         if source_status == "public_github_release" and isinstance(source_path, str) and source_path.startswith("latest-tag:"):
             latest = _manifest_from_latest_public_release_tag(source_path.split(":", 1)[1])
@@ -984,7 +1192,9 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
         payload["last_success_at"] = _iso(now)
         _LAST_RESULT = payload
         _LAST_SUCCESSFUL_RESULT = payload
+        _store_trusted_apply_snapshot(payload, now=now)
         payload["cache"] = _cache_payload()
+        payload = _attach_trusted_apply_candidate(payload, now=now)
         return payload
     except UpdateCheckBlocked as exc:
         result = UpdateCheckResult(
@@ -1003,6 +1213,7 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
         payload["last_check_status"] = payload.get("status")
         _LAST_RESULT = payload
         payload["cache"] = _cache_payload()
+        payload = _attach_trusted_apply_candidate(payload, now=now)
         return payload
     finally:
         _CHECK_IN_PROGRESS = False
@@ -1013,7 +1224,8 @@ def run_startup_due_check(db: Session) -> dict[str, Any]:
 
 
 def reset_update_check_cache_for_tests() -> None:
-    global _LAST_RESULT, _LAST_SUCCESSFUL_RESULT, _CHECK_IN_PROGRESS
+    global _LAST_RESULT, _LAST_SUCCESSFUL_RESULT, _LAST_TRUSTED_APPLY_SNAPSHOT, _CHECK_IN_PROGRESS
     _LAST_RESULT = None
     _LAST_SUCCESSFUL_RESULT = None
+    _LAST_TRUSTED_APPLY_SNAPSHOT = None
     _CHECK_IN_PROGRESS = False

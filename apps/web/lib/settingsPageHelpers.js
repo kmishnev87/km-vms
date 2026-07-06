@@ -229,10 +229,30 @@ export function shortCommit(value) {
   return text.length > 12 ? `${text.slice(0, 12)}...` : text;
 }
 
+export function updateApplyTrustedCandidateRelease(updateStatus) {
+  const candidate = updateStatus?.trusted_apply_candidate;
+  if (!candidate?.fresh || !candidate?.latest) return {};
+  const latest = candidate.latest || {};
+  const available = candidate.available_release || {};
+  return {
+    version: available.version || latest.version,
+    title: available.title || latest.title,
+    summary: available.summary || latest.summary,
+    changelog: available.changelog || latest.breaking_changes || [],
+    published_at: available.published_at || latest.published_at,
+    tag: available.tag || latest.source_ref || latest.git_ref,
+    commit: available.commit_sha || latest.commit,
+    commit_sha: available.commit_sha || latest.commit,
+    commit_short: available.commit_short || shortCommit(latest.commit),
+    provider: available.provider || candidate.source || "trusted_snapshot",
+  };
+}
+
 export function updateApplyFactRows(updateStatus, applyStatus, t) {
   const installedRelease = updateStatus?.installed_release || {};
-  const availableRelease = updateStatus?.available_release || {};
-  const latest = updateStatus?.latest || updateStatus?.latest_release || {};
+  const trustedRelease = updateApplyTrustedCandidateRelease(updateStatus);
+  const availableRelease = updateStatus?.available_release || trustedRelease;
+  const latest = updateStatus?.latest || updateStatus?.latest_release || trustedRelease;
   const installed = updateStatus?.installed_build || updateStatus?.installed || {};
   const labels = t.maintenanceLabels || {};
   const comparison = updateStatus?.comparison || {};
@@ -278,8 +298,9 @@ export function updateApplyTechnicalRows(updateStatus, applyStatus, t) {
 
 function updateApplyReleaseValue(updateStatus, key) {
   const installedRelease = updateStatus?.installed_release || {};
-  const availableRelease = updateStatus?.available_release || {};
-  const latest = updateStatus?.latest || updateStatus?.latest_release || {};
+  const trustedRelease = updateApplyTrustedCandidateRelease(updateStatus);
+  const availableRelease = updateStatus?.available_release || trustedRelease;
+  const latest = updateStatus?.latest || updateStatus?.latest_release || trustedRelease;
   const installed = updateStatus?.installed_build || updateStatus?.installed || {};
   if (key === "currentVersion") return installedRelease.version || installed.app_version || updateStatus?.installed?.installed_version || "-";
   if (key === "availableVersion") return availableRelease.version || latest.version || latest.latest_version || "-";
@@ -377,7 +398,10 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const normalizedStatus = normalizedUpdateApplyState(status);
   const normalizedUpdateStatus = normalizedUpdateApplyState(updateStatus?.status);
   const running = updateApplyIsRunning(applyStatus?.status || "");
-  const canApply = Boolean(updateStatus?.can_apply_from_ui && !running && !applyStatus?.is_stale);
+  const trustedCandidate = updateStatus?.trusted_apply_candidate || {};
+  const freshTrustedCandidateAvailable = Boolean(trustedCandidate.fresh && trustedCandidate.can_apply_from_ui && trustedCandidate.latest);
+  const liveCheckFailedWithCandidate = normalizedUpdateStatus === "check_failed" && freshTrustedCandidateAvailable;
+  const canApply = Boolean((updateStatus?.can_apply_from_ui || freshTrustedCandidateAvailable) && !running && !applyStatus?.is_stale);
   const lastSummary = applyStatus?.last_apply_summary || null;
   const currentVersion = updateApplyReleaseValue(updateStatus, "currentVersion");
   const availableVersion = updateApplyReleaseValue(updateStatus, "availableVersion");
@@ -391,14 +415,14 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const terminalSuccess = effective === "completed" && commitVerified;
   const current = status === "current" && !canApply && !running;
   const available = status === "update_available" && canApply;
-  const failed = isUpdateApplyAttentionState(normalizedEffective) ||
+  const failed = !liveCheckFailedWithCandidate && (isUpdateApplyAttentionState(normalizedEffective) ||
     isUpdateApplyAttentionState(normalizedStatus) ||
     isUpdateApplyAttentionState(normalizedUpdateStatus) ||
     UPDATE_CHECK_BLOCKING_STATES.has(normalizedEffective) ||
     UPDATE_CHECK_BLOCKING_STATES.has(normalizedStatus) ||
-    UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus);
-  const severity = failed ? "blocked" : running || available || transientError ? "warning" : "ok";
-  const headlineKey = terminalSuccess ? "completed" : running ? "running" : failed ? "blocked" : available ? "available" : current ? "current" : "current";
+    UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus));
+  const severity = failed ? "blocked" : running || available || liveCheckFailedWithCandidate || transientError ? "warning" : "ok";
+  const headlineKey = terminalSuccess ? "completed" : running ? "running" : failed ? "blocked" : available || liveCheckFailedWithCandidate ? "available" : current ? "current" : "current";
   const headline = t.updateApplyHeadlines?.[headlineKey] || maintenanceStatusText(terminalSuccess ? "completed" : status, t);
   const recoveryStatus = isUpdateApplyAttentionState(normalizedEffective) || UPDATE_CHECK_BLOCKING_STATES.has(normalizedEffective)
     ? normalizedEffective
@@ -409,8 +433,10 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
       : failed && normalizedStatus && normalizedStatus !== "unknown"
         ? normalizedStatus
         : effective;
-  const recoverySummary = updateApplyRecoveryText(recoveryStatus, applyStatus, t);
-  const summary = failed ? recoverySummary : (t.updateApplySummaries?.[headlineKey] || recoverySummary);
+  const recoverySummary = liveCheckFailedWithCandidate
+    ? (t.updateApplyRecoveryLiveCheckFailedWithSnapshot || updateApplyRecoveryText("provider_unavailable", applyStatus, t))
+    : updateApplyRecoveryText(recoveryStatus, applyStatus, t);
+  const summary = failed || liveCheckFailedWithCandidate ? recoverySummary : (t.updateApplySummaries?.[headlineKey] || recoverySummary);
   const updateResult = terminalSuccess
     ? (t.updateApplyResults?.completedVerified || headline)
     : t.updateApplyResults?.[headlineKey] || headline;
@@ -473,6 +499,10 @@ export function updateApplyRecoveryText(status, applyStatus, t) {
   if (effective === "completed" && applyStatus?.expected_commit && applyStatus?.commit_verified === false) return t.updateApplyRecoveryCommitMismatch;
   if (effective === "failed") return t.updateApplyRecoveryFailed;
   if (effective === "check_failed") return t.updateApplyRecoveryCheckFailed || t.updateApplyRecoveryFailed;
+  if (["update_check_required", "trusted_snapshot_stale", "trusted_snapshot_invalidated", "manifest_version_changed", "manifest_commit_changed"].includes(effective)) {
+    return t.updateApplyRecoveryRefreshRequired || t.updateApplyRecoveryCheckFailed || t.updateApplyRecoveryBlocked;
+  }
+  if (effective === "trusted_commit_missing") return t.updateApplyRecoveryMissingCommit || t.updateApplyRecoveryBlocked;
   if (effective === "blocked" || effective === "not_configured") return t.updateApplyRecoveryBlocked;
   if (updateApplyIsRunning(effective)) return t.updateApplyRecoveryRunning;
   if (effective === "current") return t.updateApplyRecoveryCurrent;
@@ -612,12 +642,13 @@ export function formatMaintenanceMessage(value, t, lang = "ru", context = "statu
 }
 
 export function buildUpdateApplyConfirmation(t, updateStatus) {
-  const latest = updateStatus?.latest || updateStatus?.latest_release || {};
+  const trustedRelease = updateApplyTrustedCandidateRelease(updateStatus);
+  const latest = updateStatus?.latest || updateStatus?.latest_release || trustedRelease;
   const installed = updateStatus?.installed_build || updateStatus?.installed || {};
   const lines = [t.updateApplyConfirm];
   if (installed.app_version || updateStatus?.installed?.installed_version) lines.push(`${t.updateCurrent}: ${installed.app_version || updateStatus?.installed?.installed_version}`);
   if (latest.version || latest.latest_version) lines.push(`${t.updateLatest}: ${latest.version || latest.latest_version}`);
-  if (latest.commit || latest.build_id) lines.push(`${t.maintenanceLabels?.targetCommit}: ${shortCommit(latest.commit || latest.build_id)}`);
+  if (latest.commit || latest.commit_sha || latest.build_id) lines.push(`${t.maintenanceLabels?.targetCommit}: ${shortCommit(latest.commit || latest.commit_sha || latest.build_id)}`);
   lines.push(t.updateApplyConfirmRestart);
   return lines.filter(Boolean).join("\n");
 }

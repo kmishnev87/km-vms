@@ -46,6 +46,7 @@ import {
   updateApplyOperatorModel,
   updateApplyButtonText,
   updateApplyIsRunning,
+  updateApplyTrustedCandidateRelease,
   userCanBeDeleted,
   userCanBeManaged,
 } from "../../lib/settingsPageHelpers";
@@ -236,7 +237,7 @@ const TEXT = {
     updateApplyConfirm: "Запустить обновление KM VMS? Система выполнит проверку, применит trusted release через helper и может временно перезапустить сервисы.",
     updateApplyConfirmRestart: "Сервисы могут временно перезапуститься; статус продолжит обновляться после восстановления API.",
     updateApplyQueued: "Запрос обновления передан helper.",
-    updateApplyUnavailable: "Действие сейчас недоступно. Причина показана в этом блоке.",
+    updateApplyUnavailable: "Действие сейчас недоступно. Проверьте сообщение в этом блоке и повторите проверку обновления.",
     updateApplyConnection: "Сервис может временно перезапускаться; опрос статуса продолжится автоматически.",
     updateApplyRecoveryAvailable: "Проверьте целевую версию и commit, затем запустите применение.",
     updateApplyRecoveryBlocked: "Устраните блокировку в trusted release или настройках сервера и повторите проверку.",
@@ -245,12 +246,15 @@ const TEXT = {
     updateApplyRecoveryCurrent: "Установленная версия соответствует trusted release.",
     updateApplyRecoveryFailed: "Обновление завершилось ошибкой. Проверьте статус обновления и повторите после устранения причины.",
     updateApplyRecoveryCheckFailed: "Проверка обновления не завершилась. Повторите проверку или скачайте отчёт для поддержки.",
+    updateApplyRecoveryLiveCheckFailedWithSnapshot: "Последняя live-проверка не завершилась, но свежая trusted-проверка ещё доступна для безопасного применения.",
+    updateApplyRecoveryRefreshRequired: "Release изменился или проверка устарела. Запустите «Проверить обновление» ещё раз.",
+    updateApplyRecoveryMissingCommit: "У релиза нет trusted commit evidence. Обновление нельзя применить безопасно.",
     updateApplyRecoveryReconnecting: "Сервисы могут перезапускаться. Интерфейс продолжит опрос и перечитает статус после восстановления API.",
     updateApplyRecoveryRunning: "Helper выполняет обновление. Не закрывайте питание NAS и дождитесь итогового статуса.",
     updateApplyRecoveryStalled: "Статус обновления давно не менялся. Не запускайте повторно, пока helper или lock могут быть активны; проверьте состояние сервера.",
     updateApplyRecoveryUnknown: "Статус обновления пока неизвестен. Обновите проверку или дождитесь ответа API.",
     updateApplyRecoveryIdentity: "Метаданные установки неполные или расходятся с текущим кодом. Обновление заблокировано до принятия release identity.",
-    updateApplyRecoveryProvider: "Публичный release descriptor пока недоступен. Повторите проверку позже или проверьте настройки сервера.",
+    updateApplyRecoveryProvider: "Источник релиза временно недоступен. Повторите проверку; свежая успешная trusted-проверка может использоваться только ограниченное время.",
     updateApplyRecoveryInstalledNewer: "Установленная версия новее опубликованной. Применение заблокировано, чтобы не откатить систему назад.",
     updateApplyTechnicalDetails: "Технические детали",
     updateApplyProgress: "Ход обновления",
@@ -734,7 +738,7 @@ const TEXT = {
     updateApplyConfirm: "Start KM VMS update? The system will run preflight, apply the trusted release through the helper and may temporarily restart services.",
     updateApplyConfirmRestart: "Services may restart temporarily; status polling will resume after the API is available.",
     updateApplyQueued: "Update request was handed to the helper.",
-    updateApplyUnavailable: "Update cannot start now. The reason is shown in this panel.",
+    updateApplyUnavailable: "Update cannot start now. Review the message in this panel and run Check update again if needed.",
     updateApplyConnection: "Services may restart temporarily; status polling will continue automatically.",
     updateApplyRecoveryAvailable: "Check the target version and commit, then start apply.",
     updateApplyRecoveryBlocked: "Fix the trusted release or server-side configuration blocker and run check again.",
@@ -743,12 +747,15 @@ const TEXT = {
     updateApplyRecoveryCurrent: "Installed version matches the trusted release.",
     updateApplyRecoveryFailed: "Update failed. Review the update status and retry after fixing the cause.",
     updateApplyRecoveryCheckFailed: "Update check did not complete. Run the check again or download the report for support.",
+    updateApplyRecoveryLiveCheckFailedWithSnapshot: "The latest live check failed, but a fresh trusted check is still available for safe apply.",
+    updateApplyRecoveryRefreshRequired: "The release changed or the check is too old. Run Check update again.",
+    updateApplyRecoveryMissingCommit: "The release is missing trusted commit evidence. Update cannot be applied safely.",
     updateApplyRecoveryReconnecting: "Services may be restarting. The UI will continue polling and reread status when the API returns.",
     updateApplyRecoveryRunning: "The helper is applying the update. Keep the NAS powered and wait for the final status.",
     updateApplyRecoveryStalled: "Update status has not changed recently. Do not retry while the helper or lock may still be active; check server status first.",
     updateApplyRecoveryUnknown: "Update status is not known yet. Refresh the check or wait for the API response.",
     updateApplyRecoveryIdentity: "Installed release metadata is incomplete or does not match the current code. Apply is blocked until release identity is adopted.",
-    updateApplyRecoveryProvider: "The public release descriptor is not available yet. Check again later or verify server settings.",
+    updateApplyRecoveryProvider: "Release source is temporarily unavailable. Try again; a fresh successful trusted check can be used only for a limited time.",
     updateApplyRecoveryInstalledNewer: "Installed version is newer than the published release. Apply is blocked to avoid downgrading the system.",
     updateApplyTechnicalDetails: "Technical details",
     updateApplyProgress: "Update progress",
@@ -1203,7 +1210,7 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyConfirm: "启动 KM VMS 更新？系统将执行预检查，通过 helper 应用受信任版本，并可能短暂重启服务。",
   updateApplyConfirmRestart: "服务可能会短暂重启；API 恢复后状态轮询会继续。",
   updateApplyQueued: "更新请求已交给 helper。",
-  updateApplyUnavailable: "现在无法启动更新：原因显示在此面板中。",
+  updateApplyUnavailable: "现在无法启动更新。请查看此面板中的消息，必要时重新检查更新。",
   updateApplyConnection: "服务可能会短暂重启；状态轮询会自动继续。",
   updateApplyRecoveryAvailable: "检查目标版本和 commit，然后启动应用。",
   updateApplyRecoveryBlocked: "修复受信任版本或服务器配置阻塞项后重新检查。",
@@ -1212,12 +1219,15 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyRecoveryCurrent: "已安装版本与受信任版本一致。",
   updateApplyRecoveryFailed: "更新失败。请查看更新状态，并在修复原因后重试。",
   updateApplyRecoveryCheckFailed: "更新检查未完成。请重新检查，或下载报告并发送给支持人员。",
+  updateApplyRecoveryLiveCheckFailedWithSnapshot: "最新实时检查失败，但仍有新鲜的可信检查可用于安全应用。",
+  updateApplyRecoveryRefreshRequired: "版本已变化或检查已过期。请重新运行检查更新。",
+  updateApplyRecoveryMissingCommit: "该版本缺少可信 commit 证据，无法安全应用更新。",
   updateApplyRecoveryReconnecting: "服务可能正在重启。界面会继续轮询，并在 API 恢复后重新读取状态。",
   updateApplyRecoveryRunning: "Helper 正在应用更新。请保持 NAS 供电并等待最终状态。",
   updateApplyRecoveryStalled: "更新状态已经较久没有变化。helper 或锁可能仍处于活动状态时不要重复启动，请先检查服务器状态。",
   updateApplyRecoveryUnknown: "更新状态暂时未知。请刷新检查或等待 API 响应。",
   updateApplyRecoveryIdentity: "已安装版本元数据不完整或与当前代码不一致。在接管 release identity 前无法应用更新。",
-  updateApplyRecoveryProvider: "公共 release descriptor 暂不可用。请稍后重新检查或核对服务器设置。",
+  updateApplyRecoveryProvider: "版本来源暂时不可用。请重试；最近一次成功的可信检查只能在有限时间内用于应用更新。",
   updateApplyRecoveryInstalledNewer: "已安装版本高于已发布版本。为避免降级，应用更新已被阻止。",
   updateApplyTechnicalDetails: "技术详情",
   updateApplyProgress: "更新进度",
@@ -1990,14 +2000,17 @@ export default function SettingsPage() {
     setMaintenanceBusy("update-apply");
     setMaintenanceActionResult(null);
     try {
-      const latest = updateStatus?.latest || updateStatus?.latest_release || {};
+      const trustedCandidate = updateApplyTrustedCandidateRelease(updateStatus);
+      const latest = trustedCandidate.version && (trustedCandidate.commit || trustedCandidate.commit_sha)
+        ? trustedCandidate
+        : updateStatus?.latest || updateStatus?.latest_release || {};
       const result = await apiFetch("/system/update/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           confirm: true,
           expected_manifest_version: latest.version || latest.latest_version || null,
-          expected_manifest_commit: latest.commit || latest.build_id || null,
+          expected_manifest_commit: latest.commit || latest.commit_sha || latest.build_id || null,
         }),
       });
       setUpdateApplyStatus(result?.apply_status || result);

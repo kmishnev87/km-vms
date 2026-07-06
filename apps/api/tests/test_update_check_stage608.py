@@ -1,5 +1,6 @@
 import json
 import sys
+import urllib.error
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,11 +20,13 @@ from app.routers import settings as settings_router
 from app.services.update_check import (
     UpdateCheckBlocked,
     compare_versions,
+    get_trusted_apply_snapshot,
     read_installed_update_state,
     read_trusted_local_manifest,
     reset_update_check_cache_for_tests,
     run_startup_due_check,
     run_update_check,
+    trusted_apply_snapshot_status,
 )
 
 
@@ -464,6 +467,116 @@ def test_update_available_and_blockers_are_conservative(tmp_path, monkeypatch):
     assert blocked["status"] == "blocked"
     assert {item["code"] for item in blocked["blockers"]} == {"requires_backup", "requires_manual_action", "requires_migration"}
     assert blocked["side_effects"]["update_applied"] is False
+
+
+def test_successful_check_stores_fresh_trusted_apply_snapshot(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    now = datetime(2026, 6, 18, 5, 0, 0)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(app_root / ".km-vms-release.json", version="0.7.0", commit_sha="a" * 40)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(_manifest(tmp_path / "release.json", version="9.0.0", commit="b" * 40)))
+
+    result = run_update_check(db, now=now)
+    status = trusted_apply_snapshot_status(now=now + timedelta(seconds=10))
+    snapshot = get_trusted_apply_snapshot(now=now + timedelta(seconds=10))
+    stale = trusted_apply_snapshot_status(now=now + timedelta(minutes=16))
+
+    assert result["status"] == "update_available"
+    assert status["available"] is True
+    assert status["fresh"] is True
+    assert status["age_seconds"] == 10
+    assert snapshot is not None
+    assert snapshot["latest"]["version"] == "9.0.0"
+    assert snapshot["latest"]["commit"] == "b" * 40
+    assert stale["fresh"] is False
+
+
+def test_transient_failed_recheck_preserves_fresh_trusted_apply_candidate(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(app_root / ".km-vms-release.json", version="0.7.0", commit_sha="a" * 40)
+    good_manifest = _manifest(tmp_path / "release.json", version="9.0.0", commit="b" * 40)
+    bad_manifest = tmp_path / "bad-release.json"
+    bad_manifest.write_text("{not-json", encoding="utf-8")
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(good_manifest))
+    monkeypatch.setenv("KMVMS_UPDATE_HELPER_ENABLED", "1")
+
+    first = run_update_check(db)
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(bad_manifest))
+    failed = run_update_check(db)
+    candidate = failed["trusted_apply_candidate"]
+
+    assert first["status"] == "update_available"
+    assert failed["status"] == "check_failed"
+    assert failed["can_apply_from_ui"] is True
+    assert failed["errors"][0]["code"] == "check_failed"
+    assert candidate["available"] is True
+    assert candidate["fresh"] is True
+    assert candidate["can_apply_from_ui"] is True
+    assert candidate["latest"]["version"] == "9.0.0"
+    assert candidate["latest"]["commit"] == "b" * 40
+
+
+class _BytesResponse:
+    def __init__(self, payload: bytes):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def read(self, _max_bytes):
+        return self.payload
+
+
+def test_public_provider_network_timeout_is_retried_and_sanitized(monkeypatch):
+    from app.services import update_check as update_check_module
+
+    attempts = {"count": 0}
+
+    def timeout_urlopen(*_args, **_kwargs):
+        attempts["count"] += 1
+        raise urllib.error.URLError("timed out")
+
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_RETRY_ATTEMPTS", "3")
+    monkeypatch.setattr(update_check_module.urllib.request, "urlopen", timeout_urlopen)
+    monkeypatch.setattr(update_check_module.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(UpdateCheckBlocked) as exc:
+        update_check_module._read_public_json_url("https://example.test/releases")
+
+    assert attempts["count"] == 3
+    assert exc.value.status == "provider_unavailable"
+    assert exc.value.diagnostics["error_category"] == "public_provider_retry_exhausted"
+
+
+def test_public_provider_invalid_json_is_not_retried(monkeypatch):
+    from app.services import update_check as update_check_module
+
+    attempts = {"count": 0}
+
+    def invalid_json_urlopen(*_args, **_kwargs):
+        attempts["count"] += 1
+        return _BytesResponse(b"{not-json")
+
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_RETRY_ATTEMPTS", "3")
+    monkeypatch.setattr(update_check_module.urllib.request, "urlopen", invalid_json_urlopen)
+    monkeypatch.setattr(update_check_module.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(UpdateCheckBlocked) as exc:
+        update_check_module._read_public_json_url("https://example.test/releases")
+
+    assert attempts["count"] == 1
+    assert exc.value.status == "provider_unavailable"
+    assert exc.value.diagnostics["error_category"] == "public_provider_invalid_json"
 
 
 def test_minimum_current_version_blocks_incompatible_release(tmp_path, monkeypatch):

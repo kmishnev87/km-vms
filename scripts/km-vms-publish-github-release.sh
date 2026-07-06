@@ -271,7 +271,7 @@ def main() -> None:
     if descriptor_commit and descriptor_commit != remote_commit:
         fail("descriptor commit_sha does not match tag commit evidence")
     if descriptor_commit is None:
-        info("descriptor commit_sha is null; using dereferenced tag commit evidence")
+        info("descriptor commit_sha is null; trusted commit evidence is resolved from the immutable semver tag")
 
     token = token_from_env()
     if mode == "publish":
