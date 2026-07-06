@@ -470,8 +470,11 @@ assert.equal(updateApplyRecoveryText("not-a-real-status", {}, maintenanceText), 
 assert.equal(updateApplyButtonText({ status: "rebuilding", current_step: "rebuilding" }, maintenanceText), "Rebuilding");
 assert.equal(updateApplyButtonText({ status: "health_check", current_step: "health_check" }, maintenanceText), "Health check");
 assert.deepEqual(updateApplyStepRows({ steps: [{ name: "rebuilding", status: "running" }, { name: "health_check", status: "pending" }] }, maintenanceText), [
-  { name: "rebuilding", label: "Rebuilding", status: "running", statusLabel: "Running" },
+  { name: "request", label: "Unknown", status: "pending", statusLabel: "Pending" },
+  { name: "preflight", label: "Unknown", status: "pending", statusLabel: "Pending" },
+  { name: "applying", label: "Unknown", status: "running", statusLabel: "Running" },
   { name: "health_check", label: "Health check", status: "pending", statusLabel: "Pending" },
+  { name: "commit_verification", label: "Commit check", status: "pending", statusLabel: "Pending" },
 ]);
 assert.match(buildUpdateApplyConfirmation(maintenanceText, updateStatus), /Target commit: bbbbbbbbbbbb\.\.\./);
 assert.equal(formatUpdateNotice({ code: "source_metadata_invalid", message: "Installed source metadata is unavailable or invalid." }, maintenanceText, "ru"), "Source metadata localized");

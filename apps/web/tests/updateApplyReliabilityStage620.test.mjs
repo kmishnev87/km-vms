@@ -53,7 +53,9 @@ const t = {
   },
   maintenanceStatuses: {
     update_available: "Update available",
+    request: "Request",
     preflight: "Preflight",
+    applying: "Updating",
     rebuilding: "Rebuilding",
     health_check: "Health check",
     commit_verification: "Commit check",
@@ -97,8 +99,11 @@ assert.equal(updateApplyButtonText({ status: "commit_verification", current_step
 assert.equal(updateApplyRecoveryText("stalled", { error: { operator_action: "Check server status." } }, t), "Check server status.");
 
 assert.deepEqual(updateApplyStepRows({ steps: [{ name: "preflight", status: "completed" }, { name: "rebuilding", status: "running" }] }, t), [
+  { name: "request", label: "Request", status: "pending", statusLabel: "Pending" },
   { name: "preflight", label: "Preflight", status: "completed", statusLabel: "Completed" },
-  { name: "rebuilding", label: "Rebuilding", status: "running", statusLabel: "Running" },
+  { name: "applying", label: "Updating", status: "running", statusLabel: "Running" },
+  { name: "health_check", label: "Health check", status: "pending", statusLabel: "Pending" },
+  { name: "commit_verification", label: "Commit check", status: "pending", statusLabel: "Pending" },
 ]);
 
 assert.deepEqual(updateApplyFactRows(
