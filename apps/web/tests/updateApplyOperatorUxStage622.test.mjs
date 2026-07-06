@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   updateApplyOperatorModel,
+  updateApplyStepRows,
 } from "../lib/settingsPageHelpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -91,6 +92,8 @@ assert.equal(settingsPage.includes("helper logs"), false);
 assert.equal(settingsPage.includes('name="token"'), false);
 assert.equal(settingsPage.includes('name="url"'), false);
 assert.equal(settingsPage.includes('name="repo"'), false);
+assert.equal(settingsPage.includes("reason is shown above"), false);
+assert.equal(settingsPage.includes("причина показана в блоке выше"), false);
 
 for (const label of ["updateApplyHeadlines", "updateApplySummaries", "updateApplyHistoryLimited", "updateApplySupportTitle", "updateApplySupportAction"]) {
   assert.equal(settingsPage.includes(label), true);
@@ -234,5 +237,24 @@ const ruFallback = updateApplyOperatorModel(
   "ru",
 );
 
-assert.equal(ruFallback.releaseTitle, "Published release");
-assert.equal(ruFallback.releaseSummary, "Release notes are not localized.");
+assert.equal(ruFallback.releaseTitle, "Stage 6.3.0 Settings Maintenance");
+assert.equal(ruFallback.releaseSummary, "English-only release notes.");
+
+const internalSteps = [
+  { name: "queued", status: "completed" },
+  { name: "preflight", status: "completed" },
+  { name: "acquire_source", status: "completed" },
+  { name: "extracting", status: "completed" },
+  { name: "validating_source", status: "completed" },
+  { name: "overlay", status: "completed" },
+  { name: "compose_config", status: "completed" },
+  { name: "rebuilding", status: "running" },
+  { name: "restarting", status: "pending" },
+  { name: "health_check", status: "pending" },
+  { name: "commit_verification", status: "pending" },
+];
+const macroSteps = updateApplyStepRows({ steps: internalSteps }, t);
+assert.deepEqual(macroSteps.map((step) => step.name), ["request", "preflight", "applying", "health_check", "commit_verification"]);
+assert.equal(macroSteps.length, 5);
+assert.equal(macroSteps[2].status, "running");
+assert.equal(macroSteps.some((step) => ["extracting", "validating_source", "overlay", "compose_config", "rebuilding", "restarting"].includes(step.name)), false);

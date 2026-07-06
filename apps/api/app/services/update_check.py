@@ -19,7 +19,6 @@ from app.models.system_settings import SystemSettings
 
 UPDATE_REPORT_VERSION = "stage612.update_status.v1"
 UPDATE_INTERVAL = timedelta(hours=24)
-MANUAL_RATE_LIMIT = timedelta(minutes=15)
 MAX_METADATA_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 64 * 1024
 MAX_PUBLIC_COMMIT_BYTES = 512 * 1024
@@ -40,7 +39,7 @@ SENSITIVE_VALUE_RE = re.compile(
 )
 
 _LAST_RESULT: dict[str, Any] | None = None
-_LAST_MANUAL_CHECK_AT: datetime | None = None
+_LAST_SUCCESSFUL_RESULT: dict[str, Any] | None = None
 _CHECK_IN_PROGRESS = False
 
 
@@ -718,6 +717,17 @@ def _schedule(db: Session, *, now: datetime | None = None) -> dict[str, Any]:
     }
 
 
+def _cache_payload() -> dict[str, Any]:
+    return {
+        "has_last_result": _LAST_RESULT is not None,
+        "last_result_status": _LAST_RESULT.get("status") if _LAST_RESULT else None,
+        "has_last_successful_check": _LAST_SUCCESSFUL_RESULT is not None,
+        "last_check_status": _LAST_RESULT.get("status") if _LAST_RESULT else None,
+        "last_successful_check_status": _LAST_SUCCESSFUL_RESULT.get("status") if _LAST_SUCCESSFUL_RESULT else None,
+        "last_successful_check_at": _LAST_SUCCESSFUL_RESULT.get("checked_at") if _LAST_SUCCESSFUL_RESULT else None,
+    }
+
+
 def _blocker(code: str, message: str, severity: str = "high") -> UpdateBlocker:
     return UpdateBlocker(code=code, message=message, severity=severity)
 
@@ -755,6 +765,12 @@ def _compare(installed: UpdateInstalledState, latest: UpdateManifestSummary) -> 
     if ordering == "same_version" and not latest.commit:
         warnings.append(_warning("commit_evidence_missing", "Version matches but commit evidence is unavailable."))
         return "current_or_unknown", blockers, warnings
+    if ordering == "same_version" and latest.commit:
+        if installed.installed_commit and installed.installed_commit.lower() != latest.commit.lower():
+            blockers.append(_blocker("commit_mismatch", "Installed release commit does not match the same-version release commit."))
+            return "blocked", blockers, warnings
+        blockers.append(_blocker("identity_incomplete", "Same-version release includes commit evidence, but installed release commit evidence is missing."))
+        return "identity_incomplete", blockers, warnings
     if not latest.commit:
         blockers.append(_blocker("trusted_commit_missing", "Available release does not include commit evidence required for apply."))
         if ordering == "newer_available":
@@ -762,8 +778,6 @@ def _compare(installed: UpdateInstalledState, latest: UpdateManifestSummary) -> 
         return "unknown", blockers, warnings
     if ordering == "newer_available":
         return "update_available", blockers, warnings
-    if ordering == "same_version":
-        return "current_or_unknown", blockers, warnings
     if ordering == "installed_newer_than_channel":
         blockers.append(_blocker("installed_newer_than_available", "Installed version is newer than available release."))
         return "installed_newer_than_available", blockers, warnings
@@ -908,38 +922,40 @@ def build_update_status(db: Session, *, now: datetime | None = None) -> dict[str
     )
     payload = _result_payload(result)
     payload["schedule"] = _schedule(db, now=now)
-    payload["cache"] = {"has_last_result": _LAST_RESULT is not None, "last_result_status": _LAST_RESULT.get("status") if _LAST_RESULT else None}
+    payload["cache"] = _cache_payload()
+    payload["has_last_successful_check"] = _LAST_SUCCESSFUL_RESULT is not None
+    payload["last_check_status"] = _LAST_RESULT.get("status") if _LAST_RESULT else None
     payload["last_update_check"] = _LAST_RESULT
     return payload
 
 
 def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_test_only: str | Path | None = None, now: datetime | None = None) -> dict[str, Any]:
-    global _LAST_RESULT, _LAST_MANUAL_CHECK_AT, _CHECK_IN_PROGRESS
+    global _LAST_RESULT, _LAST_SUCCESSFUL_RESULT, _CHECK_IN_PROGRESS
     now = now or _utcnow()
     if _CHECK_IN_PROGRESS:
-        raise UpdateCheckBlocked("blocked", {"summary": "An update check is already in progress."})
-    if manual and _LAST_MANUAL_CHECK_AT and now - _LAST_MANUAL_CHECK_AT < MANUAL_RATE_LIMIT:
-        raise UpdateCheckBlocked("manual_update_check_rate_limited", {"summary": "Manual update check is rate-limited.", "retry_after_seconds": int((MANUAL_RATE_LIMIT - (now - _LAST_MANUAL_CHECK_AT)).total_seconds())})
-    installed = read_installed_update_state()
-    source_path, source_status = _available_release_source_path(manifest_path_for_test_only)
-    if not source_path:
-        result = UpdateCheckResult(
-            status="not_configured",
-            installed=installed,
-            latest=None,
-            blockers=[],
-            warnings=[*installed.warnings, _warning("no_release_published", "No public release metadata is available.")],
-            checked_at=_iso(now),
-            manifest_source_status="not_configured",
-        )
-        payload = _result_payload(result)
-        payload["schedule"] = _schedule(db, now=now)
-        _LAST_RESULT = payload
-        if manual:
-            _LAST_MANUAL_CHECK_AT = now
-        return payload
+        raise UpdateCheckBlocked("update_check_already_running", {"summary": "An update check is already in progress."})
+    _CHECK_IN_PROGRESS = True
     try:
-        _CHECK_IN_PROGRESS = True
+        installed = read_installed_update_state()
+        source_path, source_status = _available_release_source_path(manifest_path_for_test_only)
+        if not source_path:
+            result = UpdateCheckResult(
+                status="not_configured",
+                installed=installed,
+                latest=None,
+                blockers=[],
+                warnings=[*installed.warnings, _warning("no_release_published", "No public release metadata is available.")],
+                checked_at=_iso(now),
+                manifest_source_status="not_configured",
+            )
+            payload = _result_payload(result)
+            payload["schedule"] = _schedule(db, now=now)
+            payload["has_last_successful_check"] = True
+            payload["last_check_status"] = payload.get("status")
+            _LAST_RESULT = payload
+            _LAST_SUCCESSFUL_RESULT = payload
+            payload["cache"] = _cache_payload()
+            return payload
         if source_status == "public_github_release" and isinstance(source_path, str) and source_path.startswith("latest-tag:"):
             latest = _manifest_from_latest_public_release_tag(source_path.split(":", 1)[1])
         elif source_status == "public_github_release" and isinstance(source_path, str) and source_path.startswith("tag:"):
@@ -963,8 +979,12 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
         )
         payload = _result_payload(result)
         payload["schedule"] = _schedule(db, now=now)
+        payload["has_last_successful_check"] = True
+        payload["last_check_status"] = payload.get("status")
         payload["last_success_at"] = _iso(now)
         _LAST_RESULT = payload
+        _LAST_SUCCESSFUL_RESULT = payload
+        payload["cache"] = _cache_payload()
         return payload
     except UpdateCheckBlocked as exc:
         result = UpdateCheckResult(
@@ -979,11 +999,12 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
         payload = _result_payload(result)
         payload["errors"] = [{"code": exc.status, "summary": _sanitize_text(exc.diagnostics.get("summary"), max_length=200), "error_category": exc.diagnostics.get("error_category")}]
         payload["schedule"] = _schedule(db, now=now)
+        payload["has_last_successful_check"] = _LAST_SUCCESSFUL_RESULT is not None
+        payload["last_check_status"] = payload.get("status")
         _LAST_RESULT = payload
+        payload["cache"] = _cache_payload()
         return payload
     finally:
-        if manual:
-            _LAST_MANUAL_CHECK_AT = now
         _CHECK_IN_PROGRESS = False
 
 
@@ -992,7 +1013,7 @@ def run_startup_due_check(db: Session) -> dict[str, Any]:
 
 
 def reset_update_check_cache_for_tests() -> None:
-    global _LAST_RESULT, _LAST_MANUAL_CHECK_AT, _CHECK_IN_PROGRESS
+    global _LAST_RESULT, _LAST_SUCCESSFUL_RESULT, _CHECK_IN_PROGRESS
     _LAST_RESULT = None
-    _LAST_MANUAL_CHECK_AT = None
+    _LAST_SUCCESSFUL_RESULT = None
     _CHECK_IN_PROGRESS = False

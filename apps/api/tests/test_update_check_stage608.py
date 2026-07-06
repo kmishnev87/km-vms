@@ -394,6 +394,55 @@ def test_same_version_without_commit_is_current_or_unknown(tmp_path, monkeypatch
     assert any(item["code"] == "commit_evidence_missing" for item in result["warnings"])
 
 
+def test_same_version_with_matching_commit_is_current(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    commit = "a" * 40
+    _release_identity(app_root / ".km-vms-release.json", version="1.0.0", commit_sha=commit)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(_manifest(tmp_path / "release.json", version="1.0.0", commit=commit)))
+
+    result = run_update_check(db)
+
+    assert result["status"] == "current"
+    assert result["comparison"]["reason_code"] == "current"
+    assert result["blockers"] == []
+
+
+def test_same_version_with_mismatched_commit_is_blocked(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(app_root / ".km-vms-release.json", version="1.0.0", commit_sha="a" * 40)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(_manifest(tmp_path / "release.json", version="1.0.0", commit="b" * 40)))
+
+    result = run_update_check(db)
+
+    assert result["status"] == "blocked"
+    assert result["comparison"]["reason_code"] == "commit_mismatch"
+    assert result["blockers"][0]["code"] == "commit_mismatch"
+
+
+def test_same_version_with_missing_installed_commit_is_not_current(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(app_root / ".km-vms-release.json", version="1.0.0", commit_sha=None)
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(_manifest(tmp_path / "release.json", version="1.0.0", commit="b" * 40)))
+
+    result = run_update_check(db)
+
+    assert result["status"] == "identity_incomplete"
+    assert result["status"] != "current"
+    assert result["blockers"][0]["code"] == "identity_incomplete"
+
+
 def test_update_available_and_blockers_are_conservative(tmp_path, monkeypatch):
     _engine, db = sqlite_session(tmp_path)
     _seed(db)
@@ -456,13 +505,15 @@ def test_manual_rate_limit_and_startup_are_read_only(tmp_path):
     now = datetime(2026, 6, 18, 4, 0, 0)
 
     first = run_update_check(db, manual=True, now=now)
-    with pytest.raises(Exception) as exc:
-        run_update_check(db, manual=True, now=now + timedelta(minutes=1))
+    second = run_update_check(db, manual=True, now=now + timedelta(minutes=1))
     startup = run_startup_due_check(db)
 
     assert first["side_effects"]["artifact_downloaded"] is False
-    assert "rate" in str(exc.value).lower()
+    assert second["side_effects"]["artifact_downloaded"] is False
+    assert second["cache"]["has_last_successful_check"] is True
+    assert second["last_check_status"] == second["status"]
     assert startup["side_effects"]["containers_restarted"] is False
+    assert startup["cache"]["last_check_status"] == second["status"]
 
 
 def test_diagnostic_archive_includes_update_status_without_running_apply(tmp_path, monkeypatch):

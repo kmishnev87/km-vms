@@ -29,6 +29,10 @@ PREFLIGHT_ENV_CKSUM=""
 POSTFLIGHT_ENV_CKSUM=""
 PREFLIGHT_DATA_PATHS=""
 UPDATE_PROGRESS_FILE="${KM_VMS_UPDATE_PROGRESS_FILE:-}"
+RELEASE_IDENTITY_HOST_STATUS=""
+RELEASE_IDENTITY_API_STATUS=""
+RELEASE_IDENTITY_API_VISIBLE=0
+RELEASE_IDENTITY_COMMIT_VERIFIED=0
 
 usage() {
   cat <<'EOF'
@@ -141,7 +145,11 @@ write_update_metadata() {
     printf '    "app_dir": "checked",\n'
     printf '    "source_tree": "checked",\n'
     printf '    "compose_config": "%s",\n' "$(if [ "$status" = "success" ]; then printf checked; else printf unknown; fi)"
-    printf '    "postflight_preservation": "%s"\n' "$(if [ "$status" = "success" ]; then printf checked; else printf unknown; fi)"
+    printf '    "postflight_preservation": "%s",\n' "$(if [ "$status" = "success" ]; then printf checked; else printf unknown; fi)"
+    printf '    "release_identity_host_metadata_status": "%s",\n' "$(json_escape "$RELEASE_IDENTITY_HOST_STATUS")"
+    printf '    "release_identity_api_metadata_status": "%s",\n' "$(json_escape "$RELEASE_IDENTITY_API_STATUS")"
+    printf '    "release_identity_api_visible": %s,\n' "$(if [ "$RELEASE_IDENTITY_API_VISIBLE" = "1" ]; then printf true; else printf false; fi)"
+    printf '    "release_identity_commit_verified": %s\n' "$(if [ "$RELEASE_IDENTITY_COMMIT_VERIFIED" = "1" ]; then printf true; else printf false; fi)"
     printf '  },\n'
     if [ -n "$error_message" ]; then
       printf '  "error_message": "%s",\n' "$(json_escape "$error_message")"
@@ -750,7 +758,82 @@ write_release_identity() {
     printf '  "metadata_source": "%s"\n' "$(if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then printf helper; else printf official_update; fi)"
     printf '}\n'
   } > "$tmp_identity"
-  mv "$tmp_identity" "$identity"
+  if [ -f "$identity" ]; then
+    # Preserve the bind-mounted file inode so running containers do not keep
+    # reading a stale precompose identity after the final complete write.
+    cat "$tmp_identity" > "$identity"
+    rm -f "$tmp_identity"
+  else
+    mv "$tmp_identity" "$identity"
+  fi
+  RELEASE_IDENTITY_HOST_STATUS="$metadata_status"
+}
+
+api_visible_release_identity_status() {
+  [ -n "$SOURCE_COMMIT_SHA" ] || return 1
+  (
+    cd "$APP_DIR"
+    compose_cmd --env-file "$APP_DIR/.env" exec -T api python -c '
+import json
+import sys
+from pathlib import Path
+
+expected = sys.argv[1]
+path = Path("/app/.km-vms-release.json")
+try:
+    data = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    raise SystemExit(10)
+status = str(data.get("metadata_status") or "")
+commit = str(data.get("commit_sha") or "")
+if status != "complete":
+    print(f"metadata_status={status or 'missing'}", file=sys.stderr)
+    raise SystemExit(11)
+if commit.lower() != expected.lower():
+    print("commit_mismatch", file=sys.stderr)
+    raise SystemExit(12)
+print(f"complete {commit.lower()}")
+' "$SOURCE_COMMIT_SHA"
+  )
+}
+
+verify_api_visible_release_identity() {
+  PHASE="metadata_write"
+  write_helper_progress "running" "Verifying API-visible release identity."
+  RELEASE_IDENTITY_API_VISIBLE=0
+  RELEASE_IDENTITY_COMMIT_VERIFIED=0
+  RELEASE_IDENTITY_API_STATUS=""
+  [ -n "$SOURCE_COMMIT_SHA" ] || fail "Cannot mark update complete without trusted commit evidence."
+
+  if api_status=$(api_visible_release_identity_status 2>/dev/null); then
+    RELEASE_IDENTITY_API_STATUS="$(printf '%s\n' "$api_status" | tail -n 1 | awk '{print $1}')"
+  else
+    RELEASE_IDENTITY_API_STATUS=""
+  fi
+  if [ "$RELEASE_IDENTITY_API_STATUS" = "complete" ]; then
+    RELEASE_IDENTITY_API_VISIBLE=1
+    RELEASE_IDENTITY_COMMIT_VERIFIED=1
+    return 0
+  fi
+
+  info "API-visible release identity is stale or incomplete; recreating api service to remount final identity."
+  (
+    cd "$APP_DIR"
+    compose_cmd --env-file "$APP_DIR/.env" up -d --force-recreate api
+  ) || fail "API recreate after release identity finalization failed."
+  health_check
+  PHASE="metadata_write"
+  if api_status=$(api_visible_release_identity_status 2>/dev/null); then
+    RELEASE_IDENTITY_API_STATUS="$(printf '%s\n' "$api_status" | tail -n 1 | awk '{print $1}')"
+  else
+    RELEASE_IDENTITY_API_STATUS=""
+  fi
+  if [ "$RELEASE_IDENTITY_API_STATUS" = "complete" ]; then
+    RELEASE_IDENTITY_API_VISIBLE=1
+    RELEASE_IDENTITY_COMMIT_VERIFIED=1
+    return 0
+  fi
+  fail "API-visible release identity is not complete after final identity write and api recreate."
 }
 
 print_plan() {
@@ -798,6 +881,7 @@ rebuild_recreate
 health_check
 write_source_provenance
 write_release_identity
+verify_api_visible_release_identity
 postflight_preservation
 PHASE="metadata_write"
 write_helper_progress "running" "Writing successful update metadata."

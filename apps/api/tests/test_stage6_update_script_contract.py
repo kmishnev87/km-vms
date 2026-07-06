@@ -15,6 +15,54 @@ def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def _write_update_shell_fixture(tmp_path: Path, *, compose_function: str, commit: str = "b" * 40) -> tuple[Path, Path, Path]:
+    script = read("scripts/update.sh")
+    app = tmp_path / "app"
+    source = tmp_path / "source"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for root in (app, source):
+        (root / "apps/api").mkdir(parents=True)
+        (root / "apps/web").mkdir(parents=True)
+        (root / "deploy/nginx").mkdir(parents=True)
+        (root / "scripts").mkdir(parents=True)
+        (root / "docs").mkdir(parents=True)
+        (root / "release").mkdir(parents=True)
+        (root / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+        (root / "docker-compose.pytest.yml").write_text("services: {}\n", encoding="utf-8")
+        (root / ".dockerignore").write_text("data\n", encoding="utf-8")
+        (root / ".gitignore").write_text(".env\n", encoding="utf-8")
+        (root / ".env.example").write_text("TZ=UTC\n", encoding="utf-8")
+        (root / "deploy/nginx/default.conf").write_text("# nginx\n", encoding="utf-8")
+        (root / "scripts/install.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+        (root / "scripts/km-vms-compose-common.sh").write_text(compose_function + "\n", encoding="utf-8")
+        (root / "docs/INSTALL.md").write_text("# install\n", encoding="utf-8")
+        (root / "release/km-vms-release.json").write_text('{"schema_version":1,"version":"0.7.1"}\n', encoding="utf-8")
+    (source / "scripts/update.sh").write_text(script, encoding="utf-8")
+    (app / "scripts/update.sh").write_text(script, encoding="utf-8")
+    (app / ".env").write_text("HTTP_PORT=18183\nCOMPOSE_PROJECT_NAME=kmvmsfixture\n", encoding="utf-8")
+    (app / "data").mkdir()
+    tarball = tmp_path / "source.tar.gz"
+    subprocess.run(["tar", "-czf", str(tarball), "-C", str(source.parent), source.name], check=True)
+    (bin_dir / "curl").write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env sh",
+                "case \"$*\" in */commits/main*) printf '{\\n  \"sha\": \"" + commit + "\"\\n}\\n'; exit 0 ;; esac",
+                "for arg in \"$@\"; do",
+                "  if [ \"$prev\" = \"-o\" ]; then cp '" + str(tarball) + "' \"$arg\"; exit 0; fi",
+                "  prev=\"$arg\"",
+                "done",
+                "exit 0",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(bin_dir / "curl", 0o755)
+    return app, source, bin_dir
+
+
 def test_update_script_exists_and_exposes_terminal_contract():
     script_path = ROOT / "scripts" / "update.sh"
     script = script_path.read_text(encoding="utf-8")
@@ -145,9 +193,24 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
     def fake_run_child(command, request_arg, update_dir, env, **kwargs):
         commands.append(command)
         if "--dry-run" not in command:
-            (app_dir / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "status": "success", "commit_sha": expected}), encoding="utf-8")
+            (app_dir / ".km-vms-update.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "status": "success",
+                        "commit_sha": expected,
+                        "validation_summary": {
+                            "release_identity_host_metadata_status": "complete",
+                            "release_identity_api_metadata_status": "complete",
+                            "release_identity_api_visible": True,
+                            "release_identity_commit_verified": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
             (app_dir / ".km-vms-source.json").write_text(json.dumps({"schema_version": 1, "commit_sha": expected}), encoding="utf-8")
-            (app_dir / ".km-vms-release.json").write_text(json.dumps({"schema_version": 1, "commit_sha": expected}), encoding="utf-8")
+            (app_dir / ".km-vms-release.json").write_text(json.dumps({"schema_version": 1, "commit_sha": expected, "metadata_status": "complete"}), encoding="utf-8")
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr(helper, "run_child_with_progress", fake_run_child)
@@ -174,6 +237,12 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
     assert status["status"] == "completed"
     assert status["commit_verified"] is True
     assert status["installed_commit"] == expected
+    assert status["release_identity"] == {
+        "host_metadata_status": "complete",
+        "api_metadata_status": "complete",
+        "api_visible": True,
+        "commit_verified": True,
+    }
 
 
 def test_update_helper_rejects_commit_mismatch_after_success(tmp_path):
@@ -381,11 +450,11 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
             (root / "scripts/install.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
             (root / "scripts/km-vms-compose-common.sh").write_text(
                 "\n".join(
-                    [
-                        "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
-                        "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; :; }",
-                    ]
-                )
+                        [
+                            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
+                            "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; if [ \"$1\" = \"exec\" ]; then echo complete; return 0; fi; :; }",
+                        ]
+                    )
                 + "\n",
                 encoding="utf-8",
             )
@@ -450,11 +519,11 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
             (root / "scripts/install.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
             (root / "scripts/km-vms-compose-common.sh").write_text(
                 "\n".join(
-                    [
-                        "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
-                        "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; :; }",
-                    ]
-                )
+                        [
+                            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
+                            "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; if [ \"$1\" = \"exec\" ]; then echo complete; return 0; fi; :; }",
+                        ]
+                    )
                 + "\n",
                 encoding="utf-8",
             )
@@ -503,6 +572,7 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
             "\n".join(
                 [
                     "#!/usr/bin/env sh",
+                    "case \"$*\" in */commits/main*) printf '{\\n  \"sha\": \"" + ("b" * 40) + "\"\\n}\\n'; exit 0 ;; esac",
                     "for arg in \"$@\"; do",
                     "  if [ \"$prev\" = \"-o\" ]; then cp '" + str(tarball) + "' \"$arg\"; exit 0; fi",
                     "  prev=\"$arg\"",
@@ -537,6 +607,105 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
         assert (app / "data/sentinel.txt").read_text(encoding="utf-8") == "keep\n"
         assert (app / ".km-vms-release.json").is_file()
         assert json.loads((app / ".km-vms-release.json").read_text(encoding="utf-8"))["metadata_status"] in {"complete", "partial"}
+        update_metadata = json.loads((app / ".km-vms-update.json").read_text(encoding="utf-8"))
+        assert update_metadata["validation_summary"]["release_identity_api_visible"] is True
+        assert update_metadata["validation_summary"]["release_identity_commit_verified"] is True
+
+
+def test_update_script_final_identity_preserves_bind_mount_inode_and_verifies_api_visibility():
+    script = read("scripts/update.sh")
+
+    assert 'cat "$tmp_identity" > "$identity"' in script
+    assert 'mv "$tmp_identity" "$identity"' in script
+    assert "verify_api_visible_release_identity" in script
+    assert "API-visible release identity is stale or incomplete" in script
+    assert "up -d --force-recreate api" in script
+    assert "release_identity_api_visible" in script
+    assert "release_identity_commit_verified" in script
+
+
+def test_update_script_recreates_api_until_api_visible_identity_is_complete(tmp_path):
+    expected = "b" * 40
+    compose_function = "\n".join(
+        [
+            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
+            "km_vms_compose_cmd() {",
+            "  if [ \"$1\" = \"--env-file\" ]; then shift 2; fi",
+            "  if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi",
+            "  if [ \"$1\" = \"up\" ]; then case \"$*\" in *'--force-recreate api'*) touch data/api-recreated ;; esac; return 0; fi",
+            "  if [ \"$1\" = \"exec\" ]; then",
+            "    if [ -f data/api-recreated ]; then echo 'complete " + expected + "'; return 0; fi",
+            "    return 11",
+            "  fi",
+            "  :",
+            "}",
+        ]
+    )
+    app, _source, bin_dir = _write_update_shell_fixture(tmp_path, compose_function=compose_function, commit=expected)
+
+    result = subprocess.run(
+        ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", "main", "--yes"],
+        cwd=app,
+        env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    metadata = json.loads((app / ".km-vms-update.json").read_text(encoding="utf-8"))
+
+    assert "API-visible release identity is stale or incomplete" in result.stdout
+    assert (app / "data/api-recreated").is_file()
+    assert metadata["status"] == "success"
+    assert metadata["validation_summary"]["release_identity_api_metadata_status"] == "complete"
+    assert metadata["validation_summary"]["release_identity_api_visible"] is True
+    assert metadata["validation_summary"]["release_identity_commit_verified"] is True
+
+
+def test_update_script_rejects_api_visible_complete_with_wrong_commit_stdout(tmp_path):
+    expected = "b" * 40
+    wrong = "a" * 40
+    compose_function = "\n".join(
+        [
+            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
+            "km_vms_compose_cmd() {",
+            "  if [ \"$1\" = \"--env-file\" ]; then shift 2; fi",
+            "  if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi",
+            "  if [ \"$1\" = \"up\" ]; then touch data/api-recreate-attempted; return 0; fi",
+            "  if [ \"$1\" = \"exec\" ]; then echo 'complete " + wrong + "'; return 12; fi",
+            "  :",
+            "}",
+        ]
+    )
+    app, _source, bin_dir = _write_update_shell_fixture(tmp_path, compose_function=compose_function, commit=expected)
+
+    result = subprocess.run(
+        ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", "main", "--yes"],
+        cwd=app,
+        env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    metadata = json.loads((app / ".km-vms-update.json").read_text(encoding="utf-8"))
+
+    assert result.returncode != 0
+    assert "API-visible release identity is not complete" in result.stderr
+    assert (app / "data/api-recreate-attempted").is_file()
+    assert metadata["status"] == "failed"
+    assert metadata["validation_summary"]["release_identity_api_metadata_status"] == ""
+    assert metadata["validation_summary"]["release_identity_api_visible"] is False
+    assert metadata["validation_summary"]["release_identity_commit_verified"] is False
+
+
+def test_update_helper_requires_complete_host_and_api_visible_identity():
+    helper = read("scripts/km-vms-update-helper.py")
+
+    assert "release_identity_api_visible" in helper
+    assert "release_identity_commit_verified" in helper
+    assert "Host release identity is not complete after successful apply." in helper
+    assert "API-visible release identity was not confirmed complete after successful apply." in helper
+    assert 'completed["release_identity"] = release_identity' in helper
 
 
 def test_docs_describe_terminal_update_without_future_stage_claims():

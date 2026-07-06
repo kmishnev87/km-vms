@@ -10,6 +10,7 @@ Usage:
   sh scripts/km-vms-release-cycle.sh --dry-run --prepare-version <x.y.z> [--allow-dirty]
   sh scripts/km-vms-release-cycle.sh --prepare-version <x.y.z> [--allow-dirty]
   sh scripts/km-vms-release-cycle.sh --print-github-release-commands [--version <x.y.z>]
+  sh scripts/km-vms-release-cycle.sh --sync-local-release-identity [--app-dir <path>] [--apply]
 
 This helper prepares and validates release metadata only. It never commits,
 pushes, creates tags or publishes GitHub Releases.
@@ -22,6 +23,9 @@ PREPARE_VERSION=""
 PRINT_COMMANDS=0
 ALLOW_DIRTY=0
 VERSION_ARG=""
+SYNC_LOCAL_IDENTITY=0
+SYNC_APPLY=0
+APP_DIR_ARG=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -35,10 +39,27 @@ while [ "$#" -gt 0 ]; do
       [ "$#" -ge 2 ] || { printf '%s\n' "--version requires a value" >&2; exit 2; }
       VERSION_ARG="$2"; shift 2 ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
+    --sync-local-release-identity|--closeout-local-identity) SYNC_LOCAL_IDENTITY=1; shift ;;
+    --apply) SYNC_APPLY=1; shift ;;
+    --app-dir)
+      [ "$#" -ge 2 ] || { printf '%s\n' "--app-dir requires a value" >&2; exit 2; }
+      APP_DIR_ARG="$2"; shift 2 ;;
     --help|-h) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+if [ "$SYNC_LOCAL_IDENTITY" = "1" ]; then
+  cmd="scripts/km-vms-adopt-release-identity.sh"
+  set -- "$cmd"
+  if [ -n "$APP_DIR_ARG" ]; then
+    set -- "$@" --app-dir "$APP_DIR_ARG"
+  fi
+  if [ "$SYNC_APPLY" = "1" ]; then
+    set -- "$@" --apply
+  fi
+  exec sh "$@"
+fi
 
 python3 - "$CHECK" "$DRY_RUN" "$PREPARE_VERSION" "$PRINT_COMMANDS" "$ALLOW_DIRTY" "$VERSION_ARG" <<'PY'
 import json
@@ -217,8 +238,13 @@ def print_release_commands(version: str) -> None:
     print("git push origin main")
     print(f"git push origin {tag}")
     print(f"sh scripts/km-vms-publish-github-release.sh --check --tag {tag}")
-    print("KM_VMS_GITHUB_RELEASE_TOKEN_FILE=/secure/path/km-vms-github-release-token \\")
+    print("KM_VMS_GITHUB_RELEASE_TOKEN_FILE=data/update-control/.github-release-token \\")
     print(f"  sh scripts/km-vms-publish-github-release.sh --publish --tag {tag}")
+    print(f"sh scripts/km-vms-release-cycle.sh --sync-local-release-identity --apply")
+    print("curl -fsS http://127.0.0.1:${HTTP_PORT:-8088}/api/health")
+    print("curl -fsS http://127.0.0.1:${HTTP_PORT:-8088}/api/system/update/status")
+    print("# Verify installed_release.version/title/commit_sha match release/km-vms-release.json and the release tag commit.")
+    print("# If update status requires authentication, validate it through an authenticated operator session or Settings -> Maintenance.")
 
 
 if prepare_version:

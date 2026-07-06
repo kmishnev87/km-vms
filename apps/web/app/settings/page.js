@@ -236,7 +236,7 @@ const TEXT = {
     updateApplyConfirm: "Запустить обновление KM VMS? Система выполнит проверку, применит trusted release через helper и может временно перезапустить сервисы.",
     updateApplyConfirmRestart: "Сервисы могут временно перезапуститься; статус продолжит обновляться после восстановления API.",
     updateApplyQueued: "Запрос обновления передан helper.",
-    updateApplyUnavailable: "Обновление сейчас не запускается: причина показана в блоке выше.",
+    updateApplyUnavailable: "Действие сейчас недоступно. Причина показана в этом блоке.",
     updateApplyConnection: "Сервис может временно перезапускаться; опрос статуса продолжится автоматически.",
     updateApplyRecoveryAvailable: "Проверьте целевую версию и commit, затем запустите применение.",
     updateApplyRecoveryBlocked: "Устраните блокировку в trusted release или настройках сервера и повторите проверку.",
@@ -461,6 +461,8 @@ const TEXT = {
       installed_newer_than_available: "Установленная версия новее опубликованной.",
       trusted_manifest_not_configured: "Trusted release manifest не настроен на сервере.",
       check_failed: "Проверка обновления не завершилась штатно.",
+      update_check_already_running: "Проверка обновления уже выполняется. Дождитесь завершения текущей проверки.",
+      manual_update_check_rate_limited: "Проверка обновления уже выполнялась недавно. Повторите проверку сейчас или обновите статус.",
       commit_mismatch: "Установленный commit не совпадает с trusted release commit.",
       token_not_configured: "Серверный token для приватного источника не настроен.",
       requires_migration: "Release требует миграции, которая не запускается этим экраном.",
@@ -732,7 +734,7 @@ const TEXT = {
     updateApplyConfirm: "Start KM VMS update? The system will run preflight, apply the trusted release through the helper and may temporarily restart services.",
     updateApplyConfirmRestart: "Services may restart temporarily; status polling will resume after the API is available.",
     updateApplyQueued: "Update request was handed to the helper.",
-    updateApplyUnavailable: "Update cannot start now: the reason is shown above.",
+    updateApplyUnavailable: "Update cannot start now. The reason is shown in this panel.",
     updateApplyConnection: "Services may restart temporarily; status polling will continue automatically.",
     updateApplyRecoveryAvailable: "Check the target version and commit, then start apply.",
     updateApplyRecoveryBlocked: "Fix the trusted release or server-side configuration blocker and run check again.",
@@ -957,6 +959,8 @@ const TEXT = {
       installed_newer_than_available: "Installed version is newer than the published release.",
       trusted_manifest_not_configured: "Trusted release manifest is not configured on the server.",
       check_failed: "Update check did not complete successfully.",
+      update_check_already_running: "An update check is already in progress. Wait for the current check to finish.",
+      manual_update_check_rate_limited: "The update check was recently requested. Run the check again or refresh status.",
       commit_mismatch: "Installed commit does not match the trusted release commit.",
       token_not_configured: "Server-side token for the private source is not configured.",
       requires_migration: "Release requires migration support that this screen does not run.",
@@ -1199,7 +1203,7 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyConfirm: "启动 KM VMS 更新？系统将执行预检查，通过 helper 应用受信任版本，并可能短暂重启服务。",
   updateApplyConfirmRestart: "服务可能会短暂重启；API 恢复后状态轮询会继续。",
   updateApplyQueued: "更新请求已交给 helper。",
-  updateApplyUnavailable: "现在无法启动更新：原因显示在上方。",
+  updateApplyUnavailable: "现在无法启动更新：原因显示在此面板中。",
   updateApplyConnection: "服务可能会短暂重启；状态轮询会自动继续。",
   updateApplyRecoveryAvailable: "检查目标版本和 commit，然后启动应用。",
   updateApplyRecoveryBlocked: "修复受信任版本或服务器配置阻塞项后重新检查。",
@@ -1424,6 +1428,8 @@ const ZH_TEXT_OVERRIDES = {
     installed_newer_than_available: "已安装版本高于已发布版本。",
     trusted_manifest_not_configured: "服务器未配置 trusted release manifest。",
     check_failed: "更新检查未正常完成。",
+    update_check_already_running: "更新检查已在进行中。请等待当前检查完成。",
+    manual_update_check_rate_limited: "最近已请求更新检查。可再次运行检查或刷新状态。",
     commit_mismatch: "已安装 commit 与 trusted release commit 不一致。",
     token_not_configured: "私有来源的服务器端 token 未配置。",
     requires_migration: "该 release 需要迁移支持，此界面不会运行迁移。",
@@ -1970,6 +1976,7 @@ export default function SettingsPage() {
       showToast({ variant: "success", title: t.updateApplyCheck, text: maintenanceStatusText(result?.status, t) });
     } catch (err) {
       const message = humanErrorText(String(err?.message || ""), t.updateApplyUnavailable);
+      setUpdateApplyTransientError(message);
       setMaintenanceActionResult({ flowKey: "update", status: "blocked", reason: message });
       showToast({ variant: "warning", title: t.updateApplyCheck, text: message });
     } finally {
@@ -1998,6 +2005,7 @@ export default function SettingsPage() {
       await loadUpdateApplySurface({ silent: true });
     } catch (err) {
       const message = humanErrorText(String(err?.message || ""), t.updateApplyUnavailable);
+      setUpdateApplyTransientError(message);
       setMaintenanceActionResult({ flowKey: "update", status: "blocked", reason: message });
       showToast({ variant: "warning", title: t.updateApplyTitle, text: message });
     } finally {

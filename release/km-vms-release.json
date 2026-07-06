@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.7",
-  "tag": "v0.7.7",
-  "title": "Settings Maintenance Operator Center: Update Apply, Backup Manager, Diagnostics and Release Workflow Hardening",
-  "summary": "Polishes the Settings Maintenance operator center with update apply state truthfulness, backup manager actions, explainable diagnostics and hardened release workflow behavior.",
+  "version": "0.7.8",
+  "tag": "v0.7.8",
+  "title": "Settings Maintenance Operator Center and Update Release Closeout Hardening",
+  "summary": "Completes the Settings Maintenance operator center with truthful update apply states, backup manager actions, explainable diagnostics, repeatable update checks and hardened release closeout identity verification.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.7",
+  "source_ref": "v0.7.8",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,9 +16,12 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Makes Settings Maintenance update apply states truthful when failed, stalled or check_failed states are present.",
+    "Makes Settings Maintenance update apply states truthful when failed, stalled, reconnecting or check_failed states are present.",
     "Adds a unified backup manager flow for create, check, delete and clear restore-status boundaries.",
     "Improves diagnostics and support-report actions with explainable warnings and stable operator UI.",
-    "Hardens release workflow/version convention and mobile Maintenance navigation behavior."
+    "Removes manual update-check repeat throttling while preserving concurrent check de-duplication.",
+    "Preserves real GitHub release title and summary text in Settings Maintenance instead of replacing it with locale fallbacks.",
+    "Hardens update apply release identity verification so API-visible complete-but-wrong-commit identity cannot be accepted.",
+    "Adds release-cycle closeout identity sync and explicit update status validation after GitHub Release publication."
   ]
 }

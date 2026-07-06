@@ -292,14 +292,6 @@ function updateApplyReleaseValue(updateStatus, key) {
   return "";
 }
 
-function hasLanguageSignal(value, lang) {
-  const text = String(value || "").trim();
-  if (!text) return false;
-  if (lang === "ru") return /[А-Яа-яЁё]/.test(text);
-  if (lang === "zh-CN") return /[\u3400-\u9fff]/.test(text);
-  return true;
-}
-
 function localizedReleaseValue(updateStatus, key, t, lang) {
   const value = updateApplyReleaseValue(updateStatus, key);
   if (!value || value === "-") {
@@ -307,11 +299,7 @@ function localizedReleaseValue(updateStatus, key, t, lang) {
       ? t.updateApplyReleaseTitleFallback || "-"
       : t.updateApplyReleaseSummaryFallback || "";
   }
-  if (hasLanguageSignal(value, lang)) return value;
-  if (lang === "en") return value;
-  return key === "title"
-    ? t.updateApplyReleaseTitleFallback || "-"
-    : t.updateApplyReleaseSummaryFallback || "";
+  return value;
 }
 
 function releaseConfirmedText(value, t) {
@@ -471,7 +459,7 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     canApply,
     canCheck: true,
     showApplyButton: canApply || running,
-    timeline: safeTimeline.slice(0, 12),
+    timeline: safeTimeline.slice(0, 5),
     detailUnavailable,
     diagnosticsRows: updateApplyTechnicalRows(updateStatus, applyStatus, t),
   };
@@ -497,13 +485,57 @@ export function updateApplyRecoveryText(status, applyStatus, t) {
 
 export function updateApplyStepRows(applyStatus, t) {
   const steps = Array.isArray(applyStatus?.steps) ? applyStatus.steps : [];
-  return steps.slice(0, 12).map((step) => ({
-    name: step?.name || "unknown",
-    label: maintenanceStatusText(step?.name || "unknown", t),
-    status: step?.status || "pending",
-    statusLabel: maintenanceStatusText(step?.status || "pending", t),
-    ...((step?.time_label || step?.completed_at || step?.updated_at) ? { time_label: step?.time_label || step?.completed_at || step?.updated_at } : {}),
-  }));
+  const stageNames = ["request", "preflight", "applying", "health_check", "commit_verification"];
+  const stageFor = (name) => {
+    if (name === "queued" || name === "request" || name === "starting_helper") return "request";
+    if (name === "preflight") return "preflight";
+    if (name === "health_check") return "health_check";
+    if (name === "commit_verification" || name === "completed") return "commit_verification";
+    if ([
+      "acquire_source",
+      "downloading",
+      "extracting",
+      "validating_source",
+      "overlay",
+      "applying",
+      "compose_config",
+      "rebuilding",
+      "restarting",
+    ].includes(name)) return "applying";
+    return "";
+  };
+  const rank = { failed: 5, running: 4, completed: 3, pending: 2, idle: 1 };
+  const normalizeStatus = (value) => {
+    const status = String(value || "pending").trim().toLowerCase();
+    if (["failed", "error", "blocked", "cancelled", "canceled", "stalled"].includes(status)) return "failed";
+    if (["running", "in_progress", "starting", "active"].includes(status)) return "running";
+    if (["completed", "complete", "ok", "done", "verified"].includes(status)) return "completed";
+    if (status === "idle") return "idle";
+    return "pending";
+  };
+  const grouped = new Map(stageNames.map((name) => [name, {
+    name,
+    label: maintenanceStatusText(name, t),
+    status: "pending",
+    statusLabel: maintenanceStatusText("pending", t),
+  }]));
+  for (const step of steps) {
+    const name = String(step?.name || "").trim();
+    const stage = stageFor(name);
+    if (!stage || !grouped.has(stage)) continue;
+    const status = normalizeStatus(step?.status);
+    const current = grouped.get(stage);
+    if (rank[status] >= rank[current.status]) {
+      grouped.set(stage, {
+        name: stage,
+        label: maintenanceStatusText(stage, t),
+        status,
+        statusLabel: maintenanceStatusText(status, t),
+        ...((step?.time_label || step?.completed_at || step?.updated_at) ? { time_label: step?.time_label || step?.completed_at || step?.updated_at } : {}),
+      });
+    }
+  }
+  return stageNames.map((name) => grouped.get(name));
 }
 
 export function updateApplyButtonText(applyStatus, t) {
@@ -545,6 +577,7 @@ export function formatUpdateNotice(item, t, lang = "ru") {
   if ((code === "requires_manual_action" || code === "manual_action_required") && labels.requires_manual_action) return labels.requires_manual_action;
   if ((code === "trusted_manifest_not_configured" || code === "manifest_not_configured" || code === "not_configured") && labels.trusted_manifest_not_configured) return labels.trusted_manifest_not_configured;
   if ((code === "private_token_missing" || code === "token_not_configured") && labels.token_not_configured) return labels.token_not_configured;
+  if ((code === "update_check_already_running" || code === "manual_update_check_rate_limited") && labels[code]) return labels[code];
   const raw = String(item?.message || item?.error_message || item?.code || "").trim();
   if (lang === "en" && raw && !/stack|trace|authorization|bearer|token|secret|\.env|rtsp:|onvif/i.test(raw) && raw.length <= 140) {
     return labels[code] || raw;
@@ -839,8 +872,11 @@ export function humanErrorText(message, fallback) {
       .join("; ") || fallback;
   }
   if (value && typeof value === "object") {
+    if (typeof value.summary === "string") return value.summary;
     if (typeof value.error === "string") return value.error;
     if (typeof value.message === "string") return value.message;
+    if (typeof value.error_category === "string") return value.error_category;
+    if (value.retry_after_seconds !== undefined) return `${fallback} (${value.retry_after_seconds}s)`;
   }
   if (!message.startsWith("{")) return message;
   return fallback;

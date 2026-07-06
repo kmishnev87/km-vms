@@ -292,7 +292,7 @@ def classify_apply_failure(update_dir: Path, stderr: str) -> HelperError:
     return HelperError("apply_failed", stderr or "Update apply failed.")
 
 
-def verify_installed_commit(update_dir: Path, expected_commit: str) -> tuple[str, str]:
+def verify_installed_commit(update_dir: Path, expected_commit: str) -> tuple[str, str, dict[str, Any]]:
     update_metadata = read_json(update_dir / ".km-vms-update.json")
     if not update_metadata:
         raise HelperError("commit_missing", "Update metadata is missing after successful apply.", phase="commit_verification")
@@ -312,7 +312,22 @@ def verify_installed_commit(update_dir: Path, expected_commit: str) -> tuple[str
     release_commit = safe_text(release_metadata.get("commit_sha"), 40)
     if release_commit != expected_commit:
         raise HelperError("commit_mismatch", "Installed release identity commit does not match the trusted manifest commit.", phase="commit_verification", diagnostics={"installed_commit": release_commit or "missing"})
-    return installed_commit, expected_commit
+    validation = update_metadata.get("validation_summary") if isinstance(update_metadata.get("validation_summary"), dict) else {}
+    host_identity_status = safe_text(validation.get("release_identity_host_metadata_status"), 40) or safe_text(release_metadata.get("metadata_status"), 40)
+    api_identity_status = safe_text(validation.get("release_identity_api_metadata_status"), 40)
+    api_visible = validation.get("release_identity_api_visible") is True
+    identity_commit_verified = validation.get("release_identity_commit_verified") is True
+    if host_identity_status != "complete":
+        raise HelperError("metadata_invalid", "Host release identity is not complete after successful apply.", phase="commit_verification", diagnostics={"installed_commit": release_commit or "missing"})
+    if api_identity_status != "complete" or not api_visible or not identity_commit_verified:
+        raise HelperError("metadata_invalid", "API-visible release identity was not confirmed complete after successful apply.", phase="commit_verification", diagnostics={"installed_commit": release_commit or "missing"})
+    release_identity = {
+        "host_metadata_status": host_identity_status,
+        "api_metadata_status": api_identity_status,
+        "api_visible": api_visible,
+        "commit_verified": identity_commit_verified,
+    }
+    return installed_commit, expected_commit, release_identity
 
 
 def run_update(request: dict[str, Any]) -> int:
@@ -340,12 +355,13 @@ def run_update(request: dict[str, Any]) -> int:
     if apply.returncode != 0:
         raise classify_apply_failure(update_dir, apply.stderr.strip())
     write_json(STATUS_FILE, base_status(request, "applying", "commit_verification", steps_for("commit_verification")))
-    installed_commit, expected_commit = verify_installed_commit(update_dir, expected_commit)
+    installed_commit, expected_commit, release_identity = verify_installed_commit(update_dir, expected_commit)
     steps = [{"name": name, "status": "completed"} for name in STEP_ORDER]
     completed = base_status(request, "completed", "completed", steps)
     completed["commit_verified"] = True
     completed["installed_commit"] = installed_commit
     completed["expected_commit"] = expected_commit
+    completed["release_identity"] = release_identity
     write_json(STATUS_FILE, completed)
     append_apply_history(completed)
     return 0

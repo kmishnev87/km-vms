@@ -112,6 +112,11 @@ def test_stage613_release_cycle_script_prints_publication_preview_only():
     assert "gh release create" not in result.stdout
     assert "sh scripts/km-vms-publish-github-release.sh --check --tag v0.7.29" in result.stdout
     assert "sh scripts/km-vms-publish-github-release.sh --publish --tag v0.7.29" in result.stdout
+    assert "KM_VMS_GITHUB_RELEASE_TOKEN_FILE=data/update-control/.github-release-token" in result.stdout
+    assert "/secure/path/km-vms-github-release-token" not in result.stdout
+    assert "sh scripts/km-vms-release-cycle.sh --sync-local-release-identity --apply" in result.stdout
+    assert "http://127.0.0.1:${HTTP_PORT:-8088}/api/system/update/status" in result.stdout
+    assert "installed_release.version/title/commit_sha" in result.stdout
     assert "run only after operator acceptance" in result.stdout
 
 
