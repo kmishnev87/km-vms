@@ -245,6 +245,72 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
     }
 
 
+def test_update_helper_uses_container_compose_override_not_host_only_path(tmp_path, monkeypatch):
+    helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
+    spec = importlib.util.spec_from_file_location("km_vms_update_helper_compose_env_contract", helper_path)
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    app_dir = tmp_path / "app"
+    control_dir = app_dir / "data" / "update-control"
+    (app_dir / "scripts").mkdir(parents=True)
+    control_dir.mkdir(parents=True)
+    (app_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (app_dir / "scripts" / "update.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+    helper.HOST_APP_DIR = app_dir
+    helper.STATUS_FILE = control_dir / "update-status.json"
+    helper.PROGRESS_FILE = control_dir / "update-progress.json"
+
+    expected = "e" * 40
+    seen_compose_values = []
+    monkeypatch.setenv("KM_VMS_DOCKER_COMPOSE", "/Volume1/@apps/DockerEngine/dockerd/bin/docker-compose")
+    monkeypatch.setenv("KM_VMS_UPDATE_HELPER_DOCKER_COMPOSE", "docker-compose")
+
+    def fake_run_child(command, request_arg, update_dir, env, **kwargs):
+        seen_compose_values.append(env.get("KM_VMS_DOCKER_COMPOSE"))
+        if "--dry-run" not in command:
+            (app_dir / ".km-vms-update.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "status": "success",
+                        "commit_sha": expected,
+                        "validation_summary": {
+                            "release_identity_host_metadata_status": "complete",
+                            "release_identity_api_metadata_status": "complete",
+                            "release_identity_api_visible": True,
+                            "release_identity_commit_verified": True,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (app_dir / ".km-vms-source.json").write_text(json.dumps({"schema_version": 1, "commit_sha": expected}), encoding="utf-8")
+            (app_dir / ".km-vms-release.json").write_text(json.dumps({"schema_version": 1, "commit_sha": expected, "metadata_status": "complete"}), encoding="utf-8")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(helper, "run_child_with_progress", fake_run_child)
+    request = {
+        "schema_version": 1,
+        "request_id": "stage651-compose-env",
+        "requested_at": "2026-07-06T00:00:00Z",
+        "intent": "apply_update",
+        "confirmed": True,
+        "source": {
+            "kind": "trusted_manifest",
+            "source_type": "github_tarball",
+            "repo": "owner/repo",
+            "ref": expected,
+            "commit": expected,
+            "apply_ref": expected,
+        },
+    }
+
+    assert helper.run_update(request) == 0
+    assert seen_compose_values == ["docker-compose", "docker-compose"]
+
+
 def test_update_helper_rejects_commit_mismatch_after_success(tmp_path):
     helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
     spec = importlib.util.spec_from_file_location("km_vms_update_helper_commit_mismatch_contract", helper_path)

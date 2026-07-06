@@ -254,6 +254,23 @@ def compose_app_dir() -> Path:
     return HOST_APP_DIR
 
 
+def update_child_env(request: dict[str, Any]) -> dict[str, str]:
+    env = os.environ.copy()
+    env["KM_VMS_UPDATE_HELPER_MODE"] = "1"
+    env["KM_VMS_UPDATE_CONTROL_REQUEST_ID"] = str(request["request_id"])
+    env["KM_VMS_UPDATE_PROGRESS_FILE"] = str(PROGRESS_FILE)
+    helper_compose = os.getenv("KM_VMS_UPDATE_HELPER_DOCKER_COMPOSE", "").strip()
+    if helper_compose:
+        env["KM_VMS_DOCKER_COMPOSE"] = helper_compose
+    else:
+        inherited = env.get("KM_VMS_DOCKER_COMPOSE", "").strip()
+        if inherited.startswith("/") and not Path(inherited).exists():
+            # Host-only NAS compose paths are valid for terminal update, but not
+            # from inside update-helper. Let update.sh detect container compose.
+            env.pop("KM_VMS_DOCKER_COMPOSE", None)
+    return env
+
+
 def classify_apply_failure(update_dir: Path, stderr: str) -> HelperError:
     try:
         metadata = read_json(update_dir / ".km-vms-update.json")
@@ -337,10 +354,7 @@ def run_update(request: dict[str, Any]) -> int:
     common = ["sh", "scripts/update.sh", "--github-repo", source["repo"], "--branch", source["apply_ref"], "--yes"]
     if os.getenv("KM_VMS_GITHUB_PRIVATE", "0") == "1" or os.getenv("KMVMS_UPDATE_SOURCE_PRIVATE", "0") == "1":
         common.append("--github-private")
-    env = os.environ.copy()
-    env["KM_VMS_UPDATE_HELPER_MODE"] = "1"
-    env["KM_VMS_UPDATE_CONTROL_REQUEST_ID"] = str(request["request_id"])
-    env["KM_VMS_UPDATE_PROGRESS_FILE"] = str(PROGRESS_FILE)
+    env = update_child_env(request)
     try:
         PROGRESS_FILE.unlink()
     except FileNotFoundError:

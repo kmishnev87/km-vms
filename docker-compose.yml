@@ -139,6 +139,7 @@ services:
       KM_VMS_GITHUB_TOKEN_FILE: ${KM_VMS_GITHUB_TOKEN_FILE:-}
       KM_VMS_GITHUB_TOKEN: ${KM_VMS_GITHUB_TOKEN:-}
       KM_VMS_DOCKER_COMPOSE: ${KM_VMS_DOCKER_COMPOSE:-}
+      KM_VMS_UPDATE_HELPER_DOCKER_COMPOSE: ${KM_VMS_UPDATE_HELPER_DOCKER_COMPOSE:-docker-compose}
       KM_VMS_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-tnas-vms}
     command: ["python3", "/host-app/scripts/km-vms-update-helper.py"]
     volumes:

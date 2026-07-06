@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.10",
-  "tag": "v0.7.10",
-  "title": "In-App Update Apply Reliability and Release Closeout Hardening",
-  "summary": "Hardens in-app update apply with fresh trusted check snapshots, provider retry, truthful release tag evidence, API-visible release identity closeout validation and operator-facing snapshot recovery UX.",
+  "version": "0.7.11",
+  "tag": "v0.7.11",
+  "title": "In-App Update Helper Compose Environment Dofix",
+  "summary": "Fixes in-app update helper compose detection on NAS installations where the host terminal update uses a vendor docker-compose path that is not available inside the update-helper container.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.10",
+  "source_ref": "v0.7.11",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,13 +16,9 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Keeps Apply usable from a fresh trusted Check snapshot after transient public provider failures.",
-    "Adds bounded retry/backoff and safer timeout handling for public release metadata reads.",
-    "Reports trusted apply candidate source/freshness in update status, apply request and history.",
-    "Blocks stale, mismatched, missing or installed-drift update evidence before helper request creation.",
-    "Clarifies Settings Maintenance messages for provider failures, stale checks and missing trusted commit evidence.",
-    "Corrects release evidence contract so commit trust comes from validated immutable semver tags.",
-    "Ensures release publish/check helpers do not mutate descriptor files after successful validation.",
-    "Strengthens terminal/helper closeout tests for API-visible release identity completeness and commit verification."
+    "Separates host terminal Docker Compose configuration from update-helper container Compose execution.",
+    "Adds KM_VMS_UPDATE_HELPER_DOCKER_COMPOSE for the in-app update helper with docker-compose as the safe container default.",
+    "Prevents host-only NAS compose paths from breaking update-helper preflight inside the container.",
+    "Adds regression coverage for the host-path versus helper-container compose environment contract."
   ]
 }
