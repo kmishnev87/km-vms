@@ -36,8 +36,8 @@ assert.match(storagePage, /humanBlockerReason\(item, language\)/, "blocked actio
 assert.match(storagePage, /Array\.from\(new Set\(labels\)\)\.join\(" "\)/, "duplicate blocked action labels are collapsed before rendering");
 assert.match(storagePage, /storageSourceLabel\(storageContract\.archive_primary_path_source, copy\)/, "backend source codes are mapped before display");
 assert.match(storagePage, /<details className="storageOpsDetails">/, "technical details are collapsed");
-assert.match(storagePage, /primaryStorageActionText\(\{ operations, pathHealth, capacity, policy, reconciliation, migrationPreview \}, language\)/, "primary action is reason-prioritized");
-assert.match(storagePage, /factLabel\(pathHealth\.readable, language\)/, "unknown read state is not rendered as confirmed no");
+assert.match(storagePage, /primaryStorageActionText\(\{ operations, pathHealth, capacity, policy, reconciliation, migrationPreview, retention \}, language\)/, "primary action is reason-prioritized");
+assert.match(storagePage, /accessRightsModel\(pathHealth, language\)/, "read/write access is combined before primary rendering");
 assert.match(storagePage, /archiveRootLabel\(root, copy\)/, "archive root labels are mapped before display");
 assert.match(storagePage, /<summary>\{copy\.addArchiveRoot\}<\/summary>/, "raw archive-root path input is collapsed");
 assert.doesNotMatch(storagePage, /<pre|raw JSON|JSON block/i, "production storage UI does not render raw JSON blocks");
@@ -72,7 +72,6 @@ assert.doesNotMatch(settingsPage, /<OperatorProblemBanners[\s\S]*storage/, "Sett
 
 for (const key of [
   "healthOkTitle",
-  "ownershipBoundaryText",
   "retentionSafetyNote",
   "reconciliationConfirm",
   "technicalDetails",
@@ -91,6 +90,7 @@ for (const visibleBad of ["bounded", "Default archive", "host_bind_env", "namesp
 assert.doesNotMatch(storagePage, /value=\{storageContract\.archive_primary_path_source/, "raw archive source is not rendered directly");
 assert.match(storageHelpers, /active_recording_jobs[\s\S]*Перенос заблокирован/, "raw migration blocker has a human RU label");
 assert.match(storageHelpers, /function factLabel/, "helper distinguishes unknown facts from confirmed false");
+assert.match(storageHelpers, /function accessRightsModel/, "helper combines read/write access for primary UI");
 assert.match(storageHelpers, /function primaryStorageActionText/, "helper centralizes primary action priority");
 
 for (const stage3Guard of [

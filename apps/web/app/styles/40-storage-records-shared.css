@@ -384,6 +384,11 @@
   color: #991b1b;
 }
 
+.storageOpsState-warning {
+  border-color: #fbbf24;
+  color: #92400e;
+}
+
 .storageOpsRecent {
   display: grid;
   gap: 8px;

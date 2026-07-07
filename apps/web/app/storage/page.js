@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import { apiFetch, canAccessPath, forbiddenMessage } from "../../lib/api";
 import { useCurrentUser } from "../../lib/currentUser";
@@ -8,24 +8,26 @@ import { useI18n, useLocaleText } from "../../lib/i18n";
 import {
   boolLabel,
   cameraStorageRows,
-  factLabel,
-  factTone,
   formatBytes,
   formatDateTime,
   formatPercent,
   humanBlockerReason,
-  lowDiskPolicyText,
+  isStorageAccessDeniedError,
   primaryStorageActionText,
+  actionPermissionState,
+  accessRightsModel,
+  archiveRootScenarioModel,
+  freeSpaceTone,
+  migrationScenarioModel,
+  normalizeReconciliationSummary,
+  reconciliationScenarioModel,
+  retentionScenarioModel,
   statusLabel,
+  storageTopHealthModel,
   topReasonEntries,
 } from "../../lib/storageOperations";
 
 const REFRESH_MS = 30000;
-
-function isAccessDenied(error) {
-  const message = String(error?.message || error || "").toLowerCase();
-  return message.includes("401") || message.includes("403") || message.includes("permission") || message.includes("\u0434\u043e\u0441\u0442\u0443\u043f");
-}
 
 function Stat({ label, value, tone = "neutral" }) {
   return (
@@ -74,6 +76,16 @@ function blockerText(blockers, copy, language) {
   return Array.from(new Set(labels)).join(" ");
 }
 
+function errorDetailText(error, fallback, language) {
+  const detail = error?.detail || error?.data?.detail || null;
+  if (detail && typeof detail === "object") {
+    if (Array.isArray(detail.blockers) && detail.blockers.length) return blockerText(detail.blockers, { noReasons: fallback }, language);
+    if (detail.error) return humanBlockerReason(detail.error, language);
+    if (detail.reason) return humanBlockerReason(detail.reason, language);
+  }
+  return error?.message || fallback;
+}
+
 function retentionSummaryText(source, copy) {
   if (!source) return copy.retentionNoPreview;
   return copy.retentionPreviewReady
@@ -83,13 +95,12 @@ function retentionSummaryText(source, copy) {
 
 function reconciliationSummaryText(source, copy) {
   if (!source) return copy.reconciliationNoPreview;
-  const problems = source.problem_file_count ?? source.problems_count ?? source.missing_file_count ?? 0;
-  const cleanup = source.cleanup_candidate_count ?? source.cleanup_candidates_count ?? 0;
-  const rows = source.total_metadata_rows_checked ?? source.checked_count ?? 0;
+  const normalized = normalizeReconciliationSummary(source);
   return copy.reconciliationPreviewReady
-    .replace("{problems}", String(problems))
-    .replace("{cleanup}", String(cleanup))
-    .replace("{rows}", String(rows));
+    .replace("{problems}", String(normalized.problemCount))
+    .replace("{safe}", String(normalized.safeFixCount))
+    .replace("{manual}", String(normalized.reviewOnlyCount || normalized.manualProblemCount))
+    .replace("{rows}", String(normalized.totalRows));
 }
 
 function healthTone(operations, pathHealth, capacity, policy, reconciliation) {
@@ -144,20 +155,26 @@ function archiveRootLabel(root, copy) {
 
 export default function StorageOperationsPage() {
   const [status, setStatus] = useState(null);
+  const statusRef = useRef(null);
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  const [refreshWarning, setRefreshWarning] = useState("");
   const [accessDenied, setAccessDenied] = useState(false);
   const [rootPath, setRootPath] = useState("");
   const [rootAction, setRootAction] = useState("");
-  const [rootMessage, setRootMessage] = useState("");
+  const [autoFreeMessage, setAutoFreeMessage] = useState("");
+  const [archiveRootMessage, setArchiveRootMessage] = useState("");
+  const [retentionMessage, setRetentionMessage] = useState("");
   const [retentionPreview, setRetentionPreview] = useState(null);
   const [retentionResult, setRetentionResult] = useState(null);
   const [retentionConfirmed, setRetentionConfirmed] = useState(false);
+  const [reconciliationMessage, setReconciliationMessage] = useState("");
   const [reconciliationPreview, setReconciliationPreview] = useState(null);
   const [reconciliationResult, setReconciliationResult] = useState(null);
   const [reconciliationConfirmed, setReconciliationConfirmed] = useState(false);
+  const [migrationMessage, setMigrationMessage] = useState("");
   const [migrationResult, setMigrationResult] = useState(null);
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { locale: language, t } = useI18n();
@@ -173,14 +190,20 @@ export default function StorageOperationsPage() {
         apiFetch("/settings").catch(() => null),
       ]);
       setStatus(data);
+      statusRef.current = data;
       setSettings(settingsData);
       setError("");
+      setRefreshWarning("");
       setAccessDenied(false);
       return true;
     } catch (err) {
-      if (isAccessDenied(err)) {
+      if (isStorageAccessDeniedError(err)) {
         setAccessDenied(true);
         setError(forbiddenMessage(language));
+        return false;
+      }
+      if (silent && statusRef.current) {
+        setRefreshWarning(t("storagePage.refreshFailedStale", { time: formatDateTime(statusRef.current?.storage_operations?.checked_at, language) }));
         return false;
       }
       setError(err?.message || copy.loadFailed);
@@ -189,7 +212,7 @@ export default function StorageOperationsPage() {
       setLoading(false);
       if (!silent) setRefreshing(false);
     }
-  }, [language, copy.loadFailed]);
+  }, [language, copy.loadFailed, t]);
 
   useEffect(() => {
     if (currentUserStatus === "loading") return;
@@ -230,13 +253,45 @@ export default function StorageOperationsPage() {
   const migrationPreview = operations.migration_preview || status?.migration_preview || {};
   const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
   const usagePercent = Number(capacity.usage_percent || 0);
-  const tone = healthTone(operations, pathHealth, capacity, policy, reconciliation);
   const autoFreeEnabled = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
-  const primaryActionText = primaryStorageActionText({ operations, pathHealth, capacity, policy, reconciliation, migrationPreview }, language);
+  const topHealth = storageTopHealthModel({ operations, pathHealth, capacity, policy, reconciliation, migrationPreview, retention }, language);
+  const tone = topHealth.tone || healthTone(operations, pathHealth, capacity, policy, reconciliation);
+  const primaryActionText = primaryStorageActionText({ operations, pathHealth, capacity, policy, reconciliation, migrationPreview, retention }, language);
+  const accessRights = accessRightsModel(pathHealth, language);
+  const availabilityBadge = pathHealth.available === false ? copy.availabilityNeedsCheck : copy.availabilityConfirmed;
+  const normalizedReconciliation = normalizeReconciliationSummary(reconciliation, language);
+  const manageSettingsPermission = actionPermissionState(currentUser, "manage_settings", language);
+  const retentionPermission = actionPermissionState(currentUser, "delete_recordings", language);
+  const diagnosticsPermission = actionPermissionState(currentUser, "run_diagnostics", language);
+  const retentionScenario = retentionScenarioModel({
+    preview: retentionPreview,
+    result: retentionResult,
+    retention,
+    permission: retentionPermission,
+    running: rootAction.startsWith("retention-"),
+  }, language);
+  const reconciliationScenario = reconciliationScenarioModel({
+    preview: reconciliationPreview,
+    result: reconciliationResult,
+    reconciliation,
+    canCheck: diagnosticsPermission,
+    canApply: manageSettingsPermission,
+    running: rootAction.startsWith("reconciliation-"),
+  }, language);
+  const migrationScenario = migrationScenarioModel({
+    preview: migrationPreview,
+    result: migrationResult,
+    permission: manageSettingsPermission,
+    running: rootAction === "preview" || rootAction === "apply-migration",
+  }, language);
 
   async function setAutoFreeSpace(nextEnabled) {
+    if (!manageSettingsPermission.allowed) {
+      setAutoFreeMessage(manageSettingsPermission.reason);
+      return;
+    }
     setRootAction("auto-free");
-    setRootMessage("");
+    setAutoFreeMessage("");
     try {
       const updated = await apiFetch("/settings", {
         method: "PATCH",
@@ -244,10 +299,10 @@ export default function StorageOperationsPage() {
         body: JSON.stringify({ auto_free_space_cleanup_enabled: Boolean(nextEnabled) }),
       });
       setSettings(updated);
-      setRootMessage(nextEnabled ? copy.autoFreeEnabled : copy.autoFreeDisabled);
+      setAutoFreeMessage(nextEnabled ? copy.autoFreeEnabled : copy.autoFreeDisabled);
       await loadStatus({ silent: true });
     } catch (err) {
-      setRootMessage(err?.message || copy.autoFreeChangeFailed);
+      setAutoFreeMessage(errorDetailText(err, copy.autoFreeChangeFailed, language));
     } finally {
       setRootAction("");
     }
@@ -255,16 +310,20 @@ export default function StorageOperationsPage() {
 
   async function validateRoot() {
     if (!rootPath.trim()) return;
+    if (!manageSettingsPermission.allowed) {
+      setArchiveRootMessage(manageSettingsPermission.reason);
+      return;
+    }
     setRootAction("validate");
-    setRootMessage("");
+    setArchiveRootMessage("");
     try {
       const result = await apiFetch("/storage/archive-roots/validate", {
         method: "POST",
         body: JSON.stringify({ root_path: rootPath.trim(), create_namespace: false }),
       });
-      setRootMessage(result.ok ? copy.rootAvailable : t("storagePage.validateFailed", { problem: result.problem || copy.unavailable }));
+      setArchiveRootMessage(result.ok ? copy.rootAvailable : t("storagePage.validateFailed", { problem: humanBlockerReason(result.problem || "unavailable", language) }));
     } catch (err) {
-      setRootMessage(err?.message || copy.rootValidateFailed);
+      setArchiveRootMessage(errorDetailText(err, copy.rootValidateFailed, language));
     } finally {
       setRootAction("");
     }
@@ -272,18 +331,22 @@ export default function StorageOperationsPage() {
 
   async function addRoot() {
     if (!rootPath.trim()) return;
+    if (!manageSettingsPermission.allowed) {
+      setArchiveRootMessage(manageSettingsPermission.reason);
+      return;
+    }
     setRootAction("add");
-    setRootMessage("");
+    setArchiveRootMessage("");
     try {
       await apiFetch("/storage/archive-roots", {
         method: "POST",
         body: JSON.stringify({ root_path: rootPath.trim(), label: "Archive root", make_active: false, confirm: false }),
       });
       setRootPath("");
-      setRootMessage(copy.rootAdded);
+      setArchiveRootMessage(copy.rootAdded);
       await loadStatus({ silent: true });
     } catch (err) {
-      setRootMessage(err?.message || copy.rootNotAdded);
+      setArchiveRootMessage(errorDetailText(err, copy.rootNotAdded, language));
     } finally {
       setRootAction("");
     }
@@ -291,27 +354,36 @@ export default function StorageOperationsPage() {
 
   async function activateRoot(rootId) {
     if (!rootId) return;
+    if (!manageSettingsPermission.allowed) {
+      setArchiveRootMessage(manageSettingsPermission.reason);
+      return;
+    }
     if (!window.confirm(copy.switchConfirm)) return;
     setRootAction(`activate-${rootId}`);
-    setRootMessage("");
+    setArchiveRootMessage("");
     try {
       await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}/activate`, {
         method: "POST",
         body: JSON.stringify({ confirm: true }),
       });
-      setRootMessage(copy.rootSwitched);
+      setArchiveRootMessage(copy.rootSwitched);
       await loadStatus({ silent: true });
     } catch (err) {
-      setRootMessage(err?.message || copy.rootNotSwitched);
+      setArchiveRootMessage(errorDetailText(err, copy.rootNotSwitched, language));
     } finally {
       setRootAction("");
     }
   }
 
   async function runRetentionPreview() {
+    if (!retentionPermission.allowed) {
+      setRetentionMessage(retentionPermission.reason);
+      return;
+    }
     setRootAction("retention-preview");
     setRetentionResult(null);
     setRetentionConfirmed(false);
+    setRetentionMessage("");
     try {
       const preview = await apiFetch("/recordings/retention/dry-run", {
         method: "POST",
@@ -319,8 +391,9 @@ export default function StorageOperationsPage() {
         body: JSON.stringify({}),
       });
       setRetentionPreview(preview);
+      setRetentionMessage(copy.retentionPreviewCompleted);
     } catch (err) {
-      setRootMessage(err?.message || copy.previewFailed);
+      setRetentionMessage(errorDetailText(err, copy.previewFailed, language));
     } finally {
       setRootAction("");
     }
@@ -328,7 +401,12 @@ export default function StorageOperationsPage() {
 
   async function applyRetentionPlan() {
     if (!retentionPreview?.planned_count || !retentionConfirmed) return;
+    if (!retentionPermission.allowed) {
+      setRetentionMessage(retentionPermission.reason);
+      return;
+    }
     setRootAction("retention-apply");
+    setRetentionMessage("");
     try {
       const result = await apiFetch("/recordings/retention/run", {
         method: "POST",
@@ -338,23 +416,30 @@ export default function StorageOperationsPage() {
       setRetentionResult(result);
       setRetentionPreview(null);
       setRetentionConfirmed(false);
+      setRetentionMessage(copy.retentionApplyCompleted);
       await loadStatus({ silent: true });
     } catch (err) {
-      setRootMessage(err?.message || copy.applyBlocked);
+      setRetentionMessage(errorDetailText(err, copy.applyBlocked, language));
     } finally {
       setRootAction("");
     }
   }
 
   async function runReconciliationPreview() {
+    if (!diagnosticsPermission.allowed) {
+      setReconciliationMessage(diagnosticsPermission.reason);
+      return;
+    }
     setRootAction("reconciliation-preview");
     setReconciliationResult(null);
     setReconciliationConfirmed(false);
+    setReconciliationMessage("");
     try {
       const preview = await apiFetch("/storage/reconciliation/summary");
       setReconciliationPreview(preview);
+      setReconciliationMessage(copy.reconciliationCheckCompleted);
     } catch (err) {
-      setRootMessage(err?.message || copy.previewFailed);
+      setReconciliationMessage(errorDetailText(err, copy.previewFailed, language));
     } finally {
       setRootAction("");
     }
@@ -362,7 +447,12 @@ export default function StorageOperationsPage() {
 
   async function applyReconciliationSafe() {
     if (!reconciliationPreview || !reconciliationConfirmed) return;
+    if (!manageSettingsPermission.allowed) {
+      setReconciliationMessage(manageSettingsPermission.reason);
+      return;
+    }
     setRootAction("reconciliation-apply");
+    setReconciliationMessage("");
     try {
       const result = await apiFetch("/storage/reconcile", {
         method: "POST",
@@ -372,27 +462,32 @@ export default function StorageOperationsPage() {
       setReconciliationResult(result);
       setReconciliationPreview(null);
       setReconciliationConfirmed(false);
+      setReconciliationMessage(copy.reconciliationApplyCompleted);
       await loadStatus({ silent: true });
     } catch (err) {
-      setRootMessage(err?.message || copy.applyBlocked);
+      setReconciliationMessage(errorDetailText(err, copy.applyBlocked, language));
     } finally {
       setRootAction("");
     }
   }
 
   async function refreshMigrationPreview() {
+    if (!manageSettingsPermission.allowed) {
+      setMigrationMessage(manageSettingsPermission.reason);
+      return;
+    }
     setRootAction("preview");
-    setRootMessage("");
+    setMigrationMessage("");
     try {
       await apiFetch("/storage/migration/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ target_root_id: null }),
       });
-      setRootMessage(copy.previewUpdated);
+      setMigrationMessage(copy.previewUpdated);
       await loadStatus({ silent: true });
     } catch (err) {
-      setRootMessage(err?.message || copy.previewFailed);
+      setMigrationMessage(errorDetailText(err, copy.previewFailed, language));
     } finally {
       setRootAction("");
     }
@@ -400,9 +495,13 @@ export default function StorageOperationsPage() {
 
   async function applyMigration() {
     if (!migrationPreview?.apply_available) return;
+    if (!manageSettingsPermission.allowed) {
+      setMigrationMessage(manageSettingsPermission.reason);
+      return;
+    }
     if (!window.confirm(copy.applyConfirm)) return;
     setRootAction("apply-migration");
-    setRootMessage("");
+    setMigrationMessage("");
     setMigrationResult(null);
     try {
       const result = await apiFetch("/storage/migration/apply", {
@@ -415,12 +514,12 @@ export default function StorageOperationsPage() {
         }),
       });
       setMigrationResult(result);
-      setRootMessage(copy.applyCompleted);
+      setMigrationMessage(copy.applyCompleted);
       await loadStatus({ silent: true });
     } catch (err) {
       const detail = err?.detail || err?.data?.detail || null;
       setMigrationResult(detail && typeof detail === "object" ? detail : { status: "blocked", blockers: [{ reason: err?.message || copy.applyBlocked }] });
-      setRootMessage(err?.message || copy.applyBlocked);
+      setMigrationMessage(errorDetailText(err, copy.applyBlocked, language));
     } finally {
       setRootAction("");
     }
@@ -451,21 +550,21 @@ export default function StorageOperationsPage() {
               <div className="storageOpsHealthMain">
                 <span className="storageOpsEyebrow">{copy.lastCheck}: {formatDateTime(operations.checked_at, language)}</span>
                 <strong>{healthTitle(copy, tone)}</strong>
-                <p>{healthText(copy, tone)}</p>
+                <p>{topHealth.reason || healthText(copy, tone)}</p>
               </div>
               <div className="storageOpsHealthMetrics">
                 <Stat label={copy.total} value={formatBytes(capacity.total_bytes)} />
                 <Stat label={copy.used} value={`${formatBytes(capacity.used_bytes)} / ${formatPercent(capacity.usage_percent)}`} />
-                <Stat label={copy.free} value={`${formatBytes(capacity.free_bytes)} / ${formatPercent(capacity.free_percent)}`} tone={tone === "error" ? "error" : tone === "warning" ? "warning" : "neutral"} />
-                <Badge label={`${copy.read}: ${factLabel(pathHealth.readable, language)}`} tone={factTone(pathHealth.readable)} />
-                <Badge label={`${copy.write}: ${factLabel(pathHealth.writable, language)}`} tone={factTone(pathHealth.writable)} />
-                <Badge label={`${copy.availability}: ${factLabel(pathHealth.available, language)}`} tone={factTone(pathHealth.available)} />
+                <Stat label={copy.free} value={`${formatBytes(capacity.free_bytes)} / ${formatPercent(capacity.free_percent)}`} tone={freeSpaceTone(capacity, policy)} />
+                <Badge label={accessRights.label} tone={accessRights.tone} />
+                <Badge label={availabilityBadge} tone={pathHealth.available === false ? "warning" : "ok"} />
               </div>
               <div className="storageOpsHealthAction">
                 <strong>{copy.primaryAction}</strong>
                 <span>{primaryActionText}</span>
               </div>
             </section>
+            {refreshWarning ? <div className="storageOpsState storageOpsState-warning">{refreshWarning}</div> : null}
 
             <div className="storageOpsGrid">
               <Section title={copy.archiveSpace} className="storageOpsSection-wide">
@@ -473,25 +572,21 @@ export default function StorageOperationsPage() {
                   <span style={{ width: `${Math.max(0, Math.min(100, usagePercent))}%` }} />
                 </div>
                 <div className="storageOpsStats">
-                  <Stat label={copy.total} value={formatBytes(capacity.total_bytes)} />
-                  <Stat label={copy.used} value={`${formatBytes(capacity.used_bytes)} / ${formatPercent(capacity.usage_percent)}`} />
-                  <Stat label={copy.free} value={`${formatBytes(capacity.free_bytes)} / ${formatPercent(capacity.free_percent)}`} />
                   <Stat label={copy.archiveSize} value={formatBytes(owned.size_bytes)} />
                   <Stat label={copy.segments} value={String(owned.segments_count || 0)} />
-                  <Stat label={copy.foreignSkipped} value={String(owned.skipped_foreign_metadata_rows || 0)} />
-                  <Stat label={copy.deletedExcluded} value={String(owned.deleted_metadata_rows_excluded || 0)} />
+                  <Stat label={copy.problems} value={String(normalizedReconciliation.problemCount || 0)} tone={normalizedReconciliation.problemCount ? "warning" : "neutral"} />
                 </div>
-                <SummaryRow label={copy.ownershipBoundary} value={copy.ownershipBoundaryText} />
               </Section>
 
               <Section title={copy.safeActions}>
                 <div className="storageOpsActions storageOpsActionsColumn">
-                  <button className="button secondary small" type="button" onClick={runReconciliationPreview} disabled={!!rootAction}>{rootAction === "reconciliation-preview" ? copy.checking : copy.reconciliationDryRun}</button>
-                  <button className="button secondary small" type="button" onClick={runRetentionPreview} disabled={!!rootAction}>{rootAction === "retention-preview" ? copy.calculating : copy.retentionDryRun}</button>
-                  <button className="button secondary small" type="button" onClick={refreshMigrationPreview} disabled={!!rootAction}>{rootAction === "preview" ? copy.calculating : copy.refreshPreview}</button>
+                  <button className="button secondary small" type="button" onClick={runReconciliationPreview} disabled={!!rootAction || !reconciliationScenario.canCheck}>{rootAction === "reconciliation-preview" ? copy.checking : copy.reconciliationDryRun}</button>
+                  <button className="button secondary small" type="button" onClick={runRetentionPreview} disabled={!!rootAction || !retentionScenario.canPreview}>{rootAction === "retention-preview" ? copy.calculating : copy.retentionDryRun}</button>
+                  <button className="button secondary small" type="button" onClick={refreshMigrationPreview} disabled={!!rootAction || !migrationScenario.canPreview}>{rootAction === "preview" ? copy.calculating : copy.refreshMigrationPreview}</button>
                 </div>
                 <div className="storageOpsNote">{copy.safeActionNote}</div>
-                {rootMessage ? <div className="storageOpsNote storageOpsNoteStrong">{rootMessage}</div> : null}
+                {!reconciliationScenario.canCheck ? <div className="storageOpsNote storageOpsNoteStrong">{reconciliationScenario.checkPermissionReason}</div> : null}
+                {!retentionScenario.canPreview ? <div className="storageOpsNote storageOpsNoteStrong">{retentionScenario.permissionReason}</div> : null}
               </Section>
 
               <Section title={copy.archivePath} className="storageOpsSection-diagnostics">
@@ -510,10 +605,12 @@ export default function StorageOperationsPage() {
                   <Stat label={copy.freed} value={formatBytes(autoCleanup.last_summary?.bytes_freed)} />
                 </div>
                 <div className="storageOpsActions">
-                  <button className="button secondary small" type="button" onClick={() => setAutoFreeSpace(!autoFreeEnabled)} disabled={!!rootAction}>
+                  <button className="button secondary small" type="button" onClick={() => setAutoFreeSpace(!autoFreeEnabled)} disabled={!!rootAction || !manageSettingsPermission.allowed}>
                     {rootAction === "auto-free" ? copy.saving : autoFreeEnabled ? copy.disableAutoFree : copy.enableAutoFree}
                   </button>
                 </div>
+                {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
+                {autoFreeMessage ? <div className="storageOpsNote storageOpsNoteStrong">{autoFreeMessage}</div> : null}
                 <div className="storageOpsNote">{copy.lowDiskNote}</div>
                 <div className="storageOpsNote">{copy.autoFreeNote}</div>
                 <SummaryRow label={copy.blockersReasons} value={reasonText(autoCleanup.last_summary, copy, language)} />
@@ -526,34 +623,48 @@ export default function StorageOperationsPage() {
                   <Stat label={copy.deleted} value={String(retention.last_summary?.deleted_count || 0)} />
                   <Stat label={copy.freed} value={formatBytes(retention.last_summary?.bytes_freed)} />
                 </div>
+                <SummaryRow label={copy.actionState} value={statusLabel(retentionScenario.status, language)} tone={retentionScenario.status.includes("failed") || retentionScenario.status.includes("permission") ? "warning" : "neutral"} />
                 <SummaryRow label={copy.preview} value={retentionSummaryText(retentionPreview || retentionResult, copy)} />
                 <div className="storageOpsActions">
-                  <button className="button secondary small" type="button" onClick={runRetentionPreview} disabled={!!rootAction}>{rootAction === "retention-preview" ? copy.calculating : copy.retentionDryRun}</button>
+                  <button className="button secondary small" type="button" onClick={runRetentionPreview} disabled={!!rootAction || !retentionScenario.canPreview}>{rootAction === "retention-preview" ? copy.calculating : copy.retentionDryRun}</button>
                   <label className="storageOpsConfirm">
-                    <input type="checkbox" checked={retentionConfirmed} onChange={(event) => setRetentionConfirmed(event.target.checked)} disabled={!retentionPreview?.planned_count || !!rootAction} />
+                    <input type="checkbox" checked={retentionConfirmed} onChange={(event) => setRetentionConfirmed(event.target.checked)} disabled={!retentionScenario.canApply || !!rootAction} />
                     <span>{copy.retentionConfirm}</span>
                   </label>
-                  <button className="button small dangerButton" type="button" onClick={applyRetentionPlan} disabled={!retentionPreview?.planned_count || !retentionConfirmed || !!rootAction}>{rootAction === "retention-apply" ? copy.applying : copy.retentionApply}</button>
+                  <button className="button small dangerButton" type="button" onClick={applyRetentionPlan} disabled={!retentionScenario.canApply || !retentionConfirmed || !!rootAction}>{rootAction === "retention-apply" ? copy.applying : copy.retentionApply}</button>
                 </div>
+                {!retentionPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{retentionPermission.reason}</div> : null}
+                {retentionMessage ? <div className="storageOpsNote storageOpsNoteStrong">{retentionMessage}</div> : null}
                 <div className="storageOpsNote">{copy.retentionSafetyNote}</div>
               </Section>
 
               <Section title={copy.integrity}>
                 <div className="storageOpsStats">
-                  <Stat label={copy.state} value={statusLabel(reconciliation.status, language)} tone={reconciliation.problem_file_count ? "warning" : "neutral"} />
-                  <Stat label={copy.problems} value={String(reconciliation.problem_file_count || 0)} />
-                  <Stat label={copy.candidates} value={String(reconciliation.cleanup_candidate_count || 0)} />
+                  <Stat label={copy.state} value={statusLabel(normalizedReconciliation.status, language)} tone={normalizedReconciliation.problemCount ? "warning" : "neutral"} />
+                  <Stat label={copy.problems} value={String(normalizedReconciliation.problemCount || 0)} />
+                  <Stat label={copy.safeFixes} value={String(normalizedReconciliation.safeFixCount || 0)} />
+                  <Stat label={copy.manualReview} value={String(normalizedReconciliation.reviewOnlyCount || normalizedReconciliation.manualProblemCount || 0)} />
                   <Stat label={copy.lastCheck} value={formatDateTime(reconciliation.last_checked_at, language)} />
                 </div>
+                <SummaryRow label={copy.actionState} value={statusLabel(reconciliationScenario.status, language)} tone={reconciliationScenario.status.includes("permission") ? "warning" : "neutral"} />
                 <SummaryRow label={copy.preview} value={reconciliationSummaryText(reconciliationPreview || reconciliationResult, copy)} />
                 <div className="storageOpsActions">
-                  <button className="button secondary small" type="button" onClick={runReconciliationPreview} disabled={!!rootAction}>{rootAction === "reconciliation-preview" ? copy.checking : copy.reconciliationDryRun}</button>
+                  <button className="button secondary small" type="button" onClick={runReconciliationPreview} disabled={!!rootAction || !reconciliationScenario.canCheck}>{rootAction === "reconciliation-preview" ? copy.checking : copy.reconciliationDryRun}</button>
                   <label className="storageOpsConfirm">
-                    <input type="checkbox" checked={reconciliationConfirmed} onChange={(event) => setReconciliationConfirmed(event.target.checked)} disabled={!reconciliationPreview || !!rootAction} />
+                    <input type="checkbox" checked={reconciliationConfirmed} onChange={(event) => setReconciliationConfirmed(event.target.checked)} disabled={!reconciliationScenario.canApply || !!rootAction} />
                     <span>{copy.reconciliationConfirm}</span>
                   </label>
-                  <button className="button small" type="button" onClick={applyReconciliationSafe} disabled={!reconciliationPreview || !reconciliationConfirmed || !!rootAction}>{rootAction === "reconciliation-apply" ? copy.applying : copy.reconciliationApply}</button>
+                  <button className="button small" type="button" onClick={applyReconciliationSafe} disabled={!reconciliationScenario.canApply || !reconciliationConfirmed || !!rootAction}>{rootAction === "reconciliation-apply" ? copy.applying : copy.reconciliationApply}</button>
                 </div>
+                {reconciliationScenario.noAutoFixReason ? <div className="storageOpsNote storageOpsNoteStrong">{copy.reconciliationNoAutoFixes}</div> : null}
+                {reconciliationScenario.categories?.length ? (
+                  <div className="storageOpsNote">
+                    {copy.reconciliationCategories}: {reconciliationScenario.categories.map((item) => `${item.label}: ${item.count}`).join(", ")}
+                  </div>
+                ) : null}
+                {!diagnosticsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{diagnosticsPermission.reason}</div> : null}
+                {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{reconciliationScenario.applyPermissionReason}</div> : null}
+                {reconciliationMessage ? <div className="storageOpsNote storageOpsNoteStrong">{reconciliationMessage}</div> : null}
                 <div className="storageOpsNote">{copy.integrityNote}</div>
               </Section>
 
@@ -565,15 +676,22 @@ export default function StorageOperationsPage() {
                       <tr><th>{copy.root}</th><th>{copy.state}</th><th>{copy.records}</th><th>{copy.size}</th><th>{copy.action}</th></tr>
                     </thead>
                     <tbody>
-                      {archiveRoots.map((root) => (
-                        <tr key={root.id}>
-                          <td><strong>{archiveRootLabel(root, copy)}</strong><span>{root.is_active ? copy.activeRoot : copy.oldInactive}</span></td>
-                          <td>{root.is_available ? copy.available : (root.problem || copy.unavailable)}</td>
-                          <td>{root.segments_count || 0}</td>
-                          <td>{formatBytes(root.size_bytes)}</td>
-                          <td><button className="button secondary small" type="button" disabled={root.is_active || rootAction === `activate-${root.id}`} onClick={() => activateRoot(root.id)}>{rootAction === `activate-${root.id}` ? copy.switching : copy.makeActive}</button></td>
-                        </tr>
-                      ))}
+                      {archiveRoots.map((root) => {
+                        const rootScenario = archiveRootScenarioModel({
+                          root,
+                          permission: manageSettingsPermission,
+                          running: rootAction === `activate-${root.id}`,
+                        }, language);
+                        return (
+                          <tr key={root.id}>
+                            <td><strong>{archiveRootLabel(root, copy)}</strong><span>{root.is_active ? copy.activeRoot : copy.oldInactive}</span></td>
+                            <td>{root.is_available ? copy.available : (rootScenario.reason || copy.unavailable)}</td>
+                            <td>{root.segments_count || 0}</td>
+                            <td>{formatBytes(root.size_bytes)}</td>
+                            <td><button className="button secondary small" type="button" disabled={!rootScenario.canActivate} onClick={() => activateRoot(root.id)}>{rootAction === `activate-${root.id}` ? copy.switching : copy.makeActive}</button></td>
+                          </tr>
+                        );
+                      })}
                       {!archiveRoots.length ? <tr><td colSpan="5">{copy.noRoots}</td></tr> : null}
                     </tbody>
                   </table>
@@ -584,9 +702,11 @@ export default function StorageOperationsPage() {
                     <div className="storageOpsNote">{copy.addArchiveRootNote}</div>
                     <div className="storageOpsRootForm">
                       <input className="input" value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder={copy.archiveRootPlaceholder} />
-                      <button className="button secondary small" type="button" onClick={validateRoot} disabled={!!rootAction || !rootPath.trim()}>{rootAction === "validate" ? copy.validating : copy.validate}</button>
-                      <button className="button small" type="button" onClick={addRoot} disabled={!!rootAction || !rootPath.trim()}>{rootAction === "add" ? copy.adding : copy.add}</button>
+                      <button className="button secondary small" type="button" onClick={validateRoot} disabled={!!rootAction || !rootPath.trim() || !manageSettingsPermission.allowed}>{rootAction === "validate" ? copy.validating : copy.validate}</button>
+                      <button className="button small" type="button" onClick={addRoot} disabled={!!rootAction || !rootPath.trim() || !manageSettingsPermission.allowed}>{rootAction === "add" ? copy.adding : copy.add}</button>
                     </div>
+                    {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
+                    {archiveRootMessage ? <div className="storageOpsNote storageOpsNoteStrong">{archiveRootMessage}</div> : null}
                   </div>
                 </details>
               </Section>
@@ -599,13 +719,17 @@ export default function StorageOperationsPage() {
                   <Stat label={copy.blockers} value={String((migrationPreview.blockers || []).length)} tone={(migrationPreview.blockers || []).length ? "warning" : "neutral"} />
                   <Stat label={copy.applyState} value={migrationPreview.apply_available ? copy.available : copy.unavailable} tone={migrationPreview.apply_available ? "ok" : "warning"} />
                 </div>
+                <SummaryRow label={copy.actionState} value={statusLabel(migrationScenario.status, language)} tone={migrationScenario.status.includes("blocked") || migrationScenario.status.includes("failed") || migrationScenario.status.includes("permission") ? "warning" : "neutral"} />
                 <div className="storageOpsNote">{copy.migrationNote}</div>
                 <div className="storageOpsActions">
-                  <button className="button secondary small" type="button" onClick={refreshMigrationPreview} disabled={!!rootAction}>{rootAction === "preview" ? copy.calculating : copy.refreshPreview}</button>
-                  <button className="button small" type="button" onClick={applyMigration} disabled={!!rootAction || !migrationPreview.apply_available}>{rootAction === "apply-migration" ? copy.applying : copy.applyMigration}</button>
+                  <button className="button secondary small" type="button" onClick={refreshMigrationPreview} disabled={!!rootAction || !migrationScenario.canPreview}>{rootAction === "preview" ? copy.calculating : copy.refreshMigrationPreview}</button>
+                  <button className="button small" type="button" onClick={applyMigration} disabled={!!rootAction || !migrationScenario.canApply}>{rootAction === "apply-migration" ? copy.applying : copy.applyMigration}</button>
                 </div>
-                {(migrationPreview.blockers || []).length ? <SummaryRow label={copy.blockers} value={blockerText(migrationPreview.blockers, copy, language)} tone="warning" /> : null}
+                {migrationScenario.blockerReason ? <SummaryRow label={copy.blockers} value={migrationScenario.blockerReason} tone="warning" /> : null}
+                {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
+                {migrationMessage ? <div className="storageOpsNote storageOpsNoteStrong">{migrationMessage}</div> : null}
                 {migrationResult ? <SummaryRow label={copy.applyReport} value={`${statusLabel(migrationResult.status, language)}; ${copy.executed}: ${(migrationResult.executed || []).length}; ${copy.sourcePreserved}: ${boolLabel(migrationResult.source_preserved, language)}; ${copy.cleanupPending}: ${boolLabel(migrationResult.cleanup_pending, language)}`} /> : null}
+                {migrationScenario.manualReviewRequired ? <div className="storageOpsNote">{copy.migrationManualReview}</div> : null}
               </Section>
 
               <Section title={copy.diagnostics}>
@@ -620,6 +744,9 @@ export default function StorageOperationsPage() {
                     <div><dt>{copy.missingNoMetadata}</dt><dd>{`${reconciliation.missing_file_count || 0} / ${reconciliation.orphan_file_count || 0}`}</dd></div>
                     <div><dt>{copy.reasonOrphanFile}</dt><dd>{String(reconciliation.orphan_file_count || 0)}</dd></div>
                     <div><dt>{copy.invalidOutside}</dt><dd>{`${reconciliation.invalid_path_count || 0} / ${reconciliation.path_outside_storage_count || 0}`}</dd></div>
+                    <div><dt>{copy.ownershipBoundary}</dt><dd>{copy.ownershipBoundaryText}</dd></div>
+                    <div><dt>{copy.foreignSkipped}</dt><dd>{String(owned.skipped_foreign_metadata_rows || 0)}</dd></div>
+                    <div><dt>{copy.deletedExcluded}</dt><dd>{String(owned.deleted_metadata_rows_excluded || 0)}</dd></div>
                   </dl>
                 </details>
               </Section>
@@ -656,8 +783,8 @@ export default function StorageOperationsPage() {
               )}
             </Section>
 
-            <Section title={copy.recentOperations}>
-              {recent.available && recent.items?.length ? (
+            {recent.available && recent.items?.length ? (
+              <Section title={copy.recentOperations}>
                 <div className="storageOpsRecent">
                   {recent.items.map((item, index) => (
                     <div className="storageOpsRecentItem" key={`${item.type || "operation"}-${index}`}>
@@ -666,10 +793,8 @@ export default function StorageOperationsPage() {
                     </div>
                   ))}
                 </div>
-              ) : (
-                <div className="storageOpsEmpty">{copy.noRecentOperations}</div>
-              )}
-            </Section>
+              </Section>
+            ) : null}
           </>
         )}
       </div>

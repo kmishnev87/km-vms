@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.11",
-  "tag": "v0.7.11",
-  "title": "In-App Update Helper Compose Environment Dofix",
-  "summary": "Fixes in-app update helper compose detection on NAS installations where the host terminal update uses a vendor docker-compose path that is not available inside the update-helper container.",
+  "version": "0.7.12",
+  "tag": "v0.7.12",
+  "title": "Storage PRO Scenario Completeness and Silent Refresh Access-Denied Hardening",
+  "summary": "Completes the Storage PRO operator scenario pass with structured API error evidence, method-aware storage action permissions, complete archive/retention/reconciliation/migration UI scenarios, and precise silent-refresh access-denied classification.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.11",
+  "source_ref": "v0.7.12",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,9 +16,10 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Separates host terminal Docker Compose configuration from update-helper container Compose execution.",
-    "Adds KM_VMS_UPDATE_HELPER_DOCKER_COMPOSE for the in-app update helper with docker-compose as the safe container default.",
-    "Prevents host-only NAS compose paths from breaking update-helper preflight inside the container.",
-    "Adds regression coverage for the host-path versus helper-container compose environment contract."
+    "Completes storage route metadata and action permission coverage for archive roots, retention, reconciliation and migration.",
+    "Preserves structured API error status/detail so storage blockers and permission failures stay truthful in the UI.",
+    "Improves Storage PRO scenario models for archive root health, retention preview/apply, reconciliation and migration states.",
+    "Keeps the last valid storage status visible during silent refresh failures and shows a non-fatal stale warning.",
+    "Narrows storage access-denied classification to real 401/403 and explicit auth/permission phrases, avoiding generic unavailable wording."
   ]
 }

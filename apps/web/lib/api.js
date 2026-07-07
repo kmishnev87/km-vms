@@ -97,6 +97,29 @@ function normalizeErrorDetail(response, detail) {
   return detail || "Ошибка запроса";
 }
 
+function safeErrorMessage(response, data, fallback) {
+  const detail = data?.detail;
+  if (typeof detail === "string") return normalizeErrorDetail(response, detail);
+  if (typeof data?.message === "string") return normalizeErrorDetail(response, data.message);
+  if (typeof detail?.message === "string") return normalizeErrorDetail(response, detail.message);
+  if (typeof detail?.error === "string") return normalizeErrorDetail(response, detail.error);
+  if (typeof detail?.code === "string") return normalizeErrorDetail(response, detail.code);
+  return normalizeErrorDetail(response, fallback);
+}
+
+function createApiError(response, data, fallback) {
+  const error = new Error(safeErrorMessage(response, data, fallback));
+  error.status = response.status;
+  error.data = data;
+  error.detail = data?.detail;
+  error.response = {
+    ok: response.ok,
+    status: response.status,
+    statusText: response.statusText,
+  };
+  return error;
+}
+
 export async function apiFetch(path, options = {}) {
   const url = buildUrl(path);
   const headers = makeHeaders(options.headers || {});
@@ -109,19 +132,18 @@ export async function apiFetch(path, options = {}) {
 
   if (!response.ok) {
     let detail = `HTTP ${response.status}`;
+    let data = null;
     try {
       if (isJson) {
-        const data = await response.json();
-        detail = typeof data?.detail === "string"
-          ? data.detail
-          : JSON.stringify(data);
+        data = await response.json();
+        detail = typeof data?.detail === "string" ? data.detail : JSON.stringify(data);
       } else {
         detail = await response.text();
       }
     } catch {
       detail = `HTTP ${response.status}`;
     }
-    throw new Error(normalizeErrorDetail(response, detail));
+    throw createApiError(response, data, detail);
   }
 
   if (isJson) return response.json();
@@ -135,20 +157,19 @@ export async function apiFetchBlob(path, options = {}) {
 
   if (!response.ok) {
     let detail = `HTTP ${response.status}`;
+    let data = null;
     try {
       const contentType = response.headers.get("content-type") || "";
       if (contentType.includes("application/json")) {
-        const data = await response.json();
-        detail = typeof data?.detail === "string"
-          ? data.detail
-          : JSON.stringify(data);
+        data = await response.json();
+        detail = typeof data?.detail === "string" ? data.detail : JSON.stringify(data);
       } else {
         detail = await response.text();
       }
     } catch {
       detail = `HTTP ${response.status}`;
     }
-    throw new Error(normalizeErrorDetail(response, detail));
+    throw createApiError(response, data, detail);
   }
 
   const blob = await response.blob();

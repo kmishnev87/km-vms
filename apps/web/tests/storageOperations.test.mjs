@@ -7,10 +7,11 @@ import { dirname, resolve } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const source = fs
   .readFileSync(resolve(__dirname, "../lib/storageOperations.js"), "utf8")
+  .replaceAll("export const ", "const ")
   .replaceAll("export function ", "function ");
 const context = {};
 vm.runInNewContext(
-  `${source}\nthis.formatBytes = formatBytes;\nthis.formatPercent = formatPercent;\nthis.statusLabel = statusLabel;\nthis.lowDiskPolicyText = lowDiskPolicyText;\nthis.humanBlockerReason = humanBlockerReason;\nthis.factLabel = factLabel;\nthis.factTone = factTone;\nthis.primaryStorageActionText = primaryStorageActionText;\nthis.cameraStorageRows = cameraStorageRows;`,
+  `${source}\nthis.formatBytes = formatBytes;\nthis.formatPercent = formatPercent;\nthis.statusLabel = statusLabel;\nthis.lowDiskPolicyText = lowDiskPolicyText;\nthis.humanBlockerReason = humanBlockerReason;\nthis.factLabel = factLabel;\nthis.factTone = factTone;\nthis.accessRightsModel = accessRightsModel;\nthis.freeSpaceTone = freeSpaceTone;\nthis.normalizeReconciliationSummary = normalizeReconciliationSummary;\nthis.primaryStorageActionText = primaryStorageActionText;\nthis.cameraStorageRows = cameraStorageRows;`,
   context
 );
 
@@ -50,12 +51,27 @@ assert.equal(context.factLabel(undefined), "Не проверено");
 assert.equal(context.factTone(undefined), "unknown");
 assert.equal(context.factLabel(false), "Нет");
 assert.equal(context.factTone(false), "error");
-assert.match(context.primaryStorageActionText({ pathHealth: { available: false } }), /доступность хранилища/);
+assert.equal(context.accessRightsModel({ readable: true, writable: true }).label, "Права на чтение и запись: есть");
+assert.equal(context.accessRightsModel({ readable: true, writable: false }).label, "Чтение есть, запись недоступна");
+assert.match(context.primaryStorageActionText({ pathHealth: { available: false } }), /Корень архива недоступен/);
+assert.doesNotMatch(context.primaryStorageActionText({ operations: { status: "available" }, capacity: { total_bytes: 1 }, pathHealth: { readable: true, writable: true, available: false } }), /недоступен/);
+assert.equal(context.freeSpaceTone({ free_percent: 77 }, { state: "warning", warning_threshold_percent: 10 }), "warning");
+assert.equal(context.freeSpaceTone({ free_percent: 77 }, { warning_threshold_percent: 10 }), "neutral");
 assert.match(context.primaryStorageActionText({ pathHealth: { writable: false } }), /права записи/);
 assert.match(context.primaryStorageActionText({ capacity: { total_bytes: 100, free_percent: 2 }, policy: { warning_threshold_percent: 10 } }), /Освободите место/);
 assert.match(context.primaryStorageActionText({ reconciliation: { problem_file_count: 1 } }), /целостности/);
 assert.match(context.primaryStorageActionText({ migrationPreview: { blockers: [{ reason: "active_recording_jobs" }] } }), /активной записью/);
 assert.match(context.primaryStorageActionText({ operations: {}, pathHealth: {}, capacity: {} }), /не хватает фактов/);
+
+const reconciliation = context.normalizeReconciliationSummary({
+  classification_counts: { missing_file: 2, orphan_file: 4, ok_owned_finalized: 10 },
+  cleanup_candidates: { count: 4, classification_counts: { orphan_file: 4 } },
+  apply_safe_summary: { updated_metadata_count: 0 },
+  total_metadata_rows_checked: 12,
+});
+assert.equal(reconciliation.problemCount, 6);
+assert.equal(reconciliation.reviewOnlyCount, 4);
+assert.equal(reconciliation.totalRows, 12);
 
 const rows = context.cameraStorageRows([
   { camera_id: 1, camera_name: "A", size_bytes: 100, segment_count: 1 },

@@ -32,7 +32,37 @@ assert.equal(entries["/security-journal"].permission, "manage_settings");
 assert.deepEqual(entries["/security-journal"].backend, ["/audit/events"]);
 assert.equal(entries["/diagnostics"].permission, "run_diagnostics");
 assert.equal(entries["/storage"].permission, "manage_settings");
-assert.deepEqual(entries["/storage"].backend, ["/storage/status", "/storage/migration/preview", "/storage/migration/apply"]);
+for (const storagePath of [
+  "/storage/status",
+  "/settings",
+  "/storage/archive-roots",
+  "/storage/archive-roots/validate",
+  "/storage/archive-roots/{root_id}/activate",
+  "/storage/migration/preview",
+  "/storage/migration/apply",
+  "/storage/reconciliation/summary",
+  "/storage/reconcile",
+  "/recordings/retention/dry-run",
+  "/recordings/retention/run",
+]) {
+  assert.equal(entries["/storage"].backend.includes(storagePath), true, `/storage backend metadata must include ${storagePath}`);
+}
+assert.equal(entries["/storage"].backendEndpoints.some((item) => item.method === "POST" && item.path === "/recordings/retention/dry-run" && item.permission === "delete_recordings"), true);
+assert.equal(entries["/storage"].backendEndpoints.some((item) => item.method === "POST" && item.path === "/recordings/retention/run" && item.permission === "delete_recordings"), true);
+assert.equal(entries["/storage"].backendEndpoints.some((item) => item.method === "GET" && item.path === "/storage/reconciliation/summary" && item.permission === "run_diagnostics"), true);
+for (const [method, path] of [
+  ["GET", "/storage/status"],
+  ["GET", "/settings"],
+  ["PATCH", "/settings"],
+  ["POST", "/storage/reconcile"],
+  ["POST", "/storage/archive-roots/validate"],
+  ["POST", "/storage/archive-roots"],
+  ["POST", "/storage/archive-roots/{root_id}/activate"],
+  ["POST", "/storage/migration/preview"],
+  ["POST", "/storage/migration/apply"],
+]) {
+  assert.equal(entries["/storage"].backendEndpoints.some((item) => item.method === method && item.path === path && item.permission === "manage_settings"), true, `${method} ${path} must require manage_settings`);
+}
 assert.equal(entries["/apk"].access, routePermissions.ROUTE_ACCESS_PUBLIC);
 assert.equal(entries["/apk"].placeholderOnly, true);
 
