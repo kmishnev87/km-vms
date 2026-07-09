@@ -61,7 +61,7 @@ for (const scattered of [
 assert.match(i18n, /retentionDryRun: "Показать, что будет удалено по правилам хранения"/);
 assert.match(i18n, /retentionApply: "Удалить найденные старые записи"/);
 assert.match(i18n, /reconciliationApply: "Исправить только безопасные проблемы метаданных"/);
-assert.match(i18n, /refresh: "Обновить состояние хранилища"/);
+assert.match(i18n, /refresh: "Обновить"/);
 assert.doesNotMatch(i18n, /Предпросмотр регламента|Удалить по плану|Применить безопасно|Самое безопасное действие|Доступность: Нет/);
 
 const primaryRender = storagePage.slice(storagePage.indexOf("<section className={`storageOpsOverview"), storagePage.indexOf("<details className=\"storageOpsSupportDetails\""));

@@ -2502,8 +2502,9 @@
 
 .storageOpsRootListRow {
   display: grid;
-  grid-template-columns: minmax(330px, 1.8fr) minmax(82px, 0.42fr) minmax(82px, 0.42fr) minmax(82px, 0.42fr) minmax(72px, 0.32fr) minmax(82px, 0.34fr);
-  gap: 8px;
+  grid-template-columns: minmax(300px, 1.62fr) 54px minmax(82px, 0.42fr) minmax(82px, 0.42fr) minmax(82px, 0.42fr) minmax(72px, 0.32fr) 42px;
+  column-gap: 10px;
+  row-gap: 8px;
   align-items: stretch;
   padding: 9px 10px;
   border: 1px solid #e2e8f0;
@@ -2570,11 +2571,16 @@
   filter: brightness(0.96);
 }
 
-.storageOpsRootActionsCell {
+.storageOpsRootActionsCell,
+.storageOpsRootDeleteCell {
   display: flex !important;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+}
+
+.storageOpsRootDeleteCell {
+  justify-self: center;
+  width: 54px;
 }
 
 .storageOpsRootActivateButton,
@@ -2593,7 +2599,7 @@
 .storageOpsRootActivateButton:disabled,
 .storageOpsRootDeleteButton:disabled {
   cursor: default;
-  opacity: 0.72;
+  opacity: 1;
 }
 
 .storageOpsRootActivateButton.isActive {
@@ -2612,6 +2618,12 @@
   border-color: #fecaca;
   background: #fff7f7;
   color: #b91c1c;
+}
+
+.storageOpsRootDeleteButton:disabled {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #94a3b8;
 }
 
 .storageOpsRootDeleteButton:not(:disabled):hover {
@@ -2637,12 +2649,10 @@
   transform: rotate(45deg);
 }
 
-.storageOpsDeleteIcon {
+.storageOpsTrashIcon {
+  width: 16px;
+  height: 16px;
   color: inherit;
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1;
-  transform: translateY(-1px);
 }
 
 .storageOpsAdvancedRootBody {

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.14",
-  "tag": "v0.7.14",
-  "title": "Storage PRO Archive Roots and Operator UX Hardening",
-  "summary": "Hardens the Storage PRO archive-root workflow with operator-safe root add/activate/delete flows, visible archive-root problem details, runtime activation handoff, and compact user-facing storage UX corrections.",
+  "version": "0.7.15",
+  "tag": "v0.7.15",
+  "title": "Storage Archive Roots Management UX and Activation Closeout",
+  "summary": "Closes the accepted Storage archive-root operator work: compact root management, NAS volume/folder add flow, inactive-root deletion, runtime activation handoff, and clearer user-facing storage problem states.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.14",
+  "source_ref": "v0.7.15",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,10 +16,10 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Reworks archive-root add flow to use NAS volume discovery and folder creation instead of raw manual paths.",
-    "Adds explicit inactive archive-root activation through the setup-helper runtime handoff with operator warning.",
-    "Adds safe inactive archive-root deletion with confirmation, permission checks, metadata cleanup and recording-list consistency.",
-    "Shows archive-root problems as compact clickable user-facing details instead of long table text.",
-    "Polishes Storage PRO root/status controls, short problem badges, dialog copy and focused visual contract tests."
+    "Completes the Storage archive-root management UI with compact root rows, centered facts, icon actions and short problem badges.",
+    "Keeps root add on the NAS volume/folder selection model instead of exposing raw Docker/internal paths.",
+    "Routes archive-root activation through the setup-helper runtime handoff and restores previously active recordings after the switch.",
+    "Adds protected inactive-root deletion with confirmation, permission checks and recording-list cleanup.",
+    "Improves Storage wording/tests around root problems, automatic retention policy, files naming and operator-safe dialogs."
   ]
 }

@@ -31,6 +31,7 @@ from app.services.timezone_contract import format_system_iso, timezone_context
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
 SEGMENT_STATUS_DELETED = "deleted"
+COUNTABLE_ARCHIVE_SEGMENT_STATUSES = {"finalized", "ready"}
 SCAN_MODE_METADATA_ONLY = "metadata_only"
 SCAN_MODE_NAMESPACE_BOUNDED = "namespace_bounded"
 MAX_NAMESPACE_FILES = 1000
@@ -273,6 +274,14 @@ def _update_range(row: dict, started_at: datetime | None) -> None:
 
 def _is_kmvms_owned(segment: RecordingSegment) -> bool:
     return segment.ownership == OWNERSHIP_KM_VMS and segment.source == RECORDER_SOURCE
+
+
+def _is_countable_archive_segment(segment: RecordingSegment) -> bool:
+    return (
+        _is_kmvms_owned(segment)
+        and segment.deleted_at is None
+        and segment.status in COUNTABLE_ARCHIVE_SEGMENT_STATUSES
+    )
 
 
 def _safe_stat_segment(segment: RecordingSegment, root: Path) -> tuple[str | None, int | None, str | None, Path | None]:
@@ -635,7 +644,7 @@ def build_storage_monitoring_summary(
     deleted_metadata_rows = 0
     archive_roots = []
     for root_row in archive_root_rows:
-        root_status = archive_root_public_status(root_row)
+        root_status = archive_root_public_status(root_row, include_path=False)
         root_status.update(root_usage(db, root_row))
         archive_roots.append(root_status)
 
@@ -646,6 +655,13 @@ def build_storage_monitoring_summary(
             continue
         if segment.status == SEGMENT_STATUS_DELETED:
             deleted_metadata_rows += 1
+            continue
+        if not _is_countable_archive_segment(segment):
+            status_counts[segment.status or "unknown"] += 1
+            integrity_counts[segment.integrity_status or "unknown"] += 1
+            reconciliation_counts[segment.reconciliation_status or "unknown"] += 1
+            container_counts[segment.container_format or "unknown"] += 1
+            extension_counts[segment.file_extension or "unknown"] += 1
             continue
 
         row = camera_usage.setdefault(segment.camera_id, _empty_camera_usage(cameras.get(segment.camera_id)))
@@ -712,8 +728,13 @@ def build_storage_monitoring_summary(
 
     scan_limited = bool(namespace_observations.get("scan_limited"))
     partial = bool(namespace_observations.get("partial"))
-    if errors or partial or owned_problem_count or not path_checks["path_exists"] or not path_checks["is_dir"]:
-        status = "degraded" if path_checks["path_exists"] and path_checks["is_dir"] else "unavailable"
+    path_available = bool(path_checks["path_exists"] and path_checks["is_dir"])
+    integrity_problem_count = int(owned_problem_count) + int(namespace_observations.get("orphan_file_count") or 0) + int(invalid_path_count) + int(path_outside_count)
+    has_storage_problem = bool(errors or integrity_problem_count)
+    if not path_available:
+        status = "unavailable"
+    elif has_storage_problem:
+        status = "degraded"
     else:
         status = "available"
 
@@ -727,7 +748,7 @@ def build_storage_monitoring_summary(
     summary = {
         "status": status,
         "ok": status == "available",
-        "available": status == "available",
+        "available": path_available,
         "checked_at": checked_at,
         "checked_at_utc": checked_at,
         "checked_at_system": format_system_iso(datetime.fromisoformat(checked_at.removesuffix("Z")), timezone_context(db)),
@@ -745,7 +766,7 @@ def build_storage_monitoring_summary(
         "errors": errors[:MAX_SAMPLE_ITEMS],
         "capacity": capacity,
         "mount_status": {
-            "path_available": bool(path_checks["path_exists"] and path_checks["is_dir"]),
+            "path_available": path_available,
             "filesystem_probe_status": capacity.get("filesystem_probe_status"),
             "mount_point": path_checks.get("storage_root_realpath"),
         },

@@ -98,6 +98,7 @@ ERROR_STALE_SEGMENT = "recording_segment_not_rotating"
 
 running = True
 jobs: dict[int, "RecordingJob"] = {}
+last_runtime_mapping_log_key: tuple[str, str, str] | None = None
 
 
 @dataclass
@@ -668,6 +669,7 @@ def clear_recording_job_error(job: RecordingJob) -> None:
 
 
 def active_archive_root() -> tuple[str, Path]:
+    global last_runtime_mapping_log_key
     try:
         with engine.begin() as conn:
             row = conn.execute(
@@ -686,7 +688,19 @@ def active_archive_root() -> tuple[str, Path]:
         return DEFAULT_ARCHIVE_ROOT_ID, STORAGE_ROOT
     if not row:
         return DEFAULT_ARCHIVE_ROOT_ID, STORAGE_ROOT
-    return str(row.id or DEFAULT_ARCHIVE_ROOT_ID), Path(str(row.root_path or STORAGE_ROOT))
+    configured_path = Path(str(row.root_path or STORAGE_ROOT))
+    if configured_path.as_posix() != STORAGE_ROOT.as_posix():
+        key = (str(row.id or DEFAULT_ARCHIVE_ROOT_ID), configured_path.as_posix(), STORAGE_ROOT.as_posix())
+        if key != last_runtime_mapping_log_key:
+            last_runtime_mapping_log_key = key
+            log_event(
+                "info",
+                "archive_root_runtime_path_mapped",
+                archive_root_id=key[0],
+                configured_path=key[1],
+                runtime_path=key[2],
+            )
+    return str(row.id or DEFAULT_ARCHIVE_ROOT_ID), STORAGE_ROOT
 
 
 def kmvms_recordings_root(root: Path | None = None) -> Path:

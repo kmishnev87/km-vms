@@ -8,9 +8,13 @@ from sqlalchemy.orm import Session
 
 from app.core.permissions import user_has_permission
 from app.db.session import get_db
-from app.models.recording import ArchiveRoot, RecordingJob, RecordingSegment
+from app.models.recording import ArchiveRoot, RecordingSegment
 from app.models.user import User
 from app.routers.deps import require_permission
+from app.services.archive_root_activation import (
+    finalize_pending_archive_root_activation,
+    request_archive_root_activation,
+)
 from app.services.audit_log import create_event
 from app.services.recording_reconciliation import reconcile_recordings
 from app.services.recording_storage import (
@@ -23,11 +27,7 @@ from app.services.recording_storage import (
     root_usage,
     sanitize_archive_root_path,
 )
-from app.services.setup_storage import (
-    build_preview as build_setup_storage_preview,
-    discovery_snapshot as setup_storage_discovery_snapshot,
-    queue_runtime_activation,
-)
+from app.services import setup_storage
 from app.services.storage_monitoring import build_storage_monitoring_summary
 
 router = APIRouter(prefix="/storage", tags=["storage"])
@@ -74,6 +74,7 @@ def storage_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
+    finalize_pending_archive_root_activation(db)
     return build_storage_monitoring_summary(db, write_audit=False, audit_actor=current_user)
 
 
@@ -82,6 +83,7 @@ def archive_roots(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
+    finalize_pending_archive_root_activation(db)
     return {"items": [archive_root_public_status(root, include_path=True) for root in list_archive_roots(db)]}
 
 
@@ -89,7 +91,7 @@ def archive_roots(
 def archive_root_discovery(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    return setup_storage_discovery_snapshot()
+    return setup_storage.discovery_snapshot()
 
 
 def _archive_root_path_from_payload(
@@ -99,7 +101,7 @@ def _archive_root_path_from_payload(
         raise ValueError("manual_archive_root_path_disabled")
     if not payload.candidate_id or not payload.folder_name:
         raise ValueError("archive_root_selection_required")
-    preview = build_setup_storage_preview(
+    preview = setup_storage.build_preview(
         payload.candidate_id,
         payload.folder_name,
         None,
@@ -179,45 +181,11 @@ def create_archive_root(
     if payload.make_active:
         if not payload.confirm:
             raise HTTPException(status_code=409, detail="Archive root activation requires confirm=true")
-        _activate_root(db, root, current_user)
+        result = request_archive_root_activation(db, root=root, actor=current_user)
+        if result.get("status") in {"blocked", "already_running"}:
+            raise HTTPException(status_code=409, detail=result)
+        return result
     return archive_root_public_status(root, include_path=True)
-
-
-def _activate_root(db: Session, root: ArchiveRoot, current_user: User) -> None:
-    active_jobs = db.query(RecordingJob).filter(RecordingJob.state.in_(("starting", "recording", "stopping", "restarting"))).count()
-    try:
-        activation = queue_runtime_activation(str(root.root_path), request_prefix="archive-root")
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail={"error": str(exc) or "archive_root_activation_request_failed"}) from exc
-    previous = db.query(ArchiveRoot).filter(ArchiveRoot.is_active == True).all()  # noqa: E712
-    previous_ids = [item.id for item in previous]
-    for item in previous:
-        item.is_active = False
-        item.updated_at = datetime.utcnow()
-        db.add(item)
-    root.is_active = True
-    root.updated_at = datetime.utcnow()
-    db.add(root)
-    db.commit()
-    create_event(
-        db=db,
-        actor=current_user,
-        category="storage",
-        event_type="archive_root.activated",
-        severity="warning",
-        message_ru="Archive root activated",
-        message_en="Archive root activated",
-        target_type="archive_root",
-        target_id=root.id,
-        target_name=root.label,
-        metadata={
-            "previous_root_ids": previous_ids,
-            "active_root_id": root.id,
-            "active_jobs_count": int(active_jobs),
-            "activation_request_id": activation.get("request_id"),
-            "activation_status": activation.get("apply_status"),
-        },
-    )
 
 
 def _safe_cleanup_empty_dirs(root_path: Path) -> int:
@@ -350,8 +318,12 @@ def activate_archive_root(
     root = db.get(ArchiveRoot, root_id)
     if not root:
         raise HTTPException(status_code=404, detail="Archive root not found")
-    _activate_root(db, root, current_user)
-    return archive_root_public_status(root, include_path=True)
+    result = request_archive_root_activation(db, root=root, actor=current_user)
+    if result.get("status") == "blocked":
+        raise HTTPException(status_code=409, detail=result)
+    if result.get("status") == "already_running":
+        raise HTTPException(status_code=409, detail=result)
+    return result
 
 
 @router.delete("/archive-roots/{root_id}")

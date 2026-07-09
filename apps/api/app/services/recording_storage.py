@@ -56,8 +56,43 @@ def _normalize_relative(relative_path: str) -> str:
     return normalized
 
 
-def _root_path(root_row) -> Path:
+def _stored_root_path(root_row) -> Path:
     return Path(str(getattr(root_row, "root_path", "") or settings.storage_root))
+
+
+def _configured_host_storage_root() -> str | None:
+    value = (os.getenv("STORAGE_HOST_ROOT") or os.getenv("SURVEILLANCE_ROOT") or "").strip()
+    return value or None
+
+
+def archive_root_host_display_path(root_row) -> str:
+    stored = _stored_root_path(root_row)
+    if stored.as_posix() == Path(settings.storage_root).as_posix():
+        host_path = _configured_host_storage_root()
+        if host_path:
+            return str(host_path)
+    return str(stored)
+
+
+def _root_path(root_row) -> Path:
+    return _stored_root_path(root_row)
+
+
+def archive_root_runtime_path(root_row) -> Path:
+    stored = _stored_root_path(root_row)
+    if bool(getattr(root_row, "is_active", False)) and stored.as_posix() != Path(settings.storage_root).as_posix():
+        return Path(settings.storage_root)
+    return stored
+
+
+def _inactive_runtime_activation_root(root_row) -> bool:
+    stored = _stored_root_path(root_row)
+    return (
+        bool(root_row)
+        and not bool(getattr(root_row, "is_active", False))
+        and stored.as_posix() != Path(settings.storage_root).as_posix()
+        and not stored.exists()
+    )
 
 
 def root_status(root_path: Path) -> dict:
@@ -272,6 +307,8 @@ def active_namespace_dir(db: Session, camera_id: int, job_id: str) -> Path:
 
 
 def archive_root_public_status(root_row, *, include_path: bool = False) -> dict:
+    configured_path = _stored_root_path(root_row)
+    requires_activation = _inactive_runtime_activation_root(root_row)
     root_path = _root_path(root_row)
     status = root_status(root_path)
     result = {
@@ -285,11 +322,12 @@ def archive_root_public_status(root_row, *, include_path: bool = False) -> dict:
         "namespace_exists": bool(status["namespace_exists"]),
         "problem": status["problem"] or getattr(root_row, "problem", None),
         "retired": bool(getattr(root_row, "retired_at", None)),
+        "requires_activation": requires_activation,
     }
     if include_path:
-        result["configured_path"] = str(root_path)
+        result["configured_path"] = archive_root_host_display_path(root_row)
     else:
-        result["path_label"] = root_path.name or "archive"
+        result["path_label"] = configured_path.name or "archive"
     return result
 
 
@@ -306,7 +344,13 @@ def root_usage(db: Session, root_row) -> dict:
         .filter(RecordingSegment.archive_root_id == getattr(root_row, "id", None))
         .all()
     ):
-        if getattr(segment, "status", None) == "deleted":
+        if getattr(segment, "deleted_at", None) is not None:
+            continue
+        if getattr(segment, "status", None) in {"deleted", "writing", "starting"}:
+            continue
+        if getattr(segment, "ownership", None) != "KM VMS" or getattr(segment, "source", None) != "recorder":
+            continue
+        if getattr(segment, "status", None) not in {"finalized", "ready"}:
             continue
         count += 1
         try:

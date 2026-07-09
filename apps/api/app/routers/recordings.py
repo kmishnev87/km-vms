@@ -411,10 +411,16 @@ def collect_recording_files(
 
 
 def clamp_recordings_pagination(limit: int | None, offset: int | None) -> tuple[int, int]:
-    requested = DEFAULT_RECORDINGS_PAGE_SIZE if limit is None else int(limit)
+    try:
+        requested = DEFAULT_RECORDINGS_PAGE_SIZE if limit is None else int(limit)
+    except (TypeError, ValueError):
+        requested = DEFAULT_RECORDINGS_PAGE_SIZE
     requested = max(1, min(MAX_RECORDINGS_PAGE_SIZE, requested))
     page_size = next((size for size in SUPPORTED_RECORDINGS_PAGE_SIZES if requested <= size), MAX_RECORDINGS_PAGE_SIZE)
-    page_offset = max(0, int(offset or 0))
+    try:
+        page_offset = max(0, int(offset or 0))
+    except (TypeError, ValueError):
+        page_offset = 0
     return page_size, page_offset
 
 
@@ -583,7 +589,19 @@ def list_recordings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_recordings")),
 ):
+    if not isinstance(camera, str):
+        camera = None
+    if not isinstance(date, str):
+        date = None
+    if not isinstance(from_ts, str):
+        from_ts = None
+    if not isinstance(to_ts, str):
+        to_ts = None
     page_limit, page_offset = clamp_recordings_pagination(limit, offset)
+    if not isinstance(sort_by, str):
+        sort_by = "created_at"
+    if not isinstance(sort_dir, str):
+        sort_dir = "desc"
     if sort_by not in {"created_at", "size_bytes", "camera"}:
         raise HTTPException(status_code=400, detail="Unsupported recordings sort field")
     if sort_dir not in {"asc", "desc"}:
@@ -614,6 +632,7 @@ def list_recordings(
     ctx = timezone_context(db)
     return {
         "items": items,
+        "total": summary["count"],
         "pagination": {
             "limit": page_limit,
             "offset": page_offset,

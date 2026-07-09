@@ -197,6 +197,12 @@ def discovery_snapshot() -> dict:
     }
 
 
+def _all_discovered_candidates() -> list[dict]:
+    path = install_control_dir() / DISCOVERY_FILE
+    payload = _safe_read_json(path)
+    return [sanitize_candidate(item) for item in payload.get("candidates") or [] if isinstance(item, dict)]
+
+
 def storage_confirmation_status() -> dict:
     selection = _safe_read_json(install_control_dir() / SELECTION_FILE)
     apply_state = _safe_read_json(install_control_dir() / APPLY_STATUS_FILE)
@@ -255,8 +261,10 @@ def require_storage_confirmation() -> dict:
 
 
 def get_candidate(candidate_id: str) -> dict:
-    for item in discovery_snapshot()["candidates"]:
+    for item in _all_discovered_candidates():
         if item["id"] == candidate_id:
+            if item["safety_status"] != "allowed":
+                raise ValueError("storage candidate is blocked")
             return item
     raise ValueError("storage candidate is not available")
 

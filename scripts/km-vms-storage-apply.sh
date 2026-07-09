@@ -170,7 +170,11 @@ if [ -e "$fs_selected_path" ]; then
   [ -x "$fs_selected_path" ] || fail "selected_host_path is not searchable"
   find "$fs_selected_path" -mindepth 1 -maxdepth 1 >/dev/null || fail "cannot list selected_host_path"
   if [ "$(find "$fs_selected_path" -mindepth 1 -maxdepth 1 ! -name '.km-vms-storage-root.json' | wc -l | tr -d ' ')" -gt 0 ] && [ ! -f "$fs_selected_path/.km-vms-storage-root.json" ]; then
-    fail "selected_host_path is non-empty and has no KM VMS marker"
+    if [ -d "$fs_selected_path/kmvms/recordings" ] && [ ! -L "$fs_selected_path/kmvms" ] && [ ! -L "$fs_selected_path/kmvms/recordings" ]; then
+      :
+    else
+      fail "selected_host_path is non-empty and has no KM VMS marker or recordings namespace"
+    fi
   fi
 else
   [ -d "$selected_mount_real" ] || fail "selected_mount_path does not exist"

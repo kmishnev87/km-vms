@@ -107,8 +107,16 @@ function CheckIcon() {
   );
 }
 
-function DeleteIcon() {
-  return <span aria-hidden="true" className="storageOpsDeleteIcon">×</span>;
+function TrashIcon() {
+  return (
+    <svg className="recordingsUiIcon recordingsTrashIcon recordingsRowSvgIcon storageOpsTrashIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4.2 6.8h15.6"></path>
+      <path d="M8.9 6.8V4.5h6.2v2.3"></path>
+      <path d="M6.7 7.2 7.6 19c.1 1.05 1 1.9 2.05 1.9h4.7c1.05 0 1.95-.85 2.05-1.9l.9-11.8"></path>
+      <path d="M10.1 10.7v6.6"></path>
+      <path d="M13.9 10.7v6.6"></path>
+    </svg>
+  );
 }
 
 function OperationRow({ title, status, tone = "neutral", description, meta = null, actions = null, children = null }) {
@@ -163,70 +171,8 @@ function errorDetailText(error, fallback, language) {
   return error?.message || fallback;
 }
 
-function archiveRootDialogText(error, language = "ru") {
-  const dictionaries = {
-    ru: {
-      title: "Корень архива не добавлен",
-      close: "Закрыть",
-      generic: ["Не удалось добавить расположение архива.", "Обновите состояние хранилища и попробуйте снова. Если ошибка повторится, откройте сведения для поддержки."],
-      invalidRequest: ["Данные формы отправлены некорректно.", "Обновите страницу и попробуйте добавить расположение ещё раз."],
-      archive_root_selection_required: ["Выберите том и папку для архива.", "Выберите доступный том, введите имя папки и нажмите «Добавить» ещё раз."],
-      "storage candidate is not available": ["Выбранный том сейчас недоступен.", "Обновите состояние хранилища, проверьте подключение диска и выберите том снова."],
-      "storage candidate is blocked": ["Выбранный том нельзя использовать для архива.", "Выберите обычный доступный NAS-том из списка."],
-      "folder_name is required": ["Введите имя папки для архива.", "Например: KM-VMS-Recordings."],
-      "folder_name is too long": ["Имя папки слишком длинное.", "Сократите название папки до 80 символов."],
-      "folder_name must be a single safe folder name": ["Имя папки некорректное.", "Используйте одно обычное название без слэшей, кавычек и специальных путей."],
-      "folder_name contains control characters": ["Имя папки содержит недопустимые символы.", "Удалите невидимые или управляющие символы и повторите добавление."],
-      target_exists_not_directory: ["По выбранному пути уже есть файл с таким именем.", "Введите другое имя папки или переименуйте этот файл на NAS."],
-      target_is_symlink: ["Выбранная папка является ссылкой.", "Выберите обычную папку на томе или создайте новую папку архива."],
-      non_empty_unmarked_folder: ["Папка уже содержит посторонние файлы.", "Выберите пустую папку или создайте новую папку для архива KM VMS."],
-      archive_root_outside_approved_storage_base: ["Этот путь нельзя использовать для архива KM VMS.", "Выберите том из списка доступных NAS-томов."],
-      foreign_surveillance_root_rejected: ["Нельзя использовать существующую системную папку Surveillance.", "Создайте отдельную папку для архива KM VMS."],
-      archive_root_path_not_directory: ["Путь архива не является папкой.", "Выберите другой том или имя новой папки."],
-      manual_archive_root_path_disabled: ["Ручной путь отключён.", "Выберите том из списка и укажите папку для архива."],
-    },
-    en: {
-      title: "Archive root was not added",
-      close: "Close",
-      generic: ["Could not add the archive location.", "Refresh storage state and try again. If the error repeats, open support details."],
-      invalidRequest: ["The form data was sent incorrectly.", "Refresh the page and try adding the location again."],
-      archive_root_selection_required: ["Choose an archive volume and folder.", "Select an available volume, enter a folder name, and click Add again."],
-      "storage candidate is not available": ["The selected volume is not available now.", "Refresh storage state, check the disk connection, and select the volume again."],
-      "storage candidate is blocked": ["The selected volume cannot be used for archive storage.", "Choose a regular available NAS volume from the list."],
-      "folder_name is required": ["Enter the archive folder name.", "For example: KM-VMS-Recordings."],
-      "folder_name is too long": ["The folder name is too long.", "Shorten it to 80 characters."],
-      "folder_name must be a single safe folder name": ["The folder name is invalid.", "Use one regular name without slashes, quotes, or path syntax."],
-      "folder_name contains control characters": ["The folder name contains invalid characters.", "Remove hidden/control characters and try again."],
-      target_exists_not_directory: ["A file with this name already exists at the selected path.", "Enter a different folder name or rename that file on the NAS."],
-      target_is_symlink: ["The selected folder is a symlink.", "Choose a normal folder on the volume or create a new archive folder."],
-      non_empty_unmarked_folder: ["The folder already contains other files.", "Choose an empty folder or create a new KM VMS archive folder."],
-      archive_root_outside_approved_storage_base: ["This path cannot be used for the KM VMS archive.", "Choose one of the available NAS volumes."],
-      foreign_surveillance_root_rejected: ["The existing Surveillance system folder cannot be used.", "Create a separate folder for the KM VMS archive."],
-      archive_root_path_not_directory: ["The archive path is not a folder.", "Choose another volume or a new folder name."],
-      manual_archive_root_path_disabled: ["Manual paths are disabled.", "Choose a volume from the list and enter an archive folder."],
-    },
-    "zh-CN": {
-      title: "未添加归档根目录",
-      close: "关闭",
-      generic: ["无法添加归档位置。", "请刷新存储状态后重试。如果错误重复出现，请打开支持信息。"],
-      invalidRequest: ["表单数据发送不正确。", "请刷新页面并重新添加位置。"],
-      archive_root_selection_required: ["请选择归档卷和文件夹。", "选择可用卷，输入文件夹名称，然后再次点击添加。"],
-      "storage candidate is not available": ["所选卷当前不可用。", "请刷新存储状态，检查磁盘连接，然后重新选择卷。"],
-      "storage candidate is blocked": ["所选卷不能用于归档存储。", "请从列表中选择普通可用的 NAS 卷。"],
-      "folder_name is required": ["请输入归档文件夹名称。", "例如：KM-VMS-Recordings。"],
-      "folder_name is too long": ["文件夹名称过长。", "请缩短到 80 个字符以内。"],
-      "folder_name must be a single safe folder name": ["文件夹名称无效。", "请使用不含斜杠、引号或路径语法的普通名称。"],
-      "folder_name contains control characters": ["文件夹名称包含无效字符。", "请删除隐藏/控制字符后重试。"],
-      target_exists_not_directory: ["所选路径已有同名文件。", "请输入其他文件夹名称，或在 NAS 上重命名该文件。"],
-      target_is_symlink: ["所选文件夹是符号链接。", "请选择卷上的普通文件夹或创建新的归档文件夹。"],
-      non_empty_unmarked_folder: ["该文件夹已包含其他文件。", "请选择空文件夹或创建新的 KM VMS 归档文件夹。"],
-      archive_root_outside_approved_storage_base: ["该路径不能用于 KM VMS 归档。", "请选择可用 NAS 卷列表中的卷。"],
-      foreign_surveillance_root_rejected: ["不能使用现有 Surveillance 系统文件夹。", "请为 KM VMS 归档创建单独文件夹。"],
-      archive_root_path_not_directory: ["归档路径不是文件夹。", "请选择其他卷或新的文件夹名称。"],
-      manual_archive_root_path_disabled: ["手动路径已禁用。", "请从列表中选择卷并输入归档文件夹。"],
-    },
-  };
-  const dict = dictionaries[language] || dictionaries.ru;
+function archiveRootDialogText(error, copy, language = "ru") {
+  const dict = copy.archiveRootAddDialog || {};
   const detail = error?.data?.detail || error?.detail || null;
   let code = "";
   if (Array.isArray(detail)) code = "invalidRequest";
@@ -238,8 +184,14 @@ function archiveRootDialogText(error, language = "ru") {
   } else if (error?.message) {
     code = error.message.split(",").map((item) => item.trim()).filter(Boolean)[0] || error.message;
   }
-  const pair = dict[code] || dict.generic;
-  return { title: dict.title, message: pair[0], action: pair[1], closeLabel: dict.close, tone: "warning" };
+  const pair = dict[code] || dict.generic || [copy.archiveRootAddProblemTitle, copy.archiveRootPermissionAction];
+  return {
+    title: dict.title || copy.archiveRootAddProblemTitle,
+    message: pair[0],
+    action: pair[1],
+    closeLabel: dict.close || copy.close,
+    tone: "warning",
+  };
 }
 
 function retentionSummaryText(source, copy) {
@@ -293,18 +245,19 @@ function rootProblemLabel(root, copy, language) {
 
 function rootHasProblems(root) {
   if (!root) return false;
-  return Boolean(root.problem || root.is_available === false || root.is_readable === false || root.is_writable === false || root.namespace_exists === false || Number(root.missing_file_count || 0) > 0);
+  if (root.requires_activation && !root.is_active && !root.problem) return false;
+  return Boolean(root.problem || root.is_available === false || root.is_readable === false || root.is_writable === false || root.namespace_exists === false);
 }
 
 function rootProblemItems(root, copy, language) {
   const items = [];
   if (!root) return [copy.no];
+  if (root.requires_activation && !root.is_active && !root.problem) return [copy.no];
   if (root.problem) items.push(humanBlockerReason(root.problem, language));
   if (root.is_available === false && !root.problem) items.push(copy.archiveRootUnavailableDetail);
   if (root.is_readable === false) items.push(copy.archiveRootUnreadableDetail);
   if (root.is_writable === false) items.push(copy.archiveRootUnwritableDetail);
   if (root.namespace_exists === false) items.push(copy.archiveRootNamespaceMissingDetail);
-  if (Number(root.missing_file_count || 0) > 0) items.push(copy.archiveRootMissingFilesDetail.replace("{count}", String(root.missing_file_count)));
   return Array.from(new Set(items.length ? items : [copy.no]));
 }
 
@@ -679,7 +632,7 @@ export default function StorageOperationsPage() {
       });
       await loadStatus({ silent: true });
     } catch (err) {
-      setArchiveRootDialog(archiveRootDialogText(err, language));
+      setArchiveRootDialog(archiveRootDialogText(err, copy, language));
     } finally {
       setRootAction("");
     }
@@ -1209,9 +1162,21 @@ export default function StorageOperationsPage() {
                           <strong>{archiveRootPath(root, archivePathText)}</strong>
                           <small>{archiveRootLabel(root, copy)}</small>
                         </div>
+                        <div className="storageOpsRootDeleteCell">
+                          <button
+                            className="storageOpsRootDeleteButton"
+                            type="button"
+                            title={copy.deleteArchiveRoot}
+                            aria-label={copy.deleteArchiveRoot}
+                            disabled={active || !!rootAction || !retentionPermission.allowed}
+                            onClick={() => requestDeleteRoot(root)}
+                          >
+                            <TrashIcon />
+                          </button>
+                        </div>
                         <div><span>{copy.state}</span><strong>{archiveRootStateText(root, copy)}</strong></div>
                         <div><span>{copy.size}</span><strong>{formatBytes(root.size_bytes ?? owned.size_bytes)}</strong></div>
-                        <div><span>{copy.segments}</span><strong>{root.segments_count || owned.segments_count || 0}</strong></div>
+                        <div><span>{copy.segments}</span><strong>{root.segments_count ?? owned.segments_count ?? 0}</strong></div>
                         <div>
                           <span>{copy.problems}</span>
                           {rootHasProblems(root) ? (
@@ -1233,18 +1198,6 @@ export default function StorageOperationsPage() {
                           >
                             <CheckIcon />
                           </button>
-                          {!active ? (
-                            <button
-                              className="storageOpsRootDeleteButton"
-                              type="button"
-                              title={copy.deleteArchiveRoot}
-                              aria-label={copy.deleteArchiveRoot}
-                              disabled={!!rootAction || !retentionPermission.allowed}
-                              onClick={() => requestDeleteRoot(root)}
-                            >
-                              <DeleteIcon />
-                            </button>
-                          ) : null}
                         </div>
                       </div>
                     );

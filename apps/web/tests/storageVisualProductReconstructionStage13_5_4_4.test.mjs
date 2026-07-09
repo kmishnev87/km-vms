@@ -44,7 +44,8 @@ assert.match(storagePage, /copy\.currentArchive/);
 assert.match(storagePage, /const currentArchivePath = archiveRootPath\(currentArchiveRoot, archivePathText\)/);
 assert.match(storagePage, /storageOpsRootList/);
 assert.match(storagePage, /archiveRootPath\(root, archivePathText\)/);
-assert.match(storagePage, /archiveRoots\.length > 1 \?/, "engineering root table is only behind multi-root advanced details");
+assert.match(storagePage, /storageOpsRootListRow/, "archive roots are shown as visible product rows, not a hidden engineering table");
+assert.doesNotMatch(storagePage, /storageOpsRootManageList|storageOpsRootManageRow|archiveRoots\.length > 1 \?/);
 assert.doesNotMatch(storagePage, /copy\.addArchiveRootAdvanced|archiveRootManualPath|\brootPath\b/);
 assert.doesNotMatch(primary, /archiveRootSummary/);
 

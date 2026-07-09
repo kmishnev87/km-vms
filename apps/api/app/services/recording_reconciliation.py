@@ -18,6 +18,7 @@ from app.services.audit_log import create_event
 from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
     VIDEO_EXTENSIONS,
+    archive_root_runtime_path,
     is_kmvms_namespace_relative,
     is_video_file,
     list_archive_roots,
@@ -312,7 +313,7 @@ def _iter_storage_video_files(db: Session | None = None) -> Iterable[tuple[objec
         roots = list_archive_roots(db)
         result = []
         for root_row in roots:
-            root = Path(root_row.root_path)
+            root = archive_root_runtime_path(root_row)
             if not root.exists():
                 continue
             result.extend((root_row, path) for path in root.rglob("*") if is_video_file(path))
