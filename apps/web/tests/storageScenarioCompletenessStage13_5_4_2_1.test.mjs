@@ -36,7 +36,8 @@ const ambiguous = context.storageTopHealthModel({
 });
 assert.equal(ambiguous.status, "availability_unconfirmed");
 assert.doesNotMatch(ambiguous.nextStep, /недоступен/);
-assert.match(ambiguous.nextStep, /namespace/);
+assert.doesNotMatch(ambiguous.nextStep, /namespace/);
+assert.match(ambiguous.nextStep, /служебную папку архива/);
 
 const hardUnavailable = context.storageTopHealthModel({
   operations: { status: "unavailable" },
@@ -78,16 +79,16 @@ const reviewOnly = context.reconciliationScenarioModel({
 assert.equal(reviewOnly.canApply, false);
 assert.equal(reviewOnly.noAutoFixReason, "review_only");
 
-assert.match(storagePage, /<Stat label=\{copy\.archiveSize\}/, "archive-specific facts remain");
+assert.match(storagePage, /<MiniFact label=\{copy\.archiveSize\}/, "archive-specific facts remain");
 const archiveSectionStart = storagePage.indexOf("<Section title={copy.archiveSpace}");
-const archiveSectionEnd = storagePage.indexOf("<Section title={copy.safeActions}", archiveSectionStart);
+const archiveSectionEnd = storagePage.indexOf("<Section title={copy.archiveOperations}", archiveSectionStart);
 const archiveSection = storagePage.slice(archiveSectionStart, archiveSectionEnd);
-assert.equal(archiveSection.includes("copy.total"), false, "total capacity is not repeated in Archive and space");
-assert.equal(archiveSection.includes("copy.used"), false, "used capacity is not repeated in Archive and space");
-assert.equal(archiveSection.includes("copy.free"), false, "free capacity is not repeated in Archive and space");
+assert.equal(archiveSection.includes("copy.total"), true, "Archive and space includes total capacity context");
+assert.equal(archiveSection.includes("copy.used"), true, "Archive and space includes used capacity context");
+assert.equal(archiveSection.includes("copy.free"), true, "Archive and space includes free capacity context");
 assert.doesNotMatch(storagePage, /<Stat label=\{copy\.foreignSkipped\}/, "ownership internals are not primary stats");
 assert.doesNotMatch(storagePage, /<SummaryRow label=\{copy\.ownershipBoundary\}/, "ownership boundary is not primary");
-assert.match(storagePage, /<dt>\{copy\.ownershipBoundary\}<\/dt>/, "ownership boundary is only diagnostics");
+assert.doesNotMatch(storagePage, /<dt>\{copy\.ownershipBoundary\}<\/dt>/, "ownership boundary is removed from visible support UI");
 
 assert.match(storagePage, /copy\.refreshMigrationPreview/, "migration preview has endpoint-specific wording");
 assert.equal(i18n.includes("refreshMigrationPreview: \"Обновить предпросмотр переноса\""), true);

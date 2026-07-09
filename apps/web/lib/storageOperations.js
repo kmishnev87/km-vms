@@ -333,7 +333,7 @@ export function normalizeReconciliationSummary(source = {}, language = "ru") {
 export const STORAGE_ACTION_PERMISSIONS = Object.freeze({
   openStorage: "manage_settings",
   autoFreeSpace: "manage_settings",
-  archiveRootValidate: "manage_settings",
+  archiveRootDiscovery: "manage_settings",
   archiveRootCreate: "manage_settings",
   archiveRootActivate: "manage_settings",
   migrationPreview: "manage_settings",
@@ -566,7 +566,7 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
       unavailable: "Корень архива недоступен. Проверьте подключение NAS, путь и права доступа.",
       unwritable: "Проверьте права записи в архив.",
       unreadable: "Проверьте права чтения архива.",
-      ambiguousAvailability: "Корень архива требует проверки: чтение и запись доступны, но общая проверка архива не подтверждена. Проверьте путь, namespace и права.",
+      ambiguousAvailability: "Корень архива требует проверки: чтение и запись доступны, но общая проверка архива не подтверждена. Проверьте путь, служебную папку архива и права.",
       lowDisk: "Освободите место или проверьте регламент хранения.",
       integrity: "Запустите проверку целостности и разберите найденные проблемы.",
       retention: "Сделайте предпросмотр регламента хранения перед удалением.",
@@ -579,7 +579,7 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
       unavailable: "Archive root is unavailable. Check NAS mount, path, and permissions.",
       unwritable: "Check archive write permissions.",
       unreadable: "Check archive read permissions.",
-      ambiguousAvailability: "Archive root needs verification: read and write checks pass, but the overall archive check is not confirmed. Check path, namespace, and permissions.",
+      ambiguousAvailability: "Archive root needs verification: read and write checks pass, but the overall archive check is not confirmed. Check the path, archive service folder, and permissions.",
       lowDisk: "Free space or review retention policy.",
       integrity: "Run integrity check and review detected problems.",
       retention: "Preview retention before deleting anything.",
@@ -592,7 +592,7 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
       unavailable: "归档根目录不可用。请检查 NAS 挂载、路径和权限。",
       unwritable: "请检查归档写入权限。",
       unreadable: "请检查归档读取权限。",
-      ambiguousAvailability: "归档根目录需要验证：读写检查通过，但整体归档检查未确认。请检查路径、命名空间和权限。",
+      ambiguousAvailability: "归档根目录需要验证：读写检查通过，但整体归档检查未确认。请检查路径、归档服务文件夹和权限。",
       lowDisk: "请释放空间或检查保留策略。",
       integrity: "请运行完整性检查并处理发现的问题。",
       retention: "删除前请先预览保留规则。",
@@ -609,7 +609,12 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
   let tone = "ok";
   let reason = text.ok;
   let nextStep = text.ok;
-  if (pathHealth?.readable === true && pathHealth?.writable === true && pathHealth?.available === false) {
+  if (pathHealth?.available == null || pathHealth?.readable == null || pathHealth?.writable == null) {
+    status = "unknown";
+    tone = "unknown";
+    reason = text.unknown;
+    nextStep = text.unknown;
+  } else if (pathHealth?.readable === true && pathHealth?.writable === true && pathHealth?.available === false) {
     status = "availability_unconfirmed";
     tone = "warning";
     reason = text.ambiguousAvailability;
@@ -654,7 +659,7 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
     tone = "unknown";
     reason = text.stale;
     nextStep = text.stale;
-  } else if (!operations?.status || !capacity?.total_bytes || pathHealth?.readable == null || pathHealth?.writable == null) {
+  } else if (!operations?.status || !capacity?.total_bytes) {
     status = "unknown";
     tone = "unknown";
     reason = text.unknown;
@@ -726,12 +731,13 @@ export function migrationScenarioModel({ preview = {}, result = null, permission
 }
 
 export function archiveRootScenarioModel({ root = null, permission = { allowed: true }, running = false } = {}, language = "ru") {
-  const problem = root?.problem || (root?.is_available === false ? "archive_root_unavailable" : "");
+  const hasPath = Boolean(root?.configured_path || root?.path || root?.root_path || root?.display_path || root?.label);
+  const problem = root?.problem || "";
   return {
-    status: !permission.allowed ? "unavailable_due_to_permissions" : running ? "running" : root?.is_active ? "active" : problem ? "blocked" : "idle",
+    status: !permission.allowed ? "unavailable_due_to_permissions" : running ? "running" : root?.is_active ? "active" : problem ? "blocked" : !hasPath ? "blocked" : root?.is_available === false ? "check_needed" : "idle",
     permissionReason: permission.allowed ? "" : permission.reason,
-    canActivate: Boolean(permission.allowed && root && !root.is_active && !problem && !running),
-    reason: problem ? humanBlockerReason(problem, language) : "",
+    canActivate: Boolean(permission.allowed && root && !root.is_active && !problem && hasPath && !running),
+    reason: problem ? humanBlockerReason(problem, language) : !hasPath ? humanBlockerReason("archive_root_missing", language) : "",
   };
 }
 

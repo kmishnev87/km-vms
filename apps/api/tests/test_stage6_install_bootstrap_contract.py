@@ -58,7 +58,7 @@ def test_previews_are_proxied_to_api_not_read_directly_by_nginx():
     assert "./data/previews:/var/www/previews" not in nginx_section
 
 
-def test_setup_activation_helper_is_bounded_and_inert_after_setup():
+def test_setup_activation_helper_is_bounded_runtime_storage_helper():
     helper = read("scripts/km-vms-setup-activation-helper.sh")
     compose = read("docker-compose.yml")
     script = read("scripts/install.sh")
@@ -75,7 +75,7 @@ def test_setup_activation_helper_is_bounded_and_inert_after_setup():
     assert "KMVMS_UPDATE_MANIFEST_PATH" in compose
     assert "KMVMS_UPDATE_CHANNEL_ID" in compose
     assert "KM_VMS_HOST_APP_DIR" in script
-    assert 'exit 0' in helper
+    assert 'setup_already_completed && [ "$status" != "requested" ]' in helper
     assert "km-vms-storage-apply.sh" in helper
     assert "km-vms-restart.sh" in helper
     assert "docker run --rm" in helper
@@ -89,6 +89,7 @@ def test_setup_activation_helper_is_bounded_and_inert_after_setup():
     helper_section = compose.split("  setup-helper:", 1)[1].split("  update-helper:", 1)[0]
     update_helper_section = compose.split("  update-helper:", 1)[1].split("  recorder:", 1)[0]
     assert "/var/run/docker.sock:/var/run/docker.sock" not in api_section
+    assert "restart: unless-stopped" in helper_section
     assert "/var/run/docker.sock:/var/run/docker.sock" in helper_section
     assert "/var/run/docker.sock:/var/run/docker.sock" in update_helper_section
     assert "ports:" not in update_helper_section

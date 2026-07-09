@@ -84,6 +84,42 @@ CLASSIFICATION_LABELS_RU = {
     "skipped": "пропущено",
 }
 
+PROBLEM_ACTION_STATUS = {
+    "missing_file": "manual_review_required",
+    "orphan_metadata": "future_safe_cleanup_possible",
+    "orphan_file": "manual_review_required",
+    "pre_metadata_km_vms_file": "manual_review_required",
+    "legacy_archive_file": "manual_review_required",
+    "foreign_file": "manual_review_required",
+    "unknown_file": "manual_review_required",
+    "zero_size_file": "future_safe_cleanup_possible",
+    "partial_file": "manual_review_required",
+    "corrupted_file": "manual_review_required",
+    "stale_writing_segment": "manual_review_required",
+    "invalid_path": "manual_review_required",
+    "path_outside_storage": "manual_review_required",
+    "unreadable_file": "manual_review_required",
+    "storage_unavailable": "none",
+}
+
+PROBLEM_ACTION_REASONS = {
+    "missing_file": "The database row references a file that is not visible on disk. Stage 13.5.4.5 does not delete metadata automatically.",
+    "orphan_metadata": "Metadata may be safely marked only through a separately confirmed metadata action; file deletion is not available here.",
+    "orphan_file": "The file has no trusted KM VMS metadata owner, so it cannot be deleted or adopted automatically.",
+    "pre_metadata_km_vms_file": "The file predates trusted metadata and requires operator review before ownership decisions.",
+    "legacy_archive_file": "Legacy archive files require manual classification before cleanup.",
+    "foreign_file": "Foreign files are outside KM VMS ownership.",
+    "unknown_file": "Unknown files are outside the safe automatic action boundary.",
+    "zero_size_file": "Zero-size files need a confirmed metadata-safe workflow before any cleanup.",
+    "partial_file": "Partial files may belong to an unfinished recording and require review.",
+    "corrupted_file": "Corruption cannot be safely repaired or deleted without operator review.",
+    "stale_writing_segment": "Stale writing records need recording-state review before metadata changes.",
+    "invalid_path": "Invalid paths may indicate metadata damage and require manual correction.",
+    "path_outside_storage": "Paths outside configured storage must not be changed automatically.",
+    "unreadable_file": "Unreadable files may be a permission/storage issue, not a cleanup candidate.",
+    "storage_unavailable": "Storage was unavailable, so no safe action can be inferred.",
+}
+
 
 @dataclass(frozen=True)
 class Classification:
@@ -439,6 +475,53 @@ def _cleanup_candidates_summary(counts: Counter, samples: dict[str, list[dict]])
     }
 
 
+def _safe_problem_sample(item: dict) -> dict:
+    relative_path = str(item.get("relative_path") or "")
+    safe_name = Path(relative_path).name if relative_path else None
+    return {
+        "category": item.get("classification") or item.get("category"),
+        "sample_name": safe_name,
+        "relative_path_redacted": bool(relative_path),
+        "camera_id": item.get("camera_id"),
+        "archive_root_id": item.get("archive_root_id"),
+        "segment_id": item.get("segment_id"),
+        "status": item.get("status"),
+        "error": redact_text(str(item.get("error") or "")) or None,
+    }
+
+
+def _problem_details(counts: Counter | dict, samples: dict[str, list[dict]]) -> dict:
+    category_counts = {
+        key: int(value or 0)
+        for key, value in dict(counts).items()
+        if key in PROBLEM_CLASSES and key not in {"ok_owned_finalized", "skipped"} and int(value or 0) > 0
+    }
+    details = []
+    safe_samples = []
+    for code, count in sorted(category_counts.items(), key=lambda item: (-item[1], item[0])):
+        details.append(
+            {
+                "code": code,
+                "label_ru": CLASSIFICATION_LABELS_RU.get(code, code),
+                "count": int(count),
+                "safe_action_status": PROBLEM_ACTION_STATUS.get(code, "manual_review_required"),
+                "reason_no_action_available": PROBLEM_ACTION_REASONS.get(code, "No safe automatic action is exposed for this category."),
+            }
+        )
+        for sample in samples.get(code) or []:
+            if len(safe_samples) >= 12:
+                break
+            safe_samples.append(_safe_problem_sample({"category": code, **sample}))
+    return {
+        "total_problem_count": int(sum(category_counts.values())),
+        "category_counts": category_counts,
+        "categories": details,
+        "samples": safe_samples,
+        "safe_action_contract": "No file deletion, import, adoption, or automatic metadata mutation is performed by the summary.",
+        "raw_absolute_paths_included": False,
+    }
+
+
 def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, write_audit: bool = True) -> dict:
     global _LAST_CLEANUP_CANDIDATES_COUNT
     mode = APPLY_SAFE_MODE if mode == APPLY_SAFE_MODE else DRY_RUN_MODE
@@ -552,6 +635,7 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
         db.commit()
 
     cleanup_summary = _cleanup_candidates_summary(counts, samples)
+    problem_details = _problem_details(counts, samples)
     apply_summary = {
         "updated_metadata_count": int(updated_metadata),
         "deleted_files_count": 0,
@@ -586,6 +670,7 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
         "classification_labels_ru": CLASSIFICATION_LABELS_RU,
         "cleanup_candidates": cleanup_summary,
         "cleanup_candidates_summary": cleanup_summary,
+        "problem_details": problem_details,
         "apply_safe_summary": apply_summary,
         "per_camera": [
             {

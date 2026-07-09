@@ -97,7 +97,7 @@ def root_status(root_path: Path) -> dict:
     }
 
 
-def sanitize_archive_root_path(path_value: str, *, allow_create: bool = False) -> Path:
+def sanitize_archive_root_path(path_value: str, *, allow_create: bool = False, allowed_base: str | Path | None = None) -> Path:
     raw = str(path_value or "").strip()
     if not raw:
         raise ValueError("archive_root_path_required")
@@ -108,11 +108,11 @@ def sanitize_archive_root_path(path_value: str, *, allow_create: bool = False) -
         raise ValueError("archive_root_path_traversal")
 
     resolved = candidate.resolve(strict=False)
-    base = approved_archive_base().resolve()
-    try:
-        resolved.relative_to(base)
-    except ValueError as exc:
-        raise ValueError("archive_root_outside_approved_storage_base") from exc
+    bases = [approved_archive_base().resolve()]
+    if allowed_base is not None:
+        bases.append(Path(allowed_base).resolve(strict=False))
+    if not any(_path_is_relative_to(resolved, base) for base in bases):
+        raise ValueError("archive_root_outside_approved_storage_base")
 
     normalized = resolved.as_posix().lower()
     if normalized.endswith("/surveillance") or "/surveillance/" in normalized:
@@ -124,6 +124,14 @@ def sanitize_archive_root_path(path_value: str, *, allow_create: bool = False) -
     if allow_create:
         (resolved / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
     return resolved
+
+
+def _path_is_relative_to(path: Path, base: Path) -> bool:
+    try:
+        path.relative_to(base)
+        return True
+    except ValueError:
+        return False
 
 
 def ensure_archive_roots(db: Session) -> list:

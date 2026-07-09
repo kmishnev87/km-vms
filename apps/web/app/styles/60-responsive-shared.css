@@ -162,6 +162,38 @@
     grid-template-columns: 1fr;
   }
 
+  .storageOpsHealthMain {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .storageOpsHealthMark {
+    width: 32px;
+    height: 32px;
+    font-size: 20px;
+  }
+
+  .storageOpsTopMetrics,
+  .storageOpsMainGrid,
+  .storageOpsSecondaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsTopMetrics {
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .storageOpsTopMetric {
+    padding: 10px;
+    border-right: 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  }
+
+  .storageOpsTopMetric:last-child {
+    border-bottom: 0;
+  }
+
   .storageOpsHealthAction {
     padding-left: 0;
     padding-top: 10px;
@@ -169,11 +201,25 @@
     border-top: 1px solid rgba(148, 163, 184, 0.35);
   }
 
-  .storageOpsGrid {
+  .storageOpsGrid,
+  .storageOpsMiniGrid,
+  .storageOpsOperationFacts,
+  .storageOpsOperationRow,
+  .storageOpsPolicyStrip,
+  .storageOpsArchiveSummary > div {
     grid-template-columns: 1fr;
   }
 
+  .storageOpsOperationActions .button,
+  .storageOpsPolicyStrip .button {
+    width: 100%;
+  }
+
   .storageOpsRootForm {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsProblemList {
     grid-template-columns: 1fr;
   }
 
@@ -548,7 +594,166 @@
     margin-left: auto;
   }
 
-  .recordingsTableWrap {
+.recordingsTableWrap {
     max-height: none;
+  }
+}
+
+@media (max-width: 900px) {
+  .storageOpsHeaderMeta {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .storageOpsHeaderActions {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+
+  .storageOpsOverview {
+    grid-template-columns: 1fr;
+    min-height: 0;
+  }
+
+  .storageOpsHealthMain,
+  .storageOpsHealthAction {
+    padding: 14px;
+  }
+
+  .storageOpsTopMetrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    border-right: 0;
+  }
+
+  .storageOpsTopMetric {
+    min-height: 72px;
+    padding: 10px 12px;
+    border-right: 1px solid rgba(148, 163, 184, 0.2);
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  }
+
+  .storageOpsTopMetric strong {
+    font-size: 17px;
+  }
+
+  .storageOpsTopMetric:last-child {
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  }
+
+  .storageOpsDashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "archive"
+      "operations"
+      "roots"
+      "recent";
+  }
+
+  .storageOpsMiniGrid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .storageOpsMiniGrid .storageOpsMiniFact {
+    padding: 8px 7px;
+  }
+
+  .storageOpsSection-operations .storageOpsOperationRow {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsOperationRow {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsOperationActions {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsOperationFacts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .storageOpsOperationFacts .storageOpsMiniFact {
+    border-right: 0;
+    border-bottom: 1px solid #e2e8f0;
+    padding-bottom: 6px;
+  }
+
+  .storageOpsArchiveSummary > div {
+    grid-template-columns: 1fr;
+    gap: 3px;
+  }
+
+  .storageOpsTable {
+    min-width: 640px;
+  }
+
+  .storageOpsTable-compact {
+    min-width: 500px;
+  }
+
+  .storageOpsLocationFacts {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .storageOpsRootListRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .storageOpsAdvancedRoot .storageOpsRootForm-product {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsAdvancedRoot .storageOpsRootAddButton {
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .storageOpsRootPath {
+    grid-column: 1 / -1;
+  }
+
+  .storageOpsCameraTable {
+    display: none;
+  }
+
+  .storageOpsCameraCards {
+    display: grid;
+    gap: 6px;
+  }
+
+  .storageOpsCameraCard {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: start;
+  }
+
+  .storageOpsCameraCardIdentity {
+    grid-column: 1 / -1;
+    padding-bottom: 5px;
+    border-bottom: 1px solid #eef2f7;
+  }
+
+  .storageOpsCameraCardMetric {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .storageOpsSupportDetails dl,
+  .storageOpsSupportDetails div {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .storageOpsMiniGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .storageOpsMiniGrid .storageOpsMiniFact {
+    padding: 8px;
   }
 }

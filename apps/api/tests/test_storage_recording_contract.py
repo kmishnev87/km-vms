@@ -25,7 +25,14 @@ from app.services.storage_contract import (
     recording_format_contract,
     storage_contract,
 )
-from app.services.setup_storage import CONTAINER_ARCHIVE_PATH, SELECTION_FILE
+from app.services.setup_storage import (
+    ACTIVATION_REQUEST_CONTROL_FILE,
+    APPLY_STATUS_FILE,
+    CONTAINER_ARCHIVE_PATH,
+    DISCOVERY_FILE,
+    SELECTION_CONTROL_FILE,
+    SELECTION_FILE,
+)
 from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.recording_storage import (
     DEFAULT_ARCHIVE_ROOT_ID,
@@ -152,7 +159,7 @@ def write_setup_storage_selection(host_path: str) -> None:
                 "container_archive_path": CONTAINER_ARCHIVE_PATH,
                 "candidate_id": "stage3-storage-contract",
                 "selected_at": "2026-05-07T00:00:00Z",
-                "apply_status": "pending_host_helper_restart_required",
+                "apply_status": "active",
             }
         )
         + "\n",
@@ -882,6 +889,11 @@ def test_reconciliation_product_summary_classifies_archive_integrity_cases(db, m
     assert counts["unknown_file"] == 1
     assert summary["cleanup_candidates_summary"]["review_only"] is True
     assert summary["cleanup_candidates_summary"]["count"] == 3
+    assert summary["problem_details"]["total_problem_count"] >= 12
+    assert summary["problem_details"]["category_counts"]["missing_file"] == 1
+    assert summary["problem_details"]["raw_absolute_paths_included"] is False
+    assert settings.storage_root not in json.dumps(summary["problem_details"])
+    assert all(item["safe_action_status"] in {"none", "future_safe_cleanup_possible", "manual_review_required"} for item in summary["problem_details"]["categories"])
     assert summary["per_camera"][0]["camera_id"] == camera.id
     assert summary["per_camera"][0]["problem_count"] >= 7
 
@@ -889,6 +901,228 @@ def test_reconciliation_product_summary_classifies_archive_integrity_cases(db, m
     assert diagnostics["classification_counts"]["legacy_archive_file"] == 1
     assert "samples" not in diagnostics["cleanup_candidates"]
     assert settings.storage_root not in str(diagnostics)
+
+
+def test_storage_status_exposes_structured_problem_details_without_raw_paths(db):
+    Path(settings.storage_root).mkdir(parents=True, exist_ok=True)
+    camera = add_camera(db)
+    add_segment(db, camera, relative_path="kmvms/recordings/missing-status.mkv", status="finalized")
+    write_storage_file("kmvms/recordings/orphan-status.mkv", b"video")
+
+    summary = build_storage_monitoring_summary(db, write_audit=False)
+    details = summary["storage_operations"]["reconciliation"]["problem_details"]
+
+    assert details["total_problem_count"] == 2
+    assert details["category_counts"] == {"missing_file": 1, "orphan_file": 1}
+    assert details["raw_absolute_paths_included"] is False
+    assert settings.storage_root not in json.dumps(details)
+    assert details["categories"][0]["safe_action_status"] == "manual_review_required"
+
+
+def test_archive_root_selection_payload_checks_and_adds_inactive_root(db, monkeypatch):
+    from app.routers import storage as storage_router
+    from app.services import setup_storage
+
+    monkeypatch.setattr(setup_storage, "BLOCKED_PATHS", setup_storage.BLOCKED_PATHS - {"/tmp"})
+    host_root = Path(tempfile.mkdtemp(prefix="km-vms-archive-root-outside-approved-base-")) / "host-volume"
+    host_root.mkdir(parents=True)
+    control = Path(settings.storage_install_control)
+    control.mkdir(parents=True, exist_ok=True)
+    (control / DISCOVERY_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "created_at": "2026-07-07T00:00:00Z",
+                "host_visibility": True,
+                "candidates": [{"id": "host-volume", "path": str(host_root), "filesystem_type": "ext4", "writable": True}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = storage_router.ArchiveRootCreateRequest(candidate_id="host-volume", folder_name="Archive2")
+    with pytest.raises(ValueError, match="archive_root_outside_approved_storage_base"):
+        sanitize_archive_root_path(str(host_root / "Archive2"), allow_create=True)
+    created = storage_router.create_archive_root(payload, db=db, current_user=actor("owner"))
+
+    assert created["configured_path"] == str(host_root / "Archive2")
+    assert created["is_active"] is False
+    assert created["is_available"] is False
+    assert not (host_root / "Archive2" / KMVMS_RECORDINGS_NAMESPACE).exists()
+
+
+def test_archive_root_activation_allows_active_jobs_to_finish_current_session(db):
+    from app.routers import storage as storage_router
+
+    active_root = Path(settings.storage_root).resolve(strict=False)
+    target_root = Path(tempfile.mkdtemp(prefix="km-vms-archive-root-switch-")).resolve(strict=False)
+    (active_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    (target_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    ensure_archive_roots(db)
+    target = ArchiveRoot(
+        id="switch-target-root",
+        label="Switch target",
+        root_path=str(target_root),
+        storage_namespace=KMVMS_RECORDINGS_NAMESPACE,
+        is_active=False,
+        is_readable=True,
+        is_writable=True,
+        is_available=True,
+        last_seen_at=datetime.utcnow(),
+    )
+    camera = add_camera(db, name="stage2_switch_camera")
+    db.add(target)
+    db.add(
+        RecordingJob(
+            id="active-switch-job",
+            camera_id=camera.id,
+            state="recording",
+            started_at=datetime.utcnow(),
+        )
+    )
+    db.commit()
+
+    result = storage_router.activate_archive_root(
+        "switch-target-root",
+        storage_router.ArchiveRootActivateRequest(confirm=True),
+        db=db,
+        current_user=actor("owner"),
+    )
+
+    assert result["is_active"] is True
+    assert active_archive_root(db).id == "switch-target-root"
+    control = Path(settings.storage_install_control)
+    selection_control = (control / SELECTION_CONTROL_FILE).read_text(encoding="utf-8")
+    activation_request_control = (control / ACTIVATION_REQUEST_CONTROL_FILE).read_text(encoding="utf-8")
+    apply_state = json.loads((control / APPLY_STATUS_FILE).read_text(encoding="utf-8"))
+    assert f"selected_host_path={target_root}" in selection_control
+    assert f"selected_mount_path={target_root.parent}" in selection_control
+    assert f"folder_name={target_root.name}" in selection_control
+    assert "status=requested" in activation_request_control
+    assert apply_state["status"] == "activation_requested"
+    assert apply_state["next_action"] == "runtime_storage_activation"
+
+
+def test_archive_root_delete_removes_inactive_root_and_hides_its_recordings(db):
+    from app.routers import recordings as recordings_router
+    from app.routers import storage as storage_router
+
+    active_root = Path(settings.storage_root).resolve(strict=False)
+    inactive_root = Path(tempfile.mkdtemp(prefix="km-vms-archive-root-delete-")).resolve(strict=False)
+    (active_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    (inactive_root / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    ensure_archive_roots(db)
+    root = ArchiveRoot(
+        id="delete-target-root",
+        label="Delete target",
+        root_path=str(inactive_root),
+        storage_namespace=KMVMS_RECORDINGS_NAMESPACE,
+        is_active=False,
+        is_readable=True,
+        is_writable=True,
+        is_available=True,
+        last_seen_at=datetime.utcnow(),
+    )
+    camera = add_camera(db, name="stage2_delete_root_camera")
+    relative = "kmvms/recordings/root-delete.mkv"
+    file_path = inactive_root / relative
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_bytes(b"root-delete-video")
+    db.add(root)
+    db.commit()
+    segment = add_segment(
+        db,
+        camera,
+        relative_path=relative,
+        status="finalized",
+        archive_root_id="delete-target-root",
+    )
+    segment.size_bytes = file_path.stat().st_size
+    db.add(segment)
+    db.commit()
+
+    result = storage_router.delete_archive_root(
+        "delete-target-root",
+        storage_router.ArchiveRootDeleteRequest(confirm=True),
+        db=db,
+        current_user=actor("owner"),
+    )
+
+    assert result["ok"] is True
+    assert result["segments_deleted"] == 1
+    assert result["files_deleted"] == 1
+    assert not file_path.exists()
+    assert db.get(ArchiveRoot, "delete-target-root") is None
+    refreshed = db.get(RecordingSegment, segment.id)
+    assert refreshed.status == "deleted"
+    assert refreshed.deleted_at is not None
+    assert refreshed.archive_root_id is None
+    listed = recordings_router.list_recordings(db=db, current_user=actor("owner"))
+    assert listed["total"] == 0
+
+
+def test_archive_root_delete_blocks_active_root(db):
+    from app.routers import storage as storage_router
+
+    ensure_archive_roots(db)
+    active = active_archive_root(db)
+
+    with pytest.raises(HTTPException) as exc:
+        storage_router.delete_archive_root(
+            active.id,
+            storage_router.ArchiveRootDeleteRequest(confirm=True),
+            db=db,
+            current_user=actor("owner"),
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["error"] == "archive_root_delete_active_root_blocked"
+
+
+def test_archive_root_create_returns_structured_problem_for_blocker(db, monkeypatch):
+    from app.routers import storage as storage_router
+    from app.services import setup_storage
+
+    monkeypatch.setattr(setup_storage, "BLOCKED_PATHS", setup_storage.BLOCKED_PATHS - {"/tmp"})
+    host_root = Path(tempfile.mkdtemp(prefix="km-vms-archive-root-blocked-")) / "host-volume"
+    target = host_root / "Archive2"
+    target.mkdir(parents=True)
+    (target / "foreign.txt").write_text("not km vms", encoding="utf-8")
+    control = Path(settings.storage_install_control)
+    control.mkdir(parents=True, exist_ok=True)
+    (control / DISCOVERY_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "created_at": "2026-07-07T00:00:00Z",
+                "host_visibility": True,
+                "candidates": [{"id": "host-volume-blocked", "path": str(host_root), "filesystem_type": "ext4", "writable": True}],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    payload = storage_router.ArchiveRootCreateRequest(candidate_id="host-volume-blocked", folder_name="Archive2")
+    with pytest.raises(HTTPException) as exc:
+        storage_router.create_archive_root(payload, db=db, current_user=actor("owner"))
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail["error"] == "non_empty_unmarked_folder"
+    assert exc.value.detail["blockers"] == [{"reason": "non_empty_unmarked_folder"}]
+
+
+def test_archive_root_manual_path_is_not_available_from_storage_page_api():
+    from app.routers import storage as storage_router
+
+    payload = storage_router.ArchiveRootCreateRequest(candidate_id="manual", folder_name="Archive2")
+    with pytest.raises(ValueError, match="manual_archive_root_path_disabled"):
+        storage_router._archive_root_path_from_payload(payload)
+
+    for blocked_payload in [{"root_path": "/Volume3/Archive2"}, {"candidate_id": "volume3", "folder_name": "Archive2", "manual_root_path": "/Volume3"}]:
+        with pytest.raises(ValidationError):
+            storage_router.ArchiveRootCreateRequest(**blocked_payload)
 
 
 def test_reconciliation_dry_run_and_apply_safe_are_non_destructive_and_do_not_adopt_files(db, monkeypatch):

@@ -108,7 +108,7 @@ services:
   setup-helper:
     image: docker:27-cli
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-setup-helper
-    restart: "no"
+    restart: unless-stopped
     depends_on:
       api:
         condition: service_started

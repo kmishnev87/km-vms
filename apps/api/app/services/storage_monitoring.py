@@ -410,6 +410,58 @@ def _safe_camera_usage(rows: list[dict] | None) -> list[dict]:
     return safe_rows
 
 
+def _storage_problem_details(reconciliation: dict, namespace_observations: dict) -> dict:
+    labels = {
+        "missing_file": "файл отсутствует",
+        "orphan_file": "файл без записи в базе",
+        "invalid_path": "некорректный путь",
+        "path_outside_storage": "путь вне хранилища",
+    }
+    reasons = {
+        "missing_file": "Строка метаданных ссылается на файл, который не виден на диске. Удаление метаданных этим экраном не выполняется.",
+        "orphan_file": "Файл не имеет доверенной строки метаданных KM VMS, поэтому его нельзя удалить или присвоить автоматически.",
+        "invalid_path": "Путь в метаданных некорректен и требует ручной проверки.",
+        "path_outside_storage": "Путь выходит за границы настроенного хранилища и не может исправляться автоматически.",
+    }
+    category_counts = {
+        "missing_file": int(reconciliation.get("missing_file_count") or 0),
+        "orphan_file": int(reconciliation.get("orphan_file_count") or 0),
+        "invalid_path": int(reconciliation.get("invalid_path_count") or 0),
+        "path_outside_storage": int(reconciliation.get("path_outside_storage_count") or 0),
+    }
+    category_counts = {key: value for key, value in category_counts.items() if value > 0}
+    samples = []
+    for item in namespace_observations.get("samples") or []:
+        if len(samples) >= MAX_SAMPLE_ITEMS:
+            break
+        relative_path = str(item.get("relative_path") or "")
+        samples.append(
+            {
+                "category": "orphan_file",
+                "sample_name": Path(relative_path).name if relative_path else None,
+                "relative_path_redacted": bool(relative_path),
+                "archive_root_id": item.get("archive_root_id"),
+            }
+        )
+    return {
+        "total_problem_count": int(sum(category_counts.values())),
+        "category_counts": category_counts,
+        "categories": [
+            {
+                "code": code,
+                "label_ru": labels.get(code, code),
+                "count": count,
+                "safe_action_status": "manual_review_required",
+                "reason_no_action_available": reasons.get(code, "Нет безопасного автоматического действия для этой категории."),
+            }
+            for code, count in sorted(category_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "samples": samples,
+        "safe_action_contract": "Status summary is read-only: no file deletion, import, adoption, or automatic metadata mutation.",
+        "raw_absolute_paths_included": False,
+    }
+
+
 def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
     from app.services.recording_retention import automatic_retention_status, auto_free_space_status
 
@@ -521,6 +573,7 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             ),
             "cleanup_candidate_count": int(cleanup.get("count") or 0),
             "cleanup_review_only": True,
+            "problem_details": reconciliation.get("problem_details") or {},
             "scan_limited": bool(summary.get("scan_limited")),
             "partial": bool(summary.get("partial")),
             "last_checked_at": summary.get("checked_at"),
@@ -728,6 +781,10 @@ def build_storage_monitoring_summary(
         "archive_roots": archive_roots,
         "migration_preview": migration_preview(db),
     }
+    summary["reconciliation_summary"]["problem_details"] = _storage_problem_details(
+        summary["reconciliation_summary"],
+        namespace_observations,
+    )
     from app.services.recording_retention import low_disk_policy_status
 
     summary["auto_free_space_policy"] = low_disk_policy_status(db, summary)

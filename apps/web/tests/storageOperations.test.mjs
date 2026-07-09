@@ -53,14 +53,15 @@ assert.equal(context.factLabel(false), "Нет");
 assert.equal(context.factTone(false), "error");
 assert.equal(context.accessRightsModel({ readable: true, writable: true }).label, "Права на чтение и запись: есть");
 assert.equal(context.accessRightsModel({ readable: true, writable: false }).label, "Чтение есть, запись недоступна");
-assert.match(context.primaryStorageActionText({ pathHealth: { available: false } }), /Корень архива недоступен/);
+assert.match(context.primaryStorageActionText({ pathHealth: { available: false } }), /не хватает фактов/);
+assert.match(context.primaryStorageActionText({ pathHealth: { readable: false, writable: true, available: false } }), /Корень архива недоступен|права чтения/);
 assert.doesNotMatch(context.primaryStorageActionText({ operations: { status: "available" }, capacity: { total_bytes: 1 }, pathHealth: { readable: true, writable: true, available: false } }), /недоступен/);
 assert.equal(context.freeSpaceTone({ free_percent: 77 }, { state: "warning", warning_threshold_percent: 10 }), "warning");
 assert.equal(context.freeSpaceTone({ free_percent: 77 }, { warning_threshold_percent: 10 }), "neutral");
-assert.match(context.primaryStorageActionText({ pathHealth: { writable: false } }), /права записи/);
-assert.match(context.primaryStorageActionText({ capacity: { total_bytes: 100, free_percent: 2 }, policy: { warning_threshold_percent: 10 } }), /Освободите место/);
-assert.match(context.primaryStorageActionText({ reconciliation: { problem_file_count: 1 } }), /целостности/);
-assert.match(context.primaryStorageActionText({ migrationPreview: { blockers: [{ reason: "active_recording_jobs" }] } }), /активной записью/);
+assert.match(context.primaryStorageActionText({ pathHealth: { readable: true, writable: false, available: true } }), /права записи/);
+assert.match(context.primaryStorageActionText({ capacity: { total_bytes: 100, free_percent: 2 }, pathHealth: { readable: true, writable: true, available: true }, policy: { warning_threshold_percent: 10 } }), /Освободите место/);
+assert.match(context.primaryStorageActionText({ pathHealth: { readable: true, writable: true, available: true }, reconciliation: { problem_file_count: 1 } }), /целостности/);
+assert.match(context.primaryStorageActionText({ pathHealth: { readable: true, writable: true, available: true }, migrationPreview: { blockers: [{ reason: "active_recording_jobs" }] } }), /активной записью/);
 assert.match(context.primaryStorageActionText({ operations: {}, pathHealth: {}, capacity: {} }), /не хватает фактов/);
 
 const reconciliation = context.normalizeReconciliationSummary({

@@ -79,10 +79,6 @@ setup_already_completed() {
 }
 
 while :; do
-  if setup_already_completed; then
-    exit 0
-  fi
-
   if [ ! -f "$REQUEST_CONTROL_FILE" ]; then
     sleep 2
     continue
@@ -93,6 +89,11 @@ while :; do
   selected_path=$(read_control_value "$REQUEST_CONTROL_FILE" selected_host_path || true)
   selected_mount=$(read_control_value "$SELECTION_CONTROL_FILE" selected_mount_path || true)
   folder_name=$(read_control_value "$SELECTION_CONTROL_FILE" folder_name || true)
+
+  if setup_already_completed && [ "$status" != "requested" ]; then
+    sleep 5
+    continue
+  fi
 
   if [ "$status" != "requested" ] || [ -z "$request_id" ] || [ -z "$selected_mount" ] || [ -z "$folder_name" ]; then
     sleep 2

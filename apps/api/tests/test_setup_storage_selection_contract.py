@@ -31,6 +31,7 @@ from app.services.setup_storage import (
     SELECTION_FILE,
     SELECTION_CONTROL_FILE,
     discovery_snapshot,
+    queue_runtime_activation,
     validate_folder_name,
 )
 
@@ -189,6 +190,33 @@ def test_non_empty_unmarked_folder_is_blocked(db):
         setup_storage_apply(payload, db=session)
     assert exc.value.status_code == 422
     assert "non_empty_unmarked_folder" in str(exc.value.detail)
+
+
+def test_runtime_activation_writes_same_helper_contract_as_first_run(db):
+    session, root = db
+    mount = root / "host-storage"
+    target = mount / "RuntimeArchive"
+    mount.mkdir()
+
+    result = queue_runtime_activation(str(target), request_prefix="archive-root")
+    selection = json.loads((root / "install-control" / SELECTION_FILE).read_text(encoding="utf-8"))
+    selection_control = (root / "install-control" / SELECTION_CONTROL_FILE).read_text(encoding="utf-8")
+    activation_request = json.loads((root / "install-control" / ACTIVATION_REQUEST_FILE).read_text(encoding="utf-8"))
+    activation_request_control = (root / "install-control" / ACTIVATION_REQUEST_CONTROL_FILE).read_text(encoding="utf-8")
+    apply_state = json.loads((root / "install-control" / APPLY_STATUS_FILE).read_text(encoding="utf-8"))
+
+    assert result["apply_status"] == "activation_requested"
+    assert selection["selected_host_path"] == str(target)
+    assert selection["selected_mount_path"] == str(mount)
+    assert selection["folder_name"] == "RuntimeArchive"
+    assert f"selected_host_path={target}" in selection_control
+    assert f"selected_mount_path={mount}" in selection_control
+    assert "folder_name=RuntimeArchive" in selection_control
+    assert activation_request["status"] == "requested"
+    assert activation_request["request_id"].startswith("archive-root-")
+    assert "status=requested" in activation_request_control
+    assert apply_state["status"] == "activation_requested"
+    assert apply_state["next_action"] == "runtime_storage_activation"
 
 
 def test_setup_storage_endpoints_close_after_initialization(db):

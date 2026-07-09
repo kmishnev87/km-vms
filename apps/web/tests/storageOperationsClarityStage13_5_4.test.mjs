@@ -14,15 +14,17 @@ const storageHelpers = read("lib/storageOperations.js");
 for (const required of [
   "healthOkTitle",
   "archiveSpace",
-  "safeActions",
+  "archiveOperations",
+  "retentionRules",
   "autoFreeSpace",
   "retentionDryRun",
   "reconciliationDryRun",
   "archiveRoots",
-  "migrationPreview",
-  "byCameras",
+  "archiveMigration",
+  "cameras",
   "recentOperations",
-  "technicalDetails",
+  "supportDetails",
+  "retentionDiagnostics",
 ]) {
   assert.match(storagePage, new RegExp(`copy\\.${required}\\b`), `/storage renders ${required}`);
 }
@@ -34,12 +36,14 @@ assert.match(storagePage, /apiFetch\("\/storage\/reconciliation\/summary"/, "/st
 assert.match(storagePage, /apiFetch\("\/storage\/reconcile"/, "/storage owns archive integrity apply");
 assert.match(storagePage, /humanBlockerReason\(item, language\)/, "blocked actions use human wording");
 assert.match(storagePage, /Array\.from\(new Set\(labels\)\)\.join\(" "\)/, "duplicate blocked action labels are collapsed before rendering");
-assert.match(storagePage, /storageSourceLabel\(storageContract\.archive_primary_path_source, copy\)/, "backend source codes are mapped before display");
-assert.match(storagePage, /<details className="storageOpsDetails">/, "technical details are collapsed");
-assert.match(storagePage, /primaryStorageActionText\(\{ operations, pathHealth, capacity, policy, reconciliation, migrationPreview, retention \}, language\)/, "primary action is reason-prioritized");
+assert.doesNotMatch(storagePage, /storageSourceLabel\(storageContract\.archive_primary_path_source, copy\)/, "backend source codes are not primary UI");
+assert.match(storagePage, /<details className="storageOpsSupportDetails">/, "support details are collapsed and demoted");
+assert.match(storagePage, /healthActionText\(topHealth, copy\)/, "primary action is reason-prioritized");
 assert.match(storagePage, /accessRightsModel\(pathHealth, language\)/, "read/write access is combined before primary rendering");
-assert.match(storagePage, /archiveRootLabel\(root, copy\)/, "archive root labels are mapped before display");
-assert.match(storagePage, /<summary>\{copy\.addArchiveRoot\}<\/summary>/, "raw archive-root path input is collapsed");
+assert.match(storagePage, /archiveRootPath\(root, archivePathText\)/, "archive root paths are mapped before display");
+assert.match(storagePage, /\/storage\/archive-roots\/discovery/, "archive root flow discovers NAS roots before selection");
+assert.match(storagePage, /storageOpsRootForm-product/, "archive root primary flow is a product selection form");
+assert.doesNotMatch(storagePage, /copy\.addArchiveRootAdvanced|archiveRootManualPath|\brootPath\b/, "manual archive-root path input is not exposed in /storage");
 assert.doesNotMatch(storagePage, /<pre|raw JSON|JSON block/i, "production storage UI does not render raw JSON blocks");
 assert.doesNotMatch(storagePage, /href="\/settings"/, "/storage does not send storage workflows back to Settings");
 
@@ -74,7 +78,7 @@ for (const key of [
   "healthOkTitle",
   "retentionSafetyNote",
   "reconciliationConfirm",
-  "technicalDetails",
+  "supportDetails",
   "defaultArchive",
   "addArchiveRoot",
 ]) {

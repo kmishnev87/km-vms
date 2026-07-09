@@ -47,7 +47,7 @@ for (const expected of [
   ["GET", "/settings"],
   ["PATCH", "/settings"],
   ["GET", "/storage/archive-roots"],
-  ["POST", "/storage/archive-roots/validate"],
+  ["GET", "/storage/archive-roots/discovery"],
   ["POST", "/storage/archive-roots"],
   ["POST", "/storage/archive-roots/{root_id}/activate"],
   ["POST", "/storage/migration/preview"],

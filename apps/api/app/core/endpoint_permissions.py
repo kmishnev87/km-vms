@@ -91,7 +91,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("hardware", "POST", "/hardware/rescan", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("storage", "GET", "/storage/status", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only Storage Monitoring summary; owner/admin only."),
     EndpointPermission("storage", "GET", "/storage/archive-roots", PERMISSION_MANAGE_SETTINGS, "require_permission"),
-    EndpointPermission("storage", "POST", "/storage/archive-roots/validate", PERMISSION_MANAGE_SETTINGS, "require_permission"),
+    EndpointPermission("storage", "GET", "/storage/archive-roots/discovery", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only NAS archive root discovery; sanitized host snapshot only."),
     EndpointPermission("storage", "POST", "/storage/archive-roots", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("storage", "POST", "/storage/archive-roots/{root_id}/activate", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("storage", "POST", "/storage/migration/preview", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only migration preview; no file move/copy/delete."),

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.12",
-  "tag": "v0.7.12",
-  "title": "Storage PRO Scenario Completeness and Silent Refresh Access-Denied Hardening",
-  "summary": "Completes the Storage PRO operator scenario pass with structured API error evidence, method-aware storage action permissions, complete archive/retention/reconciliation/migration UI scenarios, and precise silent-refresh access-denied classification.",
+  "version": "0.7.13",
+  "tag": "v0.7.13",
+  "title": "Storage PRO Archive Roots and Operator UX Hardening",
+  "summary": "Hardens the Storage PRO archive-root workflow with operator-safe root add/activate/delete flows, visible archive-root problem details, runtime activation handoff, and compact user-facing storage UX corrections.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.12",
+  "source_ref": "v0.7.13",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,10 +16,10 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Completes storage route metadata and action permission coverage for archive roots, retention, reconciliation and migration.",
-    "Preserves structured API error status/detail so storage blockers and permission failures stay truthful in the UI.",
-    "Improves Storage PRO scenario models for archive root health, retention preview/apply, reconciliation and migration states.",
-    "Keeps the last valid storage status visible during silent refresh failures and shows a non-fatal stale warning.",
-    "Narrows storage access-denied classification to real 401/403 and explicit auth/permission phrases, avoiding generic unavailable wording."
+    "Reworks archive-root add flow to use NAS volume discovery and folder creation instead of raw manual paths.",
+    "Adds explicit inactive archive-root activation through the setup-helper runtime handoff with operator warning.",
+    "Adds safe inactive archive-root deletion with confirmation, permission checks, metadata cleanup and recording-list consistency.",
+    "Shows archive-root problems as compact clickable user-facing details instead of long table text.",
+    "Polishes Storage PRO root/status controls, short problem badges, dialog copy and focused visual contract tests."
   ]
 }

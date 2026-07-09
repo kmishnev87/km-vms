@@ -175,6 +175,7 @@ def test_stage_recent_routes_have_explicit_permissions_and_no_apk_api_route():
         ("/system/upgrade/report", "GET"): "run_diagnostics",
         ("/storage/status", "GET"): "manage_settings",
         ("/storage/archive-roots", "GET"): "manage_settings",
+        ("/storage/archive-roots/discovery", "GET"): "manage_settings",
         ("/storage/migration/preview", "POST"): "manage_settings",
         ("/storage/migration/apply", "POST"): "manage_settings",
         ("/storage/reconciliation/summary", "GET"): "run_diagnostics",

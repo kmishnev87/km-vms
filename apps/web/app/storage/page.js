@@ -13,7 +13,6 @@ import {
   formatPercent,
   humanBlockerReason,
   isStorageAccessDeniedError,
-  primaryStorageActionText,
   actionPermissionState,
   accessRightsModel,
   archiveRootScenarioModel,
@@ -47,6 +46,84 @@ function SummaryRow({ label, value, tone = "neutral" }) {
     <div className={`storageOpsSummaryRow storageOpsSummaryRow-${tone}`}>
       <span>{label}</span>
       <strong>{value}</strong>
+    </div>
+  );
+}
+
+function TopMetric({ label, value, detail = "", tone = "neutral" }) {
+  return (
+    <div className={`storageOpsTopMetric storageOpsTopMetric-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {detail ? <small>{detail}</small> : null}
+    </div>
+  );
+}
+
+function MiniFact({ label, value, tone = "neutral" }) {
+  return (
+    <div className={`storageOpsMiniFact storageOpsMiniFact-${tone}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function StorageDialog({ dialog, onClose }) {
+  if (!dialog) return null;
+  const hasConfirm = typeof dialog.onConfirm === "function";
+  return (
+    <div className="storageOpsDialogOverlay" role="presentation">
+      <div className={`storageOpsDialog storageOpsDialog-${dialog.tone || "warning"}`} role="dialog" aria-modal="true" aria-labelledby="storage-dialog-title">
+        <div className="storageOpsDialogHead">
+          <strong id="storage-dialog-title">{dialog.title}</strong>
+          <button className={`button secondary small ${hasConfirm ? "storageOpsDialogCloseIconButton" : ""}`} type="button" onClick={onClose} aria-label={dialog.closeLabel || dialog.cancelLabel}>
+            {hasConfirm ? "×" : (dialog.closeLabel || dialog.cancelLabel)}
+          </button>
+        </div>
+        <p>{dialog.message}</p>
+        {Array.isArray(dialog.items) && dialog.items.length ? (
+          <ul className="storageOpsDialogList">
+            {dialog.items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
+          </ul>
+        ) : null}
+        {dialog.action ? <div className="storageOpsDialogAction">{dialog.action}</div> : null}
+        {hasConfirm ? (
+          <div className="storageOpsDialogFooter">
+            <button className="button secondary small" type="button" onClick={onClose}>{dialog.cancelLabel}</button>
+            <button className={`button small ${dialog.confirmTone === "danger" ? "dangerButton" : ""}`} type="button" onClick={dialog.onConfirm}>{dialog.confirmLabel}</button>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <span aria-hidden="true" className="storageOpsCheckIcon">
+      <span />
+    </span>
+  );
+}
+
+function DeleteIcon() {
+  return <span aria-hidden="true" className="storageOpsDeleteIcon">×</span>;
+}
+
+function OperationRow({ title, status, tone = "neutral", description, meta = null, actions = null, children = null }) {
+  return (
+    <div className={`storageOpsOperationRow storageOpsOperationRow-${tone}`}>
+      <div className="storageOpsOperationMain">
+        <div className="storageOpsOperationTitle">
+          <strong>{title}</strong>
+          <span className={`storageOpsStatusPill storageOpsStatusPill-${tone}`}>{status}</span>
+        </div>
+        <p>{description}</p>
+        {meta}
+      </div>
+      {actions ? <div className="storageOpsOperationActions">{actions}</div> : null}
+      {children ? <div className="storageOpsOperationDetails">{children}</div> : null}
     </div>
   );
 }
@@ -86,6 +163,85 @@ function errorDetailText(error, fallback, language) {
   return error?.message || fallback;
 }
 
+function archiveRootDialogText(error, language = "ru") {
+  const dictionaries = {
+    ru: {
+      title: "Корень архива не добавлен",
+      close: "Закрыть",
+      generic: ["Не удалось добавить расположение архива.", "Обновите состояние хранилища и попробуйте снова. Если ошибка повторится, откройте сведения для поддержки."],
+      invalidRequest: ["Данные формы отправлены некорректно.", "Обновите страницу и попробуйте добавить расположение ещё раз."],
+      archive_root_selection_required: ["Выберите том и папку для архива.", "Выберите доступный том, введите имя папки и нажмите «Добавить» ещё раз."],
+      "storage candidate is not available": ["Выбранный том сейчас недоступен.", "Обновите состояние хранилища, проверьте подключение диска и выберите том снова."],
+      "storage candidate is blocked": ["Выбранный том нельзя использовать для архива.", "Выберите обычный доступный NAS-том из списка."],
+      "folder_name is required": ["Введите имя папки для архива.", "Например: KM-VMS-Recordings."],
+      "folder_name is too long": ["Имя папки слишком длинное.", "Сократите название папки до 80 символов."],
+      "folder_name must be a single safe folder name": ["Имя папки некорректное.", "Используйте одно обычное название без слэшей, кавычек и специальных путей."],
+      "folder_name contains control characters": ["Имя папки содержит недопустимые символы.", "Удалите невидимые или управляющие символы и повторите добавление."],
+      target_exists_not_directory: ["По выбранному пути уже есть файл с таким именем.", "Введите другое имя папки или переименуйте этот файл на NAS."],
+      target_is_symlink: ["Выбранная папка является ссылкой.", "Выберите обычную папку на томе или создайте новую папку архива."],
+      non_empty_unmarked_folder: ["Папка уже содержит посторонние файлы.", "Выберите пустую папку или создайте новую папку для архива KM VMS."],
+      archive_root_outside_approved_storage_base: ["Этот путь нельзя использовать для архива KM VMS.", "Выберите том из списка доступных NAS-томов."],
+      foreign_surveillance_root_rejected: ["Нельзя использовать существующую системную папку Surveillance.", "Создайте отдельную папку для архива KM VMS."],
+      archive_root_path_not_directory: ["Путь архива не является папкой.", "Выберите другой том или имя новой папки."],
+      manual_archive_root_path_disabled: ["Ручной путь отключён.", "Выберите том из списка и укажите папку для архива."],
+    },
+    en: {
+      title: "Archive root was not added",
+      close: "Close",
+      generic: ["Could not add the archive location.", "Refresh storage state and try again. If the error repeats, open support details."],
+      invalidRequest: ["The form data was sent incorrectly.", "Refresh the page and try adding the location again."],
+      archive_root_selection_required: ["Choose an archive volume and folder.", "Select an available volume, enter a folder name, and click Add again."],
+      "storage candidate is not available": ["The selected volume is not available now.", "Refresh storage state, check the disk connection, and select the volume again."],
+      "storage candidate is blocked": ["The selected volume cannot be used for archive storage.", "Choose a regular available NAS volume from the list."],
+      "folder_name is required": ["Enter the archive folder name.", "For example: KM-VMS-Recordings."],
+      "folder_name is too long": ["The folder name is too long.", "Shorten it to 80 characters."],
+      "folder_name must be a single safe folder name": ["The folder name is invalid.", "Use one regular name without slashes, quotes, or path syntax."],
+      "folder_name contains control characters": ["The folder name contains invalid characters.", "Remove hidden/control characters and try again."],
+      target_exists_not_directory: ["A file with this name already exists at the selected path.", "Enter a different folder name or rename that file on the NAS."],
+      target_is_symlink: ["The selected folder is a symlink.", "Choose a normal folder on the volume or create a new archive folder."],
+      non_empty_unmarked_folder: ["The folder already contains other files.", "Choose an empty folder or create a new KM VMS archive folder."],
+      archive_root_outside_approved_storage_base: ["This path cannot be used for the KM VMS archive.", "Choose one of the available NAS volumes."],
+      foreign_surveillance_root_rejected: ["The existing Surveillance system folder cannot be used.", "Create a separate folder for the KM VMS archive."],
+      archive_root_path_not_directory: ["The archive path is not a folder.", "Choose another volume or a new folder name."],
+      manual_archive_root_path_disabled: ["Manual paths are disabled.", "Choose a volume from the list and enter an archive folder."],
+    },
+    "zh-CN": {
+      title: "未添加归档根目录",
+      close: "关闭",
+      generic: ["无法添加归档位置。", "请刷新存储状态后重试。如果错误重复出现，请打开支持信息。"],
+      invalidRequest: ["表单数据发送不正确。", "请刷新页面并重新添加位置。"],
+      archive_root_selection_required: ["请选择归档卷和文件夹。", "选择可用卷，输入文件夹名称，然后再次点击添加。"],
+      "storage candidate is not available": ["所选卷当前不可用。", "请刷新存储状态，检查磁盘连接，然后重新选择卷。"],
+      "storage candidate is blocked": ["所选卷不能用于归档存储。", "请从列表中选择普通可用的 NAS 卷。"],
+      "folder_name is required": ["请输入归档文件夹名称。", "例如：KM-VMS-Recordings。"],
+      "folder_name is too long": ["文件夹名称过长。", "请缩短到 80 个字符以内。"],
+      "folder_name must be a single safe folder name": ["文件夹名称无效。", "请使用不含斜杠、引号或路径语法的普通名称。"],
+      "folder_name contains control characters": ["文件夹名称包含无效字符。", "请删除隐藏/控制字符后重试。"],
+      target_exists_not_directory: ["所选路径已有同名文件。", "请输入其他文件夹名称，或在 NAS 上重命名该文件。"],
+      target_is_symlink: ["所选文件夹是符号链接。", "请选择卷上的普通文件夹或创建新的归档文件夹。"],
+      non_empty_unmarked_folder: ["该文件夹已包含其他文件。", "请选择空文件夹或创建新的 KM VMS 归档文件夹。"],
+      archive_root_outside_approved_storage_base: ["该路径不能用于 KM VMS 归档。", "请选择可用 NAS 卷列表中的卷。"],
+      foreign_surveillance_root_rejected: ["不能使用现有 Surveillance 系统文件夹。", "请为 KM VMS 归档创建单独文件夹。"],
+      archive_root_path_not_directory: ["归档路径不是文件夹。", "请选择其他卷或新的文件夹名称。"],
+      manual_archive_root_path_disabled: ["手动路径已禁用。", "请从列表中选择卷并输入归档文件夹。"],
+    },
+  };
+  const dict = dictionaries[language] || dictionaries.ru;
+  const detail = error?.data?.detail || error?.detail || null;
+  let code = "";
+  if (Array.isArray(detail)) code = "invalidRequest";
+  else if (detail && typeof detail === "object") {
+    const blocker = Array.isArray(detail.blockers) ? detail.blockers[0] : null;
+    code = blocker?.reason || blocker || detail.error || detail.reason || detail.message || "";
+  } else if (typeof detail === "string") {
+    code = detail.split(",").map((item) => item.trim()).filter(Boolean)[0] || detail;
+  } else if (error?.message) {
+    code = error.message.split(",").map((item) => item.trim()).filter(Boolean)[0] || error.message;
+  }
+  const pair = dict[code] || dict.generic;
+  return { title: dict.title, message: pair[0], action: pair[1], closeLabel: dict.close, tone: "warning" };
+}
+
 function retentionSummaryText(source, copy) {
   if (!source) return copy.retentionNoPreview;
   return copy.retentionPreviewReady
@@ -101,6 +257,130 @@ function reconciliationSummaryText(source, copy) {
     .replace("{safe}", String(normalized.safeFixCount))
     .replace("{manual}", String(normalized.reviewOnlyCount || normalized.manualProblemCount))
     .replace("{rows}", String(normalized.totalRows));
+}
+
+function healthReasonText(topHealth, recording, copy) {
+  if (topHealth?.status === "availability_unconfirmed") return copy.healthReasonAvailability;
+  if (topHealth?.status === "unknown") return copy.healthReasonUnknown;
+  if (topHealth?.status === "low_disk") return copy.healthReasonLowDisk;
+  if (topHealth?.status === "reconciliation") return copy.healthReasonIntegrity;
+  if (topHealth?.status === "unreadable") return copy.healthReasonRead;
+  if (topHealth?.status === "unwritable" || recording?.tone === "error") return copy.healthReasonWrite;
+  if (topHealth?.status === "migration_blocked") return copy.healthReasonMigration;
+  if (topHealth?.tone === "ok") return copy.healthReasonOk;
+  return copy.healthReasonCheck;
+}
+
+function healthActionText(topHealth, copy) {
+  if (topHealth?.status === "availability_unconfirmed" || topHealth?.status === "unknown") return copy.actionCheckArchive;
+  if (topHealth?.status === "low_disk") return copy.actionReviewSpace;
+  if (topHealth?.status === "reconciliation") return copy.actionCheckArchive;
+  if (topHealth?.status === "unreadable" || topHealth?.status === "unwritable" || topHealth?.status === "unavailable") return copy.actionCheckAccess;
+  if (topHealth?.status === "migration_blocked") return copy.actionRetryLater;
+  if (topHealth?.tone === "ok") return copy.noActionNeeded;
+  return copy.actionCheckArchive;
+}
+
+function rootProblemTone(root) {
+  if (!root) return "unknown";
+  if (root.is_available === false || root.problem) return "error";
+  return "ok";
+}
+
+function rootProblemLabel(root, copy, language) {
+  return rootHasProblems(root) ? copy.yes : copy.no;
+}
+
+function rootHasProblems(root) {
+  if (!root) return false;
+  return Boolean(root.problem || root.is_available === false || root.is_readable === false || root.is_writable === false || root.namespace_exists === false || Number(root.missing_file_count || 0) > 0);
+}
+
+function rootProblemItems(root, copy, language) {
+  const items = [];
+  if (!root) return [copy.no];
+  if (root.problem) items.push(humanBlockerReason(root.problem, language));
+  if (root.is_available === false && !root.problem) items.push(copy.archiveRootUnavailableDetail);
+  if (root.is_readable === false) items.push(copy.archiveRootUnreadableDetail);
+  if (root.is_writable === false) items.push(copy.archiveRootUnwritableDetail);
+  if (root.namespace_exists === false) items.push(copy.archiveRootNamespaceMissingDetail);
+  if (Number(root.missing_file_count || 0) > 0) items.push(copy.archiveRootMissingFilesDetail.replace("{count}", String(root.missing_file_count)));
+  return Array.from(new Set(items.length ? items : [copy.no]));
+}
+
+function retentionPolicyText(retention, copy) {
+  const gb = retention?.per_camera_gb_limit ?? retention?.camera_gb_limit ?? retention?.max_gb_per_camera;
+  const days = retention?.per_camera_days_limit ?? retention?.camera_days_limit ?? retention?.max_days_per_camera;
+  const parts = [];
+  if (gb != null) parts.push(copy.retentionLimitGb.replace("{value}", String(gb)));
+  if (days != null) parts.push(copy.retentionLimitDays.replace("{value}", String(days)));
+  return parts.length ? `${copy.retentionPolicyActive} ${parts.join("; ")}.` : copy.retentionPolicyGeneric;
+}
+
+function autoFreePolicyText(enabled, copy) {
+  return enabled ? copy.autoFreePrimaryOn : copy.autoFreePrimaryOff;
+}
+
+function compactAccessLabel(accessRights, copy) {
+  if (accessRights.status === "ok") return copy.accessOkShort;
+  if (accessRights.status === "unknown") return copy.accessUnknownShort;
+  return accessRights.label;
+}
+
+function accessRightsSummary(accessRights, copy) {
+  if (accessRights.status === "ok") return copy.accessValueOk;
+  if (accessRights.status === "unknown") return copy.accessValueUnknown;
+  if (accessRights.status === "none") return copy.accessValueNone;
+  return accessRights.label;
+}
+
+function integrityStatusText(scenario, normalized, copy) {
+  if (scenario.status === "running") return copy.integrityRunning;
+  if (scenario.status === "apply_completed") return copy.integrityFixed;
+  if (normalized.problemCount > 0) {
+    if (normalized.safeFixCount > 0) return copy.integrityProblemsSafe.replace("{count}", String(normalized.problemCount));
+    return copy.integrityProblemsManual.replace("{count}", String(normalized.problemCount));
+  }
+  if (scenario.status === "preview_completed") return copy.integrityNoProblems;
+  return copy.integrityNotChecked;
+}
+
+function retentionStatusText(scenario, copy) {
+  if (scenario.status === "running") return copy.running;
+  if (scenario.status === "apply_failed") return copy.retentionFailedStatus;
+  if (scenario.status === "unavailable_due_to_permissions") return copy.unavailable;
+  return copy.retentionAutomaticStatus;
+}
+
+function archiveProblemsStatusText(normalized, copy) {
+  const count = Number(normalized.problemCount || 0);
+  if (!count) return copy.archiveProblemsNone;
+  return copy.archiveProblemsFound.replace("{count}", String(count));
+}
+
+function archiveMigrationStatusText(scenario, archiveRoots, copy) {
+  const inactiveRoots = archiveRoots.filter((root) => !root.is_active);
+  if (!inactiveRoots.length) return copy.migrationNeedsTargetStatus;
+  if (scenario.status === "running") return copy.running;
+  if (scenario.status === "apply_blocked") return copy.applyBlocked;
+  if (scenario.status === "apply_completed") return copy.applyCompleted;
+  if (scenario.canApply) return copy.migrationPlanReadyStatus;
+  return copy.migrationChooseTargetStatus;
+}
+
+function problemActionStatusText(item, copy) {
+  if (item?.safe_action_status === "future_safe_cleanup_possible") return copy.problemFutureCleanup;
+  if (item?.safe_action_status === "none") return copy.problemNoAction;
+  return copy.problemManualReview;
+}
+
+function migrationStatusText(scenario, archiveRoots, copy) {
+  const inactiveRoots = archiveRoots.filter((root) => !root.is_active);
+  if (!inactiveRoots.length) return copy.migrationNeedsTarget;
+  if (scenario.blockerReason) return scenario.blockerReason;
+  if (!scenario.targetRootId) return copy.migrationChooseTargetFirst;
+  if (scenario.canApply) return copy.migrationPlanReady;
+  return copy.migrationScenarioText;
 }
 
 function healthTone(operations, pathHealth, capacity, policy, reconciliation) {
@@ -129,28 +409,49 @@ function healthTitle(copy, tone) {
   return copy.healthUnknownTitle;
 }
 
-function healthText(copy, tone) {
-  if (tone === "ok") return copy.healthOkText;
-  if (tone === "warning") return copy.healthWarningText;
-  if (tone === "error") return copy.healthCriticalText;
-  return copy.healthUnknownText;
-}
-
-function storageSourceLabel(value, copy) {
-  const source = String(value || "");
-  const labels = {
-    host_bind_env: copy.sourceDeployConfig,
-    installer_host_snapshot: copy.sourceInstallerSnapshot,
-    setup_wizard: copy.sourceSetupWizard,
-    database: copy.sourceDatabase,
-  };
-  return labels[source] || (source ? source.replaceAll("_", " ") : "-");
-}
-
 function archiveRootLabel(root, copy) {
   const label = String(root?.label || root?.name || root?.id || "");
   if (/^default archive$/i.test(label) || /^default$/i.test(label)) return copy.defaultArchive;
   return label || copy.defaultArchive;
+}
+
+function archiveRootPath(root, fallback = "-") {
+  return root?.configured_path || root?.root_path || root?.path || root?.archive_host_path || fallback || "-";
+}
+
+function archiveRootStateText(root, copy) {
+  if (root?.is_active) return copy.activeRoot;
+  return copy.inactiveRoot || copy.oldInactive;
+}
+
+function availabilityState(pathHealth, copy) {
+  if (pathHealth?.available === true) return { label: copy.availabilityConfirmed, tone: "ok" };
+  if (pathHealth?.available === false) return { label: copy.availabilityNeedsCheck, tone: "warning" };
+  return { label: copy.availabilityUnknown, tone: "unknown" };
+}
+
+function recordingState(operations, pathHealth, policy, copy) {
+  if (policy?.recording_suspended_by_low_disk) {
+    return { label: copy.recordingUnavailable, detail: copy.recordingSuspended, tone: "error" };
+  }
+  if (operations?.status === "unavailable" || pathHealth?.readable === false || pathHealth?.writable === false) {
+    return { label: copy.recordingUnavailable, detail: copy.recordingAccessBlocked, tone: "error" };
+  }
+  if (pathHealth?.readable === true && pathHealth?.writable === true && pathHealth?.available === true) {
+    return { label: copy.recordingPossible, detail: copy.recordingPossibleDetail, tone: "ok" };
+  }
+  if (pathHealth?.readable === true && pathHealth?.writable === true && pathHealth?.available === false) {
+    return { label: copy.recordingNeedsCheck, detail: copy.recordingNeedsCheckDetail, tone: "warning" };
+  }
+  return { label: copy.recordingUnknown, detail: copy.recordingUnknownDetail, tone: "unknown" };
+}
+
+function operationTone(status = "") {
+  const value = String(status || "");
+  if (value.includes("failed") || value.includes("blocked") || value.includes("permission")) return "warning";
+  if (value.includes("completed") || value.includes("preview")) return "ok";
+  if (value.includes("running")) return "warning";
+  return "neutral";
 }
 
 export default function StorageOperationsPage() {
@@ -162,7 +463,12 @@ export default function StorageOperationsPage() {
   const [error, setError] = useState("");
   const [refreshWarning, setRefreshWarning] = useState("");
   const [accessDenied, setAccessDenied] = useState(false);
-  const [rootPath, setRootPath] = useState("");
+  const [archiveRootDiscovery, setArchiveRootDiscovery] = useState(null);
+  const [archiveRootChoiceId, setArchiveRootChoiceId] = useState("");
+  const [archiveRootFolderName, setArchiveRootFolderName] = useState("KM-VMS-Recordings");
+  const [archiveRootDialog, setArchiveRootDialog] = useState(null);
+  const [migrationTargetRootId, setMigrationTargetRootId] = useState("");
+  const [migrationPreviewState, setMigrationPreviewState] = useState(null);
   const [rootAction, setRootAction] = useState("");
   const [autoFreeMessage, setAutoFreeMessage] = useState("");
   const [archiveRootMessage, setArchiveRootMessage] = useState("");
@@ -185,13 +491,15 @@ export default function StorageOperationsPage() {
   const loadStatus = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setRefreshing(true);
     try {
-      const [data, settingsData] = await Promise.all([
+      const [data, settingsData, discoveryData] = await Promise.all([
         apiFetch("/storage/status"),
         apiFetch("/settings").catch(() => null),
+        apiFetch("/storage/archive-roots/discovery").catch(() => null),
       ]);
       setStatus(data);
       statusRef.current = data;
       setSettings(settingsData);
+      if (discoveryData) setArchiveRootDiscovery(discoveryData);
       setError("");
       setRefreshWarning("");
       setAccessDenied(false);
@@ -250,16 +558,21 @@ export default function StorageOperationsPage() {
   const reconciliation = operations.reconciliation || {};
   const recent = operations.recent_operations || {};
   const archiveRoots = operations.archive_roots || status?.archive_roots || [];
-  const migrationPreview = operations.migration_preview || status?.migration_preview || {};
+  const migrationPreview = migrationPreviewState || operations.migration_preview || status?.migration_preview || {};
+  const archiveRootChoices = archiveRootDiscovery?.candidates || [];
+  const inactiveArchiveRoots = archiveRoots.filter((root) => !root.is_active);
   const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
   const usagePercent = Number(capacity.usage_percent || 0);
   const autoFreeEnabled = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
   const topHealth = storageTopHealthModel({ operations, pathHealth, capacity, policy, reconciliation, migrationPreview, retention }, language);
   const tone = topHealth.tone || healthTone(operations, pathHealth, capacity, policy, reconciliation);
-  const primaryActionText = primaryStorageActionText({ operations, pathHealth, capacity, policy, reconciliation, migrationPreview, retention }, language);
   const accessRights = accessRightsModel(pathHealth, language);
-  const availabilityBadge = pathHealth.available === false ? copy.availabilityNeedsCheck : copy.availabilityConfirmed;
+  const availability = availabilityState(pathHealth, copy);
+  const recording = recordingState(operations, pathHealth, policy, copy);
   const normalizedReconciliation = normalizeReconciliationSummary(reconciliation, language);
+  const problemDetails = reconciliation.problem_details || {};
+  const visibleProblemCategories = problemDetails.categories?.length ? problemDetails.categories : normalizedReconciliation.categories;
+  const visibleProblemSamples = problemDetails.samples || [];
   const manageSettingsPermission = actionPermissionState(currentUser, "manage_settings", language);
   const retentionPermission = actionPermissionState(currentUser, "delete_recordings", language);
   const diagnosticsPermission = actionPermissionState(currentUser, "run_diagnostics", language);
@@ -284,6 +597,32 @@ export default function StorageOperationsPage() {
     permission: manageSettingsPermission,
     running: rootAction === "preview" || rootAction === "apply-migration",
   }, language);
+  const retentionTone = operationTone(retentionScenario.status);
+  const reconciliationTone = operationTone(reconciliationScenario.status);
+  const migrationTone = operationTone(migrationScenario.status);
+  const archivePathText = storageContract.archive_primary_path || storageContract.archive_host_path || storageContract.storage_host_path || "-";
+  const currentArchiveRoot = archiveRoots.find((root) => root.is_active) || archiveRoots[0] || null;
+  const currentArchivePath = archiveRootPath(currentArchiveRoot, archivePathText);
+  const healthReason = healthReasonText(topHealth, recording, copy);
+  const healthAction = healthActionText(topHealth, copy);
+  const retentionPrimaryText = retentionPolicyText(retention, copy);
+  const autoFreePrimaryText = autoFreePolicyText(autoFreeEnabled, copy);
+  const integrityPrimaryText = integrityStatusText(reconciliationScenario, normalizedReconciliation, copy);
+  const migrationPrimaryText = migrationStatusText(migrationScenario, archiveRoots, copy);
+  const archiveRootSelectionReady = archiveRootFolderName.trim() && archiveRootChoiceId;
+
+  useEffect(() => {
+    if (!archiveRootChoiceId && archiveRootChoices.length) {
+      const recommended = archiveRootChoices.find((choice) => choice.recommended) || archiveRootChoices[0];
+      setArchiveRootChoiceId(recommended.id);
+    }
+  }, [archiveRootChoiceId, archiveRootChoices]);
+
+  useEffect(() => {
+    if (!migrationTargetRootId && inactiveArchiveRoots.length) {
+      setMigrationTargetRootId(inactiveArchiveRoots[0].id);
+    }
+  }, [inactiveArchiveRoots, migrationTargetRootId]);
 
   async function setAutoFreeSpace(nextEnabled) {
     if (!manageSettingsPermission.allowed) {
@@ -308,68 +647,168 @@ export default function StorageOperationsPage() {
     }
   }
 
-  async function validateRoot() {
-    if (!rootPath.trim()) return;
+  function archiveRootSelectionPayload() {
+    if (archiveRootChoiceId) {
+      return {
+        candidate_id: archiveRootChoiceId,
+        folder_name: archiveRootFolderName.trim(),
+      };
+    }
+    return {};
+  }
+
+  async function addRoot() {
+    const payload = archiveRootSelectionPayload();
+    if (!payload.root_path && (!payload.candidate_id || !payload.folder_name)) return;
     if (!manageSettingsPermission.allowed) {
-      setArchiveRootMessage(manageSettingsPermission.reason);
+      setArchiveRootDialog({
+        title: copy.archiveRootAddProblemTitle,
+        message: manageSettingsPermission.reason,
+        action: copy.archiveRootPermissionAction,
+        closeLabel: copy.close,
+        tone: "warning",
+      });
       return;
     }
-    setRootAction("validate");
-    setArchiveRootMessage("");
+    setRootAction("add");
     try {
-      const result = await apiFetch("/storage/archive-roots/validate", {
+      await apiFetch("/storage/archive-roots", {
         method: "POST",
-        body: JSON.stringify({ root_path: rootPath.trim(), create_namespace: false }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...payload, label: archiveRootFolderName.trim() || "Archive root", make_active: false, confirm: false }),
       });
-      setArchiveRootMessage(result.ok ? copy.rootAvailable : t("storagePage.validateFailed", { problem: humanBlockerReason(result.problem || "unavailable", language) }));
+      await loadStatus({ silent: true });
     } catch (err) {
-      setArchiveRootMessage(errorDetailText(err, copy.rootValidateFailed, language));
+      setArchiveRootDialog(archiveRootDialogText(err, language));
     } finally {
       setRootAction("");
     }
   }
 
-  async function addRoot() {
-    if (!rootPath.trim()) return;
+  function requestActivateRoot(root) {
+    if (!root?.id) return;
     if (!manageSettingsPermission.allowed) {
-      setArchiveRootMessage(manageSettingsPermission.reason);
+      setArchiveRootDialog({
+        title: copy.archiveRootAddProblemTitle,
+        message: manageSettingsPermission.reason,
+        action: copy.archiveRootPermissionAction,
+        closeLabel: copy.close,
+        tone: "warning",
+      });
       return;
     }
-    setRootAction("add");
-    setArchiveRootMessage("");
-    try {
-      await apiFetch("/storage/archive-roots", {
-        method: "POST",
-        body: JSON.stringify({ root_path: rootPath.trim(), label: "Archive root", make_active: false, confirm: false }),
-      });
-      setRootPath("");
-      setArchiveRootMessage(copy.rootAdded);
-      await loadStatus({ silent: true });
-    } catch (err) {
-      setArchiveRootMessage(errorDetailText(err, copy.rootNotAdded, language));
-    } finally {
-      setRootAction("");
-    }
+    setArchiveRootDialog({
+      title: copy.switchArchiveRootTitle,
+      message: copy.switchConfirm,
+      action: archiveRootPath(root, archivePathText),
+      confirmLabel: copy.makeActive,
+      cancelLabel: copy.cancel,
+      closeLabel: copy.cancel,
+      tone: "warning",
+      onConfirm: () => {
+        setArchiveRootDialog(null);
+        activateRoot(root.id);
+      },
+    });
   }
 
   async function activateRoot(rootId) {
     if (!rootId) return;
     if (!manageSettingsPermission.allowed) {
-      setArchiveRootMessage(manageSettingsPermission.reason);
+      setArchiveRootDialog({
+        title: copy.archiveRootAddProblemTitle,
+        message: manageSettingsPermission.reason,
+        action: copy.archiveRootPermissionAction,
+        closeLabel: copy.close,
+        tone: "warning",
+      });
       return;
     }
-    if (!window.confirm(copy.switchConfirm)) return;
     setRootAction(`activate-${rootId}`);
     setArchiveRootMessage("");
     try {
       await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}/activate`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ confirm: true }),
       });
       setArchiveRootMessage(copy.rootSwitched);
       await loadStatus({ silent: true });
     } catch (err) {
       setArchiveRootMessage(errorDetailText(err, copy.rootNotSwitched, language));
+    } finally {
+      setRootAction("");
+    }
+  }
+
+  function showRootProblems(root) {
+    setArchiveRootDialog({
+      title: copy.archiveRootProblemDetailsTitle,
+      message: archiveRootPath(root, archivePathText),
+      items: rootProblemItems(root, copy, language),
+      action: copy.archiveRootProblemDetailsAction,
+      closeLabel: copy.close,
+      tone: "warning",
+    });
+  }
+
+  function requestDeleteRoot(root) {
+    if (!root?.id || root.is_active) return;
+    if (!manageSettingsPermission.allowed) {
+      setArchiveRootDialog({
+        title: copy.archiveRootDeleteTitle,
+        message: manageSettingsPermission.reason,
+        action: copy.archiveRootPermissionAction,
+        closeLabel: copy.close,
+        tone: "warning",
+      });
+      return;
+    }
+    if (!retentionPermission.allowed) {
+      setArchiveRootDialog({
+        title: copy.archiveRootDeleteTitle,
+        message: retentionPermission.reason,
+        action: copy.archiveRootPermissionAction,
+        closeLabel: copy.close,
+        tone: "warning",
+      });
+      return;
+    }
+    const count = Number(root.segments_count || 0);
+    const size = Number(root.size_bytes || 0);
+    const message = count > 0
+      ? copy.archiveRootDeleteNonEmptyConfirm.replace("{count}", String(count)).replace("{size}", formatBytes(size))
+      : copy.archiveRootDeleteEmptyConfirm;
+    setArchiveRootDialog({
+      title: copy.archiveRootDeleteTitle,
+      message,
+      action: archiveRootPath(root, archivePathText),
+      confirmLabel: copy.delete,
+      cancelLabel: copy.cancel,
+      closeLabel: copy.cancel,
+      tone: "error",
+      confirmTone: "danger",
+      onConfirm: () => {
+        setArchiveRootDialog(null);
+        deleteRoot(root.id);
+      },
+    });
+  }
+
+  async function deleteRoot(rootId) {
+    if (!rootId) return;
+    setRootAction(`delete-${rootId}`);
+    setArchiveRootMessage("");
+    try {
+      await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      setArchiveRootMessage(copy.archiveRootDeleted);
+      await loadStatus({ silent: true });
+    } catch (err) {
+      setArchiveRootMessage(errorDetailText(err, copy.archiveRootNotDeleted, language));
     } finally {
       setRootAction("");
     }
@@ -476,14 +915,19 @@ export default function StorageOperationsPage() {
       setMigrationMessage(manageSettingsPermission.reason);
       return;
     }
+    if (!migrationTargetRootId) {
+      setMigrationMessage(copy.migrationChooseTargetFirst);
+      return;
+    }
     setRootAction("preview");
     setMigrationMessage("");
     try {
-      await apiFetch("/storage/migration/preview", {
+      const result = await apiFetch("/storage/migration/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target_root_id: null }),
+        body: JSON.stringify({ target_root_id: migrationTargetRootId }),
       });
+      setMigrationPreviewState(result);
       setMigrationMessage(copy.previewUpdated);
       await loadStatus({ silent: true });
     } catch (err) {
@@ -494,7 +938,7 @@ export default function StorageOperationsPage() {
   }
 
   async function applyMigration() {
-    if (!migrationPreview?.apply_available) return;
+    if (!migrationPreview?.apply_available || !migrationTargetRootId) return;
     if (!manageSettingsPermission.allowed) {
       setMigrationMessage(manageSettingsPermission.reason);
       return;
@@ -508,7 +952,7 @@ export default function StorageOperationsPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          target_root_id: migrationPreview.target_root_id || null,
+          target_root_id: migrationTargetRootId,
           plan_id: migrationPreview.plan_id || null,
           confirm: true,
         }),
@@ -529,13 +973,18 @@ export default function StorageOperationsPage() {
     <Layout>
       <div className="storageOpsPage">
         <header className="pageHeader storageOpsHeader">
-          <div>
+          <div className="storageOpsHeaderInner">
             <h1 className="pageTitle">{copy.title}</h1>
-            <div className="pageSubtitle">{copy.subtitle}</div>
+            <div className="storageOpsHeaderMeta">
+              <div className="pageSubtitle storageOpsHeaderSubtitle">{copy.subtitle}</div>
+              <div className="storageOpsHeaderActions">
+                <span>{copy.lastCheck}: {formatDateTime(operations.checked_at, language)}</span>
+                <button className="button secondary small storageOpsRefreshButton" type="button" onClick={() => loadStatus()} disabled={refreshing || loading || accessDenied}>
+                  {refreshing ? copy.refreshing : copy.refresh}
+                </button>
+              </div>
+            </div>
           </div>
-          <button className="button secondary small" type="button" onClick={() => loadStatus()} disabled={refreshing || loading || accessDenied}>
-            {refreshing ? copy.refreshing : copy.refresh}
-          </button>
         </header>
 
         {loading ? (
@@ -548,162 +997,278 @@ export default function StorageOperationsPage() {
           <>
             <section className={`storageOpsOverview storageOpsOverview-${tone}`}>
               <div className="storageOpsHealthMain">
-                <span className="storageOpsEyebrow">{copy.lastCheck}: {formatDateTime(operations.checked_at, language)}</span>
-                <strong>{healthTitle(copy, tone)}</strong>
-                <p>{topHealth.reason || healthText(copy, tone)}</p>
+                <div className={`storageOpsHealthMark storageOpsHealthMark-${tone}`} aria-hidden="true">!</div>
+                <div>
+                  <strong>{healthTitle(copy, tone)}</strong>
+                  <p>{healthReason}</p>
+                  <div className="storageOpsBadges">
+                    <Badge label={compactAccessLabel(accessRights, copy)} tone={accessRights.tone} />
+                    <Badge label={recording.detail} tone={recording.tone} />
+                  </div>
+                </div>
               </div>
-              <div className="storageOpsHealthMetrics">
-                <Stat label={copy.total} value={formatBytes(capacity.total_bytes)} />
-                <Stat label={copy.used} value={`${formatBytes(capacity.used_bytes)} / ${formatPercent(capacity.usage_percent)}`} />
-                <Stat label={copy.free} value={`${formatBytes(capacity.free_bytes)} / ${formatPercent(capacity.free_percent)}`} tone={freeSpaceTone(capacity, policy)} />
-                <Badge label={accessRights.label} tone={accessRights.tone} />
-                <Badge label={availabilityBadge} tone={pathHealth.available === false ? "warning" : "ok"} />
+              <div className="storageOpsTopMetrics" aria-label={copy.firstScreenMetrics}>
+                <TopMetric label={copy.recording} value={recording.label} detail={recording.detail} tone={recording.tone} />
+                <TopMetric label={copy.archiveProblems} value={String(normalizedReconciliation.problemCount || 0)} detail={copy.integrity} tone={normalizedReconciliation.problemCount ? "warning" : "ok"} />
               </div>
               <div className="storageOpsHealthAction">
                 <strong>{copy.primaryAction}</strong>
-                <span>{primaryActionText}</span>
+                <span>{healthAction}</span>
               </div>
             </section>
             {refreshWarning ? <div className="storageOpsState storageOpsState-warning">{refreshWarning}</div> : null}
 
-            <div className="storageOpsGrid">
-              <Section title={copy.archiveSpace} className="storageOpsSection-wide">
+            <div className="storageOpsDashboard">
+              <Section title={copy.archiveSpace} className="storageOpsSection-archive">
+                <div className="storageOpsCapacityHeader">
+                  <div>
+                    <strong>{formatBytes(capacity.total_bytes)}</strong>
+                  </div>
+                  <span>{formatPercent(capacity.usage_percent)} {copy.used}</span>
+                </div>
                 <div className="storageOpsCapacityBar" aria-label={copy.storageUsage}>
                   <span style={{ width: `${Math.max(0, Math.min(100, usagePercent))}%` }} />
                 </div>
-                <div className="storageOpsStats">
-                  <Stat label={copy.archiveSize} value={formatBytes(owned.size_bytes)} />
-                  <Stat label={copy.segments} value={String(owned.segments_count || 0)} />
-                  <Stat label={copy.problems} value={String(normalizedReconciliation.problemCount || 0)} tone={normalizedReconciliation.problemCount ? "warning" : "neutral"} />
+                <div className="storageOpsMiniGrid">
+                  <MiniFact label={copy.total} value={formatBytes(capacity.total_bytes)} />
+                  <MiniFact label={copy.free} value={formatBytes(capacity.free_bytes)} tone={freeSpaceTone(capacity, policy)} />
+                  <MiniFact label={copy.archiveSize} value={formatBytes(owned.size_bytes)} />
+                  <MiniFact label={copy.segments} value={String(owned.segments_count || 0)} />
+                  <MiniFact label={copy.problems} value={String(normalizedReconciliation.problemCount || 0)} tone={normalizedReconciliation.problemCount ? "warning" : "ok"} />
                 </div>
-              </Section>
-
-              <Section title={copy.safeActions}>
-                <div className="storageOpsActions storageOpsActionsColumn">
-                  <button className="button secondary small" type="button" onClick={runReconciliationPreview} disabled={!!rootAction || !reconciliationScenario.canCheck}>{rootAction === "reconciliation-preview" ? copy.checking : copy.reconciliationDryRun}</button>
-                  <button className="button secondary small" type="button" onClick={runRetentionPreview} disabled={!!rootAction || !retentionScenario.canPreview}>{rootAction === "retention-preview" ? copy.calculating : copy.retentionDryRun}</button>
-                  <button className="button secondary small" type="button" onClick={refreshMigrationPreview} disabled={!!rootAction || !migrationScenario.canPreview}>{rootAction === "preview" ? copy.calculating : copy.refreshMigrationPreview}</button>
-                </div>
-                <div className="storageOpsNote">{copy.safeActionNote}</div>
-                {!reconciliationScenario.canCheck ? <div className="storageOpsNote storageOpsNoteStrong">{reconciliationScenario.checkPermissionReason}</div> : null}
-                {!retentionScenario.canPreview ? <div className="storageOpsNote storageOpsNoteStrong">{retentionScenario.permissionReason}</div> : null}
-              </Section>
-
-              <Section title={copy.archivePath} className="storageOpsSection-diagnostics">
-                <div className="storageOpsStats">
-                  <Stat label={copy.archiveRootLocation} value={storageContract.archive_primary_path || storageContract.archive_host_path || storageContract.storage_host_path || "-"} />
-                  <Stat label={copy.source} value={storageSourceLabel(storageContract.archive_primary_path_source, copy)} />
-                </div>
-                <SummaryRow label={copy.accessExplanation} value={pathHealth.available === false ? copy.accessLimitedText : copy.accessOkText} tone={pathHealth.available === false ? "warning" : "neutral"} />
-              </Section>
-
-              <Section title={copy.autoFreeSpace}>
-                <div className="storageOpsStats">
-                  <Stat label={copy.state} value={autoFreeEnabled ? copy.on : copy.off} tone={autoFreeEnabled ? "ok" : "neutral"} />
-                  <Stat label={copy.lastRun} value={formatDateTime(autoCleanup.last_finished_at || autoCleanup.last_started_at, language)} />
-                  <Stat label={copy.deleted} value={String(autoCleanup.last_summary?.deleted_count || 0)} />
-                  <Stat label={copy.freed} value={formatBytes(autoCleanup.last_summary?.bytes_freed)} />
-                </div>
-                <div className="storageOpsActions">
-                  <button className="button secondary small" type="button" onClick={() => setAutoFreeSpace(!autoFreeEnabled)} disabled={!!rootAction || !manageSettingsPermission.allowed}>
-                    {rootAction === "auto-free" ? copy.saving : autoFreeEnabled ? copy.disableAutoFree : copy.enableAutoFree}
-                  </button>
-                </div>
-                {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
-                {autoFreeMessage ? <div className="storageOpsNote storageOpsNoteStrong">{autoFreeMessage}</div> : null}
-                <div className="storageOpsNote">{copy.lowDiskNote}</div>
-                <div className="storageOpsNote">{copy.autoFreeNote}</div>
-                <SummaryRow label={copy.blockersReasons} value={reasonText(autoCleanup.last_summary, copy, language)} />
-              </Section>
-
-              <Section title={copy.retention}>
-                <div className="storageOpsStats">
-                  <Stat label={copy.state} value={statusLabel(retention.last_status, language)} />
-                  <Stat label={copy.lastRun} value={formatDateTime(retention.last_finished_at || retention.last_started_at, language)} />
-                  <Stat label={copy.deleted} value={String(retention.last_summary?.deleted_count || 0)} />
-                  <Stat label={copy.freed} value={formatBytes(retention.last_summary?.bytes_freed)} />
-                </div>
-                <SummaryRow label={copy.actionState} value={statusLabel(retentionScenario.status, language)} tone={retentionScenario.status.includes("failed") || retentionScenario.status.includes("permission") ? "warning" : "neutral"} />
-                <SummaryRow label={copy.preview} value={retentionSummaryText(retentionPreview || retentionResult, copy)} />
-                <div className="storageOpsActions">
-                  <button className="button secondary small" type="button" onClick={runRetentionPreview} disabled={!!rootAction || !retentionScenario.canPreview}>{rootAction === "retention-preview" ? copy.calculating : copy.retentionDryRun}</button>
-                  <label className="storageOpsConfirm">
-                    <input type="checkbox" checked={retentionConfirmed} onChange={(event) => setRetentionConfirmed(event.target.checked)} disabled={!retentionScenario.canApply || !!rootAction} />
-                    <span>{copy.retentionConfirm}</span>
-                  </label>
-                  <button className="button small dangerButton" type="button" onClick={applyRetentionPlan} disabled={!retentionScenario.canApply || !retentionConfirmed || !!rootAction}>{rootAction === "retention-apply" ? copy.applying : copy.retentionApply}</button>
-                </div>
-                {!retentionPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{retentionPermission.reason}</div> : null}
-                {retentionMessage ? <div className="storageOpsNote storageOpsNoteStrong">{retentionMessage}</div> : null}
-                <div className="storageOpsNote">{copy.retentionSafetyNote}</div>
-              </Section>
-
-              <Section title={copy.integrity}>
-                <div className="storageOpsStats">
-                  <Stat label={copy.state} value={statusLabel(normalizedReconciliation.status, language)} tone={normalizedReconciliation.problemCount ? "warning" : "neutral"} />
-                  <Stat label={copy.problems} value={String(normalizedReconciliation.problemCount || 0)} />
-                  <Stat label={copy.safeFixes} value={String(normalizedReconciliation.safeFixCount || 0)} />
-                  <Stat label={copy.manualReview} value={String(normalizedReconciliation.reviewOnlyCount || normalizedReconciliation.manualProblemCount || 0)} />
-                  <Stat label={copy.lastCheck} value={formatDateTime(reconciliation.last_checked_at, language)} />
-                </div>
-                <SummaryRow label={copy.actionState} value={statusLabel(reconciliationScenario.status, language)} tone={reconciliationScenario.status.includes("permission") ? "warning" : "neutral"} />
-                <SummaryRow label={copy.preview} value={reconciliationSummaryText(reconciliationPreview || reconciliationResult, copy)} />
-                <div className="storageOpsActions">
-                  <button className="button secondary small" type="button" onClick={runReconciliationPreview} disabled={!!rootAction || !reconciliationScenario.canCheck}>{rootAction === "reconciliation-preview" ? copy.checking : copy.reconciliationDryRun}</button>
-                  <label className="storageOpsConfirm">
-                    <input type="checkbox" checked={reconciliationConfirmed} onChange={(event) => setReconciliationConfirmed(event.target.checked)} disabled={!reconciliationScenario.canApply || !!rootAction} />
-                    <span>{copy.reconciliationConfirm}</span>
-                  </label>
-                  <button className="button small" type="button" onClick={applyReconciliationSafe} disabled={!reconciliationScenario.canApply || !reconciliationConfirmed || !!rootAction}>{rootAction === "reconciliation-apply" ? copy.applying : copy.reconciliationApply}</button>
-                </div>
-                {reconciliationScenario.noAutoFixReason ? <div className="storageOpsNote storageOpsNoteStrong">{copy.reconciliationNoAutoFixes}</div> : null}
-                {reconciliationScenario.categories?.length ? (
-                  <div className="storageOpsNote">
-                    {copy.reconciliationCategories}: {reconciliationScenario.categories.map((item) => `${item.label}: ${item.count}`).join(", ")}
+                <div className="storageOpsArchiveSummary">
+                  <div>
+                    <span>{copy.archiveRootLocation}</span>
+                    <strong>{archivePathText}</strong>
                   </div>
-                ) : null}
-                {!diagnosticsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{diagnosticsPermission.reason}</div> : null}
-                {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{reconciliationScenario.applyPermissionReason}</div> : null}
-                {reconciliationMessage ? <div className="storageOpsNote storageOpsNoteStrong">{reconciliationMessage}</div> : null}
-                <div className="storageOpsNote">{copy.integrityNote}</div>
+                  <div>
+                    <span>{copy.accessRights}</span>
+                    <strong>{accessRightsSummary(accessRights, copy)}</strong>
+                  </div>
+                </div>
               </Section>
 
-              <Section title={copy.archiveRoots}>
-                <div className="storageOpsNote">{copy.rootsNote}</div>
-                <div className="storageOpsTableWrap">
-                  <table className="storageOpsTable storageOpsTable-compact">
-                    <thead>
-                      <tr><th>{copy.root}</th><th>{copy.state}</th><th>{copy.records}</th><th>{copy.size}</th><th>{copy.action}</th></tr>
-                    </thead>
-                    <tbody>
-                      {archiveRoots.map((root) => {
-                        const rootScenario = archiveRootScenarioModel({
-                          root,
-                          permission: manageSettingsPermission,
-                          running: rootAction === `activate-${root.id}`,
-                        }, language);
-                        return (
-                          <tr key={root.id}>
-                            <td><strong>{archiveRootLabel(root, copy)}</strong><span>{root.is_active ? copy.activeRoot : copy.oldInactive}</span></td>
-                            <td>{root.is_available ? copy.available : (rootScenario.reason || copy.unavailable)}</td>
-                            <td>{root.segments_count || 0}</td>
-                            <td>{formatBytes(root.size_bytes)}</td>
-                            <td><button className="button secondary small" type="button" disabled={!rootScenario.canActivate} onClick={() => activateRoot(root.id)}>{rootAction === `activate-${root.id}` ? copy.switching : copy.makeActive}</button></td>
-                          </tr>
-                        );
-                      })}
-                      {!archiveRoots.length ? <tr><td colSpan="5">{copy.noRoots}</td></tr> : null}
-                    </tbody>
-                  </table>
+              <Section title={copy.archiveOperations} className="storageOpsSection-operations">
+                <div className="storageOpsOperationList">
+                  <OperationRow
+                    title={copy.retentionRules}
+                    status={retentionStatusText(retentionScenario, copy)}
+                    tone={retentionTone}
+                    description={retentionPrimaryText}
+                    meta={(
+                      <div className="storageOpsOperationFacts">
+                        <MiniFact label={copy.lastRun} value={formatDateTime(retention.last_finished_at || retention.last_started_at, language)} />
+                        <MiniFact label={copy.deleted} value={String(retention.last_summary?.deleted_count || 0)} />
+                        <MiniFact label={copy.freed} value={formatBytes(retention.last_summary?.bytes_freed)} />
+                      </div>
+                    )}
+                  >
+                    {retentionMessage ? <div className="storageOpsNote storageOpsNoteStrong">{retentionMessage}</div> : null}
+                    <details className="storageOpsInlineDetails">
+                      <summary>{copy.retentionDiagnostics}</summary>
+                      <button className="button secondary small" type="button" title={copy.retentionDryRun} onClick={runRetentionPreview} disabled={!!rootAction || !retentionScenario.canPreview}>{rootAction === "retention-preview" ? copy.calculating : copy.retentionPlanShort}</button>
+                      <label className="storageOpsConfirm">
+                        <input type="checkbox" checked={retentionConfirmed} onChange={(event) => setRetentionConfirmed(event.target.checked)} disabled={!retentionScenario.canApply || !!rootAction} />
+                        <span>{copy.retentionConfirm}</span>
+                      </label>
+                      <button className="button small dangerButton" type="button" title={copy.retentionApply} onClick={applyRetentionPlan} disabled={!retentionScenario.canApply || !retentionConfirmed || !!rootAction}>{rootAction === "retention-apply" ? copy.applying : copy.retentionDeleteShort}</button>
+                      <div className="storageOpsNote">{copy.retentionSafetyNote}</div>
+                      {!retentionPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{retentionPermission.reason}</div> : null}
+                      {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
+                      <SummaryRow label={copy.blockersReasons} value={reasonText(autoCleanup.last_summary, copy, language)} />
+                    </details>
+                  </OperationRow>
+
+                  <OperationRow
+                    title={copy.autoFreeSpace}
+                    status={autoFreeEnabled ? copy.on : copy.off}
+                    tone={autoFreeEnabled ? "ok" : "neutral"}
+                    description={autoFreePrimaryText}
+                    actions={(
+                      <button className="button secondary small" type="button" title={autoFreeEnabled ? copy.disableAutoFree : copy.enableAutoFree} onClick={() => setAutoFreeSpace(!autoFreeEnabled)} disabled={!!rootAction || !manageSettingsPermission.allowed}>
+                        {rootAction === "auto-free" ? copy.saving : autoFreeEnabled ? copy.disableAutoFreeShort : copy.enableAutoFreeShort}
+                      </button>
+                    )}
+                  >
+                    {autoFreeMessage ? <div className="storageOpsNote storageOpsNoteStrong">{autoFreeMessage}</div> : null}
+                    <details className="storageOpsInlineDetails">
+                      <summary>{copy.supportDetails}</summary>
+                      <SummaryRow label={copy.policy} value={copy.lowDiskShort} />
+                      {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
+                    </details>
+                  </OperationRow>
+
+                  <OperationRow
+                    title={copy.archiveProblems}
+                    status={archiveProblemsStatusText(normalizedReconciliation, copy)}
+                    tone={reconciliationTone}
+                    description={integrityPrimaryText}
+                    meta={(
+                      <div className="storageOpsOperationFacts">
+                        <MiniFact label={copy.problems} value={String(normalizedReconciliation.problemCount || 0)} tone={normalizedReconciliation.problemCount ? "warning" : "ok"} />
+                        <MiniFact label={copy.safeFixes} value={String(normalizedReconciliation.safeFixCount || 0)} />
+                        <MiniFact label={copy.manualReview} value={String(normalizedReconciliation.reviewOnlyCount || normalizedReconciliation.manualProblemCount || 0)} />
+                        <MiniFact label={copy.lastCheck} value={formatDateTime(reconciliation.last_checked_at, language)} />
+                      </div>
+                    )}
+                    actions={(
+                      <button className="button secondary small" type="button" title={copy.reconciliationDryRun} onClick={runReconciliationPreview} disabled={!!rootAction || !reconciliationScenario.canCheck}>{rootAction === "reconciliation-preview" ? copy.checking : copy.integrityCheckShort}</button>
+                    )}
+                  >
+                    {reconciliationMessage ? <div className="storageOpsNote storageOpsNoteStrong">{reconciliationMessage}</div> : null}
+                    {visibleProblemCategories.length ? (
+                      <div className="storageOpsProblemList">
+                        {visibleProblemCategories.map((item) => (
+                          <div key={item.code || item.label}>
+                            <strong>{item.label || item.label_ru}</strong>
+                            <span>{item.count}</span>
+                            <small>{problemActionStatusText(item, copy)}</small>
+                            {item.reason_no_action_available ? <p>{item.reason_no_action_available}</p> : null}
+                          </div>
+                        ))}
+                      </div>
+                    ) : null}
+                    {visibleProblemSamples.length ? (
+                      <div className="storageOpsNote">{copy.problemSamples}: {visibleProblemSamples.map((item) => item.sample_name || item.category).filter(Boolean).slice(0, 4).join(", ")}</div>
+                    ) : null}
+                    <details className="storageOpsInlineDetails">
+                      <summary>{copy.supportDetails}</summary>
+                      <label className="storageOpsConfirm">
+                        <input type="checkbox" checked={reconciliationConfirmed} onChange={(event) => setReconciliationConfirmed(event.target.checked)} disabled={!reconciliationScenario.canApply || !!rootAction} />
+                        <span>{copy.reconciliationConfirm}</span>
+                      </label>
+                      <button className="button small" type="button" title={copy.reconciliationApply} onClick={applyReconciliationSafe} disabled={!reconciliationScenario.canApply || !reconciliationConfirmed || !!rootAction}>{rootAction === "reconciliation-apply" ? copy.applying : copy.integrityFixShort}</button>
+                      {reconciliationScenario.noAutoFixReason ? <div className="storageOpsNote storageOpsNoteStrong">{copy.reconciliationNoAutoFixes}</div> : null}
+                      {reconciliationScenario.categories?.length ? (
+                        <div className="storageOpsNote">
+                          {copy.reconciliationCategories}: {reconciliationScenario.categories.map((item) => `${item.label}: ${item.count}`).join(", ")}
+                        </div>
+                      ) : null}
+                      {!diagnosticsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{diagnosticsPermission.reason}</div> : null}
+                      {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{reconciliationScenario.applyPermissionReason}</div> : null}
+                      <div className="storageOpsNote">{copy.integrityNote}</div>
+                    </details>
+                  </OperationRow>
+
+                  <OperationRow
+                    title={copy.archiveMigration}
+                    status={archiveMigrationStatusText(migrationScenario, archiveRoots, copy)}
+                    tone={migrationTone}
+                    description={migrationPrimaryText}
+                    meta={(
+                      <div className="storageOpsOperationFacts">
+                        <MiniFact label={copy.move} value={`${migrationPreview.total_would_move_count || 0} / ${formatBytes(migrationPreview.total_would_move_bytes)}`} />
+                        <MiniFact label={copy.willStay} value={String(migrationPreview.total_would_stay_count || 0)} />
+                        <MiniFact label={copy.blockers} value={String((migrationPreview.blockers || []).length)} tone={(migrationPreview.blockers || []).length ? "warning" : "ok"} />
+                        <MiniFact label={copy.applyState} value={migrationPreview.apply_available ? copy.available : copy.unavailable} tone={migrationPreview.apply_available ? "ok" : "warning"} />
+                      </div>
+                    )}
+                    actions={(
+                      <button className="button secondary small" type="button" title={copy.refreshMigrationPreview} onClick={refreshMigrationPreview} disabled={!!rootAction || !migrationScenario.canPreview}>{rootAction === "preview" ? copy.calculating : copy.migrationPreviewShort}</button>
+                    )}
+                  >
+                    {migrationMessage ? <div className="storageOpsNote storageOpsNoteStrong">{migrationMessage}</div> : null}
+                    <details className="storageOpsInlineDetails">
+                      <summary>{copy.supportDetails}</summary>
+                      <div className="storageOpsNote">{copy.migrationSteps}</div>
+                      {inactiveArchiveRoots.length ? (
+                        <label className="storageOpsField">
+                          <span>{copy.migrationTarget}</span>
+                          <select className="select" value={migrationTargetRootId} onChange={(event) => setMigrationTargetRootId(event.target.value)} disabled={!!rootAction}>
+                            {inactiveArchiveRoots.map((root) => (
+                              <option key={root.id} value={root.id}>{archiveRootLabel(root, copy)} - {archiveRootPath(root, archivePathText)}</option>
+                            ))}
+                          </select>
+                        </label>
+                      ) : (
+                        <div className="storageOpsNote storageOpsNoteStrong">{copy.migrationAddTargetFirst}</div>
+                      )}
+                      <button className="button small" type="button" title={copy.applyMigration} onClick={applyMigration} disabled={!!rootAction || !migrationScenario.canApply}>{rootAction === "apply-migration" ? copy.applying : copy.applyMigrationShort}</button>
+                      {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
+                      {migrationResult ? <SummaryRow label={copy.applyReport} value={`${statusLabel(migrationResult.status, language)}; ${copy.executed}: ${(migrationResult.executed || []).length}; ${copy.sourcePreserved}: ${boolLabel(migrationResult.source_preserved, language)}; ${copy.cleanupPending}: ${boolLabel(migrationResult.cleanup_pending, language)}`} /> : null}
+                      {migrationScenario.manualReviewRequired ? <div className="storageOpsNote">{copy.migrationManualReview}</div> : null}
+                    </details>
+                  </OperationRow>
+                </div>
+                <div className="storageOpsNote storageOpsNoteStrong">{copy.safeActionNote}</div>
+              </Section>
+
+              <Section title={copy.archiveRoots} className="storageOpsSection-secondary storageOpsSection-roots">
+                <div className="storageOpsRootList">
+                  {(archiveRoots.length ? archiveRoots : [currentArchiveRoot]).filter(Boolean).map((root) => {
+                    const rootScenario = archiveRootScenarioModel({
+                      root,
+                      permission: manageSettingsPermission,
+                      running: rootAction === `activate-${root.id}`,
+                    }, language);
+                    const active = Boolean(root.is_active);
+                    return (
+                      <div className="storageOpsRootListRow" key={root.id || archiveRootPath(root, archivePathText)}>
+                        <div className="storageOpsRootPath">
+                          <span>{active ? copy.currentArchive : copy.archiveLocation}</span>
+                          <strong>{archiveRootPath(root, archivePathText)}</strong>
+                          <small>{archiveRootLabel(root, copy)}</small>
+                        </div>
+                        <div><span>{copy.state}</span><strong>{archiveRootStateText(root, copy)}</strong></div>
+                        <div><span>{copy.size}</span><strong>{formatBytes(root.size_bytes ?? owned.size_bytes)}</strong></div>
+                        <div><span>{copy.segments}</span><strong>{root.segments_count || owned.segments_count || 0}</strong></div>
+                        <div>
+                          <span>{copy.problems}</span>
+                          {rootHasProblems(root) ? (
+                            <button className="storageOpsBadgeButton" type="button" onClick={() => showRootProblems(root)}>
+                              <Badge label={rootProblemLabel(root, copy, language)} tone={rootProblemTone(root)} />
+                            </button>
+                          ) : (
+                            <Badge label={rootProblemLabel(root, copy, language)} tone={rootProblemTone(root)} />
+                          )}
+                        </div>
+                        <div className="storageOpsRootActionsCell">
+                          <button
+                            className={`storageOpsRootActivateButton ${active ? "isActive" : ""}`}
+                            type="button"
+                            title={active ? copy.activeRoot : copy.makeActive}
+                            aria-label={active ? copy.activeRoot : copy.makeActive}
+                            disabled={active || !rootScenario.canActivate}
+                            onClick={() => requestActivateRoot(root)}
+                          >
+                            <CheckIcon />
+                          </button>
+                          {!active ? (
+                            <button
+                              className="storageOpsRootDeleteButton"
+                              type="button"
+                              title={copy.deleteArchiveRoot}
+                              aria-label={copy.deleteArchiveRoot}
+                              disabled={!!rootAction || !retentionPermission.allowed}
+                              onClick={() => requestDeleteRoot(root)}
+                            >
+                              <DeleteIcon />
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {!archiveRoots.length && !currentArchiveRoot ? <div className="storageOpsEmpty">{copy.noRoots}</div> : null}
                 </div>
                 <details className="storageOpsDetails storageOpsAdvancedRoot">
                   <summary>{copy.addArchiveRoot}</summary>
-                  <div className="storageOpsAdvancedRootBody">
-                    <div className="storageOpsNote">{copy.addArchiveRootNote}</div>
-                    <div className="storageOpsRootForm">
-                      <input className="input" value={rootPath} onChange={(event) => setRootPath(event.target.value)} placeholder={copy.archiveRootPlaceholder} />
-                      <button className="button secondary small" type="button" onClick={validateRoot} disabled={!!rootAction || !rootPath.trim() || !manageSettingsPermission.allowed}>{rootAction === "validate" ? copy.validating : copy.validate}</button>
-                      <button className="button small" type="button" onClick={addRoot} disabled={!!rootAction || !rootPath.trim() || !manageSettingsPermission.allowed}>{rootAction === "add" ? copy.adding : copy.add}</button>
+                    <div className="storageOpsAdvancedRootBody">
+                    <div className="storageOpsRootForm storageOpsRootForm-product">
+                      <label className="storageOpsField">
+                        <span>{copy.storageRootLabel}</span>
+                        <select className="select" value={archiveRootChoiceId} onChange={(event) => setArchiveRootChoiceId(event.target.value)} disabled={!!rootAction}>
+                          {archiveRootChoices.map((choice) => (
+                            <option key={choice.id} value={choice.id}>{choice.label || choice.path} - {formatBytes(choice.free_bytes)} {copy.free}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="storageOpsField">
+                        <span>{copy.storageFolder}</span>
+                        <input className="input" value={archiveRootFolderName} onChange={(event) => setArchiveRootFolderName(event.target.value)} placeholder="KM-VMS-Recordings" />
+                      </label>
+                      {!archiveRootDiscovery?.available ? <div className="storageOpsNote">{copy.storageUnavailable}</div> : null}
+                      <button className="button small storageOpsRootAddButton" type="button" onClick={addRoot} disabled={!!rootAction || !archiveRootSelectionReady || !manageSettingsPermission.allowed}>{rootAction === "add" ? copy.adding : copy.add}</button>
                     </div>
                     {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
                     {archiveRootMessage ? <div className="storageOpsNote storageOpsNoteStrong">{archiveRootMessage}</div> : null}
@@ -711,92 +1276,78 @@ export default function StorageOperationsPage() {
                 </details>
               </Section>
 
-              <Section title={copy.migrationPreview}>
-                <div className="storageOpsStats">
-                  <Stat label={copy.move} value={`${migrationPreview.total_would_move_count || 0} / ${formatBytes(migrationPreview.total_would_move_bytes)}`} />
-                  <Stat label={copy.willStay} value={String(migrationPreview.total_would_stay_count || 0)} />
-                  <Stat label={copy.previewOnlyMigration} value={copy.yes} />
-                  <Stat label={copy.blockers} value={String((migrationPreview.blockers || []).length)} tone={(migrationPreview.blockers || []).length ? "warning" : "neutral"} />
-                  <Stat label={copy.applyState} value={migrationPreview.apply_available ? copy.available : copy.unavailable} tone={migrationPreview.apply_available ? "ok" : "warning"} />
-                </div>
-                <SummaryRow label={copy.actionState} value={statusLabel(migrationScenario.status, language)} tone={migrationScenario.status.includes("blocked") || migrationScenario.status.includes("failed") || migrationScenario.status.includes("permission") ? "warning" : "neutral"} />
-                <div className="storageOpsNote">{copy.migrationNote}</div>
-                <div className="storageOpsActions">
-                  <button className="button secondary small" type="button" onClick={refreshMigrationPreview} disabled={!!rootAction || !migrationScenario.canPreview}>{rootAction === "preview" ? copy.calculating : copy.refreshMigrationPreview}</button>
-                  <button className="button small" type="button" onClick={applyMigration} disabled={!!rootAction || !migrationScenario.canApply}>{rootAction === "apply-migration" ? copy.applying : copy.applyMigration}</button>
-                </div>
-                {migrationScenario.blockerReason ? <SummaryRow label={copy.blockers} value={migrationScenario.blockerReason} tone="warning" /> : null}
-                {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
-                {migrationMessage ? <div className="storageOpsNote storageOpsNoteStrong">{migrationMessage}</div> : null}
-                {migrationResult ? <SummaryRow label={copy.applyReport} value={`${statusLabel(migrationResult.status, language)}; ${copy.executed}: ${(migrationResult.executed || []).length}; ${copy.sourcePreserved}: ${boolLabel(migrationResult.source_preserved, language)}; ${copy.cleanupPending}: ${boolLabel(migrationResult.cleanup_pending, language)}`} /> : null}
-                {migrationScenario.manualReviewRequired ? <div className="storageOpsNote">{copy.migrationManualReview}</div> : null}
-              </Section>
-
-              <Section title={copy.diagnostics}>
-                <details className="storageOpsDetails">
-                  <summary>{copy.technicalDetails}</summary>
-                  <dl>
-                    <div><dt>{copy.namespaceState}</dt><dd>{namespace.storage_namespace || "-"}</dd></div>
-                    <div><dt>{copy.namespaceExists}</dt><dd>{boolLabel(namespace.namespace_exists, language)}</dd></div>
-                    <div><dt>{copy.scanMode}</dt><dd>{namespace.scan_mode || "-"}</dd></div>
-                    <div><dt>{copy.partialScanReason}</dt><dd>{namespace.partial_reason || "-"}</dd></div>
-                    <div><dt>{copy.dockerPath}</dt><dd>{storageContract.storage_container_path || storageContract.container_runtime_storage_root || status?.container_runtime_storage_root || "/storage/archive"}</dd></div>
-                    <div><dt>{copy.missingNoMetadata}</dt><dd>{`${reconciliation.missing_file_count || 0} / ${reconciliation.orphan_file_count || 0}`}</dd></div>
-                    <div><dt>{copy.reasonOrphanFile}</dt><dd>{String(reconciliation.orphan_file_count || 0)}</dd></div>
-                    <div><dt>{copy.invalidOutside}</dt><dd>{`${reconciliation.invalid_path_count || 0} / ${reconciliation.path_outside_storage_count || 0}`}</dd></div>
-                    <div><dt>{copy.ownershipBoundary}</dt><dd>{copy.ownershipBoundaryText}</dd></div>
-                    <div><dt>{copy.foreignSkipped}</dt><dd>{String(owned.skipped_foreign_metadata_rows || 0)}</dd></div>
-                    <div><dt>{copy.deletedExcluded}</dt><dd>{String(owned.deleted_metadata_rows_excluded || 0)}</dd></div>
-                  </dl>
-                </details>
-              </Section>
+              {recent.available && recent.items?.length ? (
+                <Section title={copy.recentOperations} className="storageOpsSection-secondary storageOpsSection-recent">
+                  <div className="storageOpsRecent">
+                    {recent.items.map((item, index) => (
+                      <div className="storageOpsRecentItem" key={`${item.type || "operation"}-${index}`}>
+                        <strong>{item.title || statusLabel(item.type, language)}</strong>
+                        <span>{item.summary || statusLabel(item.status, language)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+              ) : null}
             </div>
 
-            <Section title={copy.byCameras}>
+            <Section title={copy.cameras}>
               {cameraRows.length ? (
-                <div className="storageOpsTableWrap">
-                  <table className="storageOpsTable">
-                    <thead>
-                      <tr>
-                        <th>{copy.camera}</th>
-                        <th>{copy.size}</th>
-                        <th>{copy.segments}</th>
-                        <th>{copy.missingFiles} / {copy.problems}</th>
-                        <th>{copy.range}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {cameraRows.map((row) => (
-                        <tr key={row.camera_id || row.camera_name}>
-                          <td><strong>{row.camera_name}</strong><span>ID {row.camera_id || "-"}</span></td>
-                          <td>{formatBytes(row.size_bytes)}</td>
-                          <td>{row.segment_count}</td>
-                          <td>{row.missing_file_count} / {row.problem_file_count}</td>
-                          <td>{formatDateTime(row.oldest_recording_at, language)} - {formatDateTime(row.newest_recording_at, language)}</td>
+                <>
+                  <div className="storageOpsTableWrap storageOpsCameraTable">
+                    <table className="storageOpsTable">
+                      <thead>
+                        <tr>
+                          <th>{copy.camera}</th>
+                          <th>{copy.size}</th>
+                          <th>{copy.segments}</th>
+                          <th>{copy.problems}</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {cameraRows.map((row) => (
+                          <tr key={row.camera_id || row.camera_name}>
+                            <td><strong>{row.camera_name}</strong></td>
+                            <td>{formatBytes(row.size_bytes)}</td>
+                            <td>{row.segment_count}</td>
+                            <td>{row.missing_file_count} / {row.problem_file_count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="storageOpsCameraCards">
+                    {cameraRows.map((row) => (
+                      <div className="storageOpsCameraCard" key={`card-${row.camera_id || row.camera_name}`}>
+                        <div className="storageOpsCameraCardIdentity">
+                          <strong>{row.camera_name}</strong>
+                        </div>
+                        <div className="storageOpsCameraCardMetric"><span>{copy.size}</span><strong>{formatBytes(row.size_bytes)}</strong></div>
+                        <div className="storageOpsCameraCardMetric"><span>{copy.segments}</span><strong>{row.segment_count}</strong></div>
+                        <div className="storageOpsCameraCardMetric"><span>{copy.problems}</span><strong>{row.missing_file_count} / {row.problem_file_count}</strong></div>
+                      </div>
+                    ))}
+                  </div>
+                </>
               ) : (
                 <div className="storageOpsEmpty">{copy.noCameraOwned}</div>
               )}
             </Section>
-
-            {recent.available && recent.items?.length ? (
-              <Section title={copy.recentOperations}>
-                <div className="storageOpsRecent">
-                  {recent.items.map((item, index) => (
-                    <div className="storageOpsRecentItem" key={`${item.type || "operation"}-${index}`}>
-                      <strong>{item.title || statusLabel(item.type, language)}</strong>
-                      <span>{item.summary || statusLabel(item.status, language)}</span>
-                    </div>
-                  ))}
-                </div>
-              </Section>
-            ) : null}
+            <details className="storageOpsSupportDetails">
+              <summary>{copy.supportDetails}</summary>
+              <dl>
+                <div><dt>{copy.namespaceState}</dt><dd>{namespace.storage_namespace || "-"}</dd></div>
+                <div><dt>{copy.availability}</dt><dd>{availability.label}</dd></div>
+                <div><dt>{copy.namespaceExists}</dt><dd>{boolLabel(namespace.namespace_exists, language)}</dd></div>
+                <div><dt>{copy.scanMode}</dt><dd>{namespace.scan_mode || "-"}</dd></div>
+                <div><dt>{copy.partialScanReason}</dt><dd>{namespace.partial_reason || "-"}</dd></div>
+                <div><dt>{copy.missingNoMetadata}</dt><dd>{`${reconciliation.missing_file_count || 0} / ${reconciliation.orphan_file_count || 0}`}</dd></div>
+                <div><dt>{copy.reasonOrphanFile}</dt><dd>{String(reconciliation.orphan_file_count || 0)}</dd></div>
+                <div><dt>{copy.invalidOutside}</dt><dd>{`${reconciliation.invalid_path_count || 0} / ${reconciliation.path_outside_storage_count || 0}`}</dd></div>
+              </dl>
+            </details>
           </>
         )}
+        <StorageDialog dialog={archiveRootDialog} onClose={() => setArchiveRootDialog(null)} />
       </div>
     </Layout>
   );

@@ -443,6 +443,53 @@ def persist_selection(candidate_id: str, folder_name: str, manual_root_path: str
     return {**result, **selection, "apply_status": "activation_requested", "storage_confirmation": storage_confirmation_status()}
 
 
+def queue_runtime_activation(selected_host_path: str, *, request_prefix: str = "runtime-storage") -> dict:
+    final = Path(str(selected_host_path or "").strip())
+    if not final.is_absolute():
+        raise ValueError("selected_host_path_must_be_absolute")
+    folder_name = validate_folder_name(final.name)
+    selected_mount = final.parent
+    if str(selected_mount) in {"", "."} or not selected_mount.is_absolute():
+        raise ValueError("selected_mount_path_must_be_absolute")
+    if final == selected_mount:
+        raise ValueError("selected_host_path_must_be_child_folder")
+    request_id = f"{request_prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+    selection = {
+        "schema_version": 2,
+        "selected_host_path": str(final),
+        "selected_mount_path": str(selected_mount),
+        "folder_name": folder_name,
+        "container_archive_path": CONTAINER_ARCHIVE_PATH,
+        "candidate_id": f"existing-root-{folder_name}",
+        "selected_at": _utc_now(),
+        "apply_status": "activation_requested",
+        "activation_request_id": request_id,
+    }
+    _write_json(install_control_dir() / SELECTION_FILE, selection)
+    _write_selection_control(selection)
+    _write_apply_status(
+        {
+            "schema_version": 2,
+            "status": "activation_requested",
+            "selected_host_path": str(final),
+            "container_archive_path": CONTAINER_ARCHIVE_PATH,
+            "requested_at": _utc_now(),
+            "next_action": "runtime_storage_activation",
+        }
+    )
+    activation_request = {
+        "schema_version": 1,
+        "request_id": request_id,
+        "selected_host_path": str(final),
+        "container_archive_path": CONTAINER_ARCHIVE_PATH,
+        "requested_at": _utc_now(),
+        "status": "requested",
+    }
+    _write_activation_request(activation_request)
+    _write_activation_request_control(activation_request)
+    return {**selection, "request_id": request_id, "storage_confirmation": storage_confirmation_status()}
+
+
 def mark_setup_completed() -> None:
     _write_json(
         install_control_dir() / SETUP_COMPLETE_FILE,
