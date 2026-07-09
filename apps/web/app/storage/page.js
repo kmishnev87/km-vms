@@ -510,7 +510,7 @@ export default function StorageOperationsPage() {
   const retention = operations.retention || {};
   const reconciliation = operations.reconciliation || {};
   const recent = operations.recent_operations || {};
-  const archiveRoots = operations.archive_roots || status?.archive_roots || [];
+  const archiveRoots = status?.archive_roots || operations.archive_roots || [];
   const migrationPreview = migrationPreviewState || operations.migration_preview || status?.migration_preview || {};
   const archiveRootChoices = archiveRootDiscovery?.candidates || [];
   const inactiveArchiveRoots = archiveRoots.filter((root) => !root.is_active);

@@ -39,6 +39,7 @@ from app.services.recording_storage import (
     _file_checksum,
     active_archive_root,
     archive_root_host_display_path,
+    archive_root_public_status,
     archive_root_runtime_path,
     apply_storage_migration,
     ensure_archive_roots,
@@ -531,6 +532,41 @@ def test_root_aware_resolver_keeps_old_segment_on_default_after_active_switch(db
 
     assert resolve_segment_file_path(db, old_segment, require_exists=True) == default_file.resolve()
     assert resolve_segment_file_path(db, new_segment, require_exists=True) == new_file.resolve()
+
+
+def test_active_host_archive_root_uses_runtime_mount_for_status_and_segments(db):
+    camera = add_camera(db)
+    runtime_file = write_storage_file("kmvms/recordings/runtime-active.mkv", b"runtime")
+    ensure_archive_roots(db)
+
+    host_only_root = Path(settings.storage_root).parent / "host-only-active"
+    active_root = add_archive_root(db, host_only_root, root_id="root_host_active", active=True)
+    db.query(ArchiveRoot).filter(ArchiveRoot.id == DEFAULT_ARCHIVE_ROOT_ID).update({ArchiveRoot.is_active: False})
+    segment = add_segment(
+        db,
+        camera,
+        relative_path="kmvms/recordings/runtime-active.mkv",
+        archive_root_id=active_root.id,
+    )
+
+    assert not host_only_root.exists()
+    assert archive_root_runtime_path(active_root) == Path(settings.storage_root)
+    assert resolve_segment_file_path(db, segment, require_exists=True) == runtime_file.resolve()
+
+    public_status = archive_root_public_status(active_root, include_path=True)
+    assert public_status["configured_path"] == str(host_only_root)
+    assert public_status["is_available"] is True
+    assert public_status["is_readable"] is True
+    assert public_status["is_writable"] is True
+    assert public_status["namespace_exists"] is True
+    assert public_status["problem"] is None
+
+    summary = build_storage_monitoring_summary(db, include_namespace_observations=False)
+    root_summary = next(item for item in summary["archive_roots"] if item["id"] == active_root.id)
+    assert root_summary["configured_path"] == str(host_only_root)
+    assert root_summary["existing_file_count"] == 1
+    assert root_summary["missing_file_count"] == 0
+    assert root_summary["size_bytes"] == len(b"runtime")
 
 
 def test_default_archive_root_path_stays_stable_after_settings_storage_root_changes(db, monkeypatch):

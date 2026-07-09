@@ -487,7 +487,11 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
     owned = summary.get("owned_archive") or {}
     path_checks = summary.get("storage_path_checks") or {}
     archive_roots = summary.get("archive_roots") or []
-    active_root = next((root for root in archive_roots if root.get("is_active")), None)
+    operation_archive_roots = [
+        {key: value for key, value in root.items() if key not in {"configured_path", "root_path", "path", "archive_host_path"}}
+        for root in archive_roots
+    ]
+    active_root = next((root for root in operation_archive_roots if root.get("is_active")), None)
 
     retention_last = _safe_last_summary(retention.get("last_summary"))
     auto_last = _safe_last_summary(auto_cleanup.get("last_summary"))
@@ -512,7 +516,7 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             "status": path_checks.get("status"),
             "reason": path_checks.get("last_error"),
         },
-        "archive_roots": archive_roots,
+        "archive_roots": operation_archive_roots,
         "active_archive_root": active_root,
         "migration_preview": summary.get("migration_preview"),
         "namespace_health": {
@@ -644,7 +648,7 @@ def build_storage_monitoring_summary(
     deleted_metadata_rows = 0
     archive_roots = []
     for root_row in archive_root_rows:
-        root_status = archive_root_public_status(root_row, include_path=False)
+        root_status = archive_root_public_status(root_row, include_path=True)
         root_status.update(root_usage(db, root_row))
         archive_roots.append(root_status)
 

@@ -75,13 +75,18 @@ def archive_root_host_display_path(root_row) -> str:
 
 
 def _root_path(root_row) -> Path:
-    return _stored_root_path(root_row)
+    return archive_root_runtime_path(root_row)
 
 
 def archive_root_runtime_path(root_row) -> Path:
     stored = _stored_root_path(root_row)
-    if bool(getattr(root_row, "is_active", False)) and stored.as_posix() != Path(settings.storage_root).as_posix():
-        return Path(settings.storage_root)
+    runtime = Path(settings.storage_root)
+    if (
+        bool(getattr(root_row, "is_active", False))
+        and stored.as_posix() != runtime.as_posix()
+        and not stored.exists()
+    ):
+        return runtime
     return stored
 
 
@@ -309,7 +314,7 @@ def active_namespace_dir(db: Session, camera_id: int, job_id: str) -> Path:
 def archive_root_public_status(root_row, *, include_path: bool = False) -> dict:
     configured_path = _stored_root_path(root_row)
     requires_activation = _inactive_runtime_activation_root(root_row)
-    root_path = _root_path(root_row)
+    root_path = archive_root_runtime_path(root_row)
     status = root_status(root_path)
     result = {
         "id": getattr(root_row, "id", None),

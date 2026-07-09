@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.15",
-  "tag": "v0.7.15",
-  "title": "Storage Archive Roots Management UX and Activation Closeout",
-  "summary": "Closes the accepted Storage archive-root operator work: compact root management, NAS volume/folder add flow, inactive-root deletion, runtime activation handoff, and clearer user-facing storage problem states.",
+  "version": "0.7.16",
+  "tag": "v0.7.16",
+  "title": "Storage Archive Roots Runtime Path Contract and Activation UX Dofix",
+  "summary": "Fixes the accepted Storage archive-root closeout regression: active host/NAS roots are resolved through the runtime mount, root paths remain truthful per row, and inactive roots waiting for runtime activation can still be made active from the UI.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.15",
+  "source_ref": "v0.7.16",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,10 +16,11 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Completes the Storage archive-root management UI with compact root rows, centered facts, icon actions and short problem badges.",
-    "Keeps root add on the NAS volume/folder selection model instead of exposing raw Docker/internal paths.",
-    "Routes archive-root activation through the setup-helper runtime handoff and restores previously active recordings after the switch.",
-    "Adds protected inactive-root deletion with confirmation, permission checks and recording-list cleanup.",
-    "Improves Storage wording/tests around root problems, automatic retention policy, files naming and operator-safe dialogs."
+    "Restores the active archive-root runtime path contract so a host/NAS archive path is checked and read through the active /storage/archive mount inside containers.",
+    "Keeps the active root free of false root_missing/missing-file warnings after an archive-root switch.",
+    "Exposes configured_path on /storage/status archive roots for truthful per-row UI display while keeping storage_operations sanitized from raw paths.",
+    "Prevents inactive root rows from inheriting the active root path as a frontend fallback.",
+    "Allows roots marked requires_activation to remain activatable even when their current inactive runtime path reports root_missing.",
+    "Adds backend/frontend regression tests for active host-path runtime resolution, status path contracts and activation button availability."
   ]
 }

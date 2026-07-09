@@ -733,10 +733,12 @@ export function migrationScenarioModel({ preview = {}, result = null, permission
 export function archiveRootScenarioModel({ root = null, permission = { allowed: true }, running = false } = {}, language = "ru") {
   const hasPath = Boolean(root?.configured_path || root?.path || root?.root_path || root?.display_path || root?.label);
   const problem = root?.problem || "";
+  const canRuntimeActivate = Boolean(root?.requires_activation && !root?.is_active && problem === "root_missing");
+  const blockedByProblem = Boolean(problem && !canRuntimeActivate);
   return {
-    status: !permission.allowed ? "unavailable_due_to_permissions" : running ? "running" : root?.is_active ? "active" : problem ? "blocked" : !hasPath ? "blocked" : root?.is_available === false ? "check_needed" : "idle",
+    status: !permission.allowed ? "unavailable_due_to_permissions" : running ? "running" : root?.is_active ? "active" : blockedByProblem ? "blocked" : !hasPath ? "blocked" : root?.is_available === false ? "check_needed" : "idle",
     permissionReason: permission.allowed ? "" : permission.reason,
-    canActivate: Boolean(permission.allowed && root && !root.is_active && !problem && hasPath && !running),
+    canActivate: Boolean(permission.allowed && root && !root.is_active && !blockedByProblem && hasPath && !running),
     reason: problem ? humanBlockerReason(problem, language) : !hasPath ? humanBlockerReason("archive_root_missing", language) : "",
   };
 }

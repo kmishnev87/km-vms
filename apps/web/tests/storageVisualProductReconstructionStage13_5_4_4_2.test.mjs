@@ -36,6 +36,16 @@ assert.equal(
   true,
   "inactive configured roots can be activated through the runtime helper even before the API container can verify the final mount"
 );
+assert.equal(
+  context.archiveRootScenarioModel({ root: { is_active: false, is_available: false, requires_activation: true, configured_path: "/Volume3/Surveillance", problem: "root_missing" }, permission: { allowed: true } }).canActivate,
+  true,
+  "inactive roots waiting for runtime activation must remain activatable even while their current runtime path is missing"
+);
+assert.equal(
+  context.archiveRootScenarioModel({ root: { is_active: false, is_available: false, configured_path: "/Volume3/Broken", problem: "namespace_missing" }, permission: { allowed: true } }).canActivate,
+  false,
+  "real inactive root health problems must still block activation until fixed"
+);
 
 const overviewStart = storagePage.indexOf("<section className={`storageOpsOverview");
 const overviewEnd = storagePage.indexOf("{refreshWarning", overviewStart);
