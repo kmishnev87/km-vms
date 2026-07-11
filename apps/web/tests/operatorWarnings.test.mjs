@@ -173,4 +173,39 @@ for (const message of [
   assert.equal(shouldStopRuntimeStatusPolling(new Error(message)), true);
 }
 
-assert.equal(shouldStopRuntimeStatusPolling(new Error("Network failed")), false);
+for (const [status, message] of [
+  [500, "Сервис временно недоступен"],
+  [500, "Хранилище недоступно"],
+  [503, "Service temporarily unavailable"],
+  [500, "permission denied"],
+]) {
+  const error = Object.assign(new Error(message), { status });
+  assert.equal(isRuntimeStatusAccessDenied(error), false, `${status} ${message} is retryable`);
+  assert.equal(shouldStopRuntimeStatusPolling(error), false, `${status} ${message} keeps polling`);
+}
+
+for (const status of [401, 403]) {
+  const error = Object.assign(new Error("Service unavailable"), { status });
+  assert.equal(isRuntimeStatusAccessDenied(error), true, `${status} is denied`);
+  assert.equal(shouldStopRuntimeStatusPolling(error), true, `${status} stops polling`);
+}
+
+const nestedStatusError = Object.assign(new Error("Хранилище недоступно"), { response: { status: 502 } });
+assert.equal(isRuntimeStatusAccessDenied(nestedStatusError), false);
+assert.equal(shouldStopRuntimeStatusPolling(nestedStatusError), false);
+
+for (const message of [
+  "permission denied",
+  "Права пользователя ограничены",
+  "Раздел недоступен. Права пользователя ограничены.",
+  "用户权限受限",
+  "此部分不可用。用户权限受限。",
+]) {
+  assert.equal(isRuntimeStatusAccessDenied(new Error(message)), true, `${message} is exact denied fallback`);
+  assert.equal(shouldStopRuntimeStatusPolling(new Error(message)), true);
+}
+
+for (const message of ["Network failed", "Failed to fetch", "Сервис временно недоступен", "Хранилище недоступно"]) {
+  assert.equal(isRuntimeStatusAccessDenied(new Error(message)), false, `${message} is not denied`);
+  assert.equal(shouldStopRuntimeStatusPolling(new Error(message)), false, `${message} keeps polling`);
+}

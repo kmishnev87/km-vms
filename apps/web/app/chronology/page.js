@@ -1264,8 +1264,12 @@ export default function ChronologyPage() {
 
       const hasVideo = Boolean(response?.has_video);
       const relPath = hasVideo ? (response?.rel_path || null) : null;
+      const segmentId = response?.segment_id || null;
+      const archiveRootId = response?.archive_root_id || null;
+      const playbackRef = response?.playback_ref || null;
+      const availabilityStatus = String(response?.availability_status || (hasVideo ? "available" : "no_recording"));
       const offsetSec = hasVideo ? Number(response?.offset_sec || 0) : 0;
-      const cameraId = hasVideo ? String(tile.cameraId) : null;
+      const cameraId = String(tile.cameraId);
       const containerFormat = hasVideo ? String(response?.container_format || "").toLowerCase() : "";
       const fileExtension = hasVideo ? String(response?.file_extension || "").toLowerCase() : "";
       const mimeType = hasVideo ? String(response?.mime_type || "").toLowerCase() : "";
@@ -1275,19 +1279,25 @@ export default function ChronologyPage() {
         prev &&
         Boolean(prev.hasVideo) === hasVideo &&
         String(prev.cameraId || "") === String(cameraId || "") &&
-        String(prev.relPath || "") === String(relPath || "");
+        String(prev.relPath || "") === String(relPath || "") &&
+        String(prev.segmentId || "") === String(segmentId || "") &&
+        String(prev.archiveRootId || "") === String(archiveRootId || "");
 
       return {
         hasVideo,
         cameraId,
         relPath,
+        segmentId,
+        archiveRootId,
+        playbackRef,
+        availabilityStatus,
         offsetSec,
         containerFormat,
         fileExtension,
         mimeType,
         playbackKey: sameSource
           ? prev.playbackKey
-          : `${tile.id}-${cameraId || "empty"}-${relPath || "empty"}-${offsetSec}-${containerFormat || fileExtension || "unknown"}-${Date.now()}`,
+          : `${tile.id}-${cameraId || "empty"}-${segmentId || relPath || "empty"}-${archiveRootId || "root"}-${availabilityStatus}-${offsetSec}-${containerFormat || fileExtension || "unknown"}-${Date.now()}`,
       };
     } catch (_) {
       return {

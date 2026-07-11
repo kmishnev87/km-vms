@@ -18,6 +18,26 @@ const SEVERITY_PRIORITY = {
 const MAX_BANNERS = 8;
 const MAX_DRILLDOWN_ROWS = 6;
 const RUNTIME_STATUS_PERMISSION = "run_diagnostics";
+const RUNTIME_STATUS_DENIED_MESSAGES = new Set([
+  "401",
+  "403",
+  "http 401",
+  "http 403",
+  "401 unauthorized",
+  "403 forbidden",
+  "forbidden",
+  "not authenticated",
+  "invalid token",
+  "insufficient permissions",
+  "permission denied",
+  "section unavailable. user permissions are limited.",
+  "права пользователя ограничены",
+  "недостаточно прав",
+  "недостаточно прав пользователя",
+  "раздел недоступен. права пользователя ограничены.",
+  "用户权限受限",
+  "此部分不可用。用户权限受限。",
+]);
 
 export const DOMAIN_LABELS_RU = {
   cameras: "Камеры",
@@ -73,18 +93,52 @@ export function userCanReadRuntimeStatus(user) {
   return Array.isArray(user?.permissions) && user.permissions.includes(RUNTIME_STATUS_PERMISSION);
 }
 
+export function runtimeStatusUserIdentity(user) {
+  if (!user) return null;
+  const identity = user.id ?? user.username ?? user.role;
+  if (identity != null) return String(identity);
+  return userCanReadRuntimeStatus(user) ? "authorized-user" : null;
+}
+
+export function systemHealthIndicatorModel({
+  user,
+  summary = null,
+  runtimeStatusKnown = false,
+  permissionDenied = false,
+} = {}) {
+  const canRead = userCanReadRuntimeStatus(user);
+  if (!canRead || permissionDenied) {
+    return {
+      visible: false,
+      canRead,
+      state: permissionDenied ? "denied" : "hidden",
+      hasProblems: false,
+    };
+  }
+  if (!runtimeStatusKnown || !summary) {
+    return { visible: true, canRead: true, state: "unknown", hasProblems: false };
+  }
+  const hasProblems = summary.severity !== "ok";
+  return {
+    visible: true,
+    canRead: true,
+    state: hasProblems ? "problem" : "healthy",
+    hasProblems,
+  };
+}
+
 export function isRuntimeStatusAccessDenied(error) {
-  const message = String(error?.message || error || "").toLowerCase();
-  return (
-    message.includes("401") ||
-    message.includes("403") ||
-    message.includes("not authenticated") ||
-    message.includes("invalid token") ||
-    message.includes("forbidden") ||
-    message.includes("permission") ||
-    message.includes("недостат") ||
-    message.includes("доступ")
-  );
+  const rawStatus = error?.status ?? error?.response?.status;
+  if (rawStatus !== undefined && rawStatus !== null && rawStatus !== "") {
+    const status = Number(rawStatus);
+    if (Number.isFinite(status)) return status === 401 || status === 403;
+  }
+
+  const message = String(error?.message || error || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+  return RUNTIME_STATUS_DENIED_MESSAGES.has(message);
 }
 
 export function shouldStopRuntimeStatusPolling(error) {

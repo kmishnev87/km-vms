@@ -88,6 +88,9 @@ def migrate_recording_metadata_tables() -> None:
                 "ownership": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS ownership VARCHAR(50) DEFAULT 'KM VMS' NOT NULL",
                 "source": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'recorder' NOT NULL",
                 "archive_root_id": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS archive_root_id VARCHAR(36) NULL",
+                "archive_root_resolution_status": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS archive_root_resolution_status VARCHAR(64) NULL",
+                "archive_root_resolution_detail": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS archive_root_resolution_detail TEXT NULL",
+                "archive_root_resolved_at": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS archive_root_resolved_at TIMESTAMP NULL",
                 "checksum": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS checksum VARCHAR(128) NULL",
                 "storage_namespace": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS storage_namespace VARCHAR(255) NULL",
                 "container_format": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS container_format VARCHAR(32) NULL",
@@ -97,6 +100,7 @@ def migrate_recording_metadata_tables() -> None:
                 "integrity_error": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS integrity_error TEXT NULL",
                 "last_integrity_check_at": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS last_integrity_check_at TIMESTAMP NULL",
                 "file_size_verified_at": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS file_size_verified_at TIMESTAMP NULL",
+                "media_progress_at": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS media_progress_at TIMESTAMP NULL",
                 "file_mtime": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS file_mtime TIMESTAMP NULL",
                 "content_probe_status": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS content_probe_status VARCHAR(100) NULL",
                 "cleanup_candidate": "ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS cleanup_candidate BOOLEAN DEFAULT FALSE NULL",
@@ -123,6 +127,7 @@ def migrate_recording_metadata_tables() -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_status ON recording_segments (status)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_ownership ON recording_segments (ownership)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_archive_root_id ON recording_segments (archive_root_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_archive_root_resolution_status ON recording_segments (archive_root_resolution_status)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_relative_path ON recording_segments (relative_path)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_job_relative_path ON recording_segments (job_id, relative_path)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_integrity_status ON recording_segments (integrity_status)"))
@@ -159,6 +164,11 @@ def migrate_archive_roots() -> None:
             )
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_is_active ON archive_roots (is_active)"))
+        conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS physical_identity VARCHAR(128) NULL"))
+        conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS retirement_status VARCHAR(50) NULL"))
+        conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS retirement_problem TEXT NULL"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_physical_identity ON archive_roots (physical_identity)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_retirement_status ON archive_roots (retirement_status)"))
 
 
 def migrate_recorder_runtime_status() -> None:

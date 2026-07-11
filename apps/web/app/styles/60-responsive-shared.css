@@ -205,8 +205,7 @@
   .storageOpsMiniGrid,
   .storageOpsOperationFacts,
   .storageOpsOperationRow,
-  .storageOpsPolicyStrip,
-  .storageOpsArchiveSummary > div {
+  .storageOpsPolicyStrip {
     grid-template-columns: 1fr;
   }
 
@@ -683,11 +682,6 @@
     padding-bottom: 6px;
   }
 
-  .storageOpsArchiveSummary > div {
-    grid-template-columns: 1fr;
-    gap: 3px;
-  }
-
   .storageOpsTable {
     min-width: 640px;
   }
@@ -706,6 +700,24 @@
 
   .storageOpsAdvancedRoot .storageOpsRootForm-product {
     grid-template-columns: 1fr;
+  }
+
+  .storageOpsAdvancedRootSummaryContent {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+  }
+
+  .storageOpsDiscoveryStatus {
+    text-align: left;
+  }
+
+  .storageOpsDiscoveryFeedback {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .storageOpsDiscoveryFeedback .button {
+    align-self: flex-start;
   }
 
   .storageOpsAdvancedRoot .storageOpsRootAddButton {
@@ -749,6 +761,62 @@
 }
 
 @media (max-width: 640px) {
+  .recordingsTable {
+    min-width: 760px;
+  }
+
+  .recordingsTable th,
+  .recordingsTable td {
+    padding: 9px 6px;
+    font-size: 12px;
+  }
+
+  .recordingsSelectCol {
+    width: 34px;
+  }
+
+  .recordingsCameraCol {
+    width: 145px;
+  }
+
+  .recordingsSpacerCol {
+    width: 10px;
+  }
+
+  .recordingsFileCol {
+    width: 260px;
+  }
+
+  .recordingsDateCol {
+    width: 132px;
+  }
+
+  .recordingsSizeCol {
+    width: 76px;
+  }
+
+  .recordingsActionsCol {
+    width: 96px;
+  }
+
+  .recordingsIconButton {
+    width: 27px;
+    min-width: 27px;
+    height: 27px;
+  }
+
+  .chronologyTimelineAxisLabel {
+    font-size: 9px;
+  }
+
+  .chronologyTimelineAxisMark.major .chronologyTimelineAxisLabel {
+    display: none;
+  }
+
+  .chronologyTimelineAxisMark.major:nth-child(6n + 2) .chronologyTimelineAxisLabel {
+    display: grid;
+  }
+
   .storageOpsMiniGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

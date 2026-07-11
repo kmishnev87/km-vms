@@ -90,7 +90,11 @@ detect_compose() {
 compose_config_check() {
   [ -f "$APP_DIR/docker-compose.yml" ] || return 0
   if detect_compose; then
-    (cd "$APP_DIR" && km_vms_compose_cmd --env-file "$ENV_FILE" config >/dev/null)
+    if [ -f "$ARCHIVE_ROOTS_COMPOSE_FILE" ]; then
+      (cd "$APP_DIR" && km_vms_compose_cmd --env-file "$ENV_FILE" -f "$APP_DIR/docker-compose.yml" -f "$ARCHIVE_ROOTS_COMPOSE_FILE" config >/dev/null)
+    else
+      (cd "$APP_DIR" && km_vms_compose_cmd --env-file "$ENV_FILE" -f "$APP_DIR/docker-compose.yml" config >/dev/null)
+    fi
   fi
 }
 
@@ -115,6 +119,7 @@ done
 ENV_FILE="$APP_DIR/.env"
 SELECTION_FILE="$APP_DIR/data/install-control/storage-selection.control"
 STATUS_FILE="$APP_DIR/data/install-control/storage-apply-status.json"
+ARCHIVE_ROOTS_COMPOSE_FILE="$APP_DIR/data/install-control/docker-compose.archive-roots.yml"
 [ -f "$ENV_FILE" ] || fail ".env not found"
 [ -f "$SELECTION_FILE" ] || fail "storage-selection.control not found"
 
@@ -122,6 +127,8 @@ selected_path=$(read_control_value "$SELECTION_FILE" selected_host_path || true)
 selected_mount=$(read_control_value "$SELECTION_FILE" selected_mount_path || true)
 folder_name=$(read_control_value "$SELECTION_FILE" folder_name || true)
 apply_status=$(read_control_value "$SELECTION_FILE" apply_status || true)
+request_id=$(read_control_value "$SELECTION_FILE" activation_request_id || true)
+operation_id=$(read_control_value "$SELECTION_FILE" operation_id || true)
 [ -n "$selected_path" ] || fail "selected_host_path not found in selection control file"
 [ -n "$selected_mount" ] || fail "selected_mount_path not found in selection control file"
 [ -n "$folder_name" ] || fail "folder_name not found in selection control file"
@@ -219,6 +226,25 @@ chmod 750 "$fs_selected_path/kmvms" "$namespace_path" 2>/dev/null || true
 
 backup="$ENV_FILE.stage2-storage.bak"
 tmp="$ENV_FILE.tmp.$$"
+ENV_CHANGED=0
+
+restore_env_on_failure() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  if [ "$status" -ne 0 ] && [ "$ENV_CHANGED" = "1" ] && [ -f "$backup" ]; then
+    restore_tmp="$ENV_FILE.restore.$$"
+    if cp "$backup" "$restore_tmp"; then
+      chmod --reference="$ENV_FILE" "$restore_tmp" 2>/dev/null || chmod 600 "$restore_tmp" 2>/dev/null || true
+      mv "$restore_tmp" "$ENV_FILE" || rm -f "$restore_tmp"
+    else
+      rm -f "$restore_tmp"
+    fi
+  fi
+  exit "$status"
+}
+
+trap restore_env_on_failure EXIT
+trap 'exit 1' HUP INT TERM
 cp "$ENV_FILE" "$backup"
 awk -v value="$selected_path" '
   BEGIN { done = 0 }
@@ -228,17 +254,26 @@ awk -v value="$selected_path" '
 ' "$ENV_FILE" > "$tmp"
 chmod --reference="$ENV_FILE" "$tmp" 2>/dev/null || chmod 600 "$tmp" 2>/dev/null || true
 mv "$tmp" "$ENV_FILE"
-compose_config_check || fail "docker compose config failed after storage path apply"
+ENV_CHANGED=1
+if ! compose_config_check; then
+  fail "docker compose config failed after storage path apply"
+fi
 applied_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
+status_tmp="$STATUS_FILE.tmp.$$"
 {
   printf '{\n'
   printf '  "schema_version": 1,\n'
   printf '  "status": "applied_restart_required",\n'
+  printf '  "request_id": "%s",\n' "$(json_escape "$request_id")"
+  printf '  "operation_id": "%s",\n' "$(json_escape "$operation_id")"
   printf '  "selected_host_path": "%s",\n' "$(json_escape "$selected_path")"
   printf '  "container_archive_path": "/storage/archive",\n'
   printf '  "applied_at": "%s",\n' "$(json_escape "$applied_at")"
   printf '  "next_action": "restart_km_vms_containers"\n'
   printf '}\n'
-} > "$STATUS_FILE"
+} > "$status_tmp"
+mv "$status_tmp" "$STATUS_FILE"
 chmod 600 "$STATUS_FILE" 2>/dev/null || true
+ENV_CHANGED=0
+trap - EXIT HUP INT TERM
 printf 'Storage host path applied. Status: applied_restart_required. Restart KM VMS containers to use the new bind mount.\n'

@@ -24,6 +24,11 @@ from app.routers.audit import audit_events
 from app.services.timezone_contract import utc_now_storage
 from app.services.recorder_diagnostics import build_recorder_status
 from app.services.system_runtime_status import build_operator_runtime_status
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
 
 
 @pytest.fixture
@@ -57,6 +62,7 @@ def db():
     )
     session.add(SystemSettings(system_initialized=True, timezone="Asia/Yekaterinburg", language="ru", storage_path=settings.storage_root))
     session.commit()
+    ensure_archive_roots(session)
     try:
         yield session
     finally:
@@ -170,6 +176,7 @@ def add_runtime_rows(
             camera_name_snapshot=camera.name,
             camera_folder_snapshot=camera.storage_folder_name,
             state="recording",
+            recorder_instance_id="stage12-stage3-recorder",
             source_stream="main",
             started_at=now,
             updated_at=now,
@@ -178,6 +185,7 @@ def add_runtime_rows(
     )
     segment = RecordingSegment(
         camera_id=camera.id,
+        job_id="stage12_stage3_job",
         camera_name_snapshot=camera.name,
         camera_folder_snapshot=camera.storage_folder_name,
         file_path=str(Path(settings.storage_root) / segment_name),
@@ -187,9 +195,13 @@ def add_runtime_rows(
         finalized_at=segment_finalized_at,
         duration_sec=60,
         size_bytes=10,
+        media_progress_at=now if segment_ended_at is None else None,
         status="finalized",
         ownership="KM VMS",
         source="recorder",
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=now,
     )
     db.add(segment)
     db.commit()
@@ -284,7 +296,7 @@ def test_diagnostic_archive_contains_timezone_metadata_and_audit_system_fields(d
     monkeypatch.setattr(settings_router, "camera_diagnostics", lambda db: [])
     monkeypatch.setattr(settings_router.live_manager, "status", lambda: [])
     monkeypatch.setattr(settings_router.live_manager, "debug", lambda: {})
-    monkeypatch.setattr(settings_router, "recordings_diagnostics", lambda: {"count": 0})
+    monkeypatch.setattr(settings_router, "recordings_diagnostics", lambda db: {"count": 0})
     monkeypatch.setattr(settings_router, "chronology_diagnostics", lambda db: {"items": []})
     monkeypatch.setattr(settings_router, "list_events", lambda db, **kwargs: [event])
     monkeypatch.setattr(settings_router, "utc_now_storage", lambda: utc_now_storage())

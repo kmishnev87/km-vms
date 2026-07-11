@@ -4,6 +4,8 @@ import json
 import os
 import re
 import shutil
+import time
+import uuid
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +14,10 @@ from app.core.config import settings
 
 CONTAINER_ARCHIVE_PATH = "/storage/archive"
 DISCOVERY_FILE = "storage-discovery.json"
+DISCOVERY_REQUEST_FILE = "storage-discovery-request.json"
+DISCOVERY_REQUEST_CONTROL_FILE = "storage-discovery-request.control"
+DISCOVERY_RESULT_FILE = "storage-discovery-result.json"
+DISCOVERY_LOCK_FILE = "storage-discovery-request.lock"
 SELECTION_FILE = "storage-selection.json"
 SELECTION_CONTROL_FILE = "storage-selection.control"
 APPLY_STATUS_FILE = "storage-apply-status.json"
@@ -22,6 +28,9 @@ MARKER_FILE = ".km-vms-storage-root.json"
 ACTIVE_SELECTION_STATUSES = {"active"}
 IN_PROGRESS_SELECTION_STATUSES = {"activation_requested", "activation_in_progress", "applied_restart_required"}
 FAILED_SELECTION_STATUSES = {"activation_failed", "validation_failed"}
+DISCOVERY_CURRENT_SECONDS = 120
+DISCOVERY_REQUEST_TIMEOUT_SECONDS = 20
+DISCOVERY_LOCK_STALE_SECONDS = 60
 BLOCKED_PATHS = {
     "/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc", "/run",
     "/sbin", "/sys", "/usr", "/var", "/root", "/tmp",
@@ -65,7 +74,7 @@ def _safe_read_json(path: Path) -> dict:
 
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
 
@@ -79,7 +88,7 @@ def _control_value(value: object) -> str:
 
 def _write_control(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     lines = [f"{key}={_control_value(value)}" for key, value in payload.items()]
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     tmp.replace(path)
@@ -98,7 +107,7 @@ def _candidate_id(path: str) -> str:
 def _format_label(path: str) -> str:
     value = str(path or "").strip()
     if re.fullmatch(r"/Volume\d+", value) or re.fullmatch(r"/volume\d+", value):
-        return value
+        return value.lstrip("/")
     if value.startswith("/share/"):
         return value.split("/", 3)[2]
     if value.startswith("/mnt/"):
@@ -148,6 +157,7 @@ def sanitize_candidate(raw: dict) -> dict:
         "path": path,
         "label": str(raw.get("label") or _format_label(path)),
         "filesystem_type": fstype,
+        "physical_identity": str(raw.get("physical_identity") or "").strip() or None,
         "total_bytes": int(raw.get("total_bytes") or 0),
         "used_bytes": int(raw.get("used_bytes") or 0),
         "free_bytes": int(raw.get("free_bytes") or 0),
@@ -175,25 +185,50 @@ def _sorted_candidates(items: list[dict]) -> list[dict]:
     return ordered
 
 
+def _public_candidate(item: dict) -> dict:
+    return {
+        key: value
+        for key, value in item.items()
+        if key not in {"physical_identity", "filesystem_type"}
+    }
+
+
+def _parse_utc(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
 def discovery_snapshot() -> dict:
     path = install_control_dir() / DISCOVERY_FILE
     payload = _safe_read_json(path)
     raw_candidates = [sanitize_candidate(item) for item in payload.get("candidates") or [] if isinstance(item, dict)]
     ordered = _sorted_candidates(raw_candidates)
-    primary = [item for item in ordered if item["ui_visibility"] == "primary"]
+    primary = [_public_candidate(item) for item in ordered if item["ui_visibility"] == "primary"]
     hidden_count = sum(1 for item in ordered if item["ui_visibility"] == "hidden")
     manual_count = sum(1 for item in ordered if item["ui_visibility"] == "manual_only")
+    created_at = _parse_utc(payload.get("created_at"))
+    age_seconds = max(0, int((datetime.utcnow() - created_at).total_seconds())) if created_at else None
+    freshness = "current" if age_seconds is not None and age_seconds <= DISCOVERY_CURRENT_SECONDS else ("stale" if payload else "unavailable")
+    available = bool(primary) and bool(payload.get("host_visibility")) and freshness == "current"
     return {
-        "available": bool(primary) and bool(payload.get("host_visibility")),
+        "available": available,
         "discovery_source": payload.get("discovery_source") or "unavailable",
         "host_visibility": bool(payload.get("host_visibility")),
         "created_at": payload.get("created_at"),
+        "snapshot_id": payload.get("snapshot_id"),
+        "age_seconds": age_seconds,
+        "freshness": freshness,
         "container_archive_path": CONTAINER_ARCHIVE_PATH,
         "candidates": primary,
-        "manual_path_supported": True,
+        "manual_path_supported": False,
         "hidden_candidate_count": hidden_count,
         "manual_candidate_count": manual_count,
-        "status": "ready" if primary and payload.get("host_visibility") else "manual_snapshot_required",
+        "status": "ready" if available else freshness,
     }
 
 
@@ -203,12 +238,210 @@ def _all_discovered_candidates() -> list[dict]:
     return [sanitize_candidate(item) for item in payload.get("candidates") or [] if isinstance(item, dict)]
 
 
+def _acquire_discovery_lock(request_id: str) -> bool:
+    path = install_control_dir() / DISCOVERY_LOCK_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        try:
+            age = time.time() - path.stat().st_mtime
+        except OSError:
+            return False
+        if age <= DISCOVERY_LOCK_STALE_SECONDS:
+            return False
+        stale = path.with_name(f"{path.name}.stale.{uuid.uuid4().hex}")
+        try:
+            os.replace(path, stale)
+        except OSError:
+            return False
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+        return _acquire_discovery_lock(request_id)
+    try:
+        os.write(descriptor, f"{request_id}\n".encode("utf-8"))
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return True
+
+
+def _release_discovery_lock(request_id: str) -> None:
+    path = install_control_dir() / DISCOVERY_LOCK_FILE
+    try:
+        if path.read_text(encoding="utf-8").strip() == request_id:
+            path.unlink()
+    except (FileNotFoundError, OSError):
+        pass
+
+
+def _queue_discovery_request(payload: dict) -> None:
+    _write_json(install_control_dir() / DISCOVERY_REQUEST_FILE, payload)
+    _write_control(
+        install_control_dir() / DISCOVERY_REQUEST_CONTROL_FILE,
+        {
+            "schema_version": payload.get("schema_version", 1),
+            "request_id": payload.get("request_id"),
+            "mode": payload.get("mode"),
+            "candidate_id": payload.get("candidate_id"),
+            "expected_snapshot_id": payload.get("expected_snapshot_id"),
+            "expected_physical_identity": payload.get("expected_physical_identity"),
+            "folder_name": payload.get("folder_name"),
+            "status": payload.get("status"),
+        },
+    )
+
+
+def _wait_discovery_result(request_id: str, *, timeout_seconds: int = DISCOVERY_REQUEST_TIMEOUT_SECONDS) -> dict:
+    deadline = time.monotonic() + timeout_seconds
+    result_path = install_control_dir() / DISCOVERY_RESULT_FILE
+    while time.monotonic() < deadline:
+        result = _safe_read_json(result_path)
+        if str(result.get("request_id") or "") == request_id and str(result.get("status") or "") in {"completed", "failed"}:
+            return result
+        time.sleep(0.25)
+    return {"request_id": request_id, "status": "failed", "error": "storage_discovery_refresh_timeout"}
+
+
+def request_discovery_refresh(*, timeout_seconds: int = DISCOVERY_REQUEST_TIMEOUT_SECONDS) -> dict:
+    request_id = f"storage-discovery-{uuid.uuid4().hex}"
+    if not _acquire_discovery_lock(request_id):
+        snapshot = discovery_snapshot()
+        return {**snapshot, "refresh_in_progress": True, "status": "refreshing"}
+    try:
+        _queue_discovery_request(
+            {
+                "schema_version": 1,
+                "request_id": request_id,
+                "mode": "refresh",
+                "requested_at": _utc_now(),
+                "status": "requested",
+            }
+        )
+        result = _wait_discovery_result(request_id, timeout_seconds=timeout_seconds)
+        snapshot = discovery_snapshot()
+        if result.get("status") != "completed":
+            return {
+                **snapshot,
+                "available": False,
+                "refresh_error": str(result.get("error") or "storage_discovery_refresh_failed"),
+                "status": "stale" if snapshot.get("snapshot_id") else "unavailable",
+                "freshness": "stale" if snapshot.get("snapshot_id") else "unavailable",
+            }
+        return {**snapshot, "refresh_in_progress": False}
+    finally:
+        _release_discovery_lock(request_id)
+
+
+def revalidate_discovery_candidate(
+    candidate_id: str,
+    snapshot_id: str,
+    folder_name: str,
+    *,
+    timeout_seconds: int = DISCOVERY_REQUEST_TIMEOUT_SECONDS,
+) -> dict:
+    cached_payload = _safe_read_json(install_control_dir() / DISCOVERY_FILE)
+    if not snapshot_id or str(cached_payload.get("snapshot_id") or "") != str(snapshot_id):
+        raise ValueError("storage_discovery_snapshot_stale")
+    cached_candidates = {
+        item["id"]: item
+        for item in (sanitize_candidate(raw) for raw in cached_payload.get("candidates") or [] if isinstance(raw, dict))
+    }
+    cached = cached_candidates.get(candidate_id)
+    if not cached or cached.get("safety_status") != "allowed":
+        raise ValueError("storage candidate is not available")
+    expected_identity = str(cached.get("physical_identity") or "")
+    if not expected_identity:
+        raise ValueError("storage_candidate_identity_unavailable")
+    safe_folder = validate_folder_name(folder_name)
+    request_id = f"storage-revalidate-{uuid.uuid4().hex}"
+    if not _acquire_discovery_lock(request_id):
+        raise ValueError("storage_discovery_refresh_in_progress")
+    try:
+        _queue_discovery_request(
+            {
+                "schema_version": 1,
+                "request_id": request_id,
+                "mode": "candidate_revalidate",
+                "candidate_id": candidate_id,
+                "expected_snapshot_id": snapshot_id,
+                "expected_physical_identity": expected_identity,
+                "folder_name": safe_folder,
+                "requested_at": _utc_now(),
+                "status": "requested",
+            }
+        )
+        result = _wait_discovery_result(request_id, timeout_seconds=timeout_seconds)
+        if result.get("status") != "completed":
+            raise ValueError(str(result.get("error") or "storage_candidate_revalidation_failed"))
+        if str(result.get("candidate_id") or "") != candidate_id:
+            raise ValueError("storage_candidate_revalidation_mismatch")
+        if str(result.get("physical_identity") or "") != expected_identity:
+            raise ValueError("storage_candidate_physical_identity_changed")
+        if not result.get("writable"):
+            raise ValueError("storage_candidate_not_writable")
+        return result
+    finally:
+        _release_discovery_lock(request_id)
+
+
+def revalidate_configured_archive_root(root_row, *, timeout_seconds: int = DISCOVERY_REQUEST_TIMEOUT_SECONDS) -> dict:
+    if root_row is None:
+        raise ValueError("archive_root_missing")
+    host_path = Path(str(getattr(root_row, "root_path", "") or ""))
+    if host_path.as_posix() == Path(settings.storage_root).as_posix():
+        configured = str(os.getenv("STORAGE_HOST_ROOT") or os.getenv("SURVEILLANCE_ROOT") or "").strip()
+        host_path = Path(configured) if configured else host_path
+    if not host_path.is_absolute() or not host_path.name:
+        raise ValueError("archive_root_host_path_invalid")
+    expected_identity = str(getattr(root_row, "physical_identity", None) or "")
+
+    refreshed = request_discovery_refresh(timeout_seconds=timeout_seconds)
+    if refreshed.get("freshness") != "current" or not refreshed.get("snapshot_id"):
+        raise ValueError(str(refreshed.get("refresh_error") or "storage_discovery_current_snapshot_unavailable"))
+    candidates = [
+        item
+        for item in _all_discovered_candidates()
+        if item.get("safety_status") == "allowed"
+    ]
+    matches: list[tuple[int, dict, str]] = []
+    for candidate in candidates:
+        mount = Path(str(candidate.get("path") or ""))
+        try:
+            relative = host_path.relative_to(mount)
+        except ValueError:
+            continue
+        if len(relative.parts) != 1:
+            continue
+        matches.append((len(mount.parts), candidate, relative.parts[0]))
+    if not matches:
+        raise ValueError("storage_candidate_disappeared_or_changed")
+    _depth, candidate, folder_name = sorted(matches, key=lambda item: item[0], reverse=True)[0]
+    candidate_identity = str(candidate.get("physical_identity") or "")
+    if not candidate_identity:
+        raise ValueError("storage_candidate_identity_unavailable")
+    if expected_identity and candidate_identity != expected_identity:
+        raise ValueError("storage_candidate_physical_identity_changed")
+    result = revalidate_discovery_candidate(
+        str(candidate["id"]),
+        str(refreshed["snapshot_id"]),
+        folder_name,
+        timeout_seconds=timeout_seconds,
+    )
+    if Path(str(result.get("final_host_path") or "")).resolve(strict=False) != host_path.resolve(strict=False):
+        raise ValueError("storage_candidate_revalidation_path_mismatch")
+    return result
+
+
 def storage_confirmation_status() -> dict:
     selection = _safe_read_json(install_control_dir() / SELECTION_FILE)
     apply_state = _safe_read_json(install_control_dir() / APPLY_STATUS_FILE)
     selected_host_path = str(selection.get("selected_host_path") or "").strip()
     container_archive_path = str(selection.get("container_archive_path") or CONTAINER_ARCHIVE_PATH).strip()
     apply_status = str(apply_state.get("status") or selection.get("apply_status") or "").strip()
+    runtime_request_id = str(apply_state.get("request_id") or selection.get("activation_request_id") or "").strip()
     errors: list[str] = []
 
     if not selection:
@@ -244,6 +477,8 @@ def storage_confirmation_status() -> dict:
         "selected_host_path": selected_host_path or None,
         "container_archive_path": CONTAINER_ARCHIVE_PATH,
         "apply_status": apply_status or None,
+        "runtime_request_id": runtime_request_id or None,
+        "operation_id": apply_state.get("operation_id") or selection.get("operation_id"),
         "apply_state": apply_state if apply_state else None,
         "restart_required": apply_status in IN_PROGRESS_SELECTION_STATUSES,
         "manual_action_required": apply_status in FAILED_SELECTION_STATUSES,
@@ -395,6 +630,8 @@ def _write_selection_control(payload: dict) -> None:
             "candidate_id": payload.get("candidate_id"),
             "apply_status": payload.get("apply_status"),
             "activation_request_id": payload.get("activation_request_id"),
+            "operation_id": payload.get("operation_id"),
+            "physical_identity": payload.get("physical_identity"),
         },
     )
 
@@ -408,6 +645,7 @@ def _write_activation_request_control(payload: dict) -> None:
             "selected_host_path": payload.get("selected_host_path"),
             "container_archive_path": payload.get("container_archive_path"),
             "status": payload.get("status"),
+            "operation_id": payload.get("operation_id"),
         },
     )
 
@@ -451,7 +689,14 @@ def persist_selection(candidate_id: str, folder_name: str, manual_root_path: str
     return {**result, **selection, "apply_status": "activation_requested", "storage_confirmation": storage_confirmation_status()}
 
 
-def queue_runtime_activation(selected_host_path: str, *, request_prefix: str = "runtime-storage") -> dict:
+def queue_runtime_activation(
+    selected_host_path: str,
+    *,
+    request_prefix: str = "runtime-storage",
+    operation_id: str | None = None,
+    physical_identity: str | None = None,
+    runtime_request_id: str | None = None,
+) -> dict:
     final = Path(str(selected_host_path or "").strip())
     if not final.is_absolute():
         raise ValueError("selected_host_path_must_be_absolute")
@@ -461,7 +706,7 @@ def queue_runtime_activation(selected_host_path: str, *, request_prefix: str = "
         raise ValueError("selected_mount_path_must_be_absolute")
     if final == selected_mount:
         raise ValueError("selected_host_path_must_be_child_folder")
-    request_id = f"{request_prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+    request_id = runtime_request_id or f"{request_prefix}-{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
     selection = {
         "schema_version": 2,
         "selected_host_path": str(final),
@@ -472,6 +717,8 @@ def queue_runtime_activation(selected_host_path: str, *, request_prefix: str = "
         "selected_at": _utc_now(),
         "apply_status": "activation_requested",
         "activation_request_id": request_id,
+        "operation_id": operation_id,
+        "physical_identity": physical_identity,
     }
     _write_json(install_control_dir() / SELECTION_FILE, selection)
     _write_selection_control(selection)
@@ -483,6 +730,8 @@ def queue_runtime_activation(selected_host_path: str, *, request_prefix: str = "
             "container_archive_path": CONTAINER_ARCHIVE_PATH,
             "requested_at": _utc_now(),
             "next_action": "runtime_storage_activation",
+            "request_id": request_id,
+            "operation_id": operation_id,
         }
     )
     activation_request = {
@@ -492,6 +741,7 @@ def queue_runtime_activation(selected_host_path: str, *, request_prefix: str = "
         "container_archive_path": CONTAINER_ARCHIVE_PATH,
         "requested_at": _utc_now(),
         "status": "requested",
+        "operation_id": operation_id,
     }
     _write_activation_request(activation_request)
     _write_activation_request_control(activation_request)

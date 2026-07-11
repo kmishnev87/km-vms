@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -7,15 +8,29 @@ import uuid
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Iterable
 
 from app.core.config import settings
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 KMVMS_RECORDINGS_NAMESPACE = "kmvms/recordings"
 VIDEO_EXTENSIONS = {".mp4", ".mkv"}
 DEFAULT_ARCHIVE_ROOT_ID = "default"
+ARCHIVE_ROOTS_RUNTIME_BASE = "/storage/archive-roots"
+ARCHIVE_ROOTS_RUNTIME_MANIFEST = "archive-roots-runtime.json"
+ARCHIVE_ROOTS_COMPOSE_OVERRIDE = "docker-compose.archive-roots.yml"
+ROOT_RESOLUTION_RESOLVED = "resolved"
+ROOT_RESOLUTION_UNRESOLVED = "root_unresolved"
+ROOT_RESOLUTION_AMBIGUOUS = "root_unresolved_ambiguous"
+ROOT_RESOLUTION_INACCESSIBLE = "root_unresolved_inaccessible"
+ROOT_RESOLUTION_CONFLICT = "root_identity_conflict"
+ROOT_RESOLUTION_PROBLEMS = {
+    ROOT_RESOLUTION_UNRESOLVED,
+    ROOT_RESOLUTION_AMBIGUOUS,
+    ROOT_RESOLUTION_INACCESSIBLE,
+    ROOT_RESOLUTION_CONFLICT,
+}
 
 
 def storage_root() -> Path:
@@ -24,8 +39,20 @@ def storage_root() -> Path:
     return root
 
 
+def archive_roots_runtime_base() -> Path:
+    return Path(os.getenv("KMVMS_ARCHIVE_ROOTS_RUNTIME_BASE") or ARCHIVE_ROOTS_RUNTIME_BASE)
+
+
+def archive_roots_manifest_path() -> Path:
+    return Path(settings.storage_install_control) / ARCHIVE_ROOTS_RUNTIME_MANIFEST
+
+
+def archive_roots_compose_override_path() -> Path:
+    return Path(settings.storage_install_control) / ARCHIVE_ROOTS_COMPOSE_OVERRIDE
+
+
 def approved_archive_base() -> Path:
-    return storage_root().resolve().parent
+    return Path(settings.storage_root).resolve(strict=False).parent
 
 
 def safe_name(value: str) -> str:
@@ -34,6 +61,12 @@ def safe_name(value: str) -> str:
     text = re.sub(r"\s+", "_", text)
     text = re.sub(r"_+", "_", text)
     return text[:120].strip("_") or "camera"
+
+
+def safe_archive_root_mount_id(value: str | None) -> str:
+    raw = str(value or DEFAULT_ARCHIVE_ROOT_ID).strip()
+    text = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip(".-")
+    return (text[:80] or DEFAULT_ARCHIVE_ROOT_ID).lower()
 
 
 def safe_resolve_relative(relative_path: str) -> Path:
@@ -78,9 +111,16 @@ def _root_path(root_row) -> Path:
     return archive_root_runtime_path(root_row)
 
 
+def archive_root_runtime_mount_path(root_row) -> Path:
+    return archive_roots_runtime_base() / safe_archive_root_mount_id(getattr(root_row, "id", None))
+
+
 def archive_root_runtime_path(root_row) -> Path:
     stored = _stored_root_path(root_row)
     runtime = Path(settings.storage_root)
+    per_root_runtime = archive_root_runtime_mount_path(root_row)
+    if per_root_runtime.exists():
+        return per_root_runtime
     if (
         bool(getattr(root_row, "is_active", False))
         and stored.as_posix() != runtime.as_posix()
@@ -97,6 +137,7 @@ def _inactive_runtime_activation_root(root_row) -> bool:
         and not bool(getattr(root_row, "is_active", False))
         and stored.as_posix() != Path(settings.storage_root).as_posix()
         and not stored.exists()
+        and not archive_root_runtime_mount_path(root_row).exists()
     )
 
 
@@ -110,11 +151,17 @@ def root_status(root_path: Path) -> dict:
     if exists and is_dir:
         try:
             next(root_path.iterdir(), None)
-            readable = True
+            root_readable = os.access(root_path, os.R_OK | os.X_OK)
         except OSError:
-            readable = False
+            root_readable = False
         if namespace_exists:
-            writable = os.access(namespace_root, os.W_OK)
+            try:
+                next(namespace_root.iterdir(), None)
+                namespace_readable = os.access(namespace_root, os.R_OK | os.X_OK)
+            except OSError:
+                namespace_readable = False
+            readable = bool(root_readable and namespace_readable)
+            writable = bool(os.access(namespace_root, os.W_OK | os.X_OK))
     problem = None
     if not exists:
         problem = "root_missing"
@@ -134,6 +181,164 @@ def root_status(root_path: Path) -> dict:
         "available": bool(exists and is_dir and readable and namespace_exists),
         "namespace_exists": namespace_exists,
         "problem": problem,
+    }
+
+
+def archive_root_runtime_access_state(root_row) -> dict:
+    runtime_path = archive_root_runtime_path(root_row)
+    status = root_status(runtime_path)
+    problem = status["problem"]
+    if (
+        not bool(status["exists"])
+        and not bool(getattr(root_row, "is_active", False))
+        and archive_root_runtime_mount_path(root_row).as_posix() == runtime_path.as_posix()
+    ):
+        problem = "archive_root_runtime_mount_missing"
+    access_state = "available" if status["available"] else "unavailable"
+    if status["exists"] and status["is_dir"] and (not status["readable"] or not status["namespace_exists"]):
+        access_state = "degraded"
+    return {
+        **status,
+        "runtime_path": runtime_path,
+        "runtime_mount_path": archive_root_runtime_mount_path(root_row),
+        "access_state": access_state,
+        "read_access_state": "available" if status["readable"] and status["namespace_exists"] else "unavailable",
+        "write_access_state": "available" if status["writable"] else "unavailable",
+        "mount_access_state": access_state,
+        "problem": problem,
+    }
+
+
+def verify_runtime_path_access(runtime_path: Path, *, require_write: bool, base_status: dict | None = None) -> dict:
+    status = dict(base_status or root_status(runtime_path))
+    status.setdefault("runtime_path", runtime_path)
+    status.setdefault("read_access_state", "available" if status.get("readable") and status.get("namespace_exists") else "unavailable")
+    status.setdefault("write_access_state", "available" if status.get("writable") else "unavailable")
+    if status["read_access_state"] != "available":
+        return {**status, "verified": False, "verification_error": status.get("problem") or "archive_root_unavailable"}
+    if not require_write:
+        return {**status, "verified": True, "verification_error": None}
+
+    namespace = runtime_path / KMVMS_RECORDINGS_NAMESPACE
+    probe = namespace / f".km-vms-access-probe-{uuid.uuid4().hex}"
+    try:
+        descriptor = os.open(probe, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            os.write(descriptor, b"km-vms-storage-access-probe\n")
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        if probe.read_bytes() != b"km-vms-storage-access-probe\n":
+            raise OSError("archive_root_probe_readback_failed")
+        probe.unlink()
+    except OSError:
+        try:
+            probe.unlink()
+        except OSError:
+            pass
+        return {
+            **status,
+            "verified": False,
+            "writable": False,
+            "write_access_state": "unavailable",
+            "verification_error": "archive_root_write_probe_failed",
+        }
+    return {**status, "verified": True, "writable": True, "write_access_state": "available", "verification_error": None}
+
+
+def verify_archive_root_access(root_row, *, require_write: bool) -> dict:
+    status = archive_root_runtime_access_state(root_row)
+    return verify_runtime_path_access(status["runtime_path"], require_write=require_write, base_status=status)
+
+
+def archive_root_physical_volume_id(root_row) -> str:
+    raw = archive_root_host_display_path(root_row).replace("\\", "/")
+    parts = [part for part in raw.split("/") if part]
+    if raw.startswith("/") and parts:
+        if parts[0].lower().startswith("volume"):
+            return f"/{parts[0]}"
+        return f"/{parts[0]}"
+    if len(parts) >= 2 and parts[0].endswith(":"):
+        return f"{parts[0]}/{parts[1]}"
+    return parts[0] if parts else "unknown"
+
+
+def _compose_yaml_quote(value: str) -> str:
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def write_archive_roots_runtime_files(db: Session) -> dict:
+    from app.models.recording import ArchiveRoot
+
+    control_dir = Path(settings.storage_install_control)
+    control_dir.mkdir(parents=True, exist_ok=True)
+    roots = (
+        db.query(ArchiveRoot)
+        .filter(ArchiveRoot.retired_at.is_(None))
+        .order_by(ArchiveRoot.is_active.desc(), ArchiveRoot.created_at.asc(), ArchiveRoot.id.asc())
+        .all()
+    )
+    items = []
+    volume_lines = []
+    seen_targets: set[str] = set()
+    for root in roots:
+        root_id = str(root.id or "")
+        if not root_id:
+            continue
+        host_path = archive_root_host_display_path(root)
+        target_path = archive_root_runtime_mount_path(root).as_posix()
+        if target_path in seen_targets:
+            continue
+        seen_targets.add(target_path)
+        item = {
+            "root_id": root_id,
+            "user_display_path": host_path,
+            "backend_runtime_path": target_path,
+            "physical_volume_id": archive_root_physical_volume_id(root),
+            "storage_namespace": getattr(root, "storage_namespace", KMVMS_RECORDINGS_NAMESPACE),
+            "active_write_target": bool(getattr(root, "is_active", False)),
+        }
+        items.append(item)
+        volume_lines.extend(
+            [
+                "      - type: bind",
+                f"        source: {_compose_yaml_quote(host_path)}",
+                f"        target: {_compose_yaml_quote(target_path)}",
+                "        read_only: false",
+                "        bind:",
+                "          create_host_path: false",
+            ]
+        )
+    manifest = {
+        "schema_version": 1,
+        "runtime_base": archive_roots_runtime_base().as_posix(),
+        "compose_override_file": ARCHIVE_ROOTS_COMPOSE_OVERRIDE,
+        "items": items,
+        "raw_runtime_paths_user_visible": False,
+    }
+    manifest_path = archive_roots_manifest_path()
+    tmp_manifest = manifest_path.with_name(f"{manifest_path.name}.tmp")
+    tmp_manifest.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp_manifest.replace(manifest_path)
+
+    compose_path = archive_roots_compose_override_path()
+    tmp_compose = compose_path.with_name(f"{compose_path.name}.tmp")
+    if volume_lines:
+        compose_text = "\n".join(["# Generated by KM VMS. Do not edit manually.", "services:", "  api:", "    volumes:", *volume_lines, ""])
+    else:
+        compose_text = "# Generated by KM VMS. No archive roots configured.\nservices: {}\n"
+    tmp_compose.write_text(compose_text, encoding="utf-8")
+    tmp_compose.replace(compose_path)
+    for path in (manifest_path, compose_path):
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    return {
+        "manifest_path": str(manifest_path),
+        "compose_override_path": str(compose_path),
+        "root_count": len(items),
+        "items": items,
     }
 
 
@@ -175,41 +380,299 @@ def _path_is_relative_to(path: Path, base: Path) -> bool:
 
 
 def ensure_archive_roots(db: Session) -> list:
-    from app.models.recording import ArchiveRoot, RecordingSegment
+    from app.models.recording import ArchiveRoot
 
     default_path = Path(settings.storage_root).resolve(strict=False)
     rows = db.query(ArchiveRoot).order_by(ArchiveRoot.created_at.asc(), ArchiveRoot.id.asc()).all()
     default = db.get(ArchiveRoot, DEFAULT_ARCHIVE_ROOT_ID)
     if default is None:
-        default = ArchiveRoot(
-            id=DEFAULT_ARCHIVE_ROOT_ID,
-            label="Default archive",
-            root_path=str(default_path),
-            storage_namespace=KMVMS_RECORDINGS_NAMESPACE,
-            is_active=not any(row.is_active for row in rows),
-            is_readable=True,
-            is_writable=True,
-            is_available=True,
-            last_seen_at=datetime.utcnow(),
+        default = next(
+            (
+                row
+                for row in rows
+                if Path(str(row.root_path or "")).resolve(strict=False) == default_path
+                and row.retired_at is None
+            ),
+            None,
         )
-        db.add(default)
-        db.commit()
-        rows.append(default)
+        if default is None:
+            default = ArchiveRoot(
+                id=DEFAULT_ARCHIVE_ROOT_ID,
+                label="Default archive",
+                root_path=str(default_path),
+                storage_namespace=KMVMS_RECORDINGS_NAMESPACE,
+                is_active=not any(row.is_active for row in rows),
+                is_readable=True,
+                is_writable=True,
+                is_available=True,
+                last_seen_at=datetime.utcnow(),
+            )
+            db.add(default)
+            db.commit()
+            rows.append(default)
     if not db.query(ArchiveRoot).filter(ArchiveRoot.is_active == True, ArchiveRoot.retired_at.is_(None)).first():  # noqa: E712
         default.is_active = True
         default.updated_at = datetime.utcnow()
         db.add(default)
         db.commit()
 
-    db.query(RecordingSegment).filter(RecordingSegment.archive_root_id.is_(None)).update(
-        {
-            RecordingSegment.archive_root_id: DEFAULT_ARCHIVE_ROOT_ID,
-            RecordingSegment.updated_at: RecordingSegment.updated_at,
-        },
-        synchronize_session=False,
+    return (
+        db.query(ArchiveRoot)
+        .filter(ArchiveRoot.retired_at.is_(None))
+        .order_by(ArchiveRoot.is_active.desc(), ArchiveRoot.created_at.asc(), ArchiveRoot.id.asc())
+        .all()
     )
-    db.commit()
-    return db.query(ArchiveRoot).order_by(ArchiveRoot.is_active.desc(), ArchiveRoot.created_at.asc(), ArchiveRoot.id.asc()).all()
+
+
+def legacy_archive_root_counts(db: Session) -> dict:
+    from app.models.recording import RecordingSegment
+
+    return {
+        "null_archive_root_id_count": int(
+            db.query(RecordingSegment)
+            .filter(RecordingSegment.deleted_at.is_(None), RecordingSegment.archive_root_id.is_(None))
+            .count()
+        ),
+        "root_unresolved_count": int(
+            db.query(RecordingSegment)
+            .filter(
+                RecordingSegment.deleted_at.is_(None),
+                RecordingSegment.archive_root_resolution_status.in_(tuple(ROOT_RESOLUTION_PROBLEMS)),
+            )
+            .count()
+        ),
+        "default_archive_root_id": DEFAULT_ARCHIVE_ROOT_ID,
+    }
+
+
+def backfill_legacy_archive_root_ids(db: Session) -> dict:
+    return migrate_archive_root_identities(db)
+
+
+def segment_archive_root_resolution(segment) -> str:
+    explicit = str(getattr(segment, "archive_root_resolution_status", None) or "").strip()
+    if explicit in ROOT_RESOLUTION_PROBLEMS:
+        return explicit
+    if not getattr(segment, "archive_root_id", None):
+        return ROOT_RESOLUTION_UNRESOLVED
+    return ROOT_RESOLUTION_RESOLVED
+
+
+def segment_has_resolved_archive_root(segment) -> bool:
+    return segment_archive_root_resolution(segment) == ROOT_RESOLUTION_RESOLVED
+
+
+def _segment_candidate_relative_path(segment) -> str | None:
+    raw = getattr(segment, "relative_path", None) or getattr(segment, "file_path", None)
+    if not raw:
+        return None
+    candidate = Path(str(raw))
+    if candidate.is_absolute():
+        return None
+    try:
+        normalized = _normalize_relative(str(raw))
+    except ValueError:
+        return None
+    return normalized if is_kmvms_namespace_relative(normalized) else None
+
+
+def _set_segment_root_resolution(segment, *, root_id: str | None, status: str, detail: str | None) -> bool:
+    changed = False
+    same_resolution = (
+        getattr(segment, "archive_root_id", None) == root_id
+        and getattr(segment, "archive_root_resolution_status", None) == status
+        and getattr(segment, "archive_root_resolution_detail", None) == detail
+    )
+    resolved_at = getattr(segment, "archive_root_resolved_at", None)
+    if status == ROOT_RESOLUTION_RESOLVED and (not same_resolution or resolved_at is None):
+        resolved_at = datetime.utcnow()
+    elif status != ROOT_RESOLUTION_RESOLVED:
+        resolved_at = None
+    values = {
+        "archive_root_id": root_id,
+        "archive_root_resolution_status": status,
+        "archive_root_resolution_detail": detail,
+        "archive_root_resolved_at": resolved_at,
+    }
+    for field, value in values.items():
+        if getattr(segment, field, None) != value:
+            setattr(segment, field, value)
+            changed = True
+    if changed:
+        segment.updated_at = datetime.utcnow()
+    return changed
+
+
+def migrate_archive_root_identities(db: Session) -> dict:
+    from app.models.recording import ArchiveRoot, RecordingSegment
+
+    ensure_archive_roots(db)
+    roots = (
+        db.query(ArchiveRoot)
+        .filter(ArchiveRoot.retired_at.is_(None))
+        .order_by(ArchiveRoot.created_at.asc(), ArchiveRoot.id.asc())
+        .all()
+    )
+    root_by_id = {str(root.id): root for root in roots}
+    access_by_id = {str(root.id): archive_root_runtime_access_state(root) for root in roots}
+    base_query = db.query(RecordingSegment).filter(
+        RecordingSegment.deleted_at.is_(None),
+        RecordingSegment.status != "deleted",
+        RecordingSegment.ownership == "KM VMS",
+        RecordingSegment.source == "recorder",
+    )
+    before_non_deleted_count = int(base_query.count())
+    segments = (
+        base_query.filter(
+            or_(
+                RecordingSegment.archive_root_id.is_(None),
+                RecordingSegment.archive_root_resolution_status.is_(None),
+                RecordingSegment.archive_root_resolution_status.in_(tuple(ROOT_RESOLUTION_PROBLEMS)),
+            )
+        )
+        .order_by(RecordingSegment.id.asc())
+        .all()
+    )
+    before_null = sum(1 for segment in segments if not segment.archive_root_id)
+    counts = {
+        "before_non_deleted_count": before_non_deleted_count,
+        "evaluated_candidate_count": len(segments),
+        "before_null_count": before_null,
+        "uniquely_resolved_count": 0,
+        "preserved_resolved_count": 0,
+        "repaired_assigned_count": 0,
+        "unresolved_count": 0,
+        "ambiguous_count": 0,
+        "inaccessible_during_resolution_count": 0,
+        "root_identity_conflict_count": 0,
+        "changed_count": 0,
+    }
+
+    for segment in segments:
+        relative_path = _segment_candidate_relative_path(segment)
+        assigned_root = root_by_id.get(str(segment.archive_root_id)) if segment.archive_root_id else None
+        prior_resolution = str(getattr(segment, "archive_root_resolution_status", None) or "")
+        prior_problem = prior_resolution in ROOT_RESOLUTION_PROBLEMS
+        readable_roots = [root for root in roots if access_by_id[str(root.id)].get("read_access_state") == "available"]
+        inaccessible_present = len(readable_roots) != len(roots)
+        matches = []
+        if relative_path:
+            for root in readable_roots:
+                try:
+                    candidate = safe_resolve_relative_for_root(relative_path, root)
+                    if candidate.exists() and candidate.is_file():
+                        matches.append(root)
+                except (OSError, ValueError):
+                    continue
+
+        assigned_matches = bool(assigned_root and any(root.id == assigned_root.id for root in matches))
+        changed = False
+        if assigned_matches:
+            changed = _set_segment_root_resolution(
+                segment,
+                root_id=str(assigned_root.id),
+                status=ROOT_RESOLUTION_RESOLVED,
+                detail="assigned_root_file_verified",
+            )
+            counts["preserved_resolved_count"] += 1
+        elif assigned_root is not None and prior_problem and access_by_id[str(assigned_root.id)].get("read_access_state") != "available":
+            changed = _set_segment_root_resolution(
+                segment,
+                root_id=str(assigned_root.id),
+                status=ROOT_RESOLUTION_INACCESSIBLE,
+                detail="assigned_root_unavailable_for_resolution",
+            )
+            counts["inaccessible_during_resolution_count"] += 1
+        elif assigned_root is not None and access_by_id[str(assigned_root.id)].get("read_access_state") != "available":
+            changed = _set_segment_root_resolution(
+                segment,
+                root_id=str(assigned_root.id),
+                status=ROOT_RESOLUTION_RESOLVED,
+                detail="assigned_root_temporarily_unavailable",
+            )
+            counts["preserved_resolved_count"] += 1
+        elif assigned_root is not None and len(matches) == 1 and not assigned_matches:
+            changed = _set_segment_root_resolution(
+                segment,
+                root_id=str(assigned_root.id),
+                status=ROOT_RESOLUTION_CONFLICT,
+                detail="assigned_root_conflicts_with_unique_physical_file_evidence",
+            )
+            counts["root_identity_conflict_count"] += 1
+        elif assigned_root is None and len(matches) == 1 and not inaccessible_present:
+            matched_root = matches[0]
+            changed = _set_segment_root_resolution(
+                segment,
+                root_id=str(matched_root.id),
+                status=ROOT_RESOLUTION_RESOLVED,
+                detail="unique_file_evidence",
+            )
+            counts["uniquely_resolved_count"] += 1
+        elif len(matches) > 1:
+            changed = _set_segment_root_resolution(
+                segment,
+                root_id=segment.archive_root_id,
+                status=ROOT_RESOLUTION_AMBIGUOUS,
+                detail="multiple_readable_roots_contain_candidate",
+            )
+            counts["ambiguous_count"] += 1
+        elif inaccessible_present and assigned_root is None:
+            changed = _set_segment_root_resolution(
+                segment,
+                root_id=None,
+                status=ROOT_RESOLUTION_INACCESSIBLE,
+                detail="one_or_more_roots_unavailable_for_unique_proof",
+            )
+            counts["inaccessible_during_resolution_count"] += 1
+        elif assigned_root is None:
+            changed = _set_segment_root_resolution(
+                segment,
+                root_id=None,
+                status=ROOT_RESOLUTION_UNRESOLVED,
+                detail="no_unique_root_evidence",
+            )
+            counts["unresolved_count"] += 1
+        elif prior_problem:
+            unresolved_status = ROOT_RESOLUTION_CONFLICT if prior_resolution == ROOT_RESOLUTION_CONFLICT else ROOT_RESOLUTION_UNRESOLVED
+            changed = _set_segment_root_resolution(
+                segment,
+                root_id=str(assigned_root.id),
+                status=unresolved_status,
+                detail=getattr(segment, "archive_root_resolution_detail", None) or "no_unique_root_evidence",
+            )
+            counts["root_identity_conflict_count" if unresolved_status == ROOT_RESOLUTION_CONFLICT else "unresolved_count"] += 1
+        else:
+            changed = _set_segment_root_resolution(
+                segment,
+                root_id=str(assigned_root.id),
+                status=ROOT_RESOLUTION_RESOLVED,
+                detail="assigned_root_file_missing",
+            )
+            counts["preserved_resolved_count"] += 1
+
+        if changed:
+            db.add(segment)
+            counts["changed_count"] += 1
+
+    if counts["changed_count"]:
+        db.commit()
+    counts["after_null_count"] = int(
+        db.query(RecordingSegment)
+        .filter(RecordingSegment.deleted_at.is_(None), RecordingSegment.archive_root_id.is_(None))
+        .count()
+    )
+    counts["no_destructive_candidate_count"] = int(
+        db.query(RecordingSegment)
+        .filter(
+            RecordingSegment.deleted_at.is_(None),
+            RecordingSegment.archive_root_resolution_status.in_(tuple(ROOT_RESOLUTION_PROBLEMS)),
+        )
+        .count()
+    )
+    counts["migration_schema_version"] = 1
+    counts["migration_status"] = "completed"
+    counts["idempotent_noop"] = counts["changed_count"] == 0
+    return counts
 
 
 def list_archive_roots(db: Session) -> list:
@@ -234,19 +697,15 @@ def active_archive_root(db: Session):
 def archive_root_for_segment(db: Session, segment):
     from app.models.recording import ArchiveRoot
 
-    root_id = getattr(segment, "archive_root_id", None) or DEFAULT_ARCHIVE_ROOT_ID
+    resolution = segment_archive_root_resolution(segment)
+    if resolution != ROOT_RESOLUTION_RESOLVED:
+        raise ValueError(resolution)
+    root_id = getattr(segment, "archive_root_id", None)
+    if not root_id:
+        raise ValueError(ROOT_RESOLUTION_UNRESOLVED)
     row = db.get(ArchiveRoot, root_id)
     if row is None:
-        row = db.get(ArchiveRoot, DEFAULT_ARCHIVE_ROOT_ID)
-    if row is None and root_id == DEFAULT_ARCHIVE_ROOT_ID:
-        return SimpleNamespace(
-            id=DEFAULT_ARCHIVE_ROOT_ID,
-            label="Default archive",
-            root_path=str(Path(settings.storage_root).resolve(strict=False)),
-            storage_namespace=KMVMS_RECORDINGS_NAMESPACE,
-            is_active=True,
-            retired_at=None,
-        )
+        raise ValueError(ROOT_RESOLUTION_UNRESOLVED)
     return row
 
 
@@ -306,7 +765,7 @@ def active_namespace_dir(db: Session, camera_id: int, job_id: str) -> Path:
     root = active_archive_root(db)
     if root is None:
         raise RuntimeError("active_archive_root_missing")
-    path = build_namespace_dir(camera_id, job_id, root=_root_path(root))
+    path = build_namespace_dir(camera_id, job_id, root=Path(settings.storage_root))
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -314,8 +773,10 @@ def active_namespace_dir(db: Session, camera_id: int, job_id: str) -> Path:
 def archive_root_public_status(root_row, *, include_path: bool = False) -> dict:
     configured_path = _stored_root_path(root_row)
     requires_activation = _inactive_runtime_activation_root(root_row)
-    root_path = archive_root_runtime_path(root_row)
-    status = root_status(root_path)
+    status = archive_root_runtime_access_state(root_row)
+    read_problem = status["problem"] if status["read_access_state"] != "available" else None
+    write_problem = status["problem"] if status["write_access_state"] != "available" else None
+    operational_problem = read_problem or (write_problem if bool(getattr(root_row, "is_active", False)) else None)
     result = {
         "id": getattr(root_row, "id", None),
         "label": getattr(root_row, "label", None),
@@ -325,8 +786,18 @@ def archive_root_public_status(root_row, *, include_path: bool = False) -> dict:
         "is_writable": bool(status["writable"]),
         "is_available": bool(status["available"]),
         "namespace_exists": bool(status["namespace_exists"]),
-        "problem": status["problem"] or getattr(root_row, "problem", None),
+        "problem": operational_problem or getattr(root_row, "problem", None),
+        "problem_category": operational_problem or getattr(root_row, "problem", None),
+        "read_problem": read_problem,
+        "write_problem": write_problem,
+        "access_state": status["access_state"],
+        "read_access_state": status["read_access_state"],
+        "write_access_state": status["write_access_state"],
+        "mount_access_state": status["mount_access_state"],
+        "physical_volume_id": archive_root_physical_volume_id(root_row),
+        "active_write_target": bool(getattr(root_row, "is_active", False)),
         "retired": bool(getattr(root_row, "retired_at", None)),
+        "retirement_status": getattr(root_row, "retirement_status", None),
         "requires_activation": requires_activation,
     }
     if include_path:
@@ -339,10 +810,12 @@ def archive_root_public_status(root_row, *, include_path: bool = False) -> dict:
 def root_usage(db: Session, root_row) -> dict:
     from app.models.recording import RecordingSegment
 
-    root = _root_path(root_row)
+    status = archive_root_runtime_access_state(root_row)
     count = 0
     existing = 0
     missing = 0
+    inaccessible = 0
+    resolution_problems = 0
     size = 0
     for segment in (
         db.query(RecordingSegment)
@@ -358,6 +831,13 @@ def root_usage(db: Session, root_row) -> dict:
         if getattr(segment, "status", None) not in {"finalized", "ready"}:
             continue
         count += 1
+        resolution = segment_archive_root_resolution(segment)
+        if resolution != ROOT_RESOLUTION_RESOLVED:
+            resolution_problems += 1
+            continue
+        if status["read_access_state"] != "available":
+            inaccessible += 1
+            continue
         try:
             target = resolve_segment_file_path(db, segment)
             if target.exists() and target.is_file():
@@ -365,9 +845,22 @@ def root_usage(db: Session, root_row) -> dict:
                 size += int(target.stat().st_size)
             else:
                 missing += 1
-        except Exception:
-            missing += 1
-    return {"segments_count": count, "existing_file_count": existing, "missing_file_count": missing, "size_bytes": size}
+        except ValueError:
+            resolution_problems += 1
+        except OSError:
+            inaccessible += 1
+    problem_count = missing + resolution_problems
+    return {
+        "segments_count": count,
+        "existing_file_count": existing,
+        "missing_file_count": missing,
+        "inaccessible_file_count": inaccessible,
+        "root_resolution_problem_count": resolution_problems,
+        "problem_file_count": problem_count,
+        "size_bytes": size,
+        "root_access_problem_count": 1 if status["read_access_state"] != "available" else 0,
+        "root_access_problem": status["problem"] if status["read_access_state"] != "available" else None,
+    }
 
 
 def _safe_root_label(root_row) -> str:
@@ -392,10 +885,10 @@ def _archive_root_safety(root_row, *, require_writable: bool) -> list[dict]:
         sanitize_archive_root_path(str(_root_path(root_row)), allow_create=False)
     except ValueError as exc:
         blockers.append({"reason": str(exc), "root_id": getattr(root_row, "id", None), "count": 1})
-    status = root_status(_root_path(root_row))
-    if not status["available"]:
+    status = archive_root_runtime_access_state(root_row)
+    if status["read_access_state"] != "available":
         blockers.append({"reason": status["problem"] or "archive_root_unavailable", "root_id": getattr(root_row, "id", None), "count": 1})
-    if require_writable and not status["writable"]:
+    if require_writable and status["write_access_state"] != "available":
         blockers.append({"reason": status["problem"] or "archive_root_not_writable", "root_id": getattr(root_row, "id", None), "count": 1})
     return blockers
 
@@ -598,7 +1091,10 @@ def storage_migration_apply_plan(db: Session, *, target_root_id: str | None = No
         blockers.append({"reason": "target_root_missing", "count": 1})
 
     for segment in db.query(RecordingSegment).order_by(RecordingSegment.id.asc()).all():
-        source_root = root_by_id.get(getattr(segment, "archive_root_id", None) or DEFAULT_ARCHIVE_ROOT_ID)
+        if not segment_has_resolved_archive_root(segment):
+            blockers.append({"reason": segment_archive_root_resolution(segment), "segment_id": int(segment.id), "count": 1})
+            continue
+        source_root = root_by_id.get(getattr(segment, "archive_root_id", None))
         if target is None or source_root is None or getattr(source_root, "id", None) == getattr(target, "id", None):
             continue
         if (

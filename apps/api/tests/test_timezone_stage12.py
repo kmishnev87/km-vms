@@ -19,6 +19,11 @@ from app.models.system_settings import SystemSettings
 from app.routers.chronology import chronology_playback, chronology_ranges
 from app.routers.recordings import collect_recording_files
 from app.services.recording_retention import build_retention_plan
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
 from app.services.timezone_contract import (
     local_day_storage_bounds,
     parse_api_timestamp,
@@ -84,6 +89,7 @@ def add_camera(db):
 
 
 def add_segment(db, camera, started_at, *, name="stage12.mkv", write_file=True):
+    ensure_archive_roots(db)
     rel = f"kmvms/recordings/{camera.storage_folder_name}/{name}"
     path = Path(settings.storage_root) / rel
     if write_file:
@@ -103,6 +109,9 @@ def add_segment(db, camera, started_at, *, name="stage12.mkv", write_file=True):
         status="finalized",
         ownership="KM VMS",
         source="recorder",
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=datetime.utcnow(),
         storage_namespace="kmvms/recordings",
         container_format="mkv",
         file_extension=".mkv",

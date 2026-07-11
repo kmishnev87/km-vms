@@ -21,6 +21,11 @@ from app.services.audit_log import create_event, events_as_text, serialize_event
 from app.services.recording_reconciliation import reconcile_recordings
 from app.services.recording_retention import build_retention_plan, run_automatic_retention_once, run_retention
 from app.services.storage_monitoring import build_storage_monitoring_summary, reset_storage_audit_state
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
 
 
 def actor(role="owner"):
@@ -87,6 +92,7 @@ def add_retention_segment(
     integrity_status=None,
     job_id=None,
 ):
+    ensure_archive_roots(db)
     rel_path = f"kmvms/recordings/{camera.storage_folder_name}/{name}.mkv"
     file_path = Path(settings.storage_root) / rel_path
     file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -107,6 +113,9 @@ def add_retention_segment(
         status=status,
         ownership=ownership,
         source=source,
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=datetime.utcnow(),
         storage_namespace="kmvms/recordings",
         container_format="mkv",
         file_extension=".mkv",
@@ -150,7 +159,7 @@ def test_storage_status_audits_transitions_without_poll_spam():
     try:
         build_storage_monitoring_summary(db, write_audit=True, audit_actor=actor())
         build_storage_monitoring_summary(db, write_audit=True, audit_actor=actor())
-        Path(settings.storage_root).mkdir(parents=True)
+        Path(settings.storage_root, "kmvms", "recordings").mkdir(parents=True)
         build_storage_monitoring_summary(db, write_audit=True, audit_actor=actor())
 
         events = db.query(AuditEvent).order_by(AuditEvent.created_at.asc()).all()
@@ -230,7 +239,7 @@ def test_retention_summary_includes_available_observability_and_skipped_reason_c
         assert dry_run.event_metadata["observability"]["foreign_or_unowned_count"] == 1
         assert dry_run.event_metadata["observability"]["active_or_writing_count"] >= 1
         assert dry_run.event_metadata["observability"]["integrity_problem_count"] >= 1
-        assert apply_completed.event_metadata["skipped_reason_counts"]["limit_exceeded"] == 1
+        assert apply_completed.event_metadata["skipped_reason_counts"]["limit_exceeded"] == 2
         assert "items" not in apply_completed.event_metadata
         assert "relative_path" not in json.dumps(apply_completed.event_metadata, ensure_ascii=False)
     finally:

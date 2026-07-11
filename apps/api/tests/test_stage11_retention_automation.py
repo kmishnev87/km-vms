@@ -34,6 +34,11 @@ from app.services.recording_retention import (
     run_auto_free_space_cleanup_once,
     run_automatic_retention_once,
 )
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
 
 
 class FakeRequest:
@@ -152,6 +157,7 @@ def add_segment(
     integrity_status=None,
     job_id=None,
 ):
+    ensure_archive_roots(db)
     rel = f"kmvms/recordings/{camera.storage_folder_name}/{name}.mkv"
     path = Path(settings.storage_root) / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -175,6 +181,9 @@ def add_segment(
         status=status,
         ownership=ownership,
         source=source,
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=datetime.utcnow(),
         storage_namespace="kmvms/recordings",
         container_format="mkv",
         file_extension=".mkv",
@@ -281,21 +290,23 @@ def test_automatic_retention_run_once_uses_safe_runner_and_deletes_eligible_old_
     assert playback["has_video"] is False
 
 
-def test_automatic_retention_skips_active_non_finalized_foreign_and_problem_segments(db):
+def test_automatic_retention_deletes_old_finalized_segment_but_skips_non_finalized_foreign_and_problem_segments(db):
     camera = add_camera(db, retention_days=1, storage_quota_gb=50)
     job = RecordingJob(id="stage11_retention_active_job", camera_id=camera.id, state="recording", started_at=datetime.utcnow())
     db.add(job)
     db.commit()
-    active, active_path = add_segment(db, camera, name="stage11_retention_active", days_ago=3, job_id=job.id)
+    finalized, finalized_path = add_segment(db, camera, name="stage11_retention_active", days_ago=3, job_id=job.id)
     draft, draft_path = add_segment(db, camera, name="stage11_retention_draft", days_ago=3, status="recording")
     foreign, foreign_path = add_segment(db, camera, name="stage11_retention_foreign", days_ago=3, ownership="third_party")
     problem, problem_path = add_segment(db, camera, name="stage11_retention_problem", days_ago=3, integrity_status="corrupted_file")
 
     result = run_automatic_retention_once(db, max_candidates=10, max_bytes=1024 * 1024)
 
-    assert result["deleted_count"] == 0
-    assert result["skipped_count"] >= 1
-    for segment, path in ((active, active_path), (draft, draft_path), (foreign, foreign_path), (problem, problem_path)):
+    assert result["deleted_count"] == 1
+    db.refresh(finalized)
+    assert finalized.status == "deleted"
+    assert not finalized_path.exists()
+    for segment, path in ((draft, draft_path), (foreign, foreign_path), (problem, problem_path)):
         db.refresh(segment)
         assert segment.status != "deleted"
         assert path.exists()

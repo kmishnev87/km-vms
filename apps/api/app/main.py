@@ -23,9 +23,9 @@ from app.routers.settings import router as settings_router
 from app.routers.storage import router as storage_router
 from app.routers.users import router as users_router
 from app.services.automatic_retention import start_automatic_retention_worker, stop_automatic_retention_worker
-from app.services.archive_root_activation import finalize_pending_archive_root_activation, start_archive_root_activation_closeout_worker
+from app.services.archive_root_activation import start_archive_root_activation_closeout_worker
 from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration, ensure_system_settings
-from app.services.recording_storage import ensure_archive_roots
+from app.services.recording_storage import ensure_archive_roots, migrate_archive_root_identities, write_archive_roots_runtime_files
 from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
 from app.services.update_check import run_startup_due_check
@@ -72,9 +72,10 @@ def startup():
     try:
         ensure_system_settings(db)
         ensure_archive_roots(db)
+        migrate_archive_root_identities(db)
+        write_archive_roots_runtime_files(db)
         ensure_owner_migration(db)
         ensure_admin(db)
-        finalize_pending_archive_root_activation(db)
         run_startup_due_check(db)
     finally:
         db.close()

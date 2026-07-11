@@ -43,8 +43,8 @@ assert.equal(
 );
 assert.equal(
   context.archiveRootScenarioModel({ root: { is_active: false, is_available: false, configured_path: "/Volume3/Broken", problem: "namespace_missing" }, permission: { allowed: true } }).canActivate,
-  false,
-  "real inactive root health problems must still block activation until fixed"
+  true,
+  "visible root problems must not disable activation; backend preflight remains the safety authority"
 );
 
 const overviewStart = storagePage.indexOf("<section className={`storageOpsOverview");

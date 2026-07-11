@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "apps/api"))
 
 from app.core.config import settings
+from app.core.version import APP_VERSION
 from app.services import update_apply as update_apply_module
 from app.services.update_apply import read_update_apply_status
 from app.services.update_check import read_installed_update_state
@@ -351,6 +352,6 @@ def test_stage620_scripts_compile_and_release_descriptor_targets_current_release
         Path(cfile).unlink(missing_ok=True)
     descriptor = json.loads((ROOT / "release/km-vms-release.json").read_text(encoding="utf-8"))
 
-    assert descriptor["version"] == "0.7.5"
-    assert descriptor["tag"] == "v0.7.5"
-    assert descriptor["source_ref"] == "v0.7.5"
+    assert descriptor["version"] == APP_VERSION
+    assert descriptor["tag"] == f"v{APP_VERSION}"
+    assert descriptor["source_ref"] == f"v{APP_VERSION}"

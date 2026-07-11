@@ -17,6 +17,14 @@ from app.routers.settings import system_status
 from app.services import system_runtime_status as runtime_status
 from app.services.recording_retention import AUTO_RETENTION_STATE
 from app.services.system_runtime_status import build_operator_runtime_status
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
+
+
+RECORDER_INSTANCE_ID = "stage20-recorder"
 
 
 @pytest.fixture
@@ -119,6 +127,7 @@ def add_job(db, camera, *, job_id="job", state="recording", last_error=None, upd
         camera_name_snapshot=camera.name,
         camera_folder_snapshot=camera.storage_folder_name,
         state=state,
+        recorder_instance_id=RECORDER_INSTANCE_ID,
         source_stream="main",
         started_at=now,
         updated_at=now,
@@ -131,26 +140,38 @@ def add_job(db, camera, *, job_id="job", state="recording", last_error=None, upd
 
 
 def add_segment(db, camera, *, age_seconds=30):
+    ensure_archive_roots(db)
     now = datetime.utcnow()
+    job = db.query(RecordingJob).filter(RecordingJob.camera_id == camera.id).order_by(RecordingJob.updated_at.desc()).first()
     segment = RecordingSegment(
         camera_id=camera.id,
+        job_id=job.id if job else None,
         camera_name_snapshot=camera.name,
         camera_folder_snapshot=camera.storage_folder_name,
         file_path="/storage/archive/redacted/file.mkv",
         relative_path="camera/file.mkv",
         started_at=now - timedelta(seconds=age_seconds + 10),
-        ended_at=now - timedelta(seconds=age_seconds),
-        finalized_at=now - timedelta(seconds=age_seconds),
-        duration_sec=10,
+        ended_at=None,
+        finalized_at=None,
+        duration_sec=0,
         size_bytes=100,
-        status="ready",
+        media_progress_at=now,
+        status="writing",
+        ownership="KM VMS",
+        source="recorder",
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=now,
     )
     db.add(segment)
     db.commit()
     return segment
 
 
-def add_owned_segment(db, camera, *, relative_path="camera/file.mkv", status="ready", finalized_age_seconds=30):
+def add_owned_segment(db, camera, *, relative_path="kmvms/recordings/camera/file.mkv", status="ready", finalized_age_seconds=30):
+    ensure_archive_roots(db)
+    if not relative_path.startswith("kmvms/recordings/"):
+        relative_path = f"kmvms/recordings/{relative_path.lstrip('/')}"
     root = Path(settings.storage_root)
     target = root / relative_path
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -170,6 +191,9 @@ def add_owned_segment(db, camera, *, relative_path="camera/file.mkv", status="re
         status=status,
         ownership="KM VMS",
         source="recorder",
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=now,
     )
     db.add(segment)
     db.commit()
@@ -186,13 +210,14 @@ def add_heartbeat(db, *, service_status="healthy", age_seconds=1, active_jobs=1,
                 active_jobs_count, recording_cameras_count, failed_cameras_count,
                 last_error, last_exit_code, updated_at
             ) VALUES (
-                'stage20-recorder', :service_status, 'running', :started_at, :heartbeat_at,
+                :instance_id, :service_status, 'running', :started_at, :heartbeat_at,
                 :active_jobs, :recording_cameras, :failed_cameras, NULL, NULL, :updated_at
             )
             """
         ),
         {
             "service_status": service_status,
+            "instance_id": RECORDER_INSTANCE_ID,
             "started_at": now - timedelta(minutes=5),
             "heartbeat_at": now - timedelta(seconds=age_seconds),
             "active_jobs": active_jobs,
@@ -270,11 +295,12 @@ def test_healthy_current_recorder_job_ignores_stale_old_error_and_excludes_debug
 
 def test_recording_job_with_stale_current_segment_maps_to_warning(db):
     camera = add_camera(db)
-    add_job(db, camera, state="recording")
+    job = add_job(db, camera, state="recording")
     now = datetime.utcnow()
     db.add(
         RecordingSegment(
             camera_id=camera.id,
+            job_id=job.id,
             camera_name_snapshot=camera.name,
             camera_folder_snapshot=camera.storage_folder_name,
             file_path="/storage/archive/redacted/stale.mkv",
@@ -284,6 +310,7 @@ def test_recording_job_with_stale_current_segment_maps_to_warning(db):
             finalized_at=None,
             duration_sec=0,
             size_bytes=100,
+            media_progress_at=now - timedelta(minutes=65),
             status="writing",
             ownership="KM VMS",
             source="recorder",
@@ -478,6 +505,24 @@ def test_reconciliation_problem_counts_map_to_warning_without_samples_or_paths(d
     assert "samples" not in rendered(reconciliation)
 
 
+def test_runtime_status_uses_same_bounded_orphan_evidence_as_storage(db):
+    ensure_archive_roots(db)
+    orphan = Path(settings.storage_root, "kmvms", "recordings", "orphan.mkv")
+    orphan.parent.mkdir(parents=True, exist_ok=True)
+    orphan.write_bytes(b"orphan")
+
+    payload = build_operator_runtime_status(db)
+    storage = payload["domains"]["storage"]
+    reconciliation = payload["domains"]["reconciliation"]
+
+    assert storage["severity"] == "warning"
+    assert reconciliation["severity"] == "warning"
+    assert reconciliation["orphan_file_count"] == 1
+    assert reconciliation["problem_file_count"] == 1
+    assert "reconciliation_problems_found" in reconciliation["reason_codes"]
+    assert "orphan.mkv" not in rendered(payload)
+
+
 def test_reconciliation_missing_evidence_is_unknown_not_fresh(db, monkeypatch):
     def fake_storage_summary(db_arg, *, include_namespace_observations=True, write_audit=False, audit_actor=None):
         return {
@@ -624,5 +669,5 @@ def test_stage3_aggregate_has_no_audit_side_effects_and_no_diagnostic_archive_bu
     monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
     payload = build_operator_runtime_status(db)
 
-    assert called["storage"] == {"include_namespace_observations": False, "write_audit": False}
+    assert called["storage"] == {"include_namespace_observations": True, "write_audit": False}
     assert payload["domains"]["storage"]["source"] == "storage_monitoring_metadata_summary"

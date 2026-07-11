@@ -248,7 +248,7 @@ def _build_recorder_domain(db: Session, now: datetime, ctx) -> tuple[dict[str, A
     summary = {
         "running_jobs": int(job_summary.get("active_count") or 0),
         "active_jobs_count": int(job_summary.get("active_count") or 0),
-        "recording_camera_count": sum(1 for item in camera_states if item.get("job_state") == "recording"),
+        "recording_camera_count": sum(1 for item in camera_states if item.get("confirmed_recording")),
         "failed_camera_count": sum(1 for item in camera_states if item.get("current_failure")),
         "retrying_camera_count": sum(1 for item in camera_states if item.get("job_state") == "restarting"),
         "stale_camera_count": 0,
@@ -299,6 +299,7 @@ def _build_camera_domain(
         recording_enabled = bool(camera.enabled and recording_mode == "always")
         job_state = recorder_state.get("job_state")
         current_failure = bool(recorder_state.get("current_failure"))
+        confirmed_recording = bool(recorder_state.get("confirmed_recording"))
         stale_current_segment = bool(recorder_state.get("stale_current_segment"))
         current_segment_age = recorder_state.get("current_segment_age_seconds")
         last_segment_age = segment_state.get("last_segment_age_seconds")
@@ -307,6 +308,7 @@ def _build_camera_domain(
         has_valid_current_segment = (
             recording_enabled
             and has_active_recording_job
+            and confirmed_recording
             and current_segment_age is not None
             and current_segment_age <= stale_threshold
         )
@@ -328,6 +330,9 @@ def _build_camera_domain(
             severity = "warning"
             _append_reason(reasons, STALE_CURRENT_SEGMENT_REASON)
             _append_reason(reasons, "recording_stale")
+        elif recording_enabled and has_active_recording_job and not confirmed_recording:
+            severity = "warning"
+            _append_reason(reasons, "no_evidence")
         elif recording_enabled and last_segment_age is not None and last_segment_age > stale_threshold and not has_valid_current_segment:
             severity = "warning"
             _append_reason(reasons, "recording_stale")
@@ -350,6 +355,7 @@ def _build_camera_domain(
                 "recording_mode": recording_mode,
                 "recording_enabled": recording_enabled,
                 "recording_state": job_state or "unknown",
+                "confirmed_recording": confirmed_recording,
                 "recording_health": recorder_state.get("recording_health") or ("degraded" if stale_current_segment else "unknown"),
                 "live_state": (live_state or {}).get("state", "unknown"),
                 "severity": severity,
@@ -458,6 +464,8 @@ def _build_storage_domain(storage_summary: dict[str, Any], ctx) -> dict[str, Any
     severity, reasons = _storage_severity_and_reasons(storage_summary, usage_percent)
     problem_counts = {
         "missing_file_count": int(reconciliation.get("missing_file_count") or 0),
+        "root_unavailable_count": int(reconciliation.get("root_unavailable_count") or 0),
+        "root_unresolved_count": int(reconciliation.get("root_unresolved_count") or 0),
         "invalid_path_count": int(reconciliation.get("invalid_path_count") or 0),
         "path_outside_storage_count": int(reconciliation.get("path_outside_storage_count") or 0),
         "problem_file_count": int(owned.get("kmvms_owned_problem_file_count") or 0),
@@ -485,6 +493,8 @@ def _build_storage_domain(storage_summary: dict[str, Any], ctx) -> dict[str, Any
             "segments_count": int(owned.get("kmvms_owned_segments_count") or 0),
             "existing_file_count": int(owned.get("kmvms_owned_existing_file_count") or 0),
             "missing_file_count": problem_counts["missing_file_count"],
+            "root_unavailable_count": problem_counts["root_unavailable_count"],
+            "root_unresolved_count": problem_counts["root_unresolved_count"],
             "problem_file_count": problem_counts["problem_file_count"],
         },
         "reason_codes": reasons,
@@ -589,6 +599,8 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
     reconciliation = raw_reconciliation if has_reconciliation_evidence else {}
     cleanup = raw_cleanup if has_cleanup_evidence else {}
     missing = int(reconciliation.get("missing_file_count") or 0)
+    root_unavailable = int(reconciliation.get("root_unavailable_count") or 0)
+    root_unresolved = int(reconciliation.get("root_unresolved_count") or 0)
     orphan = int(reconciliation.get("orphan_file_count") or 0)
     path_outside = int(reconciliation.get("path_outside_storage_count") or 0)
     invalid = int(reconciliation.get("invalid_path_count") or 0)
@@ -601,7 +613,7 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
         severity = "unknown"
         _append_reason(reasons, "no_evidence")
         _append_reason(reasons, "reconciliation_unknown")
-    elif missing or orphan or path_outside or invalid:
+    elif missing or root_unavailable or root_unresolved or orphan or path_outside or invalid:
         severity = "error" if path_outside else "warning"
         _append_reason(reasons, "reconciliation_problems_found")
     elif cleanup_count:
@@ -617,9 +629,11 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
         "status": "no_evidence" if not has_status_friendly_evidence else ("problems_found" if reasons else "ok"),
         "severity": severity,
         "missing_file_count": missing,
+        "root_unavailable_count": root_unavailable,
+        "root_unresolved_count": root_unresolved,
         "orphan_file_count": orphan,
         "path_outside_storage_count": path_outside,
-        "problem_file_count": missing + orphan + path_outside + invalid,
+        "problem_file_count": missing + root_unavailable + root_unresolved + orphan + path_outside + invalid,
         "cleanup_candidate_count": cleanup_count,
         "scan_limited": scan_limited,
         "partial": partial,
@@ -639,7 +653,7 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     recorder_domain, _camera_states, recorder_states = _build_recorder_domain(db, now, ctx)
     live_domain, live_by_camera = _build_live_domain(cameras)
     cameras_domain = _build_camera_domain(db, now, ctx, cameras, recorder_states, live_by_camera)
-    storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=False, write_audit=False)
+    storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=True, write_audit=False)
     storage_summary["auto_free_space_policy"] = apply_critical_low_disk_protection(db, storage_summary)
     storage_domain = _build_storage_domain(storage_summary, ctx)
     retention_domain = _build_retention_domain(db, now, ctx)

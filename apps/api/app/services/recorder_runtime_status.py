@@ -19,6 +19,7 @@ HEALTHY_NEUTRAL_JOB_STATES = {"starting", "recording", "stopping", "stopped", "i
 SEGMENT_STATUS_DELETED = "deleted"
 RECORDER_SOURCE = "recorder"
 HEARTBEAT_STALE_SECONDS = 90
+MEDIA_PROGRESS_STALE_SECONDS = 90
 MAX_RECENT_ITEMS = 50
 SEGMENT_STALE_GRACE_SECONDS = 300
 STALE_CURRENT_SEGMENT_REASON = "recording_segment_not_rotating"
@@ -206,8 +207,18 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
     cameras = db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.id.asc()).all()
     latest_jobs: dict[int, RecordingJob] = {}
     now = utc_now()
+    heartbeat = read_recorder_heartbeat(db)
+    heartbeat_instance_id = str(heartbeat.get("recorder_instance_id") or "")
+    heartbeat_age = age_seconds(heartbeat.get("heartbeat_raw"), now) if heartbeat.get("available") else None
+    heartbeat_current = bool(
+        heartbeat.get("available")
+        and heartbeat_instance_id
+        and heartbeat_age is not None
+        and heartbeat_age <= HEARTBEAT_STALE_SECONDS
+        and str(heartbeat.get("loop_state") or "") != "shutdown"
+    )
 
-    def job_rank(job: RecordingJob) -> tuple[int, datetime]:
+    def job_rank(job: RecordingJob) -> tuple[int, int, datetime]:
         state = str(job.state or "")
         if state in {"starting", "recording", "stopping", "restarting"}:
             priority = 3
@@ -216,7 +227,8 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
         else:
             priority = 1
         timestamp = job.updated_at or job.started_at or job.created_at or datetime.min
-        return priority, timestamp
+        current_instance = int(bool(heartbeat_instance_id and str(job.recorder_instance_id or "") == heartbeat_instance_id))
+        return current_instance, priority, timestamp
 
     for job in db.query(RecordingJob).order_by(RecordingJob.camera_id.asc()).all():
         current = latest_jobs.get(job.camera_id)
@@ -230,6 +242,7 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             RecordingSegment.status == "writing",
             RecordingSegment.source == RECORDER_SOURCE,
             RecordingSegment.started_at.isnot(None),
+            RecordingSegment.deleted_at.is_(None),
         )
         .order_by(RecordingSegment.camera_id.asc(), RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
         .all()
@@ -266,6 +279,8 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
         expected_segment_seconds = expected_segment_duration_seconds(camera)
         stale_after_seconds = stale_current_segment_after_seconds(camera)
         current_segment_age = segment_age_seconds(current_segment, now, ctx)
+        media_progress_at = current_segment.media_progress_at if current_segment else None
+        media_progress_age = age_seconds(media_progress_at, now) if media_progress_at else None
         latest_finalized_time = (
             latest_finalized_segment.finalized_at
             or latest_finalized_segment.ended_at
@@ -274,11 +289,38 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             else None
         )
         latest_finalized_age = age_seconds(latest_finalized_time, now) if latest_finalized_time else None
+        current_instance_matches = bool(
+            job
+            and heartbeat_current
+            and heartbeat_instance_id
+            and str(job.recorder_instance_id or "") == heartbeat_instance_id
+        )
+        current_segment_matches_job = bool(
+            job
+            and current_segment
+            and current_segment.job_id
+            and str(current_segment.job_id) == str(job.id)
+        )
+        ongoing_media_progress = bool(
+            current_segment
+            and int(current_segment.size_bytes or 0) > 0
+            and media_progress_age is not None
+            and media_progress_age <= MEDIA_PROGRESS_STALE_SECONDS
+        )
         stale_current_segment = bool(
             job_state == "recording"
             and current_segment is not None
-            and current_segment_age is not None
-            and current_segment_age > stale_after_seconds
+            and (
+                (current_segment_age is not None and current_segment_age > stale_after_seconds)
+                or (media_progress_age is not None and media_progress_age > MEDIA_PROGRESS_STALE_SECONDS)
+            )
+        )
+        confirmed_recording = bool(
+            job_state == "recording"
+            and current_instance_matches
+            and current_segment_matches_job
+            and ongoing_media_progress
+            and not stale_current_segment
         )
         has_healthy_current_job = job_state in HEALTHY_NEUTRAL_JOB_STATES
         current_failure = (
@@ -287,9 +329,28 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             or (not has_healthy_current_job and (camera.status == "error" or bool(camera_last_error)))
         )
         reason_codes: list[str] = []
+        if job_state in ACTIVE_JOB_STATES and not heartbeat_current:
+            reason_codes.append("recorder_heartbeat_stale")
+        elif job_state in ACTIVE_JOB_STATES and not current_instance_matches:
+            reason_codes.append("recorder_instance_mismatch")
+        if job_state == "recording" and not current_segment_matches_job:
+            reason_codes.append("current_segment_job_mismatch")
+        elif job_state == "recording" and not ongoing_media_progress:
+            reason_codes.append("recording_media_progress_missing_or_stale")
         if stale_current_segment:
             reason_codes.append(STALE_CURRENT_SEGMENT_REASON)
-        recording_health = "failed" if current_failure else ("degraded" if stale_current_segment else ("recording" if job_state == "recording" else "unknown"))
+        if current_failure:
+            recording_health = "failed"
+        elif stale_current_segment:
+            recording_health = "degraded"
+        elif confirmed_recording:
+            recording_health = "recording"
+        elif job_state in {"starting", "recording"}:
+            recording_health = "starting"
+        elif job_state == "restarting":
+            recording_health = "retrying"
+        else:
+            recording_health = "unknown"
         rows.append({
             "camera_id": camera.id,
             "camera_name": camera.name,
@@ -299,16 +360,28 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             "camera_last_error": camera_last_error,
             "job_state": job_state,
             "job_id": job.id if job else None,
+            "recorder_instance_id": job.recorder_instance_id if job else None,
+            "current_recorder_instance_id": heartbeat_instance_id or None,
+            "heartbeat_current": heartbeat_current,
+            "heartbeat_age_seconds": heartbeat_age,
             **timestamp_fields("job_updated_at", job.updated_at if job else None, ctx),
             "last_exit_code": job.last_exit_code if job else None,
             "last_error": job_last_error,
             "current_failure": bool(current_failure),
             "stale_error_ignored": bool((job_last_error or camera_last_error) and not current_failure),
+            "confirmed_recording": confirmed_recording,
             "recording_health": recording_health,
             "recording_health_reason_codes": reason_codes,
             "current_segment_started_at": iso_or_none(current_segment.started_at if current_segment else None),
             "current_segment_started_at_system": format_system_iso(current_segment.started_at, ctx, local_naive=segment_uses_local_naive_display(current_segment)) if current_segment else None,
             "current_segment_age_seconds": current_segment_age,
+            "current_segment_id": int(current_segment.id) if current_segment else None,
+            "current_segment_job_id": current_segment.job_id if current_segment else None,
+            "current_segment_size_bytes": int(current_segment.size_bytes or 0) if current_segment else 0,
+            "media_progress_at": iso_or_none(media_progress_at),
+            "media_progress_age_seconds": media_progress_age,
+            "media_progress_stale_after_seconds": MEDIA_PROGRESS_STALE_SECONDS,
+            "ongoing_media_progress": ongoing_media_progress,
             "expected_segment_duration_seconds": expected_segment_seconds,
             "stale_current_segment_after_seconds": stale_after_seconds,
             "stale_current_segment": stale_current_segment,

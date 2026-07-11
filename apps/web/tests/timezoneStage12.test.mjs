@@ -17,7 +17,9 @@ assert.equal(helper.includes("productDateFilterParam"), true);
 
 assert.equal(recordsPage.includes('params.set("date", productDateFilterParam(dateValue))'), true);
 assert.equal(recordsPage.includes("data?.timezone?.id"), true);
-assert.equal(recordsPage.includes("formatProductDateTime(item.started_at_system, productTimezone)"), true);
+assert.equal(recordsPage.includes("renderRecordingsTableDateTime(item.started_at_system, productTimezone)"), true);
+assert.equal(recordsPage.includes("function formatRecordingsTableDateTime(value, timezone)"), true);
+assert.equal(recordsPage.includes("formatProductDateTime(value, timezone)"), true);
 assert.equal(recordsPage.includes("formatDateInputFromCreatedAt(item.created_at) === selectedDate"), false);
 
 assert.equal(chronologyPage.includes("formatProductTimestampParam"), true);

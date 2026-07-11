@@ -18,6 +18,9 @@ from app.services.recording_retention import AUTO_RETENTION_STATE
 from app.services.system_runtime_status import build_operator_runtime_status
 
 
+RECORDER_INSTANCE_ID = "stage19-recorder"
+
+
 @pytest.fixture
 def db():
     tmp = tempfile.TemporaryDirectory(prefix="stage19_runtime_warnings_")
@@ -111,6 +114,7 @@ def add_job(db, camera, *, state="recording", last_error=None):
         camera_name_snapshot=camera.name,
         camera_folder_snapshot=camera.storage_folder_name,
         state=state,
+        recorder_instance_id=RECORDER_INSTANCE_ID,
         source_stream="main",
         started_at=now,
         updated_at=now,
@@ -132,13 +136,14 @@ def add_heartbeat(db, *, service_status="healthy", age_seconds=1, active_jobs=1,
                 active_jobs_count, recording_cameras_count, failed_cameras_count,
                 last_error, last_exit_code, updated_at
             ) VALUES (
-                'stage19-recorder', :service_status, 'running', :started_at, :heartbeat_at,
+                :instance_id, :service_status, 'running', :started_at, :heartbeat_at,
                 :active_jobs, :recording_cameras, :failed_cameras, NULL, NULL, :updated_at
             )
             """
         ),
         {
             "service_status": service_status,
+            "instance_id": RECORDER_INSTANCE_ID,
             "started_at": now - timedelta(minutes=5),
             "heartbeat_at": now - timedelta(seconds=age_seconds),
             "active_jobs": active_jobs,
@@ -152,10 +157,12 @@ def add_heartbeat(db, *, service_status="healthy", age_seconds=1, active_jobs=1,
 
 def add_segment(db, camera, *, status="writing", started_age_seconds=30, finalized_age_seconds=None):
     now = datetime.utcnow()
+    job = db.query(RecordingJob).filter(RecordingJob.camera_id == camera.id).order_by(RecordingJob.updated_at.desc()).first()
     finalized_at = None if finalized_age_seconds is None else now - timedelta(seconds=finalized_age_seconds)
     ended_at = None if status == "writing" else finalized_at
     segment = RecordingSegment(
         camera_id=camera.id,
+        job_id=job.id if job else None,
         camera_name_snapshot=camera.name,
         camera_folder_snapshot=camera.storage_folder_name,
         file_path="/storage/archive/redacted/file.mkv",
@@ -165,6 +172,7 @@ def add_segment(db, camera, *, status="writing", started_age_seconds=30, finaliz
         finalized_at=finalized_at,
         duration_sec=0 if status == "writing" else 10,
         size_bytes=100,
+        media_progress_at=now if status == "writing" else None,
         status=status,
         ownership="KM VMS",
         source="recorder",

@@ -7,10 +7,13 @@ import { useCurrentUser } from "../../lib/currentUser";
 import { useI18n, useLocaleText } from "../../lib/i18n";
 import {
   boolLabel,
+  activationProgressModel,
   cameraStorageRows,
   formatBytes,
   formatDateTime,
   formatPercent,
+  discoveryHeaderStatusModel,
+  discoveryStateModel,
   humanBlockerReason,
   isStorageAccessDeniedError,
   actionPermissionState,
@@ -245,18 +248,18 @@ function rootProblemLabel(root, copy, language) {
 
 function rootHasProblems(root) {
   if (!root) return false;
-  if (root.requires_activation && !root.is_active && !root.problem) return false;
-  return Boolean(root.problem || root.is_available === false || root.is_readable === false || root.is_writable === false || root.namespace_exists === false);
+  if (root.requires_activation && !root.is_active) return false;
+  return Boolean(root.problem || root.is_available === false || root.is_readable === false || (root.is_active && root.is_writable === false) || root.namespace_exists === false);
 }
 
 function rootProblemItems(root, copy, language) {
   const items = [];
   if (!root) return [copy.no];
-  if (root.requires_activation && !root.is_active && !root.problem) return [copy.no];
+  if (root.requires_activation && !root.is_active) return [copy.no];
   if (root.problem) items.push(humanBlockerReason(root.problem, language));
   if (root.is_available === false && !root.problem) items.push(copy.archiveRootUnavailableDetail);
   if (root.is_readable === false) items.push(copy.archiveRootUnreadableDetail);
-  if (root.is_writable === false) items.push(copy.archiveRootUnwritableDetail);
+  if (root.is_active && root.is_writable === false) items.push(copy.archiveRootUnwritableDetail);
   if (root.namespace_exists === false) items.push(copy.archiveRootNamespaceMissingDetail);
   return Array.from(new Set(items.length ? items : [copy.no]));
 }
@@ -277,13 +280,6 @@ function autoFreePolicyText(enabled, copy) {
 function compactAccessLabel(accessRights, copy) {
   if (accessRights.status === "ok") return copy.accessOkShort;
   if (accessRights.status === "unknown") return copy.accessUnknownShort;
-  return accessRights.label;
-}
-
-function accessRightsSummary(accessRights, copy) {
-  if (accessRights.status === "ok") return copy.accessValueOk;
-  if (accessRights.status === "unknown") return copy.accessValueUnknown;
-  if (accessRights.status === "none") return copy.accessValueNone;
   return accessRights.label;
 }
 
@@ -325,6 +321,18 @@ function problemActionStatusText(item, copy) {
   if (item?.safe_action_status === "future_safe_cleanup_possible") return copy.problemFutureCleanup;
   if (item?.safe_action_status === "none") return copy.problemNoAction;
   return copy.problemManualReview;
+}
+
+function problemCategoryLabel(item, language) {
+  if (language === "en") return item?.label_en || item?.label || item?.label_ru || "";
+  if (language === "zh-CN") return item?.label_zh_cn || item?.label || item?.label_ru || "";
+  return item?.label_ru || item?.label || "";
+}
+
+function problemCategoryReason(item, language) {
+  if (language === "en") return item?.reason_no_action_available_en || "";
+  if (language === "zh-CN") return item?.reason_no_action_available_zh_cn || "";
+  return item?.reason_no_action_available || "";
 }
 
 function migrationStatusText(scenario, archiveRoots, copy) {
@@ -407,6 +415,58 @@ function operationTone(status = "") {
   return "neutral";
 }
 
+function activationProgressTone(status) {
+  if (status?.status === "failed" || status?.status === "failed_recovery_required") return "error";
+  if (status?.status === "completed") return "ok";
+  if (status?.status === "running") return "warning";
+  return "neutral";
+}
+
+function activationProgressStatusText(status, copy) {
+  if (status?.status === "queued" || status?.status === "running") return copy.activationRunning;
+  if (status?.status === "completed") return copy.activationCompleted;
+  if (status?.status === "failed_recovery_required") return copy.activationRecoveryRequired;
+  if (status?.status === "failed") return copy.activationFailed;
+  return copy.activationIdle;
+}
+
+function activationProgressReasonText(status, copy, language) {
+  const model = activationProgressModel(status);
+  const messages = {
+    storage_activation_queued: copy.activationQueued,
+    storage_activation_stopping_recordings: copy.activationStopping,
+    storage_activation_switching_location: copy.activationSwitching,
+    storage_activation_restoring_recordings: copy.activationRestoring,
+    storage_activation_checking_archive_access: copy.activationChecking,
+    storage_activation_completed: copy.activationCompleted,
+    storage_activation_failed_previous_location_preserved: copy.activationFailedPreviousPreserved,
+    storage_activation_failed_previous_location_restored: copy.activationFailedPreviousRestored,
+    storage_activation_restoring_previous_location: copy.activationRollbackRunning,
+    storage_activation_recovery_required: copy.activationRecoveryRequiredDetail,
+    storage_activation_completed_with_archive_access_problem: copy.activationArchiveAccessProblem,
+  };
+  const base = messages[model.presentationKey] || "";
+  if (model.recoveryRequired && model.effectiveRootLabel) {
+    return `${base} ${copy.activationEffectiveRoot.replace("{root}", model.effectiveRootLabel)}`.trim();
+  }
+  return base;
+}
+
+function activationProgressItems(status, copy) {
+  const labels = {
+    recordings_stopped: copy.activationStepStopRecordings,
+    runtime_applied: copy.activationStepApplyRuntime,
+    cameras_restored: copy.activationStepRestoreCameras,
+    archive_access_checked: copy.activationStepCheckAccess,
+  };
+  const model = activationProgressModel(status);
+  const items = model.steps.map((step) => `${step.done ? "✓" : step.active ? "…" : "·"} ${labels[step.key]}`);
+  if (model.rollback.status !== "not_required") {
+    items.push(`${model.rollback.completed ? "✓" : model.rollback.active ? "…" : model.rollback.failed ? "!" : "·"} ${copy.activationStepRollback}`);
+  }
+  return items;
+}
+
 export default function StorageOperationsPage() {
   const [status, setStatus] = useState(null);
   const statusRef = useRef(null);
@@ -420,6 +480,8 @@ export default function StorageOperationsPage() {
   const [archiveRootChoiceId, setArchiveRootChoiceId] = useState("");
   const [archiveRootFolderName, setArchiveRootFolderName] = useState("KM-VMS-Recordings");
   const [archiveRootDialog, setArchiveRootDialog] = useState(null);
+  const [trackedActivationOperationId, setTrackedActivationOperationId] = useState(null);
+  const [dismissedActivationOperationId, setDismissedActivationOperationId] = useState(null);
   const [migrationTargetRootId, setMigrationTargetRootId] = useState("");
   const [migrationPreviewState, setMigrationPreviewState] = useState(null);
   const [rootAction, setRootAction] = useState("");
@@ -444,15 +506,13 @@ export default function StorageOperationsPage() {
   const loadStatus = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setRefreshing(true);
     try {
-      const [data, settingsData, discoveryData] = await Promise.all([
+      const [data, settingsData] = await Promise.all([
         apiFetch("/storage/status"),
         apiFetch("/settings").catch(() => null),
-        apiFetch("/storage/archive-roots/discovery").catch(() => null),
       ]);
       setStatus(data);
       statusRef.current = data;
       setSettings(settingsData);
-      if (discoveryData) setArchiveRootDiscovery(discoveryData);
       setError("");
       setRefreshWarning("");
       setAccessDenied(false);
@@ -474,6 +534,23 @@ export default function StorageOperationsPage() {
       if (!silent) setRefreshing(false);
     }
   }, [language, copy.loadFailed, t]);
+
+  const loadArchiveRootDiscovery = useCallback(async () => {
+    setArchiveRootDiscovery((current) => ({ ...(current || {}), status: "refreshing", freshness: "refreshing", refresh_in_progress: true }));
+    try {
+      const discovery = await apiFetch("/storage/archive-roots/discovery");
+      setArchiveRootDiscovery(discovery);
+      return discovery;
+    } catch (err) {
+      setArchiveRootDiscovery({
+        status: "unavailable",
+        freshness: "unavailable",
+        available: false,
+        refresh_error: "storage_discovery_refresh_failed",
+      });
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     if (currentUserStatus === "loading") return;
@@ -511,11 +588,20 @@ export default function StorageOperationsPage() {
   const reconciliation = operations.reconciliation || {};
   const recent = operations.recent_operations || {};
   const archiveRoots = status?.archive_roots || operations.archive_roots || [];
+  const archiveRootActivation = status?.archive_root_activation || operations.archive_root_activation || {};
+  const activationModel = activationProgressModel(archiveRootActivation);
+  const activationIsActive = ["queued", "running", "failed_recovery_required"].includes(activationModel.status);
+  const activationIsTrackedTerminal = ["failed", "completed"].includes(activationModel.status)
+    && trackedActivationOperationId === activationModel.operationId
+    && dismissedActivationOperationId !== activationModel.operationId;
+  const showArchiveRootActivation = activationIsActive || activationIsTrackedTerminal;
+  const archiveRootActivationReason = activationProgressReasonText(archiveRootActivation, copy, language);
   const migrationPreview = migrationPreviewState || operations.migration_preview || status?.migration_preview || {};
-  const archiveRootChoices = archiveRootDiscovery?.candidates || [];
+  const archiveRootDiscoveryModel = discoveryStateModel(archiveRootDiscovery || {});
+  const archiveRootDiscoveryHeader = discoveryHeaderStatusModel(archiveRootDiscovery);
+  const archiveRootChoices = archiveRootDiscoveryModel.candidates;
   const inactiveArchiveRoots = archiveRoots.filter((root) => !root.is_active);
   const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
-  const usagePercent = Number(capacity.usage_percent || 0);
   const autoFreeEnabled = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
   const topHealth = storageTopHealthModel({ operations, pathHealth, capacity, policy, reconciliation, migrationPreview, retention }, language);
   const tone = topHealth.tone || healthTone(operations, pathHealth, capacity, policy, reconciliation);
@@ -523,6 +609,21 @@ export default function StorageOperationsPage() {
   const availability = availabilityState(pathHealth, copy);
   const recording = recordingState(operations, pathHealth, policy, copy);
   const normalizedReconciliation = normalizeReconciliationSummary(reconciliation, language);
+  const archivePathText = storageContract.archive_primary_path || storageContract.archive_host_path || storageContract.storage_host_path || "-";
+  const currentArchiveRoot = archiveRoots.find((root) => root.is_active) || archiveRoots[0] || null;
+  const archiveVolumeGroups = Array.isArray(operations.volume_groups) && operations.volume_groups.length
+    ? operations.volume_groups
+    : [
+        {
+          physical_volume_id: "active",
+          display_label: copy.currentArchive,
+          capacity,
+          archive_size_bytes: owned.size_bytes,
+          playable_file_count: owned.segments_count,
+          problem_file_count: normalizedReconciliation.problemCount,
+          roots: currentArchiveRoot ? [currentArchiveRoot] : [],
+        },
+      ];
   const problemDetails = reconciliation.problem_details || {};
   const visibleProblemCategories = problemDetails.categories?.length ? problemDetails.categories : normalizedReconciliation.categories;
   const visibleProblemSamples = problemDetails.samples || [];
@@ -553,8 +654,6 @@ export default function StorageOperationsPage() {
   const retentionTone = operationTone(retentionScenario.status);
   const reconciliationTone = operationTone(reconciliationScenario.status);
   const migrationTone = operationTone(migrationScenario.status);
-  const archivePathText = storageContract.archive_primary_path || storageContract.archive_host_path || storageContract.storage_host_path || "-";
-  const currentArchiveRoot = archiveRoots.find((root) => root.is_active) || archiveRoots[0] || null;
   const currentArchivePath = archiveRootPath(currentArchiveRoot, archivePathText);
   const healthReason = healthReasonText(topHealth, recording, copy);
   const healthAction = healthActionText(topHealth, copy);
@@ -562,7 +661,7 @@ export default function StorageOperationsPage() {
   const autoFreePrimaryText = autoFreePolicyText(autoFreeEnabled, copy);
   const integrityPrimaryText = integrityStatusText(reconciliationScenario, normalizedReconciliation, copy);
   const migrationPrimaryText = migrationStatusText(migrationScenario, archiveRoots, copy);
-  const archiveRootSelectionReady = archiveRootFolderName.trim() && archiveRootChoiceId;
+  const archiveRootSelectionReady = archiveRootDiscoveryModel.current && archiveRootFolderName.trim() && archiveRootChoiceId;
 
   useEffect(() => {
     if (!archiveRootChoiceId && archiveRootChoices.length) {
@@ -576,6 +675,46 @@ export default function StorageOperationsPage() {
       setMigrationTargetRootId(inactiveArchiveRoots[0].id);
     }
   }, [inactiveArchiveRoots, migrationTargetRootId]);
+
+  useEffect(() => {
+    if (!["queued", "running"].includes(String(archiveRootActivation?.status || ""))) return undefined;
+    const timer = setInterval(() => loadStatus({ silent: true }), 1500);
+    return () => clearInterval(timer);
+  }, [archiveRootActivation?.status, loadStatus]);
+
+  useEffect(() => {
+    const operationId = activationModel.operationId;
+    if (!operationId) return;
+    if (["queued", "running", "failed_recovery_required"].includes(activationModel.status) && trackedActivationOperationId !== operationId) {
+      setTrackedActivationOperationId(operationId);
+      return;
+    }
+    if (trackedActivationOperationId !== operationId || dismissedActivationOperationId === operationId) return;
+    const recoveryRequired = activationModel.recoveryRequired;
+    setArchiveRootDialog({
+      activationOperationId: operationId,
+      title: copy.activationProgressTitle,
+      message: activationProgressStatusText(archiveRootActivation, copy),
+      items: activationProgressItems(archiveRootActivation, copy),
+      action: archiveRootActivationReason || copy.activationProgressHint,
+      confirmLabel: recoveryRequired ? copy.activationRetryRecovery : undefined,
+      cancelLabel: copy.close,
+      closeLabel: copy.close,
+      tone: activationProgressTone(archiveRootActivation),
+      onConfirm: recoveryRequired
+        ? () => activateRoot(archiveRootActivation.target_root_id || archiveRootActivation.previous_root_id, true)
+        : undefined,
+    });
+  }, [
+    activationModel.operationId,
+    activationModel.status,
+    activationModel.recoveryRequired,
+    archiveRootActivation,
+    archiveRootActivationReason,
+    copy,
+    dismissedActivationOperationId,
+    trackedActivationOperationId,
+  ]);
 
   async function setAutoFreeSpace(nextEnabled) {
     if (!manageSettingsPermission.allowed) {
@@ -604,6 +743,7 @@ export default function StorageOperationsPage() {
     if (archiveRootChoiceId) {
       return {
         candidate_id: archiveRootChoiceId,
+        discovery_snapshot_id: archiveRootDiscoveryModel.snapshotId,
         folder_name: archiveRootFolderName.trim(),
       };
     }
@@ -612,7 +752,7 @@ export default function StorageOperationsPage() {
 
   async function addRoot() {
     const payload = archiveRootSelectionPayload();
-    if (!payload.root_path && (!payload.candidate_id || !payload.folder_name)) return;
+    if (!payload.candidate_id || !payload.discovery_snapshot_id || !payload.folder_name) return;
     if (!manageSettingsPermission.allowed) {
       setArchiveRootDialog({
         title: copy.archiveRootAddProblemTitle,
@@ -624,13 +764,16 @@ export default function StorageOperationsPage() {
       return;
     }
     setRootAction("add");
+    setArchiveRootMessage("");
     try {
       await apiFetch("/storage/archive-roots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...payload, label: archiveRootFolderName.trim() || "Archive root", make_active: false, confirm: false }),
       });
+      setArchiveRootMessage(copy.rootAdded);
       await loadStatus({ silent: true });
+      await loadArchiveRootDiscovery();
     } catch (err) {
       setArchiveRootDialog(archiveRootDialogText(err, copy, language));
     } finally {
@@ -665,7 +808,7 @@ export default function StorageOperationsPage() {
     });
   }
 
-  async function activateRoot(rootId) {
+  async function activateRoot(rootId, recovery = false) {
     if (!rootId) return;
     if (!manageSettingsPermission.allowed) {
       setArchiveRootDialog({
@@ -679,16 +822,31 @@ export default function StorageOperationsPage() {
     }
     setRootAction(`activate-${rootId}`);
     setArchiveRootMessage("");
+    setArchiveRootDialog({
+      title: copy.activationProgressTitle,
+      message: recovery ? copy.activationRollbackRunning : copy.activationQueued,
+      action: copy.activationProgressHint,
+      closeLabel: copy.close,
+      tone: "warning",
+    });
     try {
-      await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}/activate`, {
+      const operation = await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}/activate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
+        body: JSON.stringify({ confirm: true, recovery }),
       });
-      setArchiveRootMessage(copy.rootSwitched);
+      if (operation?.operation_id) {
+        setTrackedActivationOperationId(operation.operation_id);
+        setDismissedActivationOperationId(null);
+      }
       await loadStatus({ silent: true });
     } catch (err) {
-      setArchiveRootMessage(errorDetailText(err, copy.rootNotSwitched, language));
+      setArchiveRootDialog({
+        title: copy.rootNotSwitched,
+        message: errorDetailText(err, copy.rootNotSwitched, language),
+        closeLabel: copy.close,
+        tone: "warning",
+      });
     } finally {
       setRootAction("");
     }
@@ -761,10 +919,31 @@ export default function StorageOperationsPage() {
       setArchiveRootMessage(copy.archiveRootDeleted);
       await loadStatus({ silent: true });
     } catch (err) {
-      setArchiveRootMessage(errorDetailText(err, copy.archiveRootNotDeleted, language));
+      const detail = err?.detail || err?.data?.detail;
+      if (detail?.status === "partial") {
+        setArchiveRootDialog({
+          title: copy.archiveRootDeletePartialTitle,
+          message: copy.archiveRootDeletePartialMessage
+            .replace("{deleted}", String(detail.segments_deleted || 0))
+            .replace("{remaining}", String(detail.remaining_count || 0)),
+          action: copy.archiveRootDeletePartialAction,
+          closeLabel: copy.close,
+          tone: "error",
+        });
+      } else {
+        setArchiveRootMessage(errorDetailText(err, copy.archiveRootNotDeleted, language));
+      }
+      await loadStatus({ silent: true });
     } finally {
       setRootAction("");
     }
+  }
+
+  function closeArchiveRootDialog() {
+    if (archiveRootDialog?.activationOperationId) {
+      setDismissedActivationOperationId(archiveRootDialog.activationOperationId);
+    }
+    setArchiveRootDialog(null);
   }
 
   async function runRetentionPreview() {
@@ -973,31 +1152,33 @@ export default function StorageOperationsPage() {
 
             <div className="storageOpsDashboard">
               <Section title={copy.archiveSpace} className="storageOpsSection-archive">
-                <div className="storageOpsCapacityHeader">
-                  <div>
-                    <strong>{formatBytes(capacity.total_bytes)}</strong>
-                  </div>
-                  <span>{formatPercent(capacity.usage_percent)} {copy.used}</span>
-                </div>
-                <div className="storageOpsCapacityBar" aria-label={copy.storageUsage}>
-                  <span style={{ width: `${Math.max(0, Math.min(100, usagePercent))}%` }} />
-                </div>
-                <div className="storageOpsMiniGrid">
-                  <MiniFact label={copy.total} value={formatBytes(capacity.total_bytes)} />
-                  <MiniFact label={copy.free} value={formatBytes(capacity.free_bytes)} tone={freeSpaceTone(capacity, policy)} />
-                  <MiniFact label={copy.archiveSize} value={formatBytes(owned.size_bytes)} />
-                  <MiniFact label={copy.segments} value={String(owned.segments_count || 0)} />
-                  <MiniFact label={copy.problems} value={String(normalizedReconciliation.problemCount || 0)} tone={normalizedReconciliation.problemCount ? "warning" : "ok"} />
-                </div>
-                <div className="storageOpsArchiveSummary">
-                  <div>
-                    <span>{copy.archiveRootLocation}</span>
-                    <strong>{archivePathText}</strong>
-                  </div>
-                  <div>
-                    <span>{copy.accessRights}</span>
-                    <strong>{accessRightsSummary(accessRights, copy)}</strong>
-                  </div>
+                <div className="storageOpsVolumeGroups">
+                  {archiveVolumeGroups.map((group) => {
+                    const groupCapacity = group.capacity || {};
+                    const groupUsagePercent = Number(groupCapacity.usage_percent || 0);
+                    const groupProblemCount = Number(group.problem_file_count || 0);
+                    return (
+                      <div className="storageOpsVolumeGroup" key={group.physical_volume_id || group.display_label || "active"}>
+                        <div className="storageOpsCapacityHeader">
+                          <div>
+                            <span>{group.display_label || group.physical_volume_id || copy.archiveSpace}</span>
+                            <strong>{formatBytes(groupCapacity.total_bytes)}</strong>
+                          </div>
+                          <span>{formatPercent(groupCapacity.usage_percent)} {copy.used}</span>
+                        </div>
+                        <div className="storageOpsCapacityBar" aria-label={copy.storageUsage}>
+                          <span style={{ width: `${Math.max(0, Math.min(100, groupUsagePercent))}%` }} />
+                        </div>
+                        <div className="storageOpsMiniGrid">
+                          <MiniFact label={copy.total} value={formatBytes(groupCapacity.total_bytes)} />
+                          <MiniFact label={copy.free} value={formatBytes(groupCapacity.free_bytes)} tone={freeSpaceTone(groupCapacity, policy)} />
+                          <MiniFact label={copy.archiveSize} value={formatBytes(group.archive_size_bytes)} />
+                          <MiniFact label={copy.segments} value={String(group.playable_file_count || 0)} />
+                          <MiniFact label={copy.problems} value={String(groupProblemCount)} tone={groupProblemCount ? "warning" : "ok"} />
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </Section>
 
@@ -1073,10 +1254,10 @@ export default function StorageOperationsPage() {
                       <div className="storageOpsProblemList">
                         {visibleProblemCategories.map((item) => (
                           <div key={item.code || item.label}>
-                            <strong>{item.label || item.label_ru}</strong>
+                            <strong>{problemCategoryLabel(item, language)}</strong>
                             <span>{item.count}</span>
                             <small>{problemActionStatusText(item, copy)}</small>
-                            {item.reason_no_action_available ? <p>{item.reason_no_action_available}</p> : null}
+                            {problemCategoryReason(item, language) ? <p>{problemCategoryReason(item, language)}</p> : null}
                           </div>
                         ))}
                       </div>
@@ -1204,15 +1385,47 @@ export default function StorageOperationsPage() {
                   })}
                   {!archiveRoots.length && !currentArchiveRoot ? <div className="storageOpsEmpty">{copy.noRoots}</div> : null}
                 </div>
-                <details className="storageOpsDetails storageOpsAdvancedRoot">
-                  <summary>{copy.addArchiveRoot}</summary>
-                    <div className="storageOpsAdvancedRootBody">
+                {archiveRootMessage ? <div className="storageOpsNote storageOpsNoteStrong">{archiveRootMessage}</div> : null}
+                {showArchiveRootActivation ? (
+                  <div className={`storageOpsNote storageOpsNoteStrong storageOpsActivationProgress storageOpsActivationProgress-${activationProgressTone(archiveRootActivation)}`}>
+                    <strong>{copy.activationProgressTitle}: {activationProgressStatusText(archiveRootActivation, copy)}</strong>
+                    <ul className="storageOpsDialogList">
+                      {activationProgressItems(archiveRootActivation, copy).map((item) => <li key={item}>{item}</li>)}
+                    </ul>
+                    {archiveRootActivationReason ? <div>{archiveRootActivationReason}</div> : null}
+                  </div>
+                ) : null}
+                <details
+                  className="storageOpsDetails storageOpsAdvancedRoot"
+                  onToggle={(event) => {
+                    if (event.currentTarget.open && !archiveRootDiscoveryModel.refreshing) loadArchiveRootDiscovery();
+                  }}
+                >
+                  <summary>
+                    <span className="storageOpsAdvancedRootSummaryContent">
+                      <span>{copy.addArchiveRoot}</span>
+                      <span
+                        className={`storageOpsDiscoveryStatus storageOpsDiscoveryStatus-${archiveRootDiscoveryHeader.tone}`}
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                        title={copy[`discoveryStatus_${archiveRootDiscoveryHeader.state}`]}
+                      >
+                        {copy[`discoveryStatus_${archiveRootDiscoveryHeader.state}`]}
+                      </span>
+                    </span>
+                  </summary>
+                  <div className="storageOpsAdvancedRootBody">
                     <div className="storageOpsRootForm storageOpsRootForm-product">
                       <label className="storageOpsField">
                         <span>{copy.storageRootLabel}</span>
                         <select className="select" value={archiveRootChoiceId} onChange={(event) => setArchiveRootChoiceId(event.target.value)} disabled={!!rootAction}>
                           {archiveRootChoices.map((choice) => (
-                            <option key={choice.id} value={choice.id}>{choice.label || choice.path} - {formatBytes(choice.free_bytes)} {copy.free}</option>
+                            <option key={choice.id} value={choice.id}>
+                              {choice.label || choice.path} - {copy.discoveryFreeOfTotal
+                                .replace("{free}", formatBytes(choice.free_bytes))
+                                .replace("{total}", formatBytes(choice.total_bytes))}
+                            </option>
                           ))}
                         </select>
                       </label>
@@ -1220,11 +1433,16 @@ export default function StorageOperationsPage() {
                         <span>{copy.storageFolder}</span>
                         <input className="input" value={archiveRootFolderName} onChange={(event) => setArchiveRootFolderName(event.target.value)} placeholder="KM-VMS-Recordings" />
                       </label>
-                      {!archiveRootDiscovery?.available ? <div className="storageOpsNote">{copy.storageUnavailable}</div> : null}
                       <button className="button small storageOpsRootAddButton" type="button" onClick={addRoot} disabled={!!rootAction || !archiveRootSelectionReady || !manageSettingsPermission.allowed}>{rootAction === "add" ? copy.adding : copy.add}</button>
                     </div>
+                    <div className="storageOpsDiscoveryFeedback">
+                      {archiveRootDiscoveryHeader.needsRefresh ? (
+                        <button className="button secondary small" type="button" onClick={loadArchiveRootDiscovery} disabled={!!rootAction}>
+                          {copy.refreshDiscovery}
+                        </button>
+                      ) : null}
+                    </div>
                     {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
-                    {archiveRootMessage ? <div className="storageOpsNote storageOpsNoteStrong">{archiveRootMessage}</div> : null}
                   </div>
                 </details>
               </Section>
@@ -1300,7 +1518,7 @@ export default function StorageOperationsPage() {
             </details>
           </>
         )}
-        <StorageDialog dialog={archiveRootDialog} onClose={() => setArchiveRootDialog(null)} />
+        <StorageDialog dialog={archiveRootDialog} onClose={closeArchiveRootDialog} />
       </div>
     </Layout>
   );

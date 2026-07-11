@@ -100,7 +100,16 @@ export default function Layout({ children }) {
               </Link>
             ) : null}
 
-            <SystemHealthIndicator currentUser={currentUser} pathname={pathname} label={t("nav.systemHealth")} />
+            <SystemHealthIndicator
+              currentUser={currentUser}
+              pathname={pathname}
+              label={t("nav.systemHealth")}
+              stateLabels={{
+                unknown: t("nav.systemHealthUnknown"),
+                healthy: t("nav.systemHealthHealthy"),
+                problem: t("nav.systemHealthProblem"),
+              }}
+            />
 
             {canOpenSettings ? (
               <Link

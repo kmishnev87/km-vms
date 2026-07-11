@@ -1,5 +1,5 @@
-import os
 from datetime import datetime
+import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -12,7 +12,9 @@ from app.models.recording import ArchiveRoot, RecordingSegment
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.services.archive_root_activation import (
-    finalize_pending_archive_root_activation,
+    ArchiveRootMutationConflict,
+    archive_root_mutation_guard,
+    archive_root_activation_public_status,
     request_archive_root_activation,
 )
 from app.services.audit_log import create_event
@@ -21,11 +23,15 @@ from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
     apply_storage_migration,
     archive_root_public_status,
+    archive_root_runtime_path,
     list_archive_roots,
     migration_preview,
     resolve_segment_file_path,
     root_usage,
     sanitize_archive_root_path,
+    segment_has_resolved_archive_root,
+    verify_archive_root_access,
+    write_archive_roots_runtime_files,
 )
 from app.services import setup_storage
 from app.services.storage_monitoring import build_storage_monitoring_summary
@@ -41,6 +47,7 @@ class ArchiveRootCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidate_id: str | None = None
+    discovery_snapshot_id: str | None = None
     folder_name: str | None = None
     label: str | None = None
     make_active: bool = False
@@ -49,6 +56,7 @@ class ArchiveRootCreateRequest(BaseModel):
 
 class ArchiveRootActivateRequest(BaseModel):
     confirm: bool = False
+    recovery: bool = False
 
 
 class ArchiveRootDeleteRequest(BaseModel):
@@ -74,8 +82,11 @@ def storage_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    finalize_pending_archive_root_activation(db)
-    return build_storage_monitoring_summary(db, write_audit=False, audit_actor=current_user)
+    summary = build_storage_monitoring_summary(db, write_audit=False, audit_actor=current_user)
+    summary["archive_root_activation"] = archive_root_activation_public_status()
+    if isinstance(summary.get("storage_operations"), dict):
+        summary["storage_operations"]["archive_root_activation"] = summary["archive_root_activation"]
+    return summary
 
 
 @router.get("/archive-roots")
@@ -83,7 +94,6 @@ def archive_roots(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    finalize_pending_archive_root_activation(db)
     return {"items": [archive_root_public_status(root, include_path=True) for root in list_archive_roots(db)]}
 
 
@@ -91,7 +101,7 @@ def archive_roots(
 def archive_root_discovery(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    return setup_storage.discovery_snapshot()
+    return setup_storage.request_discovery_refresh()
 
 
 def _archive_root_path_from_payload(
@@ -99,15 +109,13 @@ def _archive_root_path_from_payload(
 ) -> tuple[str, dict | None, str | None]:
     if payload.candidate_id == "manual":
         raise ValueError("manual_archive_root_path_disabled")
-    if not payload.candidate_id or not payload.folder_name:
+    if not payload.candidate_id or not payload.discovery_snapshot_id or not payload.folder_name:
         raise ValueError("archive_root_selection_required")
-    preview = setup_storage.build_preview(
+    preview = setup_storage.revalidate_discovery_candidate(
         payload.candidate_id,
+        payload.discovery_snapshot_id,
         payload.folder_name,
-        None,
     )
-    if preview.get("blockers"):
-        raise ValueError(",".join(preview.get("blockers") or []))
     return str(preview["final_host_path"]), preview, str(preview.get("selected_mount_path") or "")
 
 
@@ -142,57 +150,98 @@ def create_archive_root(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
+    if payload.make_active and not payload.confirm:
+        raise HTTPException(status_code=409, detail={"error": "archive_root_activation_confirm_required"})
     try:
-        selected_path, preview, allowed_base = _archive_root_path_from_payload(payload)
-        root_path = sanitize_archive_root_path(selected_path, allow_create=False, allowed_base=allowed_base)
-    except ValueError as exc:
-        _archive_root_add_blocked(db, current_user, exc)
-    existing = db.query(ArchiveRoot).filter(ArchiveRoot.root_path == str(root_path)).first()
-    if existing:
-        root = existing
-    else:
-        root = ArchiveRoot(
-            id=f"root_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}",
-            label=(payload.label or (preview or {}).get("folder_name") or root_path.name or "Archive root")[:255],
-            root_path=str(root_path),
-            storage_namespace=KMVMS_RECORDINGS_NAMESPACE,
-            is_active=False,
-            is_readable=True,
-            is_writable=True,
-            is_available=False,
-            last_seen_at=datetime.utcnow(),
-        )
-        db.add(root)
-        db.commit()
-        db.refresh(root)
-        create_event(
-            db=db,
-            actor=current_user,
-            category="storage",
-            event_type="archive_root.created",
-            severity="info",
-            message_ru="Archive root created",
-            message_en="Archive root created",
-            target_type="archive_root",
-            target_id=root.id,
-            target_name=root.label,
-            metadata={"root_id": root.id, "label": root.label},
-        )
-    if payload.make_active:
-        if not payload.confirm:
-            raise HTTPException(status_code=409, detail="Archive root activation requires confirm=true")
-        result = request_archive_root_activation(db, root=root, actor=current_user)
-        if result.get("status") in {"blocked", "already_running"}:
-            raise HTTPException(status_code=409, detail=result)
-        return result
-    return archive_root_public_status(root, include_path=True)
+        with archive_root_mutation_guard("archive_root_create") as mutation_owner:
+            try:
+                selected_path, preview, allowed_base = _archive_root_path_from_payload(payload)
+                root_path = sanitize_archive_root_path(selected_path, allow_create=False, allowed_base=allowed_base)
+            except ValueError as exc:
+                _archive_root_add_blocked(db, current_user, exc)
+
+            physical_identity = str((preview or {}).get("physical_identity") or "").strip()
+            if not physical_identity:
+                _archive_root_add_blocked(db, current_user, ValueError("storage_candidate_identity_unavailable"))
+            canonical_path = root_path.resolve(strict=False)
+            existing = None
+            for candidate in db.query(ArchiveRoot).order_by(ArchiveRoot.created_at.asc()).all():
+                if Path(str(candidate.root_path)).resolve(strict=False) == canonical_path:
+                    existing = candidate
+                    break
+
+            if existing and existing.physical_identity and existing.physical_identity != physical_identity:
+                _archive_root_add_blocked(db, current_user, ValueError("root_identity_conflict"))
+            if existing and existing.retirement_status == "partial_deletion":
+                _archive_root_add_blocked(db, current_user, ValueError("retired_root_partial_deletion_requires_retry"))
+
+            reactivated = bool(existing and existing.retired_at is not None)
+            if existing:
+                root = existing
+                root.physical_identity = physical_identity
+                if reactivated:
+                    root.retired_at = None
+                    root.retirement_status = None
+                    root.retirement_problem = None
+                    root.is_active = False
+                root.updated_at = datetime.utcnow()
+                db.add(root)
+            else:
+                root = ArchiveRoot(
+                    id=f"root_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}",
+                    label=(payload.label or (preview or {}).get("folder_name") or root_path.name or "Archive root")[:255],
+                    root_path=str(canonical_path),
+                    storage_namespace=KMVMS_RECORDINGS_NAMESPACE,
+                    is_active=False,
+                    is_readable=bool((preview or {}).get("exists")),
+                    is_writable=bool((preview or {}).get("writable")),
+                    is_available=bool((preview or {}).get("exists")),
+                    last_seen_at=datetime.utcnow(),
+                    physical_identity=physical_identity,
+                )
+                db.add(root)
+            db.commit()
+            db.refresh(root)
+            write_archive_roots_runtime_files(db)
+            create_event(
+                db=db,
+                actor=current_user,
+                category="storage",
+                event_type="archive_root.reactivated" if reactivated else "archive_root.created",
+                severity="info",
+                message_ru="Archive root reactivated" if reactivated else "Archive root created",
+                message_en="Archive root reactivated" if reactivated else "Archive root created",
+                target_type="archive_root",
+                target_id=root.id,
+                target_name=root.label,
+                metadata={"root_id": root.id, "label": root.label, "identity_reused": reactivated},
+            )
+            db.commit()
+            if payload.make_active:
+                result = request_archive_root_activation(
+                    db,
+                    root=root,
+                    actor=current_user,
+                    mutation_owner=mutation_owner,
+                )
+                if result.get("status") in {"blocked", "already_running"}:
+                    raise HTTPException(status_code=409, detail=result)
+                return result
+            return archive_root_public_status(root, include_path=True)
+    except ArchiveRootMutationConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.blocker) from exc
 
 
 def _safe_cleanup_empty_dirs(root_path: Path) -> int:
     removed = 0
-    if not root_path.exists() or not root_path.is_dir():
+    namespace_path = (root_path / KMVMS_RECORDINGS_NAMESPACE).resolve(strict=False)
+    try:
+        namespace_path.relative_to(root_path.resolve(strict=False))
+    except ValueError:
         return removed
-    for current, dirs, _files in os.walk(root_path, topdown=False):
+    if not namespace_path.exists() or not namespace_path.is_dir():
+        return removed
+    for current, dirs, _files in os.walk(namespace_path, topdown=False):
         for dirname in dirs:
             candidate = Path(current) / dirname
             try:
@@ -201,11 +250,47 @@ def _safe_cleanup_empty_dirs(root_path: Path) -> int:
             except OSError:
                 pass
     try:
-        root_path.rmdir()
+        namespace_path.rmdir()
+        removed += 1
+    except OSError:
+        pass
+    kmvms_path = namespace_path.parent
+    try:
+        kmvms_path.rmdir()
         removed += 1
     except OSError:
         pass
     return removed
+
+
+def _mark_root_segment_deleted(db: Session, segment: RecordingSegment, current_user: User, *, now: datetime) -> None:
+    segment.status = "deleted"
+    segment.deleted_at = now
+    segment.deletion_reason = "archive_root_retired"
+    segment.deleted_by = getattr(current_user, "username", None)
+    segment.deletion_source = "archive_root_delete"
+    segment.updated_at = now
+    db.add(segment)
+
+
+def _recover_root_segment_metadata_after_file_delete(
+    db: Session,
+    *,
+    segment_id: int,
+    current_user: User,
+    now: datetime,
+) -> bool:
+    try:
+        db.rollback()
+        fresh = db.get(RecordingSegment, segment_id)
+        if fresh is None:
+            return False
+        _mark_root_segment_deleted(db, fresh, current_user, now=now)
+        db.commit()
+        return True
+    except Exception:
+        db.rollback()
+        return False
 
 
 def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) -> dict:
@@ -227,7 +312,21 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
         raise HTTPException(status_code=409, detail={"error": "archive_root_delete_active_writes_blocked", "writing_count": int(writing_count)})
 
     usage = root_usage(db, root)
-    root_path = Path(root.root_path).resolve(strict=False)
+    access = verify_archive_root_access(root, require_write=True)
+    if not access.get("verified") or access.get("read_access_state") != "available" or access.get("write_access_state") != "available":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "archive_root_delete_unavailable_root_blocked",
+                "problem": access.get("verification_error") or access.get("problem") or "archive_root_unavailable",
+            },
+        )
+    root_path = archive_root_runtime_path(root).resolve(strict=False)
+    namespace_path = (root_path / KMVMS_RECORDINGS_NAMESPACE).resolve(strict=False)
+    try:
+        namespace_path.relative_to(root_path)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail={"error": "archive_root_namespace_boundary_invalid"}) from exc
     segments = (
         db.query(RecordingSegment)
         .filter(
@@ -238,71 +337,219 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
         .order_by(RecordingSegment.id.asc())
         .all()
     )
-    deleted_files = 0
-    missing_files = 0
-    skipped_files = 0
-    bytes_freed = 0
-    now = datetime.utcnow()
+
+    plans: list[dict] = []
+    blockers: list[dict] = []
     for segment in segments:
-        file_deleted = False
+        if segment.ownership != "KM VMS" or segment.source != "recorder":
+            blockers.append({"reason": "archive_root_contains_non_kmvms_metadata", "segment_id": int(segment.id)})
+            continue
+        if not segment_has_resolved_archive_root(segment):
+            blockers.append({"reason": "archive_root_segment_unresolved", "segment_id": int(segment.id)})
+            continue
         try:
             path = resolve_segment_file_path(db, segment).resolve(strict=False)
+            path.relative_to(namespace_path)
             try:
-                path.relative_to(root_path)
-            except ValueError:
-                skipped_files += 1
-                path = None
-            if path is not None and path.exists() and path.is_file():
-                size = int(path.stat().st_size)
-                path.unlink()
-                deleted_files += 1
-                bytes_freed += size
-                file_deleted = True
-            elif path is not None:
+                stat = path.stat()
+                if not path.is_file():
+                    blockers.append({"reason": "archive_root_segment_not_regular_file", "segment_id": int(segment.id)})
+                    continue
+                if not os.access(path.parent, os.W_OK):
+                    blockers.append({"reason": "archive_root_segment_parent_not_writable", "segment_id": int(segment.id)})
+                    continue
+                plans.append({"segment": segment, "path": path, "exists": True, "size_bytes": int(stat.st_size)})
+            except FileNotFoundError:
+                plans.append({"segment": segment, "path": path, "exists": False, "size_bytes": 0})
+        except (OSError, ValueError) as exc:
+            blockers.append({"reason": "archive_root_segment_preflight_failed", "segment_id": int(segment.id), "type": type(exc).__name__})
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "archive_root_delete_preflight_blocked",
+                "blocker_count": len(blockers),
+                "blockers": blockers[:20],
+                "mutation_performed": False,
+            },
+        )
+
+    deleted_files = 0
+    missing_files = 0
+    bytes_freed = 0
+    metadata_deleted = 0
+    metadata_recovered = 0
+    failed: list[dict] = []
+    now = datetime.utcnow()
+    for plan in plans:
+        segment = plan["segment"]
+        try:
+            if plan["exists"]:
+                try:
+                    plan["path"].unlink()
+                    deleted_files += 1
+                    bytes_freed += int(plan["size_bytes"])
+                except FileNotFoundError:
+                    missing_files += 1
+            else:
                 missing_files += 1
+        except OSError as exc:
+            db.rollback()
+            failed.append({"segment_id": int(segment.id), "reason": "filesystem_delete_failed", "type": type(exc).__name__})
+            break
+        try:
+            _mark_root_segment_deleted(db, segment, current_user, now=now)
+            db.commit()
+            metadata_deleted += 1
         except Exception:
-            skipped_files += 1
-        segment.status = "deleted"
-        segment.deleted_at = now
-        segment.deletion_reason = "archive_root_deleted"
-        segment.deleted_by = getattr(current_user, "username", None)
-        segment.deletion_source = "archive_root_delete"
-        segment.archive_root_id = None
-        segment.updated_at = now
-        if file_deleted and not segment.size_bytes:
-            segment.size_bytes = 0
-        db.add(segment)
+            if _recover_root_segment_metadata_after_file_delete(
+                db,
+                segment_id=int(segment.id),
+                current_user=current_user,
+                now=now,
+            ):
+                metadata_deleted += 1
+                metadata_recovered += 1
+                continue
+            failed.append({"segment_id": int(segment.id), "reason": "metadata_update_failed_after_file_delete"})
+            break
 
     root_id = root.id
     root_label = root.label
-    db.delete(root)
-    db.commit()
-    removed_dirs = _safe_cleanup_empty_dirs(root_path)
+    if failed:
+        root.retirement_status = "partial_deletion"
+        root.retirement_problem = str(failed[0].get("reason") or "archive_root_delete_failed")
+        root.updated_at = datetime.utcnow()
+        db.add(root)
+        db.commit()
+        result = {
+            "ok": False,
+            "status": "partial",
+            "root_id": root_id,
+            "segments_deleted": metadata_deleted,
+            "metadata_recovered_count": metadata_recovered,
+            "files_deleted": deleted_files,
+            "confirmed_missing_files": missing_files,
+            "failed_count": len(failed),
+            "remaining_count": max(0, len(plans) - metadata_deleted),
+            "bytes_freed": bytes_freed,
+            "retry_available": True,
+            "failures": failed,
+        }
+        create_event(
+            db=db,
+            actor=current_user,
+            category="storage",
+            event_type="archive_root.delete_partial",
+            severity="error",
+            message_ru="Archive root deletion completed partially",
+            message_en="Archive root deletion completed partially",
+            target_type="archive_root",
+            target_id=root_id,
+            target_name=root_label,
+            metadata=result,
+            commit=False,
+        )
+        db.commit()
+        return result
+
+    root.retired_at = datetime.utcnow()
+    root.retirement_status = "completed"
+    root.retirement_problem = None
+    root.is_active = False
+    root.updated_at = datetime.utcnow()
+    db.add(root)
     result = {
         "ok": True,
         "root_id": root_id,
         "root_label": root_label,
-        "segments_deleted": len(segments),
+        "status": "completed",
+        "segments_deleted": metadata_deleted,
+        "metadata_recovered_count": metadata_recovered,
         "files_deleted": deleted_files,
-        "missing_files": missing_files,
-        "skipped_files": skipped_files,
+        "confirmed_missing_files": missing_files,
+        "failed_count": 0,
         "bytes_freed": bytes_freed,
-        "removed_empty_dirs": removed_dirs,
+        "removed_empty_dirs": 0,
         "previous_usage": usage,
+        "historical_root_identity_preserved": True,
     }
     create_event(
         db=db,
         actor=current_user,
         category="storage",
-        event_type="archive_root.deleted",
+        event_type="archive_root.retired",
         severity="warning",
-        message_ru="Archive root deleted",
-        message_en="Archive root deleted",
+        message_ru="Archive root retired after recording deletion",
+        message_en="Archive root retired after recording deletion",
         target_type="archive_root",
         target_id=root_id,
         target_name=root_label,
         metadata=result,
+        commit=False,
     )
+    try:
+        # Keep DB retirement, audit truth and generated runtime selection in one
+        # recoverable finalization boundary. The runtime files are atomic and
+        # are generated from this transaction's flushed retirement state.
+        db.flush()
+        write_archive_roots_runtime_files(db)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        fresh = db.get(ArchiveRoot, root_id)
+        if fresh is None or fresh.retired_at is None:
+            if fresh is None:
+                raise
+            fresh.retired_at = None
+            fresh.retirement_status = "partial_deletion"
+            fresh.retirement_problem = "runtime_state_finalize_failed"
+            fresh.is_active = False
+            fresh.updated_at = datetime.utcnow()
+            db.add(fresh)
+            db.commit()
+            runtime_recovery_failed = False
+            try:
+                write_archive_roots_runtime_files(db)
+            except Exception:
+                runtime_recovery_failed = True
+                fresh.retirement_problem = "runtime_manifest_recovery_failed"
+                fresh.updated_at = datetime.utcnow()
+                db.add(fresh)
+                db.commit()
+            partial = {
+                **result,
+                "ok": False,
+                "status": "partial",
+                "failed_count": 1,
+                "remaining_count": 0,
+                "retry_available": True,
+                "finalization_pending": True,
+                "failure": {
+                    "reason": fresh.retirement_problem,
+                    "type": type(exc).__name__,
+                    "runtime_manifest_recovery_failed": runtime_recovery_failed,
+                },
+            }
+            create_event(
+                db=db,
+                actor=current_user,
+                category="storage",
+                event_type="archive_root.delete_partial",
+                severity="error",
+                message_ru="Archive root deletion finalization completed partially",
+                message_en="Archive root deletion finalization completed partially",
+                target_type="archive_root",
+                target_id=root_id,
+                target_name=root_label,
+                metadata=partial,
+                commit=False,
+            )
+            db.commit()
+            return partial
+        root = fresh
+
+    result["removed_empty_dirs"] = _safe_cleanup_empty_dirs(root_path)
     return result
 
 
@@ -314,11 +561,14 @@ def activate_archive_root(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     if not payload.confirm:
-        raise HTTPException(status_code=409, detail="Archive root activation requires confirm=true")
+        raise HTTPException(status_code=409, detail={"error": "archive_root_activation_confirm_required"})
     root = db.get(ArchiveRoot, root_id)
     if not root:
         raise HTTPException(status_code=404, detail="Archive root not found")
-    result = request_archive_root_activation(db, root=root, actor=current_user)
+    try:
+        result = request_archive_root_activation(db, root=root, actor=current_user, recovery=payload.recovery)
+    except ArchiveRootMutationConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.blocker) from exc
     if result.get("status") == "blocked":
         raise HTTPException(status_code=409, detail=result)
     if result.get("status") == "already_running":
@@ -335,10 +585,17 @@ def delete_archive_root(
 ):
     if not payload.confirm:
         raise HTTPException(status_code=409, detail="Archive root deletion requires confirm=true")
-    root = db.get(ArchiveRoot, root_id)
-    if not root:
-        raise HTTPException(status_code=404, detail="Archive root not found")
-    return _delete_inactive_root(db, root, current_user)
+    try:
+        with archive_root_mutation_guard("archive_root_delete"):
+            root = db.get(ArchiveRoot, root_id)
+            if not root or root.retired_at is not None:
+                raise HTTPException(status_code=404, detail="Archive root not found")
+            result = _delete_inactive_root(db, root, current_user)
+            if result.get("status") == "partial":
+                raise HTTPException(status_code=409, detail=result)
+            return result
+    except ArchiveRootMutationConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.blocker) from exc
 
 
 @router.post("/migration/preview")
@@ -408,7 +665,11 @@ def storage_migration_apply(
         target_type="archive_migration",
         metadata={"target_root_id": payload.target_root_id, "plan_id": payload.plan_id},
     )
-    result = apply_storage_migration(db, target_root_id=payload.target_root_id, expected_plan_id=payload.plan_id)
+    try:
+        with archive_root_mutation_guard("archive_migration_apply"):
+            result = apply_storage_migration(db, target_root_id=payload.target_root_id, expected_plan_id=payload.plan_id)
+    except ArchiveRootMutationConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.blocker) from exc
     event_type = "archive_migration.apply_completed" if result["status"] == "completed" else "archive_migration.apply_blocked" if result["status"] == "blocked" else "archive_migration.apply_failed"
     create_event(
         db=db,

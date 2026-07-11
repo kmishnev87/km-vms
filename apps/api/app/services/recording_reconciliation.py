@@ -18,6 +18,8 @@ from app.services.audit_log import create_event
 from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
     VIDEO_EXTENSIONS,
+    archive_root_for_segment,
+    archive_root_runtime_access_state,
     archive_root_runtime_path,
     is_kmvms_namespace_relative,
     is_video_file,
@@ -25,6 +27,8 @@ from app.services.recording_storage import (
     relative_to_archive_root,
     resolve_segment_file_path,
     safe_resolve_relative_for_root,
+    segment_archive_root_resolution,
+    segment_has_resolved_archive_root,
     storage_root,
 )
 
@@ -63,6 +67,7 @@ PROBLEM_CLASSES = {
     "path_outside_storage",
     "unreadable_file",
     "storage_unavailable",
+    "root_unresolved",
     "skipped",
 }
 CLASSIFICATION_LABELS_RU = {
@@ -82,6 +87,7 @@ CLASSIFICATION_LABELS_RU = {
     "path_outside_storage": "путь вне хранилища",
     "unreadable_file": "файл недоступен для чтения",
     "storage_unavailable": "хранилище недоступно",
+    "root_unresolved": "не определено расположение записи",
     "skipped": "пропущено",
 }
 
@@ -101,6 +107,7 @@ PROBLEM_ACTION_STATUS = {
     "path_outside_storage": "manual_review_required",
     "unreadable_file": "manual_review_required",
     "storage_unavailable": "none",
+    "root_unresolved": "none",
 }
 
 PROBLEM_ACTION_REASONS = {
@@ -119,6 +126,7 @@ PROBLEM_ACTION_REASONS = {
     "path_outside_storage": "Paths outside configured storage must not be changed automatically.",
     "unreadable_file": "Unreadable files may be a permission/storage issue, not a cleanup candidate.",
     "storage_unavailable": "Storage was unavailable, so no safe action can be inferred.",
+    "root_unresolved": "Archive-root identity is not proven, so playback and destructive actions remain blocked.",
 }
 
 
@@ -151,6 +159,7 @@ def _empty_counts() -> Counter:
         "path_outside_storage",
         "unreadable_file",
         "storage_unavailable",
+        "root_unresolved",
         "skipped",
     ]
     counts = Counter()
@@ -163,15 +172,18 @@ def _safe_rel_for_segment(segment: RecordingSegment) -> tuple[str | None, str | 
     raw_path = segment.relative_path or segment.file_path
     if not raw_path:
         return None, "invalid_path", None
+    if not segment_has_resolved_archive_root(segment):
+        return segment.relative_path, "root_unresolved", None
 
     try:
         db = object_session(segment)
         if db is None:
             return None, "db_session_missing", None
-        target = resolve_segment_file_path(db, segment)
-        from app.services.recording_storage import archive_root_for_segment
-
         root = archive_root_for_segment(db, segment)
+        access = archive_root_runtime_access_state(root)
+        if access.get("read_access_state") != "available":
+            return None, "storage_unavailable", None
+        target = resolve_segment_file_path(db, segment)
         return relative_to_archive_root(target, root), None, target
     except ValueError as exc:
         error = str(exc) or "path_outside_storage"
@@ -228,7 +240,10 @@ def _probe_media_file(path: Path) -> tuple[bool | None, str, str | None]:
 def _classify_segment(segment: RecordingSegment, active_job_ids: set[str] | None = None) -> tuple[str | None, Classification]:
     rel_path, path_error, target = _safe_rel_for_segment(segment)
     if path_error:
-        name = "path_outside_storage" if path_error == "path_outside_storage" else "invalid_path"
+        if path_error in {"storage_unavailable", "root_unresolved"}:
+            name = path_error
+        else:
+            name = "path_outside_storage" if path_error == "path_outside_storage" else "invalid_path"
         return rel_path, Classification(name=name, error=path_error)
     if target is None:
         return rel_path, Classification(name="invalid_path", error="invalid_path")
@@ -568,8 +583,8 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
             camera_summary["counts"][classification.name] += 1
             if classification.name in PROBLEM_CLASSES:
                 camera_summary["problem_count"] += 1
-            if rel_path:
-                checked_paths.add((segment.archive_root_id or "default", rel_path))
+            if rel_path and segment_has_resolved_archive_root(segment) and segment.archive_root_id:
+                checked_paths.add((str(segment.archive_root_id), rel_path))
             if len(samples[classification.name]) < MAX_SAMPLE_ITEMS:
                 samples[classification.name].append(
                     {

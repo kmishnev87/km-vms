@@ -180,16 +180,25 @@ export async function apiFetchBlob(path, options = {}) {
   return { blob, filename };
 }
 
-export async function issueRecordingMediaToken(path, action = "stream") {
-  const data = await issueRecordingMediaTokenInfo(path, action);
+export async function issueRecordingMediaToken(pathOrItem, action = "stream") {
+  const data = await issueRecordingMediaTokenInfo(pathOrItem, action);
   return data.mediaToken;
 }
 
-export async function issueRecordingMediaTokenInfo(path, action = "stream") {
+export async function issueRecordingMediaTokenInfo(pathOrItem, action = "stream") {
+  const payload = typeof pathOrItem === "object" && pathOrItem !== null
+    ? {
+        segment_id: pathOrItem.segment_id,
+        archive_root_id: pathOrItem.archive_root_id,
+        recording_ref: pathOrItem.recording_ref,
+        path: pathOrItem.path,
+        action,
+      }
+    : { path: pathOrItem, action };
   const data = await apiFetch("/recordings/media-token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, action }),
+    body: JSON.stringify(payload),
   });
   return {
     mediaToken: data?.media_token || "",
@@ -198,16 +207,24 @@ export async function issueRecordingMediaTokenInfo(path, action = "stream") {
   };
 }
 
-export async function issueChronologyMediaToken(cameraId, relPath) {
-  const data = await issueChronologyMediaTokenInfo(cameraId, relPath);
+export async function issueChronologyMediaToken(cameraId, relPath, playback = null) {
+  const data = await issueChronologyMediaTokenInfo(cameraId, relPath, playback);
   return data.mediaToken;
 }
 
-export async function issueChronologyMediaTokenInfo(cameraId, relPath) {
-  const data = await apiFetch(
-    `/chronology/media-token?camera_id=${encodeURIComponent(cameraId)}&rel_path=${encodeURIComponent(relPath)}`,
-    { method: "POST" }
-  );
+export async function issueChronologyMediaTokenInfo(cameraId, relPath, playback = null) {
+  const params = new URLSearchParams();
+  const segmentId = playback?.segment_id || playback?.segmentId;
+  const archiveRootId = playback?.archive_root_id || playback?.archiveRootId;
+  const playbackRef = playback?.playback_ref || playback?.playbackRef;
+  if (segmentId) params.set("segment_id", String(segmentId));
+  if (archiveRootId) params.set("archive_root_id", archiveRootId);
+  if (playbackRef) params.set("playback_ref", playbackRef);
+  if (!params.has("segment_id") && !params.has("playback_ref")) {
+    params.set("camera_id", String(cameraId));
+    params.set("rel_path", relPath);
+  }
+  const data = await apiFetch(`/chronology/media-token?${params.toString()}`, { method: "POST" });
   return {
     mediaToken: data?.media_token || "",
     expiresAt: data?.expires_at || null,

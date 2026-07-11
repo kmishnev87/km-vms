@@ -17,7 +17,14 @@ from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
 from app.models.user import User
 from app.services.audit_log import create_event
-from app.services.recording_storage import is_kmvms_namespace_relative, resolve_segment_file_path, segment_relative_path
+from app.services.recording_storage import (
+    archive_root_for_segment,
+    archive_root_runtime_access_state,
+    is_kmvms_namespace_relative,
+    resolve_segment_file_path,
+    segment_has_resolved_archive_root,
+    segment_relative_path,
+)
 from app.services.system_settings import (
     AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT,
     AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT,
@@ -98,10 +105,16 @@ def _storage_root() -> Path:
 def _safe_rel(segment: RecordingSegment) -> tuple[str | None, Path | None, str | None]:
     if not segment.relative_path:
         return None, None, "missing_relative_path"
+    if not segment_has_resolved_archive_root(segment):
+        return segment.relative_path.replace("\\", "/").lstrip("/"), None, "root_unresolved"
     try:
         db = object_session(segment)
         if db is None:
             return None, None, "db_session_missing"
+        root = archive_root_for_segment(db, segment)
+        access = archive_root_runtime_access_state(root)
+        if access.get("read_access_state") != "available":
+            return segment.relative_path.replace("\\", "/").lstrip("/"), None, "storage_unavailable"
         target = resolve_segment_file_path(db, segment)
         rel_path = segment_relative_path(db, segment)
     except ValueError as exc:
@@ -333,6 +346,7 @@ def validate_segment_for_deletion(
     *,
     active_job_ids: set[str],
     require_file: bool = True,
+    block_active_job: bool = False,
 ) -> tuple[bool, str, Path | None, int]:
     if segment.ownership != OWNERSHIP_KM_VMS:
         return False, "unowned", None, 0
@@ -340,6 +354,8 @@ def validate_segment_for_deletion(
         return False, "foreign_source", None, 0
     if segment.status == SEGMENT_STATUS_DELETED:
         return False, "already_deleted", None, 0
+    if block_active_job and segment.job_id and str(segment.job_id) in active_job_ids:
+        return False, "active_job", None, 0
     if segment.status != SEGMENT_STATUS_FINALIZED:
         return False, "not_finalized", None, 0
     if segment.integrity_status in PROBLEM_INTEGRITY_STATUSES:
@@ -394,6 +410,8 @@ def _retention_observability_counts(
         "non_finalized_count": 0,
         "active_or_writing_count": 0,
         "outside_namespace_count": 0,
+        "root_unavailable_count": 0,
+        "root_unresolved_count": 0,
         "integrity_problem_count": 0,
         "missing_file_count": 0,
         "foreign_or_unowned_count": 0,
@@ -418,7 +436,11 @@ def _retention_observability_counts(
             counts["integrity_problem_count"] += 1
 
         rel_path, file_path, path_error = _safe_rel(segment)
-        if path_error or not rel_path or file_path is None or not is_kmvms_namespace_relative(rel_path):
+        if path_error == "storage_unavailable":
+            counts["root_unavailable_count"] += 1
+        elif path_error == "root_unresolved":
+            counts["root_unresolved_count"] += 1
+        elif path_error or not rel_path or file_path is None or not is_kmvms_namespace_relative(rel_path):
             counts["outside_namespace_count"] += 1
         elif not file_path.exists():
             counts["missing_file_count"] += 1
@@ -682,7 +704,11 @@ def execute_segments(
 
     for segment in segments:
         result["requested_count"] += 1
-        ok, item_reason, file_path, size = validate_segment_for_deletion(segment, active_job_ids=active_job_ids)
+        ok, item_reason, file_path, size = validate_segment_for_deletion(
+            segment,
+            active_job_ids=active_job_ids,
+            block_active_job=operation.startswith("camera_delete"),
+        )
         if not ok or file_path is None:
             _add_item(result, _item(segment, action="skipped", reason=item_reason, size_bytes=size))
             continue
@@ -799,7 +825,11 @@ def preview_segments(
     active_job_ids = _active_job_ids(db)
     for segment in segments:
         result["requested_count"] += 1
-        ok, item_reason, _file_path, size = validate_segment_for_deletion(segment, active_job_ids=active_job_ids)
+        ok, item_reason, _file_path, size = validate_segment_for_deletion(
+            segment,
+            active_job_ids=active_job_ids,
+            block_active_job=operation.startswith("camera_delete"),
+        )
         if ok:
             result["planned_count"] += 1
             result["candidates_count"] += 1
@@ -907,12 +937,22 @@ def _retention_summary(result: dict) -> dict:
 
 def automatic_retention_status() -> dict:
     with AUTO_RETENTION_STATE_LOCK:
-        return dict(AUTO_RETENTION_STATE)
+        return _json_safe_state(AUTO_RETENTION_STATE)
 
 
 def auto_free_space_status() -> dict:
     with AUTO_FREE_SPACE_STATE_LOCK:
-        return dict(AUTO_FREE_SPACE_STATE)
+        return _json_safe_state(AUTO_FREE_SPACE_STATE)
+
+
+def _json_safe_state(value):
+    if isinstance(value, datetime):
+        return _iso(value)
+    if isinstance(value, dict):
+        return {key: _json_safe_state(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_state(item) for item in value]
+    return value
 
 
 def _set_automatic_retention_state(**updates) -> None:

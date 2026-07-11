@@ -86,13 +86,17 @@ assert.equal(chronologyPage.includes('event.key === "Escape"'), true);
 assert.equal(chronologyPage.includes("setDownloadChooserOpen(false);"), true);
 
 assert.equal(globalsCss.includes(".archiveExportForm"), true);
-assert.equal(globalsCss.includes(".archiveExportHelp"), true);
-assert.equal(globalsCss.includes(".archiveExportLimits"), true);
+assert.equal(globalsCss.includes(".archiveExportHelp"), false);
+assert.equal(globalsCss.includes(".archiveExportLimits"), false);
 assert.equal(globalsCss.includes(".archiveExportStatus"), true);
 assert.equal(globalsCss.includes(".chronologyDownloadChooser"), true);
 assert.equal(globalsCss.includes(".chronologyHelpTooltip"), true);
 assert.equal(globalsCss.includes(".recordingsCreateClipButton"), true);
 assert.equal(globalsCss.includes(`.${removedRecordsEvidence}IconButton`), false);
+assert.equal(recordsPage.includes("archiveExportHelp"), false);
+assert.equal(chronologyPage.includes("archiveExportHelp"), false);
+assert.equal(recordsPage.includes("archiveExportLimits"), false);
+assert.equal(chronologyPage.includes("archiveExportLimits"), false);
 
 const visibleSources = [helper, recordsPage, chronologyPage].join("\n");
 for (const forbidden of ["source_missing", "checksum_mismatch", "manifest_not_ready", "invalid_job_status"]) {

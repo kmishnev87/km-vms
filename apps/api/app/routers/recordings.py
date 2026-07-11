@@ -9,11 +9,10 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.permissions import PERMISSION_VIEW_RECORDINGS
 from app.db.session import get_db
 from app.models.camera import Camera
@@ -22,7 +21,14 @@ from app.models.user import User
 from app.routers.deps import require_permission
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 from app.services.recording_retention import build_retention_plan, execute_segments, preview_segments, run_retention
-from app.services.recording_storage import resolve_segment_file_path, segment_relative_path as root_segment_relative_path
+from app.services.recording_storage import (
+    archive_root_for_segment,
+    archive_root_runtime_access_state,
+    resolve_segment_file_path,
+    segment_archive_root_resolution,
+    segment_has_resolved_archive_root,
+    segment_relative_path as root_segment_relative_path,
+)
 from app.services.timezone_contract import (
     TimezoneContext,
     format_system_display,
@@ -59,13 +65,13 @@ PROBLEM_INTEGRITY_STATUSES = {
     "invalid_path",
     "path_outside_storage",
     "unreadable_file",
-    "storage_unavailable",
 }
 TECHNICAL_DELETED_CAMERA_RE = re.compile(r"__deleted_\d+_\d+$")
 
 
 class BulkDeleteRequest(BaseModel):
-    paths: list[str]
+    paths: list[str] = Field(default_factory=list)
+    items: list[dict] = Field(default_factory=list)
 
 
 class RetentionDryRunRequest(BaseModel):
@@ -80,37 +86,11 @@ class RetentionRunRequest(BaseModel):
 
 
 class RecordingMediaTokenRequest(BaseModel):
-    path: str
+    path: str | None = None
+    segment_id: int | None = None
+    archive_root_id: str | None = None
+    recording_ref: str | None = None
     action: str = "stream"
-
-
-def storage_root() -> Path:
-    root = Path(settings.storage_root)
-    root.mkdir(parents=True, exist_ok=True)
-    return root
-
-
-def safe_resolve_relative(relative_path: str) -> Path:
-    if not relative_path:
-        raise HTTPException(status_code=400, detail="Empty path")
-
-    root = storage_root().resolve()
-    target = (root / relative_path).resolve()
-
-    try:
-        target.relative_to(root)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid path")
-
-    return target
-
-
-def relative_to_storage(path: Path) -> str:
-    root = storage_root().resolve()
-    try:
-        return path.resolve().relative_to(root).as_posix()
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid recording path")
 
 
 def segment_relative_path(segment: RecordingSegment) -> str | None:
@@ -138,6 +118,16 @@ def resolve_segment_file(segment: RecordingSegment, require_exists: bool = True)
     if db is None:
         raise HTTPException(status_code=500, detail="Recording metadata session unavailable")
     try:
+        root = archive_root_for_segment(db, segment)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "recording_archive_root_unresolved", "category": segment_archive_root_resolution(segment)},
+        ) from exc
+    access = archive_root_runtime_access_state(root)
+    if access.get("read_access_state") != "available":
+        raise HTTPException(status_code=409, detail={"error": "recording_archive_root_unavailable", "problem": access.get("problem")})
+    try:
         file_path = resolve_segment_file_path(db, segment, require_exists=require_exists)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Recording file not found")
@@ -152,6 +142,13 @@ def segment_file_resolution(segment: RecordingSegment) -> tuple[Path | None, boo
     db = object_session(segment)
     if db is None:
         return None, False, "metadata_unavailable"
+    try:
+        root = archive_root_for_segment(db, segment)
+    except ValueError:
+        return None, False, "root_unresolved"
+    access = archive_root_runtime_access_state(root)
+    if access.get("read_access_state") != "available":
+        return None, False, "root_unavailable"
     try:
         file_path = resolve_segment_file_path(db, segment, require_exists=False)
     except ValueError:
@@ -169,6 +166,13 @@ def segment_metadata_path(segment: RecordingSegment) -> tuple[Path | None, str |
     db = object_session(segment)
     if db is None:
         return None, "metadata_unavailable"
+    try:
+        root = archive_root_for_segment(db, segment)
+    except ValueError:
+        return None, "root_unresolved"
+    access = archive_root_runtime_access_state(root)
+    if access.get("read_access_state") != "available":
+        return None, "root_unavailable"
     try:
         return resolve_segment_file_path(db, segment, require_exists=False), None
     except ValueError:
@@ -190,15 +194,65 @@ def finalized_segments_query(db: Session):
 
 def get_finalized_segment_by_path(db: Session, relative_path: str) -> RecordingSegment:
     normalized_path = relative_path.replace("\\", "/").lstrip("/")
-    segment = (
+    matches = (
         finalized_segments_query(db)
         .filter(RecordingSegment.relative_path == normalized_path)
         .order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
-        .first()
+        .limit(2)
+        .all()
     )
-    if not segment:
+    if not matches:
         raise HTTPException(status_code=404, detail="Recording metadata not found")
-    return segment
+    if len(matches) > 1:
+        raise HTTPException(status_code=409, detail={"error": "recording_path_ambiguous", "path": normalized_path})
+    return matches[0]
+
+
+def _segment_root_id(segment: RecordingSegment) -> str:
+    if not segment_has_resolved_archive_root(segment) or not segment.archive_root_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "recording_archive_root_unresolved", "category": segment_archive_root_resolution(segment)},
+        )
+    return str(segment.archive_root_id)
+
+
+def recording_ref(segment: RecordingSegment) -> str:
+    return f"segment:{int(segment.id)}:root:{_segment_root_id(segment)}"
+
+
+def _segment_from_recording_ref(db: Session, ref: str) -> RecordingSegment:
+    match = re.match(r"^segment:(\d+):root:([A-Za-z0-9_.-]+)$", str(ref or ""))
+    if not match:
+        raise HTTPException(status_code=400, detail="Invalid recording reference")
+    return get_finalized_segment_by_identity(db, segment_id=int(match.group(1)), archive_root_id=match.group(2))
+
+
+def get_finalized_segment_by_identity(
+    db: Session,
+    *,
+    segment_id: int | None = None,
+    archive_root_id: str | None = None,
+    recording_ref_value: str | None = None,
+    path: str | None = None,
+) -> RecordingSegment:
+    segment_id = segment_id if isinstance(segment_id, int) and not isinstance(segment_id, bool) else None
+    archive_root_id = archive_root_id if isinstance(archive_root_id, str) and archive_root_id else None
+    recording_ref_value = recording_ref_value if isinstance(recording_ref_value, str) and recording_ref_value else None
+    path = path if isinstance(path, str) and path else None
+    if recording_ref_value:
+        return _segment_from_recording_ref(db, recording_ref_value)
+    if segment_id is not None:
+        segment = finalized_segments_query(db).filter(RecordingSegment.id == int(segment_id)).first()
+        if not segment:
+            raise HTTPException(status_code=404, detail="Recording metadata not found")
+        segment_root_id = _segment_root_id(segment)
+        if archive_root_id and segment_root_id != str(archive_root_id):
+            raise HTTPException(status_code=404, detail="Recording root mismatch")
+        return segment
+    if path:
+        return get_finalized_segment_by_path(db, path)
+    raise HTTPException(status_code=400, detail="Recording identity required")
 
 
 def is_technical_deleted_camera_label(value: str | None) -> bool:
@@ -233,8 +287,27 @@ def apply_camera_filter(query, db: Session, camera_name: str | None):
     return query.filter(or_(*filters))
 
 
-def recording_media_resource(path: str, action: str) -> dict:
-    return {"path": path.replace("\\", "/").lstrip("/"), "action": action}
+def recording_media_resource_for_segment(segment: RecordingSegment, action: str) -> dict:
+    return {
+        "segment_id": int(segment.id),
+        "archive_root_id": _segment_root_id(segment),
+        "action": action,
+    }
+
+
+def _bulk_lookup_failure(exc: HTTPException) -> tuple[str, bool]:
+    if exc.status_code == 404:
+        return "metadata_not_found", True
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    reason = str(detail.get("error") or "")
+    if reason in {
+        "recording_path_ambiguous",
+        "recording_archive_root_unresolved",
+    }:
+        return reason, False
+    if exc.status_code == 409:
+        return "recording_identity_conflict", False
+    return "recording_identity_invalid", False
 
 
 def human_size(size_bytes: int) -> str:
@@ -361,6 +434,10 @@ def collect_recording_files(
                 availability_status = "available"
             elif unavailable_reason == "missing_file":
                 availability_status = "missing"
+            elif unavailable_reason == "root_unavailable":
+                availability_status = "root_unavailable"
+            elif unavailable_reason == "root_unresolved":
+                availability_status = "root_unresolved"
             else:
                 availability_status = "error"
         else:
@@ -368,19 +445,24 @@ def collect_recording_files(
             file_exists = None
             availability_status = "not_checked" if file_path is not None else unavailable_reason
         rel_path = segment_relative_path(segment)
-        if file_path is None or not rel_path:
+        if not rel_path:
             continue
+        display_file_path = file_path if file_path is not None else Path(rel_path)
 
         size_bytes = int(segment.size_bytes or 0)
         started_at = segment.started_at or segment.created_at
-        media_metadata = segment_media_metadata(segment, file_path)
-        local_naive_display = segment_uses_local_naive_display(segment, file_path.name)
+        media_metadata = segment_media_metadata(segment, display_file_path)
+        local_naive_display = segment_uses_local_naive_display(segment, display_file_path.name)
+        resolved_root = bool(segment_has_resolved_archive_root(segment) and segment.archive_root_id)
         items.append(
             {
+                "segment_id": segment.id,
+                "archive_root_id": str(segment.archive_root_id) if resolved_root else None,
+                "recording_ref": recording_ref(segment) if resolved_root else None,
                 "camera_id": segment.camera_id,
                 "camera": segment_camera_name(segment, cameras.get(segment.camera_id)),
                 "path": rel_path,
-                "filename": file_path.name,
+                "filename": display_file_path.name,
                 "created_at": format_system_display(started_at, ctx, local_naive=local_naive_display) or format_local_dt(started_at, ctx),
                 "started_at": segment.started_at.isoformat() if segment.started_at else None,
                 "ended_at": segment.ended_at.isoformat() if segment.ended_at else None,
@@ -659,12 +741,18 @@ def issue_recording_media_token(
     action = str(payload.action or "stream").strip().lower()
     if action not in {"stream", "download"}:
         raise HTTPException(status_code=422, detail="Unsupported recording media action")
-    segment = get_finalized_segment_by_path(db, payload.path)
+    segment = get_finalized_segment_by_identity(
+        db,
+        segment_id=payload.segment_id,
+        archive_root_id=payload.archive_root_id,
+        recording_ref_value=payload.recording_ref,
+        path=payload.path,
+    )
     resolve_segment_file(segment)
     token, expires_at = create_media_token(
         user=current_user,
         scope="recording",
-        resource=recording_media_resource(payload.path, action),
+        resource=recording_media_resource_for_segment(segment, action),
     )
     return media_token_response(token, expires_at)
 
@@ -672,20 +760,29 @@ def issue_recording_media_token(
 @router.get("/download")
 def download_recording(
     request: Request,
-    path: str = Query(...),
+    path: str | None = Query(default=None),
+    segment_id: int | None = Query(default=None),
+    archive_root_id: str | None = Query(default=None),
+    recording_ref: str | None = Query(default=None),
     media_token: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
+    segment = get_finalized_segment_by_identity(
+        db,
+        segment_id=segment_id,
+        archive_root_id=archive_root_id,
+        recording_ref_value=recording_ref,
+        path=path,
+    )
     validate_media_token(
         db,
         token=media_token,
         scope="recording",
-        resource=recording_media_resource(path, "download"),
+        resource=recording_media_resource_for_segment(segment, "download"),
         permission=PERMISSION_VIEW_RECORDINGS,
         request=request,
         media_area="recordings",
     )
-    segment = get_finalized_segment_by_path(db, path)
     file_path = resolve_segment_file(segment)
     media_metadata = segment_media_metadata(segment, file_path)
 
@@ -699,20 +796,29 @@ def download_recording(
 @router.get("/stream")
 def stream_recording(
     request: Request,
-    path: str = Query(...),
+    path: str | None = Query(default=None),
+    segment_id: int | None = Query(default=None),
+    archive_root_id: str | None = Query(default=None),
+    recording_ref: str | None = Query(default=None),
     media_token: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
+    segment = get_finalized_segment_by_identity(
+        db,
+        segment_id=segment_id,
+        archive_root_id=archive_root_id,
+        recording_ref_value=recording_ref,
+        path=path,
+    )
     validate_media_token(
         db,
         token=media_token,
         scope="recording",
-        resource=recording_media_resource(path, "stream"),
+        resource=recording_media_resource_for_segment(segment, "stream"),
         permission=PERMISSION_VIEW_RECORDINGS,
         request=request,
         media_area="recordings",
     )
-    segment = get_finalized_segment_by_path(db, path)
     file_path = resolve_segment_file(segment)
     media_metadata = segment_media_metadata(segment, file_path)
     return stream_video(request, file_path, media_metadata["mime_type"])
@@ -720,11 +826,20 @@ def stream_recording(
 
 @router.delete("")
 def delete_recording(
-    path: str = Query(...),
+    path: str | None = Query(default=None),
+    segment_id: int | None = Query(default=None),
+    archive_root_id: str | None = Query(default=None),
+    recording_ref: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
-    segment = get_finalized_segment_by_path(db, path)
+    segment = get_finalized_segment_by_identity(
+        db,
+        segment_id=segment_id,
+        archive_root_id=archive_root_id,
+        recording_ref_value=recording_ref,
+        path=path,
+    )
     result = execute_segments(
         db,
         [segment],
@@ -745,12 +860,25 @@ def bulk_delete_recordings(
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
     segments: list[RecordingSegment] = []
-    result_not_found = 0
+    lookup_failures: list[tuple[str, bool]] = []
+    for item in payload.items:
+        try:
+            segments.append(
+                get_finalized_segment_by_identity(
+                    db,
+                    segment_id=item.get("segment_id"),
+                    archive_root_id=item.get("archive_root_id"),
+                    recording_ref_value=item.get("recording_ref"),
+                    path=item.get("path"),
+                )
+            )
+        except HTTPException as exc:
+            lookup_failures.append(_bulk_lookup_failure(exc))
     for rel in payload.paths:
         try:
             segments.append(get_finalized_segment_by_path(db, rel))
-        except HTTPException:
-            result_not_found += 1
+        except HTTPException as exc:
+            lookup_failures.append(_bulk_lookup_failure(exc))
 
     result = execute_segments(
         db,
@@ -758,13 +886,13 @@ def bulk_delete_recordings(
         actor=current_user,
         operation="manual_bulk_delete",
         reason="manual_bulk_delete",
-        max_candidates=max(len(payload.paths), 1),
+        max_candidates=max(len(payload.paths) + len(payload.items), 1),
     )
-    result["requested_count"] = len(payload.paths)
-    result["not_found_count"] += result_not_found
-    result["skipped_count"] += result_not_found
-    for _ in range(result_not_found):
-        result["items"].append({"segment_id": None, "camera_id": None, "relative_path": None, "action": "skipped", "reason": "metadata_not_found", "error": None, "size_bytes": 0})
+    result["requested_count"] = len(payload.paths) + len(payload.items)
+    result["not_found_count"] += sum(1 for _reason, not_found in lookup_failures if not_found)
+    result["skipped_count"] += len(lookup_failures)
+    for reason, _not_found in lookup_failures:
+        result["items"].append({"segment_id": None, "camera_id": None, "relative_path": None, "action": "skipped", "reason": reason, "error": None, "size_bytes": 0})
 
     return result
 

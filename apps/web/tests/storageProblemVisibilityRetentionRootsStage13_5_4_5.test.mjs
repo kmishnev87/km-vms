@@ -33,7 +33,9 @@ assert.match(operations, /title=\{copy\.archiveProblems\}/, "archive problems mu
 assert.match(operations, /visibleProblemCategories/, "problem categories must be visible, not only hidden diagnostics");
 assert.match(operations, /visibleProblemSamples/, "problem samples must be visible with redacted display fields");
 assert.match(operations, /problemActionStatusText\(item, copy\)/, "problem categories must explain the current action boundary");
-assert.match(operations, /item\.reason_no_action_available/, "problem viewer must show why cleanup is not performed in this stage");
+assert.match(page, /item\?\.reason_no_action_available/, "problem viewer must show a localized reason when no action is available");
+assert.match(page, /reason_no_action_available_en/, "problem reasons must support English");
+assert.match(page, /reason_no_action_available_zh_cn/, "problem reasons must support Chinese");
 assert.doesNotMatch(operations, /status=\{statusLabel\(reconciliationScenario\.status, language\)\}/, "archive problems must not use generic preview-ready status");
 assert.doesNotMatch(operations, /status=\{statusLabel\(retentionScenario\.status, language\)\}/, "retention must not use generic preview-ready status");
 assert.doesNotMatch(operations, /status=\{statusLabel\(migrationScenario\.status, language\)\}/, "migration must not use generic preview-ready status");
@@ -41,7 +43,7 @@ assert.doesNotMatch(operations, /status=\{statusLabel\(migrationScenario\.status
 assert.match(page, /rootProblemLabel\(root, copy, language\)/);
 assert.match(page, /rootHasProblems\(root\) \? copy\.yes : copy\.no/, "root problem column must show short yes/no badges");
 assert.match(page, /showRootProblems\(root\)/, "root problem yes badge must open a details dialog");
-assert.match(page, /root\.requires_activation && !root\.is_active && !root\.problem/, "inactive root waiting for runtime activation must not be shown as a problem");
+assert.match(page, /root\.requires_activation && !root\.is_active/, "inactive root waiting for runtime activation must not be shown as a problem");
 assert.match(page, /root\.segments_count \?\? owned\.segments_count \?\? 0/, "root row must not replace a real zero segment count with total archive count");
 assert.doesNotMatch(page, /if \(root\.is_available === true\) return copy\.available/, "problem column must not show green availability as no-problem state");
 const rootProblemCode = page.slice(page.indexOf("function rootHasProblems"), page.indexOf("function retentionPolicyText"));
@@ -59,11 +61,14 @@ assert.doesNotMatch(page, /storageOpsDeleteIcon|>×<\/span>/, "archive root dele
 const rootActionFlow = page.slice(page.indexOf("function requestActivateRoot"), page.indexOf("async function runRetentionPreview"));
 assert.doesNotMatch(rootActionFlow, /window\.confirm/, "storage root destructive/switch actions must use product dialogs, not browser confirm");
 assert.doesNotMatch(page, /storageOpsRootManageList|storageOpsRootManageRow/, "duplicate archive root management list must not remain under the add section");
-assert.match(page, /<summary>\{copy\.addArchiveRoot\}<\/summary>/, "advanced section must be only for adding a root");
+assert.match(page, /<summary>[\s\S]*\{copy\.addArchiveRoot\}[\s\S]*storageOpsDiscoveryStatus[\s\S]*<\/summary>/, "advanced section header must remain dedicated to add-root and its discovery status");
 assert.doesNotMatch(page, /<table className="storageOpsTable storageOpsTable-compact">[\s\S]*copy\.archiveLocation/, "archive root management must not render the old cramped table");
 
-const archiveSummary = page.slice(page.indexOf("storageOpsArchiveSummary"), page.indexOf("</Section>", page.indexOf("storageOpsArchiveSummary")));
-assert.doesNotMatch(archiveSummary, /copy\.availability/, "primary archive summary must not have a separate availability row");
+assert.doesNotMatch(
+  page,
+  /storageOpsArchiveSummary|copy\.archiveRootLocation|copy\.accessRights/,
+  "primary archive block must not duplicate root location or access summary rows"
+);
 
 assert.match(i18n, /segments: "Файлы"/, "RU storage label must be Files, not Segments");
 assert.match(i18n, /segments: "Files"/, "EN storage label must be Files");
@@ -81,7 +86,8 @@ assert.match(i18n, /retentionAutomaticStatus: "Применяется автом
 assert.match(css, /storageOpsRootForm-product/, "root selection form must have compact product styling");
 assert.match(css, /storageOpsRootActionsCell/, "root actions must be a compact icon cell");
 assert.match(css, /storageOpsRootDeleteCell/, "root delete action must have a separate compact column");
-assert.match(css, /grid-template-columns: minmax\(300px, 1\.62fr\) 54px minmax\(82px, 0\.42fr\)/, "delete icon column must sit between archive path and state");
+assert.match(page, /storageOpsRootPath[\s\S]*storageOpsRootDeleteCell[\s\S]*copy\.state/, "delete icon cell must be rendered between archive path and state");
+assert.match(css, /\.storageOpsRootListRow\s*\{[\s\S]*grid-template-columns:\s*minmax\([^;]+\)\s+36px/, "root grid must reserve a compact delete icon column after archive path");
 assert.match(css, /storageOpsTrashIcon/, "root delete action must style the trash SVG icon");
 assert.match(css, /storageOpsBadgeButton/, "problem yes badge must be clickable without becoming a large button");
 assert.match(css, /storageOpsProblemList/, "problem categories must have dedicated compact styling");

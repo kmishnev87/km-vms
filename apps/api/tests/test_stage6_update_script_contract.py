@@ -350,7 +350,8 @@ def test_update_script_forbids_destructive_runtime_data_and_docker_actions():
     for pattern in forbidden:
         assert pattern not in compact
 
-    assert 'compose_cmd --env-file "$APP_DIR/.env" up -d --build' in script
+    assert 'compose_with_archive_roots up -d --build' in script
+    assert 'archive_roots_compose_present || return 1' in script
     assert 'KM_VMS_UPDATE_HELPER_MODE' in script
     assert 'up -d --build postgres redis api recorder web nginx' in script
     assert "health_attempts=60" in script

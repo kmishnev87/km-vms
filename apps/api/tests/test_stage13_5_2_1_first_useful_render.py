@@ -18,6 +18,11 @@ from app.models.recording import RecordingJob, RecordingSegment
 from app.models.system_settings import SystemSettings
 from app.routers import recordings as recordings_router
 from app.services import recorder_diagnostics
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
 
 
 def actor():
@@ -44,6 +49,7 @@ def db():
         )
     )
     session.commit()
+    ensure_archive_roots(session)
     try:
         yield session
     finally:
@@ -89,6 +95,9 @@ def add_segment(db, camera, index):
         status="finalized",
         ownership="KM VMS",
         source="recorder",
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=datetime.utcnow(),
         storage_namespace="kmvms/recordings",
         container_format="mkv",
         file_extension=".mkv",
@@ -319,6 +328,7 @@ def test_manual_delete_allows_finalized_segment_from_still_active_recording_job(
 def test_single_delete_reports_skipped_as_conflict_not_false_success(db):
     camera = add_camera(db)
     segment = add_segment(db, camera, 2)
+    Path(settings.storage_root, "kmvms", "recordings").mkdir(parents=True, exist_ok=True)
 
     with pytest.raises(HTTPException) as exc:
         recordings_router.delete_recording(

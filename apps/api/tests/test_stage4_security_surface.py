@@ -30,6 +30,11 @@ from app.routers.recordings import stream_recording
 from app.routers.settings import system_status
 from app.services.audit_log import redact_text
 from app.services.media_tokens import create_media_token, validate_media_token
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
 
 
 class FakeRequest:
@@ -73,6 +78,7 @@ def add_user(db, *, username="stage4_owner", role="owner", active=True):
 
 
 def add_segment(db):
+    ensure_archive_roots(db)
     camera = Camera(
         name="stage4_security_camera",
         storage_folder_name="stage4_security_camera",
@@ -113,6 +119,9 @@ def add_segment(db):
         status="finalized",
         ownership="KM VMS",
         source="recorder",
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=datetime.utcnow(),
         storage_namespace="kmvms/recordings",
         container_format="mkv",
         file_extension=".mkv",
@@ -123,6 +132,22 @@ def add_segment(db):
     db.commit()
     db.refresh(segment)
     return camera, segment
+
+
+def recording_resource(segment, action="stream"):
+    return {
+        "segment_id": segment.id,
+        "archive_root_id": segment.archive_root_id,
+        "action": action,
+    }
+
+
+def chronology_resource(segment, action="stream"):
+    return {
+        "segment_id": segment.id,
+        "archive_root_id": segment.archive_root_id,
+        "action": action,
+    }
 
 
 def test_media_token_issue_and_validate_recording_scope(db):
@@ -139,7 +164,7 @@ def test_media_token_issue_and_validate_recording_scope(db):
         db,
         token=token,
         scope="recording",
-        resource={"path": segment.relative_path, "action": "stream"},
+        resource=recording_resource(segment),
         permission="view_recordings",
     )
 
@@ -149,7 +174,7 @@ def test_media_token_issue_and_validate_recording_scope(db):
             db,
             token=token,
             scope="recording",
-            resource={"path": segment.relative_path, "action": "download"},
+            resource=recording_resource(segment, "download"),
             permission="view_recordings",
         )
     assert exc.value.status_code == 403
@@ -251,7 +276,7 @@ def test_media_token_rejects_wrong_scope_expired_and_wrong_permission(db):
     assert exc.value.status_code == 403
 
 
-def test_chronology_media_token_is_bound_to_camera_and_path(db):
+def test_chronology_media_token_is_bound_to_segment_and_archive_root(db):
     user = add_user(db, role="operator")
     camera, segment = add_segment(db)
 
@@ -267,7 +292,7 @@ def test_chronology_media_token_is_bound_to_camera_and_path(db):
         db,
         token=token,
         scope="chronology",
-        resource={"camera_id": camera.id, "rel_path": segment.relative_path},
+        resource=chronology_resource(segment),
         permission="view_timeline",
     )
     with pytest.raises(HTTPException) as exc:
@@ -275,7 +300,7 @@ def test_chronology_media_token_is_bound_to_camera_and_path(db):
             db,
             token=token,
             scope="chronology",
-            resource={"camera_id": camera.id + 1, "rel_path": segment.relative_path},
+            resource={**chronology_resource(segment), "archive_root_id": "another-root"},
             permission="view_timeline",
         )
     assert exc.value.status_code == 403
@@ -326,12 +351,12 @@ def test_media_endpoints_reject_access_tokens_and_accept_only_scoped_media_token
     recording_token, _ = create_media_token(
         user=user,
         scope="recording",
-        resource={"path": segment.relative_path, "action": "stream"},
+        resource=recording_resource(segment),
     )
     chronology_token, _ = create_media_token(
         user=user,
         scope="chronology",
-        resource={"camera_id": camera.id, "rel_path": segment.relative_path},
+        resource=chronology_resource(segment),
     )
     live_token, _ = create_media_token(
         user=user,
@@ -357,7 +382,7 @@ def test_media_endpoints_reject_expired_and_wrong_resource_tokens(db, monkeypatc
             "typ": "media",
             "sub": user.username,
             "scope": "recording",
-            "resource": {"path": segment.relative_path, "action": "stream"},
+            "resource": recording_resource(segment),
             "exp": int((datetime.now(timezone.utc) - timedelta(seconds=1)).timestamp()),
         },
         settings.jwt_secret,
@@ -368,7 +393,7 @@ def test_media_endpoints_reject_expired_and_wrong_resource_tokens(db, monkeypatc
             "typ": "media",
             "sub": user.username,
             "scope": "chronology",
-            "resource": {"camera_id": camera.id, "rel_path": segment.relative_path},
+            "resource": chronology_resource(segment),
             "exp": int((datetime.now(timezone.utc) - timedelta(seconds=1)).timestamp()),
         },
         settings.jwt_secret,
@@ -398,12 +423,12 @@ def test_media_endpoints_reject_expired_and_wrong_resource_tokens(db, monkeypatc
     wrong_recording, _ = create_media_token(
         user=user,
         scope="recording",
-        resource={"path": segment.relative_path, "action": "download"},
+        resource=recording_resource(segment, "download"),
     )
     wrong_chronology, _ = create_media_token(
         user=user,
         scope="chronology",
-        resource={"camera_id": camera.id + 1, "rel_path": segment.relative_path},
+        resource={**chronology_resource(segment), "archive_root_id": "another-root"},
     )
     wrong_live, _ = create_media_token(
         user=user,

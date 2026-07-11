@@ -170,6 +170,11 @@ textarea {
   animation: systemHealthPulse 2.8s ease-in-out infinite;
 }
 
+.systemHealthNavItem-unknown .topNavIconImage {
+  opacity: 0.5;
+  filter: grayscale(1);
+}
+
 @keyframes systemHealthPulse {
   0%,
   100% {

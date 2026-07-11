@@ -31,6 +31,11 @@ from app.routers.cameras import (
 )
 from app.schemas.camera import CameraResponse
 from app.services.recording_retention import execute_segments
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
 
 
 class FakeRequest:
@@ -135,6 +140,8 @@ def add_segment(
     job_id=None,
     file_exists=True,
 ):
+    ensure_archive_roots(db)
+    Path(settings.storage_root, "kmvms", "recordings").mkdir(parents=True, exist_ok=True)
     rel = relative_path or f"kmvms/recordings/camera_{camera.id}/stage1_delete_test_segment.mkv"
     path = Path(settings.storage_root) / rel
     if file_exists:
@@ -155,6 +162,9 @@ def add_segment(
         status=status,
         ownership=ownership,
         source=source,
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=datetime.utcnow(),
         storage_namespace="kmvms/recordings",
         container_format="mkv",
         file_extension=".mkv",

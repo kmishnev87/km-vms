@@ -432,35 +432,12 @@
   overflow-wrap: anywhere;
 }
 
-.storageOpsArchiveSummary {
-  display: grid;
-  gap: 0;
-  margin-top: 12px;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  overflow: hidden;
-}
-
-.storageOpsArchiveSummary > div {
-  display: grid;
-  grid-template-columns: minmax(120px, 0.34fr) minmax(0, 1fr);
-  gap: 12px;
-  padding: 10px 12px;
-  border-bottom: 1px solid #edf2f7;
-}
-
-.storageOpsArchiveSummary > div:last-child {
-  border-bottom: 0;
-}
-
-.storageOpsArchiveSummary span,
 .storageOpsSecondaryIntro span {
   color: #64748b;
   font-size: 12px;
   line-height: 1.3;
 }
 
-.storageOpsArchiveSummary strong,
 .storageOpsSecondaryIntro strong {
   color: #0f172a;
   font-size: 13px;
@@ -689,17 +666,19 @@
 
 .storageOpsProblemList {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 6px;
 }
 
 .storageOpsProblemList div {
-  align-items: center;
+  align-items: start;
   background: rgba(183, 83, 18, 0.08);
   border: 1px solid rgba(183, 83, 18, 0.18);
   border-radius: 6px;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 10px;
+  row-gap: 4px;
   min-width: 0;
   padding: 7px 9px;
 }
@@ -713,6 +692,28 @@
 .storageOpsProblemList span {
   color: #9a4a13;
   font-weight: 800;
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.storageOpsProblemList small,
+.storageOpsProblemList p {
+  grid-column: 1 / -1;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.storageOpsProblemList small {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.storageOpsProblemList p {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.4;
 }
 
 .storageOpsActions {
@@ -1960,21 +1961,10 @@
   font-weight: 700;
 }
 
-.storageOpsArchiveSummary {
-  margin-top: 10px;
-  border-radius: 6px;
-}
-
-.storageOpsArchiveSummary > div {
-  padding: 8px 10px;
-}
-
-.storageOpsArchiveSummary span,
 .storageOpsSecondaryIntro span {
   font-size: 11px;
 }
 
-.storageOpsArchiveSummary strong,
 .storageOpsSecondaryIntro strong {
   font-size: 12px;
   font-weight: 700;
@@ -2469,6 +2459,45 @@
   background: linear-gradient(90deg, #16a34a, #22c55e);
 }
 
+.storageOpsVolumeGroups {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.storageOpsVolumeGroup {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.storageOpsVolumeGroup .storageOpsCapacityHeader {
+  margin: 0;
+}
+
+.storageOpsVolumeGroup .storageOpsCapacityHeader > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.storageOpsVolumeGroup .storageOpsCapacityHeader > div > span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.storageOpsVolumeGroup .storageOpsCapacityHeader strong {
+  font-size: 16px;
+}
+
 .storageOpsMiniGrid {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
@@ -2502,8 +2531,8 @@
 
 .storageOpsRootListRow {
   display: grid;
-  grid-template-columns: minmax(300px, 1.62fr) 54px minmax(82px, 0.42fr) minmax(82px, 0.42fr) minmax(82px, 0.42fr) minmax(72px, 0.32fr) 42px;
-  column-gap: 10px;
+  grid-template-columns: minmax(190px, 1.5fr) 36px repeat(3, minmax(58px, 0.44fr)) minmax(62px, 0.38fr) 36px;
+  column-gap: 8px;
   row-gap: 8px;
   align-items: stretch;
   padding: 9px 10px;
@@ -2580,7 +2609,7 @@
 
 .storageOpsRootDeleteCell {
   justify-self: center;
-  width: 54px;
+  width: 36px;
 }
 
 .storageOpsRootActivateButton,
@@ -2665,6 +2694,57 @@
   margin-top: 12px;
   padding-top: 0;
   border-top: 0;
+}
+
+.storageOpsAdvancedRootSummaryContent {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
+  align-items: center;
+  gap: 12px;
+  width: calc(100% - 6px);
+}
+
+.storageOpsDiscoveryStatus {
+  display: block;
+  min-height: 15px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.storageOpsDiscoveryStatus-ok {
+  color: #15803d;
+}
+
+.storageOpsDiscoveryStatus-warning {
+  color: #a16207;
+}
+
+.storageOpsDiscoveryFeedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 30px;
+  margin-top: 8px;
+}
+
+.storageOpsDiscoveryFeedback:empty {
+  display: none;
+}
+
+.storageOpsDiscoveryFeedback .storageOpsNote {
+  min-width: 0;
+  margin: 0;
+}
+
+.storageOpsDiscoveryFeedback .button {
+  flex: 0 0 auto;
 }
 
 .storageOpsAdvancedRootBody > div,

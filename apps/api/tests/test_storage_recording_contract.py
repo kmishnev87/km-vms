@@ -40,6 +40,7 @@ from app.services.recording_storage import (
     active_archive_root,
     archive_root_host_display_path,
     archive_root_public_status,
+    archive_root_runtime_access_state,
     archive_root_runtime_path,
     apply_storage_migration,
     ensure_archive_roots,
@@ -48,6 +49,7 @@ from app.services.recording_storage import (
     root_status,
     sanitize_archive_root_path,
     storage_migration_apply_plan,
+    write_archive_roots_runtime_files,
 )
 from app.services import recording_reconciliation
 from app.services.recording_reconciliation import reconcile_recordings, reconciliation_diagnostics
@@ -101,7 +103,7 @@ def add_segment(
     ownership="KM VMS",
     source="recorder",
     job_id=None,
-    archive_root_id=None,
+    archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
     updated_at=None,
 ):
     now = datetime.utcnow()
@@ -121,6 +123,8 @@ def add_segment(
         ownership=ownership,
         source=source,
         archive_root_id=archive_root_id,
+        archive_root_resolution_status="resolved" if archive_root_id else None,
+        archive_root_resolved_at=now if archive_root_id else None,
         storage_namespace=KMVMS_RECORDINGS_NAMESPACE,
         container_format="mkv",
         file_extension=".mkv",
@@ -366,7 +370,7 @@ def test_storage_status_route_is_read_only_and_does_not_write_audit(db, monkeypa
     assert result["storage_operations"]["recent_operations"]["items"] == []
 
 
-def test_archive_root_activation_pauses_active_recordings_and_defers_active_root_until_closeout(db, monkeypatch):
+def test_archive_root_activation_persists_snapshot_before_worker_and_status_read_is_side_effect_free(db, monkeypatch):
     from app.services import archive_root_activation
 
     original_host_path = Path(settings.storage_root).parent / "original-host-archive"
@@ -378,61 +382,51 @@ def test_archive_root_activation_pauses_active_recordings_and_defers_active_root
         camera_name_snapshot=camera.name,
         state="recording",
         started_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+        ffmpeg_pid=1234,
     )
     db.add(active_job)
     ensure_archive_roots(db)
     target_root = add_archive_root(db, Path(settings.storage_root).parent / "switch-target", root_id="root_switch_target", active=False)
-    monkeypatch.setattr(archive_root_activation, "_wait_for_recordings_to_stop", lambda _db, _ids, **_kwargs: {"ok": True, "recent_active_jobs": 0, "writing_segments": 0})
-    monkeypatch.setattr(
-        archive_root_activation,
-        "queue_runtime_activation",
-        lambda selected_host_path, request_prefix="archive-root": {
-            "request_id": "archive-root-test-request",
-            "apply_status": "activation_requested",
-            "storage_confirmation": {"status": "activation_requested"},
-        },
-    )
+    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda: None)
+    monkeypatch.setattr(archive_root_activation, "list_camera_recording_states", lambda _db: [{
+        "camera_id": camera.id,
+        "camera_name": camera.name,
+        "enabled": True,
+        "recording_mode": "always",
+        "confirmed_recording": True,
+        "recording_health": "recording",
+        "media_progress_at": datetime.utcnow().isoformat() + "Z",
+        "current_segment_id": 1,
+        "job_id": active_job.id,
+        "recorder_instance_id": "recorder-current",
+        "job_state": "recording",
+    }])
 
     result = archive_root_activation.request_archive_root_activation(db, root=target_root, actor=actor("owner"))
     db.refresh(camera)
     db.refresh(target_root)
 
-    assert result["status"] == "activation_requested"
-    assert result["paused_camera_ids"] == [camera.id]
-    assert camera.enabled is False
-    assert camera.status == "storage_switch_paused"
+    assert result["status"] == "queued"
+    assert result["affected_camera_ids"] == [camera.id]
+    assert result["paused_camera_ids"] == []
+    assert camera.enabled is True
     assert target_root.is_active is False
-    assert archive_root_activation.read_pending_archive_root_activation()["root_id"] == target_root.id
-
-    monkeypatch.setattr(
-        archive_root_activation,
-        "storage_confirmation_status",
-        lambda: {
-            "status": "active",
-            "apply_status": "active",
-            "selected_host_path": str(Path(settings.storage_root).parent / "switch-target"),
-        },
-    )
+    pending = archive_root_activation.read_pending_archive_root_activation()
+    assert pending["target_root_id"] == target_root.id
+    revision = pending["revision"]
 
     closeout = archive_root_activation.finalize_pending_archive_root_activation(db)
     db.refresh(camera)
     db.refresh(target_root)
-    default_root = db.get(ArchiveRoot, DEFAULT_ARCHIVE_ROOT_ID)
-
-    assert closeout["status"] == "activation_completed"
-    assert closeout["active_root_id"] == target_root.id
-    assert closeout["restored_camera_ids"] == [camera.id]
+    assert closeout["status"] == "queued"
+    assert archive_root_activation.read_pending_archive_root_activation()["revision"] == revision
     assert camera.enabled is True
-    assert camera.status == "enabled"
-    assert target_root.is_active is True
-    assert default_root.root_path == str(original_host_path)
-    assert archive_root_host_display_path(default_root) == str(original_host_path)
-    assert archive_root_runtime_path(target_root) == Path(settings.storage_root)
-    assert archive_root_activation.read_pending_archive_root_activation() is None
+    assert target_root.is_active is False
 
 
 def test_storage_partial_namespace_scan_without_file_problems_keeps_root_available(db, monkeypatch):
-    Path(settings.storage_root).mkdir(parents=True, exist_ok=True)
+    (Path(settings.storage_root) / KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(
         "app.services.storage_monitoring._observe_namespace",
@@ -499,17 +493,33 @@ def test_storage_validation_is_explicit_container_not_host_remount():
     assert "does not remount host storage" in result["host_mount_note"]
 
 
-def test_archive_roots_bootstrap_backfills_default_root_and_is_idempotent(db):
+def test_archive_roots_bootstrap_does_not_guess_null_identity_and_migration_is_idempotent(db):
     camera = add_camera(db)
     write_storage_file("kmvms/recordings/default.mkv", b"video")
     original_updated_at = datetime.utcnow() - timedelta(hours=2)
     segment = add_segment(db, camera, relative_path="kmvms/recordings/default.mkv", updated_at=original_updated_at)
+    segment.archive_root_id = None
+    segment.archive_root_resolution_status = None
+    segment.archive_root_resolved_at = None
+    db.add(segment)
+    db.commit()
+    db.refresh(segment)
+    before_bootstrap_updated_at = segment.updated_at
 
     roots = ensure_archive_roots(db)
     db.refresh(segment)
     assert [root.id for root in roots if root.is_active] == [DEFAULT_ARCHIVE_ROOT_ID]
+    assert segment.archive_root_id is None
+    assert segment.updated_at == before_bootstrap_updated_at
+
+    from app.services.recording_storage import migrate_archive_root_identities
+
+    first_migration = migrate_archive_root_identities(db)
+    db.refresh(segment)
     assert segment.archive_root_id == DEFAULT_ARCHIVE_ROOT_ID
-    assert segment.updated_at == original_updated_at
+    assert first_migration["uniquely_resolved_count"] == 1
+    second_migration = migrate_archive_root_identities(db)
+    assert second_migration["changed_count"] == 0
 
     second = ensure_archive_roots(db)
     assert len(second) == 1
@@ -569,6 +579,129 @@ def test_active_host_archive_root_uses_runtime_mount_for_status_and_segments(db)
     assert root_summary["size_bytes"] == len(b"runtime")
 
 
+def test_multi_root_duplicate_relative_path_resolves_by_segment_identity_and_rejects_path_only(db):
+    from app.routers import recordings as recordings_router
+    from app.routers import chronology as chronology_router
+
+    camera = add_camera(db)
+    ensure_archive_roots(db)
+    relative = "kmvms/recordings/camera_1/job_same/same-name.mkv"
+    default_file = write_storage_file(relative, b"default-root-video")
+    extra_root_path = Path(settings.storage_root).parent / "archive-extra"
+    extra_file = extra_root_path / relative
+    extra_file.parent.mkdir(parents=True, exist_ok=True)
+    extra_file.write_bytes(b"extra-root-video")
+    extra_root = add_archive_root(db, extra_root_path, root_id="root_extra_same", active=False)
+    default_segment = add_segment(db, camera, relative_path=relative, archive_root_id=DEFAULT_ARCHIVE_ROOT_ID)
+    extra_segment = add_segment(db, camera, relative_path=relative, archive_root_id=extra_root.id)
+
+    assert resolve_segment_file_path(db, default_segment, require_exists=True) == default_file.resolve()
+    assert resolve_segment_file_path(db, extra_segment, require_exists=True) == extra_file.resolve()
+    assert recordings_router.get_finalized_segment_by_identity(
+        db,
+        segment_id=default_segment.id,
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+    ).id == default_segment.id
+    assert recordings_router.get_finalized_segment_by_identity(
+        db,
+        segment_id=extra_segment.id,
+        archive_root_id=extra_root.id,
+    ).id == extra_segment.id
+    with pytest.raises(HTTPException) as recording_path_error:
+        recordings_router.get_finalized_segment_by_path(db, relative)
+    assert recording_path_error.value.status_code == 409
+    with pytest.raises(HTTPException) as chronology_path_error:
+        chronology_router._segment_by_identity(db, camera_id=camera.id, rel_path=relative)
+    assert chronology_path_error.value.status_code == 409
+
+
+def test_unavailable_archive_root_is_root_problem_not_missing_files(db):
+    camera = add_camera(db)
+    ensure_archive_roots(db)
+    Path(settings.storage_root, KMVMS_RECORDINGS_NAMESPACE).mkdir(parents=True, exist_ok=True)
+    missing_root = add_archive_root(
+        db,
+        Path(settings.storage_root).parent / "not-mounted-root",
+        root_id="root_not_mounted",
+        active=False,
+    )
+    add_segment(
+        db,
+        camera,
+        relative_path="kmvms/recordings/not-mounted.mkv",
+        archive_root_id=missing_root.id,
+    )
+
+    access = archive_root_runtime_access_state(missing_root)
+    assert access["read_access_state"] == "unavailable"
+
+    summary = build_storage_monitoring_summary(db, include_namespace_observations=False)
+    root_summary = next(item for item in summary["archive_roots"] if item["id"] == missing_root.id)
+    reconciliation = summary["reconciliation_summary"]
+
+    assert root_summary["missing_file_count"] == 0
+    assert root_summary["problem_file_count"] == 0
+    assert root_summary["root_access_problem_count"] == 1
+    assert root_summary["inaccessible_file_count"] == 1
+    assert reconciliation["missing_file_count"] == 0
+    assert reconciliation["root_unavailable_count"] == 1
+    assert reconciliation["root_unavailable_segment_count"] == 1
+    assert reconciliation["problem_details"]["category_counts"] == {"root_unavailable": 1}
+
+
+def test_archive_roots_runtime_files_expose_all_roots_without_user_visible_runtime_paths(db):
+    ensure_archive_roots(db)
+    extra_root = add_archive_root(db, Path(settings.storage_root).parent / "archive-extra", root_id="root_extra_runtime", active=False)
+
+    result = write_archive_roots_runtime_files(db)
+    manifest = json.loads(Path(result["manifest_path"]).read_text(encoding="utf-8"))
+    compose_text = Path(result["compose_override_path"]).read_text(encoding="utf-8")
+
+    root_ids = {item["root_id"] for item in manifest["items"]}
+    assert DEFAULT_ARCHIVE_ROOT_ID in root_ids
+    assert extra_root.id in root_ids
+    assert manifest["raw_runtime_paths_user_visible"] is False
+    assert "/storage/archive-roots/root_extra_runtime" in compose_text
+    assert str(Path(settings.storage_root).parent / "archive-extra") in compose_text
+
+
+def test_archive_root_activation_ignores_stale_recording_job_without_runtime_evidence(db, monkeypatch):
+    from app.services import archive_root_activation
+
+    camera = add_camera(db, name="stale_switch_camera")
+    db.add(
+        RecordingJob(
+            id="stale-switch-job",
+            camera_id=camera.id,
+            camera_name_snapshot=camera.name,
+            state="recording",
+            started_at=datetime.utcnow() - timedelta(hours=2),
+            updated_at=datetime.utcnow() - timedelta(hours=2),
+            ffmpeg_pid=None,
+            recorder_instance_id=None,
+        )
+    )
+    ensure_archive_roots(db)
+    target_root = add_archive_root(db, Path(settings.storage_root).parent / "switch-target-stale", root_id="root_switch_stale", active=False)
+    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda: None)
+    monkeypatch.setattr(archive_root_activation, "list_camera_recording_states", lambda _db: [{
+        "camera_id": camera.id,
+        "camera_name": camera.name,
+        "enabled": True,
+        "recording_mode": "always",
+        "confirmed_recording": False,
+        "job_state": "recording",
+    }])
+
+    result = archive_root_activation.request_archive_root_activation(db, root=target_root, actor=actor("owner"))
+    db.refresh(camera)
+
+    assert result["status"] == "queued"
+    assert result["paused_camera_ids"] == []
+    assert camera.enabled is True
+    assert camera.status != "storage_switch_paused"
+
+
 def test_default_archive_root_path_stays_stable_after_settings_storage_root_changes(db, monkeypatch):
     camera = add_camera(db)
     default_file = write_storage_file("kmvms/recordings/default-stable.mkv", b"old")
@@ -593,8 +726,9 @@ def test_recorder_never_uses_archive_root_host_path_as_ffmpeg_output_root():
 
     assert "configured_path = Path(str(row.root_path or STORAGE_ROOT))" in source
     assert "archive_root_runtime_path_mapped" in source
-    assert "return str(row.id or DEFAULT_ARCHIVE_ROOT_ID), STORAGE_ROOT" in source
-    assert "return str(row.id or DEFAULT_ARCHIVE_ROOT_ID), Path(str(row.root_path or STORAGE_ROOT))" not in source
+    assert "return str(row.id), STORAGE_ROOT" in source
+    assert "raise RuntimeError(\"active_archive_root_missing\")" in source
+    assert "return str(row.id or DEFAULT_ARCHIVE_ROOT_ID), STORAGE_ROOT" not in source
 
 
 def test_archive_root_validation_rejects_traversal_outside_base_and_surveillance(db):
@@ -1098,22 +1232,22 @@ def test_archive_root_selection_payload_checks_and_adds_inactive_root(db, monkey
     monkeypatch.setattr(setup_storage, "BLOCKED_PATHS", setup_storage.BLOCKED_PATHS - {"/tmp"})
     host_root = Path(tempfile.mkdtemp(prefix="km-vms-archive-root-outside-approved-base-")) / "host-volume"
     host_root.mkdir(parents=True)
-    control = Path(settings.storage_install_control)
-    control.mkdir(parents=True, exist_ok=True)
-    (control / DISCOVERY_FILE).write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "created_at": "2026-07-07T00:00:00Z",
-                "host_visibility": True,
-                "candidates": [{"id": "host-volume", "path": str(host_root), "filesystem_type": "ext4", "writable": True}],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
+    monkeypatch.setattr(
+        setup_storage,
+        "revalidate_discovery_candidate",
+        lambda candidate_id, snapshot_id, folder_name: {
+            "candidate_id": candidate_id,
+            "snapshot_id": snapshot_id,
+            "folder_name": folder_name,
+            "selected_mount_path": str(host_root),
+            "final_host_path": str(host_root / folder_name),
+            "physical_identity": "fs-stage48-host-volume",
+            "writable": True,
+            "exists": False,
+        },
     )
 
-    payload = storage_router.ArchiveRootCreateRequest(candidate_id="host-volume", folder_name="Archive2")
+    payload = storage_router.ArchiveRootCreateRequest(candidate_id="host-volume", discovery_snapshot_id="snapshot-stage48", folder_name="Archive2")
     with pytest.raises(ValueError, match="archive_root_outside_approved_storage_base"):
         sanitize_archive_root_path(str(host_root / "Archive2"), allow_create=True)
     created = storage_router.create_archive_root(payload, db=db, current_user=actor("owner"))
@@ -1152,11 +1286,26 @@ def test_archive_root_activation_requests_runtime_switch_after_pausing_active_jo
             camera_id=camera.id,
             state="recording",
             started_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+            ffmpeg_pid=1234,
         )
     )
     db.commit()
 
-    monkeypatch.setattr(archive_root_activation, "_wait_for_recordings_to_stop", lambda _db, _ids, **_kwargs: {"ok": True, "recent_active_jobs": 0, "writing_segments": 0})
+    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda: None)
+    monkeypatch.setattr(archive_root_activation, "list_camera_recording_states", lambda _db: [{
+        "camera_id": camera.id,
+        "camera_name": camera.name,
+        "enabled": True,
+        "recording_mode": "always",
+        "confirmed_recording": True,
+        "recording_health": "recording",
+        "media_progress_at": datetime.utcnow().isoformat() + "Z",
+        "current_segment_id": 1,
+        "job_id": "active-switch-job",
+        "recorder_instance_id": "recorder-current",
+        "job_state": "recording",
+    }])
 
     result = storage_router.activate_archive_root(
         "switch-target-root",
@@ -1167,22 +1316,15 @@ def test_archive_root_activation_requests_runtime_switch_after_pausing_active_jo
     db.refresh(camera)
     db.refresh(target)
 
-    assert result["status"] == "activation_requested"
-    assert result["paused_camera_ids"] == [camera.id]
+    assert result["status"] == "queued"
+    assert result["affected_camera_ids"] == [camera.id]
+    assert result["paused_camera_ids"] == []
     assert target.is_active is False
     assert active_archive_root(db).id == DEFAULT_ARCHIVE_ROOT_ID
-    assert camera.enabled is False
-    assert camera.status == "storage_switch_paused"
-    control = Path(settings.storage_install_control)
-    selection_control = (control / SELECTION_CONTROL_FILE).read_text(encoding="utf-8")
-    activation_request_control = (control / ACTIVATION_REQUEST_CONTROL_FILE).read_text(encoding="utf-8")
-    apply_state = json.loads((control / APPLY_STATUS_FILE).read_text(encoding="utf-8"))
-    assert f"selected_host_path={target_root}" in selection_control
-    assert f"selected_mount_path={target_root.parent}" in selection_control
-    assert f"folder_name={target_root.name}" in selection_control
-    assert "status=requested" in activation_request_control
-    assert apply_state["status"] == "activation_requested"
-    assert apply_state["next_action"] == "runtime_storage_activation"
+    assert camera.enabled is True
+    pending = archive_root_activation.read_pending_archive_root_activation()
+    assert pending["target_root_id"] == target.id
+    assert pending["current_step"] == "snapshot_created"
 
 
 def test_archive_root_delete_removes_inactive_root_and_hides_its_recordings(db):
@@ -1234,11 +1376,14 @@ def test_archive_root_delete_removes_inactive_root_and_hides_its_recordings(db):
     assert result["segments_deleted"] == 1
     assert result["files_deleted"] == 1
     assert not file_path.exists()
-    assert db.get(ArchiveRoot, "delete-target-root") is None
+    retired_root = db.get(ArchiveRoot, "delete-target-root")
+    assert retired_root is not None
+    assert retired_root.retired_at is not None
+    assert retired_root.retirement_status == "completed"
     refreshed = db.get(RecordingSegment, segment.id)
     assert refreshed.status == "deleted"
     assert refreshed.deleted_at is not None
-    assert refreshed.archive_root_id is None
+    assert refreshed.archive_root_id == "delete-target-root"
     listed = recordings_router.list_recordings(db=db, current_user=actor("owner"))
     assert listed["total"] == 0
 
@@ -1270,22 +1415,17 @@ def test_archive_root_create_returns_structured_problem_for_blocker(db, monkeypa
     target = host_root / "Archive2"
     target.mkdir(parents=True)
     (target / "foreign.txt").write_text("not km vms", encoding="utf-8")
-    control = Path(settings.storage_install_control)
-    control.mkdir(parents=True, exist_ok=True)
-    (control / DISCOVERY_FILE).write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "created_at": "2026-07-07T00:00:00Z",
-                "host_visibility": True,
-                "candidates": [{"id": "host-volume-blocked", "path": str(host_root), "filesystem_type": "ext4", "writable": True}],
-            }
-        )
-        + "\n",
-        encoding="utf-8",
+    monkeypatch.setattr(
+        setup_storage,
+        "revalidate_discovery_candidate",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("non_empty_unmarked_folder")),
     )
 
-    payload = storage_router.ArchiveRootCreateRequest(candidate_id="host-volume-blocked", folder_name="Archive2")
+    payload = storage_router.ArchiveRootCreateRequest(
+        candidate_id="host-volume-blocked",
+        discovery_snapshot_id="snapshot-stage48-blocked",
+        folder_name="Archive2",
+    )
     with pytest.raises(HTTPException) as exc:
         storage_router.create_archive_root(payload, db=db, current_user=actor("owner"))
 

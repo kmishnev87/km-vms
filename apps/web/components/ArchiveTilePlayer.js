@@ -20,6 +20,11 @@ export default function ArchiveTilePlayer({
   tileId = "",
   onTilePlaybackState,
 }) {
+  const unavailableText = playback?.availabilityStatus === "root_unavailable"
+    ? "Том архива сейчас недоступен"
+    : playback?.availabilityStatus === "root_unresolved"
+      ? "Не удалось определить расположение записи"
+      : "Запись недоступна";
   const wrapRef = useRef(null);
   const videoRef = useRef(null);
   const playIntentRef = useRef(false);
@@ -139,11 +144,18 @@ export default function ArchiveTilePlayer({
 
   async function buildMediaUrl() {
     if (!playback?.cameraId || !playback?.relPath) return "";
-    const mediaToken = await issueChronologyMediaToken(playback.cameraId, playback.relPath);
+    const mediaToken = await issueChronologyMediaToken(playback.cameraId, playback.relPath, playback);
+    const params = new URLSearchParams();
+    if (playback?.segmentId) params.set("segment_id", String(playback.segmentId));
+    if (playback?.archiveRootId) params.set("archive_root_id", playback.archiveRootId);
+    if (playback?.playbackRef) params.set("playback_ref", playback.playbackRef);
+    if (!params.has("segment_id") && !params.has("playback_ref")) {
+      params.set("camera_id", String(playback.cameraId));
+      params.set("rel_path", playback.relPath);
+    }
+    params.set("media_token", mediaToken);
     return (
-      `/api/chronology/file?camera_id=${playback.cameraId}` +
-      `&rel_path=${encodeURIComponent(playback.relPath)}` +
-      `&media_token=${encodeURIComponent(mediaToken)}`
+      `/api/chronology/file?${params.toString()}`
     );
   }
 
@@ -603,7 +615,7 @@ export default function ArchiveTilePlayer({
       ) : null}
 
       {status === "empty" ? (
-        <div className="archiveCenterHint">Запись недоступна</div>
+        <div className="archiveCenterHint">{unavailableText}</div>
       ) : null}
 
       {status === "error" ? (

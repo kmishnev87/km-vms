@@ -23,6 +23,63 @@ export function formatPercent(value) {
   return `${number.toFixed(number >= 10 ? 1 : 2)}%`;
 }
 
+export function activationProgressModel(status = {}) {
+  const completed = new Set(Array.isArray(status?.completed_steps) ? status.completed_steps : []);
+  const current = String(status?.current_step || "");
+  const definitions = [
+    { key: "recordings_stopped", active: ["recordings_stopping", "recordings_stopped"] },
+    { key: "runtime_applied", active: ["root_preflight_checked", "runtime_activation_requested", "runtime_applied"] },
+    { key: "cameras_restored", active: ["cameras_restoring", "cameras_restored"] },
+    { key: "archive_access_checked", active: ["archive_access_checking", "archive_access_checked"] },
+  ];
+  return {
+    status: String(status?.status || "idle"),
+    operationId: status?.operation_id || null,
+    steps: definitions.map((definition) => ({
+      key: definition.key,
+      done: completed.has(definition.key),
+      active: !completed.has(definition.key) && definition.active.includes(current),
+    })),
+    rollback: {
+      status: String(status?.rollback_status || "not_required"),
+      active: current.startsWith("rollback_") && current !== "rollback_completed",
+      completed: completed.has("rollback_completed"),
+      failed: status?.status === "failed_recovery_required" || status?.rollback_status === "failed",
+    },
+    recoveryRequired: status?.status === "failed_recovery_required",
+    effectiveRootLabel: status?.effective_active_root_label || null,
+    targetRootLabel: status?.target_root_label || null,
+    previousRootLabel: status?.previous_root_label || null,
+    presentationKey: status?.presentation_key || null,
+  };
+}
+
+export function discoveryStateModel(discovery = {}) {
+  const freshness = String(discovery?.freshness || discovery?.status || "unavailable");
+  const current = freshness === "current" && discovery?.available === true && Boolean(discovery?.snapshot_id);
+  return {
+    freshness,
+    current,
+    refreshing: freshness === "refreshing" || discovery?.status === "refreshing" || discovery?.refresh_in_progress === true,
+    stale: freshness === "stale",
+    unavailable: freshness === "unavailable" || (!current && freshness !== "refreshing" && freshness !== "stale"),
+    snapshotId: current ? discovery.snapshot_id : null,
+    candidates: current && Array.isArray(discovery?.candidates) ? discovery.candidates : [],
+    reasonCode: discovery?.refresh_error || discovery?.reason_code || null,
+  };
+}
+
+export function discoveryHeaderStatusModel(discovery = null) {
+  if (!discovery) {
+    return { state: "not_checked", tone: "neutral", needsRefresh: true };
+  }
+  const model = discoveryStateModel(discovery);
+  if (model.refreshing) return { state: "refreshing", tone: "neutral", needsRefresh: false };
+  if (model.current) return { state: "current", tone: "ok", needsRefresh: false };
+  if (model.stale) return { state: "stale", tone: "warning", needsRefresh: true };
+  return { state: "unavailable", tone: "warning", needsRefresh: true };
+}
+
 export function formatDateTime(value, language = "ru") {
   if (!value) {
     if (language === "en") return "Never";
@@ -278,6 +335,9 @@ export function reconciliationClassLabel(code, labels = {}, language = "ru") {
     stale_writing_segment: { ru: "Зависшие записи", en: "Stale writing records", "zh-CN": "卡住的录像记录" },
     unreadable_file: { ru: "Файлы недоступны для чтения", en: "Unreadable files", "zh-CN": "无法读取的文件" },
     storage_unavailable: { ru: "Хранилище недоступно", en: "Storage unavailable", "zh-CN": "存储不可用" },
+    root_unavailable: { ru: "Корень архива недоступен", en: "Archive root unavailable", "zh-CN": "归档根目录不可用" },
+    active_root_not_writable: { ru: "Нет записи в активный корень", en: "Active archive root is not writable", "zh-CN": "活动归档根目录不可写" },
+    root_unresolved: { ru: "Расположение записи не определено", en: "Recording location unresolved", "zh-CN": "无法确定录像位置" },
     skipped: { ru: "Пропущено", en: "Skipped", "zh-CN": "已跳过" },
   };
   const backendLabel = typeof labels?.[code] === "string" ? labels[code] : "";
@@ -292,6 +352,9 @@ export function normalizeReconciliationSummary(source = {}, language = "ru") {
   };
   if (!Object.keys(counts).length) {
     if (source?.missing_file_count != null) counts.missing_file = Number(source.missing_file_count || 0);
+    if (source?.root_unavailable_count != null) counts.root_unavailable = Number(source.root_unavailable_count || 0);
+    if (source?.active_root_write_problem_count != null) counts.active_root_not_writable = Number(source.active_root_write_problem_count || 0);
+    if (source?.root_unresolved_count != null) counts.root_unresolved = Number(source.root_unresolved_count || 0);
     if (source?.orphan_file_count != null) counts.orphan_file = Number(source.orphan_file_count || 0);
     if (source?.invalid_path_count != null) counts.invalid_path = Number(source.invalid_path_count || 0);
     if (source?.path_outside_storage_count != null) counts.path_outside_storage = Number(source.path_outside_storage_count || 0);
@@ -445,6 +508,31 @@ export function humanBlockerReason(reason, language = "ru") {
       ru: "Корень архива недоступен",
       en: "Archive root is unavailable",
       "zh-CN": "归档根目录不可用",
+    },
+    archive_root_activation_in_progress: {
+      ru: "Переключение расположения архива уже выполняется. Дождитесь его завершения.",
+      en: "An archive location switch is already running. Wait for it to finish.",
+      "zh-CN": "归档位置切换正在进行。请等待其完成。",
+    },
+    archive_root_mutation_in_progress: {
+      ru: "Сейчас выполняется другая операция с расположением архива. Дождитесь её завершения.",
+      en: "Another archive-location operation is running. Wait for it to finish.",
+      "zh-CN": "另一个归档位置操作正在进行。请等待其完成。",
+    },
+    archive_root_recovery_required: {
+      ru: "Предыдущее переключение не завершилось безопасно. Выполните восстановление предыдущего расположения.",
+      en: "The previous switch did not finish safely. Recover the previous archive location.",
+      "zh-CN": "上次切换未安全完成。请恢复之前的归档位置。",
+    },
+    archive_root_retired: {
+      ru: "Это расположение архива уже удалено и недоступно для переключения.",
+      en: "This archive location has been removed and cannot be activated.",
+      "zh-CN": "此归档位置已删除，无法激活。",
+    },
+    storage_candidate_identity_unavailable: {
+      ru: "Не удалось подтвердить физический том. Обновите список томов и повторите действие.",
+      en: "The physical volume could not be verified. Refresh the volume list and retry.",
+      "zh-CN": "无法确认物理卷。请刷新卷列表后重试。",
     },
     archive_root_not_writable: {
       ru: "Корень архива недоступен для записи",
@@ -734,11 +822,10 @@ export function archiveRootScenarioModel({ root = null, permission = { allowed: 
   const hasPath = Boolean(root?.configured_path || root?.path || root?.root_path || root?.display_path || root?.label);
   const problem = root?.problem || "";
   const canRuntimeActivate = Boolean(root?.requires_activation && !root?.is_active && problem === "root_missing");
-  const blockedByProblem = Boolean(problem && !canRuntimeActivate);
   return {
-    status: !permission.allowed ? "unavailable_due_to_permissions" : running ? "running" : root?.is_active ? "active" : blockedByProblem ? "blocked" : !hasPath ? "blocked" : root?.is_available === false ? "check_needed" : "idle",
+    status: !permission.allowed ? "unavailable_due_to_permissions" : running ? "running" : root?.is_active ? "active" : !hasPath ? "blocked" : root?.is_available === false ? "check_needed" : "idle",
     permissionReason: permission.allowed ? "" : permission.reason,
-    canActivate: Boolean(permission.allowed && root && !root.is_active && !blockedByProblem && hasPath && !running),
+    canActivate: Boolean(permission.allowed && root && !root.is_active && hasPath && !running),
     reason: problem ? humanBlockerReason(problem, language) : !hasPath ? humanBlockerReason("archive_root_missing", language) : "",
   };
 }

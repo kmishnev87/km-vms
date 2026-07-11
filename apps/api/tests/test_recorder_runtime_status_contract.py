@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -17,6 +17,14 @@ from app.models.system_settings import SystemSettings
 from app.services import recorder_runtime_status
 from app.services.recorder_diagnostics import _health_from, build_recorder_status
 from app.services.recorder_runtime_status import list_camera_recording_states, stale_current_segment_after_seconds
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
+
+
+RECORDER_INSTANCE_ID = "stage201-recorder"
 
 
 @pytest.fixture
@@ -29,6 +37,26 @@ def db():
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     session = Session()
+    session.execute(
+        text(
+            """
+            CREATE TABLE recorder_runtime_status (
+                recorder_instance_id TEXT,
+                service_status TEXT,
+                loop_state TEXT,
+                started_at DATETIME,
+                heartbeat_at DATETIME,
+                active_jobs_count INTEGER,
+                recording_cameras_count INTEGER,
+                failed_cameras_count INTEGER,
+                last_error TEXT,
+                last_exit_code INTEGER,
+                updated_at DATETIME
+            )
+            """
+        )
+    )
+    session.commit()
     try:
         yield session
     finally:
@@ -76,6 +104,34 @@ def add_camera(db, *, name="stage201_camera", enabled=True, status="recording", 
     return camera
 
 
+def set_heartbeat(db, *, active_jobs=1, recording_cameras=1):
+    now = datetime.utcnow()
+    db.execute(text("DELETE FROM recorder_runtime_status"))
+    db.execute(
+        text(
+            """
+            INSERT INTO recorder_runtime_status (
+                recorder_instance_id, service_status, loop_state, started_at, heartbeat_at,
+                active_jobs_count, recording_cameras_count, failed_cameras_count,
+                last_error, last_exit_code, updated_at
+            ) VALUES (
+                :instance_id, 'healthy', 'running', :started_at, :heartbeat_at,
+                :active_jobs, :recording_cameras, 0, NULL, NULL, :updated_at
+            )
+            """
+        ),
+        {
+            "instance_id": RECORDER_INSTANCE_ID,
+            "started_at": now - timedelta(minutes=5),
+            "heartbeat_at": now,
+            "active_jobs": active_jobs,
+            "recording_cameras": recording_cameras,
+            "updated_at": now,
+        },
+    )
+    db.commit()
+
+
 def add_job(
     db,
     camera,
@@ -94,6 +150,7 @@ def add_job(
         camera_name_snapshot=camera.name,
         camera_folder_snapshot=camera.storage_folder_name,
         state=state,
+        recorder_instance_id=RECORDER_INSTANCE_ID,
         started_at=now,
         updated_at=now,
         last_error=last_error,
@@ -104,13 +161,21 @@ def add_job(
     db.add(job)
     db.commit()
     db.refresh(job)
+    set_heartbeat(
+        db,
+        active_jobs=1 if state in recorder_runtime_status.ACTIVE_JOB_STATES else 0,
+        recording_cameras=1 if state == "recording" else 0,
+    )
     return job
 
 
 def add_segment(db, camera, *, status, started_delta_seconds, duration_seconds=10, name="segment.mkv"):
+    ensure_archive_roots(db)
     started_at = datetime.utcnow() + timedelta(seconds=started_delta_seconds)
+    job = db.query(RecordingJob).filter(RecordingJob.camera_id == camera.id).order_by(RecordingJob.updated_at.desc()).first()
     segment = RecordingSegment(
         camera_id=camera.id,
+        job_id=job.id if job else None,
         camera_name_snapshot=camera.name,
         camera_folder_snapshot=camera.storage_folder_name,
         file_path=f"/storage/redacted/{name}",
@@ -120,9 +185,13 @@ def add_segment(db, camera, *, status, started_delta_seconds, duration_seconds=1
         finalized_at=None if status == "writing" else started_at + timedelta(seconds=duration_seconds),
         duration_sec=0 if status == "writing" else duration_seconds,
         size_bytes=100,
+        media_progress_at=datetime.utcnow() if status == "writing" else None,
         status=status,
         ownership="KM VMS",
         source="recorder",
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=datetime.utcnow(),
         integrity_status=status,
         reconciliation_status="pending" if status == "writing" else "ok_owned_finalized",
     )
@@ -241,6 +310,7 @@ def test_product_local_naive_current_segment_age_uses_system_timezone(db, monkey
     add_job(db, camera, job_id="stage201_local_naive_age", state="recording")
     segment = RecordingSegment(
         camera_id=camera.id,
+        job_id="stage201_local_naive_age",
         camera_name_snapshot=camera.name,
         camera_folder_snapshot=camera.storage_folder_name,
         file_path="/storage/redacted/Dahua-2026-05-14-11-24-00.mkv",
@@ -250,6 +320,7 @@ def test_product_local_naive_current_segment_age_uses_system_timezone(db, monkey
         finalized_at=None,
         duration_sec=0,
         size_bytes=100,
+        media_progress_at=datetime(2026, 5, 14, 6, 59, 30),
         status="writing",
         ownership="KM VMS",
         source="recorder",

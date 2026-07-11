@@ -29,6 +29,7 @@ STDERR_TAIL_LINES = 80
 MAX_ERROR_LENGTH = 2000
 BACKOFF_STEPS_SECONDS = (10, 20, 30, 60, 120)
 STARTUP_CONFIRM_SECONDS = 5
+MEDIA_PROGRESS_HEARTBEAT_GRACE_SECONDS = 45
 OWNERSHIP_KM_VMS = "KM VMS"
 METADATA_SOURCE_RECORDER = "recorder"
 SEGMENT_STATUS_WRITING = "writing"
@@ -127,13 +128,16 @@ class RecordingJob:
     recording_format: str = DEFAULT_RECORDING_FORMAT
     segment_baseline_paths: set[str] = field(default_factory=set)
     known_segment_paths: set[str] = field(default_factory=set)
-    archive_root_id: str = DEFAULT_ARCHIVE_ROOT_ID
+    archive_root_id: str | None = None
     archive_root_path: Path = STORAGE_ROOT
     config_signature: tuple[Any, ...] | None = None
     stderr_tail: deque[str] = field(default_factory=lambda: deque(maxlen=STDERR_TAIL_LINES))
     stderr_thread: threading.Thread | None = None
     stale_recovery_count: int = 0
     last_stale_recovery_at: float | None = None
+    last_media_progress_at: float | None = None
+    current_media_size: int = 0
+    current_media_relative_path: str | None = None
 
     def set_state(self, state: str, error: str | None = None, error_type: str | None = None) -> None:
         if self.state != state:
@@ -171,6 +175,12 @@ class RecordingJob:
             "enabled": self.enabled,
             "stale_recovery_count": self.stale_recovery_count,
             "last_stale_recovery_at": iso_ts(self.last_stale_recovery_at),
+            "confirmed_recording": bool(
+                self.state == RecorderState.RECORDING
+                and self.last_media_progress_at
+                and time.time() - self.last_media_progress_at <= MEDIA_PROGRESS_HEARTBEAT_GRACE_SECONDS
+            ),
+            "last_media_progress_at": iso_ts(self.last_media_progress_at),
         }
 
 
@@ -362,6 +372,9 @@ def ensure_recording_metadata_schema() -> None:
                     ownership VARCHAR(50) DEFAULT 'KM VMS' NOT NULL,
                     source VARCHAR(50) DEFAULT 'recorder' NOT NULL,
                     archive_root_id VARCHAR(36) NULL,
+                    archive_root_resolution_status VARCHAR(64) NULL,
+                    archive_root_resolution_detail TEXT NULL,
+                    archive_root_resolved_at TIMESTAMP NULL,
                     checksum VARCHAR(128) NULL,
                     storage_namespace VARCHAR(255) NULL,
                     container_format VARCHAR(32) NULL,
@@ -371,6 +384,7 @@ def ensure_recording_metadata_schema() -> None:
                     integrity_error TEXT NULL,
                     last_integrity_check_at TIMESTAMP NULL,
                     file_size_verified_at TIMESTAMP NULL,
+                    media_progress_at TIMESTAMP NULL,
                     file_mtime TIMESTAMP NULL,
                     content_probe_status VARCHAR(100) NULL,
                     cleanup_candidate BOOLEAN DEFAULT FALSE NULL,
@@ -396,6 +410,9 @@ def ensure_recording_metadata_schema() -> None:
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS ownership VARCHAR(50) DEFAULT 'KM VMS' NOT NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS source VARCHAR(50) DEFAULT 'recorder' NOT NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS archive_root_id VARCHAR(36) NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS archive_root_resolution_status VARCHAR(64) NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS archive_root_resolution_detail TEXT NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS archive_root_resolved_at TIMESTAMP NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS checksum VARCHAR(128) NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS storage_namespace VARCHAR(255) NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS container_format VARCHAR(32) NULL"))
@@ -405,6 +422,7 @@ def ensure_recording_metadata_schema() -> None:
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS integrity_error TEXT NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS last_integrity_check_at TIMESTAMP NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS file_size_verified_at TIMESTAMP NULL"))
+        conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS media_progress_at TIMESTAMP NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS file_mtime TIMESTAMP NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS content_probe_status VARCHAR(100) NULL"))
         conn.execute(text("ALTER TABLE recording_segments ADD COLUMN IF NOT EXISTS cleanup_candidate BOOLEAN DEFAULT FALSE NULL"))
@@ -427,6 +445,7 @@ def ensure_recording_metadata_schema() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_status ON recording_segments (status)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_ownership ON recording_segments (ownership)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_archive_root_id ON recording_segments (archive_root_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_archive_root_resolution_status ON recording_segments (archive_root_resolution_status)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_relative_path ON recording_segments (relative_path)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_job_relative_path ON recording_segments (job_id, relative_path)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_integrity_status ON recording_segments (integrity_status)"))
@@ -470,12 +489,20 @@ def ensure_recording_metadata_schema() -> None:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
                     last_seen_at TIMESTAMP NULL,
-                    retired_at TIMESTAMP NULL
+                    retired_at TIMESTAMP NULL,
+                    physical_identity VARCHAR(128) NULL,
+                    retirement_status VARCHAR(50) NULL,
+                    retirement_problem TEXT NULL
                 )
                 """
             )
         )
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_is_active ON archive_roots (is_active)"))
+        conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS physical_identity VARCHAR(128) NULL"))
+        conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS retirement_status VARCHAR(50) NULL"))
+        conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS retirement_problem TEXT NULL"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_physical_identity ON archive_roots (physical_identity)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_retirement_status ON archive_roots (retirement_status)"))
         conn.execute(
             text(
                 """
@@ -489,10 +516,6 @@ def ensure_recording_metadata_schema() -> None:
                 """
             ),
             {"id": DEFAULT_ARCHIVE_ROOT_ID, "label": "Default archive", "root_path": str(STORAGE_ROOT), "namespace": STORAGE_NAMESPACE},
-        )
-        conn.execute(
-            text("UPDATE recording_segments SET archive_root_id = :default_root_id WHERE archive_root_id IS NULL"),
-            {"default_root_id": DEFAULT_ARCHIVE_ROOT_ID},
         )
 
 
@@ -684,13 +707,13 @@ def active_archive_root() -> tuple[str, Path]:
                 )
             ).first()
     except Exception as exc:
-        log_event("warning", "archive_root_read_failed", error=redact_text(str(exc)), fallback=DEFAULT_ARCHIVE_ROOT_ID)
-        return DEFAULT_ARCHIVE_ROOT_ID, STORAGE_ROOT
-    if not row:
-        return DEFAULT_ARCHIVE_ROOT_ID, STORAGE_ROOT
+        log_event("error", "archive_root_read_failed", error=redact_text(str(exc)))
+        raise RuntimeError("active_archive_root_lookup_failed") from exc
+    if not row or not row.id:
+        raise RuntimeError("active_archive_root_missing")
     configured_path = Path(str(row.root_path or STORAGE_ROOT))
     if configured_path.as_posix() != STORAGE_ROOT.as_posix():
-        key = (str(row.id or DEFAULT_ARCHIVE_ROOT_ID), configured_path.as_posix(), STORAGE_ROOT.as_posix())
+        key = (str(row.id), configured_path.as_posix(), STORAGE_ROOT.as_posix())
         if key != last_runtime_mapping_log_key:
             last_runtime_mapping_log_key = key
             log_event(
@@ -700,7 +723,7 @@ def active_archive_root() -> tuple[str, Path]:
                 configured_path=key[1],
                 runtime_path=key[2],
             )
-    return str(row.id or DEFAULT_ARCHIVE_ROOT_ID), STORAGE_ROOT
+    return str(row.id), STORAGE_ROOT
 
 
 def kmvms_recordings_root(root: Path | None = None) -> Path:
@@ -818,7 +841,7 @@ def discover_job_segments(job: RecordingJob) -> list[Path]:
 
 
 def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> None:
-    if not job.db_job_id:
+    if not job.db_job_id or not job.archive_root_id:
         return
     rel_path = storage_relative_path(file_path, root=job.archive_root_path)
     if not rel_path or rel_path in job.segment_baseline_paths:
@@ -841,13 +864,19 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                 SELECT id
                 FROM recording_segments
                 WHERE (job_id = :job_id AND relative_path = :relative_path)
-                   OR (relative_path = :relative_path AND ownership = :ownership AND source = :source)
+                   OR (
+                        relative_path = :relative_path
+                        AND archive_root_id = :archive_root_id
+                        AND ownership = :ownership
+                        AND source = :source
+                   )
                 LIMIT 1
                 """
             ),
             {
                 "job_id": job.db_job_id,
                 "relative_path": rel_path,
+                "archive_root_id": job.archive_root_id,
                 "ownership": OWNERSHIP_KM_VMS,
                 "source": METADATA_SOURCE_RECORDER,
             },
@@ -875,11 +904,17 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                     ownership,
                     source,
                     archive_root_id,
+                    archive_root_resolution_status,
+                    archive_root_resolution_detail,
+                    archive_root_resolved_at,
                     storage_namespace,
                     container_format,
                     file_extension,
                     mime_type,
                     integrity_status,
+                    file_size_verified_at,
+                    media_progress_at,
+                    file_mtime,
                     cleanup_candidate,
                     reconciliation_status,
                     created_at,
@@ -901,11 +936,17 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                     :ownership,
                     :source,
                     :archive_root_id,
+                    :archive_root_resolution_status,
+                    NULL,
+                    NOW(),
                     :storage_namespace,
                     :container_format,
                     :file_extension,
                     :mime_type,
                     :integrity_status,
+                    NOW(),
+                    :media_progress_at,
+                    :file_mtime,
                     FALSE,
                     :reconciliation_status,
                     NOW(),
@@ -927,16 +968,74 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                 "ownership": OWNERSHIP_KM_VMS,
                 "source": METADATA_SOURCE_RECORDER,
                 "archive_root_id": job.archive_root_id,
+                "archive_root_resolution_status": "resolved",
                 "storage_namespace": STORAGE_NAMESPACE,
                 "container_format": media_metadata["container_format"],
                 "file_extension": media_metadata["file_extension"],
                 "mime_type": media_metadata["mime_type"],
                 "integrity_status": SEGMENT_STATUS_WRITING,
+                "media_progress_at": datetime.utcnow() if stat.st_size > 0 else None,
+                "file_mtime": datetime.fromtimestamp(stat.st_mtime),
                 "reconciliation_status": "pending",
             },
         )
     job.known_segment_paths.add(rel_path)
+    if stat.st_size > 0:
+        job.last_media_progress_at = time.time()
+        job.current_media_size = int(stat.st_size)
+        job.current_media_relative_path = rel_path
     log_event("info", "segment_detected", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, size_bytes=stat.st_size)
+
+
+def update_writing_segment_progress(job: RecordingJob, file_path: Path) -> bool:
+    if not job.db_job_id:
+        return False
+    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
+    if not rel_path or rel_path not in job.known_segment_paths:
+        return False
+    try:
+        stat = file_path.stat()
+    except OSError:
+        return False
+    if stat.st_size <= 0:
+        return False
+    file_mtime = datetime.fromtimestamp(stat.st_mtime)
+    with engine.begin() as conn:
+        result = conn.execute(
+            text(
+                """
+                UPDATE recording_segments
+                SET size_bytes = :size_bytes,
+                    file_mtime = :file_mtime,
+                    file_size_verified_at = NOW(),
+                    media_progress_at = NOW(),
+                    updated_at = NOW()
+                WHERE job_id = :job_id
+                  AND relative_path = :relative_path
+                  AND archive_root_id = :archive_root_id
+                  AND ownership = :ownership
+                  AND source = :source
+                  AND status = :writing
+                  AND (size_bytes <> :size_bytes OR file_mtime IS DISTINCT FROM :file_mtime)
+                """
+            ),
+            {
+                "job_id": job.db_job_id,
+                "relative_path": rel_path,
+                "archive_root_id": job.archive_root_id,
+                "ownership": OWNERSHIP_KM_VMS,
+                "source": METADATA_SOURCE_RECORDER,
+                "writing": SEGMENT_STATUS_WRITING,
+                "size_bytes": int(stat.st_size),
+                "file_mtime": file_mtime,
+            },
+        )
+    if result.rowcount <= 0:
+        return False
+    job.last_media_progress_at = time.time()
+    job.current_media_size = int(stat.st_size)
+    job.current_media_relative_path = rel_path
+    return True
 
 
 def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
@@ -988,6 +1087,7 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
                     updated_at = NOW()
                 WHERE job_id = :job_id
                   AND relative_path = :relative_path
+                  AND archive_root_id = :archive_root_id
                   AND ownership = :ownership
                   AND source = :source
                   AND status = :writing
@@ -996,6 +1096,7 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
             {
                 "job_id": job.db_job_id,
                 "relative_path": rel_path,
+                "archive_root_id": job.archive_root_id,
                 "ownership": OWNERSHIP_KM_VMS,
                 "source": METADATA_SOURCE_RECORDER,
                 "writing": SEGMENT_STATUS_WRITING,
@@ -1041,6 +1142,7 @@ def mark_segment_failed(job: RecordingJob, rel_path: str, error: str) -> None:
                     updated_at = NOW()
                 WHERE job_id = :job_id
                   AND relative_path = :relative_path
+                  AND archive_root_id = :archive_root_id
                   AND ownership = :ownership
                   AND source = :source
                   AND status = :writing
@@ -1049,6 +1151,7 @@ def mark_segment_failed(job: RecordingJob, rel_path: str, error: str) -> None:
             {
                 "job_id": job.db_job_id,
                 "relative_path": rel_path,
+                "archive_root_id": job.archive_root_id,
                 "ownership": OWNERSHIP_KM_VMS,
                 "source": METADATA_SOURCE_RECORDER,
                 "writing": SEGMENT_STATUS_WRITING,
@@ -1078,6 +1181,8 @@ def sync_segment_metadata_for_job(job: RecordingJob) -> None:
         files = discover_job_segments(job)
         for file_path in files:
             create_segment_metadata_if_needed(job, file_path)
+        if files:
+            update_writing_segment_progress(job, files[-1])
         for file_path in files[:-1]:
             finalize_segment_path(job, file_path)
     except Exception as exc:
@@ -1362,19 +1467,20 @@ def mark_camera_status(camera_id: int, status: str, last_error: str | None = Non
 
 
 def external_camera_status(state: str) -> str:
-    if state == RecorderState.RECORDING:
-        return "recording"
     if state == RecorderState.DISABLED:
         return "disabled"
     if state in {RecorderState.ERROR, RecorderState.RESTARTING}:
         return "error"
+    if state == RecorderState.RECORDING:
+        return "starting"
     if state == RecorderState.IDLE:
         return "idle"
     return "stopped"
 
 
 def update_camera_status_from_job(job: RecordingJob) -> None:
-    mark_camera_status(job.camera_id, external_camera_status(job.state), job.last_error)
+    status = "recording" if job.state == RecorderState.RECORDING and job.known_segment_paths else external_camera_status(job.state)
+    mark_camera_status(job.camera_id, status, job.last_error)
 
 
 def get_or_create_job(row) -> RecordingJob:
@@ -1888,6 +1994,8 @@ def confirm_recording_startups() -> None:
             continue
         if time.time() - job.started_at < STARTUP_CONFIRM_SECONDS:
             continue
+        if not job.last_media_progress_at or time.time() - job.last_media_progress_at > MEDIA_PROGRESS_HEARTBEAT_GRACE_SECONDS:
+            continue
         if not (job.retry_count or job.next_retry_at or job.last_error or job.last_error_type):
             continue
 
@@ -1916,7 +2024,13 @@ def write_recorder_heartbeat(loop_state: str = "loop") -> None:
     try:
         rows = list(jobs.values())
         active_count = sum(1 for job in rows if job.state in {RecorderState.STARTING, RecorderState.RECORDING, RecorderState.STOPPING, RecorderState.RESTARTING})
-        recording_count = sum(1 for job in rows if job.state == RecorderState.RECORDING)
+        recording_count = sum(
+            1
+            for job in rows
+            if job.state == RecorderState.RECORDING
+            and job.last_media_progress_at
+            and time.time() - job.last_media_progress_at <= MEDIA_PROGRESS_HEARTBEAT_GRACE_SECONDS
+        )
         current_failure_jobs = [
             job
             for job in rows

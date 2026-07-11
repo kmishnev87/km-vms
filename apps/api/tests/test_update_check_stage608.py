@@ -643,7 +643,7 @@ def test_diagnostic_archive_includes_update_status_without_running_apply(tmp_pat
     monkeypatch.setattr(settings_router, "camera_diagnostics", lambda db: [])
     monkeypatch.setattr(settings_router.live_manager, "status", lambda: [])
     monkeypatch.setattr(settings_router.live_manager, "debug", lambda: {})
-    monkeypatch.setattr(settings_router, "recordings_diagnostics", lambda: {"count": 0})
+    monkeypatch.setattr(settings_router, "recordings_diagnostics", lambda db: {"count": 0})
     monkeypatch.setattr(settings_router, "chronology_diagnostics", lambda db: {"items": []})
 
     archive = settings_router.build_log_archive(db, mode="normal", include_logs=False)

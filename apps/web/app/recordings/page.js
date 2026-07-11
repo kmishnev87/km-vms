@@ -75,6 +75,8 @@ const TEXT = {
   close: "\u0417\u0430\u043a\u0440\u044b\u0442\u044c",
   playbackError: "\u0411\u0440\u0430\u0443\u0437\u0435\u0440 \u043d\u0435 \u0441\u043c\u043e\u0433 \u0432\u043e\u0441\u043f\u0440\u043e\u0438\u0437\u0432\u0435\u0441\u0442\u0438 \u0437\u0430\u043f\u0438\u0441\u044c \u043e\u043d\u043b\u0430\u0439\u043d. \u0417\u0430\u043f\u0438\u0441\u044c \u043c\u043e\u0436\u043d\u043e \u0441\u043a\u0430\u0447\u0430\u0442\u044c.",
   missingFile: "\u0424\u0430\u0439\u043b \u043e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u0435\u0442",
+  rootUnavailable: "\u041a\u043e\u0440\u0435\u043d\u044c \u0430\u0440\u0445\u0438\u0432\u0430 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d",
+  rootUnresolved: "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0434\u043d\u043e\u0437\u043d\u0430\u0447\u043d\u043e \u043e\u043f\u0440\u0435\u0434\u0435\u043b\u0438\u0442\u044c \u0440\u0430\u0441\u043f\u043e\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0437\u0430\u043f\u0438\u0441\u0438",
   verificationError: "\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438",
   unavailable: "\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e",
   recordingActiveEmpty: "\u0418\u0434\u0451\u0442 \u0437\u0430\u043f\u0438\u0441\u044c. \u0417\u0430\u043f\u0438\u0441\u044c \u043f\u043e\u044f\u0432\u0438\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u0437\u0430\u043a\u0440\u044b\u0442\u0438\u044f \u0441\u0435\u0433\u043c\u0435\u043d\u0442\u0430.",
@@ -385,7 +387,34 @@ function isRecordingAvailable(item) {
     && item?.download_available === true;
 }
 
+function recordingIdentityKey(item) {
+  if (!item) return "";
+  return item.recording_ref || (item.segment_id ? `segment:${item.segment_id}:root:${item.archive_root_id || "default"}` : item.path || "");
+}
+
+function recordingIdentityPayload(item) {
+  if (!item) return {};
+  return {
+    segment_id: item.segment_id,
+    archive_root_id: item.archive_root_id,
+    recording_ref: item.recording_ref,
+    path: item.path,
+  };
+}
+
+function recordingIdentityQuery(item) {
+  const payload = recordingIdentityPayload(item);
+  const params = new URLSearchParams();
+  if (payload.segment_id) params.set("segment_id", String(payload.segment_id));
+  if (payload.archive_root_id) params.set("archive_root_id", payload.archive_root_id);
+  if (payload.recording_ref) params.set("recording_ref", payload.recording_ref);
+  if (!params.has("segment_id") && !params.has("recording_ref") && payload.path) params.set("path", payload.path);
+  return params.toString();
+}
+
 function recordingAvailabilityLabel(item, t) {
+  if (item?.availability_status === "root_unavailable") return t.rootUnavailable;
+  if (item?.availability_status === "root_unresolved") return t.rootUnresolved;
   if (item?.availability_status === "error") return t.verificationError;
   return t.missingFile;
 }
@@ -599,7 +628,7 @@ export default function RecordingsPage() {
   const paginatedItems = filteredItems;
 
   const visiblePaths = useMemo(
-    () => paginatedItems.map((item) => item.path),
+    () => paginatedItems.map((item) => recordingIdentityKey(item)),
     [paginatedItems]
   );
 
@@ -693,8 +722,8 @@ export default function RecordingsPage() {
     try {
       setError("");
       setNotice("");
-      const mediaToken = await issueRecordingMediaToken(item.path, "download");
-      const url = `/api/recordings/download?path=${encodeURIComponent(item.path)}&media_token=${encodeURIComponent(mediaToken)}`;
+      const mediaToken = await issueRecordingMediaToken(recordingIdentityPayload(item), "download");
+      const url = `/api/recordings/download?${recordingIdentityQuery(item)}&media_token=${encodeURIComponent(mediaToken)}`;
       const a = document.createElement("a");
       a.href = url;
       a.download = item.filename || "recording.mp4";
@@ -943,7 +972,7 @@ export default function RecordingsPage() {
       setError("");
       setNotice("");
       setBusy(true);
-      const result = await apiFetch(`/recordings?path=${encodeURIComponent(item.path)}`, {
+      const result = await apiFetch(`/recordings?${recordingIdentityQuery(item)}`, {
         method: "DELETE",
       });
       await refresh();
@@ -967,7 +996,11 @@ export default function RecordingsPage() {
       const result = await apiFetch("/recordings/bulk-delete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paths: selectedPaths }),
+        body: JSON.stringify({
+          items: paginatedItems
+            .filter((item) => selectedPaths.includes(recordingIdentityKey(item)))
+            .map((item) => recordingIdentityPayload(item)),
+        }),
       });
       await refresh();
       setNotice(summarizeDeleteResult(result));
@@ -1190,13 +1223,13 @@ export default function RecordingsPage() {
             </thead>
             <tbody>
               {paginatedItems.map((item) => (
-                <tr key={item.path}>
+                <tr key={recordingIdentityKey(item)}>
                   <td>
                     {canDelete ? (
                       <input
                         type="checkbox"
-                        checked={selectedPaths.includes(item.path)}
-                        onChange={() => toggleSelected(item.path)}
+                        checked={selectedPaths.includes(recordingIdentityKey(item))}
+                        onChange={() => toggleSelected(recordingIdentityKey(item))}
                         aria-label={`\u0412\u044b\u0431\u0440\u0430\u0442\u044c ${item.filename}`}
                       />
                     ) : null}
@@ -1488,6 +1521,6 @@ export default function RecordingsPage() {
   );
 }
   async function buildRecordingStreamUrl(item) {
-    const mediaToken = await issueRecordingMediaToken(item.path, "stream");
-    return `/api/recordings/stream?path=${encodeURIComponent(item.path)}&media_token=${encodeURIComponent(mediaToken)}`;
+    const mediaToken = await issueRecordingMediaToken(recordingIdentityPayload(item), "stream");
+    return `/api/recordings/stream?${recordingIdentityQuery(item)}&media_token=${encodeURIComponent(mediaToken)}`;
   }

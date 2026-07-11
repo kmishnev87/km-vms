@@ -18,12 +18,19 @@ from app.models.recording import RecordingSegment
 from app.services.audit_log import create_event
 from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
+    ROOT_RESOLUTION_PROBLEMS,
     VIDEO_EXTENSIONS,
+    archive_root_for_segment,
+    archive_root_physical_volume_id,
     archive_root_public_status,
+    archive_root_runtime_access_state,
+    archive_root_runtime_path,
+    is_kmvms_namespace_relative,
     list_archive_roots,
     migration_preview,
     resolve_segment_file_path,
     root_usage,
+    segment_archive_root_resolution,
 )
 from app.services.storage_contract import storage_contract
 from app.services.timezone_contract import format_system_iso, timezone_context
@@ -224,6 +231,65 @@ def _capacity_percent(numerator: int | None, denominator: int | None) -> float |
         return None
 
 
+def _build_volume_groups(db: Session, root_rows: list, archive_roots: list[dict]) -> list[dict]:
+    root_status_by_id = {str(item.get("id")): item for item in archive_roots if item.get("id") is not None}
+    groups: dict[str, dict] = {}
+    for root_row in root_rows:
+        root_id = str(getattr(root_row, "id", "") or "")
+        public = root_status_by_id.get(root_id) or {}
+        volume_id = public.get("physical_volume_id") or archive_root_physical_volume_id(root_row)
+        group = groups.setdefault(
+            volume_id,
+            {
+                "physical_volume_id": volume_id,
+                "display_label": str(volume_id).lstrip("/") or "Storage",
+                "capacity": {
+                    "total_bytes": None,
+                    "used_bytes": None,
+                    "free_bytes": None,
+                    "available_bytes": None,
+                    "usage_percent": None,
+                    "filesystem_probe_status": "unknown",
+                },
+                "roots": [],
+                "archive_size_bytes": 0,
+                "playable_file_count": 0,
+                "segments_count": 0,
+                "missing_file_count": 0,
+                "root_unavailable_count": 0,
+                "problem_file_count": 0,
+            },
+        )
+        if public.get("read_access_state") == "available" and group["capacity"]["filesystem_probe_status"] == "unknown":
+            capacity, _error = _capacity(archive_root_runtime_path(root_row))
+            capacity["usage_percent"] = _capacity_percent(capacity.get("used_bytes"), capacity.get("total_bytes"))
+            group["capacity"] = capacity
+        group["roots"].append(
+            {
+                "id": root_id,
+                "label": public.get("label"),
+                "is_active": bool(public.get("is_active")),
+                "active_write_target": bool(public.get("active_write_target")),
+                "access_state": public.get("access_state"),
+                "problem_category": public.get("problem_category"),
+                "size_bytes": int(public.get("size_bytes") or 0),
+                "existing_file_count": int(public.get("existing_file_count") or 0),
+                "segments_count": int(public.get("segments_count") or 0),
+                "missing_file_count": int(public.get("missing_file_count") or 0),
+                "inaccessible_file_count": int(public.get("inaccessible_file_count") or 0),
+                "root_access_problem_count": int(public.get("root_access_problem_count") or 0),
+                "problem_file_count": int(public.get("problem_file_count") or 0),
+            }
+        )
+        group["archive_size_bytes"] += int(public.get("size_bytes") or 0)
+        group["playable_file_count"] += int(public.get("existing_file_count") or 0)
+        group["segments_count"] += int(public.get("segments_count") or 0)
+        group["missing_file_count"] += int(public.get("missing_file_count") or 0)
+        group["root_unavailable_count"] += int(public.get("root_access_problem_count") or 0)
+        group["problem_file_count"] += int(public.get("problem_file_count") or 0)
+    return sorted(groups.values(), key=lambda item: item["physical_volume_id"])
+
+
 def _is_technical_deleted_camera_label(value: str | None) -> bool:
     return bool(value and TECHNICAL_DELETED_CAMERA_RE.search(str(value)))
 
@@ -285,24 +351,39 @@ def _is_countable_archive_segment(segment: RecordingSegment) -> bool:
 
 
 def _safe_stat_segment(segment: RecordingSegment, root: Path) -> tuple[str | None, int | None, str | None, Path | None]:
+    if segment_archive_root_resolution(segment) != "resolved":
+        return segment.relative_path, None, "root_unresolved", None
     try:
         db = object_session(segment)
         if db is None:
             return segment.relative_path, None, "db_session_missing", None
+        root_row = archive_root_for_segment(db, segment)
+        if root_row is not None:
+            access = archive_root_runtime_access_state(root_row)
+            if access.get("read_access_state") != "available":
+                return segment.relative_path, None, "root_unavailable", None
         target = resolve_segment_file_path(db, segment)
         rel_path = segment.relative_path
     except FileNotFoundError:
         return segment.relative_path, None, "missing_file", None
+    except ValueError as exc:
+        error = str(exc) or "invalid_path"
+        if error in ROOT_RESOLUTION_PROBLEMS or error == "root_unresolved":
+            return segment.relative_path, None, "root_unresolved", None
+        if error == "path_outside_archive_root":
+            return segment.relative_path, None, "path_outside_storage", None
+        return segment.relative_path, None, "invalid_path", None
     except Exception:
         return segment.relative_path, None, "invalid_path", None
-    if not target.exists():
-        return rel_path, None, "missing_file", target
-    if not target.is_file():
-        return rel_path, None, "not_file", target
     try:
-        return rel_path, int(target.stat().st_size), None, target
+        stat = target.stat()
+        if not target.is_file():
+            return rel_path, None, "not_file", target
+        return rel_path, int(stat.st_size), None, target
+    except FileNotFoundError:
+        return rel_path, None, "missing_file", target
     except OSError as exc:
-        return rel_path, None, redact_text(str(exc)) or "stat_error", target
+        return rel_path, None, "root_unavailable", target
 
 
 def _observe_namespace(root: Path, owned_paths: set[str]) -> dict:
@@ -422,18 +503,63 @@ def _safe_camera_usage(rows: list[dict] | None) -> list[dict]:
 def _storage_problem_details(reconciliation: dict, namespace_observations: dict) -> dict:
     labels = {
         "missing_file": "файл отсутствует",
+        "root_unavailable": "корень архива недоступен",
+        "active_root_not_writable": "активный корень архива недоступен для записи",
+        "root_unresolved": "не определено расположение записи",
         "orphan_file": "файл без записи в базе",
         "invalid_path": "некорректный путь",
         "path_outside_storage": "путь вне хранилища",
     }
+    labels_en = {
+        "missing_file": "recording file is missing",
+        "root_unavailable": "archive root is unavailable",
+        "active_root_not_writable": "active archive root is not writable",
+        "root_unresolved": "recording location is unresolved",
+        "orphan_file": "file has no metadata row",
+        "invalid_path": "invalid path",
+        "path_outside_storage": "path is outside storage",
+    }
+    labels_zh_cn = {
+        "missing_file": "录像文件缺失",
+        "root_unavailable": "归档根目录不可用",
+        "active_root_not_writable": "活动归档根目录不可写",
+        "root_unresolved": "无法确定录像位置",
+        "orphan_file": "文件没有元数据记录",
+        "invalid_path": "路径无效",
+        "path_outside_storage": "路径位于存储之外",
+    }
     reasons = {
         "missing_file": "Строка метаданных ссылается на файл, который не виден на диске. Удаление метаданных этим экраном не выполняется.",
+        "root_unavailable": "Расположение архива сейчас недоступно для чтения. Записи из него нельзя считать отсутствующими файлами, пока сам корень не доступен.",
+        "active_root_not_writable": "Активное расположение доступно для чтения, но запись в него не подтверждена. Проверьте права доступа к папке архива.",
+        "root_unresolved": "Для записи нельзя однозначно подтвердить корень архива. Воспроизведение и удаление заблокированы до безопасного разрешения.",
         "orphan_file": "Файл не имеет доверенной строки метаданных KM VMS, поэтому его нельзя удалить или присвоить автоматически.",
         "invalid_path": "Путь в метаданных некорректен и требует ручной проверки.",
         "path_outside_storage": "Путь выходит за границы настроенного хранилища и не может исправляться автоматически.",
     }
+    reasons_en = {
+        "missing_file": "Metadata points to a file that is not visible on disk. This status screen does not delete metadata.",
+        "root_unavailable": "The archive location cannot currently be read. Its recordings cannot be classified as missing until the root is available.",
+        "active_root_not_writable": "The active location is readable, but write access is not confirmed. Check access rights for the archive folder.",
+        "root_unresolved": "The recording's archive root cannot be proven unambiguously. Playback and deletion stay blocked until it is resolved safely.",
+        "orphan_file": "The file has no trusted KM VMS metadata row, so it cannot be deleted or adopted automatically.",
+        "invalid_path": "The metadata path is invalid and requires manual review.",
+        "path_outside_storage": "The path leaves the configured storage boundary and cannot be fixed automatically.",
+    }
+    reasons_zh_cn = {
+        "missing_file": "元数据指向磁盘上不可见的文件。此状态页面不会删除元数据。",
+        "root_unavailable": "当前无法读取归档位置。在根目录恢复可用之前，不能将其中的录像判定为文件缺失。",
+        "active_root_not_writable": "活动位置可读，但尚未确认写入权限。请检查归档文件夹的访问权限。",
+        "root_unresolved": "无法唯一确认录像所属的归档根目录。在安全解决之前，播放和删除保持阻止状态。",
+        "orphan_file": "该文件没有可信的 KM VMS 元数据记录，因此不能自动删除或接管。",
+        "invalid_path": "元数据路径无效，需要手动检查。",
+        "path_outside_storage": "路径超出已配置的存储边界，无法自动修复。",
+    }
     category_counts = {
         "missing_file": int(reconciliation.get("missing_file_count") or 0),
+        "root_unavailable": int(reconciliation.get("root_unavailable_count") or 0),
+        "active_root_not_writable": int(reconciliation.get("active_root_write_problem_count") or 0),
+        "root_unresolved": int(reconciliation.get("root_unresolved_count") or 0),
         "orphan_file": int(reconciliation.get("orphan_file_count") or 0),
         "invalid_path": int(reconciliation.get("invalid_path_count") or 0),
         "path_outside_storage": int(reconciliation.get("path_outside_storage_count") or 0),
@@ -459,9 +585,13 @@ def _storage_problem_details(reconciliation: dict, namespace_observations: dict)
             {
                 "code": code,
                 "label_ru": labels.get(code, code),
+                "label_en": labels_en.get(code, code),
+                "label_zh_cn": labels_zh_cn.get(code, code),
                 "count": count,
                 "safe_action_status": "manual_review_required",
                 "reason_no_action_available": reasons.get(code, "Нет безопасного автоматического действия для этой категории."),
+                "reason_no_action_available_en": reasons_en.get(code, "No safe automatic action is available for this category."),
+                "reason_no_action_available_zh_cn": reasons_zh_cn.get(code, "此类别没有可用的安全自动操作。"),
             }
             for code, count in sorted(category_counts.items(), key=lambda item: (-item[1], item[0]))
         ],
@@ -487,11 +617,15 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
     owned = summary.get("owned_archive") or {}
     path_checks = summary.get("storage_path_checks") or {}
     archive_roots = summary.get("archive_roots") or []
+    volume_groups = summary.get("volume_groups") or []
     operation_archive_roots = [
         {key: value for key, value in root.items() if key not in {"configured_path", "root_path", "path", "archive_host_path"}}
         for root in archive_roots
     ]
     active_root = next((root for root in operation_archive_roots if root.get("is_active")), None)
+    path_available = active_root.get("is_available") if active_root is not None else summary.get("available")
+    path_readable = active_root.get("is_readable") if active_root is not None else path_checks.get("readable")
+    path_writable = active_root.get("is_writable") if active_root is not None else path_checks.get("writable")
 
     retention_last = _safe_last_summary(retention.get("last_summary"))
     auto_last = _safe_last_summary(auto_cleanup.get("last_summary"))
@@ -509,14 +643,15 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             "filesystem_probe_status": capacity.get("filesystem_probe_status"),
         },
         "path_health": {
-            "available": bool(summary.get("available")),
-            "readable": bool(path_checks.get("readable")),
-            "writable": bool(path_checks.get("writable")),
+            "available": path_available if isinstance(path_available, bool) else None,
+            "readable": path_readable if isinstance(path_readable, bool) else None,
+            "writable": path_writable if isinstance(path_writable, bool) else None,
             "filesystem_probe_status": capacity.get("filesystem_probe_status"),
             "status": path_checks.get("status"),
-            "reason": path_checks.get("last_error"),
+            "reason": (active_root or {}).get("problem") or path_checks.get("last_error"),
         },
         "archive_roots": operation_archive_roots,
+        "volume_groups": volume_groups,
         "active_archive_root": active_root,
         "migration_preview": summary.get("migration_preview"),
         "namespace_health": {
@@ -535,6 +670,8 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             "segments_count": int(owned.get("kmvms_owned_segments_count") or 0),
             "existing_file_count": int(owned.get("kmvms_owned_existing_file_count") or 0),
             "missing_file_count": int(owned.get("kmvms_owned_missing_file_count") or 0),
+            "root_unavailable_count": int(owned.get("kmvms_owned_root_unavailable_count") or 0),
+            "active_root_write_problem_count": int(owned.get("kmvms_active_root_write_problem_count") or 0),
             "problem_file_count": int(owned.get("kmvms_owned_problem_file_count") or 0),
             "skipped_foreign_metadata_rows": int(owned.get("skipped_foreign_metadata_rows") or 0),
             "deleted_metadata_rows_excluded": int(owned.get("deleted_metadata_rows_excluded") or 0),
@@ -575,14 +712,17 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             "last_summary": retention_last,
         },
         "reconciliation": {
-            "status": "problems_found" if any(int(reconciliation.get(key) or 0) for key in ("missing_file_count", "orphan_file_count", "invalid_path_count", "path_outside_storage_count")) else "ok",
+            "status": "problems_found" if any(int(reconciliation.get(key) or 0) for key in ("missing_file_count", "root_unavailable_count", "active_root_write_problem_count", "root_unresolved_count", "orphan_file_count", "invalid_path_count", "path_outside_storage_count")) else "ok",
             "missing_file_count": int(reconciliation.get("missing_file_count") or 0),
+            "root_unavailable_count": int(reconciliation.get("root_unavailable_count") or 0),
+            "active_root_write_problem_count": int(reconciliation.get("active_root_write_problem_count") or 0),
+            "root_unresolved_count": int(reconciliation.get("root_unresolved_count") or 0),
             "orphan_file_count": int(reconciliation.get("orphan_file_count") or 0),
             "invalid_path_count": int(reconciliation.get("invalid_path_count") or 0),
             "path_outside_storage_count": int(reconciliation.get("path_outside_storage_count") or 0),
             "foreign_unknown_count": int(reconciliation.get("foreign_unknown_count") or 0),
             "problem_file_count": int(
-                sum(int(reconciliation.get(key) or 0) for key in ("missing_file_count", "orphan_file_count", "invalid_path_count", "path_outside_storage_count"))
+                sum(int(reconciliation.get(key) or 0) for key in ("missing_file_count", "root_unavailable_count", "active_root_write_problem_count", "root_unresolved_count", "orphan_file_count", "invalid_path_count", "path_outside_storage_count"))
             ),
             "cleanup_candidate_count": int(cleanup.get("count") or 0),
             "cleanup_review_only": True,
@@ -637,11 +777,13 @@ def build_storage_monitoring_summary(
     reconciliation_counts = Counter()
     container_counts = Counter()
     extension_counts = Counter()
-    owned_paths: set[str] = set()
+    owned_paths_by_root: dict[str, set[str]] = defaultdict(set)
     invalid_path_count = 0
     path_outside_count = 0
     owned_existing_count = 0
     owned_missing_count = 0
+    owned_root_unavailable_count = 0
+    owned_root_unresolved_count = 0
     owned_problem_count = 0
     owned_archive_size = 0
     skipped_foreign_metadata = 0
@@ -651,6 +793,12 @@ def build_storage_monitoring_summary(
         root_status = archive_root_public_status(root_row, include_path=True)
         root_status.update(root_usage(db, root_row))
         archive_roots.append(root_status)
+    root_access_problem_count = sum(int(root.get("root_access_problem_count") or 0) for root in archive_roots)
+    active_root_write_problem_count = sum(
+        1
+        for root in archive_roots
+        if root.get("is_active") and root.get("write_access_state") != "available"
+    )
 
     segments = db.query(RecordingSegment).order_by(RecordingSegment.id.asc()).all()
     for segment in segments:
@@ -660,6 +808,14 @@ def build_storage_monitoring_summary(
         if segment.status == SEGMENT_STATUS_DELETED:
             deleted_metadata_rows += 1
             continue
+        if (
+            segment.archive_root_id
+            and segment_archive_root_resolution(segment) == "resolved"
+            and is_kmvms_namespace_relative(segment.relative_path)
+        ):
+            owned_paths_by_root[str(segment.archive_root_id)].add(
+                str(segment.relative_path).replace("\\", "/").lstrip("/")
+            )
         if not _is_countable_archive_segment(segment):
             status_counts[segment.status or "unknown"] += 1
             integrity_counts[segment.integrity_status or "unknown"] += 1
@@ -696,13 +852,19 @@ def build_storage_monitoring_summary(
         extension_counts[segment.file_extension or "unknown"] += 1
 
         rel_path, size, problem, _target = _safe_stat_segment(segment, root)
-        if rel_path:
-            owned_paths.add(rel_path)
         if problem is None and size is not None:
             owned_existing_count += 1
             row["existing_file_count"] += 1
             row["size_bytes"] += size
             owned_archive_size += size
+        elif problem == "root_unavailable":
+            owned_root_unavailable_count += 1
+            _bump_counter_map(row, "problem_counts", problem)
+        elif problem == "root_unresolved":
+            owned_root_unresolved_count += 1
+            owned_problem_count += 1
+            row["problem_file_count"] += 1
+            _bump_counter_map(row, "problem_counts", segment_archive_root_resolution(segment))
         else:
             owned_problem_count += 1
             row["problem_file_count"] += 1
@@ -725,15 +887,55 @@ def build_storage_monitoring_summary(
         "foreign_unknown_count": 0,
         "samples": [],
         "errors": [],
+        "roots": [],
     }
-    if include_namespace_observations and path_checks["path_exists"] and path_checks["is_dir"]:
-        namespace_observations = _observe_namespace(root, owned_paths)
+    if include_namespace_observations:
+        namespace_observations["scan_mode"] = SCAN_MODE_NAMESPACE_BOUNDED
+        for root_row in archive_root_rows:
+            root_id = str(getattr(root_row, "id", "") or "")
+            access = archive_root_runtime_access_state(root_row)
+            if access.get("read_access_state") != "available":
+                namespace_observations["roots"].append(
+                    {
+                        "root_id": root_id,
+                        "status": "skipped_unavailable",
+                        "orphan_file_count": 0,
+                        "partial": False,
+                    }
+                )
+                continue
+            observed = _observe_namespace(
+                archive_root_runtime_path(root_row),
+                owned_paths_by_root.get(root_id, set()),
+            )
+            namespace_observations["scanned_files"] = int(namespace_observations.get("scanned_files") or 0) + int(observed.get("scanned_files") or 0)
+            namespace_observations["scanned_dirs"] = int(namespace_observations.get("scanned_dirs") or 0) + int(observed.get("scanned_dirs") or 0)
+            namespace_observations["orphan_file_count"] += int(observed.get("orphan_file_count") or 0)
+            namespace_observations["foreign_unknown_count"] += int(observed.get("foreign_unknown_count") or 0)
+            namespace_observations["scan_limited"] = bool(namespace_observations["scan_limited"] or observed.get("scan_limited"))
+            namespace_observations["partial"] = bool(namespace_observations["partial"] or observed.get("partial"))
+            if not namespace_observations.get("partial_reason") and observed.get("partial_reason"):
+                namespace_observations["partial_reason"] = observed.get("partial_reason")
+            namespace_observations["errors"].extend((observed.get("errors") or [])[:MAX_SAMPLE_ITEMS])
+            remaining_samples = max(0, MAX_SAMPLE_ITEMS - len(namespace_observations["samples"]))
+            namespace_observations["samples"].extend(
+                {**sample, "root_id": root_id}
+                for sample in (observed.get("samples") or [])[:remaining_samples]
+            )
+            namespace_observations["roots"].append(
+                {
+                    "root_id": root_id,
+                    "status": "partial" if observed.get("partial") else "completed",
+                    "orphan_file_count": int(observed.get("orphan_file_count") or 0),
+                    "partial": bool(observed.get("partial")),
+                }
+            )
         errors.extend(namespace_observations.get("errors") or [])
 
     scan_limited = bool(namespace_observations.get("scan_limited"))
     partial = bool(namespace_observations.get("partial"))
     path_available = bool(path_checks["path_exists"] and path_checks["is_dir"])
-    integrity_problem_count = int(owned_problem_count) + int(namespace_observations.get("orphan_file_count") or 0) + int(invalid_path_count) + int(path_outside_count)
+    integrity_problem_count = int(owned_problem_count) + int(root_access_problem_count) + int(active_root_write_problem_count) + int(namespace_observations.get("orphan_file_count") or 0)
     has_storage_problem = bool(errors or integrity_problem_count)
     if not path_available:
         status = "unavailable"
@@ -781,6 +983,10 @@ def build_storage_monitoring_summary(
             "kmvms_owned_segments_count": int(sum(status_counts.values())),
             "kmvms_owned_existing_file_count": int(owned_existing_count),
             "kmvms_owned_missing_file_count": int(owned_missing_count),
+            "kmvms_owned_root_unavailable_count": int(root_access_problem_count),
+            "kmvms_active_root_write_problem_count": int(active_root_write_problem_count),
+            "kmvms_owned_root_unavailable_segments_count": int(owned_root_unavailable_count),
+            "kmvms_owned_root_unresolved_count": int(owned_root_unresolved_count),
             "kmvms_owned_problem_file_count": int(owned_problem_count),
             "skipped_foreign_metadata_rows": int(skipped_foreign_metadata),
             "deleted_metadata_rows_excluded": int(deleted_metadata_rows),
@@ -794,6 +1000,10 @@ def build_storage_monitoring_summary(
         "file_extension_counts": dict(extension_counts),
         "reconciliation_summary": {
             "missing_file_count": int(owned_missing_count),
+            "root_unavailable_count": int(root_access_problem_count),
+            "active_root_write_problem_count": int(active_root_write_problem_count),
+            "root_unavailable_segment_count": int(owned_root_unavailable_count),
+            "root_unresolved_count": int(owned_root_unresolved_count),
             "invalid_path_count": int(invalid_path_count),
             "path_outside_storage_count": int(path_outside_count),
             "orphan_file_count": int(namespace_observations.get("orphan_file_count") or 0),
@@ -804,6 +1014,7 @@ def build_storage_monitoring_summary(
         "cleanup_candidates_summary": cleanup_candidates_summary,
         "namespace_observations": namespace_observations,
         "archive_roots": archive_roots,
+        "volume_groups": _build_volume_groups(db, archive_root_rows, archive_roots),
         "migration_preview": migration_preview(db),
     }
     summary["reconciliation_summary"]["problem_details"] = _storage_problem_details(

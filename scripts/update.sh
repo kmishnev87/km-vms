@@ -175,7 +175,7 @@ fail() {
       rebuild_recreate|health_check)
         (
           cd "$APP_DIR"
-          compose_cmd --env-file "$APP_DIR/.env" up -d postgres redis api recorder web nginx >/dev/null 2>&1
+          compose_with_archive_roots up -d postgres redis api recorder web nginx >/dev/null 2>&1
         ) || true
         ;;
     esac
@@ -184,6 +184,34 @@ fail() {
     write_update_metadata "failed" "$message" 2>/dev/null || true
   fi
   exit 1
+}
+
+compose_with_archive_roots() {
+  archive_roots_compose="$APP_DIR/data/install-control/docker-compose.archive-roots.yml"
+  if [ -f "$archive_roots_compose" ]; then
+    compose_cmd --env-file "$APP_DIR/.env" -f "$APP_DIR/docker-compose.yml" -f "$archive_roots_compose" "$@"
+  else
+    compose_cmd --env-file "$APP_DIR/.env" "$@"
+  fi
+}
+
+archive_roots_compose_file() {
+  printf '%s\n' "$APP_DIR/data/install-control/docker-compose.archive-roots.yml"
+}
+
+archive_roots_compose_present() {
+  [ -f "$(archive_roots_compose_file)" ]
+}
+
+apply_generated_archive_roots_compose_if_needed() {
+  was_present="$1"
+  if [ "$was_present" = "1" ]; then
+    return 1
+  fi
+  archive_roots_compose_present || return 1
+  compose_with_archive_roots config >/dev/null
+  compose_with_archive_roots up -d --force-recreate api
+  return 0
 }
 
 cleanup() {
@@ -640,22 +668,24 @@ compose_config() {
   write_helper_progress "running" "Validating Docker Compose config."
   (
     cd "$APP_DIR"
-    compose_cmd --env-file "$APP_DIR/.env" config >/dev/null
+    compose_with_archive_roots config >/dev/null
   ) || fail "Compose config validation failed."
 }
 
 rebuild_recreate() {
   PHASE="rebuild_recreate"
   write_helper_progress "running" "Rebuilding and recreating containers."
+  ARCHIVE_ROOTS_COMPOSE_WAS_PRESENT=0
+  archive_roots_compose_present && ARCHIVE_ROOTS_COMPOSE_WAS_PRESENT=1
   (
     cd "$APP_DIR"
     if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then
-      compose_cmd --env-file "$APP_DIR/.env" up -d --build postgres redis api recorder web nginx || {
+      compose_with_archive_roots up -d --build postgres redis api recorder web nginx || {
         sleep 5
-        compose_cmd --env-file "$APP_DIR/.env" up -d --build postgres redis api recorder web nginx
+        compose_with_archive_roots up -d --build postgres redis api recorder web nginx
       }
     else
-      compose_cmd --env-file "$APP_DIR/.env" up -d --build
+      compose_with_archive_roots up -d --build
     fi
   ) || fail "Compose rebuild/recreate failed."
 }
@@ -773,7 +803,7 @@ api_visible_release_identity_status() {
   [ -n "$SOURCE_COMMIT_SHA" ] || return 1
   (
     cd "$APP_DIR"
-    compose_cmd --env-file "$APP_DIR/.env" exec -T api python -c '
+    compose_with_archive_roots exec -T api python -c '
 import json
 import sys
 from pathlib import Path
@@ -819,7 +849,7 @@ verify_api_visible_release_identity() {
   info "API-visible release identity is stale or incomplete; recreating api service to remount final identity."
   (
     cd "$APP_DIR"
-    compose_cmd --env-file "$APP_DIR/.env" up -d --force-recreate api
+    compose_with_archive_roots up -d --force-recreate api
   ) || fail "API recreate after release identity finalization failed."
   health_check
   PHASE="metadata_write"
@@ -879,6 +909,9 @@ write_release_identity "precompose"
 compose_config
 rebuild_recreate
 health_check
+if apply_generated_archive_roots_compose_if_needed "$ARCHIVE_ROOTS_COMPOSE_WAS_PRESENT"; then
+  health_check
+fi
 write_source_provenance
 write_release_identity
 verify_api_visible_release_identity

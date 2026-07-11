@@ -86,7 +86,7 @@ def write_setup_storage_selection() -> None:
                 "container_archive_path": CONTAINER_ARCHIVE_PATH,
                 "candidate_id": "stage3-audit",
                 "selected_at": "2026-05-07T00:00:00Z",
-                "apply_status": "pending_host_helper_restart_required",
+                "apply_status": "active",
             }
         )
         + "\n",

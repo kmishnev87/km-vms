@@ -50,6 +50,9 @@ class ArchiveRoot(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     retired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    physical_identity: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
+    retirement_status: Mapped[str | None] = mapped_column(String(50), index=True, nullable=True)
+    retirement_problem: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class RecordingSegment(Base):
@@ -73,6 +76,9 @@ class RecordingSegment(Base):
     ownership: Mapped[str] = mapped_column(String(50), default="KM VMS", index=True)
     source: Mapped[str] = mapped_column(String(50), default="recorder")
     archive_root_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("archive_roots.id", ondelete="SET NULL"), index=True, nullable=True)
+    archive_root_resolution_status: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    archive_root_resolution_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    archive_root_resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     checksum: Mapped[str | None] = mapped_column(String(128), nullable=True)
     storage_namespace: Mapped[str | None] = mapped_column(String(255), nullable=True)
     container_format: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -82,6 +88,7 @@ class RecordingSegment(Base):
     integrity_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_integrity_check_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     file_size_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    media_progress_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     file_mtime: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     content_probe_status: Mapped[str | None] = mapped_column(String(100), nullable=True)
     cleanup_candidate: Mapped[bool | None] = mapped_column(Boolean, default=False, nullable=True)

@@ -1,6 +1,7 @@
 import json
 import sys
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -65,7 +66,8 @@ def write_discovery(root: Path, candidates: list[dict]) -> None:
         json.dumps(
             {
                 "schema_version": 1,
-                "created_at": "2026-05-06T00:00:00Z",
+                "created_at": datetime.utcnow().isoformat() + "Z",
+                "snapshot_id": "stage2-current-snapshot",
                 "discovery_source": "test-host-snapshot",
                 "host_visibility": True,
                 "candidates": candidates,
@@ -113,7 +115,7 @@ def test_blocked_candidate_cannot_be_applied(db):
         setup_storage_apply(payload, db=session)
 
     assert exc.value.status_code == 422
-    assert "storage candidate is not available" in str(exc.value.detail)
+    assert "storage candidate is blocked" in str(exc.value.detail)
 
 
 def test_authorized_settings_exposes_host_archive_path_without_public_status_leak(db, monkeypatch):

@@ -21,9 +21,15 @@ from app.routers.recordings import (
     collect_recording_files,
     download_recording,
     issue_recording_media_token,
+    recording_media_resource_for_segment,
     stream_recording,
 )
 from app.services.media_tokens import create_media_token
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
 
 
 class FakeRequest:
@@ -39,6 +45,7 @@ def db():
     original_storage_previews = settings.storage_previews
     settings.storage_root = str(root / "archive")
     settings.storage_previews = str(root / "previews")
+    Path(settings.storage_root, "kmvms", "recordings").mkdir(parents=True, exist_ok=True)
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
@@ -80,6 +87,7 @@ def add_camera(db):
 
 
 def add_segment(db, camera, *, name="stage10_missing_file.mkv", write_file=False):
+    ensure_archive_roots(db)
     rel = f"kmvms/recordings/{camera.storage_folder_name}/{name}"
     path = Path(settings.storage_root) / rel
     if write_file:
@@ -100,6 +108,9 @@ def add_segment(db, camera, *, name="stage10_missing_file.mkv", write_file=False
         status="finalized",
         ownership="KM VMS",
         source="recorder",
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=datetime.utcnow(),
         storage_namespace="kmvms/recordings",
         container_format="mkv",
         file_extension=".mkv",
@@ -116,7 +127,7 @@ def test_stage10_missing_file_list_marks_recording_unavailable(db):
     camera = add_camera(db)
     missing = add_segment(db, camera, write_file=False)
 
-    items = collect_recording_files(db)
+    items = collect_recording_files(db, verify_files=True)
 
     assert len(items) == 1
     item = items[0]
@@ -124,7 +135,7 @@ def test_stage10_missing_file_list_marks_recording_unavailable(db):
     assert item["available"] is False
     assert item["playback_available"] is False
     assert item["download_available"] is False
-    assert item["availability_status"] == "missing_file"
+    assert item["availability_status"] == "missing"
     assert settings.storage_root not in str(item)
 
 
@@ -145,7 +156,7 @@ def test_stage10_missing_file_media_token_stream_and_download_fail_safely(db):
     stream_token, _ = create_media_token(
         user=user,
         scope="recording",
-        resource={"path": missing.relative_path, "action": "stream"},
+        resource=recording_media_resource_for_segment(missing, "stream"),
     )
     with pytest.raises(HTTPException) as stream_exc:
         stream_recording(FakeRequest(), path=missing.relative_path, media_token=stream_token, db=db)
@@ -155,7 +166,7 @@ def test_stage10_missing_file_media_token_stream_and_download_fail_safely(db):
     download_token, _ = create_media_token(
         user=user,
         scope="recording",
-        resource={"path": missing.relative_path, "action": "download"},
+        resource=recording_media_resource_for_segment(missing, "download"),
     )
     with pytest.raises(HTTPException) as download_exc:
         download_recording(FakeRequest(), path=missing.relative_path, media_token=download_token, db=db)
@@ -171,12 +182,12 @@ def test_stage10_recording_stream_and_download_tokens_remain_action_bound(db):
     stream_token, _ = create_media_token(
         user=user,
         scope="recording",
-        resource={"path": segment.relative_path, "action": "stream"},
+        resource=recording_media_resource_for_segment(segment, "stream"),
     )
     download_token, _ = create_media_token(
         user=user,
         scope="recording",
-        resource={"path": segment.relative_path, "action": "download"},
+        resource=recording_media_resource_for_segment(segment, "download"),
     )
 
     assert stream_recording(FakeRequest(), path=segment.relative_path, media_token=stream_token, db=db).status_code == 200

@@ -68,7 +68,7 @@ assert.match(responsiveCss, /storageOpsCameraTable[\s\S]*display:\s*none/);
 assert.match(storageCss, /storageOpsDashboard/);
 assert.match(storageCss, /storageOpsRootList/);
 
-assert.match(i18n, /supportDetails: "Служебные сведения для поддержки"/);
+assert.match(i18n, /supportDetails: "Подробнее"/, "secondary support facts must use a short user-facing disclosure label");
 assert.match(i18n, /currentArchive: "Текущий архив"/);
 assert.doesNotMatch(i18n, /Предпросмотр регламента|Удалить по плану|Применить безопасно|Самое безопасное действие|Доступность: Нет/);
 

@@ -15,6 +15,11 @@ from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.routers.recordings import collect_camera_names, collect_recording_files
 from app.services.storage_monitoring import build_storage_monitoring_summary
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
 
 
 @pytest.fixture
@@ -74,6 +79,7 @@ def add_segment(
     folder_snapshot=None,
     write_file=True,
 ):
+    ensure_archive_roots(db)
     relative_path = f"kmvms/recordings/{camera.storage_folder_name}/{name}"
     if write_file:
         write_storage_file(relative_path)
@@ -92,6 +98,9 @@ def add_segment(
         status="finalized",
         ownership="KM VMS",
         source="recorder",
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=datetime.utcnow(),
         storage_namespace="kmvms/recordings",
         container_format="mkv",
         file_extension=".mkv",

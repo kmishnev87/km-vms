@@ -113,6 +113,7 @@ def create_event(
     metadata: dict | None = None,
     ip_address: str | None = None,
     user_agent: str | None = None,
+    commit: bool = True,
 ) -> AuditEvent | None:
     category = category if category in CATEGORIES else "system"
     severity = severity if severity in SEVERITIES else "info"
@@ -139,8 +140,11 @@ def create_event(
             user_agent=user_agent,
         )
         session.add(event)
-        session.commit()
-        session.refresh(event)
+        if commit:
+            session.commit()
+            session.refresh(event)
+        else:
+            session.flush()
         return event
     except Exception:
         try:

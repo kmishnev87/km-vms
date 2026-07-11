@@ -879,9 +879,9 @@ def storage_diagnostics() -> dict:
     }
 
 
-def recordings_diagnostics() -> dict:
+def recordings_diagnostics(db: Session) -> dict:
     try:
-        items = collect_recording_files()
+        items = collect_recording_files(db, verify_files=True)
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
     total_size = sum(int(item.get("size_bytes") or 0) for item in items)
@@ -901,33 +901,53 @@ def recordings_diagnostics() -> dict:
 
 
 def chronology_diagnostics(db: Session) -> dict:
-    rows = []
-    for camera in db.query(Camera).order_by(Camera.id.asc()).all():
-        root = Path(settings.storage_root) / camera.storage_folder_name
-        files = []
-        if root.exists():
-            for path in sorted(root.rglob("*.mp4"), key=lambda item: item.stat().st_mtime if item.exists() else 0, reverse=True)[:20]:
-                try:
-                    stat = path.stat()
-                    files.append(
-                        {
-                            "path": str(path.resolve().relative_to(root.resolve())),
-                            "size_bytes": stat.st_size,
-                            "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                        }
-                    )
-                except Exception as exc:
-                    files.append({"path": str(path), "error": str(exc)})
-        rows.append(
-            {
-                "camera_id": camera.id,
-                "camera_name": camera.name,
-                "archive_root": str(root),
-                "archive_root_exists": root.exists(),
-                "latest_mp4_files": files,
-            }
+    try:
+        recordings = collect_recording_files(
+            db,
+            limit=200,
+            sort_by="created_at",
+            sort_dir="desc",
+            verify_files=True,
         )
-    return {"items": rows}
+    except Exception as exc:
+        return {"ok": False, "error": redact_text(str(exc)), "items": []}
+
+    rows: dict[int, dict] = {}
+    for item in recordings:
+        camera_id = int(item.get("camera_id") or 0)
+        row = rows.setdefault(
+            camera_id,
+            {
+                "camera_id": camera_id,
+                "camera_name": item.get("camera"),
+                "recording_count": 0,
+                "available_count": 0,
+                "unavailable_count": 0,
+                "archive_root_ids": [],
+                "latest_recordings": [],
+            },
+        )
+        row["recording_count"] += 1
+        if item.get("available") is True:
+            row["available_count"] += 1
+        else:
+            row["unavailable_count"] += 1
+        root_id = item.get("archive_root_id")
+        if root_id and root_id not in row["archive_root_ids"]:
+            row["archive_root_ids"].append(root_id)
+        if len(row["latest_recordings"]) < 20:
+            row["latest_recordings"].append(
+                {
+                    "segment_id": item.get("segment_id"),
+                    "archive_root_id": root_id,
+                    "started_at": item.get("started_at"),
+                    "ended_at": item.get("ended_at"),
+                    "size_bytes": int(item.get("size_bytes") or 0),
+                    "availability_status": item.get("availability_status"),
+                    "container_format": item.get("container_format"),
+                }
+            )
+    return {"ok": True, "items": [rows[key] for key in sorted(rows)]}
 
 
 def docker_logs_via_cli(container: str, mode: str) -> str:
@@ -1052,7 +1072,7 @@ def build_log_archive(
         live_status = live_manager.status()
         write_json(bundle, "live/status.json", {"items": live_status, "count": len(live_status)})
         write_json(bundle, "live/debug.json", live_manager.debug())
-        write_json(bundle, "recordings/summary.json", recordings_diagnostics())
+        write_json(bundle, "recordings/summary.json", recordings_diagnostics(db))
         write_json(bundle, "chronology/summary.json", chronology_diagnostics(db))
         write_json(bundle, "audit/events_recent.json", [serialize_event(event, ctx) for event in audit_events])
         write_json(bundle, "audit/summary.json", audit_summary(audit_events, ctx))

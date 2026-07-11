@@ -34,6 +34,11 @@ from app.models.camera import Camera
 from app.models.recording import ArchiveExportJob, RecordingSegment
 from app.models.user import User
 from app.services import archive_exports as export_service
+from app.services.recording_storage import (
+    DEFAULT_ARCHIVE_ROOT_ID,
+    ROOT_RESOLUTION_RESOLVED,
+    ensure_archive_roots,
+)
 
 
 FORBIDDEN_PATTERNS = (
@@ -128,6 +133,7 @@ def add_camera(db, *, deleted=False, name="stage11_export_camera"):
 
 
 def add_segment(db, camera, *, started=None, seconds=60, write_file=True, name="segment.mkv", size=16):
+    ensure_archive_roots(db)
     started = started or (datetime.utcnow() - timedelta(minutes=10))
     relative_path = f"kmvms/recordings/{camera.storage_folder_name}/{name}"
     file_path = Path(settings.storage_root) / relative_path
@@ -148,6 +154,9 @@ def add_segment(db, camera, *, started=None, seconds=60, write_file=True, name="
         status="finalized",
         ownership="KM VMS",
         source="recorder",
+        archive_root_id=DEFAULT_ARCHIVE_ROOT_ID,
+        archive_root_resolution_status=ROOT_RESOLUTION_RESOLVED,
+        archive_root_resolved_at=datetime.utcnow(),
         storage_namespace="kmvms/recordings",
         container_format="mkv",
         file_extension=".mkv",

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.16",
-  "tag": "v0.7.16",
-  "title": "Storage Archive Roots Runtime Path Contract and Activation UX Dofix",
-  "summary": "Fixes the accepted Storage archive-root closeout regression: active host/NAS roots are resolved through the runtime mount, root paths remain truthful per row, and inactive roots waiting for runtime activation can still be made active from the UI.",
+  "version": "0.7.17",
+  "tag": "v0.7.17",
+  "title": "Storage Multi-Root Archive Contract, Operational Truth, Activation Reliability and Frontend Evidence Closeout",
+  "summary": "Closes the accepted Stage 13.5 Storage multi-root archive cycle: root-aware storage, playback and timeline access across active and inactive roots; reliable activation with lease, rollback and recovery safety; truthful NAS volume discovery and operator status; stable System Status behavior under retryable failures; and final frontend evidence hardening.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.16",
+  "source_ref": "v0.7.17",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,11 +16,16 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Restores the active archive-root runtime path contract so a host/NAS archive path is checked and read through the active /storage/archive mount inside containers.",
-    "Keeps the active root free of false root_missing/missing-file warnings after an archive-root switch.",
-    "Exposes configured_path on /storage/status archive roots for truthful per-row UI display while keeping storage_operations sanitized from raw paths.",
-    "Prevents inactive root rows from inheriting the active root path as a frontend fallback.",
-    "Allows roots marked requires_activation to remain activatable even when their current inactive runtime path reports root_missing.",
-    "Adds backend/frontend regression tests for active host-path runtime resolution, status path contracts and activation button availability."
+    "Makes recording identity root-aware across Records, Chronology, media tokens, playback, downloads, exports and deletes, including duplicate relative paths.",
+    "Keeps archive history readable from active and inactive roots and preserves a continuous camera timeline across root switches.",
+    "Aggregates archive capacity truth by physical NAS volume while preserving per-root usage, file counts, availability and configured path evidence.",
+    "Introduces live NAS volume discovery with snapshot and candidate validation, rejecting stale, synthetic or changed selections before root creation.",
+    "Hardens archive-root activation with operation ownership, leases, heartbeats, stale-worker fencing, verified rollback and resumable recovery.",
+    "Stops only cameras recording at activation time, waits for confirmed stop, applies the runtime root and restores only the captured camera set.",
+    "Keeps root add, activation, deletion, retention, reconciliation, migration, exports and bulk actions bound to stable root identity and fail-closed checks.",
+    "Presents truthful activation progress, recovery state, volume capacity, root access and archive problems without fabricated completion or raw service text.",
+    "Keeps the Storage add-root layout compact with one header status and no lower refreshing, stale or unavailable text that changes disclosure height.",
+    "Fixes System Status retry classification so 5xx and network failures remain retryable and only 401/403 or exact permission messages hide the slot.",
+    "Aligns stale frontend tests with accepted Archive Export, timezone formatting and root-aware playback contracts; the full frontend corpus is green."
   ]
 }

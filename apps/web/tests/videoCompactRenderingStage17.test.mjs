@@ -147,5 +147,10 @@ test("records page remains native and does not introduce canvas playback", () =>
   assert.equal(records.includes("data-render-context=\"records\""), true);
   assert.equal(records.includes("data-renderer=\"native\""), true);
   assert.equal(records.includes("CompactVideoCanvas"), false);
-  assert.equal(records.includes("issueRecordingMediaToken(item.path, \"stream\")"), true);
+  assert.equal(records.includes("issueRecordingMediaToken(recordingIdentityPayload(item), \"stream\")"), true);
+  assert.equal(records.includes("segment_id: item.segment_id"), true);
+  assert.equal(records.includes("archive_root_id: item.archive_root_id"), true);
+  assert.equal(records.includes("recording_ref: item.recording_ref"), true);
+  assert.equal(records.includes("recordingIdentityQuery(item)"), true);
+  assert.equal(records.includes("issueRecordingMediaToken(item.path, \"stream\")"), false);
 });

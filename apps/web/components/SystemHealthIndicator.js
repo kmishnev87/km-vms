@@ -5,7 +5,9 @@ import { useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../lib/api";
 import {
   buildDashboardStatusSummary,
+  runtimeStatusUserIdentity,
   shouldStopRuntimeStatusPolling,
+  systemHealthIndicatorModel,
   userCanReadRuntimeStatus,
 } from "../lib/operatorWarnings";
 
@@ -13,36 +15,38 @@ const REFRESH_MS = 30000;
 
 export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
   const [runtimeStatus, setRuntimeStatus] = useState(null);
-  const [accessDenied, setAccessDenied] = useState(false);
+  const [deniedUserIdentity, setDeniedUserIdentity] = useState(null);
   const [loading, setLoading] = useState(false);
+  const userIdentity = runtimeStatusUserIdentity(currentUser);
+  const canRead = userCanReadRuntimeStatus(currentUser);
 
   useEffect(() => {
     let cancelled = false;
     let timer = null;
 
     async function loadStatus() {
-      if (!enabled || !userCanReadRuntimeStatus(currentUser)) {
+      if (!enabled || !canRead) {
         if (!cancelled) {
           setRuntimeStatus(null);
-          setAccessDenied(!userCanReadRuntimeStatus(currentUser));
           setLoading(false);
         }
         return false;
       }
 
+      setDeniedUserIdentity((current) => current && current !== userIdentity ? null : current);
       setLoading(true);
       try {
         const data = await apiFetch("/system/runtime/status");
         if (!cancelled) {
           setRuntimeStatus(data);
-          setAccessDenied(false);
+          setDeniedUserIdentity(null);
         }
         return true;
       } catch (error) {
         if (!cancelled) {
           setRuntimeStatus(null);
           if (shouldStopRuntimeStatusPolling(error)) {
-            setAccessDenied(true);
+            setDeniedUserIdentity(userIdentity);
           }
         }
         return !shouldStopRuntimeStatusPolling(error);
@@ -63,39 +67,48 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [currentUser, enabled]);
+  }, [canRead, currentUser, enabled, userIdentity]);
 
   const summary = useMemo(
     () => runtimeStatus ? buildDashboardStatusSummary(runtimeStatus, { limit: 8 }) : null,
     [runtimeStatus]
   );
 
+  const accessDenied = Boolean(canRead && deniedUserIdentity && deniedUserIdentity === userIdentity);
+  const model = systemHealthIndicatorModel({
+    user: currentUser,
+    summary,
+    runtimeStatusKnown: runtimeStatus !== null,
+    permissionDenied: accessDenied,
+  });
+
   return {
     runtimeStatus,
     summary,
     loading,
     accessDenied,
-    canRead: userCanReadRuntimeStatus(currentUser),
-    hasProblems: Boolean(summary && summary.severity !== "ok"),
+    ...model,
   };
 }
 
-export default function SystemHealthIndicator({ currentUser, pathname, label }) {
+export default function SystemHealthIndicator({ currentUser, pathname, label, stateLabels = {} }) {
   const status = useSystemHealthStatus(currentUser);
 
-  if (!status.canRead || status.accessDenied) return null;
+  if (!status.visible) return null;
 
   const icon = status.hasProblems
     ? "/assets/icons/ui/system-status-alert.png"
     : "/assets/icons/ui/system-status-base.png";
+  const stateLabel = stateLabels[status.state] || label;
 
   return (
     <Link
       href="/system-status"
-      className={`topNavItem systemHealthNavItem ${pathname === "/system-status" ? "active" : ""} ${status.hasProblems ? "attention" : ""}`}
-      title={label}
-      aria-label={label}
-      data-health-state={status.hasProblems ? "problem" : "normal"}
+      className={`topNavItem systemHealthNavItem systemHealthNavItem-${status.state} ${pathname === "/system-status" ? "active" : ""} ${status.hasProblems ? "attention" : ""}`}
+      title={stateLabel}
+      aria-label={stateLabel}
+      aria-busy={status.loading || undefined}
+      data-health-state={status.state}
     >
       <img className="topNavIconImage" src={icon} alt="" />
     </Link>

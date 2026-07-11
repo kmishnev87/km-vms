@@ -6,18 +6,23 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
+from starlette.responses import FileResponse
 
-from app.core.config import settings
 from app.core.permissions import PERMISSION_VIEW_TIMELINE, user_has_permission
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL, get_db, require_permission
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
-from app.services.recording_storage import resolve_segment_file_path
+from app.services.recording_storage import (
+    archive_root_for_segment,
+    archive_root_runtime_access_state,
+    resolve_segment_file_path,
+    segment_archive_root_resolution,
+    segment_has_resolved_archive_root,
+)
 from app.services.timezone_contract import (
     ParsedTimestamp,
     TimezoneContext,
@@ -26,6 +31,7 @@ from app.services.timezone_contract import (
     timestamp_matches_filename,
     timezone_context,
 )
+from app.utils.video_stream import stream_video
 
 router = APIRouter(prefix="/chronology", tags=["chronology"])
 
@@ -47,24 +53,7 @@ PROBLEM_INTEGRITY_STATUSES = {
     "invalid_path",
     "path_outside_storage",
     "unreadable_file",
-    "storage_unavailable",
 }
-
-
-def _storage_root() -> Path:
-    return Path(settings.storage_root)
-
-
-def _safe_storage_relative_path(relative_path: str) -> str:
-    if not relative_path:
-        raise HTTPException(status_code=400, detail="Empty path")
-
-    root = _storage_root().resolve()
-    target = (root / relative_path).resolve()
-    try:
-        return target.relative_to(root).as_posix()
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid path")
 
 
 def _resolve_segment_path(segment: RecordingSegment, require_exists: bool = True) -> Path:
@@ -73,6 +62,16 @@ def _resolve_segment_path(segment: RecordingSegment, require_exists: bool = True
     db = object_session(segment)
     if db is None:
         raise HTTPException(status_code=500, detail="Recording metadata session unavailable")
+    try:
+        root = archive_root_for_segment(db, segment)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "recording_archive_root_unresolved", "category": segment_archive_root_resolution(segment)},
+        ) from exc
+    access = archive_root_runtime_access_state(root)
+    if access.get("read_access_state") != "available":
+        raise HTTPException(status_code=409, detail={"error": "recording_archive_root_unavailable", "problem": access.get("problem")})
     try:
         target = resolve_segment_file_path(db, segment, require_exists=require_exists)
     except FileNotFoundError:
@@ -175,6 +174,69 @@ def _segment_covering_timestamp(db: Session, *, camera_id: int, target: ParsedTi
     return None
 
 
+def _segment_root_id(segment: RecordingSegment) -> str:
+    if not segment_has_resolved_archive_root(segment) or not segment.archive_root_id:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "recording_archive_root_unresolved", "category": segment_archive_root_resolution(segment)},
+        )
+    return str(segment.archive_root_id)
+
+
+def _playback_ref(segment: RecordingSegment) -> str:
+    return f"segment:{int(segment.id)}:root:{_segment_root_id(segment)}"
+
+
+def _segment_by_identity(
+    db: Session,
+    *,
+    segment_id: int | None = None,
+    archive_root_id: str | None = None,
+    playback_ref: str | None = None,
+    camera_id: int | None = None,
+    rel_path: str | None = None,
+) -> RecordingSegment:
+    segment_id = segment_id if isinstance(segment_id, int) and not isinstance(segment_id, bool) else None
+    archive_root_id = archive_root_id if isinstance(archive_root_id, str) and archive_root_id else None
+    playback_ref = playback_ref if isinstance(playback_ref, str) and playback_ref else None
+    camera_id = camera_id if isinstance(camera_id, int) and not isinstance(camera_id, bool) else None
+    rel_path = rel_path if isinstance(rel_path, str) and rel_path else None
+    if playback_ref:
+        match = re.match(r"^segment:(\d+):root:([A-Za-z0-9_.-]+)$", str(playback_ref or ""))
+        if not match:
+            raise HTTPException(status_code=400, detail="Invalid playback reference")
+        segment_id = int(match.group(1))
+        archive_root_id = match.group(2)
+    if segment_id is not None:
+        segment = _finalized_segments_query(db).filter(RecordingSegment.id == int(segment_id)).first()
+        if not segment:
+            raise HTTPException(status_code=404, detail="Recording metadata not found")
+        segment_root_id = _segment_root_id(segment)
+        if archive_root_id and segment_root_id != str(archive_root_id):
+            raise HTTPException(status_code=404, detail="Recording root mismatch")
+        if camera_id is not None and int(segment.camera_id) != int(camera_id):
+            raise HTTPException(status_code=404, detail="Recording camera mismatch")
+        return segment
+    if rel_path and camera_id is not None:
+        normalized_path = rel_path.replace("\\", "/").lstrip("/")
+        matches = (
+            _finalized_segments_query(db)
+            .filter(
+                RecordingSegment.camera_id == camera_id,
+                RecordingSegment.relative_path == normalized_path,
+            )
+            .order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
+            .limit(2)
+            .all()
+        )
+        if not matches:
+            raise HTTPException(status_code=404, detail="Recording metadata not found")
+        if len(matches) > 1:
+            raise HTTPException(status_code=409, detail={"error": "chronology_path_ambiguous", "rel_path": normalized_path})
+        return matches[0]
+    raise HTTPException(status_code=400, detail="Playback identity required")
+
+
 def _clip_segment_to_range(
     segment: RecordingSegment,
     *,
@@ -269,13 +331,26 @@ def chronology_playback(
 
         try:
             file_path = _resolve_segment_path(segment)
-        except HTTPException:
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            if detail.get("error") == "recording_archive_root_unavailable":
+                availability_status = "root_unavailable"
+            elif detail.get("error") == "recording_archive_root_unresolved":
+                availability_status = "root_unresolved"
+            else:
+                availability_status = "unavailable"
+            resolved_root = bool(segment_has_resolved_archive_root(segment) and segment.archive_root_id)
             return {
                 "camera_id": camera_id,
+                "segment_id": segment.id,
+                "archive_root_id": str(segment.archive_root_id) if resolved_root else None,
+                "playback_ref": _playback_ref(segment) if resolved_root else None,
                 "has_video": False,
                 "file_url": None,
                 "rel_path": None,
                 "offset_sec": 0,
+                "availability_status": availability_status,
+                "problem": detail.get("problem") or detail.get("category"),
             }
 
         rel_path = segment.relative_path.replace("\\", "/").lstrip("/")
@@ -285,9 +360,11 @@ def chronology_playback(
         media_metadata = _segment_media_metadata(segment, file_path)
         return {
             "segment_id": segment.id,
+            "archive_root_id": _segment_root_id(segment),
+            "playback_ref": _playback_ref(segment),
             "camera_id": camera_id,
             "has_video": True,
-            "file_url": f"/api/chronology/file?camera_id={camera_id}&rel_path={rel_path}",
+            "file_url": f"/api/chronology/file?segment_id={segment.id}&archive_root_id={_segment_root_id(segment)}",
             "rel_path": rel_path,
             "offset_sec": offset_sec,
             "file_start": start_dt.isoformat(),
@@ -432,7 +509,7 @@ def chronology_download_current_recording(
         db,
         token=media_token,
         scope="chronology-download",
-        resource={"camera_id": camera_id, "segment_id": segment.id, "action": "download"},
+        resource=_chronology_download_resource(camera_id, segment),
         permission=PERMISSION_VIEW_TIMELINE,
         request=request,
         media_area="chronology-download",
@@ -475,7 +552,7 @@ def issue_chronology_download_token(
     token, expires_at = create_media_token(
         user=current_user,
         scope="chronology-download",
-        resource={"camera_id": camera_id, "segment_id": segment.id, "action": "download"},
+        resource=_chronology_download_resource(camera_id, segment),
     )
     response = media_token_response(token, expires_at)
     response.update(
@@ -488,69 +565,83 @@ def issue_chronology_download_token(
     return response
 
 
-def _chronology_media_resource(camera_id: int, rel_path: str) -> dict:
-    return {"camera_id": int(camera_id), "rel_path": rel_path.replace("\\", "/").lstrip("/")}
+def _chronology_media_resource(segment: RecordingSegment, action: str = "stream") -> dict:
+    return {
+        "segment_id": int(segment.id),
+        "archive_root_id": _segment_root_id(segment),
+        "action": action,
+    }
+
+
+def _chronology_download_resource(camera_id: int, segment: RecordingSegment) -> dict:
+    return {
+        "camera_id": int(camera_id),
+        "segment_id": int(segment.id),
+        "archive_root_id": _segment_root_id(segment),
+        "action": "download",
+    }
 
 
 @router.post("/media-token")
 def issue_chronology_media_token(
-    camera_id: int = Query(...),
-    rel_path: str = Query(...),
+    camera_id: int | None = Query(default=None),
+    rel_path: str | None = Query(default=None),
+    segment_id: int | None = Query(default=None),
+    archive_root_id: str | None = Query(default=None),
+    playback_ref: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_timeline")),
 ):
-    normalized_path = rel_path.replace("\\", "/").lstrip("/")
-    segment = (
-        _finalized_segments_query(db)
-        .filter(
-            RecordingSegment.camera_id == camera_id,
-            RecordingSegment.relative_path == normalized_path,
-        )
-        .order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
-        .first()
+    segment = _segment_by_identity(
+        db,
+        segment_id=segment_id,
+        archive_root_id=archive_root_id,
+        playback_ref=playback_ref,
+        camera_id=camera_id,
+        rel_path=rel_path,
     )
-    if not segment:
-        raise HTTPException(status_code=404, detail="Recording metadata not found")
     _resolve_segment_path(segment)
     token, expires_at = create_media_token(
         user=current_user,
         scope="chronology",
-        resource=_chronology_media_resource(camera_id, normalized_path),
+        resource=_chronology_media_resource(segment, "stream"),
     )
     return media_token_response(token, expires_at)
 
 
 @router.get("/file")
 def chronology_file(
-    camera_id: int = Query(...),
-    rel_path: str = Query(...),
+    camera_id: int | None = Query(default=None),
+    rel_path: str | None = Query(default=None),
+    segment_id: int | None = Query(default=None),
+    archive_root_id: str | None = Query(default=None),
+    playback_ref: str | None = Query(default=None),
     media_token: str = Query(...),
     db: Session = Depends(get_db),
     request: Request = None,
 ):
+    segment = _segment_by_identity(
+        db,
+        segment_id=segment_id,
+        archive_root_id=archive_root_id,
+        playback_ref=playback_ref,
+        camera_id=camera_id,
+        rel_path=rel_path,
+    )
     validate_media_token(
         db,
         token=media_token,
         scope="chronology",
-        resource=_chronology_media_resource(camera_id, rel_path),
+        resource=_chronology_media_resource(segment, "stream"),
         permission=PERMISSION_VIEW_TIMELINE,
         request=request,
         media_area="chronology",
     )
 
-    normalized_path = rel_path.replace("\\", "/").lstrip("/")
-    segment = (
-        _finalized_segments_query(db)
-        .filter(
-            RecordingSegment.camera_id == camera_id,
-            RecordingSegment.relative_path == normalized_path,
-        )
-        .order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
-        .first()
-    )
-    if not segment:
-        raise HTTPException(status_code=404, detail="Recording metadata not found")
-
     file_path = _resolve_segment_path(segment)
     media_metadata = _segment_media_metadata(segment, file_path)
-    return FileResponse(file_path, media_type=media_metadata["mime_type"] or "application/octet-stream", filename=file_path.name)
+    return stream_video(
+        request,
+        file_path,
+        media_type=media_metadata["mime_type"] or "application/octet-stream",
+    )

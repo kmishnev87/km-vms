@@ -127,8 +127,9 @@ def manifest(path: Path, **overrides):
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     reset_update_check_cache_for_tests()
-    for name in ["KMVMS_UPDATE_MANIFEST_PATH", "KMVMS_UPDATE_CHANNEL_ID", "KMVMS_BUILD_METADATA_FILE", "KMVMS_BUILD_ID", "KMVMS_INSTALL_SOURCE", "KMVMS_SOURCE_CHANNEL_ID"]:
+    for name in ["KMVMS_UPDATE_MANIFEST_PATH", "KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", "KMVMS_PUBLIC_RELEASE_PROVIDER", "KMVMS_UPDATE_CHANNEL_ID", "KMVMS_BUILD_METADATA_FILE", "KMVMS_BUILD_ID", "KMVMS_INSTALL_SOURCE", "KMVMS_SOURCE_CHANNEL_ID"]:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "0")
     yield
     reset_update_check_cache_for_tests()
 
@@ -172,6 +173,7 @@ def test_update_candidate_preflight_is_sanitized_and_apply_blocked(tmp_path, mon
     engine, db = sqlite_session(tmp_path)
     release = manifest(tmp_path / "release.json")
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(release))
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", "1")
     monkeypatch.setenv("KMVMS_UPDATE_CHANNEL_ID", "stable")
     monkeypatch.setenv("KMVMS_BUILD_ID", "stage13-current-build")
 
@@ -201,6 +203,7 @@ def test_update_apply_confirmation_and_release_reference_are_checked(tmp_path, m
     _engine, db = sqlite_session(tmp_path)
     release = manifest(tmp_path / "release.json")
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(release))
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", "1")
 
     with pytest.raises(UpdateMaintenanceBlocked) as confirm:
         apply_update_maintenance(db, confirm=False, release_id=UPDATE_RELEASE_ID)
@@ -215,6 +218,7 @@ def test_update_simulated_apply_requires_backup_before_any_apply_step(tmp_path, 
     _engine, db = sqlite_session(tmp_path)
     release = manifest(tmp_path / "release.json")
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_PATH", str(release))
+    monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", "1")
     order = []
 
     def fake_backup(*_args, **_kwargs):
