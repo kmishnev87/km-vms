@@ -13,9 +13,9 @@ from app.core.version import APP_BUILD_VERSION, APP_VERSION
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
 
 
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 3
 CURRENT_BASELINE_ID = "chapter06_stage4_baseline"
-CURRENT_MIGRATION_ID = f"{CURRENT_BASELINE_ID}_schema_v1"
+CURRENT_MIGRATION_ID = f"{CURRENT_BASELINE_ID}_schema_v{CURRENT_SCHEMA_VERSION}"
 CURRENT_STATE_ID = "current"
 SCHEMA_METADATA_TABLES = {"schema_version_state", "schema_migration_history"}
 BASELINE_MODEL_TABLES = {
@@ -29,10 +29,26 @@ BASELINE_MODEL_TABLES = {
     "recording_segments",
     "audit_events",
     "user_workspace_layouts",
+    "storage_operations",
+    "storage_worker_leases",
+    "storage_work_signals",
 }
 LEGACY_DB_ONLY_TABLES = {"recorder_runtime_status"}
-KNOWN_SAFE_MISSING_TABLES = {"setup_locks", "recorder_runtime_status", "user_workspace_layouts", "archive_export_jobs"}
-KNOWN_OPTIONAL_MISSING_TABLES = {"archive_export_jobs"}
+KNOWN_SAFE_MISSING_TABLES = {
+    "setup_locks",
+    "recorder_runtime_status",
+    "user_workspace_layouts",
+    "archive_export_jobs",
+    "storage_operations",
+    "storage_worker_leases",
+    "storage_work_signals",
+}
+KNOWN_OPTIONAL_MISSING_TABLES = {
+    "archive_export_jobs",
+    "storage_operations",
+    "storage_worker_leases",
+    "storage_work_signals",
+}
 KNOWN_CAMERA_NULLABLE_DRIFT_COLUMNS = {"segment_minutes", "retention_days", "storage_quota_gb"}
 KNOWN_SAFE_MISSING_COLUMNS = {"system_settings": {"system_name"}, "cameras": {"rtsp_host", "rtsp_port", "deleted_at"}}
 SAFE_STATUSES = {"current", "adopted_baseline", "drift_known_safe"}

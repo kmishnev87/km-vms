@@ -388,7 +388,7 @@ def test_archive_root_activation_persists_snapshot_before_worker_and_status_read
     db.add(active_job)
     ensure_archive_roots(db)
     target_root = add_archive_root(db, Path(settings.storage_root).parent / "switch-target", root_id="root_switch_target", active=False)
-    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda: None)
+    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(archive_root_activation, "list_camera_recording_states", lambda _db: [{
         "camera_id": camera.id,
         "camera_name": camera.name,
@@ -683,7 +683,7 @@ def test_archive_root_activation_ignores_stale_recording_job_without_runtime_evi
     )
     ensure_archive_roots(db)
     target_root = add_archive_root(db, Path(settings.storage_root).parent / "switch-target-stale", root_id="root_switch_stale", active=False)
-    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda: None)
+    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(archive_root_activation, "list_camera_recording_states", lambda _db: [{
         "camera_id": camera.id,
         "camera_name": camera.name,
@@ -1292,7 +1292,7 @@ def test_archive_root_activation_requests_runtime_switch_after_pausing_active_jo
     )
     db.commit()
 
-    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda: None)
+    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(archive_root_activation, "list_camera_recording_states", lambda _db: [{
         "camera_id": camera.id,
         "camera_name": camera.name,

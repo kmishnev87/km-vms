@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.sanitization import redact_text
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
+from app.models.system_settings import SystemSettings
 from app.models.user import User
 from app.services.audit_log import create_event
 from app.services.recording_operations import (
@@ -41,6 +42,20 @@ from app.services.system_settings import (
     get_system_settings,
 )
 from app.services.timezone_contract import retention_cutoff_storage, timezone_context, utc_now_storage
+from app.services.storage_operation_conflicts import (
+    DELETION_EXECUTION_TYPES,
+    StorageOperationLifecycle,
+    StorageOperationConflict,
+    claim_state_detail,
+    claim_operation_with_conflicts,
+    operation_instance_id,
+    terminal_replay_result,
+)
+from app.services.storage_operations_foundation import (
+    OperationHeartbeatController,
+    OperationHandle as StorageOperationHandle,
+    safe_reason_code,
+)
 
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
@@ -99,6 +114,17 @@ PROBLEM_INTEGRITY_STATUSES = {
     "unreadable_file",
     "storage_unavailable",
 }
+
+
+def _foundation_scope(scope: dict, segments: list[RecordingSegment]) -> dict:
+    scope_type = str(scope.get("type") or "segments")
+    return {
+        "global": scope_type == "all",
+        "root_ids": list(scope.get("root_ids") or [segment.archive_root_id for segment in segments if segment.archive_root_id]),
+        "camera_ids": list(scope.get("camera_ids") or [segment.camera_id for segment in segments]),
+        "segment_ids": list(scope.get("segment_ids") or [segment.id for segment in segments]),
+        "physical_volume_ids": [],
+    }
 
 
 def _now() -> datetime:
@@ -321,7 +347,7 @@ def low_disk_policy_status(db: Session, storage_summary: dict | None = None) -> 
         from app.services.storage_monitoring import build_storage_monitoring_summary
 
         storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=False, write_audit=False)
-    system = get_system_settings(db)
+    system = db.query(SystemSettings).order_by(SystemSettings.id.asc()).first()
     capacity = storage_summary.get("capacity") or {}
     free_percent = _free_percent(capacity)
     cleanup_enabled = bool(getattr(system, "auto_free_space_cleanup_enabled", False))
@@ -791,6 +817,8 @@ def execute_segments(
     operation_heartbeat: Callable[[], None] | None = None,
     operation_owner_token: str | None = None,
     expected_identities: dict[int, dict] | None = None,
+    outer_operation_handle: StorageOperationHandle | None = None,
+    manage_outer_operation: bool = True,
 ) -> dict:
     if policy not in {EXECUTION_POLICY_AUTOMATIC_BOUNDED, EXECUTION_POLICY_MANUAL_COMPLETE}:
         raise ValueError("invalid_recording_deletion_policy")
@@ -801,6 +829,105 @@ def execute_segments(
     for item in initial_items or []:
         result["requested_count"] += 1
         _add_item(result, dict(item))
+
+    common_scope = _foundation_scope(normalized_scope, segment_list)
+    has_common_scope = bool(
+        common_scope.get("global")
+        or common_scope.get("root_ids")
+        or common_scope.get("camera_ids")
+        or common_scope.get("segment_ids")
+    )
+    if manage_outer_operation and outer_operation_handle is None and has_common_scope:
+        try:
+            coordinator_operation = operation if operation in DELETION_EXECUTION_TYPES else "retention_run"
+            claimed_outer = claim_operation_with_conflicts(
+                db,
+                operation_type=coordinator_operation,
+                scope=common_scope,
+                request_identity={"operation_id": operation_id, "scope": normalized_scope},
+                actor=actor,
+                system_owner=None if actor is not None else coordinator_operation,
+                operation_id=operation_id,
+                idempotency_key=operation_id,
+                owner_instance_id=operation_instance_id(coordinator_operation),
+            )
+        except StorageOperationConflict as exc:
+            _add_item(result, _item(None, action="skipped", reason=str(exc.detail.get("reason_code") or "storage_operation_conflict")))
+            result["retryable"] = bool(exc.detail.get("retryable", True))
+            result["conflict"] = dict(exc.detail)
+            finished = _finish(result)
+            _write_terminal_execution_audit(db, actor, finished, write_terminal_audit=write_terminal_audit)
+            return finished
+        if claimed_outer.get("state") == "terminal":
+            return terminal_replay_result(claimed_outer)
+        if claimed_outer.get("state") != "claimed":
+            detail = claim_state_detail(claimed_outer)
+            _add_item(result, _item(None, action="skipped", reason=str(detail["reason_code"])))
+            result["retryable"] = True
+            finished = _finish(result)
+            _write_terminal_execution_audit(db, actor, finished, write_terminal_audit=write_terminal_audit)
+            return finished
+        managed_lifecycle = StorageOperationLifecycle(
+            db,
+            claimed_outer["handle"],
+            failure_reason="storage_deletion_execution_failed",
+        )
+        managed_handle = managed_lifecycle.handle
+        try:
+            finished = execute_segments(
+                db,
+                segment_list,
+                actor=actor,
+                operation=operation,
+                reason=reason,
+                max_candidates=max_candidates,
+                max_bytes=max_bytes,
+                policy=policy,
+                operation_id=operation_id,
+                scope=normalized_scope,
+                scope_lease=scope_lease,
+                initial_items=initial_items,
+                write_terminal_audit=write_terminal_audit,
+                write_item_audit=write_item_audit,
+                operation_heartbeat=operation_heartbeat,
+                operation_owner_token=operation_owner_token,
+                expected_identities=expected_identities,
+                outer_operation_handle=managed_handle,
+                manage_outer_operation=False,
+            )
+            managed_lifecycle.finish_result(
+                finished,
+                progress={
+                    "planned_count": int(finished.get("planned_count") or 0),
+                    "completed_count": int(finished.get("deleted_count") or 0),
+                    "failed_count": int(finished.get("failed_count") or 0),
+                    "skipped_count": int(finished.get("skipped_count") or 0),
+                    "completed_bytes": int(finished.get("bytes_freed") or 0),
+                },
+                reason_code=safe_reason_code((finished.get("warnings") or [None])[0]),
+                retry_allowed=bool(finished.get("retryable")),
+                retry_mode="immediate" if finished.get("retryable") else None,
+            )
+            return finished
+        except Exception as exc:
+            if not managed_lifecycle.terminalized:
+                managed_lifecycle.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+
+    outer_heartbeat = (
+        OperationHeartbeatController(db.get_bind(), outer_operation_handle)
+        if outer_operation_handle is not None
+        else None
+    )
+
+    def touch_outer() -> None:
+        if outer_heartbeat is not None:
+            outer_heartbeat.touch()
+
+    def combined_heartbeat(callback: Callable[[], None] | None = None) -> None:
+        if callback is not None:
+            callback()
+        touch_outer()
 
     if scope_lease is None:
         try:
@@ -825,7 +952,7 @@ def execute_segments(
                             scope_lease=owned_lease,
                             write_terminal_audit=write_terminal_audit,
                             write_item_audit=write_item_audit,
-                            operation_heartbeat=heartbeat.progress,
+                            operation_heartbeat=lambda: combined_heartbeat(heartbeat.progress),
                             operation_owner_token=operation_owner_token,
                             expected_identities=expected_identities,
                         )
@@ -843,7 +970,7 @@ def execute_segments(
                     scope_lease=owned_lease,
                     write_terminal_audit=write_terminal_audit,
                     write_item_audit=write_item_audit,
-                    operation_heartbeat=operation_heartbeat,
+                    operation_heartbeat=lambda: combined_heartbeat(operation_heartbeat),
                     operation_owner_token=None,
                     expected_identities=expected_identities,
                 )
@@ -875,7 +1002,7 @@ def execute_segments(
         scope_lease=scope_lease,
         write_terminal_audit=write_terminal_audit,
         write_item_audit=write_item_audit,
-        operation_heartbeat=operation_heartbeat,
+        operation_heartbeat=lambda: combined_heartbeat(operation_heartbeat),
         operation_owner_token=operation_owner_token,
         expected_identities=expected_identities,
     )
@@ -1488,6 +1615,7 @@ def run_auto_free_space_cleanup_once(
     actor: User | None = None,
     max_candidates: int | None = None,
     max_bytes: int | None = None,
+    operation_heartbeat: Callable[[], None] | None = None,
 ) -> dict:
     max_candidates = min(int(max_candidates or AUTO_RETENTION_DEFAULT_MAX_CANDIDATES), HARD_MAX_CANDIDATES)
     max_bytes = min(int(max_bytes or AUTO_RETENTION_DEFAULT_MAX_BYTES), HARD_MAX_BYTES)
@@ -1495,6 +1623,8 @@ def run_auto_free_space_cleanup_once(
         from app.services.storage_monitoring import build_storage_monitoring_summary
 
         storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=False, write_audit=False)
+    if operation_heartbeat is not None:
+        operation_heartbeat()
     policy = apply_critical_low_disk_protection(db, storage_summary, actor=actor)
     trigger = "critical_low_disk" if policy["state"] == "critical" else "low_disk"
     started_at = _now()
@@ -1553,6 +1683,8 @@ def run_auto_free_space_cleanup_once(
                 },
             )
             with RetentionApplyLock():
+                if operation_heartbeat is not None:
+                    operation_heartbeat()
                 selected, bounded = _auto_free_space_bounded_subset(
                     db,
                     max_candidates=max_candidates,
@@ -1574,6 +1706,7 @@ def run_auto_free_space_cleanup_once(
                         reason=trigger,
                         max_candidates=max_candidates,
                         max_bytes=effective_max_bytes,
+                        operation_heartbeat=operation_heartbeat,
                     )
                     safety_skipped_items = bounded.pop("bounded_safety_skipped_items", [])
                     return_result.update(bounded)
@@ -1645,6 +1778,7 @@ def run_automatic_retention_once(
     *,
     max_candidates: int | None = None,
     max_bytes: int | None = None,
+    operation_heartbeat: Callable[[], None] | None = None,
 ) -> dict:
     max_candidates = min(int(max_candidates or AUTO_RETENTION_DEFAULT_MAX_CANDIDATES), HARD_MAX_CANDIDATES)
     max_bytes = min(int(max_bytes or AUTO_RETENTION_DEFAULT_MAX_BYTES), HARD_MAX_BYTES)
@@ -1678,6 +1812,8 @@ def run_automatic_retention_once(
         )
         try:
             with RetentionApplyLock():
+                if operation_heartbeat is not None:
+                    operation_heartbeat()
                 selected, bounded = _automatic_retention_bounded_subset(
                     db,
                     max_candidates=max_candidates,
@@ -1694,6 +1830,7 @@ def run_automatic_retention_once(
                     reason="automatic_retention_policy",
                     max_candidates=max_candidates,
                     max_bytes=effective_max_bytes,
+                    operation_heartbeat=operation_heartbeat,
                 )
                 safety_skipped_items = bounded.pop("bounded_safety_skipped_items", [])
                 result.update(bounded)

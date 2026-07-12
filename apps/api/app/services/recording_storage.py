@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from app.core.config import settings
 from sqlalchemy import or_
@@ -943,12 +943,34 @@ def _migration_plan_id(rows: list[dict], target_root_id: str | None) -> str:
     return sha256(str(payload).encode("utf-8")).hexdigest()[:24]
 
 
-def _file_checksum(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+def _file_checksum(
+    path: Path,
+    *,
+    chunk_size: int = 1024 * 1024,
+    progress_callback: Callable[[], None] | None = None,
+) -> str:
     digest = sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(chunk_size), b""):
             digest.update(chunk)
+            if progress_callback is not None:
+                progress_callback()
     return digest.hexdigest()
+
+
+def _copy_file_with_progress(
+    source_path: Path,
+    target_path: Path,
+    *,
+    progress_callback: Callable[[], None] | None = None,
+    chunk_size: int = 1024 * 1024,
+) -> None:
+    with source_path.open("rb") as source, target_path.open("xb") as target:
+        for chunk in iter(lambda: source.read(chunk_size), b""):
+            target.write(chunk)
+            if progress_callback is not None:
+                progress_callback()
+    shutil.copystat(source_path, target_path)
 
 
 def _stable_file_stat(path: Path) -> dict:
@@ -1000,7 +1022,14 @@ def _copy_failure_report(reason: str, *, copy_finalized: bool, verified_bytes: i
     }
 
 
-def _verified_copy_to_final(source_path: Path, target_path: Path, target_root, item: dict) -> dict:
+def _verified_copy_to_final(
+    source_path: Path,
+    target_path: Path,
+    target_root,
+    item: dict,
+    *,
+    progress_callback: Callable[[], None] | None = None,
+) -> dict:
     target_root_path = _root_path(target_root).resolve()
     target_parent = target_path.parent.resolve(strict=False)
     target_parent.relative_to(target_root_path)
@@ -1019,15 +1048,28 @@ def _verified_copy_to_final(source_path: Path, target_path: Path, target_root, i
 
     temp_created = False
     try:
-        source_checksum = _file_checksum(source_path)
-        shutil.copy2(source_path, temp_path)
-        temp_created = True
+        source_checksum = (
+            _file_checksum(source_path, progress_callback=progress_callback)
+            if progress_callback is not None
+            else _file_checksum(source_path)
+        )
+        try:
+            if progress_callback is None:
+                shutil.copy2(source_path, temp_path)
+            else:
+                _copy_file_with_progress(source_path, temp_path, progress_callback=progress_callback)
+        finally:
+            temp_created = temp_path.exists()
         if not temp_path.exists() or not temp_path.is_file():
             raise RuntimeError("verification_unavailable")
         temp_stat = _stable_file_stat(temp_path)
         if int(temp_stat["size_bytes"]) != int(item["size_bytes"]):
             raise RuntimeError("copy_size_mismatch")
-        temp_checksum = _file_checksum(temp_path)
+        temp_checksum = (
+            _file_checksum(temp_path, progress_callback=progress_callback)
+            if progress_callback is not None
+            else _file_checksum(temp_path)
+        )
         if source_checksum != temp_checksum:
             raise RuntimeError("checksum_mismatch")
         source_stat_after = _stable_file_stat(source_path)
@@ -1045,7 +1087,11 @@ def _verified_copy_to_final(source_path: Path, target_path: Path, target_root, i
                 "final_verification_failed",
                 _copy_failure_report("final_verification_failed", copy_finalized=True, verified_bytes=final_stat["size_bytes"]),
             )
-        final_checksum = _file_checksum(target_path)
+        final_checksum = (
+            _file_checksum(target_path, progress_callback=progress_callback)
+            if progress_callback is not None
+            else _file_checksum(target_path)
+        )
         if final_checksum != source_checksum:
             raise StorageMigrationCopyError(
                 "final_checksum_mismatch",
@@ -1074,7 +1120,12 @@ def _verified_copy_to_final(source_path: Path, target_path: Path, target_root, i
         raise
 
 
-def storage_migration_apply_plan(db: Session, *, target_root_id: str | None = None) -> dict:
+def storage_migration_apply_plan(
+    db: Session,
+    *,
+    target_root_id: str | None = None,
+    progress_callback: Callable[[], None] | None = None,
+) -> dict:
     from app.models.recording import RecordingJob, RecordingSegment
 
     roots = list_archive_roots(db)
@@ -1090,6 +1141,8 @@ def storage_migration_apply_plan(db: Session, *, target_root_id: str | None = No
 
     root_by_id = {getattr(root, "id", None): root for root in roots}
     for root in roots:
+        if progress_callback is not None:
+            progress_callback()
         if target is not None and root.id != target.id:
             blockers.extend(_archive_root_safety(root, require_writable=False))
             if _roots_overlap(root, target):
@@ -1099,6 +1152,8 @@ def storage_migration_apply_plan(db: Session, *, target_root_id: str | None = No
         blockers.append({"reason": "target_root_missing", "count": 1})
 
     for segment in db.query(RecordingSegment).order_by(RecordingSegment.id.asc()).all():
+        if progress_callback is not None:
+            progress_callback()
         if not segment_has_resolved_archive_root(segment):
             blockers.append({"reason": segment_archive_root_resolution(segment), "segment_id": int(segment.id), "count": 1})
             continue
@@ -1181,10 +1236,20 @@ def storage_migration_apply_plan(db: Session, *, target_root_id: str | None = No
     }
 
 
-def apply_storage_migration(db: Session, *, target_root_id: str | None = None, expected_plan_id: str | None = None) -> dict:
+def apply_storage_migration(
+    db: Session,
+    *,
+    target_root_id: str | None = None,
+    expected_plan_id: str | None = None,
+    progress_callback: Callable[[], None] | None = None,
+) -> dict:
     from app.models.recording import ArchiveRoot, RecordingSegment
 
-    plan = storage_migration_apply_plan(db, target_root_id=target_root_id)
+    plan = storage_migration_apply_plan(
+        db,
+        target_root_id=target_root_id,
+        progress_callback=progress_callback,
+    )
     if expected_plan_id and expected_plan_id != plan["plan_id"]:
         plan["blockers"].append({"reason": "stale_or_tampered_plan", "count": 1})
         plan["apply_available"] = False
@@ -1206,6 +1271,8 @@ def apply_storage_migration(db: Session, *, target_root_id: str | None = None, e
     executed: list[dict] = []
     try:
         for item in plan["_internal_items"]:
+            if progress_callback is not None:
+                progress_callback()
             source_root = db.get(ArchiveRoot, item["source_root_id"])
             target_root = db.get(ArchiveRoot, item["target_root_id"])
             segment = db.get(RecordingSegment, item["segment_id"])
@@ -1216,7 +1283,13 @@ def apply_storage_migration(db: Session, *, target_root_id: str | None = None, e
             if int(current_stat.st_size) != item["size_bytes"] or int(current_stat.st_mtime_ns) != item["mtime_ns"]:
                 raise RuntimeError("source_file_changed_after_plan")
             target_path = safe_resolve_relative_for_root(item["relative_path"], target_root)
-            verification = _verified_copy_to_final(source_path, target_path, target_root, item)
+            verification = _verified_copy_to_final(
+                source_path,
+                target_path,
+                target_root,
+                item,
+                progress_callback=progress_callback,
+            )
             segment.archive_root_id = item["target_root_id"]
             segment.relative_path = item["relative_path"]
             segment.file_path = item["relative_path"]

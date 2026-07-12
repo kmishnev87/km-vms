@@ -18,7 +18,11 @@ from app.services.schema_migrations import (
     MIGRATION_SOURCE,
     MigrationDefinition,
     MigrationRegistry,
+    PRODUCTION_MIGRATIONS,
     SchemaMigrationBlocked,
+    STAGE4101_STORAGE_FOUNDATION_MIGRATION,
+    STAGE41011_OPERATION_LINEAGE_MIGRATION,
+    STAGE4101_TABLES,
     build_migration_plan,
     execute_migration_plan,
 )
@@ -62,7 +66,7 @@ def pg_safe_migration():
     return MigrationDefinition(
         migration_id="stage3_pg_test_safe_metadata",
         from_version=0,
-        to_version=1,
+        to_version=CURRENT_SCHEMA_VERSION,
         description="PostgreSQL test-only metadata migration.",
         risk=RISK_METADATA_ONLY,
         transaction_mode="session_transaction",
@@ -78,7 +82,7 @@ def pg_risky_migration(risk):
     return MigrationDefinition(
         migration_id=f"stage3_pg_test_{risk}",
         from_version=0,
-        to_version=1,
+        to_version=CURRENT_SCHEMA_VERSION,
         description="PostgreSQL test-only blocked risk migration.",
         risk=risk,
         transaction_mode="manual_boundary",
@@ -97,7 +101,7 @@ def pg_failing_migration():
     return MigrationDefinition(
         migration_id="stage3_pg_test_failure",
         from_version=0,
-        to_version=1,
+        to_version=CURRENT_SCHEMA_VERSION,
         description="PostgreSQL test-only failure migration.",
         risk=RISK_METADATA_ONLY,
         transaction_mode="session_transaction",
@@ -135,6 +139,31 @@ def test_postgres_lower_safe_migration_executes_once(pg_session):
     assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == CURRENT_SCHEMA_VERSION
     assert db.query(SchemaMigrationHistory).filter(SchemaMigrationHistory.migration_id == "stage3_pg_test_safe_metadata").count() == 1
     assert schema_version_status(db)["status"] == "current"
+
+
+def test_postgres_stage4101_additive_tables_upgrade_from_v1_and_restart(pg_session):
+    engine, db = pg_session
+    Base.metadata.create_all(bind=engine)
+    for table in reversed(STAGE4101_TABLES):
+        table.drop(bind=engine, checkfirst=True)
+    db.query(SchemaMigrationHistory).delete()
+    db.query(SchemaVersionState).delete()
+    db.commit()
+    seed_state(db, version=1)
+
+    first = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS)
+    second = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS)
+    inspector = inspect(engine)
+
+    assert first["executed_migrations"] == [
+        STAGE4101_STORAGE_FOUNDATION_MIGRATION.migration_id,
+        STAGE41011_OPERATION_LINEAGE_MIGRATION.migration_id,
+    ]
+    assert second["executed_migrations"] == []
+    assert all(inspector.has_table(table.name) for table in STAGE4101_TABLES)
+    operation_columns = {item["name"] for item in inspector.get_columns("storage_operations")}
+    assert {"parent_snapshot", "retry_depth"}.issubset(operation_columns)
+    assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == CURRENT_SCHEMA_VERSION
 
 
 def test_postgres_future_unknown_incomplete_and_read_only_plan(pg_session):

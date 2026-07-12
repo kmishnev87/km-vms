@@ -1021,7 +1021,7 @@ export default function CamerasPage() {
     setBusy(true);
     try {
       const result = await apiFetch(
-        `/cameras/${cameraToDelete.id}?delete_files=${deleteFiles ? "true" : "false"}`,
+        `/cameras/${cameraToDelete.id}?delete_files=${deleteFiles ? "true" : "false"}&operation_id=${encodeURIComponent(newCameraDeleteOperationId())}`,
         { method: "DELETE" }
       );
       closeDeleteModal();
@@ -1606,4 +1606,10 @@ export default function CamerasPage() {
       </div>
     </Layout>
   );
+}
+function newCameraDeleteOperationId() {
+  const randomPart = globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID().replaceAll("-", "")
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`;
+  return `camera-delete-${randomPart}`;
 }

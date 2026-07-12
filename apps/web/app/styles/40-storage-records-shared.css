@@ -2526,7 +2526,7 @@
 
 .storageOpsRootList {
   display: grid;
-  gap: 6px;
+  gap: var(--storage-root-spacing, 10px);
 }
 
 .storageOpsRootListRow {
@@ -2614,15 +2614,27 @@
 
 .storageOpsRootActivateButton,
 .storageOpsRootDeleteButton {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   border: 1px solid #cbd5e1;
   border-radius: 999px;
   background: #fff;
   color: #64748b;
+  font: inherit;
+  line-height: 1;
   cursor: pointer;
+}
+
+.storageOpsRootActivateButton {
+  border-width: 2px;
+  border-color: #cbd5e1;
+  background: #fff;
+  color: #94a3b8;
 }
 
 .storageOpsRootActivateButton:disabled,
@@ -2632,9 +2644,9 @@
 }
 
 .storageOpsRootActivateButton.isActive {
-  border-color: #86efac;
-  background: #dcfce7;
-  color: #15803d;
+  border-color: #9ee4ba;
+  background: #ecfdf3;
+  color: #178449;
   opacity: 1;
 }
 
@@ -2661,26 +2673,22 @@
 }
 
 .storageOpsCheckIcon {
-  position: relative;
-  display: block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 16px;
   height: 16px;
-}
-
-.storageOpsCheckIcon span {
-  position: absolute;
-  left: 3px;
-  top: 2px;
-  width: 8px;
-  height: 12px;
-  border: solid currentColor;
-  border-width: 0 3px 3px 0;
-  transform: rotate(45deg);
+  color: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .storageOpsTrashIcon {
+  display: block;
   width: 16px;
   height: 16px;
+  margin: 0;
   color: inherit;
 }
 
@@ -3054,6 +3062,7 @@
 }
 
 .storageOpsSection-roots {
+  --storage-root-spacing: 10px;
   padding: 0;
   overflow: hidden;
 }
@@ -3065,11 +3074,13 @@
 }
 
 .storageOpsSection-roots > .storageOpsRootList {
-  margin-top: 10px;
+  margin-top: var(--storage-root-spacing);
 }
 
 .storageOpsSection-roots > .storageOpsAdvancedRoot {
-  margin-bottom: 12px;
+  margin-top: var(--storage-root-spacing);
+  margin-bottom: var(--storage-root-spacing);
+  padding-top: var(--storage-root-spacing);
 }
 
 .storageOpsAdvancedRoot > summary {
@@ -3104,8 +3115,9 @@
 }
 
 .storageOpsRootListRow > div:not(.storageOpsRootPath):not(.storageOpsRootActionsCell):not(.storageOpsRootDeleteCell) {
-  grid-template-rows: 14px 18px;
+  grid-template-rows: 14px 30px;
   align-content: center;
+  align-items: center;
 }
 
 .storageOpsAdvancedRoot .storageOpsRootAddButton,

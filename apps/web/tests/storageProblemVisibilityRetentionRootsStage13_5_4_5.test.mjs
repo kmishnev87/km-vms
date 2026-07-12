@@ -54,7 +54,8 @@ assert.match(page, /storageOpsRootDeleteButton/, "inactive archive roots must ex
 assert.match(page, /function TrashIcon\(\)/, "archive root delete action must use the same trash icon pattern as Recordings");
 assert.match(page, /storageOpsRootDeleteCell/, "archive root delete action must live in its own root-row column");
 assert.match(page, /disabled=\{active \|\| !!rootAction \|\| !retentionPermission\.allowed\}/, "active archive root must show a disabled trash action");
-assert.match(page, /deleteRoot\(root\.id\)/, "archive root delete confirmation must call the delete flow");
+assert.match(page, /deleteRoot\(root\.id, newStorageOperationId\("archive-root-delete"\)\)/, "archive root delete confirmation must call the idempotent delete flow");
+assert.match(page, /operation_id: operationId \|\| null/, "archive root delete must send its stable operation identity");
 assert.match(page, /archiveRootStateText\(root, copy\)/, "root row must show an explicit active/inactive state");
 assert.doesNotMatch(page, /<span>\{copy\.active\}<\/span>/, "action column must not duplicate active state text above the check icon");
 assert.doesNotMatch(page, /storageOpsDeleteIcon|>×<\/span>/, "archive root delete action must not use a raw x icon");

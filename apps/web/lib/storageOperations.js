@@ -671,7 +671,7 @@ export function humanBlockerReason(reason, language = "ru") {
   return labels[code]?.[language] || labels[code]?.ru || statusLabel("unknown", language);
 }
 
-export function storageTopHealthModel({ operations = {}, pathHealth = {}, capacity = {}, policy = {}, reconciliation = {}, migrationPreview = {}, retention = {} } = {}, language = "ru") {
+export function storageTopHealthModel({ operations = {}, pathHealth = {}, capacity = {}, policy = {}, reconciliation = {}, retention = {} } = {}, language = "ru") {
   const labels = {
     ru: {
       unavailable: "Корень архива недоступен. Проверьте подключение NAS, путь и права доступа.",
@@ -682,6 +682,7 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
       integrity: "Запустите проверку целостности и разберите найденные проблемы.",
       retention: "Сделайте предпросмотр регламента хранения перед удалением.",
       migration: "Перенос заблокирован активной записью; выполните его позже.",
+      interruptedOperation: "Предыдущая операция с архивом прервалась. Обновите состояние и повторяйте действие только после проверки результата.",
       stale: "Обновите состояние хранилища перед действиями.",
       unknown: "Дождитесь проверки состояния: не хватает фактов для безопасного действия.",
       ok: "Немедленных действий не требуется.",
@@ -695,6 +696,7 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
       integrity: "Run integrity check and review detected problems.",
       retention: "Preview retention before deleting anything.",
       migration: "Migration is blocked by active recording; run it later.",
+      interruptedOperation: "A previous archive operation was interrupted. Refresh the state and retry only after checking its result.",
       stale: "Refresh storage state before actions.",
       unknown: "Wait for storage checks: facts are incomplete.",
       ok: "No immediate action is required.",
@@ -708,14 +710,13 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
       integrity: "请运行完整性检查并处理发现的问题。",
       retention: "删除前请先预览保留规则。",
       migration: "迁移被活动录像阻止；请稍后执行。",
+      interruptedOperation: "上一个归档操作已中断。请刷新状态并确认结果后再重试。",
       stale: "操作前请刷新存储状态。",
       unknown: "等待存储检查完成：安全操作所需事实不完整。",
       ok: "当前无需立即操作。",
     },
   };
   const text = labels[language] || labels.ru;
-  const blockers = Array.isArray(migrationPreview?.blockers) ? migrationPreview.blockers : [];
-  const hasActiveRecordingBlocker = blockers.some((item) => reasonCode(item) === "active_recording_jobs");
   let status = "ok";
   let tone = "ok";
   let reason = text.ok;
@@ -750,21 +751,26 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
     tone = policy?.state === "critical" || policy?.recording_suspended_by_low_disk ? "error" : "warning";
     reason = text.lowDisk;
     nextStep = text.lowDisk;
+  } else if (Array.isArray(operations?.interrupted_operations) && operations.interrupted_operations.length > 0) {
+    status = "operation_interrupted";
+    tone = "warning";
+    reason = text.interruptedOperation;
+    nextStep = text.interruptedOperation;
   } else if (Number(reconciliation?.problem_file_count || 0) > 0 || Number(reconciliation?.cleanup_candidate_count || 0) > 0) {
     status = "reconciliation";
     tone = "warning";
     reason = text.integrity;
     nextStep = text.integrity;
+  } else if (["missing", "unknown", "not_checked", "stale", "metadata_only"].includes(String(reconciliation?.evidence_status || "missing"))) {
+    status = "unknown";
+    tone = "unknown";
+    reason = text.unknown;
+    nextStep = text.unknown;
   } else if (retention?.last_status === "failed") {
     status = "retention_failed";
     tone = "warning";
     reason = text.retention;
     nextStep = text.retention;
-  } else if (hasActiveRecordingBlocker) {
-    status = "migration_blocked";
-    tone = "warning";
-    reason = humanBlockerReason("active_recording_jobs", language);
-    nextStep = text.migration;
   } else if (operations?.stale || operations?.status === "stale") {
     status = "stale";
     tone = "unknown";

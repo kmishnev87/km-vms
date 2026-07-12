@@ -17,6 +17,7 @@ from app.db.session import Base
 from app.models.audit_event import AuditEvent
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
+from app.models.storage_operation import StorageOperation
 from app.models.user import User
 import app.routers.cameras as cameras_module
 from app.routers.cameras import (
@@ -178,6 +179,94 @@ def add_segment(
     return segment, path
 
 
+def seed_terminal_camera_delete_operation(
+    db,
+    camera,
+    *,
+    operation_id,
+    terminal_status,
+    reason_code,
+    next_action,
+    retry_mode,
+    retry_allowed,
+):
+    current_actor = actor("owner")
+    claim = cameras_module.claim_operation_with_conflicts(
+        db,
+        operation_type="camera_delete_with_files",
+        scope=cameras_module.camera_delete_operation_scope(camera, []),
+        request_identity={"camera_id": camera.id, "delete_files": True},
+        actor=current_actor,
+        operation_id=operation_id,
+        idempotency_key=operation_id,
+        owner_instance_id=cameras_module.operation_instance_id("camera-delete-test"),
+    )
+    assert claim["state"] == "claimed"
+    lifecycle = cameras_module.StorageOperationLifecycle(
+        db,
+        claim["handle"],
+        failure_reason="camera_delete_with_files_failed",
+    )
+    lifecycle.finish(
+        status=terminal_status,
+        result={"status": terminal_status},
+        reason_code=reason_code,
+        next_action=next_action,
+        retry_mode=retry_mode,
+        retry_allowed=retry_allowed,
+    )
+    return current_actor
+
+
+def assert_unremoved_camera_terminal_replay(
+    db,
+    *,
+    terminal_status,
+    reason_code,
+    next_action,
+    retry_mode,
+    retry_allowed,
+):
+    camera = add_camera(db, name=f"stage41012_camera_{terminal_status}_replay")
+    operation_id = f"stage41012-camera-delete-{terminal_status}-replay"
+    current_actor = seed_terminal_camera_delete_operation(
+        db,
+        camera,
+        operation_id=operation_id,
+        terminal_status=terminal_status,
+        reason_code=reason_code,
+        next_action=next_action,
+        retry_mode=retry_mode,
+        retry_allowed=retry_allowed,
+    )
+    operation_count = db.query(StorageOperation).count()
+    audit_count = db.query(AuditEvent).count()
+
+    replay = delete_camera(
+        camera.id,
+        FakeRequest(),
+        delete_files=True,
+        operation_id=operation_id,
+        db=db,
+        current_user=current_actor,
+    )
+
+    assert replay["status"] == terminal_status
+    assert replay["ok"] is False
+    assert replay["camera_removed"] is False
+    assert replay["replayed"] is True
+    assert replay["reason_code"] == reason_code
+    assert replay["next_action"] == next_action
+    assert replay["retry_mode"] == retry_mode
+    assert replay["retry_allowed"] is retry_allowed
+    assert replay["cancel_allowed"] is False
+    assert replay["recordings"]["status"] == terminal_status
+    assert replay["recordings"]["camera_removed"] is False
+    assert db.get(Camera, camera.id).deleted_at is None
+    assert db.query(StorageOperation).count() == operation_count
+    assert db.query(AuditEvent).count() == audit_count
+
+
 def test_camera_delete_without_files_removes_camera_and_retains_recordings(db):
     camera = add_camera(db)
     segment, file_path = add_segment(db, camera)
@@ -228,6 +317,220 @@ def test_camera_delete_with_files_uses_safe_model_and_returns_summary(db):
     remaining = db.get(RecordingSegment, segment.id)
     if remaining is not None:
         assert remaining.status == "deleted"
+
+
+def test_camera_delete_with_files_terminal_replay_does_not_delete_twice(db):
+    camera = add_camera(db, name="stage41011_camera_replay")
+    _segment, file_path = add_segment(db, camera)
+    operation_id = "stage41011-camera-delete-replay"
+
+    first = delete_camera(
+        camera.id,
+        FakeRequest(),
+        delete_files=True,
+        operation_id=operation_id,
+        db=db,
+        current_user=actor("owner"),
+    )
+    audit_count_after_first = db.query(AuditEvent).count()
+    second = delete_camera(
+        camera.id,
+        FakeRequest(),
+        delete_files=True,
+        operation_id=operation_id,
+        db=db,
+        current_user=actor("owner"),
+    )
+
+    assert first["status"] == "deleted"
+    assert "replayed" not in first
+    assert second["status"] == "deleted"
+    assert second["ok"] is True
+    assert second["camera_removed"] is True
+    assert second["replayed"] is True
+    assert second["camera_name"] == first["camera_name"]
+    assert second["delete_files"] == first["delete_files"]
+    assert second["preview_cleanup"] == first["preview_cleanup"]
+    assert second["recordings"]["replayed"] is True
+    assert not file_path.exists()
+    operation = db.query(StorageOperation).filter(StorageOperation.operation_type == "camera_delete_with_files").one()
+    assert operation.status == "completed"
+    assert db.query(AuditEvent).count() == audit_count_after_first
+
+
+def test_camera_delete_partial_cleanup_terminal_replay_preserves_product_truth(db):
+    camera = add_camera(db, name="stage41012_camera_partial_replay")
+    _segment, file_path = add_segment(db, camera, ownership="third_party")
+    operation_id = "stage41012-camera-delete-partial-replay"
+
+    first = delete_camera(
+        camera.id,
+        FakeRequest(),
+        delete_files=True,
+        operation_id=operation_id,
+        db=db,
+        current_user=actor("owner"),
+    )
+    audit_count_after_first = db.query(AuditEvent).count()
+    second = delete_camera(
+        camera.id,
+        FakeRequest(),
+        delete_files=True,
+        operation_id=operation_id,
+        db=db,
+        current_user=actor("owner"),
+    )
+
+    assert first["status"] == "deleted_archive_cleanup_partial"
+    assert "replayed" not in first
+    assert second["status"] == "deleted_archive_cleanup_partial"
+    assert second["ok"] is True
+    assert second["camera_removed"] is True
+    assert second["replayed"] is True
+    assert second["camera_name"] == first["camera_name"]
+    assert second["recordings"]["reason_counts"] == first["recordings"]["reason_counts"]
+    assert second["warnings"] == first["warnings"]
+    assert file_path.exists()
+    operation = db.query(StorageOperation).filter(StorageOperation.operation_type == "camera_delete_with_files").one()
+    assert operation.status == "partial"
+    assert db.query(AuditEvent).count() == audit_count_after_first
+
+
+def test_camera_delete_without_recording_permission_replays_partial_outcome(db):
+    camera = add_camera(db, name="stage41012_camera_permission_replay")
+    _segment, file_path = add_segment(db, camera)
+    operation_id = "stage41012-camera-delete-permission-replay"
+
+    first = delete_camera(
+        camera.id,
+        FakeRequest(),
+        delete_files=True,
+        operation_id=operation_id,
+        db=db,
+        current_user=actor("operator"),
+    )
+    audit_count_after_first = db.query(AuditEvent).count()
+    second = delete_camera(
+        camera.id,
+        FakeRequest(),
+        delete_files=True,
+        operation_id=operation_id,
+        db=db,
+        current_user=actor("operator"),
+    )
+
+    assert first["status"] == "deleted_archive_cleanup_partial"
+    assert second["status"] == first["status"]
+    assert second["ok"] is True
+    assert second["camera_removed"] is True
+    assert second["replayed"] is True
+    assert second["recordings"]["status"] == first["recordings"]["status"] == "blocked"
+    assert second["recordings"]["reason_counts"] == first["recordings"]["reason_counts"]
+    assert file_path.exists()
+    assert db.query(StorageOperation).filter(StorageOperation.operation_type == "camera_delete_with_files").count() == 1
+    assert db.query(AuditEvent).count() == audit_count_after_first
+
+
+def test_camera_delete_terminal_replay_remains_actor_bound(db):
+    camera = add_camera(db, name="stage41012_camera_actor_replay")
+    add_segment(db, camera)
+    operation_id = "stage41012-camera-delete-actor-replay"
+    delete_camera(
+        camera.id,
+        FakeRequest(),
+        delete_files=True,
+        operation_id=operation_id,
+        db=db,
+        current_user=actor("owner"),
+    )
+    foreign_actor = SimpleNamespace(id=2, username="other_owner", role="owner", is_active=True)
+
+    with pytest.raises(HTTPException) as exc:
+        delete_camera(
+            camera.id,
+            FakeRequest(),
+            delete_files=True,
+            operation_id=operation_id,
+            db=db,
+            current_user=foreign_actor,
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["reason_code"] == "storage_operation_identity_mismatch"
+
+
+def test_camera_delete_blocked_terminal_replay_preserves_terminal_truth(db):
+    assert_unremoved_camera_terminal_replay(
+        db,
+        terminal_status="blocked",
+        reason_code="camera_delete_blocked",
+        next_action="resolve_camera_delete_blocker",
+        retry_mode="refresh",
+        retry_allowed=True,
+    )
+
+
+def test_camera_delete_cancelled_terminal_replay_preserves_terminal_truth(db):
+    assert_unremoved_camera_terminal_replay(
+        db,
+        terminal_status="cancelled",
+        reason_code="camera_delete_cancelled",
+        next_action="restart_camera_delete_if_needed",
+        retry_mode=None,
+        retry_allowed=False,
+    )
+
+
+def test_camera_delete_failed_terminal_replay_preserves_failure_truth(db, monkeypatch):
+    camera = add_camera(db)
+    add_segment(db, camera)
+    operation_id = "stage41012-camera-delete-failed-replay"
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("injected camera deletion failure")
+
+    monkeypatch.setattr(cameras_module, "execute_segments", fail)
+
+    with pytest.raises(RuntimeError, match="injected camera deletion failure"):
+        delete_camera(
+            camera.id,
+            FakeRequest(),
+            delete_files=True,
+            operation_id=operation_id,
+            db=db,
+            current_user=actor("owner"),
+        )
+
+    row = (
+        db.query(StorageOperation)
+        .filter(StorageOperation.operation_type == "camera_delete_with_files")
+        .order_by(StorageOperation.created_at.desc())
+        .first()
+    )
+    assert row.status == "failed"
+    assert row.lease_expires_at is None
+    assert db.get(Camera, camera.id).deleted_at is None
+    audit_count = db.query(AuditEvent).count()
+
+    replay = delete_camera(
+        camera.id,
+        FakeRequest(),
+        delete_files=True,
+        operation_id=operation_id,
+        db=db,
+        current_user=actor("owner"),
+    )
+
+    assert replay["status"] == "failed"
+    assert replay["ok"] is False
+    assert replay["camera_removed"] is False
+    assert replay["replayed"] is True
+    assert replay["reason_code"] == "camera_delete_with_files_failed"
+    assert replay["retry_allowed"] is True
+    assert replay["retry_mode"] == "immediate"
+    assert db.get(Camera, camera.id).deleted_at is None
+    assert db.query(StorageOperation).filter(StorageOperation.operation_type == "camera_delete_with_files").count() == 1
+    assert db.query(AuditEvent).count() == audit_count
 
 
 def test_camera_delete_with_files_skips_active_recording_but_removes_camera(db):
@@ -506,11 +809,11 @@ def test_execute_segments_recovers_metadata_if_commit_fails_after_file_delete(db
     camera = add_camera(db)
     segment, file_path = add_segment(db, camera)
     original_commit = db.commit
-    calls = {"count": 0}
+    calls = {"failed": False}
 
     def fail_once():
-        calls["count"] += 1
-        if calls["count"] == 1:
+        if not file_path.exists() and not calls["failed"]:
+            calls["failed"] = True
             raise RuntimeError("stage1 simulated metadata commit failure")
         return original_commit()
 

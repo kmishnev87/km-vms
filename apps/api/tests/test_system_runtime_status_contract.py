@@ -396,7 +396,7 @@ def test_storage_domain_available_readable_writable_maps_to_ok_without_paths(db)
     assert storage["readable"] is True
     assert storage["writable"] is True
     assert storage["capacity"]["total_bytes"] is not None
-    assert storage["summary"]["existing_file_count"] == 1
+    assert storage["summary"]["existing_file_count"] is None
     assert storage["evidence_status"] == "fresh"
     assert str(settings.storage_root) not in rendered(storage)
     assert "camera/file.mkv" not in rendered(storage)
@@ -493,6 +493,10 @@ def test_reconciliation_problem_counts_map_to_warning_without_samples_or_paths(d
     add_owned_segment(db, camera, relative_path="missing/missing.mkv")
     missing = db.query(RecordingSegment).first()
     Path(settings.storage_root, missing.relative_path).unlink()
+    missing.reconciliation_status = "missing_file"
+    missing.reconciliation_checked_at = datetime.utcnow()
+    db.add(missing)
+    db.commit()
 
     payload = build_operator_runtime_status(db)
     reconciliation = payload["domains"]["reconciliation"]
@@ -515,11 +519,11 @@ def test_runtime_status_uses_same_bounded_orphan_evidence_as_storage(db):
     storage = payload["domains"]["storage"]
     reconciliation = payload["domains"]["reconciliation"]
 
-    assert storage["severity"] == "warning"
-    assert reconciliation["severity"] == "warning"
-    assert reconciliation["orphan_file_count"] == 1
-    assert reconciliation["problem_file_count"] == 1
-    assert "reconciliation_problems_found" in reconciliation["reason_codes"]
+    assert storage["severity"] == "ok"
+    assert reconciliation["severity"] == "unknown"
+    assert reconciliation["orphan_file_count"] == 0
+    assert reconciliation["problem_file_count"] == 0
+    assert "reconciliation_unknown" in reconciliation["reason_codes"]
     assert "orphan.mkv" not in rendered(payload)
 
 
@@ -536,7 +540,7 @@ def test_reconciliation_missing_evidence_is_unknown_not_fresh(db, monkeypatch):
             "partial": False,
         }
 
-    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
+    monkeypatch.setattr(runtime_status, "build_lightweight_storage_monitoring_summary", fake_storage_summary)
     payload = build_operator_runtime_status(db)
     reconciliation = payload["domains"]["reconciliation"]
 
@@ -579,7 +583,7 @@ def test_reconciliation_invalid_evidence_shape_is_unknown_not_fresh(
             "partial": False,
         }
 
-    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
+    monkeypatch.setattr(runtime_status, "build_lightweight_storage_monitoring_summary", fake_storage_summary)
     payload = build_operator_runtime_status(db)
     reconciliation = payload["domains"]["reconciliation"]
 
@@ -601,6 +605,8 @@ def test_reconciliation_explicit_zero_evidence_can_be_ok(db, monkeypatch):
             "capacity": {"total_bytes": 100, "used_bytes": 50, "free_bytes": 50, "available_bytes": 50, "filesystem_probe_status": "ok"},
             "owned_archive": {},
             "reconciliation_summary": {
+                "evidence_status": "fresh",
+                "source": "explicit_reconciliation",
                 "missing_file_count": 0,
                 "orphan_file_count": 0,
                 "path_outside_storage_count": 0,
@@ -611,7 +617,7 @@ def test_reconciliation_explicit_zero_evidence_can_be_ok(db, monkeypatch):
             "partial": False,
         }
 
-    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
+    monkeypatch.setattr(runtime_status, "build_lightweight_storage_monitoring_summary", fake_storage_summary)
     payload = build_operator_runtime_status(db)
     reconciliation = payload["domains"]["reconciliation"]
 
@@ -630,13 +636,13 @@ def test_reconciliation_cleanup_candidates_map_to_warning(db, monkeypatch):
             "storage_path_checks": {"readable": True, "writable": True},
             "capacity": {"total_bytes": 100, "used_bytes": 50, "free_bytes": 50, "available_bytes": 50, "filesystem_probe_status": "ok"},
             "owned_archive": {},
-            "reconciliation_summary": {},
+            "reconciliation_summary": {"evidence_status": "fresh", "source": "explicit_reconciliation"},
             "cleanup_candidates_summary": {"count": 2},
             "scan_limited": False,
             "partial": False,
         }
 
-    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
+    monkeypatch.setattr(runtime_status, "build_lightweight_storage_monitoring_summary", fake_storage_summary)
     payload = build_operator_runtime_status(db)
     reconciliation = payload["domains"]["reconciliation"]
 
@@ -648,11 +654,8 @@ def test_reconciliation_cleanup_candidates_map_to_warning(db, monkeypatch):
 def test_stage3_aggregate_has_no_audit_side_effects_and_no_diagnostic_archive_builder(db, monkeypatch):
     called = {"storage": None}
 
-    def fake_storage_summary(db_arg, *, include_namespace_observations=True, write_audit=False, audit_actor=None):
-        called["storage"] = {
-            "include_namespace_observations": include_namespace_observations,
-            "write_audit": write_audit,
-        }
+    def fake_storage_summary(db_arg):
+        called["storage"] = "lightweight"
         return {
             "status": "available",
             "available": True,
@@ -666,8 +669,8 @@ def test_stage3_aggregate_has_no_audit_side_effects_and_no_diagnostic_archive_bu
             "partial": False,
         }
 
-    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage_summary)
+    monkeypatch.setattr(runtime_status, "build_lightweight_storage_monitoring_summary", fake_storage_summary)
     payload = build_operator_runtime_status(db)
 
-    assert called["storage"] == {"include_namespace_observations": True, "write_audit": False}
+    assert called["storage"] == "lightweight"
     assert payload["domains"]["storage"]["source"] == "storage_monitoring_metadata_summary"

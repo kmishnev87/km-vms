@@ -61,7 +61,12 @@ assert.equal(context.freeSpaceTone({ free_percent: 77 }, { warning_threshold_per
 assert.match(context.primaryStorageActionText({ pathHealth: { readable: true, writable: false, available: true } }), /права записи/);
 assert.match(context.primaryStorageActionText({ capacity: { total_bytes: 100, free_percent: 2 }, pathHealth: { readable: true, writable: true, available: true }, policy: { warning_threshold_percent: 10 } }), /Освободите место/);
 assert.match(context.primaryStorageActionText({ pathHealth: { readable: true, writable: true, available: true }, reconciliation: { problem_file_count: 1 } }), /целостности/);
-assert.match(context.primaryStorageActionText({ pathHealth: { readable: true, writable: true, available: true }, migrationPreview: { blockers: [{ reason: "active_recording_jobs" }] } }), /активной записью/);
+const recurringStatusWithMigrationBlocker = context.primaryStorageActionText({
+  pathHealth: { readable: true, writable: true, available: true },
+  migrationPreview: { blockers: [{ reason: "active_recording_jobs" }] },
+});
+assert.doesNotMatch(recurringStatusWithMigrationBlocker, /активной записью/);
+assert.match(recurringStatusWithMigrationBlocker, /не хватает фактов/);
 assert.match(context.primaryStorageActionText({ operations: {}, pathHealth: {}, capacity: {} }), /не хватает фактов/);
 
 const reconciliation = context.normalizeReconciliationSummary({

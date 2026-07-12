@@ -69,6 +69,18 @@ from app.services.timezone_contract import (
     timestamp_matches_filename,
     timezone_context,
 )
+from app.services.storage_operation_conflicts import (
+    StorageOperationLifecycle,
+    StorageOperationConflict as StorageOuterConflict,
+    claim_state_detail,
+    claim_operation_with_conflicts,
+    operation_instance_id,
+    terminal_replay_result,
+)
+from app.services.storage_operations_foundation import (
+    OperationHeartbeatController,
+    safe_reason_code,
+)
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
 logger = logging.getLogger(__name__)
@@ -98,6 +110,72 @@ PROBLEM_INTEGRITY_STATUSES = {
     "unreadable_file",
 }
 TECHNICAL_DELETED_CAMERA_RE = re.compile(r"__deleted_\d+_\d+$")
+
+
+def _outer_scope(scope: dict | None, segments: list[RecordingSegment] | None = None) -> dict:
+    value = dict(scope or {})
+    items = list(segments or [])
+    return {
+        "global": str(value.get("type") or "") == "all",
+        "root_ids": list(value.get("root_ids") or [segment.archive_root_id for segment in items if segment.archive_root_id]),
+        "camera_ids": list(value.get("camera_ids") or [segment.camera_id for segment in items]),
+        "segment_ids": list(value.get("segment_ids") or [segment.id for segment in items]),
+        "physical_volume_ids": [],
+    }
+
+
+class StorageOuterTerminalReplay(RuntimeError):
+    def __init__(self, result: dict):
+        self.result = result
+        super().__init__(str(result.get("status") or "terminal"))
+
+
+def _claim_storage_outer(
+    db: Session,
+    current_user: User,
+    *,
+    operation: str,
+    operation_id: str,
+    scope: dict,
+) -> StorageOperationLifecycle:
+    try:
+        claimed = claim_operation_with_conflicts(
+            db,
+            operation_type=operation,
+            scope=scope,
+            request_identity={"operation_id": operation_id, "scope": scope},
+            actor=current_user,
+            operation_id=operation_id,
+            idempotency_key=operation_id,
+            owner_instance_id=operation_instance_id(operation),
+        )
+    except StorageOuterConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    if claimed.get("state") == "terminal":
+        raise StorageOuterTerminalReplay(terminal_replay_result(claimed))
+    if claimed.get("state") != "claimed":
+        raise HTTPException(status_code=409, detail=claim_state_detail(claimed))
+    return StorageOperationLifecycle(
+        db,
+        claimed["handle"],
+        failure_reason=f"{operation}_failed",
+    )
+
+
+def _finish_storage_outer(lifecycle: StorageOperationLifecycle, result: dict) -> None:
+    lifecycle.finish_result(
+        result,
+        progress={
+            "planned_count": int(result.get("planned_count") or 0),
+            "completed_count": int(result.get("deleted_count") or 0),
+            "failed_count": int(result.get("failed_count") or 0),
+            "skipped_count": int(result.get("skipped_count") or 0),
+            "completed_bytes": int(result.get("bytes_freed") or 0),
+        },
+        reason_code=safe_reason_code((result.get("warnings") or [None])[0]),
+        retry_allowed=bool(result.get("retryable")),
+        retry_mode="immediate" if result.get("retryable") else None,
+    )
 
 
 class BulkDeleteRequest(BaseModel):
@@ -1073,8 +1151,34 @@ def _execute_recording_deletion_plan(
         scope=scope,
         planned_count=planned_count,
     )
+    try:
+        outer_lifecycle = _claim_storage_outer(
+            db,
+            current_user,
+            operation=aggregate["operation"],
+            operation_id=plan_id,
+            scope=_outer_scope(scope),
+        )
+    except StorageOuterTerminalReplay as replay:
+        finish_operation(plan_id, owner_token, replay.result)
+        return replay.result
+    except HTTPException as exc:
+        blocked = _blocked_operation_result(
+            db,
+            current_user,
+            plan_id,
+            str((exc.detail or {}).get("reason_code") or "storage_operation_scope_conflict") if isinstance(exc.detail, dict) else "storage_operation_scope_conflict",
+            operation=operation,
+            scope=scope,
+            retryable=True,
+            planned_count=planned_count,
+        )
+        finish_operation(plan_id, owner_token, blocked)
+        raise
 
     scope_validated = False
+    outer_handle = outer_lifecycle.handle
+    outer_heartbeat = OperationHeartbeatController(db.get_bind(), outer_handle)
     try:
         with destructive_scope_guard(plan_id, scope, purpose=aggregate["operation"]) as scope_lease:
             with LeaseHeartbeat(
@@ -1088,6 +1192,7 @@ def _execute_recording_deletion_plan(
                         batch_size=MANUAL_BATCH_SIZE,
                         progress=heartbeat.progress,
                     ):
+                        outer_heartbeat.touch()
                         heartbeat.progress()
                         _segments, _expected, valid = _manifest_batch_segments(db, items)
                         if not valid:
@@ -1104,6 +1209,7 @@ def _execute_recording_deletion_plan(
                             batch_size=MANUAL_BATCH_SIZE,
                             progress=heartbeat.progress,
                         ):
+                            outer_heartbeat.touch()
                             heartbeat.progress()
                             batch, expected, valid = _manifest_batch_segments(db, items)
                             if not valid:
@@ -1128,6 +1234,8 @@ def _execute_recording_deletion_plan(
                                 operation_heartbeat=heartbeat.progress,
                                 operation_owner_token=owner_token,
                                 expected_identities=expected,
+                                outer_operation_handle=outer_handle,
+                                manage_outer_operation=False,
                             )
                             merge_execution_result(aggregate, batch_result)
     except ManifestValidationError as exc:
@@ -1156,12 +1264,24 @@ def _execute_recording_deletion_plan(
 
     if scope_validated:
         enforce_exact_planned_accounting(aggregate, planned_count)
-    finished = finish_manual_execution_result(db, current_user, aggregate)
     try:
+        finished = finish_manual_execution_result(db, current_user, aggregate)
         finish_operation(plan_id, owner_token, finished)
-    except OperationStateConflict:
-        pass
-    return finished
+        outer_lifecycle.mark_inner_persisted(finished)
+        outer_heartbeat.touch(force=True)
+        _finish_storage_outer(outer_lifecycle, finished)
+        return finished
+    except OperationStateConflict as exc:
+        if not outer_lifecycle.terminalized:
+            outer_lifecycle.__exit__(type(exc), exc, exc.__traceback__)
+        raise HTTPException(
+            status_code=409,
+            detail={"reason": "operation_terminal_persistence_failed", "retryable": True},
+        ) from exc
+    except Exception as exc:
+        if not outer_lifecycle.terminalized:
+            outer_lifecycle.__exit__(type(exc), exc, exc.__traceback__)
+        raise
 
 
 @router.post("/deletion-plans/{plan_id}/execute")
@@ -1298,6 +1418,7 @@ def delete_recording(
         raise HTTPException(status_code=409, detail=blocked)
     operation_id = claimed["record"]["operation_id"]
     owner_token = claimed["owner_token"]
+    outer_lifecycle = None
     try:
         segment = get_finalized_segment_by_identity(
             db,
@@ -1305,6 +1426,13 @@ def delete_recording(
             archive_root_id=archive_root_id,
             recording_ref_value=recording_ref,
             path=path,
+        )
+        outer_lifecycle = _claim_storage_outer(
+            db,
+            current_user,
+            operation="manual_single_delete",
+            operation_id=operation_id,
+            scope=_outer_scope(scope_for_segments([segment]), [segment]),
         )
         result = execute_segments(
             db,
@@ -1316,7 +1444,14 @@ def delete_recording(
             operation_id=operation_id,
             operation_owner_token=owner_token,
             expected_identities={int(segment.id): _expected_identity_for_segment(segment)},
+            outer_operation_handle=outer_lifecycle.handle,
+            manage_outer_operation=False,
         )
+    except StorageOuterTerminalReplay as replay:
+        finish_operation(operation_id, owner_token, replay.result)
+        if replay.result.get("ok") is not True and replay.result.get("status") != "completed":
+            raise HTTPException(status_code=409, detail=replay.result)
+        return replay.result
     except HTTPException as exc:
         reason, _not_found = _bulk_lookup_failure(exc)
         result = begin_manual_execution_result(
@@ -1344,7 +1479,15 @@ def delete_recording(
         )
         append_execution_issue(result, reason="recording_deletion_internal_failure", action="failed", retryable=True)
         result = finish_manual_execution_result(db, current_user, result)
-    finish_operation(operation_id, owner_token, result)
+    try:
+        finish_operation(operation_id, owner_token, result)
+        if outer_lifecycle is not None:
+            outer_lifecycle.mark_inner_persisted(result)
+            _finish_storage_outer(outer_lifecycle, result)
+    except Exception as exc:
+        if outer_lifecycle is not None and not outer_lifecycle.terminalized:
+            outer_lifecycle.__exit__(type(exc), exc, exc.__traceback__)
+        raise
     if result.get("ok") is not True:
         raise HTTPException(status_code=409, detail=result)
     return result
@@ -1391,12 +1534,21 @@ def bulk_delete_recordings(
     operation_id = claimed["record"]["operation_id"]
     owner_token = claimed["owner_token"]
     unique_segments: list[RecordingSegment] = []
+    outer_lifecycle = None
     try:
         unique_segments, lookup_failures = _resolve_bulk_delete_segments(
             db,
             payload,
             heartbeat=lambda: touch_operation(operation_id, owner_token),
         )
+        if unique_segments:
+            outer_lifecycle = _claim_storage_outer(
+                db,
+                current_user,
+                operation="manual_bulk_delete",
+                operation_id=operation_id,
+                scope=_outer_scope(scope_for_segments(unique_segments), unique_segments),
+            )
         result = execute_segments(
             db,
             unique_segments,
@@ -1411,7 +1563,12 @@ def bulk_delete_recordings(
                 int(segment.id): _expected_identity_for_segment(segment)
                 for segment in unique_segments
             },
+            outer_operation_handle=outer_lifecycle.handle if outer_lifecycle is not None else None,
+            manage_outer_operation=outer_lifecycle is None,
         )
+    except StorageOuterTerminalReplay as replay:
+        finish_operation(operation_id, owner_token, replay.result)
+        return replay.result
     except (OperationStateConflict, DestructiveScopeConflict):
         db.rollback()
         result = begin_manual_execution_result(
@@ -1430,7 +1587,15 @@ def bulk_delete_recordings(
         )
         append_execution_issue(result, reason="recording_deletion_internal_failure", action="failed", retryable=True)
         result = finish_manual_execution_result(db, current_user, result)
-    finish_operation(operation_id, owner_token, result)
+    try:
+        finish_operation(operation_id, owner_token, result)
+        if outer_lifecycle is not None:
+            outer_lifecycle.mark_inner_persisted(result)
+            _finish_storage_outer(outer_lifecycle, result)
+    except Exception as exc:
+        if outer_lifecycle is not None and not outer_lifecycle.terminalized:
+            outer_lifecycle.__exit__(type(exc), exc, exc.__traceback__)
+        raise
     return result
 
 

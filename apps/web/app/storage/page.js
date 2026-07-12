@@ -34,6 +34,13 @@ import {
 const REFRESH_MS = 30000;
 const ACTIVATION_ACK_KEY = "kmvms.storage.activation.acknowledged";
 
+function newStorageOperationId(prefix) {
+  const randomPart = globalThis.crypto?.randomUUID
+    ? globalThis.crypto.randomUUID().replaceAll("-", "")
+    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`;
+  return `${prefix}-${randomPart}`;
+}
+
 function Stat({ label, value, tone = "neutral" }) {
   return (
     <div className={`storageOpsStat storageOpsStat-${tone}`}>
@@ -77,15 +84,13 @@ function MiniFact({ label, value, tone = "neutral" }) {
 
 function CheckIcon() {
   return (
-    <span aria-hidden="true" className="storageOpsCheckIcon">
-      <span />
-    </span>
+    <span aria-hidden="true" className="storageOpsCheckIcon">✓</span>
   );
 }
 
 function TrashIcon() {
   return (
-    <svg className="recordingsUiIcon recordingsTrashIcon recordingsRowSvgIcon storageOpsTrashIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <svg className="recordingsUiIcon recordingsTrashIcon recordingsRowSvgIcon storageOpsTrashIcon" viewBox="0 1 24 24" aria-hidden="true" focusable="false">
       <path d="M4.2 6.8h15.6"></path>
       <path d="M8.9 6.8V4.5h6.2v2.3"></path>
       <path d="M6.7 7.2 7.6 19c.1 1.05 1 1.9 2.05 1.9h4.7c1.05 0 1.95-.85 2.05-1.9l.9-11.8"></path>
@@ -601,14 +606,14 @@ export default function StorageOperationsPage() {
   const archiveRootActivation = status?.archive_root_activation || operations.archive_root_activation || {};
   const activationModel = activationProgressModel(archiveRootActivation);
   const archiveRootActivationReason = activationProgressReasonText(archiveRootActivation, copy, language);
-  const migrationPreview = migrationPreviewState || operations.migration_preview || status?.migration_preview || {};
+  const migrationPreview = migrationPreviewState || {};
   const archiveRootDiscoveryModel = discoveryStateModel(archiveRootDiscovery || {});
   const archiveRootDiscoveryHeader = discoveryHeaderStatusModel(archiveRootDiscovery);
   const archiveRootChoices = archiveRootDiscoveryModel.candidates;
   const inactiveArchiveRoots = archiveRoots.filter((root) => !root.is_active);
   const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
   const autoFreeEnabled = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
-  const topHealth = storageTopHealthModel({ operations, pathHealth, capacity, policy, reconciliation, migrationPreview, retention }, language);
+  const topHealth = storageTopHealthModel({ operations, pathHealth, capacity, policy, reconciliation, retention }, language);
   const tone = topHealth.tone || healthTone(operations, pathHealth, capacity, policy, reconciliation);
   const accessRights = accessRightsModel(pathHealth, language);
   const recording = recordingState(operations, pathHealth, policy, copy);
@@ -994,19 +999,19 @@ export default function StorageOperationsPage() {
           busy: true,
           dismissible: false,
         });
-        deleteRoot(root.id);
+        deleteRoot(root.id, newStorageOperationId("archive-root-delete"));
       },
     });
   }
 
-  async function deleteRoot(rootId) {
+  async function deleteRoot(rootId, operationId) {
     if (!rootId) return;
     setRootAction(`delete-${rootId}`);
     try {
       const result = await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
+        body: JSON.stringify({ confirm: true, operation_id: operationId || null }),
       });
       const cleanupMessage = result?.cleanup_status === "completed_preserved_nonempty"
         ? copy.archiveRootDirectoryPreserved
@@ -1051,7 +1056,7 @@ export default function StorageOperationsPage() {
             cancelLabel: copy.close,
             onConfirm: () => {
               setArchiveRootDialog(null);
-              deleteRoot(rootId);
+              deleteRoot(rootId, newStorageOperationId("archive-root-delete"));
             },
           } : (capability.shouldRefresh || capability.needsExternalFix) ? {
             actions: [{
@@ -1172,7 +1177,10 @@ export default function StorageOperationsPage() {
       const result = await apiFetch("/storage/reconcile", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode: "apply_safe" }),
+        body: JSON.stringify({
+          mode: "apply_safe",
+          operation_id: newStorageOperationId("integrity-repair"),
+        }),
       });
       setReconciliationResult(result);
       setReconciliationPreview(null);

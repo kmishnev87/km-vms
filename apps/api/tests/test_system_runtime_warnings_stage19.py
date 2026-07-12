@@ -399,7 +399,7 @@ def test_live_failure_warns_immediately_without_starting_threshold(db, monkeypat
 
 def test_storage_retention_and_reconciliation_warnings_still_surface(db, monkeypatch):
     add_camera(db)
-    monkeypatch.setattr(runtime_status, "build_storage_monitoring_summary", fake_storage(storage_severity="error", reconciliation_severity="warning"))
+    monkeypatch.setattr(runtime_status, "build_lightweight_storage_monitoring_summary", fake_storage(storage_severity="error", reconciliation_severity="warning"))
     AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": "failed", "last_error": "/redacted/path", "run_count": 1})
 
     payload = build_operator_runtime_status(db)

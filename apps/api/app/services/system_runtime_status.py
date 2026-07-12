@@ -10,7 +10,7 @@ from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.services.live_engine import manager as live_manager
 from app.services.recording_retention import automatic_retention_status
-from app.services.recording_retention import apply_critical_low_disk_protection, auto_free_space_status
+from app.services.recording_retention import auto_free_space_status
 from app.services.recorder_runtime_status import (
     ACTIVE_JOB_STATES,
     HEARTBEAT_STALE_SECONDS,
@@ -26,7 +26,7 @@ from app.services.recorder_runtime_status import (
     summarize_recorder_segments as _segment_summary,
     utc_now as _utc_now,
 )
-from app.services.storage_monitoring import build_storage_monitoring_summary
+from app.services.storage_monitoring import build_lightweight_storage_monitoring_summary
 from app.services.timezone_contract import format_system_iso, timezone_context, timezone_metadata
 
 SEVERITIES = ("ok", "warning", "error", "unknown")
@@ -491,7 +491,11 @@ def _build_storage_domain(storage_summary: dict[str, Any], ctx) -> dict[str, Any
         "problem_counts": problem_counts,
         "summary": {
             "segments_count": int(owned.get("kmvms_owned_segments_count") or 0),
-            "existing_file_count": int(owned.get("kmvms_owned_existing_file_count") or 0),
+            "existing_file_count": (
+                int(owned.get("kmvms_owned_existing_file_count"))
+                if owned.get("kmvms_owned_existing_file_count") is not None
+                else None
+            ),
             "missing_file_count": problem_counts["missing_file_count"],
             "root_unavailable_count": problem_counts["root_unavailable_count"],
             "root_unresolved_count": problem_counts["root_unresolved_count"],
@@ -595,7 +599,8 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
     raw_cleanup = storage_summary.get("cleanup_candidates_summary")
     has_reconciliation_evidence = isinstance(raw_reconciliation, dict)
     has_cleanup_evidence = isinstance(raw_cleanup, dict)
-    has_status_friendly_evidence = has_reconciliation_evidence and has_cleanup_evidence
+    evidence_status = str((raw_reconciliation or {}).get("evidence_status") or "missing") if has_reconciliation_evidence else "missing"
+    has_status_friendly_evidence = has_reconciliation_evidence and evidence_status == "fresh"
     reconciliation = raw_reconciliation if has_reconciliation_evidence else {}
     cleanup = raw_cleanup if has_cleanup_evidence else {}
     missing = int(reconciliation.get("missing_file_count") or 0)
@@ -604,18 +609,19 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
     orphan = int(reconciliation.get("orphan_file_count") or 0)
     path_outside = int(reconciliation.get("path_outside_storage_count") or 0)
     invalid = int(reconciliation.get("invalid_path_count") or 0)
-    cleanup_count = int(cleanup.get("count") or 0)
+    cleanup_count = int(cleanup.get("count") or 0) if has_cleanup_evidence else 0
     scan_limited = bool(storage_summary.get("scan_limited"))
     partial = bool(storage_summary.get("partial"))
     reasons: list[str] = []
 
-    if not has_status_friendly_evidence:
+    has_known_problems = bool(missing or root_unavailable or root_unresolved or orphan or path_outside or invalid)
+    if has_known_problems:
+        severity = "error" if path_outside else "warning"
+        _append_reason(reasons, "reconciliation_problems_found")
+    elif not has_status_friendly_evidence:
         severity = "unknown"
         _append_reason(reasons, "no_evidence")
         _append_reason(reasons, "reconciliation_unknown")
-    elif missing or root_unavailable or root_unresolved or orphan or path_outside or invalid:
-        severity = "error" if path_outside else "warning"
-        _append_reason(reasons, "reconciliation_problems_found")
     elif cleanup_count:
         severity = "warning"
         _append_reason(reasons, "cleanup_candidates_present")
@@ -626,7 +632,7 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
         severity = "ok"
 
     return {
-        "status": "no_evidence" if not has_status_friendly_evidence else ("problems_found" if reasons else "ok"),
+        "status": "problems_found" if has_known_problems else "no_evidence" if not has_status_friendly_evidence else ("problems_found" if reasons else "ok"),
         "severity": severity,
         "missing_file_count": missing,
         "root_unavailable_count": root_unavailable,
@@ -638,11 +644,11 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
         "scan_limited": scan_limited,
         "partial": partial,
         "reason_codes": reasons,
-        "evidence_status": "fresh" if has_status_friendly_evidence else "missing",
-        "source": "storage_monitoring_metadata_reconciliation_counts" if has_status_friendly_evidence else "reconciliation_evidence_missing",
-        "last_checked_at": storage_summary.get("checked_at"),
-        "last_checked_at_utc": storage_summary.get("checked_at"),
-        "last_checked_at_system": _system_time(storage_summary.get("checked_at"), ctx),
+        "evidence_status": evidence_status,
+        "source": reconciliation.get("source") or "reconciliation_evidence_missing",
+        "last_checked_at": reconciliation.get("last_checked_at"),
+        "last_checked_at_utc": reconciliation.get("last_checked_at"),
+        "last_checked_at_system": _system_time(reconciliation.get("last_checked_at"), ctx),
     }
 
 
@@ -653,8 +659,7 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     recorder_domain, _camera_states, recorder_states = _build_recorder_domain(db, now, ctx)
     live_domain, live_by_camera = _build_live_domain(cameras)
     cameras_domain = _build_camera_domain(db, now, ctx, cameras, recorder_states, live_by_camera)
-    storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=True, write_audit=False)
-    storage_summary["auto_free_space_policy"] = apply_critical_low_disk_protection(db, storage_summary)
+    storage_summary = build_lightweight_storage_monitoring_summary(db)
     storage_domain = _build_storage_domain(storage_summary, ctx)
     retention_domain = _build_retention_domain(db, now, ctx)
     reconciliation_domain = _build_reconciliation_domain(storage_summary, ctx)

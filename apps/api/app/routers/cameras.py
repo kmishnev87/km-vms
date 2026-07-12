@@ -41,6 +41,17 @@ from app.services.onvif_service import (
     ptz_command_limits,
 )
 from app.services.recording_retention import EXECUTION_POLICY_MANUAL_COMPLETE, execute_segments, preview_segments
+from app.services.storage_operation_conflicts import (
+    StorageOperationLifecycle,
+    StorageOperationConflict as StorageOuterConflict,
+    claim_state_detail,
+    claim_operation_with_conflicts,
+    operation_instance_id,
+    scope_with_physical_volumes,
+    terminal_replay_result,
+    terminal_result_summary,
+)
+from app.services.storage_operations_foundation import StorageOperationContractError, claim_operation, safe_reason_code
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 viewer_router = APIRouter(prefix="/viewer/cameras", tags=["viewer-cameras"])
@@ -1222,13 +1233,15 @@ def camera_delete_response(
     status_value: str,
     recordings: dict,
     preview_deleted: bool = False,
+    camera_name: str | None = None,
+    replayed: bool = False,
 ) -> dict:
     warnings = list(recordings.get("warnings") or [])
-    return {
+    response = {
         "ok": status_value in {"deleted", "deleted_archive_cleanup_partial"},
         "status": status_value,
         "camera_id": camera.id,
-        "camera_name": camera.name,
+        "camera_name": camera_name if camera_name is not None else camera.name,
         "camera_removed": status_value in {"deleted", "deleted_archive_cleanup_partial"},
         "delete_files": bool(delete_files),
         "recordings": recordings,
@@ -1239,6 +1252,101 @@ def camera_delete_response(
             "scope": "camera_preview_only",
         },
     }
+    if replayed:
+        response["replayed"] = True
+    return response
+
+
+def camera_delete_replay_response(
+    *,
+    camera: Camera,
+    delete_files: bool,
+    terminal: dict,
+    operation_status: str | None = None,
+) -> dict:
+    replay_result = dict(terminal)
+    product_status = str(replay_result.pop("camera_delete_status", "") or "")
+    camera_removed = replay_result.pop("camera_removed", None) is True
+    camera_name = replay_result.pop("camera_name", None)
+    preview_deleted = bool(replay_result.pop("camera_preview_deleted", False))
+    replay_result.pop("camera_id", None)
+    replay_result.pop("delete_files", None)
+    if camera_removed and product_status in {"deleted", "deleted_archive_cleanup_partial"}:
+        return camera_delete_response(
+            camera=camera,
+            delete_files=delete_files,
+            status_value=product_status,
+            recordings=replay_result,
+            preview_deleted=preview_deleted,
+            camera_name=str(camera_name) if camera_name is not None else None,
+            replayed=True,
+        )
+
+    terminal_status = str(operation_status or replay_result.get("status") or "failed")
+    replay_result["status"] = terminal_status
+    replay_result["ok"] = False
+    replay_result["camera_removed"] = False
+    replay_result["replayed"] = True
+    response = {
+        "ok": False,
+        "status": terminal_status,
+        "camera_id": camera.id,
+        "camera_name": str(camera_name) if camera_name is not None else camera.name,
+        "camera_removed": False,
+        "delete_files": bool(delete_files),
+        "recordings": replay_result,
+        "archive_cleanup": replay_result,
+        "warnings": list(replay_result.get("warnings") or []),
+        "preview_cleanup": {
+            "deleted": preview_deleted,
+            "scope": "camera_preview_only",
+        },
+        "replayed": True,
+    }
+    for field in ("operation_id", "reason_code", "next_action", "retry_mode", "retry_allowed", "cancel_allowed"):
+        if field in replay_result:
+            response[field] = replay_result[field]
+    return response
+
+
+def camera_delete_operation_scope(camera: Camera, segments: list[RecordingSegment]) -> dict:
+    return {
+        "global": False,
+        "root_ids": sorted({str(segment.archive_root_id) for segment in segments if segment.archive_root_id}),
+        "camera_ids": [camera.id],
+        "segment_ids": [segment.id for segment in segments],
+        "physical_volume_ids": [],
+    }
+
+
+def claim_nonmutating_camera_delete_outcome(
+    db: Session,
+    *,
+    camera: Camera,
+    segments: list[RecordingSegment],
+    actor: User,
+    operation_id: str,
+) -> dict:
+    canonical_scope = scope_with_physical_volumes(db, camera_delete_operation_scope(camera, segments))
+    try:
+        return claim_operation(
+            db,
+            operation_type="camera_delete_with_files",
+            scope=canonical_scope,
+            request_identity={"camera_id": camera.id, "delete_files": True},
+            actor=actor,
+            operation_id=operation_id,
+            idempotency_key=operation_id,
+            owner_instance_id=operation_instance_id("camera-delete-outcome"),
+            scope_is_canonical=True,
+        )
+    except StorageOperationContractError as exc:
+        if str(exc) in {"operation_identity_mismatch", "operation_idempotency_identity_mismatch"}:
+            raise HTTPException(
+                status_code=409,
+                detail={"reason_code": "storage_operation_identity_mismatch", "retryable": False},
+            ) from exc
+        raise
 
 
 def require_recording_delete_permission_for_camera_delete(current_user: User) -> None:
@@ -1590,14 +1698,61 @@ def delete_camera(
     camera_id: int,
     request: Request,
     delete_files: bool = Query(False),
+    operation_id: str | None = Query(
+        default=None,
+        min_length=1,
+        max_length=96,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
+    operation_id = operation_id if isinstance(operation_id, str) and operation_id.strip() else None
+    camera_query = db.query(Camera).filter(Camera.id == camera_id)
+    if not delete_files:
+        camera_query = camera_query.filter(Camera.deleted_at.is_(None))
+    camera = camera_query.first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
     segments = camera_recording_segments(db, camera.id)
+    storage_scope = camera_delete_operation_scope(camera, segments)
+
+    outer_handle = None
+    outer_lifecycle = None
+    if delete_files and camera.deleted_at is not None:
+        if not operation_id:
+            raise HTTPException(status_code=404, detail="Камера не найдена")
+        try:
+            replay_claim = claim_operation_with_conflicts(
+                db,
+                operation_type="camera_delete_with_files",
+                scope=storage_scope,
+                request_identity={"camera_id": camera.id, "delete_files": True},
+                actor=current_user,
+                operation_id=operation_id,
+                idempotency_key=operation_id,
+                owner_instance_id=operation_instance_id("camera-delete-replay"),
+            )
+        except StorageOuterConflict as exc:
+            raise HTTPException(status_code=409, detail=exc.detail) from exc
+        if replay_claim.get("state") == "terminal":
+            recordings = terminal_replay_result(replay_claim)
+            return camera_delete_replay_response(
+                camera=camera,
+                delete_files=delete_files,
+                terminal=recordings,
+                operation_status=(replay_claim.get("operation") or {}).get("status"),
+            )
+        if replay_claim.get("state") == "claimed":
+            replay_lifecycle = StorageOperationLifecycle(
+                db,
+                replay_claim["handle"],
+                failure_reason="camera_delete_with_files_failed",
+            )
+            replay_lifecycle.block("camera_not_found", retry_allowed=False)
+            raise HTTPException(status_code=404, detail="Камера не найдена")
+        raise HTTPException(status_code=409, detail=claim_state_detail(replay_claim))
 
     if not delete_files:
         recordings = {
@@ -1632,6 +1787,7 @@ def delete_camera(
         if not user_has_permission(getattr(current_user, "role", ""), "delete_recordings"):
             recordings = {
                 "ok": len(segments) == 0,
+                "status": "completed" if len(segments) == 0 else "blocked",
                 "operation": "camera_delete_with_files",
                 "dry_run": False,
                 "requested_count": len(segments),
@@ -1672,50 +1828,142 @@ def delete_camera(
             if not preview["ok"]:
                 recordings = preview
             else:
-                recordings = compact_deletion_result(
-                    execute_segments(
+                try:
+                    outer_claim = claim_operation_with_conflicts(
                         db,
-                        segments,
+                        operation_type="camera_delete_with_files",
+                        scope=storage_scope,
+                        request_identity={"camera_id": camera.id, "delete_files": True},
                         actor=current_user,
-                        operation="camera_delete_with_files",
-                        reason=CAMERA_DELETE_FILES_REASON,
-                        policy=EXECUTION_POLICY_MANUAL_COMPLETE,
-                        scope={"type": "camera", "segment_ids": [], "camera_ids": [camera.id], "root_ids": []},
+                        operation_id=operation_id,
+                        idempotency_key=operation_id,
+                        owner_instance_id=operation_instance_id("camera-delete"),
                     )
+                except StorageOuterConflict as exc:
+                    raise HTTPException(status_code=409, detail=exc.detail) from exc
+                if outer_claim.get("state") == "terminal":
+                    recordings = terminal_replay_result(outer_claim)
+                    return camera_delete_replay_response(
+                        camera=camera,
+                        delete_files=delete_files,
+                        terminal=recordings,
+                        operation_status=(outer_claim.get("operation") or {}).get("status"),
+                    )
+                if outer_claim.get("state") != "claimed":
+                    raise HTTPException(status_code=409, detail=claim_state_detail(outer_claim))
+                outer_handle = outer_claim["handle"]
+                outer_lifecycle = StorageOperationLifecycle(
+                    db,
+                    outer_handle,
+                    failure_reason="camera_delete_with_files_failed",
                 )
-                if recordings["failed_count"] or recordings["skipped_count"] or recordings["limit_exceeded"]:
-                    recordings["ok"] = False
-                    if "archive_cleanup_partial" not in recordings["warnings"]:
-                        recordings["warnings"].append("archive_cleanup_partial")
+                if camera.deleted_at is not None:
+                    outer_lifecycle.block("camera_not_found", retry_allowed=False)
+                    raise HTTPException(status_code=404, detail="Камера не найдена")
+                try:
+                    recordings = compact_deletion_result(
+                        execute_segments(
+                            db,
+                            segments,
+                            actor=current_user,
+                            operation="camera_delete_with_files",
+                            reason=CAMERA_DELETE_FILES_REASON,
+                            policy=EXECUTION_POLICY_MANUAL_COMPLETE,
+                            scope={"type": "camera", "segment_ids": [], "camera_ids": [camera.id], "root_ids": []},
+                            outer_operation_handle=outer_handle,
+                            manage_outer_operation=False,
+                        )
+                    )
+                    if recordings["failed_count"] or recordings["skipped_count"] or recordings["limit_exceeded"]:
+                        recordings["ok"] = False
+                        if "archive_cleanup_partial" not in recordings["warnings"]:
+                            recordings["warnings"].append("archive_cleanup_partial")
+                except Exception as exc:
+                    outer_lifecycle.__exit__(type(exc), exc, exc.__traceback__)
+                    raise
 
-    preview_deleted = delete_camera_preview(camera.id)
-    status_value = "deleted" if recordings.get("ok") else "deleted_archive_cleanup_partial"
-    response = camera_delete_response(
-        camera=camera,
-        delete_files=delete_files,
-        status_value=status_value,
-        recordings=recordings,
-        preview_deleted=preview_deleted,
-    )
-    original_camera_name = camera.name
-    original_folder_name = camera.storage_folder_name
-    audit_camera_delete(
-        db,
-        actor=current_user,
-        request=request,
-        event_type="cameras.deleted" if recordings.get("ok") else "cameras.delete_partial_cleanup",
-        severity="info" if recordings.get("ok") else "warning",
-        camera=camera,
-        delete_files=delete_files,
-        status_value=status_value,
-        recordings=recordings,
-        camera_name=original_camera_name,
-    )
-    camera.enabled = False
-    camera.status = "deleted"
-    camera.deleted_at = datetime.utcnow()
-    camera.name = deleted_unique_value(original_camera_name, camera.id)
-    camera.storage_folder_name = deleted_unique_value(original_folder_name, camera.id)
-    db.add(camera)
-    db.commit()
-    return response
+    if delete_files and operation_id and outer_lifecycle is None:
+        outcome_claim = claim_nonmutating_camera_delete_outcome(
+            db,
+            camera=camera,
+            segments=segments,
+            actor=current_user,
+            operation_id=operation_id,
+        )
+        if outcome_claim.get("state") == "terminal":
+            return camera_delete_replay_response(
+                camera=camera,
+                delete_files=delete_files,
+                terminal=terminal_replay_result(outcome_claim),
+                operation_status=(outcome_claim.get("operation") or {}).get("status"),
+            )
+        if outcome_claim.get("state") != "claimed":
+            raise HTTPException(status_code=409, detail=claim_state_detail(outcome_claim))
+        outer_handle = outcome_claim["handle"]
+        outer_lifecycle = StorageOperationLifecycle(
+            db,
+            outer_handle,
+            failure_reason="camera_delete_outcome_persistence_failed",
+        )
+
+    try:
+        preview_deleted = delete_camera_preview(camera.id)
+        status_value = "deleted" if recordings.get("ok") else "deleted_archive_cleanup_partial"
+        original_camera_name = camera.name
+        response = camera_delete_response(
+            camera=camera,
+            delete_files=delete_files,
+            status_value=status_value,
+            recordings=recordings,
+            preview_deleted=preview_deleted,
+        )
+        original_folder_name = camera.storage_folder_name
+        audit_camera_delete(
+            db,
+            actor=current_user,
+            request=request,
+            event_type="cameras.deleted" if recordings.get("ok") else "cameras.delete_partial_cleanup",
+            severity="info" if recordings.get("ok") else "warning",
+            camera=camera,
+            delete_files=delete_files,
+            status_value=status_value,
+            recordings=recordings,
+            camera_name=original_camera_name,
+        )
+        camera.enabled = False
+        camera.status = "deleted"
+        camera.deleted_at = datetime.utcnow()
+        camera.name = deleted_unique_value(original_camera_name, camera.id)
+        camera.storage_folder_name = deleted_unique_value(original_folder_name, camera.id)
+        db.add(camera)
+        db.commit()
+        if outer_lifecycle is not None:
+            terminal_recordings = {
+                **recordings,
+                "camera_delete_status": status_value,
+                "camera_removed": True,
+                "camera_id": camera.id,
+                "camera_name": original_camera_name,
+                "camera_preview_deleted": bool(preview_deleted),
+                "delete_files": bool(delete_files),
+            }
+            outer_lifecycle.mark_inner_persisted(terminal_recordings)
+            outer_lifecycle.finish(
+                status="completed" if status_value == "deleted" else "partial",
+                result=terminal_result_summary(terminal_recordings),
+                progress={
+                    "planned_count": int(recordings.get("planned_count") or 0),
+                    "completed_count": int(recordings.get("deleted_count") or 0),
+                    "failed_count": int(recordings.get("failed_count") or 0),
+                    "skipped_count": int(recordings.get("skipped_count") or 0),
+                    "completed_bytes": int(recordings.get("bytes_freed") or 0),
+                },
+                reason_code=safe_reason_code((recordings.get("warnings") or [None])[0]),
+                retry_allowed=not bool(recordings.get("ok")),
+                retry_mode="refresh" if not recordings.get("ok") else None,
+            )
+        return response
+    except Exception as exc:
+        if outer_lifecycle is not None and not outer_lifecycle.terminalized:
+            outer_lifecycle.__exit__(type(exc), exc, exc.__traceback__)
+        raise

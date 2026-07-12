@@ -5,11 +5,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
 
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.core.version import APP_BUILD_VERSION, APP_VERSION
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
+from app.models.storage_operation import StorageOperation, StorageWorkerLease, StorageWorkSignal
 from app.services.backup_before_upgrade import backup_precondition_status
 from app.services.schema_versioning import (
     CURRENT_BASELINE_ID,
@@ -87,7 +88,7 @@ class MigrationRegistry:
     def target_version(self) -> int:
         if not self._migrations:
             return CURRENT_SCHEMA_VERSION
-        return max(CURRENT_SCHEMA_VERSION, *(item.to_version for item in self._migrations))
+        return max(item.to_version for item in self._migrations)
 
     def _validate(self) -> None:
         seen_ids: set[str] = set()
@@ -124,7 +125,120 @@ class MigrationRegistry:
         return pending
 
 
-PRODUCTION_MIGRATIONS = MigrationRegistry(())
+STAGE4101_TABLES = (
+    StorageOperation.__table__,
+    StorageWorkerLease.__table__,
+    StorageWorkSignal.__table__,
+)
+
+
+def _stage4101_storage_foundation_preflight(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    existing = sorted(table.name for table in STAGE4101_TABLES if inspector.has_table(table.name))
+    return {
+        "status": "ready",
+        "existing_table_count": len(existing),
+        "required_table_count": len(STAGE4101_TABLES),
+    }
+
+
+def _stage4101_storage_foundation_apply(db: Session) -> dict[str, Any]:
+    bind = db.connection()
+    for table in STAGE4101_TABLES:
+        table.create(bind=bind, checkfirst=True)
+    return {"created_or_verified_table_count": len(STAGE4101_TABLES)}
+
+
+def _stage4101_storage_foundation_verify(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    missing = sorted(table.name for table in STAGE4101_TABLES if not inspector.has_table(table.name))
+    if missing:
+        raise RuntimeError("stage4101_storage_foundation_tables_missing")
+    drift: dict[str, list[str]] = {}
+    for table in STAGE4101_TABLES:
+        actual_columns = {str(item["name"]) for item in inspector.get_columns(table.name)}
+        missing_columns = sorted(set(table.c.keys()) - actual_columns)
+        if missing_columns:
+            drift[table.name] = missing_columns
+    if drift:
+        raise RuntimeError("stage4101_storage_foundation_schema_drift")
+    return {"status": "verified", "table_count": len(STAGE4101_TABLES), "column_drift": False}
+
+
+STAGE4101_STORAGE_FOUNDATION_MIGRATION = MigrationDefinition(
+    migration_id="stage13_5_4_10_1_storage_operations_foundation_v2",
+    from_version=1,
+    to_version=2,
+    description="Add durable storage operation, worker lease and coalesced work-signal tables.",
+    risk=RISK_ADDITIVE_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage4101_storage_foundation_preflight,
+    apply=_stage4101_storage_foundation_apply,
+    verify=_stage4101_storage_foundation_verify,
+    safe_failure_summary="Storage operations foundation migration failed safely.",
+    rollback_note="Additive tables are retained for evidence; destructive automatic downgrade is not supported.",
+)
+
+
+STAGE41011_COLUMNS = {
+    "parent_snapshot": "JSON NULL",
+    "retry_depth": "INTEGER NOT NULL DEFAULT 0",
+}
+
+
+def _stage41011_lineage_preflight(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    if not inspector.has_table(StorageOperation.__tablename__):
+        raise RuntimeError("stage41011_storage_operations_table_missing")
+    existing = {str(item["name"]) for item in inspector.get_columns(StorageOperation.__tablename__)}
+    missing = sorted(set(STAGE41011_COLUMNS) - existing)
+    return {"status": "ready", "missing_columns": missing}
+
+
+def _stage41011_lineage_apply(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    existing = {str(item["name"]) for item in inspector.get_columns(StorageOperation.__tablename__)}
+    added: list[str] = []
+    for column_name, column_ddl in STAGE41011_COLUMNS.items():
+        if column_name in existing:
+            continue
+        db.execute(
+            text(
+                f"ALTER TABLE {StorageOperation.__tablename__} "
+                f"ADD COLUMN {column_name} {column_ddl}"
+            )
+        )
+        added.append(column_name)
+    return {"added_columns": sorted(added)}
+
+
+def _stage41011_lineage_verify(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    actual = {str(item["name"]) for item in inspector.get_columns(StorageOperation.__tablename__)}
+    missing = sorted(set(STAGE41011_COLUMNS) - actual)
+    if missing:
+        raise RuntimeError("stage41011_operation_lineage_columns_missing")
+    return {"status": "verified", "column_drift": False}
+
+
+STAGE41011_OPERATION_LINEAGE_MIGRATION = MigrationDefinition(
+    migration_id="stage13_5_4_10_1_1_operation_lineage_v3",
+    from_version=2,
+    to_version=3,
+    description="Add bounded storage-operation retry lineage metadata.",
+    risk=RISK_ADDITIVE_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage41011_lineage_preflight,
+    apply=_stage41011_lineage_apply,
+    verify=_stage41011_lineage_verify,
+    safe_failure_summary="Storage operation lineage migration failed safely.",
+    rollback_note="Additive lineage columns are retained; destructive automatic downgrade is not supported.",
+)
+
+
+PRODUCTION_MIGRATIONS = MigrationRegistry(
+    (STAGE4101_STORAGE_FOUNDATION_MIGRATION, STAGE41011_OPERATION_LINEAGE_MIGRATION)
+)
 
 
 def _has_metadata_tables(db: Session) -> tuple[bool, bool]:

@@ -9,12 +9,13 @@ import shutil
 import threading
 import time
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
 from app.core.sanitization import redact_text
 from app.models.camera import Camera
-from app.models.recording import RecordingSegment
+from app.models.recording import ArchiveRoot, RecordingSegment
 from app.services.audit_log import create_event
 from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
@@ -34,11 +35,26 @@ from app.services.recording_storage import (
 )
 from app.services.storage_contract import storage_contract
 from app.services.timezone_contract import format_system_iso, timezone_context
+from app.services.storage_operations_foundation import operation_summaries, safe_reason_code
 
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
 SEGMENT_STATUS_DELETED = "deleted"
 COUNTABLE_ARCHIVE_SEGMENT_STATUSES = {"finalized", "ready"}
+METADATA_PROBLEM_STATUSES = {
+    "missing_file",
+    "orphan_metadata",
+    "zero_size_file",
+    "partial_file",
+    "corrupted_file",
+    "stale_writing_segment",
+    "invalid_path",
+    "path_outside_storage",
+    "unreadable_file",
+    "storage_unavailable",
+    "root_unresolved",
+    "skipped",
+}
 SCAN_MODE_METADATA_ONLY = "metadata_only"
 SCAN_MODE_NAMESPACE_BOUNDED = "namespace_bounded"
 MAX_NAMESPACE_FILES = 1000
@@ -282,7 +298,7 @@ def _build_volume_groups(db: Session, root_rows: list, archive_roots: list[dict]
             }
         )
         group["archive_size_bytes"] += int(public.get("size_bytes") or 0)
-        group["playable_file_count"] += int(public.get("existing_file_count") or 0)
+        group["playable_file_count"] += int(public.get("segments_count") or 0)
         group["segments_count"] += int(public.get("segments_count") or 0)
         group["missing_file_count"] += int(public.get("missing_file_count") or 0)
         group["root_unavailable_count"] += int(public.get("root_access_problem_count") or 0)
@@ -319,6 +335,7 @@ def _empty_camera_usage(camera: Camera | None = None) -> dict:
         "file_extension_counts": {},
         "status_counts": {},
         "integrity_status_counts": {},
+        "reconciliation_status_counts": {},
     }
 
 
@@ -511,6 +528,7 @@ def _safe_camera_usage(rows: list[dict] | None) -> list[dict]:
                 "status_counts": dict(row.get("status_counts") or {}),
                 "integrity_status_counts": dict(row.get("integrity_status_counts") or {}),
                 "reconciliation_status_counts": dict(row.get("reconciliation_status_counts") or {}),
+                "evidence_status": row.get("evidence_status") or "unknown",
             }
         )
     return safe_rows
@@ -630,6 +648,12 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
     reconciliation = summary.get("reconciliation_summary") or {}
     cleanup = summary.get("cleanup_candidates_summary") or {}
     namespace = summary.get("namespace_observations") or {}
+    durable_operations = summary.get("operation_summaries") or {
+        "available": False,
+        "active": [],
+        "interrupted": [],
+        "recent": [],
+    }
     owned = summary.get("owned_archive") or {}
     path_checks = summary.get("storage_path_checks") or {}
     archive_roots = summary.get("archive_roots") or []
@@ -669,28 +693,33 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
         "archive_roots": operation_archive_roots,
         "volume_groups": volume_groups,
         "active_archive_root": active_root,
-        "migration_preview": summary.get("migration_preview"),
         "namespace_health": {
             "storage_namespace": summary.get("storage_namespace"),
-            "namespace_exists": namespace.get("namespace_exists"),
-            "namespace_status": "available" if bool(namespace.get("namespace_exists")) or not summary.get("available") is False else "unknown",
+            "namespace_exists": None,
+            "namespace_status": "unknown",
+            "evidence_status": "not_checked",
             "scan_mode": summary.get("scan_mode"),
             "scan_limited": bool(summary.get("scan_limited")),
             "partial": bool(summary.get("partial")),
             "partial_reason": summary.get("partial_reason"),
-            "scanned_files": int(namespace.get("scanned_files") or 0),
-            "scanned_dirs": int(namespace.get("scanned_dirs") or 0),
+            "scanned_files": None,
+            "scanned_dirs": None,
         },
         "owned_archive": {
             "size_bytes": int(owned.get("kmvms_owned_archive_size_bytes") or owned.get("kmvms_owned_archive_bytes") or 0),
             "segments_count": int(owned.get("kmvms_owned_segments_count") or 0),
-            "existing_file_count": int(owned.get("kmvms_owned_existing_file_count") or 0),
+            "existing_file_count": (
+                int(owned.get("kmvms_owned_existing_file_count"))
+                if owned.get("kmvms_owned_existing_file_count") is not None
+                else None
+            ),
             "missing_file_count": int(owned.get("kmvms_owned_missing_file_count") or 0),
             "root_unavailable_count": int(owned.get("kmvms_owned_root_unavailable_count") or 0),
             "active_root_write_problem_count": int(owned.get("kmvms_active_root_write_problem_count") or 0),
             "problem_file_count": int(owned.get("kmvms_owned_problem_file_count") or 0),
             "skipped_foreign_metadata_rows": int(owned.get("skipped_foreign_metadata_rows") or 0),
             "deleted_metadata_rows_excluded": int(owned.get("deleted_metadata_rows_excluded") or 0),
+            "evidence_status": owned.get("evidence_status") or "unknown",
         },
         "per_camera_usage": _safe_camera_usage(summary.get("camera_usage")),
         "low_disk_policy": {
@@ -728,12 +757,24 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             "last_summary": retention_last,
         },
         "reconciliation": {
-            "status": "problems_found" if any(int(reconciliation.get(key) or 0) for key in ("missing_file_count", "root_unavailable_count", "active_root_write_problem_count", "root_unresolved_count", "orphan_file_count", "invalid_path_count", "path_outside_storage_count")) else "ok",
+            "status": (
+                "problems_found"
+                if int(reconciliation.get("problem_file_count") or 0) > 0
+                else "ok"
+                if reconciliation.get("evidence_status") == "fresh"
+                else "unknown"
+            ),
+            "evidence_status": reconciliation.get("evidence_status") or "missing",
+            "source": reconciliation.get("source"),
             "missing_file_count": int(reconciliation.get("missing_file_count") or 0),
             "root_unavailable_count": int(reconciliation.get("root_unavailable_count") or 0),
             "active_root_write_problem_count": int(reconciliation.get("active_root_write_problem_count") or 0),
             "root_unresolved_count": int(reconciliation.get("root_unresolved_count") or 0),
-            "orphan_file_count": int(reconciliation.get("orphan_file_count") or 0),
+            "orphan_file_count": (
+                int(reconciliation.get("orphan_file_count"))
+                if reconciliation.get("orphan_file_count") is not None
+                else None
+            ),
             "invalid_path_count": int(reconciliation.get("invalid_path_count") or 0),
             "path_outside_storage_count": int(reconciliation.get("path_outside_storage_count") or 0),
             "foreign_unknown_count": int(reconciliation.get("foreign_unknown_count") or 0),
@@ -745,13 +786,14 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             "problem_details": reconciliation.get("problem_details") or {},
             "scan_limited": bool(summary.get("scan_limited")),
             "partial": bool(summary.get("partial")),
-            "last_checked_at": summary.get("checked_at"),
+            "last_checked_at": reconciliation.get("last_checked_at"),
         },
         "recent_operations": {
-            "available": False,
-            "items": [],
-            "note": "No safe bounded operation history source is exposed in Stage 3; use current retention/reconciliation summaries.",
+            "available": bool(durable_operations.get("available")),
+            "items": list(durable_operations.get("recent") or [])[:20],
         },
+        "active_operations": list(durable_operations.get("active") or [])[:8],
+        "interrupted_operations": list(durable_operations.get("interrupted") or [])[:8],
     }
 
 
@@ -1041,4 +1083,314 @@ def build_storage_monitoring_summary(
     summary["storage_operations"] = _build_storage_operations_summary(db, summary)
     if write_audit:
         _maybe_audit_storage_transition(db, summary, actor=audit_actor)
+    return summary
+
+
+def _display_storage_contract() -> dict:
+    current = storage_contract()
+    return {
+        "archive_primary_path": current.get("archive_host_path"),
+        "archive_primary_path_source": "host_bind_env" if current.get("archive_host_path") else "configured_archive_root",
+        "storage_namespace": current.get("storage_namespace"),
+        "relative_recording_path_contract": current.get("relative_recording_path_contract"),
+        "storage_editable": False,
+        "storage_change_requires": current.get("storage_change_requires"),
+    }
+
+
+def _metadata_problem_key(value: str | None) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if normalized == "storage_unavailable":
+        return "root_unavailable"
+    return normalized if normalized in METADATA_PROBLEM_STATUSES else None
+
+
+def _metadata_usage_aggregates(db: Session, cameras: dict[int, Camera]) -> dict:
+    base_filters = (
+        RecordingSegment.deleted_at.is_(None),
+        RecordingSegment.ownership == OWNERSHIP_KM_VMS,
+        RecordingSegment.source == RECORDER_SOURCE,
+        RecordingSegment.status.in_(tuple(COUNTABLE_ARCHIVE_SEGMENT_STATUSES)),
+    )
+    grouped = (
+        db.query(
+            RecordingSegment.archive_root_id,
+            RecordingSegment.camera_id,
+            func.count(RecordingSegment.id),
+            func.coalesce(func.sum(RecordingSegment.size_bytes), 0),
+            func.min(RecordingSegment.started_at),
+            func.max(RecordingSegment.started_at),
+            func.max(RecordingSegment.reconciliation_checked_at),
+        )
+        .filter(*base_filters)
+        .group_by(RecordingSegment.archive_root_id, RecordingSegment.camera_id)
+        .all()
+    )
+    problem_rows = (
+        db.query(
+            RecordingSegment.archive_root_id,
+            RecordingSegment.camera_id,
+            RecordingSegment.reconciliation_status,
+            func.count(RecordingSegment.id),
+        )
+        .filter(*base_filters, RecordingSegment.reconciliation_status.in_(tuple(METADATA_PROBLEM_STATUSES)))
+        .group_by(
+            RecordingSegment.archive_root_id,
+            RecordingSegment.camera_id,
+            RecordingSegment.reconciliation_status,
+        )
+        .all()
+    )
+
+    roots: dict[str, dict] = {}
+    camera_usage: dict[int, dict] = {
+        camera_id: {**_empty_camera_usage(camera), "existing_file_count": None, "evidence_status": "metadata_only"}
+        for camera_id, camera in cameras.items()
+        if camera.deleted_at is None
+    }
+    total_count = 0
+    total_bytes = 0
+    last_reconciliation_at = None
+    for root_id, camera_id, count, size_bytes, oldest, newest, checked_at in grouped:
+        count = int(count or 0)
+        size_bytes = int(size_bytes or 0)
+        total_count += count
+        total_bytes += size_bytes
+        if checked_at is not None and (last_reconciliation_at is None or checked_at > last_reconciliation_at):
+            last_reconciliation_at = checked_at
+        root_key = str(root_id or "unresolved")
+        root = roots.setdefault(
+            root_key,
+            {
+                "segments_count": 0,
+                "metadata_file_count": 0,
+                "existing_file_count": None,
+                "missing_file_count": 0,
+                "inaccessible_file_count": 0,
+                "root_resolution_problem_count": 0,
+                "problem_file_count": 0,
+                "size_bytes": 0,
+                "evidence_status": "metadata_only",
+            },
+        )
+        root["segments_count"] += count
+        root["metadata_file_count"] += count
+        root["size_bytes"] += size_bytes
+
+        row = camera_usage.setdefault(
+            int(camera_id),
+            {**_empty_camera_usage(cameras.get(int(camera_id))), "existing_file_count": None, "evidence_status": "metadata_only"},
+        )
+        row["recording_count"] += count
+        row["segment_count"] += count
+        row["size_bytes"] += size_bytes
+        if oldest is not None and (row.get("oldest_recording_at") is None or oldest < row["oldest_recording_at"]):
+            row["oldest_recording_at"] = oldest
+        if newest is not None and (row.get("newest_recording_at") is None or newest > row["newest_recording_at"]):
+            row["newest_recording_at"] = newest
+
+    problem_totals = Counter()
+    for root_id, camera_id, status, count in problem_rows:
+        key = _metadata_problem_key(status)
+        if not key:
+            continue
+        count = int(count or 0)
+        problem_totals[key] += count
+        root = roots.setdefault(
+            str(root_id or "unresolved"),
+            {
+                "segments_count": 0,
+                "metadata_file_count": 0,
+                "existing_file_count": None,
+                "missing_file_count": 0,
+                "inaccessible_file_count": 0,
+                "root_resolution_problem_count": 0,
+                "problem_file_count": 0,
+                "size_bytes": 0,
+                "evidence_status": "metadata_only",
+            },
+        )
+        root["problem_file_count"] += count
+        if key == "missing_file":
+            root["missing_file_count"] += count
+        if key == "root_unresolved":
+            root["root_resolution_problem_count"] += count
+        camera = camera_usage.setdefault(
+            int(camera_id),
+            {**_empty_camera_usage(cameras.get(int(camera_id))), "existing_file_count": None, "evidence_status": "metadata_only"},
+        )
+        camera["problem_file_count"] += count
+        if key == "missing_file":
+            camera["missing_file_count"] += count
+        camera["problem_counts"][key] = int(camera["problem_counts"].get(key) or 0) + count
+        camera["reconciliation_status_counts"][str(status)] = count
+
+    for row in camera_usage.values():
+        for field in ("oldest_recording_at", "newest_recording_at"):
+            if isinstance(row.get(field), datetime):
+                row[field] = row[field].isoformat() + "Z"
+
+    deleted_rows = int(db.query(RecordingSegment).filter(RecordingSegment.deleted_at.isnot(None)).count())
+    foreign_rows = int(
+        db.query(RecordingSegment)
+        .filter(
+            RecordingSegment.deleted_at.is_(None),
+            (RecordingSegment.ownership != OWNERSHIP_KM_VMS) | (RecordingSegment.source != RECORDER_SOURCE),
+        )
+        .count()
+    )
+    return {
+        "roots": roots,
+        "camera_usage": sorted(camera_usage.values(), key=lambda item: int(item.get("camera_id") or 0)),
+        "total_count": total_count,
+        "total_bytes": total_bytes,
+        "problem_totals": problem_totals,
+        "last_reconciliation_at": last_reconciliation_at,
+        "deleted_rows": deleted_rows,
+        "foreign_rows": foreign_rows,
+    }
+
+
+def build_lightweight_storage_monitoring_summary(db: Session) -> dict:
+    checked_at = _utc_now()
+    root_rows = (
+        db.query(ArchiveRoot)
+        .filter(ArchiveRoot.retired_at.is_(None))
+        .order_by(ArchiveRoot.is_active.desc(), ArchiveRoot.updated_at.desc(), ArchiveRoot.id.asc())
+        .all()
+    )
+    cameras = {
+        camera.id: camera
+        for camera in db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.id.asc()).all()
+    }
+    metadata = _metadata_usage_aggregates(db, cameras)
+    archive_roots = []
+    for root_row in root_rows:
+        public = archive_root_public_status(root_row, include_path=True)
+        for field in ("problem", "problem_category", "read_problem", "write_problem"):
+            if public.get(field):
+                public[field] = safe_reason_code(public.get(field), fallback="archive_root_access_problem")
+        usage = dict(metadata["roots"].get(str(root_row.id)) or {})
+        usage.setdefault("segments_count", 0)
+        usage.setdefault("metadata_file_count", 0)
+        usage.setdefault("existing_file_count", None)
+        usage.setdefault("missing_file_count", 0)
+        usage.setdefault("inaccessible_file_count", 0)
+        usage.setdefault("root_resolution_problem_count", 0)
+        usage.setdefault("problem_file_count", 0)
+        usage.setdefault("size_bytes", 0)
+        usage.setdefault("evidence_status", "metadata_only")
+        expected_unmounted_empty_root = bool(
+            not root_row.is_active and not usage["segments_count"] and public.get("requires_activation")
+        )
+        root_access_problem = bool(public.get("read_access_state") != "available" and not expected_unmounted_empty_root)
+        usage["root_access_problem_count"] = 1 if root_access_problem else 0
+        usage["root_access_problem"] = public.get("read_problem") if root_access_problem else None
+        archive_roots.append({**public, **usage})
+
+    active_root = next((row for row in archive_roots if row.get("is_active")), None)
+    active_row = next((row for row in root_rows if bool(row.is_active)), None)
+    runtime_root = archive_root_runtime_path(active_row) if active_row is not None else _storage_root_path()
+    path_checks = _path_checks(runtime_root)
+    path_checks.pop("storage_root_realpath", None)
+    capacity, capacity_error = _capacity(runtime_root) if path_checks["path_exists"] and path_checks["is_dir"] else (
+        {
+            "total_bytes": None,
+            "used_bytes": None,
+            "free_bytes": None,
+            "available_bytes": None,
+            "filesystem_probe_status": "storage_unavailable",
+        },
+        path_checks.get("last_error"),
+    )
+    problem_totals = metadata["problem_totals"]
+    root_access_problem_count = sum(int(item.get("root_access_problem_count") or 0) for item in archive_roots)
+    active_root_write_problem_count = sum(
+        1 for item in archive_roots if item.get("is_active") and item.get("write_access_state") != "available"
+    )
+    known_problem_count = int(sum(problem_totals.values())) + root_access_problem_count + active_root_write_problem_count
+    path_available = bool(path_checks["path_exists"] and path_checks["is_dir"])
+    status = "unavailable" if not path_available else "degraded" if capacity_error or known_problem_count else "available"
+    last_checked = metadata.get("last_reconciliation_at")
+    evidence_status = "metadata_only" if last_checked else "missing"
+    reconciliation_summary = {
+        "status": "problems_found" if known_problem_count else "unknown",
+        "evidence_status": evidence_status,
+        "source": "recording_segment_reconciliation_metadata",
+        "last_checked_at": last_checked.isoformat() + "Z" if isinstance(last_checked, datetime) else None,
+        "missing_file_count": int(problem_totals.get("missing_file") or 0),
+        "root_unavailable_count": root_access_problem_count,
+        "active_root_write_problem_count": active_root_write_problem_count,
+        "root_unresolved_count": int(problem_totals.get("root_unresolved") or 0),
+        "invalid_path_count": int(problem_totals.get("invalid_path") or 0),
+        "path_outside_storage_count": int(problem_totals.get("path_outside_storage") or 0),
+        "orphan_file_count": None,
+        "foreign_unknown_count": None,
+        "problem_file_count": known_problem_count,
+        "problem_details": {
+            "evidence_status": evidence_status,
+            "categories": [
+                {"reason": str(reason), "count": int(count)}
+                for reason, count in sorted(problem_totals.items())
+                if int(count) > 0
+            ][:MAX_SAMPLE_ITEMS],
+            "samples": [],
+            "raw_absolute_paths_included": False,
+        },
+    }
+    summary = {
+        "status": status,
+        "ok": status == "available",
+        "available": path_available,
+        "checked_at": checked_at,
+        "checked_at_utc": checked_at,
+        "checked_at_system": format_system_iso(
+            datetime.fromisoformat(checked_at.removesuffix("Z")),
+            timezone_context(db),
+        ),
+        "storage_contract": _display_storage_contract(),
+        "storage_namespace": KMVMS_RECORDINGS_NAMESPACE,
+        "scan_mode": "not_run_recurring_status",
+        "scan_limited": False,
+        "partial": evidence_status != "fresh",
+        "partial_reason": "explicit_reconciliation_required",
+        "warnings": ["storage_metadata_problems_present"] if known_problem_count else [],
+        "errors": ["storage_capacity_probe_failed"] if capacity_error else [],
+        "capacity": capacity,
+        "mount_status": {
+            "path_available": path_available,
+            "filesystem_probe_status": capacity.get("filesystem_probe_status"),
+        },
+        "storage_path_checks": path_checks,
+        "owned_archive": {
+            "kmvms_owned_archive_bytes": int(metadata["total_bytes"]),
+            "kmvms_owned_archive_size_bytes": int(metadata["total_bytes"]),
+            "kmvms_owned_segments_count": int(metadata["total_count"]),
+            "kmvms_owned_existing_file_count": None,
+            "kmvms_owned_missing_file_count": int(problem_totals.get("missing_file") or 0),
+            "kmvms_owned_root_unavailable_count": root_access_problem_count,
+            "kmvms_active_root_write_problem_count": active_root_write_problem_count,
+            "kmvms_owned_root_unavailable_segments_count": None,
+            "kmvms_owned_root_unresolved_count": int(problem_totals.get("root_unresolved") or 0),
+            "kmvms_owned_problem_file_count": known_problem_count,
+            "skipped_foreign_metadata_rows": int(metadata["foreign_rows"]),
+            "deleted_metadata_rows_excluded": int(metadata["deleted_rows"]),
+            "evidence_status": "metadata_only",
+        },
+        "camera_usage": metadata["camera_usage"],
+        "reconciliation_summary": reconciliation_summary,
+        "cleanup_candidates_summary": None,
+        "namespace_observations": None,
+        "archive_roots": archive_roots,
+        "volume_groups": _build_volume_groups(db, root_rows, archive_roots),
+        "operation_summaries": operation_summaries(db),
+    }
+    from app.services.recording_retention import low_disk_policy_status
+
+    summary["auto_free_space_policy"] = low_disk_policy_status(db, summary)
+    summary["storage_operations"] = _build_storage_operations_summary(db, summary)
+    if active_root is None:
+        summary["status"] = "unavailable"
+        summary["ok"] = False
+        summary["available"] = False
     return summary

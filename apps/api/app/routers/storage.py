@@ -1,9 +1,10 @@
 from datetime import datetime
 import os
 from pathlib import Path
+from typing import Callable
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.core.permissions import user_has_permission
@@ -15,6 +16,7 @@ from app.services.archive_root_activation import (
     ArchiveRootMutationConflict,
     archive_root_mutation_guard,
     archive_root_activation_public_status,
+    read_pending_archive_root_activation,
     request_archive_root_activation,
 )
 from app.services.audit_log import create_event
@@ -39,7 +41,19 @@ from app.services.recording_storage import (
     write_archive_roots_runtime_files,
 )
 from app.services import setup_storage
-from app.services.storage_monitoring import build_storage_monitoring_summary
+from app.services.storage_monitoring import build_lightweight_storage_monitoring_summary
+from app.services.storage_operation_conflicts import (
+    StorageOperationLifecycle,
+    StorageOperationConflict as StorageOuterConflict,
+    claim_state_detail,
+    claim_operation_with_conflicts,
+    operation_instance_id,
+    terminal_replay_result,
+)
+from app.services.storage_operations_foundation import (
+    OperationHeartbeatController,
+    safe_reason_code,
+)
 
 router = APIRouter(prefix="/storage", tags=["storage"])
 
@@ -50,10 +64,14 @@ ROOT_DELETION_RETRY_STATUSES = {
     "partial_finalization",
 }
 ROOT_CLEANUP_EVIDENCE_STATUSES = {"partial_cleanup", "partial_finalization"}
+OPERATION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
 
 
 class ReconciliationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     mode: str = "dry_run"
+    operation_id: str | None = Field(default=None, max_length=96, pattern=OPERATION_ID_PATTERN)
 
 
 class ArchiveRootCreateRequest(BaseModel):
@@ -68,12 +86,17 @@ class ArchiveRootCreateRequest(BaseModel):
 
 
 class ArchiveRootActivateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     confirm: bool = False
     recovery: bool = False
 
 
 class ArchiveRootDeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     confirm: bool = False
+    operation_id: str | None = Field(default=None, max_length=96, pattern=OPERATION_ID_PATTERN)
 
 
 class MigrationPreviewRequest(BaseModel):
@@ -95,7 +118,7 @@ def storage_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    summary = build_storage_monitoring_summary(db, write_audit=False, audit_actor=current_user)
+    summary = build_lightweight_storage_monitoring_summary(db)
     summary["archive_root_activation"] = archive_root_activation_public_status()
     if isinstance(summary.get("storage_operations"), dict):
         summary["storage_operations"]["archive_root_activation"] = summary["archive_root_activation"]
@@ -309,14 +332,21 @@ def _recover_root_segment_metadata_after_file_delete(
         return False
 
 
-def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) -> dict:
+def _delete_inactive_root(
+    db: Session,
+    root: ArchiveRoot,
+    current_user: User,
+    *,
+    operation_id: str | None = None,
+    operation_heartbeat: Callable[[], None] | None = None,
+) -> dict:
     if root.is_active:
         raise HTTPException(status_code=409, detail={"error": "archive_root_delete_active_root_blocked"})
     if not user_has_permission(getattr(current_user, "role", ""), "delete_recordings"):
         raise HTTPException(status_code=403, detail="delete_recordings permission is required")
     previous_status = str(getattr(root, "retirement_status", None) or "")
     previous_operation_id = str(getattr(root, "retirement_operation_id", None) or "")
-    operation_id = (
+    operation_id = operation_id or (
         previous_operation_id
         if previous_status in ROOT_DELETION_RETRY_STATUSES and previous_operation_id
         else new_operation_id("archive-root-cleanup")
@@ -343,7 +373,10 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
     }
     try:
         with destructive_scope_guard(operation_id, scope, purpose="archive_root_delete") as scope_lease:
-            return _delete_inactive_root_owned(db, root, current_user, operation_id=operation_id, scope_lease=scope_lease)
+            kwargs = {"operation_id": operation_id, "scope_lease": scope_lease}
+            if operation_heartbeat is not None:
+                kwargs["operation_heartbeat"] = operation_heartbeat
+            return _delete_inactive_root_owned(db, root, current_user, **kwargs)
     except DestructiveScopeConflict as exc:
         reason = str(exc.detail.get("reason") or "destructive_scope_conflict")
         raise HTTPException(
@@ -364,6 +397,7 @@ def _delete_inactive_root_owned(
     *,
     operation_id: str,
     scope_lease,
+    operation_heartbeat: Callable[[], None] | None = None,
 ) -> dict:
     if root.is_active:
         raise HTTPException(status_code=409, detail={"error": "archive_root_delete_active_root_blocked"})
@@ -473,6 +507,8 @@ def _delete_inactive_root_owned(
     failed: list[dict] = []
     now = datetime.utcnow()
     for plan in plans:
+        if operation_heartbeat is not None:
+            operation_heartbeat()
         segment = plan["segment"]
         scope_lease.touch()
         try:
@@ -759,15 +795,95 @@ def activate_archive_root(
     root = db.get(ArchiveRoot, root_id)
     if not root:
         raise HTTPException(status_code=404, detail="Archive root not found")
+    pending = read_pending_archive_root_activation()
+    if pending is not None or payload.recovery:
+        try:
+            result = request_archive_root_activation(db, root=root, actor=current_user, recovery=payload.recovery)
+        except ArchiveRootMutationConflict as exc:
+            raise HTTPException(status_code=409, detail=exc.blocker) from exc
+        if result.get("status") in {"blocked", "already_running"}:
+            raise HTTPException(status_code=409, detail=result)
+        return result
+
+    previous_root = (
+        db.query(ArchiveRoot)
+        .filter(ArchiveRoot.is_active == True, ArchiveRoot.retired_at.is_(None))  # noqa: E712
+        .order_by(ArchiveRoot.updated_at.desc(), ArchiveRoot.id.asc())
+        .first()
+    )
+    if previous_root is not None and str(previous_root.id) == str(root.id):
+        return request_archive_root_activation(db, root=root, actor=current_user, recovery=False)
+
+    operation_id = new_operation_id("archive-root-activation")
     try:
-        result = request_archive_root_activation(db, root=root, actor=current_user, recovery=payload.recovery)
-    except ArchiveRootMutationConflict as exc:
-        raise HTTPException(status_code=409, detail=exc.blocker) from exc
-    if result.get("status") == "blocked":
-        raise HTTPException(status_code=409, detail=result)
-    if result.get("status") == "already_running":
-        raise HTTPException(status_code=409, detail=result)
-    return result
+        outer_claim = claim_operation_with_conflicts(
+            db,
+            operation_type="archive_root_activation",
+            scope={
+                "global": True,
+                "physical_volume_ids": [],
+                "root_ids": [
+                    value
+                    for value in (getattr(previous_root, "id", None), root.id)
+                    if value is not None
+                ],
+                "camera_ids": [],
+                "segment_ids": [],
+            },
+            request_identity={
+                "operation_id": operation_id,
+                "previous_root_id": getattr(previous_root, "id", None),
+                "target_root_id": root.id,
+            },
+            actor=current_user,
+            operation_id=operation_id,
+            idempotency_key=operation_id,
+            owner_instance_id=operation_instance_id("archive-root-activation"),
+        )
+    except StorageOuterConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    if outer_claim.get("state") == "terminal":
+        replay = terminal_replay_result(outer_claim)
+        if replay.get("status") in {"blocked", "failed", "partial"}:
+            raise HTTPException(status_code=409, detail=replay)
+        return replay
+    if outer_claim.get("state") != "claimed":
+        raise HTTPException(status_code=409, detail=claim_state_detail(outer_claim))
+    outer_handle = outer_claim["handle"]
+    with StorageOperationLifecycle(
+        db,
+        outer_handle,
+        failure_reason="archive_root_activation_scheduling_failed",
+    ) as lifecycle:
+        try:
+            result = request_archive_root_activation(
+                db,
+                root=root,
+                actor=current_user,
+                recovery=False,
+                operation_id=operation_id,
+                outer_handle=outer_handle,
+            )
+        except ArchiveRootMutationConflict as exc:
+            lifecycle.block(
+                safe_reason_code(exc.blocker, fallback="archive_root_mutation_conflict"),
+                retry_allowed=True,
+            )
+            raise HTTPException(status_code=409, detail=exc.blocker) from exc
+        if result.get("status") == "blocked":
+            lifecycle.block(
+                safe_reason_code(result, fallback="archive_root_activation_blocked"),
+                retry_allowed=False,
+            )
+            raise HTTPException(status_code=409, detail=result)
+        if result.get("status") == "already_running":
+            lifecycle.block("archive_root_activation_already_running", retry_allowed=True)
+            raise HTTPException(status_code=409, detail=result)
+        if result.get("status") == "already_active":
+            lifecycle.finish(status="completed", result={"status": "completed"})
+        elif result.get("status") in {"queued", "running"}:
+            lifecycle.defer_to_async_worker()
+        return result
 
 
 @router.delete("/archive-roots/{root_id}")
@@ -779,17 +895,103 @@ def delete_archive_root(
 ):
     if not payload.confirm:
         raise HTTPException(status_code=409, detail="Archive root deletion requires confirm=true")
+    root = db.get(ArchiveRoot, root_id)
+    if not root or (root.retired_at is not None and not payload.operation_id):
+        raise HTTPException(status_code=404, detail="Archive root not found")
+    previous_status = str(root.retirement_status or "")
+    operation_id = payload.operation_id or new_operation_id("archive-root-cleanup")
+    parent_operation_id = (
+        str(root.retirement_operation_id)
+        if (
+            previous_status in ROOT_DELETION_RETRY_STATUSES
+            and root.retirement_operation_id
+            and str(root.retirement_operation_id) != operation_id
+        )
+        else None
+    )
+    camera_ids = [
+        int(value)
+        for (value,) in db.query(RecordingSegment.camera_id)
+        .filter(RecordingSegment.archive_root_id == root.id, RecordingSegment.deleted_at.is_(None))
+        .distinct()
+        .all()
+        if value is not None
+    ]
     try:
-        with archive_root_mutation_guard("archive_root_delete"):
-            root = db.get(ArchiveRoot, root_id)
-            if not root or root.retired_at is not None:
-                raise HTTPException(status_code=404, detail="Archive root not found")
-            result = _delete_inactive_root(db, root, current_user)
-            if result.get("status") == "partial":
-                raise HTTPException(status_code=409, detail=result)
-            return result
-    except ArchiveRootMutationConflict as exc:
-        raise HTTPException(status_code=409, detail=exc.blocker) from exc
+        outer_claim = claim_operation_with_conflicts(
+            db,
+            operation_type="archive_root_delete",
+            scope={
+                "global": False,
+                "physical_volume_ids": [root.physical_identity] if root.physical_identity else [],
+                "root_ids": [root.id],
+                "camera_ids": camera_ids,
+                "segment_ids": [],
+            },
+            request_identity={"root_id": root.id, "operation_id": operation_id},
+            actor=current_user,
+            operation_id=operation_id,
+            idempotency_key=operation_id,
+            parent_operation_id=parent_operation_id,
+            owner_instance_id=operation_instance_id("archive-root-delete"),
+        )
+    except StorageOuterConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    if outer_claim.get("state") == "terminal":
+        replay = terminal_replay_result(outer_claim)
+        if replay.get("status") in {"blocked", "partial"}:
+            raise HTTPException(status_code=409, detail=replay)
+        if replay.get("status") == "failed":
+            raise HTTPException(status_code=500, detail=replay)
+        return replay
+    if outer_claim.get("state") != "claimed":
+        raise HTTPException(status_code=409, detail=claim_state_detail(outer_claim))
+    outer_handle = outer_claim["handle"]
+    outer_heartbeat = OperationHeartbeatController(db.get_bind(), outer_handle)
+    with StorageOperationLifecycle(db, outer_handle, failure_reason="archive_root_delete_failed") as lifecycle:
+        try:
+            with archive_root_mutation_guard("archive_root_delete"):
+                root = db.get(ArchiveRoot, root_id)
+                if not root or root.retired_at is not None:
+                    lifecycle.block("archive_root_not_found", retry_allowed=False)
+                    raise HTTPException(status_code=404, detail="Archive root not found")
+                result = _delete_inactive_root(
+                    db,
+                    root,
+                    current_user,
+                    operation_id=operation_id,
+                    operation_heartbeat=outer_heartbeat.touch,
+                )
+                lifecycle.mark_inner_persisted(result)
+        except ArchiveRootMutationConflict as exc:
+            lifecycle.block(
+                safe_reason_code(exc.blocker, fallback="archive_root_mutation_conflict"),
+                retry_allowed=True,
+            )
+            raise HTTPException(status_code=409, detail=exc.blocker) from exc
+        except HTTPException as exc:
+            lifecycle.block(
+                safe_reason_code(exc.detail, fallback="archive_root_delete_blocked"),
+                retry_allowed=exc.status_code >= 500,
+            )
+            raise
+        outer_heartbeat.touch(force=True)
+        lifecycle.finish_result(
+            result,
+            progress={
+                "planned_count": int(result.get("planned_count") or 0),
+                "completed_count": int(result.get("deleted_count") or 0),
+                "failed_count": int(result.get("failed_count") or 0),
+                "skipped_count": int(result.get("skipped_count") or 0),
+                "completed_bytes": int(result.get("bytes_freed") or 0),
+            },
+            reason_code=safe_reason_code(result.get("reason_code") or result.get("error")),
+            retry_allowed=bool(result.get("retryable")),
+            retry_mode=result.get("retry_mode"),
+        )
+        if result.get("status") == "partial":
+            raise HTTPException(status_code=409, detail=result)
+        return result
 
 
 @router.post("/migration/preview")
@@ -848,47 +1050,104 @@ def storage_migration_apply(
             metadata={"reason": "confirm_required"},
         )
         raise HTTPException(status_code=409, detail={"error": "archive_migration_apply_requires_confirm"})
-    create_event(
-        db=db,
-        actor=current_user,
-        category="storage",
-        event_type="archive_migration.apply_started",
-        severity="warning",
-        message_ru="Archive migration apply started",
-        message_en="Archive migration apply started",
-        target_type="archive_migration",
-        metadata={"target_root_id": payload.target_root_id, "plan_id": payload.plan_id},
-    )
+    roots = db.query(ArchiveRoot).filter(ArchiveRoot.retired_at.is_(None)).all()
     try:
-        with archive_root_mutation_guard("archive_migration_apply"):
-            result = apply_storage_migration(db, target_root_id=payload.target_root_id, expected_plan_id=payload.plan_id)
-    except ArchiveRootMutationConflict as exc:
-        raise HTTPException(status_code=409, detail=exc.blocker) from exc
-    event_type = "archive_migration.apply_completed" if result["status"] == "completed" else "archive_migration.apply_blocked" if result["status"] == "blocked" else "archive_migration.apply_failed"
-    create_event(
-        db=db,
-        actor=current_user,
-        category="storage",
-        event_type=event_type,
-        severity="info" if result["status"] == "completed" else "warning",
-        message_ru="Archive migration apply finished",
-        message_en="Archive migration apply finished",
-        target_type="archive_migration",
-        metadata={
-            "status": result["status"],
-            "target_root_id": result.get("target_root_id"),
-            "plan_id": result.get("plan_id"),
-            "executed_count": len(result.get("executed") or []),
-            "blocker_count": len(result.get("blockers") or []),
-            "source_preserved": bool(result.get("source_preserved")),
-            "cleanup_pending": bool(result.get("cleanup_pending")),
-        },
-    )
-    if result["status"] == "blocked":
-        raise HTTPException(status_code=409, detail=result)
-    if result["status"] == "failed":
-        raise HTTPException(status_code=500, detail=result)
-    return result
+        outer_claim = claim_operation_with_conflicts(
+            db,
+            operation_type="archive_migration_apply",
+            scope={
+                "global": False,
+                "physical_volume_ids": [root.physical_identity for root in roots if root.physical_identity],
+                "root_ids": [root.id for root in roots],
+                "camera_ids": [],
+                "segment_ids": [],
+            },
+            request_identity={"target_root_id": payload.target_root_id, "plan_id": payload.plan_id},
+            actor=current_user,
+            idempotency_key=payload.plan_id,
+            owner_instance_id=operation_instance_id("archive-migration"),
+        )
+    except StorageOuterConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    if outer_claim.get("state") == "terminal":
+        replay = terminal_replay_result(outer_claim)
+        if replay.get("status") == "blocked":
+            raise HTTPException(status_code=409, detail=replay)
+        if replay.get("status") == "failed":
+            raise HTTPException(status_code=500, detail=replay)
+        return replay
+    if outer_claim.get("state") != "claimed":
+        raise HTTPException(status_code=409, detail=claim_state_detail(outer_claim))
+    outer_handle = outer_claim["handle"]
+    outer_heartbeat = OperationHeartbeatController(db.get_bind(), outer_handle)
+    with StorageOperationLifecycle(db, outer_handle, failure_reason="archive_migration_apply_failed") as lifecycle:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="storage",
+            event_type="archive_migration.apply_started",
+            severity="warning",
+            message_ru="Archive migration apply started",
+            message_en="Archive migration apply started",
+            target_type="archive_migration",
+            metadata={"target_root_id": payload.target_root_id, "plan_id": payload.plan_id},
+        )
+        try:
+            with archive_root_mutation_guard("archive_migration_apply"):
+                result = apply_storage_migration(
+                    db,
+                    target_root_id=payload.target_root_id,
+                    expected_plan_id=payload.plan_id,
+                    progress_callback=outer_heartbeat.touch,
+                )
+                lifecycle.mark_inner_persisted(result)
+        except ArchiveRootMutationConflict as exc:
+            lifecycle.block(
+                safe_reason_code(exc.blocker, fallback="archive_root_mutation_conflict"),
+                retry_allowed=True,
+            )
+            raise HTTPException(status_code=409, detail=exc.blocker) from exc
+        event_type = "archive_migration.apply_completed" if result["status"] == "completed" else "archive_migration.apply_blocked" if result["status"] == "blocked" else "archive_migration.apply_failed"
+        create_event(
+            db=db,
+            actor=current_user,
+            category="storage",
+            event_type=event_type,
+            severity="info" if result["status"] == "completed" else "warning",
+            message_ru="Archive migration apply finished",
+            message_en="Archive migration apply finished",
+            target_type="archive_migration",
+            metadata={
+                "status": result["status"],
+                "target_root_id": result.get("target_root_id"),
+                "plan_id": result.get("plan_id"),
+                "executed_count": len(result.get("executed") or []),
+                "blocker_count": len(result.get("blockers") or []),
+                "source_preserved": bool(result.get("source_preserved")),
+                "cleanup_pending": bool(result.get("cleanup_pending")),
+            },
+        )
+        outer_heartbeat.touch(force=True)
+        lifecycle.finish_result(
+            result,
+            progress={
+                "planned_count": int(result.get("planned_count") or result.get("total_would_move_count") or 0),
+                "completed_count": len(result.get("executed") or []),
+                "failed_count": len(result.get("failed") or []),
+                "completed_bytes": int(result.get("executed_bytes") or 0),
+            },
+            reason_code=safe_reason_code(
+                (result.get("blockers") or [None])[0] if result.get("blockers") else None,
+                fallback="archive_migration_apply_incomplete" if result.get("status") != "completed" else None,
+            ),
+            retry_allowed=result.get("status") in {"blocked", "failed"},
+            retry_mode="refresh" if result.get("status") in {"blocked", "failed"} else None,
+        )
+        if result["status"] == "blocked":
+            raise HTTPException(status_code=409, detail=result)
+        if result["status"] == "failed":
+            raise HTTPException(status_code=500, detail=result)
+        return result
 
 
 @router.get("/reconciliation/summary")
@@ -906,4 +1165,47 @@ def storage_reconcile(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     mode = "apply_safe" if payload.mode == "apply_safe" else "dry_run"
-    return reconcile_recordings(db, mode=mode, actor=current_user, write_audit=True)
+    if mode == "dry_run":
+        return reconcile_recordings(db, mode=mode, actor=current_user, write_audit=True)
+    try:
+        operation_id = payload.operation_id or new_operation_id("integrity-metadata-repair")
+        outer_claim = claim_operation_with_conflicts(
+            db,
+            operation_type="integrity_metadata_repair",
+            scope={"global": True, "physical_volume_ids": [], "root_ids": [], "camera_ids": [], "segment_ids": []},
+            request_identity={"mode": mode, "operation_id": operation_id},
+            actor=current_user,
+            operation_id=operation_id,
+            idempotency_key=operation_id,
+            owner_instance_id=operation_instance_id("integrity-repair"),
+        )
+    except StorageOuterConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    if outer_claim.get("state") == "terminal":
+        return terminal_replay_result(outer_claim)
+    if outer_claim.get("state") != "claimed":
+        raise HTTPException(status_code=409, detail=claim_state_detail(outer_claim))
+    outer_handle = outer_claim["handle"]
+    outer_heartbeat = OperationHeartbeatController(db.get_bind(), outer_handle)
+    with StorageOperationLifecycle(db, outer_handle, failure_reason="integrity_metadata_repair_failed") as lifecycle:
+        result = reconcile_recordings(
+            db,
+            mode=mode,
+            actor=current_user,
+            write_audit=True,
+            progress_callback=outer_heartbeat.touch,
+        )
+        lifecycle.mark_inner_persisted(result)
+        outer_heartbeat.touch(force=True)
+        lifecycle.finish_result(
+            result,
+            progress={
+                "planned_count": int(result.get("total_rows") or 0),
+                "completed_count": int(result.get("updated_count") or 0),
+                "failed_count": int(result.get("failed_count") or 0),
+            },
+            reason_code=safe_reason_code(result.get("reason_code")),
+            retry_allowed=result.get("status") in {"partial", "failed"},
+            retry_mode="refresh" if result.get("status") in {"partial", "failed"} else None,
+        )
+        return result

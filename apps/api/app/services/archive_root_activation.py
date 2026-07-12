@@ -34,6 +34,18 @@ from app.services.recording_storage import (
     write_archive_roots_runtime_files,
 )
 from app.services.setup_storage import queue_runtime_activation, storage_confirmation_status
+from app.services.storage_operation_conflicts import (
+    StorageOperationConflict as StorageOuterConflict,
+    claim_operation_with_conflicts,
+    reclaim_operation_with_conflicts,
+    operation_instance_id,
+)
+from app.services.storage_operations_foundation import (
+    OperationHandle as StorageOuterHandle,
+    finish_operation as finish_storage_outer_operation,
+    heartbeat_operation as heartbeat_storage_outer_operation,
+    safe_reason_code,
+)
 
 logger = logging.getLogger(__name__)
 _WORKER_LEASE_THREAD_GUARD = threading.RLock()
@@ -721,6 +733,7 @@ def _new_operation_state(
         "updated_at": now,
         "completed_at": None,
         "actor_username": getattr(actor, "username", None),
+        "actor_user_id": getattr(actor, "id", None),
         "camera_snapshots": camera_snapshots,
         "affected_camera_ids": [int(item["camera_id"]) for item in camera_snapshots],
         "paused_camera_ids": [],
@@ -746,6 +759,8 @@ def request_archive_root_activation(
     actor: User | None = None,
     mutation_owner: str | None = None,
     recovery: bool = False,
+    operation_id: str | None = None,
+    outer_handle: StorageOuterHandle | None = None,
 ) -> dict[str, Any]:
     existing = read_pending_archive_root_activation()
     if existing:
@@ -779,7 +794,7 @@ def request_archive_root_activation(
     if str(previous_root.id) == str(root.id):
         return {"status": "already_active", "root_id": str(root.id)}
 
-    operation_id = f"archive-root-{uuid.uuid4().hex}"
+    operation_id = str(operation_id or f"archive-root-{uuid.uuid4().hex}")
     lock_acquired = False
     try:
         if mutation_owner:
@@ -823,7 +838,10 @@ def request_archive_root_activation(
             _release_mutation_lock(operation_id)
         raise
 
-    start_archive_root_activation_closeout_worker()
+    if outer_handle is None:
+        start_archive_root_activation_closeout_worker()
+    else:
+        start_archive_root_activation_closeout_worker(outer_handle=outer_handle)
     return _public_state(state)
 
 
@@ -931,8 +949,9 @@ def _release_worker_lease(handle: WorkerLeaseHandle) -> bool:
 
 
 class WorkerLeaseSession:
-    def __init__(self, handle: WorkerLeaseHandle):
+    def __init__(self, handle: WorkerLeaseHandle, outer_handle: StorageOuterHandle | None = None):
         self.handle = handle
+        self.outer_handle = outer_handle
         self._stop = threading.Event()
         self._lost = threading.Event()
         self._lost_error: BaseException | None = None
@@ -951,6 +970,12 @@ class WorkerLeaseSession:
         while not self._stop.wait(WORKER_HEARTBEAT_SECONDS):
             try:
                 _touch_worker_lease(self.handle)
+                if self.outer_handle is not None:
+                    db = SessionLocal()
+                    try:
+                        heartbeat_storage_outer_operation(db, self.outer_handle)
+                    finally:
+                        db.close()
             except BaseException as exc:  # keep ownership failure visible to the worker
                 self._lost_error = exc
                 self._lost.set()
@@ -960,21 +985,25 @@ class WorkerLeaseSession:
         if self._lost.is_set():
             raise WorkerLeaseLost("archive_root_activation_worker_heartbeat_failed") from self._lost_error
         _assert_worker_lease(self.handle)
+        if self.outer_handle is not None:
+            db = SessionLocal()
+            try:
+                heartbeat_storage_outer_operation(db, self.outer_handle)
+            finally:
+                db.close()
         if self._lost.is_set():
             raise WorkerLeaseLost("archive_root_activation_worker_heartbeat_failed") from self._lost_error
 
     @contextmanager
     def fenced(self) -> Iterator[None]:
-        if self._lost.is_set():
-            raise WorkerLeaseLost("archive_root_activation_worker_heartbeat_failed") from self._lost_error
+        self.assert_owned()
         with _worker_lease_file_guard():
             lease = _validate_worker_lease_locked(self.handle)
             _write_json(_worker_lease_path(), {**lease, "heartbeat_at": _utc_now()})
             yield
             lease = _validate_worker_lease_locked(self.handle)
             _write_json(_worker_lease_path(), {**lease, "heartbeat_at": _utc_now()})
-        if self._lost.is_set():
-            raise WorkerLeaseLost("archive_root_activation_worker_heartbeat_failed") from self._lost_error
+        self.assert_owned()
 
     def stop(self) -> None:
         self._stop.set()
@@ -1819,16 +1848,77 @@ def finalize_pending_archive_root_activation(db: Session) -> dict[str, Any]:
     return _public_state(pending)
 
 
-def _closeout_worker(operation_id: str) -> None:
+def _claim_recovered_storage_outer(db: Session, state: dict[str, Any]) -> StorageOuterHandle | None:
+    deadline = time.monotonic() + 210
+    while True:
+        try:
+            claimed = reclaim_operation_with_conflicts(
+                db,
+                operation_type="archive_root_activation",
+                request_identity={
+                    "operation_id": state.get("operation_id"),
+                    "previous_root_id": state.get("previous_root_id"),
+                    "target_root_id": state.get("target_root_id"),
+                },
+                operation_id=str(state.get("operation_id") or ""),
+                idempotency_key=str(state.get("operation_id") or ""),
+                owner_instance_id=operation_instance_id("archive-root-activation-recovery"),
+            )
+        except StorageOuterConflict:
+            claimed = {"state": "running"}
+        if claimed.get("state") == "claimed":
+            return claimed["handle"]
+        if claimed.get("state") == "terminal":
+            return None
+        if time.monotonic() >= deadline:
+            raise StorageOuterConflict(
+                {"reason_code": "storage_operation_recovery_claim_timeout", "retryable": True}
+            )
+        time.sleep(2)
+
+
+def _finish_activation_storage_outer(db: Session, handle: StorageOuterHandle, state: dict[str, Any]) -> None:
+    status = str(state.get("status") or "failed")
+    terminal = "completed" if status == "completed" else "partial" if status == "failed_recovery_required" else "failed"
+    retry = terminal != "completed"
+    finish_storage_outer_operation(
+        db,
+        handle,
+        status=terminal,
+        result={
+            "status": status,
+            "affected_camera_count": len(state.get("affected_camera_ids") or []),
+            "restored_camera_count": len(state.get("restored_camera_ids") or []),
+            "restore_failed_count": len(state.get("camera_restore_failed_ids") or []),
+        },
+        progress={
+            "planned_count": len(state.get("affected_camera_ids") or []),
+            "completed_count": len(state.get("restored_camera_ids") or []),
+            "failed_count": len(state.get("camera_restore_failed_ids") or []),
+        },
+        reason_code=safe_reason_code(
+            state.get("reason_code") or state.get("rollback_reason_code"),
+            fallback="archive_root_activation_incomplete" if terminal != "completed" else None,
+        ),
+        retry_allowed=retry,
+        retry_mode="recovery" if retry else None,
+    )
+
+
+def _closeout_worker(operation_id: str, outer_handle: StorageOuterHandle | None = None) -> None:
     lease = _claim_worker_lease(operation_id)
     if lease is None:
         return
-    worker_session = WorkerLeaseSession(lease)
+    worker_session: WorkerLeaseSession | None = None
     db: Session | None = None
+    outer_terminalized = False
     try:
-        worker_session.start()
         db = SessionLocal()
         state = read_pending_archive_root_activation()
+        if state and str(state.get("operation_id") or "") == operation_id and outer_handle is None:
+            outer_handle = _claim_recovered_storage_outer(db, state)
+        worker_session = WorkerLeaseSession(lease, outer_handle)
+        worker_session.start()
         if state and str(state.get("operation_id") or "") == operation_id:
             if int(state.get("worker_recovery_count") or 0) > 0 or state.get("status") == "failed_recovery_required":
                 state = _transition_from(
@@ -1836,7 +1926,10 @@ def _closeout_worker(operation_id: str) -> None:
                     worker_session=worker_session,
                     worker_recovery_count=int(state.get("worker_recovery_count") or 0) + 1,
                 )
-            _run_activation_operation(db, operation_id, worker_session=worker_session)
+            terminal_state = _run_activation_operation(db, operation_id, worker_session=worker_session)
+            if outer_handle is not None and terminal_state.get("status") in {"completed", "failed", "failed_recovery_required"}:
+                _finish_activation_storage_outer(db, outer_handle, terminal_state)
+                outer_terminalized = True
     except WorkerLeaseLost:
         if db is not None:
             db.rollback()
@@ -1849,6 +1942,8 @@ def _closeout_worker(operation_id: str) -> None:
         if db is not None:
             db.rollback()
         try:
+            if worker_session is None:
+                raise WorkerLeaseLost("archive_root_activation_worker_not_started")
             worker_session.assert_owned()
         except WorkerLeaseLost:
             logger.warning("Archive-root activation worker failed after losing ownership; current operation was not mutated for %s", operation_id)
@@ -1885,20 +1980,28 @@ def _closeout_worker(operation_id: str) -> None:
                 db.rollback()
                 logger.exception("Archive-root activation failure handler failed for %s", operation_id)
     finally:
+        if db is not None and outer_handle is not None and not outer_terminalized:
+            final_state = read_pending_archive_root_activation() or archive_root_activation_public_status()
+            if final_state.get("status") in {"completed", "failed", "failed_recovery_required"}:
+                try:
+                    _finish_activation_storage_outer(db, outer_handle, final_state)
+                except Exception:
+                    db.rollback()
         if db is not None:
             db.close()
-        worker_session.stop()
+        if worker_session is not None:
+            worker_session.stop()
         _release_worker_lease(lease)
 
 
-def start_archive_root_activation_closeout_worker() -> None:
+def start_archive_root_activation_closeout_worker(outer_handle: StorageOuterHandle | None = None) -> None:
     pending = read_pending_archive_root_activation()
     if not pending or not pending.get("operation_id"):
         return
     operation_id = str(pending["operation_id"])
     thread = threading.Thread(
         target=_closeout_worker,
-        args=(operation_id,),
+        args=(operation_id, outer_handle),
         name=f"archive-root-activation-{operation_id[-8:]}",
         daemon=True,
     )

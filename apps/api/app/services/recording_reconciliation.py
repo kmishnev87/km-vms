@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-from typing import Iterable
+from typing import Callable, Iterable
 
 from sqlalchemy.orm import Session, object_session
 
@@ -538,7 +538,14 @@ def _problem_details(counts: Counter | dict, samples: dict[str, list[dict]]) -> 
     }
 
 
-def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, write_audit: bool = True) -> dict:
+def reconcile_recordings(
+    db: Session,
+    *,
+    mode: str = DRY_RUN_MODE,
+    actor=None,
+    write_audit: bool = True,
+    progress_callback: Callable[[], None] | None = None,
+) -> dict:
     global _LAST_CLEANUP_CANDIDATES_COUNT
     mode = APPLY_SAFE_MODE if mode == APPLY_SAFE_MODE else DRY_RUN_MODE
     apply_safe = mode == APPLY_SAFE_MODE
@@ -574,6 +581,8 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
         }
 
         for segment in segments:
+            if progress_callback is not None:
+                progress_callback()
             if segment.ownership != OWNERSHIP_KM_VMS or segment.source != RECORDER_SOURCE:
                 counts["skipped"] += 1
                 continue
@@ -597,6 +606,8 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
                 )
         per_root_counts: dict[str, Counter] = defaultdict(Counter)
         for root_row, path in _iter_storage_video_files(db):
+            if progress_callback is not None:
+                progress_callback()
             total_storage_files_scanned += 1
             try:
                 if root_row is None:
@@ -624,6 +635,8 @@ def reconcile_recordings(db: Session, *, mode: str = DRY_RUN_MODE, actor=None, w
                 )
         if apply_safe:
             for segment in segments:
+                if progress_callback is not None:
+                    progress_callback()
                 if segment.ownership != OWNERSHIP_KM_VMS or segment.source != RECORDER_SOURCE:
                     continue
                 _rel_path, classification = _classify_segment(segment, active_job_ids)

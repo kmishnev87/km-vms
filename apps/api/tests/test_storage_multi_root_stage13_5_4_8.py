@@ -365,7 +365,7 @@ def test_confirmed_recording_requires_current_instance_media_progress(stage48):
 
 
 def test_activation_ownership_is_atomic_and_state_transition_rejects_stale_revision(stage48, monkeypatch):
-    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda: None)
+    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(archive_root_activation, "list_camera_recording_states", lambda _db: [])
     monkeypatch.setattr(archive_root_activation, "create_event", lambda **_kwargs: None)
     barrier = threading.Barrier(2)
@@ -412,7 +412,7 @@ def test_recovery_request_persists_running_rollback_state_before_worker(stage48,
         rollback_status="failed",
         reason_code="rollback_access_failed",
     )
-    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda: None)
+    monkeypatch.setattr(archive_root_activation, "start_archive_root_activation_closeout_worker", lambda *_args, **_kwargs: None)
 
     result = archive_root_activation.request_archive_root_activation(
         stage48.db,

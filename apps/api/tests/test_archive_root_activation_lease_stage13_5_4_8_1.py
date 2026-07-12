@@ -316,6 +316,7 @@ def test_stale_worker_conflict_exits_without_failure_or_cleanup_side_effects(lea
 
     monkeypatch.setattr(archive_root_activation, "_claim_worker_lease", lambda _operation_id: old)
     monkeypatch.setattr(archive_root_activation, "SessionLocal", lambda: db)
+    monkeypatch.setattr(archive_root_activation, "_claim_recovered_storage_outer", lambda *_args, **_kwargs: None)
 
     def lose_ownership(*_args, **_kwargs):
         _write_lease(new)
@@ -359,6 +360,7 @@ def test_dead_stale_worker_lease_recovers_through_closeout_path(lease_control, m
     observed: list[str] = []
 
     monkeypatch.setattr(archive_root_activation, "SessionLocal", lambda: db)
+    monkeypatch.setattr(archive_root_activation, "_claim_recovered_storage_outer", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         archive_root_activation,
         "_run_activation_operation",
@@ -388,6 +390,7 @@ def test_normal_completion_stops_heartbeat_and_releases_exact_ownership(lease_co
     sessions: list[archive_root_activation.WorkerLeaseSession] = []
 
     monkeypatch.setattr(archive_root_activation, "SessionLocal", lambda: db)
+    monkeypatch.setattr(archive_root_activation, "_claim_recovered_storage_outer", lambda *_args, **_kwargs: None)
 
     def complete(_db, current_operation_id, *, worker_session):
         assert current_operation_id == operation_id

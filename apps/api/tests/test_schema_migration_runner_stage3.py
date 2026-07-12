@@ -57,7 +57,7 @@ def ok(_db):
     return {"ok": True}
 
 
-def safe_migration(from_version=0, to_version=1, migration_id="stage3_test_safe_metadata"):
+def safe_migration(from_version=0, to_version=CURRENT_SCHEMA_VERSION, migration_id="stage3_test_safe_metadata"):
     return MigrationDefinition(
         migration_id=migration_id,
         from_version=from_version,
@@ -77,7 +77,7 @@ def risky_migration():
     return MigrationDefinition(
         migration_id="stage3_test_risky_requires_backup",
         from_version=0,
-        to_version=1,
+        to_version=CURRENT_SCHEMA_VERSION,
         description="Test-only risky migration classification.",
         risk=RISK_REQUIRES_BACKUP,
         transaction_mode="manual_boundary",
@@ -93,7 +93,7 @@ def manual_migration():
     return MigrationDefinition(
         migration_id="stage3_test_manual_only",
         from_version=0,
-        to_version=1,
+        to_version=CURRENT_SCHEMA_VERSION,
         description="Test-only manual migration classification.",
         risk=RISK_MANUAL_ONLY,
         transaction_mode="manual_boundary",
@@ -277,7 +277,7 @@ def test_migration_failure_does_not_mark_current_and_sanitizes_error():
     migration = MigrationDefinition(
         migration_id="stage3_test_failure",
         from_version=0,
-        to_version=1,
+        to_version=CURRENT_SCHEMA_VERSION,
         description="Test-only failure migration.",
         risk=RISK_ADDITIVE_SAFE,
         transaction_mode="session_transaction",
