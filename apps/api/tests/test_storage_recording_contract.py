@@ -51,7 +51,7 @@ from app.services.recording_storage import (
     storage_migration_apply_plan,
     write_archive_roots_runtime_files,
 )
-from app.services import recording_reconciliation
+from app.services import recording_reconciliation, setup_storage
 from app.services.recording_reconciliation import reconcile_recordings, reconciliation_diagnostics
 from app.services.system_settings import (
     active_recording_jobs_count,
@@ -1327,7 +1327,7 @@ def test_archive_root_activation_requests_runtime_switch_after_pausing_active_jo
     assert pending["current_step"] == "snapshot_created"
 
 
-def test_archive_root_delete_removes_inactive_root_and_hides_its_recordings(db):
+def test_archive_root_delete_removes_inactive_root_and_hides_its_recordings(db, monkeypatch):
     from app.routers import recordings as recordings_router
     from app.routers import storage as storage_router
 
@@ -1364,6 +1364,20 @@ def test_archive_root_delete_removes_inactive_root_and_hides_its_recordings(db):
     segment.size_bytes = file_path.stat().st_size
     db.add(segment)
     db.commit()
+    monkeypatch.setattr(
+        setup_storage,
+        "request_archive_root_cleanup",
+        lambda root, operation_id, marker_already_removed=False, **_kwargs: {
+            "status": "completed",
+            "cleanup_status": "completed_removed",
+            "operation_id": operation_id,
+            "archive_root_id": root.id,
+            "marker_removed": True,
+            "root_directory_removed": True,
+            "root_directory_preserved_reason": "",
+            "retry_available": False,
+        },
+    )
 
     result = storage_router.delete_archive_root(
         "delete-target-root",

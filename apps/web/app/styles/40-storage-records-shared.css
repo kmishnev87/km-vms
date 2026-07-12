@@ -2697,11 +2697,12 @@
 }
 
 .storageOpsAdvancedRootSummaryContent {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  width: calc(100% - 6px);
+  min-width: 0;
+  width: 100%;
 }
 
 .storageOpsDiscoveryStatus {
@@ -2813,4 +2814,367 @@
 .storageOpsCameraTable th:nth-child(n + 2),
 .storageOpsCameraTable td:nth-child(n + 2) {
   text-align: right;
+}
+
+/* Stage 13.5 / 4.9 operation feedback and compact storage composition. */
+.operationFeedbackOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.operationFeedbackDialog {
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  overflow: auto;
+  border: 1px solid #dbe3ed;
+  border-top: 4px solid #d97706;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 22px 64px rgba(15, 23, 42, 0.24);
+}
+
+.operationFeedbackDialog-success {
+  border-top-color: #16a34a;
+}
+
+.operationFeedbackDialog-error {
+  border-top-color: #dc2626;
+}
+
+.operationFeedbackHead,
+.operationFeedbackFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.operationFeedbackHead {
+  justify-content: space-between;
+  border-bottom: 1px solid #e5eaf0;
+}
+
+.operationFeedbackHead h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.operationFeedbackClose,
+.operationFeedbackToast button {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: #eef2f6;
+  color: #334155;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.operationFeedbackBody {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.operationFeedbackBody > p {
+  margin: 0;
+}
+
+.operationFeedbackSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.operationFeedbackSummary div {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.operationFeedbackSummary dt {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.operationFeedbackSummary dd {
+  margin: 0;
+  color: #0f172a;
+  font-weight: 650;
+}
+
+.operationFeedbackList {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.operationFeedbackReasons {
+  display: grid;
+  gap: 8px;
+}
+
+.operationFeedbackReasons > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  padding: 10px 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  background: #fff7ed;
+}
+
+.operationFeedbackReasons p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+}
+
+.operationFeedbackDetail {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 12px;
+}
+
+.operationFeedbackFooter {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  border-top: 1px solid #e5eaf0;
+}
+
+.operationFeedbackBusy {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.operationFeedbackBusy span {
+  display: block;
+  width: 36%;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  animation: operationFeedbackBusy 1.1s ease-in-out infinite;
+}
+
+@keyframes operationFeedbackBusy {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(310%); }
+}
+
+.operationFeedbackToastRegion {
+  position: fixed;
+  z-index: 1400;
+  top: 22px;
+  left: 50%;
+  width: min(520px, calc(100vw - 28px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.operationFeedbackToast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid #86efac;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #166534;
+  box-shadow: 0 14px 38px rgba(15, 23, 42, 0.18);
+  pointer-events: auto;
+}
+
+.operationFeedbackToast > div {
+  display: grid;
+  gap: 2px;
+}
+
+.operationFeedbackToast span {
+  font-size: 12px;
+}
+
+.operationFeedbackToast button {
+  flex: 0 0 auto;
+  background: transparent;
+  color: inherit;
+}
+
+.storageOpsDashboard {
+  grid-template-columns: minmax(0, 1.55fr) minmax(390px, 1fr);
+  grid-template-areas:
+    "archive cameras"
+    "roots operations"
+    "roots operations"
+    "recent operations";
+}
+
+.storageOpsSection-cameras {
+  grid-area: cameras;
+  min-width: 0;
+}
+
+.storageOpsSection-operations .storageOpsOperationList {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.storageOpsSection-operations .storageOpsOperationRow {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+}
+
+.storageOpsSection-operations .storageOpsOperationActions {
+  justify-content: flex-start;
+}
+
+.storageOpsSection-roots {
+  padding: 0;
+  overflow: hidden;
+}
+
+.storageOpsSection-roots > .storageOpsRootList,
+.storageOpsSection-roots > .storageOpsAdvancedRoot {
+  margin-left: 14px;
+  margin-right: 14px;
+}
+
+.storageOpsSection-roots > .storageOpsRootList {
+  margin-top: 10px;
+}
+
+.storageOpsSection-roots > .storageOpsAdvancedRoot {
+  margin-bottom: 12px;
+}
+
+.storageOpsAdvancedRoot > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  list-style: none;
+}
+
+.storageOpsAdvancedRoot > summary::-webkit-details-marker {
+  display: none;
+}
+
+.storageOpsAdvancedRoot > summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid #475569;
+  transition: transform 120ms ease;
+}
+
+.storageOpsAdvancedRoot[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.storageOpsAdvancedRootSummaryContent > :first-child {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.storageOpsRootListRow > div:not(.storageOpsRootPath):not(.storageOpsRootActionsCell):not(.storageOpsRootDeleteCell) {
+  grid-template-rows: 14px 18px;
+  align-content: center;
+}
+
+.storageOpsAdvancedRoot .storageOpsRootAddButton,
+.storageOpsAdvancedRoot .storageOpsRootForm-product .select,
+.storageOpsAdvancedRoot .storageOpsRootForm-product .input {
+  min-height: 38px;
+  height: 38px;
+}
+
+.storageOpsAdvancedRoot .storageOpsRootAddButton {
+  min-width: 92px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.storageOpsCameraTable .storageOpsTable th,
+.storageOpsCameraTable .storageOpsTable td {
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
+.storageOpsCameraTable {
+  overflow-x: hidden;
+}
+
+.storageOpsCameraTable .storageOpsTable {
+  width: 100%;
+  min-width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+}
+
+.storageOpsCameraTable .storageOpsTable th {
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.storageOpsCameraTable .storageOpsTable th:first-child,
+.storageOpsCameraTable .storageOpsTable td:first-child {
+  width: 40%;
+}
+
+.storageOpsCameraTable .storageOpsTable th:nth-child(2),
+.storageOpsCameraTable .storageOpsTable td:nth-child(2) {
+  width: 20%;
+}
+
+.storageOpsCameraTable .storageOpsTable th:nth-child(3),
+.storageOpsCameraTable .storageOpsTable td:nth-child(3) {
+  width: 20%;
+}
+
+.storageOpsCameraTable .storageOpsTable th:nth-child(4),
+.storageOpsCameraTable .storageOpsTable td:nth-child(4) {
+  width: 20%;
+}
+
+.storageOpsCameraTable .storageOpsTable th:nth-child(n + 2),
+.storageOpsCameraTable .storageOpsTable td:nth-child(n + 2) {
+  text-align: center;
+}
+
+.storageOpsCameraProblemButton {
+  min-width: 26px;
+  padding: 2px 8px;
+  border: 1px solid #fdba74;
+  border-radius: 5px;
+  background: #fff7ed;
+  color: #c2410c;
+  font: inherit;
+  cursor: pointer;
 }

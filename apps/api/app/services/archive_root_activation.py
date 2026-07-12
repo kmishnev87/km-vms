@@ -765,7 +765,7 @@ def request_archive_root_activation(
         return {"status": "blocked", "reason_code": "archive_root_recovery_not_available"}
     if root.retired_at is not None:
         return {"status": "blocked", "reason_code": "archive_root_retired"}
-    if root.retirement_status == "partial_deletion":
+    if root.retirement_status in {"deleting", "partial_deletion", "partial_cleanup", "partial_finalization"}:
         return {"status": "blocked", "reason_code": "archive_root_partial_deletion_requires_retry"}
 
     previous_root = (

@@ -40,7 +40,7 @@ from app.services.onvif_service import (
     ptz_validation_response,
     ptz_command_limits,
 )
-from app.services.recording_retention import execute_segments, preview_segments
+from app.services.recording_retention import EXECUTION_POLICY_MANUAL_COMPLETE, execute_segments, preview_segments
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 viewer_router = APIRouter(prefix="/viewer/cameras", tags=["viewer-cameras"])
@@ -1679,7 +1679,8 @@ def delete_camera(
                         actor=current_user,
                         operation="camera_delete_with_files",
                         reason=CAMERA_DELETE_FILES_REASON,
-                        max_candidates=max(len(segments), 1),
+                        policy=EXECUTION_POLICY_MANUAL_COMPLETE,
+                        scope={"type": "camera", "segment_ids": [], "camera_ids": [camera.id], "root_ids": []},
                     )
                 )
                 if recordings["failed_count"] or recordings["skipped_count"] or recordings["limit_exceeded"]:

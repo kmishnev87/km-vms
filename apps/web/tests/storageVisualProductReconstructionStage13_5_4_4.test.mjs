@@ -35,9 +35,9 @@ for (const pathHealth of [
 }
 
 assert.doesNotMatch(storagePage, /<Section title=\{copy\.diagnostics\}/, "diagnostics is not a main card");
-assert.match(storagePage, /storageOpsSupportDetails/, "support details are collapsed and low priority");
-const supportStart = storagePage.indexOf("storageOpsSupportDetails");
-const primary = storagePage.slice(storagePage.indexOf("<section className={`storageOpsOverview"), supportStart);
+assert.doesNotMatch(storagePage, /storageOpsSupportDetails/, "the obsolete page-level support block is not rendered");
+const primaryEnd = storagePage.indexOf("<OperationDialog");
+const primary = storagePage.slice(storagePage.indexOf("<section className={`storageOpsOverview"), primaryEnd);
 assert.doesNotMatch(primary, /copy\.ownershipBoundary|copy\.ownershipBoundaryText|copy\.deletedExcluded|copy\.dockerPath|raw JSON|active_recording_jobs/i);
 
 assert.match(storagePage, /copy\.currentArchive/);

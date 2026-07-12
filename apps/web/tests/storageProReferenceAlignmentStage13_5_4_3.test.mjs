@@ -64,11 +64,11 @@ assert.match(i18n, /reconciliationApply: "Исправить только без
 assert.match(i18n, /refresh: "Обновить"/);
 assert.doesNotMatch(i18n, /Предпросмотр регламента|Удалить по плану|Применить безопасно|Самое безопасное действие|Доступность: Нет/);
 
-const primaryRender = storagePage.slice(storagePage.indexOf("<section className={`storageOpsOverview"), storagePage.indexOf("<details className=\"storageOpsSupportDetails\""));
+const primaryRender = storagePage.slice(storagePage.indexOf("<section className={`storageOpsOverview"), storagePage.indexOf("<OperationDialog"));
 assert.doesNotMatch(primaryRender, /namespace|host_bind_env|Default archive|active_recording_jobs|raw JSON/i);
 assert.match(primaryRender, /archiveRootPath\(root, archivePathText\)/, "archive roots show human archive paths");
 
-assert.match(storagePage, /availabilityState\(pathHealth, copy\)/);
+assert.match(storagePage, /accessRightsModel\(pathHealth, language\)/);
 assert.match(storagePage, /recordingState\(operations, pathHealth, policy, copy\)/);
 assert.doesNotMatch(storagePage, /pathHealth\.available === false \? copy\.availabilityNeedsCheck : copy\.availabilityConfirmed/);
 assert.equal(context.accessRightsModel({}).label, "Права на чтение и запись: не проверены");

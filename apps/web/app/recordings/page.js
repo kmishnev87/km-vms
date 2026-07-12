@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
+import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
 import VideoZoomPanSurface from "../../components/VideoZoomPanSurface";
 import { apiFetch, canDeleteRecordings, issueRecordingMediaToken } from "../../lib/api";
 import {
@@ -17,6 +18,7 @@ import {
 } from "../../lib/archiveExports";
 import { useCurrentUser } from "../../lib/currentUser";
 import { useI18n } from "../../lib/i18n";
+import { resolveEffectiveRecordingCamera } from "../../lib/recordingFilters";
 import {
   shouldUseAdaptiveHighResolutionPlayback,
   normalizeVideoDimensions,
@@ -80,6 +82,49 @@ const TEXT = {
   verificationError: "\u041e\u0448\u0438\u0431\u043a\u0430 \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438",
   unavailable: "\u041d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u043d\u043e",
   recordingActiveEmpty: "\u0418\u0434\u0451\u0442 \u0437\u0430\u043f\u0438\u0441\u044c. \u0417\u0430\u043f\u0438\u0441\u044c \u043f\u043e\u044f\u0432\u0438\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u0437\u0430\u043a\u0440\u044b\u0442\u0438\u044f \u0441\u0435\u0433\u043c\u0435\u043d\u0442\u0430.",
+  cancel: "Отмена",
+  deleteOneTitle: "Удалить запись?",
+  deleteOneMessage: "Запись «{name}» будет удалена без возможности восстановления.",
+  deleteSelectedTitle: "Удалить выбранные записи?",
+  deleteSelectedMessage: "Будет удалено записей: {count}.",
+  deleteCameraTitle: "Удалить записи камеры?",
+  deleteCameraMessage: "Будут удалены все записи камеры «{camera}», вошедшие в подтверждённый план.",
+  deleteAllTitle: "Удалить все записи?",
+  deleteAllMessage: "Будут удалены все записи из подтверждённого сервером списка.",
+  preparingDeletionTitle: "Подготовка удаления",
+  preparingDeletionMessage: "Сервер формирует точный список записей и рассчитывает объём.",
+  deletingTitle: "Удаление записей",
+  deletingMessage: "Операция выполняется. Не закрывайте страницу до получения результата.",
+  deletionCompletedTitle: "Записи удалены",
+  deletionCompletedMessage: "Удалено: {count}; освобождено: {size}.",
+  deletionPartialTitle: "Удаление завершено не полностью",
+  deletionFailedTitle: "Записи не удалены",
+  plannedCount: "Будет удалено",
+  deletedCount: "Удалено",
+  skippedCount: "Пропущено",
+  failedCount: "Ошибки",
+  freedSpace: "Освобождено",
+  openStorage: "Открыть хранилище",
+  refreshRecords: "Обновить записи",
+  deletionRetryHint: "Причины показаны ниже. Устраните их и сформируйте новый план удаления.",
+  reasonActiveJob: "Запись ещё выполняется",
+  reasonActiveJobDetail: "Дождитесь завершения текущего файла записи и повторите операцию.",
+  reasonFileMissing: "Файл уже отсутствует",
+  reasonFileMissingDetail: "Откройте Хранилище и выполните проверку архива, чтобы сверить метаданные.",
+  reasonStorageUnavailable: "Расположение архива недоступно",
+  reasonStorageUnavailableDetail: "Проверьте доступность корня архива в разделе Хранилище.",
+  reasonUnsafePath: "Расположение записи не подтверждено",
+  reasonUnsafePathDetail: "Удаление безопасно заблокировано до проверки архива.",
+  reasonForeign: "Запись не принадлежит KM VMS",
+  reasonForeignDetail: "KM VMS не удаляет чужие или неподтверждённые данные.",
+  reasonPermission: "Недостаточно прав",
+  reasonPermissionDetail: "Войдите под пользователем с правом удаления записей.",
+  reasonConflict: "Другая операция уже работает с этими записями",
+  reasonConflictDetail: "Дождитесь её завершения, обновите список и повторите удаление.",
+  reasonPlanExpired: "План удаления устарел",
+  reasonPlanExpiredDetail: "Сформируйте новый план и подтвердите его ещё раз.",
+  reasonInternal: "Удаление не завершено",
+  reasonInternalDetail: "Повторите операцию. Если ошибка сохраняется, проверьте состояние системы.",
 };
 
 const ICONS = {
@@ -362,6 +407,59 @@ function summarizeDeleteResult(result) {
   return `\u0423\u0434\u0430\u043b\u0435\u043d\u043e: ${deleted}; \u043f\u0440\u043e\u043f\u0443\u0449\u0435\u043d\u043e: ${skipped + notFound}; \u043e\u0448\u0438\u0431\u043e\u043a: ${failed}.`;
 }
 
+function newClientOperationId(prefix = "recording-delete") {
+  const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${random}`;
+}
+
+function deletionResultFromError(error) {
+  const detail = error?.detail || error?.data?.detail;
+  return detail && typeof detail === "object" ? detail : null;
+}
+
+function deletionReasonRows(result, t) {
+  const skipped = result?.skipped_reason_counts || {};
+  const failed = result?.failed_reason_counts || {};
+  const counts = {};
+  for (const source of [skipped, failed]) {
+    for (const [reason, count] of Object.entries(source)) {
+      counts[reason] = Number(counts[reason] || 0) + Number(count || 0);
+    }
+  }
+  const mapping = {
+    active_job: [t.reasonActiveJob, t.reasonActiveJobDetail],
+    writing: [t.reasonActiveJob, t.reasonActiveJobDetail],
+    file_missing: [t.reasonFileMissing, t.reasonFileMissingDetail],
+    metadata_not_found: [t.reasonFileMissing, t.reasonFileMissingDetail],
+    storage_unavailable: [t.reasonStorageUnavailable, t.reasonStorageUnavailableDetail],
+    root_unavailable: [t.reasonStorageUnavailable, t.reasonStorageUnavailableDetail],
+    root_unresolved: [t.reasonUnsafePath, t.reasonUnsafePathDetail],
+    outside_kmvms_namespace: [t.reasonUnsafePath, t.reasonUnsafePathDetail],
+    path_outside_storage: [t.reasonUnsafePath, t.reasonUnsafePathDetail],
+    invalid_path: [t.reasonUnsafePath, t.reasonUnsafePathDetail],
+    unowned: [t.reasonForeign, t.reasonForeignDetail],
+    foreign_source: [t.reasonForeign, t.reasonForeignDetail],
+    permission_denied: [t.reasonPermission, t.reasonPermissionDetail],
+    destructive_scope_conflict: [t.reasonConflict, t.reasonConflictDetail],
+    destructive_operation_already_running: [t.reasonConflict, t.reasonConflictDetail],
+    deletion_plan_expired: [t.reasonPlanExpired, t.reasonPlanExpiredDetail],
+    deletion_plan_scope_changed: [t.reasonPlanExpired, t.reasonPlanExpiredDetail],
+    recording_deletion_internal_failure: [t.reasonInternal, t.reasonInternalDetail],
+    operation_lease_lost: [t.reasonInternal, t.reasonInternalDetail],
+    destructive_scope_lease_lost: [t.reasonInternal, t.reasonInternalDetail],
+    delete_failed: [t.reasonInternal, t.reasonInternalDetail],
+    metadata_update_failed: [t.reasonInternal, t.reasonInternalDetail],
+    metadata_update_failed_recovered: [t.reasonInternal, t.reasonInternalDetail],
+    limit_exceeded: [t.reasonInternal, t.reasonInternalDetail],
+  };
+  return Object.entries(counts)
+    .filter(([, count]) => Number(count || 0) > 0)
+    .map(([code, count]) => {
+      const [label, detail] = mapping[code] || [t.reasonInternal, t.reasonInternalDetail];
+      return { code, count: Number(count), label, detail };
+    });
+}
+
 function normalizeRecordingError(message) {
   const text = String(message || "").trim();
   if (!text) return "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0432\u044b\u043f\u043e\u043b\u043d\u0438\u0442\u044c \u043e\u043f\u0435\u0440\u0430\u0446\u0438\u044e. \u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435 \u043f\u043e\u043f\u044b\u0442\u043a\u0443.";
@@ -454,6 +552,8 @@ export default function RecordingsPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [deleteDialog, setDeleteDialog] = useState(null);
+  const [deleteToast, setDeleteToast] = useState(null);
   const [busy, setBusy] = useState(false);
   const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
   const [recorderStatus, setRecorderStatus] = useState(null);
@@ -476,6 +576,7 @@ export default function RecordingsPage() {
 
   const requestIdRef = useRef(0);
   const dangerMenuRef = useRef(null);
+  const dangerTriggerRef = useRef(null);
   const viewerFrameRef = useRef(null);
   const viewerVideoRef = useRef(null);
   const viewerRestoreStateRef = useRef(null);
@@ -491,8 +592,10 @@ export default function RecordingsPage() {
 
   async function loadCameras() {
     const data = await apiFetch("/recordings/cameras");
-    setCameras(data.items || []);
+    const cameraOptions = data.items || [];
+    setCameras(cameraOptions);
     setExportCameraOptions(data.export_items || []);
+    return cameraOptions;
   }
 
   async function loadRecordings(camera = "__all__", dateValue = selectedDate, page = currentPage) {
@@ -574,7 +677,14 @@ export default function RecordingsPage() {
     try {
       setError("");
       setNotice("");
-      await Promise.all([loadCameras(), loadRecordings(selectedCamera, selectedDate, currentPage), loadRecorderStatus()]);
+      const [cameraOptions] = await Promise.all([loadCameras(), loadRecorderStatus()]);
+      const effectiveCamera = resolveEffectiveRecordingCamera(selectedCamera, cameraOptions);
+      const effectivePage = effectiveCamera === selectedCamera ? currentPage : 1;
+      if (effectiveCamera !== selectedCamera) {
+        setSelectedCamera(effectiveCamera);
+        setCurrentPage(1);
+      }
+      await loadRecordings(effectiveCamera, selectedDate, effectivePage);
     } catch (err) {
       setError(normalizeRecordingError(err.message));
     }
@@ -965,91 +1075,228 @@ export default function RecordingsPage() {
     }
   }
 
-  async function handleDeleteOne(item) {
-    if (!canDelete) return;
-    if (!window.confirm(`\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0437\u0430\u043f\u0438\u0441\u044c "${item.filename}"?`)) return;
-    try {
-      setError("");
-      setNotice("");
-      setBusy(true);
-      const result = await apiFetch(`/recordings?${recordingIdentityQuery(item)}`, {
-        method: "DELETE",
+  function closeDeleteDialog() {
+    if (deleteDialog?.busy) return;
+    const readyPlanId = deleteDialog?.readyPlanId;
+    setDeleteDialog(null);
+    if (readyPlanId) {
+      apiFetch(`/recordings/deletion-plans/${encodeURIComponent(readyPlanId)}`, { method: "DELETE" }).catch(() => {});
+    }
+  }
+
+  function showDeletionResult(result) {
+    const completed = result?.ok === true && result?.status === "completed";
+    if (completed) {
+      setDeleteDialog(null);
+      setDeleteToast({
+        id: `recording-delete-${result.operation_id || Date.now()}`,
+        title: t.deletionCompletedTitle,
+        message: t.deletionCompletedMessage
+          .replace("{count}", String(result.deleted_count || 0))
+          .replace("{size}", formatSizeBytes(result.bytes_freed || 0)),
+        closeLabel: t.close,
+        tone: "success",
       });
+      return;
+    }
+    const reasons = deletionReasonRows(result, t);
+    const reasonCodes = new Set(reasons.map((reason) => reason.code));
+    const storageActionNeeded = [...reasonCodes].some((code) => [
+      "file_missing",
+      "metadata_not_found",
+      "storage_unavailable",
+      "root_unavailable",
+      "root_unresolved",
+      "outside_kmvms_namespace",
+      "path_outside_storage",
+      "invalid_path",
+    ].includes(code));
+    setDeleteDialog({
+      id: `recording-delete-result-${result?.operation_id || Date.now()}`,
+      title: Number(result?.deleted_count || 0) > 0 ? t.deletionPartialTitle : t.deletionFailedTitle,
+      message: t.deletionRetryHint,
+      summary: [
+        { label: t.deletedCount, value: String(result?.deleted_count || 0) },
+        { label: t.skippedCount, value: String(result?.skipped_count || 0) },
+        { label: t.failedCount, value: String(result?.failed_count || 0) },
+        { label: t.freedSpace, value: formatSizeBytes(result?.bytes_freed || 0) },
+      ],
+      reasons: reasons.length ? reasons : [{ code: "unknown", label: t.reasonInternal, detail: t.reasonInternalDetail }],
+      actions: [
+        ...(storageActionNeeded ? [{ id: "open-storage", label: t.openStorage, onClick: () => window.location.assign("/storage") }] : []),
+        { id: "refresh-recordings", label: t.refreshRecords, onClick: async () => { setDeleteDialog(null); await refresh(); } },
+      ],
+      closeLabel: t.close,
+      tone: "error",
+    });
+  }
+
+  function showDeletionError(error) {
+    const result = deletionResultFromError(error);
+    if (result) {
+      showDeletionResult(result);
+      return;
+    }
+    setDeleteDialog({
+      id: `recording-delete-error-${Date.now()}`,
+      title: t.deletionFailedTitle,
+      message: normalizeRecordingError(error?.message),
+      reasons: [{ code: "request_failed", label: t.reasonInternal, detail: t.reasonInternalDetail }],
+      closeLabel: t.close,
+      tone: "error",
+    });
+  }
+
+  async function executeExactDelete({ url, options, operationId }) {
+    setBusy(true);
+    setError("");
+    setDeleteDialog({
+      id: `recording-delete-running-${operationId}`,
+      title: t.deletingTitle,
+      message: t.deletingMessage,
+      busy: true,
+      dismissible: false,
+      tone: "warning",
+    });
+    try {
+      const result = await apiFetch(url, options);
       await refresh();
-      setNotice(summarizeDeleteResult(result));
-    } catch (err) {
-      setError(normalizeRecordingError(err.message));
+      showDeletionResult(result);
+    } catch (error) {
+      showDeletionError(error);
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleDeleteSelected() {
+  function handleDeleteOne(item) {
     if (!canDelete) return;
-    if (!selectedPaths.length) return;
-    if (!window.confirm(`\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0435 \u0437\u0430\u043f\u0438\u0441\u0438: ${selectedPaths.length} \u0448\u0442.?`)) return;
+    const operationId = newClientOperationId("recording-single");
+    setDeleteDialog({
+      id: `recording-single-confirm-${operationId}`,
+      title: t.deleteOneTitle,
+      message: t.deleteOneMessage.replace("{name}", item.filename || t.file),
+      summary: [{ label: t.size, value: formatSizeBytes(item.size_bytes || item.size || 0) }],
+      confirmLabel: t.remove,
+      cancelLabel: t.cancel,
+      closeLabel: t.cancel,
+      confirmTone: "danger",
+      tone: "error",
+      onConfirm: () => executeExactDelete({
+        operationId,
+        url: `/recordings?${recordingIdentityQuery(item)}&operation_id=${encodeURIComponent(operationId)}`,
+        options: { method: "DELETE" },
+      }),
+    });
+  }
 
+  function handleDeleteSelected() {
+    if (!canDelete || !selectedPaths.length) return;
+    const selectedItems = paginatedItems
+      .filter((item) => selectedPaths.includes(recordingIdentityKey(item)))
+      .map((item) => recordingIdentityPayload(item));
+    const operationId = newClientOperationId("recording-selected");
+    setDeleteDialog({
+      id: `recording-selected-confirm-${operationId}`,
+      title: t.deleteSelectedTitle,
+      message: t.deleteSelectedMessage.replace("{count}", String(selectedItems.length)),
+      summary: [{ label: t.selected, value: String(selectedItems.length) }],
+      confirmLabel: t.remove,
+      cancelLabel: t.cancel,
+      closeLabel: t.cancel,
+      confirmTone: "danger",
+      tone: "error",
+      onConfirm: () => executeExactDelete({
+        operationId,
+        url: "/recordings/bulk-delete",
+        options: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ operation_id: operationId, items: selectedItems }),
+        },
+      }),
+    });
+  }
+
+  async function prepareDynamicDeletion(scope, camera = null) {
+    dangerTriggerRef.current?.focus({ preventScroll: true });
+    setDangerMenuOpen(false);
+    setBusy(true);
+    setError("");
+    setDeleteDialog({
+      id: `recording-plan-${scope}`,
+      title: t.preparingDeletionTitle,
+      message: t.preparingDeletionMessage,
+      busy: true,
+      dismissible: false,
+      tone: "warning",
+    });
     try {
-      setError("");
-      setNotice("");
-      setBusy(true);
-      const result = await apiFetch("/recordings/bulk-delete", {
+      const plan = await apiFetch("/recordings/deletion-plans", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          items: paginatedItems
-            .filter((item) => selectedPaths.includes(recordingIdentityKey(item)))
-            .map((item) => recordingIdentityPayload(item)),
-        }),
+        body: JSON.stringify({ scope, camera }),
       });
-      await refresh();
-      setNotice(summarizeDeleteResult(result));
-    } catch (err) {
-      setError(normalizeRecordingError(err.message));
+      const title = scope === "all" ? t.deleteAllTitle : t.deleteCameraTitle;
+      const message = scope === "all"
+        ? t.deleteAllMessage
+        : t.deleteCameraMessage.replace("{camera}", camera || "");
+      setDeleteDialog({
+        id: `recording-plan-confirm-${plan.plan_id}`,
+        readyPlanId: plan.plan_id,
+        title,
+        message,
+        summary: [
+          { label: t.plannedCount, value: String(plan.planned_count || 0) },
+          { label: t.totalSize, value: formatSizeBytes(plan.planned_bytes || 0) },
+        ],
+        confirmLabel: t.remove,
+        cancelLabel: t.cancel,
+        closeLabel: t.cancel,
+        confirmTone: "danger",
+        tone: "error",
+        onConfirm: () => executeDeletionPlan(plan),
+      });
+    } catch (error) {
+      showDeletionError(error);
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleDeleteByCamera() {
-    if (!canDelete) return;
-    if (!selectedCamera || selectedCamera === "__all__") return;
-    if (!window.confirm(`\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u0441\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 \u043a\u0430\u043c\u0435\u0440\u044b "${selectedCamera}"?`)) return;
-
+  async function executeDeletionPlan(plan) {
+    setBusy(true);
+    setDeleteDialog({
+      id: `recording-plan-running-${plan.plan_id}`,
+      title: t.deletingTitle,
+      message: t.deletingMessage,
+      busy: true,
+      dismissible: false,
+      tone: "warning",
+    });
     try {
-      setDangerMenuOpen(false);
-      setError("");
-      setNotice("");
-      setBusy(true);
-      const result = await apiFetch(`/recordings/by-camera?camera=${encodeURIComponent(selectedCamera)}`, {
-        method: "DELETE",
+      const result = await apiFetch(`/recordings/deletion-plans/${encodeURIComponent(plan.plan_id)}/execute`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
       });
       await refresh();
-      setNotice(summarizeDeleteResult(result));
-    } catch (err) {
-      setError(normalizeRecordingError(err.message));
+      showDeletionResult(result);
+    } catch (error) {
+      showDeletionError(error);
     } finally {
       setBusy(false);
     }
   }
 
-  async function handleDeleteAll() {
-    if (!canDelete) return;
-    if (!window.confirm("\u0423\u0434\u0430\u043b\u0438\u0442\u044c \u0432\u043e\u043e\u0431\u0449\u0435 \u0432\u0441\u0435 \u0437\u0430\u043f\u0438\u0441\u0438 \u0432\u0441\u0435\u0445 \u043a\u0430\u043c\u0435\u0440?")) return;
+  function handleDeleteByCamera() {
+    if (!canDelete || !selectedCamera || selectedCamera === "__all__") return;
+    prepareDynamicDeletion("camera", selectedCamera);
+  }
 
-    try {
-      setDangerMenuOpen(false);
-      setError("");
-      setNotice("");
-      setBusy(true);
-      const result = await apiFetch("/recordings/all?confirm=true&confirmation_text=DELETE_ALL_RECORDINGS", { method: "DELETE" });
-      await refresh();
-      setNotice(summarizeDeleteResult(result));
-    } catch (err) {
-      setError(normalizeRecordingError(err.message));
-    } finally {
-      setBusy(false);
-    }
+  function handleDeleteAll() {
+    if (!canDelete) return;
+    prepareDynamicDeletion("all");
   }
 
   return (
@@ -1135,6 +1382,7 @@ export default function RecordingsPage() {
 
                 <div className="recordingsDangerMenu recordingsToolbarMenu" ref={dangerMenuRef}>
                   <button
+                    ref={dangerTriggerRef}
                     className="button secondary small recordingsDangerTrigger"
                     onClick={() => setDangerMenuOpen((prev) => !prev)}
                     aria-haspopup="menu"
@@ -1516,6 +1764,8 @@ export default function RecordingsPage() {
           </div>
         </div>
       ) : null}
+      <OperationDialog dialog={deleteDialog} onClose={closeDeleteDialog} />
+      <OperationToast toast={deleteToast} onClose={() => setDeleteToast(null)} />
       </div>
     </Layout>
   );

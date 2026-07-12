@@ -22,11 +22,12 @@ const addRootDetails = storagePage.slice(
   storagePage.indexOf("</details>", storagePage.indexOf("<details className=\"storageOpsDetails storageOpsAdvancedRoot\""))
 );
 
-assert.match(rootsSection, /showArchiveRootActivation/, "activation progress must be rendered on the visible archive-roots surface");
-assert.match(rootsSection, /archiveRootActivation/, "activation progress must be backend-backed by archiveRootActivation state");
+assert.doesNotMatch(storagePage, /showArchiveRootActivation/, "activation progress must not be duplicated inline");
+assert.match(storagePage, /activationOperationId/, "activation modal acknowledgement must be bound to the backend operation id");
+assert.match(storagePage, /setArchiveRootDialog\(/, "activation progress must use the application modal");
 assert.match(storagePage, /setInterval\(\(\) => loadStatus\(\{ silent: true \}\), 1500\)/, "activation progress must poll backend status");
 assert.doesNotMatch(addRootDetails, /copy\.rootSwitched|activationProgressTitle|showArchiveRootActivation/, "switch progress must not live inside collapsed add-root details");
-assert.doesNotMatch(storagePage, /setArchiveRootMessage\(copy\.rootSwitched\)/, "switch progress must not be stored as add-root message");
+assert.doesNotMatch(storagePage, /setArchiveRootMessage/, "root operation feedback must not use persistent inline messages");
 
 assert.match(api, /segment_id: pathOrItem\.segment_id/, "recording media token payload must include segment id");
 assert.match(api, /archive_root_id: pathOrItem\.archive_root_id/, "recording media token payload must include archive root id");

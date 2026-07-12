@@ -185,6 +185,20 @@ def stage48(tmp_path, monkeypatch):
     )
     db.add_all([root_a, root_b])
     db.commit()
+    monkeypatch.setattr(
+        setup_storage,
+        "request_archive_root_cleanup",
+        lambda root, operation_id, marker_already_removed=False, **_kwargs: {
+            "status": "completed",
+            "cleanup_status": "completed_removed",
+            "operation_id": operation_id,
+            "archive_root_id": root.id,
+            "marker_removed": True,
+            "root_directory_removed": True,
+            "root_directory_preserved_reason": "",
+            "retry_available": False,
+        },
+    )
     try:
         yield SimpleNamespace(
             db=db,
@@ -773,7 +787,7 @@ def test_root_delete_recovers_metadata_after_commit_failure(stage48):
 
     def fail_once():
         calls["count"] += 1
-        if calls["count"] == 1:
+        if calls["count"] == 2:
             raise RuntimeError("stage48 simulated metadata commit failure")
         return original_commit()
 
@@ -808,7 +822,7 @@ def test_root_delete_runtime_finalization_failure_stays_visible_and_retryable(st
     assert result["retry_available"] is True
     assert result["finalization_pending"] is True
     assert stage48.root_b.retired_at is None
-    assert stage48.root_b.retirement_status == "partial_deletion"
+    assert stage48.root_b.retirement_status == "partial_finalization"
     assert stage48.root_b.retirement_problem == "runtime_manifest_recovery_failed"
     assert calls["count"] == 2
     blocked = archive_root_activation.request_archive_root_activation(
@@ -939,6 +953,7 @@ def test_chronology_file_streams_unbuffered_and_honors_byte_ranges(stage48):
 
 
 def test_bulk_delete_preserves_ambiguous_and_unresolved_refusal_reasons(stage48):
+    actor = _media_user(stage48.db)
     camera = _camera(stage48.db, "bulk-refusal")
     duplicate = "kmvms/recordings/bulk-duplicate.mkv"
     _write(stage48.root_a_path, duplicate, b"root-a")
@@ -961,7 +976,7 @@ def test_bulk_delete_preserves_ambiguous_and_unresolved_refusal_reasons(stage48)
             items=[{"segment_id": unresolved.id, "archive_root_id": "root_b"}],
         ),
         db=stage48.db,
-        current_user=_actor(),
+        current_user=actor,
     )
 
     reasons = {item["reason"] for item in result["items"]}

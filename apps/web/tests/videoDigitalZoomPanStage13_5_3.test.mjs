@@ -124,8 +124,8 @@ test("closed-stage interaction markers remain protected", () => {
   const canvas = read("components/CompactVideoCanvas.js");
 
   assert.equal(livePage.includes("data-live-audio-button=\"true\""), true);
-  assert.equal(livePage.includes("onDoubleClick={(event) => {\n                    event.stopPropagation();\n                    toggleTileFullscreen(tile.id);"), true);
-  assert.equal(chronologyPage.includes("onDoubleClick={async (event) => {\n                      event.stopPropagation();\n                      await toggleTileFullscreen(tile.id);"), true);
+  assert.match(livePage, /onDoubleClick=\{\(event\) => \{[\s\S]*?event\.stopPropagation\(\);[\s\S]*?toggleTileFullscreen\(tile\.id\);/);
+  assert.match(chronologyPage, /onDoubleClick=\{async \(event\) => \{[\s\S]*?event\.stopPropagation\(\);[\s\S]*?await toggleTileFullscreen\(tile\.id\);/);
   assert.equal(recordsPage.includes("PAGE_SIZE_OPTIONS = [15, 30, 50, 100]"), true);
   assert.equal(recordsPage.includes("recordsPageScopedVerifiedLoad"), false);
 

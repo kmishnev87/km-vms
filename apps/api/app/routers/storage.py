@@ -18,6 +18,11 @@ from app.services.archive_root_activation import (
     request_archive_root_activation,
 )
 from app.services.audit_log import create_event
+from app.services.recording_operations import (
+    DestructiveScopeConflict,
+    destructive_scope_guard,
+    new_operation_id,
+)
 from app.services.recording_reconciliation import reconcile_recordings
 from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
@@ -37,6 +42,14 @@ from app.services import setup_storage
 from app.services.storage_monitoring import build_storage_monitoring_summary
 
 router = APIRouter(prefix="/storage", tags=["storage"])
+
+ROOT_DELETION_RETRY_STATUSES = {
+    "deleting",
+    "partial_deletion",
+    "partial_cleanup",
+    "partial_finalization",
+}
+ROOT_CLEANUP_EVIDENCE_STATUSES = {"partial_cleanup", "partial_finalization"}
 
 
 class ReconciliationRequest(BaseModel):
@@ -172,7 +185,7 @@ def create_archive_root(
 
             if existing and existing.physical_identity and existing.physical_identity != physical_identity:
                 _archive_root_add_blocked(db, current_user, ValueError("root_identity_conflict"))
-            if existing and existing.retirement_status == "partial_deletion":
+            if existing and existing.retirement_status in {"deleting", "partial_deletion", "partial_cleanup", "partial_finalization"}:
                 _archive_root_add_blocked(db, current_user, ValueError("retired_root_partial_deletion_requires_retry"))
 
             reactivated = bool(existing and existing.retired_at is not None)
@@ -183,6 +196,9 @@ def create_archive_root(
                     root.retired_at = None
                     root.retirement_status = None
                     root.retirement_problem = None
+                    root.retirement_operation_id = None
+                    root.retirement_cleanup_status = None
+                    root.retirement_cleanup_result = None
                     root.is_active = False
                 root.updated_at = datetime.utcnow()
                 db.add(root)
@@ -298,6 +314,74 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
         raise HTTPException(status_code=409, detail={"error": "archive_root_delete_active_root_blocked"})
     if not user_has_permission(getattr(current_user, "role", ""), "delete_recordings"):
         raise HTTPException(status_code=403, detail="delete_recordings permission is required")
+    previous_status = str(getattr(root, "retirement_status", None) or "")
+    previous_operation_id = str(getattr(root, "retirement_operation_id", None) or "")
+    operation_id = (
+        previous_operation_id
+        if previous_status in ROOT_DELETION_RETRY_STATUSES and previous_operation_id
+        else new_operation_id("archive-root-cleanup")
+    )
+    camera_ids = [
+        int(camera_id)
+        for (camera_id,) in (
+            db.query(RecordingSegment.camera_id)
+            .filter(
+                RecordingSegment.archive_root_id == root.id,
+                RecordingSegment.deleted_at.is_(None),
+                RecordingSegment.status != "deleted",
+            )
+            .distinct()
+            .all()
+        )
+        if camera_id is not None
+    ]
+    scope = {
+        "type": "root",
+        "segment_ids": [],
+        "camera_ids": camera_ids,
+        "root_ids": [root.id],
+    }
+    try:
+        with destructive_scope_guard(operation_id, scope, purpose="archive_root_delete") as scope_lease:
+            return _delete_inactive_root_owned(db, root, current_user, operation_id=operation_id, scope_lease=scope_lease)
+    except DestructiveScopeConflict as exc:
+        reason = str(exc.detail.get("reason") or "destructive_scope_conflict")
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": reason,
+                "status": "blocked",
+                "operation_id": operation_id,
+                **setup_storage.archive_root_cleanup_capability(reason, "partial_cleanup"),
+            },
+        ) from exc
+
+
+def _delete_inactive_root_owned(
+    db: Session,
+    root: ArchiveRoot,
+    current_user: User,
+    *,
+    operation_id: str,
+    scope_lease,
+) -> dict:
+    if root.is_active:
+        raise HTTPException(status_code=409, detail={"error": "archive_root_delete_active_root_blocked"})
+    if not user_has_permission(getattr(current_user, "role", ""), "delete_recordings"):
+        raise HTTPException(status_code=403, detail="delete_recordings permission is required")
+
+    previous_retirement_status = str(root.retirement_status or "")
+    previous_retirement_operation_id = str(root.retirement_operation_id or "")
+    previous_cleanup = (
+        dict(root.retirement_cleanup_result)
+        if (
+            previous_retirement_status in ROOT_CLEANUP_EVIDENCE_STATUSES
+            and previous_retirement_operation_id == operation_id
+            and isinstance(root.retirement_cleanup_result, dict)
+            and str(root.retirement_cleanup_result.get("operation_id") or "") == operation_id
+        )
+        else {}
+    )
 
     writing_count = (
         db.query(RecordingSegment)
@@ -311,22 +395,6 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
     if writing_count:
         raise HTTPException(status_code=409, detail={"error": "archive_root_delete_active_writes_blocked", "writing_count": int(writing_count)})
 
-    usage = root_usage(db, root)
-    access = verify_archive_root_access(root, require_write=True)
-    if not access.get("verified") or access.get("read_access_state") != "available" or access.get("write_access_state") != "available":
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "archive_root_delete_unavailable_root_blocked",
-                "problem": access.get("verification_error") or access.get("problem") or "archive_root_unavailable",
-            },
-        )
-    root_path = archive_root_runtime_path(root).resolve(strict=False)
-    namespace_path = (root_path / KMVMS_RECORDINGS_NAMESPACE).resolve(strict=False)
-    try:
-        namespace_path.relative_to(root_path)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail={"error": "archive_root_namespace_boundary_invalid"}) from exc
     segments = (
         db.query(RecordingSegment)
         .filter(
@@ -337,6 +405,23 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
         .order_by(RecordingSegment.id.asc())
         .all()
     )
+    usage = root_usage(db, root)
+    root_path = archive_root_runtime_path(root).resolve(strict=False)
+    namespace_path = (root_path / KMVMS_RECORDINGS_NAMESPACE).resolve(strict=False)
+    if segments:
+        access = verify_archive_root_access(root, require_write=True)
+        if not access.get("verified") or access.get("read_access_state") != "available" or access.get("write_access_state") != "available":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "archive_root_delete_unavailable_root_blocked",
+                    "problem": access.get("verification_error") or access.get("problem") or "archive_root_unavailable",
+                },
+            )
+        try:
+            namespace_path.relative_to(root_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail={"error": "archive_root_namespace_boundary_invalid"}) from exc
 
     plans: list[dict] = []
     blockers: list[dict] = []
@@ -374,6 +459,12 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
             },
         )
 
+    root.retirement_operation_id = operation_id
+    root.retirement_status = "deleting"
+    root.retirement_problem = None
+    db.add(root)
+    db.commit()
+
     deleted_files = 0
     missing_files = 0
     bytes_freed = 0
@@ -383,48 +474,72 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
     now = datetime.utcnow()
     for plan in plans:
         segment = plan["segment"]
+        scope_lease.touch()
         try:
-            if plan["exists"]:
+            with scope_lease.mutation_guard():
                 try:
-                    plan["path"].unlink()
-                    deleted_files += 1
-                    bytes_freed += int(plan["size_bytes"])
-                except FileNotFoundError:
-                    missing_files += 1
-            else:
-                missing_files += 1
-        except OSError as exc:
+                    if plan["exists"]:
+                        try:
+                            plan["path"].unlink()
+                            deleted_files += 1
+                            bytes_freed += int(plan["size_bytes"])
+                        except FileNotFoundError:
+                            missing_files += 1
+                    else:
+                        missing_files += 1
+                except OSError as exc:
+                    db.rollback()
+                    failed.append({"segment_id": int(segment.id), "reason": "filesystem_delete_failed", "type": type(exc).__name__})
+                    break
+                try:
+                    _mark_root_segment_deleted(db, segment, current_user, now=now)
+                    db.commit()
+                    metadata_deleted += 1
+                except Exception:
+                    if _recover_root_segment_metadata_after_file_delete(
+                        db,
+                        segment_id=int(segment.id),
+                        current_user=current_user,
+                        now=now,
+                    ):
+                        metadata_deleted += 1
+                        metadata_recovered += 1
+                        continue
+                    failed.append({"segment_id": int(segment.id), "reason": "metadata_update_failed_after_file_delete"})
+                    break
+        except (DestructiveScopeConflict, OSError):
             db.rollback()
-            failed.append({"segment_id": int(segment.id), "reason": "filesystem_delete_failed", "type": type(exc).__name__})
-            break
-        try:
-            _mark_root_segment_deleted(db, segment, current_user, now=now)
-            db.commit()
-            metadata_deleted += 1
-        except Exception:
-            if _recover_root_segment_metadata_after_file_delete(
-                db,
-                segment_id=int(segment.id),
-                current_user=current_user,
-                now=now,
-            ):
-                metadata_deleted += 1
-                metadata_recovered += 1
-                continue
-            failed.append({"segment_id": int(segment.id), "reason": "metadata_update_failed_after_file_delete"})
+            if not failed:
+                failed.append(
+                    {
+                        "segment_id": int(segment.id),
+                        "reason": "destructive_scope_lease_lost",
+                    }
+                )
             break
 
     root_id = root.id
     root_label = root.label
     if failed:
+        failure_reason = str(failed[0].get("reason") or "archive_root_delete_failed")
+        retry_capability = setup_storage.archive_root_cleanup_capability(failure_reason, "not_started")
         root.retirement_status = "partial_deletion"
-        root.retirement_problem = str(failed[0].get("reason") or "archive_root_delete_failed")
+        root.retirement_problem = failure_reason
+        root.retirement_cleanup_status = "not_started"
+        root.retirement_cleanup_result = {
+            "operation_id": operation_id,
+            "cleanup_status": "not_started",
+            "reason": failure_reason,
+            **retry_capability,
+        }
         root.updated_at = datetime.utcnow()
         db.add(root)
         db.commit()
         result = {
             "ok": False,
             "status": "partial",
+            "operation_id": operation_id,
+            "cleanup_status": "not_started",
             "root_id": root_id,
             "segments_deleted": metadata_deleted,
             "metadata_recovered_count": metadata_recovered,
@@ -433,7 +548,8 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
             "failed_count": len(failed),
             "remaining_count": max(0, len(plans) - metadata_deleted),
             "bytes_freed": bytes_freed,
-            "retry_available": True,
+            "reason": failure_reason,
+            **retry_capability,
             "failures": failed,
         }
         create_event(
@@ -453,6 +569,80 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
         db.commit()
         return result
 
+    removed_empty_dirs = _safe_cleanup_empty_dirs(root_path) if segments else 0
+    scope_lease.touch()
+    try:
+        cleanup = setup_storage.request_archive_root_cleanup(
+            root,
+            operation_id=operation_id,
+            marker_already_removed=bool(previous_cleanup.get("marker_removed")),
+        )
+    except ValueError as exc:
+        cleanup = {
+            "status": "failed",
+            "cleanup_status": "failed_preflight",
+            "reason": str(exc) or "archive_root_cleanup_preflight_failed",
+            "marker_removed": bool(previous_cleanup.get("marker_removed")),
+            "root_directory_removed": False,
+            "root_directory_preserved_reason": "",
+        }
+    cleanup = setup_storage.normalize_archive_root_cleanup_result(cleanup)
+    cleanup_facts = {
+        "operation_id": operation_id,
+        "cleanup_status": str(cleanup.get("cleanup_status") or "partial_cleanup"),
+        "reason": str(cleanup.get("reason") or "")[:120] or None,
+        "marker_removed": bool(cleanup.get("marker_removed")),
+        "root_directory_removed": bool(cleanup.get("root_directory_removed")),
+        "root_directory_preserved_reason": str(cleanup.get("root_directory_preserved_reason") or "")[:120] or None,
+        "retry_mode": str(cleanup.get("retry_mode") or "none")[:32],
+        "next_action": str(cleanup.get("next_action") or "close")[:64],
+        "retry_available": bool(cleanup.get("retry_available")),
+    }
+    cleanup_completed = cleanup_facts["cleanup_status"] in {
+        "completed_removed",
+        "completed_preserved_nonempty",
+    }
+    root.retirement_cleanup_status = cleanup_facts["cleanup_status"]
+    root.retirement_cleanup_result = cleanup_facts
+    if not cleanup_completed:
+        root.retired_at = None
+        root.retirement_status = "partial_cleanup"
+        root.retirement_problem = cleanup_facts["reason"] or "archive_root_cleanup_incomplete"
+        root.updated_at = datetime.utcnow()
+        db.add(root)
+        db.commit()
+        result = {
+            "ok": False,
+            "status": "partial",
+            "operation_id": operation_id,
+            "root_id": root_id,
+            "segments_deleted": metadata_deleted,
+            "metadata_recovered_count": metadata_recovered,
+            "files_deleted": deleted_files,
+            "confirmed_missing_files": missing_files,
+            "failed_count": 1,
+            "remaining_count": 0,
+            "bytes_freed": bytes_freed,
+            "removed_empty_dirs": removed_empty_dirs,
+            **cleanup_facts,
+        }
+        create_event(
+            db=db,
+            actor=current_user,
+            category="storage",
+            event_type="archive_root.delete_partial",
+            severity="error",
+            message_ru="Archive root host cleanup completed partially",
+            message_en="Archive root host cleanup completed partially",
+            target_type="archive_root",
+            target_id=root_id,
+            target_name=root_label,
+            metadata=result,
+            commit=False,
+        )
+        db.commit()
+        return result
+
     root.retired_at = datetime.utcnow()
     root.retirement_status = "completed"
     root.retirement_problem = None
@@ -461,6 +651,7 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
     db.add(root)
     result = {
         "ok": True,
+        "operation_id": operation_id,
         "root_id": root_id,
         "root_label": root_label,
         "status": "completed",
@@ -470,9 +661,10 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
         "confirmed_missing_files": missing_files,
         "failed_count": 0,
         "bytes_freed": bytes_freed,
-        "removed_empty_dirs": 0,
+        "removed_empty_dirs": removed_empty_dirs,
         "previous_usage": usage,
         "historical_root_identity_preserved": True,
+        **cleanup_facts,
     }
     create_event(
         db=db,
@@ -502,7 +694,7 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
             if fresh is None:
                 raise
             fresh.retired_at = None
-            fresh.retirement_status = "partial_deletion"
+            fresh.retirement_status = "partial_finalization"
             fresh.retirement_problem = "runtime_state_finalize_failed"
             fresh.is_active = False
             fresh.updated_at = datetime.utcnow()
@@ -523,7 +715,10 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
                 "status": "partial",
                 "failed_count": 1,
                 "remaining_count": 0,
-                "retry_available": True,
+                **setup_storage.archive_root_cleanup_capability(
+                    fresh.retirement_problem,
+                    "partial_finalization",
+                ),
                 "finalization_pending": True,
                 "failure": {
                     "reason": fresh.retirement_problem,
@@ -549,7 +744,6 @@ def _delete_inactive_root(db: Session, root: ArchiveRoot, current_user: User) ->
             return partial
         root = fresh
 
-    result["removed_empty_dirs"] = _safe_cleanup_empty_dirs(root_path)
     return result
 
 

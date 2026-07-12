@@ -37,7 +37,8 @@ assert.match(storagePage, /apiFetch\("\/storage\/reconcile"/, "/storage owns arc
 assert.match(storagePage, /humanBlockerReason\(item, language\)/, "blocked actions use human wording");
 assert.match(storagePage, /Array\.from\(new Set\(labels\)\)\.join\(" "\)/, "duplicate blocked action labels are collapsed before rendering");
 assert.doesNotMatch(storagePage, /storageSourceLabel\(storageContract\.archive_primary_path_source, copy\)/, "backend source codes are not primary UI");
-assert.match(storagePage, /<details className="storageOpsSupportDetails">/, "support details are collapsed and demoted");
+assert.doesNotMatch(storagePage, /storageOpsSupportDetails/, "the obsolete page-level support block stays removed");
+assert.match(storagePage, /storageOpsInlineDetails/, "scenario-specific secondary details remain locally disclosed");
 assert.match(storagePage, /healthActionText\(topHealth, copy\)/, "primary action is reason-prioritized");
 assert.match(storagePage, /accessRightsModel\(pathHealth, language\)/, "read/write access is combined before primary rendering");
 assert.match(storagePage, /archiveRootPath\(root, archivePathText\)/, "archive root paths are mapped before display");

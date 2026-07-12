@@ -53,6 +53,9 @@ class ArchiveRoot(Base):
     physical_identity: Mapped[str | None] = mapped_column(String(128), index=True, nullable=True)
     retirement_status: Mapped[str | None] = mapped_column(String(50), index=True, nullable=True)
     retirement_problem: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retirement_operation_id: Mapped[str | None] = mapped_column(String(96), index=True, nullable=True)
+    retirement_cleanup_status: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    retirement_cleanup_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class RecordingSegment(Base):

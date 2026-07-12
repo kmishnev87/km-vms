@@ -3,9 +3,10 @@ from __future__ import annotations
 import mimetypes
 import os
 import re
+import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
@@ -13,14 +14,43 @@ from pydantic import BaseModel, Field
 from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session
 
-from app.core.permissions import PERMISSION_VIEW_RECORDINGS
+from app.core.permissions import PERMISSION_DELETE_RECORDINGS, PERMISSION_VIEW_RECORDINGS, user_has_permission
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
-from app.services.recording_retention import build_retention_plan, execute_segments, preview_segments, run_retention
+from app.services.recording_operations import (
+    DestructiveScopeConflict,
+    LeaseHeartbeat,
+    ManifestValidationError,
+    MANIFEST_STREAM_BATCH_SIZE,
+    OperationStateConflict,
+    cancel_deletion_plan,
+    claim_deletion_plan,
+    claim_exact_operation,
+    create_deletion_plan,
+    destructive_scope_guard,
+    finish_operation,
+    operation_fingerprint,
+    open_verified_deletion_manifest,
+    scope_for_segments,
+    touch_operation,
+)
+from app.services.recording_retention import (
+    EXECUTION_POLICY_MANUAL_COMPLETE,
+    MANUAL_BATCH_SIZE,
+    append_execution_issue,
+    begin_manual_execution_result,
+    build_retention_plan,
+    enforce_exact_planned_accounting,
+    execute_segments,
+    finish_manual_execution_result,
+    merge_execution_result,
+    preview_segments,
+    run_retention,
+)
 from app.services.recording_storage import (
     archive_root_for_segment,
     archive_root_runtime_access_state,
@@ -41,6 +71,7 @@ from app.services.timezone_contract import (
 )
 
 router = APIRouter(prefix="/recordings", tags=["recordings"])
+logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1024 * 1024
 DEFAULT_RECORDINGS_PAGE_SIZE = 30
@@ -72,6 +103,16 @@ TECHNICAL_DELETED_CAMERA_RE = re.compile(r"__deleted_\d+_\d+$")
 class BulkDeleteRequest(BaseModel):
     paths: list[str] = Field(default_factory=list)
     items: list[dict] = Field(default_factory=list)
+    operation_id: str | None = None
+
+
+class RecordingDeletionPlanRequest(BaseModel):
+    scope: Literal["camera", "all"]
+    camera: str | None = None
+
+
+class RecordingDeletionExecuteRequest(BaseModel):
+    confirm: bool = False
 
 
 class RetentionDryRunRequest(BaseModel):
@@ -285,6 +326,136 @@ def apply_camera_filter(query, db: Session, camera_name: str | None):
     if camera_ids:
         filters.append(RecordingSegment.camera_id.in_(camera_ids))
     return query.filter(or_(*filters))
+
+
+def _deletion_scope_query(db: Session, *, scope: str, camera: str | None = None):
+    query = finalized_segments_query(db)
+    if scope == "all":
+        return query
+    camera_label = str(camera or "").strip()
+    if not camera_label or camera_label == "__all__" or is_technical_deleted_camera_label(camera_label):
+        raise HTTPException(status_code=400, detail={"error": "recording_deletion_camera_required"})
+    return apply_camera_filter(query, db, camera_label)
+
+
+def _current_deletion_actor(db: Session, current_user: User) -> User:
+    user_id = int(getattr(current_user, "id", 0) or 0)
+    fresh = (
+        db.query(User)
+        .populate_existing()
+        .filter(User.id == user_id)
+        .first()
+        if user_id > 0
+        else None
+    )
+    if (
+        fresh is None
+        or not bool(getattr(fresh, "is_active", False))
+        or not user_has_permission(getattr(fresh, "role", ""), PERMISSION_DELETE_RECORDINGS)
+    ):
+        raise HTTPException(status_code=403, detail="Раздел недоступен. Ограничены права пользователя.")
+    return fresh
+
+
+def _deletion_manifest_items(query):
+    rows = (
+        query.with_entities(
+            RecordingSegment.id,
+            RecordingSegment.archive_root_id,
+            RecordingSegment.relative_path,
+            RecordingSegment.size_bytes,
+            RecordingSegment.camera_id,
+        )
+        .order_by(RecordingSegment.id.asc())
+        .execution_options(stream_results=True, max_row_buffer=MANIFEST_STREAM_BATCH_SIZE)
+        .yield_per(MANIFEST_STREAM_BATCH_SIZE)
+    )
+    for row in rows:
+        yield {
+            "segment_id": int(row[0]),
+            "archive_root_id": str(row[1] or ""),
+            "relative_path": str(row[2] or ""),
+            "size_bytes": int(row[3] or 0),
+            "camera_id": int(row[4] or 0),
+        }
+
+
+def _segment_matches_manifest_item(segment: RecordingSegment, item: dict) -> bool:
+    try:
+        return bool(
+            int(segment.id) == int(item.get("segment_id") or 0)
+            and int(segment.camera_id) == int(item.get("camera_id") or 0)
+            and str(segment.archive_root_id or "") == str(item.get("archive_root_id") or "")
+            and str(segment_relative_path(segment) or "") == str(item.get("relative_path") or "")
+            and int(segment.size_bytes or 0) == int(item.get("size_bytes") or 0)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _expected_identity_for_segment(segment: RecordingSegment) -> dict:
+    return {
+        "segment_id": int(segment.id),
+        "camera_id": int(segment.camera_id),
+        "archive_root_id": _segment_root_id(segment),
+        "relative_path": str(segment_relative_path(segment) or ""),
+        "size_bytes": int(segment.size_bytes or 0),
+    }
+
+
+def _manifest_batch_segments(db: Session, items: list[dict]) -> tuple[list[RecordingSegment], dict[int, dict], bool]:
+    expected = {int(item["segment_id"]): item for item in items}
+    if len(expected) != len(items):
+        return [], expected, False
+    segments = (
+        finalized_segments_query(db)
+        .populate_existing()
+        .filter(RecordingSegment.id.in_(list(expected)))
+        .all()
+    )
+    by_id = {int(segment.id): segment for segment in segments}
+    ordered: list[RecordingSegment] = []
+    for item in items:
+        segment = by_id.get(int(item["segment_id"]))
+        if segment is None or not _segment_matches_manifest_item(segment, item):
+            return [], expected, False
+        ordered.append(segment)
+    return ordered, expected, True
+
+
+def _public_deletion_plan(record: dict) -> dict:
+    return {
+        "ok": True,
+        "status": "ready",
+        "plan_id": record.get("operation_id"),
+        "scope": (record.get("scope") or {}).get("type"),
+        "camera": record.get("camera_label"),
+        "planned_count": int(record.get("planned_count") or 0),
+        "planned_bytes": int(record.get("planned_bytes") or 0),
+        "cutoff_segment_id": int(record.get("cutoff_segment_id") or 0),
+        "expires_in_seconds": 10 * 60,
+    }
+
+
+def _blocked_operation_result(
+    db: Session,
+    actor: User,
+    operation_id: str,
+    reason: str,
+    *,
+    operation: str,
+    scope: dict,
+    retryable: bool,
+    planned_count: int = 0,
+) -> dict:
+    result = begin_manual_execution_result(
+        operation,
+        operation_id=operation_id,
+        scope=scope,
+        planned_count=planned_count,
+    )
+    append_execution_issue(result, reason=reason, retryable=retryable)
+    return finish_manual_execution_result(db, actor, result)
 
 
 def recording_media_resource_for_segment(segment: RecordingSegment, action: str) -> dict:
@@ -824,31 +995,357 @@ def stream_recording(
     return stream_video(request, file_path, media_metadata["mime_type"])
 
 
+@router.post("/deletion-plans")
+def create_recording_deletion_plan(
+    payload: RecordingDeletionPlanRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("delete_recordings")),
+):
+    current_user = _current_deletion_actor(db, current_user)
+    query = _deletion_scope_query(db, scope=payload.scope, camera=payload.camera)
+    try:
+        record = create_deletion_plan(
+            actor=current_user,
+            scope_type=payload.scope,
+            planned_items=_deletion_manifest_items(query),
+            camera_label=payload.camera if payload.scope == "camera" else None,
+        )
+    except ManifestValidationError as exc:
+        raise HTTPException(status_code=409, detail={"error": exc.reason}) from exc
+    return _public_deletion_plan(record)
+
+
+def _execute_recording_deletion_plan(
+    plan_id: str,
+    *,
+    confirm: bool,
+    db: Session,
+    current_user: User,
+) -> dict:
+    if not confirm:
+        raise HTTPException(status_code=409, detail={"error": "recording_deletion_confirmation_required"})
+    current_user = _current_deletion_actor(db, current_user)
+    try:
+        claimed = claim_deletion_plan(plan_id, actor=current_user)
+    except (OperationStateConflict, ValueError) as exc:
+        detail = getattr(exc, "detail", {"reason": str(exc) or "deletion_plan_invalid"})
+        raise HTTPException(status_code=409, detail={"error": detail.get("reason"), **detail}) from exc
+    if claimed["state"] == "terminal":
+        return claimed.get("result") or {}
+    record = claimed["record"]
+    scope = record.get("scope") or {}
+    operation = "manual_delete_all" if str(scope.get("type") or "") == "all" else "manual_delete_by_camera"
+    if claimed["state"] == "running":
+        blocked = _blocked_operation_result(
+            db,
+            current_user,
+            plan_id,
+            "destructive_operation_already_running",
+            operation=operation,
+            scope=scope,
+            retryable=True,
+            planned_count=int(record.get("planned_count") or 0),
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=blocked,
+        )
+    if claimed["state"] == "expired":
+        expired = _blocked_operation_result(
+            db,
+            current_user,
+            plan_id,
+            "deletion_plan_expired",
+            operation=operation,
+            scope=scope,
+            retryable=False,
+            planned_count=int(record.get("planned_count") or 0),
+        )
+        finish_operation(plan_id, claimed["owner_token"], expired)
+        return expired
+
+    owner_token = claimed["owner_token"]
+    scope_type = str(scope.get("type") or "")
+    planned_count = int(record.get("planned_count") or 0)
+    aggregate = begin_manual_execution_result(
+        "manual_delete_all" if scope_type == "all" else "manual_delete_by_camera",
+        operation_id=plan_id,
+        scope=scope,
+        planned_count=planned_count,
+    )
+
+    scope_validated = False
+    try:
+        with destructive_scope_guard(plan_id, scope, purpose=aggregate["operation"]) as scope_lease:
+            with LeaseHeartbeat(
+                scope_lease=scope_lease,
+                operation_id=plan_id,
+                owner_token=owner_token,
+            ) as heartbeat:
+                with open_verified_deletion_manifest(record, progress=heartbeat.progress) as manifest:
+                    scope_validated = True
+                    for items in manifest.iter_batches(
+                        batch_size=MANUAL_BATCH_SIZE,
+                        progress=heartbeat.progress,
+                    ):
+                        heartbeat.progress()
+                        _segments, _expected, valid = _manifest_batch_segments(db, items)
+                        if not valid:
+                            scope_validated = False
+                            append_execution_issue(
+                                aggregate,
+                                reason="deletion_plan_item_changed",
+                                retryable=False,
+                            )
+                            break
+
+                    if scope_validated:
+                        for items in manifest.iter_batches(
+                            batch_size=MANUAL_BATCH_SIZE,
+                            progress=heartbeat.progress,
+                        ):
+                            heartbeat.progress()
+                            batch, expected, valid = _manifest_batch_segments(db, items)
+                            if not valid:
+                                append_execution_issue(
+                                    aggregate,
+                                    reason="deletion_plan_item_changed",
+                                    retryable=False,
+                                )
+                                break
+                            batch_result = execute_segments(
+                                db,
+                                batch,
+                                actor=current_user,
+                                operation=aggregate["operation"],
+                                reason=aggregate["operation"],
+                                policy=EXECUTION_POLICY_MANUAL_COMPLETE,
+                                operation_id=plan_id,
+                                scope=scope,
+                                scope_lease=scope_lease,
+                                write_terminal_audit=False,
+                                write_item_audit=False,
+                                operation_heartbeat=heartbeat.progress,
+                                operation_owner_token=owner_token,
+                                expected_identities=expected,
+                            )
+                            merge_execution_result(aggregate, batch_result)
+    except ManifestValidationError as exc:
+        append_execution_issue(
+            aggregate,
+            reason=exc.reason,
+            retryable=False,
+        )
+    except DestructiveScopeConflict as exc:
+        append_execution_issue(
+            aggregate,
+            reason=str(exc.detail.get("reason") or "destructive_scope_conflict"),
+            retryable=bool(exc.detail.get("retryable", True)),
+        )
+    except OperationStateConflict as exc:
+        append_execution_issue(
+            aggregate,
+            reason=str(exc.detail.get("reason") or "operation_lease_lost"),
+            action="failed",
+            retryable=bool(exc.detail.get("retryable", True)),
+        )
+    except Exception:
+        logger.exception("Recording deletion plan execution failed")
+        db.rollback()
+        append_execution_issue(aggregate, reason="recording_deletion_internal_failure", action="failed", retryable=True)
+
+    if scope_validated:
+        enforce_exact_planned_accounting(aggregate, planned_count)
+    finished = finish_manual_execution_result(db, current_user, aggregate)
+    try:
+        finish_operation(plan_id, owner_token, finished)
+    except OperationStateConflict:
+        pass
+    return finished
+
+
+@router.post("/deletion-plans/{plan_id}/execute")
+def execute_recording_deletion_plan(
+    plan_id: str,
+    payload: RecordingDeletionExecuteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("delete_recordings")),
+):
+    return _execute_recording_deletion_plan(
+        plan_id,
+        confirm=payload.confirm,
+        db=db,
+        current_user=current_user,
+    )
+
+
+@router.delete("/deletion-plans/{plan_id}")
+def cancel_recording_deletion_plan(
+    plan_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("delete_recordings")),
+):
+    current_user = _current_deletion_actor(db, current_user)
+    try:
+        return cancel_deletion_plan(plan_id, actor=current_user)
+    except (OperationStateConflict, ValueError) as exc:
+        detail = getattr(exc, "detail", {"reason": str(exc) or "deletion_plan_invalid"})
+        raise HTTPException(status_code=409, detail={"error": detail.get("reason"), **detail}) from exc
+
+
+def _claim_exact_or_return(
+    operation_id: str | None,
+    *,
+    actor: User,
+    operation_type: str,
+    request_payload: dict,
+) -> dict:
+    try:
+        return claim_exact_operation(
+            operation_id,
+            actor=actor,
+            operation_type=operation_type,
+            request_fingerprint=operation_fingerprint(request_payload),
+        )
+    except (OperationStateConflict, ValueError) as exc:
+        detail = getattr(exc, "detail", {"reason": str(exc) or "operation_identity_invalid"})
+        raise HTTPException(status_code=409, detail={"error": detail.get("reason"), **detail}) from exc
+
+
+def _resolve_bulk_delete_segments(
+    db: Session,
+    payload: BulkDeleteRequest,
+    *,
+    heartbeat,
+) -> tuple[list[RecordingSegment], list[dict]]:
+    segments: list[RecordingSegment] = []
+    lookup_failures: list[dict] = []
+    requested = [
+        ("identity", item)
+        for item in payload.items
+    ] + [
+        ("path", rel)
+        for rel in payload.paths
+    ]
+    for index, (kind, value) in enumerate(requested):
+        if index % MANUAL_BATCH_SIZE == 0:
+            heartbeat()
+        try:
+            if kind == "identity":
+                item = value
+                segments.append(
+                    get_finalized_segment_by_identity(
+                        db,
+                        segment_id=item.get("segment_id"),
+                        archive_root_id=item.get("archive_root_id"),
+                        recording_ref_value=item.get("recording_ref"),
+                        path=item.get("path"),
+                    )
+                )
+            else:
+                segments.append(get_finalized_segment_by_path(db, value))
+        except HTTPException as exc:
+            reason, _not_found = _bulk_lookup_failure(exc)
+            lookup_failures.append(
+                {"segment_id": None, "camera_id": None, "action": "skipped", "reason": reason, "error": None, "size_bytes": 0}
+            )
+    return list({int(segment.id): segment for segment in segments}.values()), lookup_failures
+
+
 @router.delete("")
 def delete_recording(
     path: str | None = Query(default=None),
     segment_id: int | None = Query(default=None),
     archive_root_id: str | None = Query(default=None),
     recording_ref: str | None = Query(default=None),
+    operation_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
-    segment = get_finalized_segment_by_identity(
-        db,
-        segment_id=segment_id,
-        archive_root_id=archive_root_id,
-        recording_ref_value=recording_ref,
-        path=path,
-    )
-    result = execute_segments(
-        db,
-        [segment],
+    current_user = _current_deletion_actor(db, current_user)
+    path = path if isinstance(path, str) else None
+    segment_id = segment_id if isinstance(segment_id, int) and not isinstance(segment_id, bool) else None
+    archive_root_id = archive_root_id if isinstance(archive_root_id, str) else None
+    recording_ref = recording_ref if isinstance(recording_ref, str) else None
+    operation_id = operation_id if isinstance(operation_id, str) else None
+    request_identity = {
+        "path": path,
+        "segment_id": segment_id,
+        "archive_root_id": archive_root_id,
+        "recording_ref": recording_ref,
+    }
+    claimed = _claim_exact_or_return(
+        operation_id,
         actor=current_user,
-        operation="manual_single_delete",
-        reason="manual_delete",
-        max_candidates=1,
+        operation_type="manual_single_delete",
+        request_payload=request_identity,
     )
-    if result["failed_count"] or result["skipped_count"] or not result["deleted_count"]:
+    if claimed["state"] == "terminal":
+        terminal = claimed.get("result") or {}
+        if terminal.get("ok") is not True:
+            raise HTTPException(status_code=409, detail=terminal)
+        return terminal
+    if claimed["state"] == "running":
+        blocked = _blocked_operation_result(
+            db,
+            current_user,
+            str(claimed["record"].get("operation_id") or operation_id or "recording-operation"),
+            "destructive_operation_already_running",
+            operation="manual_single_delete",
+            scope={"type": "segments", "segment_ids": [], "camera_ids": [], "root_ids": []},
+            retryable=True,
+        )
+        raise HTTPException(status_code=409, detail=blocked)
+    operation_id = claimed["record"]["operation_id"]
+    owner_token = claimed["owner_token"]
+    try:
+        segment = get_finalized_segment_by_identity(
+            db,
+            segment_id=segment_id,
+            archive_root_id=archive_root_id,
+            recording_ref_value=recording_ref,
+            path=path,
+        )
+        result = execute_segments(
+            db,
+            [segment],
+            actor=current_user,
+            operation="manual_single_delete",
+            reason="manual_delete",
+            policy=EXECUTION_POLICY_MANUAL_COMPLETE,
+            operation_id=operation_id,
+            operation_owner_token=owner_token,
+            expected_identities={int(segment.id): _expected_identity_for_segment(segment)},
+        )
+    except HTTPException as exc:
+        reason, _not_found = _bulk_lookup_failure(exc)
+        result = begin_manual_execution_result(
+            "manual_single_delete",
+            operation_id=operation_id,
+            scope={"type": "segments", "segment_ids": [], "camera_ids": [], "root_ids": []},
+        )
+        append_execution_issue(result, reason=reason, retryable=False)
+        result = finish_manual_execution_result(db, current_user, result)
+    except (OperationStateConflict, DestructiveScopeConflict):
+        db.rollback()
+        result = begin_manual_execution_result(
+            "manual_single_delete",
+            operation_id=operation_id,
+            scope={"type": "segments", "segment_ids": [], "camera_ids": [], "root_ids": []},
+        )
+        append_execution_issue(result, reason="operation_lease_lost", action="failed", retryable=True)
+        result = finish_manual_execution_result(db, current_user, result)
+    except Exception:
+        db.rollback()
+        result = begin_manual_execution_result(
+            "manual_single_delete",
+            operation_id=operation_id,
+            scope={"type": "segments", "segment_ids": [], "camera_ids": [], "root_ids": []},
+        )
+        append_execution_issue(result, reason="recording_deletion_internal_failure", action="failed", retryable=True)
+        result = finish_manual_execution_result(db, current_user, result)
+    finish_operation(operation_id, owner_token, result)
+    if result.get("ok") is not True:
         raise HTTPException(status_code=409, detail=result)
     return result
 
@@ -859,62 +1356,95 @@ def bulk_delete_recordings(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
-    segments: list[RecordingSegment] = []
-    lookup_failures: list[tuple[str, bool]] = []
-    for item in payload.items:
-        try:
-            segments.append(
-                get_finalized_segment_by_identity(
-                    db,
-                    segment_id=item.get("segment_id"),
-                    archive_root_id=item.get("archive_root_id"),
-                    recording_ref_value=item.get("recording_ref"),
-                    path=item.get("path"),
-                )
-            )
-        except HTTPException as exc:
-            lookup_failures.append(_bulk_lookup_failure(exc))
-    for rel in payload.paths:
-        try:
-            segments.append(get_finalized_segment_by_path(db, rel))
-        except HTTPException as exc:
-            lookup_failures.append(_bulk_lookup_failure(exc))
-
-    result = execute_segments(
-        db,
-        segments,
-        actor=current_user,
-        operation="manual_bulk_delete",
-        reason="manual_bulk_delete",
-        max_candidates=max(len(payload.paths) + len(payload.items), 1),
+    current_user = _current_deletion_actor(db, current_user)
+    stable_items = sorted(
+        [
+            {
+                "segment_id": item.get("segment_id"),
+                "archive_root_id": item.get("archive_root_id"),
+                "recording_ref": item.get("recording_ref"),
+                "path": item.get("path"),
+            }
+            for item in payload.items
+        ],
+        key=lambda item: str(sorted(item.items())),
     )
-    result["requested_count"] = len(payload.paths) + len(payload.items)
-    result["not_found_count"] += sum(1 for _reason, not_found in lookup_failures if not_found)
-    result["skipped_count"] += len(lookup_failures)
-    for reason, _not_found in lookup_failures:
-        result["items"].append({"segment_id": None, "camera_id": None, "relative_path": None, "action": "skipped", "reason": reason, "error": None, "size_bytes": 0})
-
+    claimed = _claim_exact_or_return(
+        payload.operation_id,
+        actor=current_user,
+        operation_type="manual_bulk_delete",
+        request_payload={"items": stable_items, "paths": sorted(payload.paths)},
+    )
+    if claimed["state"] == "terminal":
+        return claimed.get("result") or {}
+    if claimed["state"] == "running":
+        blocked = _blocked_operation_result(
+            db,
+            current_user,
+            str(claimed["record"].get("operation_id") or payload.operation_id or "recording-operation"),
+            "destructive_operation_already_running",
+            operation="manual_bulk_delete",
+            scope={"type": "segments", "segment_ids": [], "camera_ids": [], "root_ids": []},
+            retryable=True,
+        )
+        raise HTTPException(status_code=409, detail=blocked)
+    operation_id = claimed["record"]["operation_id"]
+    owner_token = claimed["owner_token"]
+    unique_segments: list[RecordingSegment] = []
+    try:
+        unique_segments, lookup_failures = _resolve_bulk_delete_segments(
+            db,
+            payload,
+            heartbeat=lambda: touch_operation(operation_id, owner_token),
+        )
+        result = execute_segments(
+            db,
+            unique_segments,
+            actor=current_user,
+            operation="manual_bulk_delete",
+            reason="manual_bulk_delete",
+            policy=EXECUTION_POLICY_MANUAL_COMPLETE,
+            operation_id=operation_id,
+            initial_items=lookup_failures,
+            operation_owner_token=owner_token,
+            expected_identities={
+                int(segment.id): _expected_identity_for_segment(segment)
+                for segment in unique_segments
+            },
+        )
+    except (OperationStateConflict, DestructiveScopeConflict):
+        db.rollback()
+        result = begin_manual_execution_result(
+            "manual_bulk_delete",
+            operation_id=operation_id,
+            scope=scope_for_segments(unique_segments),
+        )
+        append_execution_issue(result, reason="operation_lease_lost", action="failed", retryable=True)
+        result = finish_manual_execution_result(db, current_user, result)
+    except Exception:
+        db.rollback()
+        result = begin_manual_execution_result(
+            "manual_bulk_delete",
+            operation_id=operation_id,
+            scope=scope_for_segments(unique_segments),
+        )
+        append_execution_issue(result, reason="recording_deletion_internal_failure", action="failed", retryable=True)
+        result = finish_manual_execution_result(db, current_user, result)
+    finish_operation(operation_id, owner_token, result)
     return result
 
 
 @router.delete("/by-camera")
 def delete_recordings_by_camera(
     camera: str = Query(...),
+    plan_id: str | None = Query(default=None),
+    confirm: bool = Query(False),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
-    if not camera:
-        raise HTTPException(status_code=400, detail="Camera is required")
-
-    segments = apply_camera_filter(finalized_segments_query(db), db, camera).all()
-    return execute_segments(
-        db,
-        segments,
-        actor=current_user,
-        operation="manual_delete_by_camera",
-        reason="manual_delete_by_camera",
-        max_candidates=max(len(segments), 1),
-    )
+    if not plan_id:
+        raise HTTPException(status_code=409, detail={"error": "recording_deletion_plan_required"})
+    return _execute_recording_deletion_plan(plan_id, confirm=confirm, db=db, current_user=current_user)
 
 
 @router.delete("/all")
@@ -922,24 +1452,18 @@ def delete_all_recordings(
     dry_run: bool = Query(False),
     confirm: bool = Query(False),
     confirmation_text: str | None = Query(default=None),
+    plan_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("delete_recordings")),
 ):
-    segments = finalized_segments_query(db).all()
     if dry_run:
-        return preview_segments(
-            db,
-            segments,
-            operation="manual_delete_all_preview",
-            reason="manual_delete_all",
+        return create_recording_deletion_plan(
+            RecordingDeletionPlanRequest(scope="all"),
+            db=db,
+            current_user=current_user,
         )
+    if not plan_id:
+        raise HTTPException(status_code=409, detail={"error": "recording_deletion_plan_required"})
     if not confirm or confirmation_text != DELETE_ALL_CONFIRMATION_TEXT:
-        raise HTTPException(status_code=409, detail=f"Delete all recordings requires confirm=true and confirmation_text={DELETE_ALL_CONFIRMATION_TEXT}")
-    return execute_segments(
-        db,
-        segments,
-        actor=current_user,
-        operation="manual_delete_all",
-        reason="manual_delete_all",
-        max_candidates=max(len(segments), 1),
-    )
+        raise HTTPException(status_code=409, detail={"error": "recording_deletion_confirmation_required"})
+    return _execute_recording_deletion_plan(plan_id, confirm=True, db=db, current_user=current_user)

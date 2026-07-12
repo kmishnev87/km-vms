@@ -6,7 +6,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from sqlalchemy import or_
 from sqlalchemy.orm import Session, object_session
@@ -17,6 +17,15 @@ from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
 from app.models.user import User
 from app.services.audit_log import create_event
+from app.services.recording_operations import (
+    DestructiveScopeConflict,
+    LeaseHeartbeat,
+    ScopeLease,
+    destructive_scope_guard,
+    new_operation_id,
+    operation_scope_mutation_guard,
+    scope_for_segments,
+)
 from app.services.recording_storage import (
     archive_root_for_segment,
     archive_root_runtime_access_state,
@@ -44,6 +53,10 @@ DEFAULT_MAX_CANDIDATES = 100
 DEFAULT_MAX_BYTES = 10 * 1024 * 1024 * 1024
 HARD_MAX_CANDIDATES = 1000
 HARD_MAX_BYTES = 100 * 1024 * 1024 * 1024
+EXECUTION_POLICY_AUTOMATIC_BOUNDED = "automatic_bounded"
+EXECUTION_POLICY_MANUAL_COMPLETE = "manual_complete"
+MANUAL_BATCH_SIZE = 100
+MAX_RESULT_SAMPLES = 100
 AUTO_RETENTION_DEFAULT_MAX_CANDIDATES = 25
 AUTO_RETENTION_DEFAULT_MAX_BYTES = 1 * 1024 * 1024 * 1024
 AUTO_RETENTION_STATE_LOCK = threading.Lock()
@@ -137,14 +150,24 @@ def _active_job_ids(db: Session) -> set[str]:
     }
 
 
-def _base_result(operation: str, *, dry_run: bool) -> dict:
+def _base_result(
+    operation: str,
+    *,
+    dry_run: bool,
+    operation_id: str | None = None,
+    scope: dict | None = None,
+) -> dict:
     started_at = _now()
     return {
-        "ok": True,
+        "ok": False,
         "operation": operation,
+        "operation_id": operation_id,
+        "scope": scope,
         "dry_run": dry_run,
+        "status": "running",
         "requested_count": 0,
         "planned_count": 0,
+        "processed_count": 0,
         "deleted_count": 0,
         "skipped_count": 0,
         "failed_count": 0,
@@ -153,18 +176,45 @@ def _base_result(operation: str, *, dry_run: bool) -> dict:
         "candidates_count": 0,
         "limit_applied": None,
         "limit_exceeded": False,
+        "batch_count": 0,
         "started_at": _iso(started_at),
         "finished_at": None,
         "generated_at": _iso(started_at),
         "items": [],
+        "sample_eligible_count": 0,
+        "sample_truncated": False,
         "per_camera": {},
+        "reason_counts": {},
+        "skipped_reason_counts": {},
+        "failed_reason_counts": {},
         "warnings": [],
+        "retryable": False,
     }
 
 
 def _finish(result: dict) -> dict:
     result["finished_at"] = _iso(_now())
-    result["ok"] = result.get("failed_count", 0) == 0 and not result.get("limit_exceeded", False)
+    deleted = int(result.get("deleted_count") or 0)
+    skipped = int(result.get("skipped_count") or 0)
+    failed = int(result.get("failed_count") or 0)
+    result["processed_count"] = (
+        int(result.get("planned_count") or 0) + skipped + failed
+        if result.get("dry_run")
+        else deleted + skipped + failed
+    )
+    if failed:
+        result["status"] = "partial" if deleted else "failed"
+    elif skipped or result.get("limit_exceeded"):
+        result["status"] = "partial" if deleted else "blocked"
+    else:
+        result["status"] = "completed"
+    result["ok"] = bool(
+        result["status"] == "completed"
+        and failed == 0
+        and skipped == 0
+        and not result.get("limit_exceeded", False)
+        and result["processed_count"] >= int(result.get("requested_count") or 0)
+    )
     return result
 
 
@@ -203,14 +253,24 @@ def _segment_audit_ref(segment: RecordingSegment | None) -> dict:
     }
 
 
+def _append_sample(result: dict, item: dict) -> None:
+    result["sample_eligible_count"] = int(result.get("sample_eligible_count") or 0) + 1
+    if len(result["items"]) < MAX_RESULT_SAMPLES:
+        result["items"].append(item)
+    else:
+        result["sample_truncated"] = True
+
+
 def _add_item(result: dict, item: dict) -> None:
-    result["items"].append(item)
     camera_key = str(item.get("camera_id") or "unknown")
     row = result["per_camera"].setdefault(
         camera_key,
         {"camera_id": item.get("camera_id"), "deleted_count": 0, "skipped_count": 0, "failed_count": 0, "bytes_freed": 0},
     )
     action = item.get("action")
+    reason = str(item.get("reason") or "unknown")
+    _append_sample(result, item)
+    _add_reason_count(result, reason)
     if action == "deleted":
         result["deleted_count"] += 1
         result["bytes_freed"] += int(item.get("size_bytes") or 0)
@@ -219,9 +279,13 @@ def _add_item(result: dict, item: dict) -> None:
     elif action == "failed":
         result["failed_count"] += 1
         row["failed_count"] += 1
+        counts = result.setdefault("failed_reason_counts", {})
+        counts[reason] = int(counts.get(reason) or 0) + 1
     else:
         result["skipped_count"] += 1
         row["skipped_count"] += 1
+        counts = result.setdefault("skipped_reason_counts", {})
+        counts[reason] = int(counts.get(reason) or 0) + 1
         if item.get("reason") in {"metadata_not_found", "file_missing"}:
             result["not_found_count"] += 1
 
@@ -371,6 +435,30 @@ def validate_segment_for_deletion(
     if require_file and not file_path.is_file():
         return False, "not_file", file_path, 0
     return True, "eligible", file_path, _segment_size(segment, file_path)
+
+
+def _matches_expected_identity(db: Session, segment: RecordingSegment, expected: dict | None) -> bool:
+    if not expected:
+        return True
+    try:
+        return bool(
+            int(segment.id) == int(expected.get("segment_id") or 0)
+            and int(segment.camera_id) == int(expected.get("camera_id") or 0)
+            and str(segment.archive_root_id or "") == str(expected.get("archive_root_id") or "")
+            and str(segment_relative_path(db, segment) or "") == str(expected.get("relative_path") or "")
+            and int(segment.size_bytes or 0) == int(expected.get("size_bytes") or 0)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def _fresh_segment(db: Session, segment_id: int) -> RecordingSegment | None:
+    return (
+        db.query(RecordingSegment)
+        .populate_existing()
+        .filter(RecordingSegment.id == int(segment_id))
+        .first()
+    )
 
 
 def _eligible_segments_query(db: Session):
@@ -549,7 +637,7 @@ def build_retention_plan(
             result["planned_count"] += 1
             result["candidates_count"] += 1
             item = _item(segment, action="candidate", reason=policy_reason, size_bytes=size)
-            result["items"].append(item)
+            _append_sample(result, item)
             camera_key = str(segment.camera_id)
             row = result["per_camera"].setdefault(
                 camera_key,
@@ -558,7 +646,6 @@ def build_retention_plan(
             row["bytes_freed"] += size
             result["bytes_freed"] += size
         else:
-            _add_reason_count(result, reason)
             _add_item(result, _item(segment, action="skipped", reason=reason, size_bytes=size))
     result["estimated_freed_bytes"] = result["bytes_freed"]
     finished = _finish(result)
@@ -694,16 +781,149 @@ def execute_segments(
     reason: str,
     max_candidates: int | None = None,
     max_bytes: int | None = None,
+    policy: str = EXECUTION_POLICY_AUTOMATIC_BOUNDED,
+    operation_id: str | None = None,
+    scope: dict | None = None,
+    scope_lease: ScopeLease | None = None,
+    initial_items: Iterable[dict] | None = None,
+    write_terminal_audit: bool = True,
+    write_item_audit: bool = True,
+    operation_heartbeat: Callable[[], None] | None = None,
+    operation_owner_token: str | None = None,
+    expected_identities: dict[int, dict] | None = None,
 ) -> dict:
-    result = _base_result(operation, dry_run=False)
-    max_candidates = min(int(max_candidates or DEFAULT_MAX_CANDIDATES), HARD_MAX_CANDIDATES)
-    max_bytes = min(int(max_bytes or DEFAULT_MAX_BYTES), HARD_MAX_BYTES)
-    result["limit_applied"] = {"max_candidates": max_candidates, "max_bytes": max_bytes}
-    active_job_ids = _active_job_ids(db)
-    planned: list[tuple[RecordingSegment, Path, int]] = []
-
-    for segment in segments:
+    if policy not in {EXECUTION_POLICY_AUTOMATIC_BOUNDED, EXECUTION_POLICY_MANUAL_COMPLETE}:
+        raise ValueError("invalid_recording_deletion_policy")
+    segment_list = list(segments)
+    operation_id = operation_id or new_operation_id(operation[:32])
+    normalized_scope = scope or scope_for_segments(segment_list)
+    result = _base_result(operation, dry_run=False, operation_id=operation_id, scope=normalized_scope)
+    for item in initial_items or []:
         result["requested_count"] += 1
+        _add_item(result, dict(item))
+
+    if scope_lease is None:
+        try:
+            with destructive_scope_guard(operation_id, normalized_scope, purpose=operation) as owned_lease:
+                if operation_owner_token:
+                    with LeaseHeartbeat(
+                        scope_lease=owned_lease,
+                        operation_id=operation_id,
+                        owner_token=operation_owner_token,
+                    ) as heartbeat:
+                        return _execute_segments_with_lease(
+                            db,
+                            segment_list,
+                            actor=actor,
+                            operation=operation,
+                            operation_id=operation_id,
+                            reason=reason,
+                            max_candidates=max_candidates,
+                            max_bytes=max_bytes,
+                            policy=policy,
+                            result=result,
+                            scope_lease=owned_lease,
+                            write_terminal_audit=write_terminal_audit,
+                            write_item_audit=write_item_audit,
+                            operation_heartbeat=heartbeat.progress,
+                            operation_owner_token=operation_owner_token,
+                            expected_identities=expected_identities,
+                        )
+                return _execute_segments_with_lease(
+                    db,
+                    segment_list,
+                    actor=actor,
+                    operation=operation,
+                    operation_id=operation_id,
+                    reason=reason,
+                    max_candidates=max_candidates,
+                    max_bytes=max_bytes,
+                    policy=policy,
+                    result=result,
+                    scope_lease=owned_lease,
+                    write_terminal_audit=write_terminal_audit,
+                    write_item_audit=write_item_audit,
+                    operation_heartbeat=operation_heartbeat,
+                    operation_owner_token=None,
+                    expected_identities=expected_identities,
+                )
+        except DestructiveScopeConflict as exc:
+            _add_item(
+                result,
+                _item(None, action="skipped", reason=str(exc.detail.get("reason") or "destructive_scope_conflict")),
+            )
+            result["retryable"] = bool(exc.detail.get("retryable", True))
+            result["conflict"] = {
+                "reason": exc.detail.get("reason"),
+                "conflicting_operation_id": exc.detail.get("conflicting_operation_id"),
+            }
+            finished = _finish(result)
+            _write_terminal_execution_audit(db, actor, finished, write_terminal_audit=write_terminal_audit)
+            return finished
+
+    return _execute_segments_with_lease(
+        db,
+        segment_list,
+        actor=actor,
+        operation=operation,
+        operation_id=operation_id,
+        reason=reason,
+        max_candidates=max_candidates,
+        max_bytes=max_bytes,
+        policy=policy,
+        result=result,
+        scope_lease=scope_lease,
+        write_terminal_audit=write_terminal_audit,
+        write_item_audit=write_item_audit,
+        operation_heartbeat=operation_heartbeat,
+        operation_owner_token=operation_owner_token,
+        expected_identities=expected_identities,
+    )
+
+
+def _execute_segments_with_lease(
+    db: Session,
+    segments: list[RecordingSegment],
+    *,
+    actor: User | None,
+    operation: str,
+    operation_id: str,
+    reason: str,
+    max_candidates: int | None,
+    max_bytes: int | None,
+    policy: str,
+    result: dict,
+    scope_lease: ScopeLease,
+    write_terminal_audit: bool,
+    write_item_audit: bool,
+    operation_heartbeat: Callable[[], None] | None,
+    operation_owner_token: str | None,
+    expected_identities: dict[int, dict] | None,
+) -> dict:
+    if policy == EXECUTION_POLICY_AUTOMATIC_BOUNDED:
+        max_candidates = min(int(max_candidates or DEFAULT_MAX_CANDIDATES), HARD_MAX_CANDIDATES)
+        max_bytes = min(int(max_bytes or DEFAULT_MAX_BYTES), HARD_MAX_BYTES)
+        result["limit_applied"] = {"max_candidates": max_candidates, "max_bytes": max_bytes, "policy": policy}
+    else:
+        max_candidates = None
+        max_bytes = None
+        result["limit_applied"] = {"max_candidates": None, "max_bytes": None, "batch_size": MANUAL_BATCH_SIZE, "policy": policy}
+
+    active_job_ids = _active_job_ids(db)
+    expected_identities = expected_identities or {}
+    planned: list[tuple[RecordingSegment, Path, int, dict | None]] = []
+
+    for index, segment in enumerate(segments):
+        if policy == EXECUTION_POLICY_MANUAL_COMPLETE and index % MANUAL_BATCH_SIZE == 0:
+            if operation_heartbeat is not None:
+                operation_heartbeat()
+            scope_lease.touch()
+            scope_lease.assert_owned()
+        result["requested_count"] += 1
+        expected = expected_identities.get(int(segment.id))
+        if expected is not None and not _matches_expected_identity(db, segment, expected):
+            _add_item(result, _item(segment, action="skipped", reason="deletion_plan_item_changed", size_bytes=0))
+            continue
         ok, item_reason, file_path, size = validate_segment_for_deletion(
             segment,
             active_job_ids=active_job_ids,
@@ -712,105 +932,299 @@ def execute_segments(
         if not ok or file_path is None:
             _add_item(result, _item(segment, action="skipped", reason=item_reason, size_bytes=size))
             continue
-        planned.append((segment, file_path, size))
+        planned.append((segment, file_path, size, expected))
 
-    planned_bytes = sum(size for _segment, _path, size in planned)
-    if len(planned) > max_candidates or planned_bytes > max_bytes:
+    planned_bytes = sum(size for _segment, _path, size, _expected in planned)
+    if policy == EXECUTION_POLICY_AUTOMATIC_BOUNDED and (len(planned) > int(max_candidates or 0) or planned_bytes > int(max_bytes or 0)):
         result["limit_exceeded"] = True
         result["planned_count"] = len(planned)
         result["candidates_count"] = len(planned)
         result["warnings"].append("limit_exceeded")
-        for segment, _path, size in planned:
+        for segment, _path, size, _expected in planned:
             _add_item(result, _item(segment, action="skipped", reason="limit_exceeded", size_bytes=size))
         finished = _finish(result)
-        if not operation.startswith("manual") and not operation.startswith("retention_auto"):
-            _audit(
-                db,
-                actor,
-                event_type="retention.apply_completed",
-                severity="warning",
-                message=f"{operation} completed with retention limits",
-                metadata=_retention_summary(finished),
-            )
+        _write_terminal_execution_audit(db, actor, finished, write_terminal_audit=write_terminal_audit)
         return finished
 
     result["planned_count"] = len(planned)
     result["candidates_count"] = len(planned)
-    for segment, file_path, size in planned:
-        try:
-            file_path.unlink()
-        except OSError as exc:
-            db.rollback()
-            _add_item(result, _item(segment, action="failed", reason="delete_failed", error=str(exc), size_bytes=size))
-            _audit(
-                db,
-                actor,
-                event_type="recordings.delete_failed" if operation.startswith("manual") else "retention.deletion_failed",
-                severity="error",
-                message=f"Recording deletion failed for segment {segment.id}",
-                segment=segment,
-                metadata={**_segment_audit_ref(segment), "reason": "delete_failed", "error": str(exc)},
+    batch_size = MANUAL_BATCH_SIZE if policy == EXECUTION_POLICY_MANUAL_COMPLETE else max(1, len(planned))
+    for offset in range(0, len(planned), batch_size):
+        result["batch_count"] += 1
+        if operation_heartbeat is not None:
+            operation_heartbeat()
+        scope_lease.touch()
+        for segment, _file_path, size, expected in planned[offset : offset + batch_size]:
+            if operation_heartbeat is not None:
+                operation_heartbeat()
+            mutation_guard = (
+                operation_scope_mutation_guard(operation_id, operation_owner_token, scope_lease)
+                if operation_owner_token
+                else scope_lease.mutation_guard()
             )
-            continue
+            try:
+                with mutation_guard:
+                    fresh = _fresh_segment(db, int(segment.id))
+                    if fresh is None:
+                        _add_item(result, _item(segment, action="skipped", reason="metadata_not_found", size_bytes=0))
+                        continue
+                    if expected is not None and not _matches_expected_identity(db, fresh, expected):
+                        _add_item(
+                            result,
+                            _item(fresh, action="skipped", reason="deletion_plan_item_changed", size_bytes=0),
+                        )
+                        continue
+                    ok, final_reason, file_path, final_size = validate_segment_for_deletion(
+                        fresh,
+                        active_job_ids=active_job_ids,
+                        block_active_job=operation.startswith("camera_delete"),
+                    )
+                    if not ok or file_path is None:
+                        _add_item(result, _item(fresh, action="skipped", reason=final_reason, size_bytes=final_size))
+                        continue
+                    file_path.unlink()
+                    try:
+                        _mark_deleted(db, fresh, actor=actor, reason=reason, source=operation)
+                        db.commit()
+                    except Exception as exc:
+                        recovered = _recover_deleted_segment_metadata(
+                            db,
+                            fresh,
+                            actor=actor,
+                            reason=reason,
+                            source=operation,
+                            error=str(exc),
+                        )
+                        failure_reason = "metadata_update_failed_recovered" if recovered else "metadata_update_failed"
+                        _add_item(
+                            result,
+                            _item(fresh, action="failed", reason=failure_reason, error=str(exc), size_bytes=final_size),
+                        )
+                        _write_item_execution_audit(
+                            db,
+                            actor,
+                            operation=operation,
+                            segment=fresh,
+                            reason=failure_reason,
+                            error=str(exc),
+                            write_item_audit=write_item_audit,
+                        )
+                        continue
+            except FileNotFoundError:
+                db.rollback()
+                _add_item(result, _item(segment, action="skipped", reason="file_missing", size_bytes=size))
+                continue
+            except OSError as exc:
+                db.rollback()
+                _add_item(result, _item(segment, action="failed", reason="delete_failed", error=str(exc), size_bytes=size))
+                _write_item_execution_audit(
+                    db,
+                    actor,
+                    operation=operation,
+                    segment=segment,
+                    reason="delete_failed",
+                    error=str(exc),
+                    write_item_audit=write_item_audit,
+                )
+                continue
 
-        try:
-            _mark_deleted(db, segment, actor=actor, reason=reason, source=operation)
-            db.commit()
-            _add_item(result, _item(segment, action="deleted", reason=reason, size_bytes=size))
-            if operation.startswith("manual"):
+            _add_item(result, _item(fresh, action="deleted", reason=reason, size_bytes=final_size))
+            if operation.startswith("manual") and write_item_audit:
                 _audit(
                     db,
                     actor,
                     event_type="recordings.deleted_segment",
-                    message=f"Recording segment deleted: {segment.id}",
-                    segment=segment,
-                    metadata={**_segment_audit_ref(segment), "reason": reason, "bytes_freed": size},
+                    message=f"Recording segment deleted: {fresh.id}",
+                    segment=fresh,
+                    metadata={**_segment_audit_ref(fresh), "reason": reason, "bytes_freed": final_size},
                 )
-        except Exception as exc:
-            recovered = _recover_deleted_segment_metadata(
-                db,
-                segment,
-                actor=actor,
-                reason=reason,
-                source=operation,
-                error=str(exc),
-            )
-            failure_reason = "metadata_update_failed_recovered" if recovered else "metadata_update_failed"
-            _add_item(result, _item(segment, action="failed", reason=failure_reason, error=str(exc), size_bytes=size))
-            _audit(
-                db,
-                actor,
-                event_type="recordings.delete_failed" if operation.startswith("manual") else "retention.deletion_failed",
-                severity="error",
-                message=f"Recording metadata update failed after file deletion for segment {segment.id}",
-                segment=segment,
-                metadata={**_segment_audit_ref(segment), "reason": failure_reason, "error": str(exc)},
-            )
 
     finished = _finish(result)
-    if operation.startswith("manual"):
+    _write_terminal_execution_audit(db, actor, finished, write_terminal_audit=write_terminal_audit)
+    return finished
+
+
+def _write_item_execution_audit(
+    db: Session,
+    actor: User | None,
+    *,
+    operation: str,
+    segment: RecordingSegment,
+    reason: str,
+    error: str,
+    write_item_audit: bool,
+) -> None:
+    if not write_item_audit:
+        return
+    try:
         _audit(
             db,
             actor,
-            event_type="recordings.bulk_delete_completed",
-            message=f"{operation} completed",
-            metadata={
-                "operation": operation,
-                "deleted_count": finished["deleted_count"],
-                "skipped_count": finished["skipped_count"],
-                "failed_count": finished["failed_count"],
-                "bytes_freed": finished["bytes_freed"],
+            event_type="recordings.delete_failed" if operation.startswith("manual") else "retention.deletion_failed",
+            severity="error",
+            message=f"Recording deletion failed for segment {segment.id}",
+            segment=segment,
+            metadata={**_segment_audit_ref(segment), "reason": reason, "error": error},
+        )
+    except Exception:
+        db.rollback()
+
+
+def _write_terminal_execution_audit(
+    db: Session,
+    actor: User | None,
+    result: dict,
+    *,
+    write_terminal_audit: bool,
+) -> None:
+    if not write_terminal_audit:
+        return
+    operation = str(result.get("operation") or "recording_delete")
+    status = str(result.get("status") or "failed")
+    try:
+        if operation.startswith("manual"):
+            event_type = f"recordings.bulk_delete_{status}"
+            category_message = f"{operation} {status}"
+        elif operation.startswith("retention_auto"):
+            return
+        else:
+            event_type = f"retention.apply_{status}"
+            category_message = f"{operation} {status}"
+        _audit(
+            db,
+            actor,
+            event_type=event_type,
+            severity="info" if status == "completed" else "warning" if status == "blocked" else "error",
+            message=category_message,
+            metadata=_retention_summary(result),
+        )
+    except Exception:
+        db.rollback()
+        if "audit_write_failed" not in result["warnings"]:
+            result["warnings"].append("audit_write_failed")
+
+
+def begin_manual_execution_result(
+    operation: str,
+    *,
+    operation_id: str,
+    scope: dict,
+    planned_count: int = 0,
+) -> dict:
+    result = _base_result(operation, dry_run=False, operation_id=operation_id, scope=scope)
+    result["planned_count"] = max(0, int(planned_count or 0))
+    result["candidates_count"] = result["planned_count"]
+    result["limit_applied"] = {
+        "max_candidates": None,
+        "max_bytes": None,
+        "batch_size": MANUAL_BATCH_SIZE,
+        "policy": EXECUTION_POLICY_MANUAL_COMPLETE,
+    }
+    return result
+
+
+def merge_execution_result(target: dict, batch: dict) -> dict:
+    for key in (
+        "requested_count",
+        "processed_count",
+        "deleted_count",
+        "skipped_count",
+        "failed_count",
+        "not_found_count",
+        "bytes_freed",
+        "batch_count",
+        "sample_eligible_count",
+    ):
+        target[key] = int(target.get(key) or 0) + int(batch.get(key) or 0)
+    target["sample_truncated"] = bool(target.get("sample_truncated") or batch.get("sample_truncated"))
+    for item in batch.get("items") or []:
+        if len(target["items"]) < MAX_RESULT_SAMPLES:
+            target["items"].append(item)
+        else:
+            target["sample_truncated"] = True
+    for field in ("reason_counts", "skipped_reason_counts", "failed_reason_counts"):
+        output = target.setdefault(field, {})
+        for reason, count in (batch.get(field) or {}).items():
+            output[str(reason)] = int(output.get(str(reason)) or 0) + int(count or 0)
+    for camera_key, row in (batch.get("per_camera") or {}).items():
+        output = target["per_camera"].setdefault(
+            str(camera_key),
+            {
+                "camera_id": row.get("camera_id"),
+                "deleted_count": 0,
+                "skipped_count": 0,
+                "failed_count": 0,
+                "bytes_freed": 0,
             },
         )
-    elif not operation.startswith("retention_auto"):
-        _audit(
-            db,
-            actor,
-            event_type="retention.apply_completed",
-            severity="error" if finished.get("failed_count") else "info",
-            message=f"{operation} completed",
-            metadata=_retention_summary(finished),
+        for key in ("deleted_count", "skipped_count", "failed_count", "bytes_freed"):
+            output[key] = int(output.get(key) or 0) + int(row.get(key) or 0)
+    for warning in batch.get("warnings") or []:
+        if warning not in target["warnings"]:
+            target["warnings"].append(warning)
+    target["retryable"] = bool(target.get("retryable") or batch.get("retryable"))
+    return target
+
+
+def append_execution_issue(
+    result: dict,
+    *,
+    reason: str,
+    action: str = "skipped",
+    retryable: bool = False,
+    count: int = 1,
+) -> dict:
+    count = max(1, int(count or 1))
+    result["requested_count"] = int(result.get("requested_count") or 0) + count
+    item = _item(None, action=action, reason=reason)
+    _add_item(result, item)
+    if count > 1:
+        additional = count - 1
+        result["sample_eligible_count"] = int(result.get("sample_eligible_count") or 0) + additional
+        result["sample_truncated"] = True
+        result["reason_counts"][reason] = int(result["reason_counts"].get(reason) or 0) + additional
+        row = result["per_camera"]["unknown"]
+        if action == "failed":
+            result["failed_count"] += additional
+            row["failed_count"] += additional
+            result["failed_reason_counts"][reason] = int(result["failed_reason_counts"].get(reason) or 0) + additional
+        else:
+            result["skipped_count"] += additional
+            row["skipped_count"] += additional
+            result["skipped_reason_counts"][reason] = int(result["skipped_reason_counts"].get(reason) or 0) + additional
+    result["retryable"] = bool(result.get("retryable") or retryable)
+    return result
+
+
+def enforce_exact_planned_accounting(result: dict, planned_count: int) -> dict:
+    expected = max(0, int(planned_count or 0))
+    observed = sum(
+        int(result.get(key) or 0)
+        for key in ("deleted_count", "skipped_count", "failed_count")
+    )
+    result["accounting_expected_count"] = expected
+    result["accounting_observed_count"] = observed
+    if observed != expected:
+        append_execution_issue(
+            result,
+            reason="deletion_plan_accounting_mismatch",
+            action="failed",
+            retryable=True,
+            count=max(1, expected - observed),
         )
+    result["requested_count"] = max(int(result.get("requested_count") or 0), expected)
+    return result
+
+
+def finish_manual_execution_result(
+    db: Session,
+    actor: User | None,
+    result: dict,
+    *,
+    write_terminal_audit: bool = True,
+) -> dict:
+    finished = _finish(result)
+    _write_terminal_execution_audit(db, actor, finished, write_terminal_audit=write_terminal_audit)
     return finished
 
 
@@ -835,7 +1249,7 @@ def preview_segments(
             result["candidates_count"] += 1
             result["bytes_freed"] += int(size or 0)
             result["estimated_freed_bytes"] = result["bytes_freed"]
-            result["items"].append(_item(segment, action="candidate", reason=reason, size_bytes=size))
+            _append_sample(result, _item(segment, action="candidate", reason=reason, size_bytes=size))
             camera_key = str(segment.camera_id)
             row = result["per_camera"].setdefault(
                 camera_key,
@@ -843,7 +1257,6 @@ def preview_segments(
             )
             row["bytes_freed"] += int(size or 0)
         else:
-            _add_reason_count(result, item_reason)
             _add_item(result, _item(segment, action="skipped", reason=item_reason, size_bytes=size))
     result.setdefault("estimated_freed_bytes", result["bytes_freed"])
     return _finish(result)
@@ -900,26 +1313,20 @@ def run_retention(
 
 
 def _retention_summary(result: dict) -> dict:
-    item_reason_counts: dict[str, int] = {}
-    skipped_reason_counts: dict[str, int] = {}
-    failed_reason_counts: dict[str, int] = {}
-    for item in result.get("items") or []:
-        reason = str(item.get("reason") or "unknown")
-        action = str(item.get("action") or "unknown")
-        item_reason_counts[reason] = int(item_reason_counts.get(reason) or 0) + 1
-        if action == "skipped":
-            skipped_reason_counts[reason] = int(skipped_reason_counts.get(reason) or 0) + 1
-        if action == "failed":
-            failed_reason_counts[reason] = int(failed_reason_counts.get(reason) or 0) + 1
     return {
         "ok": bool(result.get("ok")),
+        "status": result.get("status"),
         "operation": result.get("operation"),
+        "operation_id": result.get("operation_id"),
+        "scope": result.get("scope"),
         "requested_count": int(result.get("requested_count") or 0),
         "planned_count": int(result.get("planned_count") or 0),
+        "processed_count": int(result.get("processed_count") or 0),
         "deleted_count": int(result.get("deleted_count") or 0),
         "skipped_count": int(result.get("skipped_count") or 0),
         "failed_count": int(result.get("failed_count") or 0),
         "bytes_freed": int(result.get("bytes_freed") or 0),
+        "batch_count": int(result.get("batch_count") or 0),
         "limit_applied": result.get("limit_applied"),
         "limit_exceeded": bool(result.get("limit_exceeded")),
         "bounded_requested_count": int(result.get("bounded_requested_count") or 0),
@@ -927,9 +1334,12 @@ def _retention_summary(result: dict) -> dict:
         "bounded_skipped_due_to_limit_count": int(result.get("bounded_skipped_due_to_limit_count") or 0),
         "oversized_single_segment_progress": bool(result.get("oversized_single_segment_progress")),
         "reason_counts": dict(result.get("reason_counts") or {}),
-        "item_reason_counts": item_reason_counts,
-        "skipped_reason_counts": skipped_reason_counts,
-        "failed_reason_counts": failed_reason_counts,
+        "item_reason_counts": dict(result.get("reason_counts") or {}),
+        "skipped_reason_counts": dict(result.get("skipped_reason_counts") or {}),
+        "failed_reason_counts": dict(result.get("failed_reason_counts") or {}),
+        "sample_eligible_count": int(result.get("sample_eligible_count") or 0),
+        "sample_truncated": bool(result.get("sample_truncated")),
+        "retryable": bool(result.get("retryable")),
         "observability": dict(result.get("observability") or {}),
         "warnings": list(result.get("warnings") or []),
     }
@@ -1179,6 +1589,7 @@ def run_auto_free_space_cleanup_once(
                         "max_bytes": max_bytes,
                         "effective_max_bytes": effective_max_bytes,
                     }
+                    _finish(return_result)
             _audit(
                 db,
                 actor,
@@ -1297,6 +1708,7 @@ def run_automatic_retention_once(
                     "max_bytes": max_bytes,
                     "effective_max_bytes": effective_max_bytes,
                 }
+                _finish(result)
         except RuntimeError as exc:
             result = _base_result("retention_auto_run", dry_run=False)
             _add_item(result, _item(None, action="skipped", reason=str(exc) or "concurrency_lock"))

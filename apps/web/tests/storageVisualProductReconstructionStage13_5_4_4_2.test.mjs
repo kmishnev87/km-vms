@@ -55,8 +55,8 @@ assert.match(storagePage.slice(0, overviewStart), /copy\.lastCheck/, "last check
 assert.doesNotMatch(overview, /topHealth\.reason|primaryStorageActionText|archive_primary_path_source|sourceDeployConfig/);
 
 const primaryStart = storagePage.indexOf("<section className={`storageOpsOverview");
-const supportStart = storagePage.indexOf("<details className=\"storageOpsSupportDetails\"");
-const primary = storagePage.slice(primaryStart, supportStart);
+const primaryEnd = storagePage.indexOf("<OperationDialog", primaryStart);
+const primary = storagePage.slice(primaryStart, primaryEnd);
 assert.doesNotMatch(primary, /copy\.source\b|copy\.accessExplanation|copy\.dockerPath|copy\.ownershipBoundary|metadata|метаданн|кандидат|candidate/i);
 assert.match(storagePage, /copy\.healthReasonAvailability/);
 assert.match(storagePage, /copy\.actionCheckArchive/);
@@ -79,7 +79,7 @@ assert.match(i18n, /archiveRootPlaceholder: "\/Volume3\/Archive2"/);
 assert.doesNotMatch(i18n, /archiveRootPlaceholder: "\/storage\/archive2"/);
 
 const cameraStart = storagePage.indexOf("<Section title={copy.cameras}");
-const cameraEnd = storagePage.indexOf("<details className=\"storageOpsSupportDetails\"", cameraStart);
+const cameraEnd = storagePage.indexOf("<Section title={copy.archiveOperations}", cameraStart);
 const cameraBlock = storagePage.slice(cameraStart, cameraEnd);
 assert.match(cameraBlock, /<th>\{copy\.camera\}<\/th>[\s\S]*<th>\{copy\.size\}<\/th>[\s\S]*<th>\{copy\.segments\}<\/th>[\s\S]*<th>\{copy\.problems\}<\/th>/);
 assert.doesNotMatch(cameraBlock, /copy\.range|ID \{row\.camera_id|row\.oldest_recording_at|row\.newest_recording_at/);

@@ -54,8 +54,6 @@ const stage9RenderedKeys = [
   "previewUpdated",
   "migrationManualReview",
   "noCameraOwned",
-  "missingNoMetadata",
-  "reasonOrphanFile",
 ];
 
 for (const key of stage9RenderedKeys) {
@@ -65,6 +63,12 @@ for (const key of stage9RenderedKeys) {
 const ru = extractStoragePage("ru");
 const zh = extractStoragePage("zh-CN");
 const en = extractStoragePage("en");
+
+for (const key of ["missingNoMetadata", "reasonOrphanFile"]) {
+  for (const [locale, values] of Object.entries({ ru, en, "zh-CN": zh })) {
+    assert.ok(values[key], `${locale}.${key} remains available for diagnostics and human reason mapping`);
+  }
+}
 
 const staleStorageMigrationPatterns = [
   new RegExp(["Stage", "4\\.0"].join(" "), "i"),

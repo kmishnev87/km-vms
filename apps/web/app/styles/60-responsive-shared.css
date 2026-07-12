@@ -825,3 +825,38 @@
     padding: 8px;
   }
 }
+
+@media (max-width: 980px) {
+  .storageOpsDashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "archive"
+      "cameras"
+      "operations"
+      "roots"
+      "recent";
+  }
+
+  .storageOpsSection-operations .storageOpsOperationList {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .operationFeedbackOverlay {
+    align-items: end;
+    padding: 10px;
+  }
+
+  .operationFeedbackDialog {
+    max-height: calc(100vh - 20px);
+  }
+
+  .operationFeedbackSummary {
+    grid-template-columns: 1fr;
+  }
+
+  .operationFeedbackFooter .button {
+    min-height: 42px;
+  }
+}

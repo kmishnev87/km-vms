@@ -230,18 +230,18 @@ def test_retention_summary_includes_available_observability_and_skipped_reason_c
             .order_by(AuditEvent.created_at.desc())
             .first()
         )
-        apply_completed = (
+        apply_blocked = (
             db.query(AuditEvent)
-            .filter(AuditEvent.event_type == "retention.apply_completed")
+            .filter(AuditEvent.event_type == "retention.apply_blocked")
             .order_by(AuditEvent.created_at.desc())
             .first()
         )
         assert dry_run.event_metadata["observability"]["foreign_or_unowned_count"] == 1
         assert dry_run.event_metadata["observability"]["active_or_writing_count"] >= 1
         assert dry_run.event_metadata["observability"]["integrity_problem_count"] >= 1
-        assert apply_completed.event_metadata["skipped_reason_counts"]["limit_exceeded"] == 2
-        assert "items" not in apply_completed.event_metadata
-        assert "relative_path" not in json.dumps(apply_completed.event_metadata, ensure_ascii=False)
+        assert apply_blocked.event_metadata["skipped_reason_counts"]["limit_exceeded"] == 2
+        assert "items" not in apply_blocked.event_metadata
+        assert "relative_path" not in json.dumps(apply_blocked.event_metadata, ensure_ascii=False)
     finally:
         close_db(db, tmp, old_root, old_previews, old_exports)
 

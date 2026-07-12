@@ -18,6 +18,9 @@ DISCOVERY_REQUEST_FILE = "storage-discovery-request.json"
 DISCOVERY_REQUEST_CONTROL_FILE = "storage-discovery-request.control"
 DISCOVERY_RESULT_FILE = "storage-discovery-result.json"
 DISCOVERY_LOCK_FILE = "storage-discovery-request.lock"
+ROOT_CLEANUP_REQUEST_FILE = "storage-root-cleanup-request.json"
+ROOT_CLEANUP_REQUEST_CONTROL_FILE = "storage-root-cleanup-request.control"
+ROOT_CLEANUP_RESULT_FILE = "storage-root-cleanup-result.json"
 SELECTION_FILE = "storage-selection.json"
 SELECTION_CONTROL_FILE = "storage-selection.control"
 APPLY_STATUS_FILE = "storage-apply-status.json"
@@ -30,6 +33,7 @@ IN_PROGRESS_SELECTION_STATUSES = {"activation_requested", "activation_in_progres
 FAILED_SELECTION_STATUSES = {"activation_failed", "validation_failed"}
 DISCOVERY_CURRENT_SECONDS = 120
 DISCOVERY_REQUEST_TIMEOUT_SECONDS = 20
+ROOT_CLEANUP_TIMEOUT_SECONDS = 30
 DISCOVERY_LOCK_STALE_SECONDS = 60
 BLOCKED_PATHS = {
     "/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc", "/run",
@@ -49,6 +53,29 @@ PRIMARY_ROOT_PATTERNS = (
     re.compile(r"^/data(?:/[^/]+)?$"),
     re.compile(r"^/media/[^/]+$"),
 )
+ROOT_CLEANUP_IMMEDIATE_REASONS = {
+    "archive_root_cleanup_helper_timeout",
+    "archive_root_cleanup_helper_failed",
+    "root_directory_remove_failed",
+    "metadata_update_failed_after_file_delete",
+    "runtime_state_finalize_failed",
+    "runtime_manifest_recovery_failed",
+    "destructive_scope_conflict",
+    "destructive_scope_lease_lost",
+}
+ROOT_CLEANUP_REFRESH_REASONS = {
+    "selected_mount_missing",
+    "storage_discovery_refresh_failed",
+    "archive_root_cleanup_identity_revalidation_failed",
+}
+ROOT_CLEANUP_EXTERNAL_FIX_REASONS = {
+    "selected_mount_not_readable",
+    "selected_mount_not_searchable",
+    "selected_mount_not_writable",
+    "root_marker_remove_failed",
+    "filesystem_delete_failed",
+}
+ROOT_CLEANUP_COMPLETED_STATUSES = {"completed_removed", "completed_preserved_nonempty"}
 
 
 def _same_or_child(path: Path, blocked: Path) -> bool:
@@ -63,6 +90,41 @@ def _same_or_child(path: Path, blocked: Path) -> bool:
 
 def install_control_dir() -> Path:
     return Path(settings.storage_install_control)
+
+
+def archive_root_cleanup_capability(reason: str | None, cleanup_status: str | None = None) -> dict[str, object]:
+    normalized_reason = str(reason or "").strip()[:120]
+    normalized_status = str(cleanup_status or "").strip()[:64]
+    if normalized_status in ROOT_CLEANUP_COMPLETED_STATUSES:
+        retry_mode = "none"
+        next_action = "close"
+    elif normalized_reason in ROOT_CLEANUP_IMMEDIATE_REASONS:
+        retry_mode = "immediate"
+        next_action = "retry_cleanup"
+    elif normalized_reason in ROOT_CLEANUP_REFRESH_REASONS:
+        retry_mode = "after_refresh"
+        next_action = "refresh_storage_state"
+    elif normalized_reason in ROOT_CLEANUP_EXTERNAL_FIX_REASONS:
+        retry_mode = "after_external_fix"
+        next_action = "correct_storage_access"
+    else:
+        retry_mode = "none"
+        next_action = "close"
+    return {
+        "retry_mode": retry_mode,
+        "next_action": next_action,
+        "retry_available": retry_mode == "immediate",
+    }
+
+
+def normalize_archive_root_cleanup_result(result: dict) -> dict:
+    normalized = dict(result or {})
+    reason = str(normalized.get("reason") or "archive_root_cleanup_unknown")[:120]
+    cleanup_status = str(normalized.get("cleanup_status") or "partial_cleanup")[:64]
+    normalized["reason"] = reason
+    normalized["cleanup_status"] = cleanup_status
+    normalized.update(archive_root_cleanup_capability(reason, cleanup_status))
+    return normalized
 
 
 def _safe_read_json(path: Path) -> dict:
@@ -303,6 +365,83 @@ def _wait_discovery_result(request_id: str, *, timeout_seconds: int = DISCOVERY_
             return result
         time.sleep(0.25)
     return {"request_id": request_id, "status": "failed", "error": "storage_discovery_refresh_timeout"}
+
+
+def request_archive_root_cleanup(
+    root_row,
+    *,
+    operation_id: str,
+    marker_already_removed: bool = False,
+    timeout_seconds: int = ROOT_CLEANUP_TIMEOUT_SECONDS,
+) -> dict:
+    root_id = str(getattr(root_row, "id", "") or "").strip()
+    physical_identity = str(getattr(root_row, "physical_identity", "") or "").strip()
+    host_path = Path(str(getattr(root_row, "root_path", "") or "").strip())
+    if not root_id or not re.fullmatch(r"[A-Za-z0-9_.-]{1,96}", operation_id or ""):
+        raise ValueError("archive_root_cleanup_identity_invalid")
+    if not physical_identity:
+        raise ValueError("archive_root_cleanup_physical_identity_missing")
+    if not host_path.is_absolute() or not host_path.name or host_path.name in {".", ".."}:
+        raise ValueError("archive_root_cleanup_path_invalid")
+    selected_mount = host_path.parent
+    if ".." in host_path.parts or len(host_path.parts) < 3 or _path_block_reason(str(selected_mount), ""):
+        raise ValueError("archive_root_cleanup_path_outside_discovered_volume")
+    folder_name = validate_folder_name(host_path.name)
+    if host_path != selected_mount / folder_name:
+        raise ValueError("archive_root_cleanup_path_invalid")
+    request_id = f"storage-root-cleanup-{uuid.uuid4().hex}"
+    payload = {
+        "schema_version": 1,
+        "request_id": request_id,
+        "operation_id": operation_id,
+        "archive_root_id": root_id,
+        "selected_host_path": str(host_path),
+        "selected_mount_path": str(selected_mount),
+        "folder_name": folder_name,
+        "expected_physical_identity": physical_identity,
+        "marker_already_removed": bool(marker_already_removed),
+        "requested_at": _utc_now(),
+        "status": "requested",
+    }
+    _write_json(install_control_dir() / ROOT_CLEANUP_REQUEST_FILE, payload)
+    _write_control(
+        install_control_dir() / ROOT_CLEANUP_REQUEST_CONTROL_FILE,
+        {
+            "schema_version": 1,
+            "request_id": request_id,
+            "operation_id": operation_id,
+            "archive_root_id": root_id,
+            "selected_host_path": str(host_path),
+            "selected_mount_path": str(selected_mount),
+            "folder_name": folder_name,
+            "expected_physical_identity": physical_identity,
+            "marker_already_removed": "true" if marker_already_removed else "false",
+            "status": "requested",
+        },
+    )
+    deadline = time.monotonic() + max(1, int(timeout_seconds))
+    result_path = install_control_dir() / ROOT_CLEANUP_RESULT_FILE
+    while time.monotonic() < deadline:
+        result = _safe_read_json(result_path)
+        if (
+            str(result.get("request_id") or "") == request_id
+            and str(result.get("operation_id") or "") == operation_id
+            and str(result.get("archive_root_id") or "") == root_id
+            and str(result.get("status") or "") in {"completed", "partial", "failed"}
+        ):
+            return normalize_archive_root_cleanup_result(result)
+        time.sleep(0.25)
+    return normalize_archive_root_cleanup_result({
+        "schema_version": 1,
+        "request_id": request_id,
+        "operation_id": operation_id,
+        "archive_root_id": root_id,
+        "status": "partial",
+        "cleanup_status": "partial_cleanup",
+        "reason": "archive_root_cleanup_helper_timeout",
+        "marker_removed": bool(marker_already_removed),
+        "root_directory_removed": False,
+    })
 
 
 def request_discovery_refresh(*, timeout_seconds: int = DISCOVERY_REQUEST_TIMEOUT_SECONDS) -> dict:

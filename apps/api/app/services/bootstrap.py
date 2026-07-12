@@ -167,8 +167,13 @@ def migrate_archive_roots() -> None:
         conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS physical_identity VARCHAR(128) NULL"))
         conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS retirement_status VARCHAR(50) NULL"))
         conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS retirement_problem TEXT NULL"))
+        conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS retirement_operation_id VARCHAR(96) NULL"))
+        conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS retirement_cleanup_status VARCHAR(64) NULL"))
+        conn.execute(text("ALTER TABLE archive_roots ADD COLUMN IF NOT EXISTS retirement_cleanup_result JSON NULL"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_physical_identity ON archive_roots (physical_identity)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_retirement_status ON archive_roots (retirement_status)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_retirement_operation_id ON archive_roots (retirement_operation_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_archive_roots_retirement_cleanup_status ON archive_roots (retirement_cleanup_status)"))
 
 
 def migrate_recorder_runtime_status() -> None:

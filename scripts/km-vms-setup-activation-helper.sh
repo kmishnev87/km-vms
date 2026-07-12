@@ -10,6 +10,8 @@ STATUS_FILE="$CONTROL_DIR/storage-apply-status.json"
 DISCOVERY_REQUEST_CONTROL_FILE="$CONTROL_DIR/storage-discovery-request.control"
 DISCOVERY_RESULT_FILE="$CONTROL_DIR/storage-discovery-result.json"
 DISCOVERY_CANDIDATES_CONTROL_FILE="$CONTROL_DIR/storage-discovery-candidates.control"
+ROOT_CLEANUP_REQUEST_CONTROL_FILE="$CONTROL_DIR/storage-root-cleanup-request.control"
+ROOT_CLEANUP_RESULT_FILE="$CONTROL_DIR/storage-root-cleanup-result.json"
 SETUP_COMPLETE_FILE="$CONTROL_DIR/setup-complete.json"
 SETUP_STATUS_URL="${KM_VMS_SETUP_STATUS_URL:-http://api:8000/system/status}"
 APPLY_OUT="/tmp/km-vms-storage-apply.out"
@@ -20,6 +22,8 @@ DISCOVERY_OUT="/tmp/km-vms-storage-discovery.out"
 DISCOVERY_ERR="/tmp/km-vms-storage-discovery.err"
 DISCOVERY_VALIDATION_OUT="/tmp/km-vms-storage-discovery-validation.out"
 DISCOVERY_VALIDATION_ERR="/tmp/km-vms-storage-discovery-validation.err"
+ROOT_CLEANUP_OUT="/tmp/km-vms-storage-root-cleanup.out"
+ROOT_CLEANUP_ERR="/tmp/km-vms-storage-root-cleanup.err"
 
 fail_status() {
   message="$1"
@@ -183,10 +187,239 @@ write_discovery_result() {
   chmod 600 "$DISCOVERY_RESULT_FILE" 2>/dev/null || true
 }
 
+write_root_cleanup_request_status() {
+  request_id_value="$1"
+  operation_id_value="$2"
+  archive_root_id_value="$3"
+  selected_path_value="$4"
+  selected_mount_value="$5"
+  folder_value="$6"
+  identity_value="$7"
+  marker_removed_value="$8"
+  status_value="$9"
+  tmp="$ROOT_CLEANUP_REQUEST_CONTROL_FILE.tmp.$$"
+  {
+    printf 'schema_version=1\n'
+    printf 'request_id=%s\n' "$request_id_value"
+    printf 'operation_id=%s\n' "$operation_id_value"
+    printf 'archive_root_id=%s\n' "$archive_root_id_value"
+    printf 'selected_host_path=%s\n' "$selected_path_value"
+    printf 'selected_mount_path=%s\n' "$selected_mount_value"
+    printf 'folder_name=%s\n' "$folder_value"
+    printf 'expected_physical_identity=%s\n' "$identity_value"
+    printf 'marker_already_removed=%s\n' "$marker_removed_value"
+    printf 'status=%s\n' "$status_value"
+  } > "$tmp"
+  mv "$tmp" "$ROOT_CLEANUP_REQUEST_CONTROL_FILE"
+  chmod 600 "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" 2>/dev/null || true
+}
+
+set_root_cleanup_capability() {
+  capability_reason="$1"
+  capability_status="$2"
+  if [ "$capability_status" = "completed_removed" ] || [ "$capability_status" = "completed_preserved_nonempty" ]; then
+    ROOT_CLEANUP_RETRY_MODE=none
+    ROOT_CLEANUP_NEXT_ACTION=close
+  else
+    case "$capability_reason" in
+      archive_root_cleanup_helper_timeout|archive_root_cleanup_helper_failed|root_directory_remove_failed|metadata_update_failed_after_file_delete|runtime_state_finalize_failed|runtime_manifest_recovery_failed|destructive_scope_conflict|destructive_scope_lease_lost)
+        ROOT_CLEANUP_RETRY_MODE=immediate
+        ROOT_CLEANUP_NEXT_ACTION=retry_cleanup
+        ;;
+      selected_mount_missing|storage_discovery_refresh_failed|archive_root_cleanup_identity_revalidation_failed)
+        ROOT_CLEANUP_RETRY_MODE=after_refresh
+        ROOT_CLEANUP_NEXT_ACTION=refresh_storage_state
+        ;;
+      selected_mount_not_readable|selected_mount_not_searchable|selected_mount_not_writable|root_marker_remove_failed|filesystem_delete_failed)
+        ROOT_CLEANUP_RETRY_MODE=after_external_fix
+        ROOT_CLEANUP_NEXT_ACTION=correct_storage_access
+        ;;
+      *)
+        ROOT_CLEANUP_RETRY_MODE=none
+        ROOT_CLEANUP_NEXT_ACTION=close
+        ;;
+    esac
+  fi
+  if [ "$ROOT_CLEANUP_RETRY_MODE" = "immediate" ]; then
+    ROOT_CLEANUP_RETRY_AVAILABLE=true
+  else
+    ROOT_CLEANUP_RETRY_AVAILABLE=false
+  fi
+}
+
+write_root_cleanup_result() {
+  request_id_value="$1"
+  operation_id_value="$2"
+  archive_root_id_value="$3"
+  status_value="$4"
+  cleanup_status_value="$5"
+  reason_value="$6"
+  marker_removed_value="$7"
+  directory_removed_value="$8"
+  preserved_reason_value="$9"
+  supplied_retry_available_value="${10}"
+  retry_mode_value="${11:-}"
+  next_action_value="${12:-}"
+  case "$marker_removed_value:$directory_removed_value:$supplied_retry_available_value" in
+    true:true:true|true:true:false|true:false:true|true:false:false|false:true:true|false:true:false|false:false:true|false:false:false) ;;
+    *) marker_removed_value=false; directory_removed_value=false ;;
+  esac
+  case "$retry_mode_value:$next_action_value" in
+    immediate:retry_cleanup|after_refresh:refresh_storage_state|after_external_fix:correct_storage_access|none:close) ;;
+    *)
+      set_root_cleanup_capability "$reason_value" "$cleanup_status_value"
+      retry_mode_value="$ROOT_CLEANUP_RETRY_MODE"
+      next_action_value="$ROOT_CLEANUP_NEXT_ACTION"
+      ;;
+  esac
+  if [ "$retry_mode_value" = "immediate" ]; then
+    retry_available_value=true
+  else
+    retry_available_value=false
+  fi
+  updated_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
+  tmp="$ROOT_CLEANUP_RESULT_FILE.tmp.$$"
+  {
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "request_id": "%s",\n' "$(json_escape "$request_id_value")"
+    printf '  "operation_id": "%s",\n' "$(json_escape "$operation_id_value")"
+    printf '  "archive_root_id": "%s",\n' "$(json_escape "$archive_root_id_value")"
+    printf '  "status": "%s",\n' "$(json_escape "$status_value")"
+    printf '  "cleanup_status": "%s",\n' "$(json_escape "$cleanup_status_value")"
+    printf '  "reason": "%s",\n' "$(json_escape "$reason_value")"
+    printf '  "marker_removed": %s,\n' "$marker_removed_value"
+    printf '  "root_directory_removed": %s,\n' "$directory_removed_value"
+    printf '  "root_directory_preserved_reason": "%s",\n' "$(json_escape "$preserved_reason_value")"
+    printf '  "retry_mode": "%s",\n' "$(json_escape "$retry_mode_value")"
+    printf '  "next_action": "%s",\n' "$(json_escape "$next_action_value")"
+    printf '  "retry_available": %s,\n' "$retry_available_value"
+    printf '  "updated_at": "%s"\n' "$updated_at"
+    printf '}\n'
+  } > "$tmp"
+  mv "$tmp" "$ROOT_CLEANUP_RESULT_FILE"
+  chmod 600 "$ROOT_CLEANUP_RESULT_FILE" 2>/dev/null || true
+}
+
 discovery_json_value() {
   key="$1"
   file="$2"
   sed -n 's/^[[:space:]]*"'"$key"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -n 1
+}
+
+process_root_cleanup_request() {
+  [ -f "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" ] || return 0
+  cleanup_request_status=$(read_control_value "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" status || true)
+  [ "$cleanup_request_status" = "requested" ] || return 0
+  cleanup_request_id=$(read_control_value "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" request_id || true)
+  cleanup_operation_id=$(read_control_value "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" operation_id || true)
+  cleanup_root_id=$(read_control_value "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" archive_root_id || true)
+  cleanup_host_path=$(read_control_value "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" selected_host_path || true)
+  cleanup_mount=$(read_control_value "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" selected_mount_path || true)
+  cleanup_folder=$(read_control_value "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" folder_name || true)
+  cleanup_identity=$(read_control_value "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" expected_physical_identity || true)
+  cleanup_marker_removed=$(read_control_value "$ROOT_CLEANUP_REQUEST_CONTROL_FILE" marker_already_removed || printf false)
+
+  case "$cleanup_request_id" in
+    ''|*[!A-Za-z0-9_.-]*)
+      write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" failed failed_preflight archive_root_cleanup_request_invalid false false "" false
+      write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" failed
+      return 0
+      ;;
+  esac
+  case "$cleanup_operation_id" in
+    ''|*[!A-Za-z0-9_.-]*)
+      write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" failed failed_preflight archive_root_cleanup_identity_invalid false false "" false
+      write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" failed
+      return 0
+      ;;
+  esac
+  case "$cleanup_root_id" in
+    ''|*[!A-Za-z0-9_.-]*)
+      write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" failed failed_preflight archive_root_cleanup_identity_invalid false false "" false
+      write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" failed
+      return 0
+      ;;
+  esac
+  case "$cleanup_mount" in
+    /*) ;;
+    *)
+      write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" failed failed_preflight archive_root_cleanup_mount_invalid false false "" false
+      write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" failed
+      return 0
+      ;;
+  esac
+  case "$cleanup_folder" in
+    ''|.|..|.*|*/*|*\\*|*'"'*)
+      write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" failed failed_preflight archive_root_cleanup_folder_invalid false false "" false
+      write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" failed
+      return 0
+      ;;
+  esac
+  [ "$cleanup_host_path" = "$cleanup_mount/$cleanup_folder" ] || {
+    write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" failed failed_preflight archive_root_cleanup_path_mismatch false false "" false
+    write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" failed
+    return 0
+  }
+  if [ -z "$cleanup_identity" ]; then
+    write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" failed failed_preflight archive_root_cleanup_identity_invalid false false "" false
+    write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" failed
+    return 0
+  fi
+
+  write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" processing
+  rm -f "$DISCOVERY_OUT" "$DISCOVERY_ERR" "$ROOT_CLEANUP_OUT" "$ROOT_CLEANUP_ERR"
+  if ! docker run --rm \
+    -v "$APP_DIR:/host-app" \
+    -v "/:/host:ro,rslave" \
+    docker:27-cli \
+    sh /host-app/scripts/km-vms-storage-discovery.sh --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
+    write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" partial partial_cleanup storage_discovery_refresh_failed "$cleanup_marker_removed" false "" true
+    write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" partial
+    return 0
+  fi
+
+  cleanup_candidate=$(awk -F '\t' -v mount="$cleanup_mount" '$2 == mount {print; exit}' "$DISCOVERY_CANDIDATES_CONTROL_FILE" 2>/dev/null || true)
+  cleanup_current_identity=$(printf '%s\n' "$cleanup_candidate" | awk -F '\t' '{print $3}')
+  cleanup_writable=$(printf '%s\n' "$cleanup_candidate" | awk -F '\t' '{print $4}')
+  cleanup_safety=$(printf '%s\n' "$cleanup_candidate" | awk -F '\t' '{print $5}')
+  if [ -z "$cleanup_candidate" ] || [ "$cleanup_current_identity" != "$cleanup_identity" ] || [ "$cleanup_writable" != "true" ] || [ "$cleanup_safety" != "allowed" ]; then
+    write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" failed failed_preflight archive_root_cleanup_identity_revalidation_failed false false "" false
+    write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" failed
+    return 0
+  fi
+
+  helper_exit=0
+  docker run --rm \
+    -v "$APP_DIR:/host-app:ro" \
+    -v "$cleanup_mount:/selected-root" \
+    docker:27-cli \
+    sh /host-app/scripts/km-vms-storage-root-cleanup.sh \
+      --folder-name "$cleanup_folder" \
+      --expected-host-path "$cleanup_host_path" \
+      --operation-id "$cleanup_operation_id" \
+      --archive-root-id "$cleanup_root_id" \
+      --allow-missing-marker "$cleanup_marker_removed" >"$ROOT_CLEANUP_OUT" 2>"$ROOT_CLEANUP_ERR" || helper_exit=$?
+
+  result_status=$(read_control_value "$ROOT_CLEANUP_OUT" status || printf partial)
+  cleanup_status=$(read_control_value "$ROOT_CLEANUP_OUT" cleanup_status || printf partial_cleanup)
+  cleanup_reason=$(read_control_value "$ROOT_CLEANUP_OUT" reason || printf archive_root_cleanup_helper_failed)
+  result_marker_removed=$(read_control_value "$ROOT_CLEANUP_OUT" marker_removed || printf false)
+  result_directory_removed=$(read_control_value "$ROOT_CLEANUP_OUT" root_directory_removed || printf false)
+  result_preserved_reason=$(read_control_value "$ROOT_CLEANUP_OUT" root_directory_preserved_reason || true)
+  result_retry_mode=$(read_control_value "$ROOT_CLEANUP_OUT" retry_mode || true)
+  result_next_action=$(read_control_value "$ROOT_CLEANUP_OUT" next_action || true)
+  result_retry=$(read_control_value "$ROOT_CLEANUP_OUT" retry_available || printf true)
+  if [ "$helper_exit" -ne 0 ] && [ "$result_status" = "completed" ]; then
+    result_status=partial
+    cleanup_status=partial_cleanup
+    cleanup_reason=archive_root_cleanup_helper_failed
+    result_retry_mode=immediate
+    result_next_action=retry_cleanup
+    result_retry=true
+  fi
+  write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$result_status" "$cleanup_status" "$cleanup_reason" "$result_marker_removed" "$result_directory_removed" "$result_preserved_reason" "$result_retry" "$result_retry_mode" "$result_next_action"
+  write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$result_marker_removed" "$result_status"
 }
 
 process_discovery_request() {
@@ -274,6 +507,7 @@ process_discovery_request() {
 }
 
 while :; do
+  process_root_cleanup_request
   process_discovery_request
   if [ ! -f "$REQUEST_CONTROL_FILE" ]; then
     sleep 2

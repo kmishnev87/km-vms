@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
+import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
 import { apiFetch, canAccessPath, forbiddenMessage } from "../../lib/api";
 import { useCurrentUser } from "../../lib/currentUser";
 import { useI18n, useLocaleText } from "../../lib/i18n";
@@ -18,6 +19,7 @@ import {
   isStorageAccessDeniedError,
   actionPermissionState,
   accessRightsModel,
+  archiveRootCleanupCapabilityModel,
   archiveRootScenarioModel,
   freeSpaceTone,
   migrationScenarioModel,
@@ -30,6 +32,7 @@ import {
 } from "../../lib/storageOperations";
 
 const REFRESH_MS = 30000;
+const ACTIVATION_ACK_KEY = "kmvms.storage.activation.acknowledged";
 
 function Stat({ label, value, tone = "neutral" }) {
   return (
@@ -68,36 +71,6 @@ function MiniFact({ label, value, tone = "neutral" }) {
     <div className={`storageOpsMiniFact storageOpsMiniFact-${tone}`}>
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
-  );
-}
-
-function StorageDialog({ dialog, onClose }) {
-  if (!dialog) return null;
-  const hasConfirm = typeof dialog.onConfirm === "function";
-  return (
-    <div className="storageOpsDialogOverlay" role="presentation">
-      <div className={`storageOpsDialog storageOpsDialog-${dialog.tone || "warning"}`} role="dialog" aria-modal="true" aria-labelledby="storage-dialog-title">
-        <div className="storageOpsDialogHead">
-          <strong id="storage-dialog-title">{dialog.title}</strong>
-          <button className={`button secondary small ${hasConfirm ? "storageOpsDialogCloseIconButton" : ""}`} type="button" onClick={onClose} aria-label={dialog.closeLabel || dialog.cancelLabel}>
-            {hasConfirm ? "×" : (dialog.closeLabel || dialog.cancelLabel)}
-          </button>
-        </div>
-        <p>{dialog.message}</p>
-        {Array.isArray(dialog.items) && dialog.items.length ? (
-          <ul className="storageOpsDialogList">
-            {dialog.items.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}
-          </ul>
-        ) : null}
-        {dialog.action ? <div className="storageOpsDialogAction">{dialog.action}</div> : null}
-        {hasConfirm ? (
-          <div className="storageOpsDialogFooter">
-            <button className="button secondary small" type="button" onClick={onClose}>{dialog.cancelLabel}</button>
-            <button className={`button small ${dialog.confirmTone === "danger" ? "dangerButton" : ""}`} type="button" onClick={dialog.onConfirm}>{dialog.confirmLabel}</button>
-          </div>
-        ) : null}
-      </div>
     </div>
   );
 }
@@ -197,6 +170,45 @@ function archiveRootDialogText(error, copy, language = "ru") {
   };
 }
 
+function archiveRootCleanupReason(detail, copy) {
+  const reason = String(detail?.reason || detail?.failure?.reason || "");
+  if ([
+    "root_marker_missing",
+    "root_marker_product_mismatch",
+    "root_marker_path_mismatch",
+    "root_marker_container_path_mismatch",
+    "root_marker_not_regular_file",
+    "root_marker_symlink_rejected",
+    "root_path_symlink_rejected",
+  ].includes(reason)) {
+    return copy.archiveRootCleanupMarkerProblem;
+  }
+  if ([
+    "archive_root_cleanup_identity_revalidation_failed",
+    "archive_root_cleanup_physical_identity_missing",
+    "selected_mount_missing",
+    "storage_discovery_refresh_failed",
+  ].includes(reason)) {
+    return copy.archiveRootCleanupDiskChanged;
+  }
+  if ([
+    "selected_mount_not_readable",
+    "selected_mount_not_searchable",
+    "selected_mount_not_writable",
+    "root_marker_remove_failed",
+    "filesystem_delete_failed",
+  ].includes(reason)) {
+    return copy.archiveRootCleanupAccessProblem;
+  }
+  if (["root_directory_remove_failed", "foreign_or_user_content_preserved"].includes(reason)) {
+    return copy.archiveRootCleanupFolderBusy;
+  }
+  if (["filesystem_delete_failed", "metadata_update_failed_after_file_delete"].includes(reason)) {
+    return copy.archiveRootCleanupRecordingProblem;
+  }
+  return copy.archiveRootCleanupGenericProblem;
+}
+
 function retentionSummaryText(source, copy) {
   if (!source) return copy.retentionNoPreview;
   return copy.retentionPreviewReady
@@ -238,8 +250,7 @@ function healthActionText(topHealth, copy) {
 
 function rootProblemTone(root) {
   if (!root) return "unknown";
-  if (root.is_available === false || root.problem) return "error";
-  return "ok";
+  return rootHasProblems(root) ? "error" : "ok";
 }
 
 function rootProblemLabel(root, copy, language) {
@@ -248,14 +259,14 @@ function rootProblemLabel(root, copy, language) {
 
 function rootHasProblems(root) {
   if (!root) return false;
-  if (root.requires_activation && !root.is_active) return false;
+  if (root.requires_activation && !root.is_active && Number(root.segments_count || 0) === 0) return false;
   return Boolean(root.problem || root.is_available === false || root.is_readable === false || (root.is_active && root.is_writable === false) || root.namespace_exists === false);
 }
 
 function rootProblemItems(root, copy, language) {
   const items = [];
   if (!root) return [copy.no];
-  if (root.requires_activation && !root.is_active) return [copy.no];
+  if (root.requires_activation && !root.is_active && Number(root.segments_count || 0) === 0) return [copy.no];
   if (root.problem) items.push(humanBlockerReason(root.problem, language));
   if (root.is_available === false && !root.problem) items.push(copy.archiveRootUnavailableDetail);
   if (root.is_readable === false) items.push(copy.archiveRootUnreadableDetail);
@@ -385,12 +396,6 @@ function archiveRootStateText(root, copy) {
   return copy.inactiveRoot || copy.oldInactive;
 }
 
-function availabilityState(pathHealth, copy) {
-  if (pathHealth?.available === true) return { label: copy.availabilityConfirmed, tone: "ok" };
-  if (pathHealth?.available === false) return { label: copy.availabilityNeedsCheck, tone: "warning" };
-  return { label: copy.availabilityUnknown, tone: "unknown" };
-}
-
 function recordingState(operations, pathHealth, policy, copy) {
   if (policy?.recording_suspended_by_low_disk) {
     return { label: copy.recordingUnavailable, detail: copy.recordingSuspended, tone: "error" };
@@ -480,13 +485,13 @@ export default function StorageOperationsPage() {
   const [archiveRootChoiceId, setArchiveRootChoiceId] = useState("");
   const [archiveRootFolderName, setArchiveRootFolderName] = useState("KM-VMS-Recordings");
   const [archiveRootDialog, setArchiveRootDialog] = useState(null);
+  const [operationToast, setOperationToast] = useState(null);
   const [trackedActivationOperationId, setTrackedActivationOperationId] = useState(null);
   const [dismissedActivationOperationId, setDismissedActivationOperationId] = useState(null);
   const [migrationTargetRootId, setMigrationTargetRootId] = useState("");
   const [migrationPreviewState, setMigrationPreviewState] = useState(null);
   const [rootAction, setRootAction] = useState("");
   const [autoFreeMessage, setAutoFreeMessage] = useState("");
-  const [archiveRootMessage, setArchiveRootMessage] = useState("");
   const [retentionMessage, setRetentionMessage] = useState("");
   const [retentionPreview, setRetentionPreview] = useState(null);
   const [retentionResult, setRetentionResult] = useState(null);
@@ -502,6 +507,12 @@ export default function StorageOperationsPage() {
   const copy = useLocaleText("storagePage");
 
   const canOpenStorage = currentUser ? canAccessPath(currentUser, "/storage") : false;
+
+  useEffect(() => {
+    try {
+      setDismissedActivationOperationId(window.sessionStorage.getItem(ACTIVATION_ACK_KEY));
+    } catch (_) {}
+  }, []);
 
   const loadStatus = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setRefreshing(true);
@@ -580,7 +591,6 @@ export default function StorageOperationsPage() {
   const storageContract = status?.storage_contract || {};
   const capacity = operations.capacity || {};
   const pathHealth = operations.path_health || {};
-  const namespace = operations.namespace_health || {};
   const owned = operations.owned_archive || {};
   const policy = operations.low_disk_policy || {};
   const autoCleanup = operations.auto_free_space_cleanup || {};
@@ -590,11 +600,6 @@ export default function StorageOperationsPage() {
   const archiveRoots = status?.archive_roots || operations.archive_roots || [];
   const archiveRootActivation = status?.archive_root_activation || operations.archive_root_activation || {};
   const activationModel = activationProgressModel(archiveRootActivation);
-  const activationIsActive = ["queued", "running", "failed_recovery_required"].includes(activationModel.status);
-  const activationIsTrackedTerminal = ["failed", "completed"].includes(activationModel.status)
-    && trackedActivationOperationId === activationModel.operationId
-    && dismissedActivationOperationId !== activationModel.operationId;
-  const showArchiveRootActivation = activationIsActive || activationIsTrackedTerminal;
   const archiveRootActivationReason = activationProgressReasonText(archiveRootActivation, copy, language);
   const migrationPreview = migrationPreviewState || operations.migration_preview || status?.migration_preview || {};
   const archiveRootDiscoveryModel = discoveryStateModel(archiveRootDiscovery || {});
@@ -606,7 +611,6 @@ export default function StorageOperationsPage() {
   const topHealth = storageTopHealthModel({ operations, pathHealth, capacity, policy, reconciliation, migrationPreview, retention }, language);
   const tone = topHealth.tone || healthTone(operations, pathHealth, capacity, policy, reconciliation);
   const accessRights = accessRightsModel(pathHealth, language);
-  const availability = availabilityState(pathHealth, copy);
   const recording = recordingState(operations, pathHealth, policy, copy);
   const normalizedReconciliation = normalizeReconciliationSummary(reconciliation, language);
   const archivePathText = storageContract.archive_primary_path || storageContract.archive_host_path || storageContract.storage_host_path || "-";
@@ -691,16 +695,21 @@ export default function StorageOperationsPage() {
     }
     if (trackedActivationOperationId !== operationId || dismissedActivationOperationId === operationId) return;
     const recoveryRequired = activationModel.recoveryRequired;
+    const completed = activationModel.status === "completed";
+    const running = ["queued", "running"].includes(activationModel.status);
     setArchiveRootDialog({
+      id: `activation-${operationId}`,
       activationOperationId: operationId,
-      title: copy.activationProgressTitle,
-      message: activationProgressStatusText(archiveRootActivation, copy),
+      title: completed ? copy.activationCompletedTitle : copy.activationProgressTitle,
+      message: completed ? copy.activationCompletedMessage : activationProgressStatusText(archiveRootActivation, copy),
       items: activationProgressItems(archiveRootActivation, copy),
-      action: archiveRootActivationReason || copy.activationProgressHint,
+      action: completed ? "" : (archiveRootActivationReason || copy.activationProgressHint),
       confirmLabel: recoveryRequired ? copy.activationRetryRecovery : undefined,
       cancelLabel: copy.close,
       closeLabel: copy.close,
-      tone: activationProgressTone(archiveRootActivation),
+      tone: completed ? "success" : activationProgressTone(archiveRootActivation),
+      busy: running,
+      dismissible: !running,
       onConfirm: recoveryRequired
         ? () => activateRoot(archiveRootActivation.target_root_id || archiveRootActivation.previous_root_id, true)
         : undefined,
@@ -715,6 +724,19 @@ export default function StorageOperationsPage() {
     dismissedActivationOperationId,
     trackedActivationOperationId,
   ]);
+
+  useEffect(() => {
+    const operationId = archiveRootDialog?.activationOperationId;
+    if (!operationId || activationModel.status !== "completed") return undefined;
+    const timer = window.setTimeout(() => {
+      setDismissedActivationOperationId(operationId);
+      try {
+        window.sessionStorage.setItem(ACTIVATION_ACK_KEY, operationId);
+      } catch (_) {}
+      setArchiveRootDialog((current) => current?.activationOperationId === operationId ? null : current);
+    }, 2500);
+    return () => window.clearTimeout(timer);
+  }, [activationModel.status, archiveRootDialog?.activationOperationId]);
 
   async function setAutoFreeSpace(nextEnabled) {
     if (!manageSettingsPermission.allowed) {
@@ -764,15 +786,20 @@ export default function StorageOperationsPage() {
       return;
     }
     setRootAction("add");
-    setArchiveRootMessage("");
     try {
       await apiFetch("/storage/archive-roots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...payload, label: archiveRootFolderName.trim() || "Archive root", make_active: false, confirm: false }),
       });
-      setArchiveRootMessage(copy.rootAdded);
       await loadStatus({ silent: true });
+      setOperationToast({
+        id: `root-added-${Date.now()}`,
+        title: copy.rootAddedTitle,
+        message: copy.rootAddedInactive || "",
+        closeLabel: copy.close,
+        tone: "success",
+      });
       await loadArchiveRootDiscovery();
     } catch (err) {
       setArchiveRootDialog(archiveRootDialogText(err, copy, language));
@@ -821,13 +848,15 @@ export default function StorageOperationsPage() {
       return;
     }
     setRootAction(`activate-${rootId}`);
-    setArchiveRootMessage("");
     setArchiveRootDialog({
+      id: `activation-request-${rootId}`,
       title: copy.activationProgressTitle,
       message: recovery ? copy.activationRollbackRunning : copy.activationQueued,
       action: copy.activationProgressHint,
       closeLabel: copy.close,
       tone: "warning",
+      busy: true,
+      dismissible: false,
     });
     try {
       const operation = await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}/activate`, {
@@ -858,6 +887,63 @@ export default function StorageOperationsPage() {
       message: archiveRootPath(root, archivePathText),
       items: rootProblemItems(root, copy, language),
       action: copy.archiveRootProblemDetailsAction,
+      closeLabel: copy.close,
+      tone: "warning",
+    });
+  }
+
+  function showCameraProblems(row) {
+    const labels = {
+      missing_file: copy.cameraProblemMissingFile,
+      root_unavailable: copy.cameraProblemRootUnavailable,
+      root_unresolved: copy.cameraProblemRootUnresolved,
+      path_outside_storage: copy.cameraProblemUnsafePath,
+      invalid_path: copy.cameraProblemInvalidPath,
+      not_file: copy.cameraProblemNotFile,
+      metadata_unavailable: copy.cameraProblemMetadataUnavailable,
+      verification_error: copy.cameraProblemVerificationError,
+    };
+    const details = {
+      missing_file: copy.cameraProblemMissingFileDetail,
+      root_unavailable: copy.cameraProblemRootUnavailableDetail,
+      root_unresolved: copy.cameraProblemRootUnresolvedDetail,
+      path_outside_storage: copy.cameraProblemUnsafePathDetail,
+      invalid_path: copy.cameraProblemInvalidPathDetail,
+      not_file: copy.cameraProblemNotFileDetail,
+      metadata_unavailable: copy.cameraProblemMetadataUnavailableDetail,
+      verification_error: copy.cameraProblemVerificationErrorDetail,
+    };
+    const reasons = Object.entries(row.problem_counts || {})
+      .filter(([, count]) => Number(count || 0) > 0)
+      .map(([code, count]) => ({ code, count, label: labels[code] || copy.cameraProblemOther, detail: details[code] || copy.cameraProblemOtherDetail }));
+    const actions = [
+      {
+        id: "refresh-storage",
+        label: copy.refresh,
+        onClick: async () => {
+          setArchiveRootDialog(null);
+          await loadStatus();
+        },
+      },
+    ];
+    if (diagnosticsPermission.allowed) {
+      actions.push({
+        id: "check-archive",
+        label: copy.integrityCheckShort,
+        onClick: () => {
+          setArchiveRootDialog(null);
+          runReconciliationPreview();
+        },
+      });
+    }
+    setArchiveRootDialog({
+      id: `camera-problems-${row.camera_id || row.camera_name}`,
+      title: copy.cameraProblemDialogTitle,
+      message: row.camera_name,
+      summary: [{ label: copy.problems, value: String(row.problem_file_count || 0) }],
+      reasons,
+      detail: diagnosticsPermission.allowed ? copy.cameraProblemNextAction : copy.cameraProblemNoAutomaticFix,
+      actions,
       closeLabel: copy.close,
       tone: "warning",
     });
@@ -900,7 +986,14 @@ export default function StorageOperationsPage() {
       tone: "error",
       confirmTone: "danger",
       onConfirm: () => {
-        setArchiveRootDialog(null);
+        setArchiveRootDialog({
+          id: `root-delete-running-${root.id}`,
+          title: copy.deleteArchiveRoot,
+          message: copy.archiveRootDeleteRunningMessage,
+          tone: "warning",
+          busy: true,
+          dismissible: false,
+        });
         deleteRoot(root.id);
       },
     });
@@ -909,29 +1002,77 @@ export default function StorageOperationsPage() {
   async function deleteRoot(rootId) {
     if (!rootId) return;
     setRootAction(`delete-${rootId}`);
-    setArchiveRootMessage("");
     try {
-      await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}`, {
+      const result = await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ confirm: true }),
       });
-      setArchiveRootMessage(copy.archiveRootDeleted);
+      const cleanupMessage = result?.cleanup_status === "completed_preserved_nonempty"
+        ? copy.archiveRootDirectoryPreserved
+        : result?.root_directory_removed
+          ? copy.archiveRootDirectoryRemoved
+          : copy.archiveRootDeleted;
       await loadStatus({ silent: true });
+      setArchiveRootDialog(null);
+      setOperationToast({
+        id: `root-deleted-${result?.operation_id || Date.now()}`,
+        title: copy.archiveRootDeletedTitle,
+        message: cleanupMessage,
+        closeLabel: copy.close,
+        tone: "success",
+      });
     } catch (err) {
       const detail = err?.detail || err?.data?.detail;
       if (detail?.status === "partial") {
+        const capability = archiveRootCleanupCapabilityModel(detail);
+        const partialAction = capability.canRetryNow
+          ? copy.archiveRootDeletePartialAction
+          : capability.shouldRefresh
+            ? copy.archiveRootCleanupRefreshAction
+            : capability.needsExternalFix
+              ? copy.archiveRootCleanupExternalFixAction
+              : copy.archiveRootCleanupNoRetryAction;
         setArchiveRootDialog({
+          id: `root-delete-partial-${detail.operation_id || Date.now()}`,
           title: copy.archiveRootDeletePartialTitle,
           message: copy.archiveRootDeletePartialMessage
             .replace("{deleted}", String(detail.segments_deleted || 0))
             .replace("{remaining}", String(detail.remaining_count || 0)),
-          action: copy.archiveRootDeletePartialAction,
+          reasons: [{
+            code: "archive-root-cleanup",
+            label: copy.archiveRootCleanupPending,
+            detail: archiveRootCleanupReason(detail, copy),
+          }],
+          action: partialAction,
           closeLabel: copy.close,
+          ...(capability.canRetryNow ? {
+            confirmLabel: copy.archiveRootCleanupRetry,
+            cancelLabel: copy.close,
+            onConfirm: () => {
+              setArchiveRootDialog(null);
+              deleteRoot(rootId);
+            },
+          } : (capability.shouldRefresh || capability.needsExternalFix) ? {
+            actions: [{
+              id: "refresh-storage",
+              label: copy.refresh,
+              onClick: async () => {
+                setArchiveRootDialog(null);
+                await loadStatus();
+              },
+            }],
+          } : {}),
           tone: "error",
         });
       } else {
-        setArchiveRootMessage(errorDetailText(err, copy.archiveRootNotDeleted, language));
+        setArchiveRootDialog({
+          id: `root-delete-error-${Date.now()}`,
+          title: copy.archiveRootNotDeleted,
+          message: errorDetailText(err, copy.archiveRootNotDeleted, language),
+          closeLabel: copy.close,
+          tone: "error",
+        });
       }
       await loadStatus({ silent: true });
     } finally {
@@ -942,6 +1083,9 @@ export default function StorageOperationsPage() {
   function closeArchiveRootDialog() {
     if (archiveRootDialog?.activationOperationId) {
       setDismissedActivationOperationId(archiveRootDialog.activationOperationId);
+      try {
+        window.sessionStorage.setItem(ACTIVATION_ACK_KEY, archiveRootDialog.activationOperationId);
+      } catch (_) {}
     }
     setArchiveRootDialog(null);
   }
@@ -1182,6 +1326,56 @@ export default function StorageOperationsPage() {
                 </div>
               </Section>
 
+              <Section title={copy.cameras} className="storageOpsSection-cameras">
+                {cameraRows.length ? (
+                  <>
+                    <div className="storageOpsTableWrap storageOpsCameraTable">
+                      <table className="storageOpsTable">
+                        <thead>
+                          <tr>
+                            <th>{copy.camera}</th>
+                            <th>{copy.size}</th>
+                            <th>{copy.segments}</th>
+                            <th>{copy.problems}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cameraRows.map((row) => (
+                            <tr key={row.camera_id || row.camera_name}>
+                              <td>{row.camera_name}</td>
+                              <td>{formatBytes(row.size_bytes)}</td>
+                              <td>{row.segment_count}</td>
+                              <td>
+                                {row.problem_file_count > 0 ? (
+                                  <button className="storageOpsCameraProblemButton" type="button" onClick={() => showCameraProblems(row)} aria-label={`${copy.problems}: ${row.problem_file_count}`}>
+                                    {row.problem_file_count}
+                                  </button>
+                                ) : "0"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="storageOpsCameraCards">
+                      {cameraRows.map((row) => (
+                        <div className="storageOpsCameraCard" key={`card-${row.camera_id || row.camera_name}`}>
+                          <div className="storageOpsCameraCardIdentity"><strong>{row.camera_name}</strong></div>
+                          <div className="storageOpsCameraCardMetric"><span>{copy.size}</span><strong>{formatBytes(row.size_bytes)}</strong></div>
+                          <div className="storageOpsCameraCardMetric"><span>{copy.segments}</span><strong>{row.segment_count}</strong></div>
+                          <div className="storageOpsCameraCardMetric">
+                            <span>{copy.problems}</span>
+                            {row.problem_file_count > 0 ? (
+                              <button className="storageOpsCameraProblemButton" type="button" onClick={() => showCameraProblems(row)}>{row.problem_file_count}</button>
+                            ) : <strong>0</strong>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : <div className="storageOpsEmpty">{copy.noCameraOwned}</div>}
+              </Section>
+
               <Section title={copy.archiveOperations} className="storageOpsSection-operations">
                 <div className="storageOpsOperationList">
                   <OperationRow
@@ -1385,16 +1579,6 @@ export default function StorageOperationsPage() {
                   })}
                   {!archiveRoots.length && !currentArchiveRoot ? <div className="storageOpsEmpty">{copy.noRoots}</div> : null}
                 </div>
-                {archiveRootMessage ? <div className="storageOpsNote storageOpsNoteStrong">{archiveRootMessage}</div> : null}
-                {showArchiveRootActivation ? (
-                  <div className={`storageOpsNote storageOpsNoteStrong storageOpsActivationProgress storageOpsActivationProgress-${activationProgressTone(archiveRootActivation)}`}>
-                    <strong>{copy.activationProgressTitle}: {activationProgressStatusText(archiveRootActivation, copy)}</strong>
-                    <ul className="storageOpsDialogList">
-                      {activationProgressItems(archiveRootActivation, copy).map((item) => <li key={item}>{item}</li>)}
-                    </ul>
-                    {archiveRootActivationReason ? <div>{archiveRootActivationReason}</div> : null}
-                  </div>
-                ) : null}
                 <details
                   className="storageOpsDetails storageOpsAdvancedRoot"
                   onToggle={(event) => {
@@ -1461,64 +1645,10 @@ export default function StorageOperationsPage() {
               ) : null}
             </div>
 
-            <Section title={copy.cameras}>
-              {cameraRows.length ? (
-                <>
-                  <div className="storageOpsTableWrap storageOpsCameraTable">
-                    <table className="storageOpsTable">
-                      <thead>
-                        <tr>
-                          <th>{copy.camera}</th>
-                          <th>{copy.size}</th>
-                          <th>{copy.segments}</th>
-                          <th>{copy.problems}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {cameraRows.map((row) => (
-                          <tr key={row.camera_id || row.camera_name}>
-                            <td><strong>{row.camera_name}</strong></td>
-                            <td>{formatBytes(row.size_bytes)}</td>
-                            <td>{row.segment_count}</td>
-                            <td>{row.missing_file_count} / {row.problem_file_count}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                  <div className="storageOpsCameraCards">
-                    {cameraRows.map((row) => (
-                      <div className="storageOpsCameraCard" key={`card-${row.camera_id || row.camera_name}`}>
-                        <div className="storageOpsCameraCardIdentity">
-                          <strong>{row.camera_name}</strong>
-                        </div>
-                        <div className="storageOpsCameraCardMetric"><span>{copy.size}</span><strong>{formatBytes(row.size_bytes)}</strong></div>
-                        <div className="storageOpsCameraCardMetric"><span>{copy.segments}</span><strong>{row.segment_count}</strong></div>
-                        <div className="storageOpsCameraCardMetric"><span>{copy.problems}</span><strong>{row.missing_file_count} / {row.problem_file_count}</strong></div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <div className="storageOpsEmpty">{copy.noCameraOwned}</div>
-              )}
-            </Section>
-            <details className="storageOpsSupportDetails">
-              <summary>{copy.supportDetails}</summary>
-              <dl>
-                <div><dt>{copy.namespaceState}</dt><dd>{namespace.storage_namespace || "-"}</dd></div>
-                <div><dt>{copy.availability}</dt><dd>{availability.label}</dd></div>
-                <div><dt>{copy.namespaceExists}</dt><dd>{boolLabel(namespace.namespace_exists, language)}</dd></div>
-                <div><dt>{copy.scanMode}</dt><dd>{namespace.scan_mode || "-"}</dd></div>
-                <div><dt>{copy.partialScanReason}</dt><dd>{namespace.partial_reason || "-"}</dd></div>
-                <div><dt>{copy.missingNoMetadata}</dt><dd>{`${reconciliation.missing_file_count || 0} / ${reconciliation.orphan_file_count || 0}`}</dd></div>
-                <div><dt>{copy.reasonOrphanFile}</dt><dd>{String(reconciliation.orphan_file_count || 0)}</dd></div>
-                <div><dt>{copy.invalidOutside}</dt><dd>{`${reconciliation.invalid_path_count || 0} / ${reconciliation.path_outside_storage_count || 0}`}</dd></div>
-              </dl>
-            </details>
           </>
         )}
-        <StorageDialog dialog={archiveRootDialog} onClose={closeArchiveRootDialog} />
+        <OperationDialog dialog={archiveRootDialog} onClose={closeArchiveRootDialog} />
+        <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
       </div>
     </Layout>
   );

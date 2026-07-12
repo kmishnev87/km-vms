@@ -798,6 +798,8 @@ def archive_root_public_status(root_row, *, include_path: bool = False) -> dict:
         "active_write_target": bool(getattr(root_row, "is_active", False)),
         "retired": bool(getattr(root_row, "retired_at", None)),
         "retirement_status": getattr(root_row, "retirement_status", None),
+        "retirement_cleanup_status": getattr(root_row, "retirement_cleanup_status", None),
+        "retirement_operation_id": getattr(root_row, "retirement_operation_id", None),
         "requires_activation": requires_activation,
     }
     if include_path:
@@ -850,6 +852,12 @@ def root_usage(db: Session, root_row) -> dict:
         except OSError:
             inaccessible += 1
     problem_count = missing + resolution_problems
+    expected_unmounted_empty_root = bool(
+        not getattr(root_row, "is_active", False)
+        and count == 0
+        and _inactive_runtime_activation_root(root_row)
+    )
+    root_access_problem = status["read_access_state"] != "available" and not expected_unmounted_empty_root
     return {
         "segments_count": count,
         "existing_file_count": existing,
@@ -858,8 +866,8 @@ def root_usage(db: Session, root_row) -> dict:
         "root_resolution_problem_count": resolution_problems,
         "problem_file_count": problem_count,
         "size_bytes": size,
-        "root_access_problem_count": 1 if status["read_access_state"] != "available" else 0,
-        "root_access_problem": status["problem"] if status["read_access_state"] != "available" else None,
+        "root_access_problem_count": 1 if root_access_problem else 0,
+        "root_access_problem": status["problem"] if root_access_problem else None,
     }
 
 

@@ -80,6 +80,29 @@ export function discoveryHeaderStatusModel(discovery = null) {
   return { state: "unavailable", tone: "warning", needsRefresh: true };
 }
 
+export function archiveRootCleanupCapabilityModel(detail = {}) {
+  const expectedActions = {
+    immediate: "retry_cleanup",
+    after_refresh: "refresh_storage_state",
+    after_external_fix: "correct_storage_access",
+    none: "close",
+  };
+  const requestedMode = String(detail?.retry_mode || "none");
+  const requestedAction = String(detail?.next_action || "close");
+  const valid = Object.prototype.hasOwnProperty.call(expectedActions, requestedMode)
+    && expectedActions[requestedMode] === requestedAction;
+  const retryMode = valid ? requestedMode : "none";
+  const nextAction = valid ? requestedAction : "close";
+  return {
+    retryMode,
+    nextAction,
+    canRetryNow: retryMode === "immediate",
+    shouldRefresh: retryMode === "after_refresh",
+    needsExternalFix: retryMode === "after_external_fix",
+    retryAvailable: retryMode === "immediate",
+  };
+}
+
 export function formatDateTime(value, language = "ru") {
   if (!value) {
     if (language === "en") return "Never";
@@ -840,6 +863,11 @@ export function cameraStorageRows(rows, limit = 12) {
       existing_file_count: asNumber(row?.existing_file_count, 0),
       missing_file_count: asNumber(row?.missing_file_count, 0),
       problem_file_count: asNumber(row?.problem_file_count, 0),
+      problem_counts: Object.fromEntries(
+        Object.entries(row?.problem_counts || {})
+          .map(([reason, count]) => [reason, asNumber(count, 0)])
+          .filter(([, count]) => count > 0)
+      ),
       oldest_recording_at: row?.oldest_recording_at || null,
       newest_recording_at: row?.newest_recording_at || null,
     }))

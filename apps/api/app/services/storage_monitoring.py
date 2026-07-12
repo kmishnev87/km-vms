@@ -311,6 +311,7 @@ def _empty_camera_usage(camera: Camera | None = None) -> dict:
         "existing_file_count": 0,
         "missing_file_count": 0,
         "problem_file_count": 0,
+        "problem_counts": {},
         "size_bytes": 0,
         "newest_recording_at": None,
         "oldest_recording_at": None,
@@ -356,7 +357,7 @@ def _safe_stat_segment(segment: RecordingSegment, root: Path) -> tuple[str | Non
     try:
         db = object_session(segment)
         if db is None:
-            return segment.relative_path, None, "db_session_missing", None
+            return segment.relative_path, None, "metadata_unavailable", None
         root_row = archive_root_for_segment(db, segment)
         if root_row is not None:
             access = archive_root_runtime_access_state(root_row)
@@ -374,7 +375,7 @@ def _safe_stat_segment(segment: RecordingSegment, root: Path) -> tuple[str | Non
             return segment.relative_path, None, "path_outside_storage", None
         return segment.relative_path, None, "invalid_path", None
     except Exception:
-        return segment.relative_path, None, "invalid_path", None
+        return segment.relative_path, None, "verification_error", None
     try:
         stat = target.stat()
         if not target.is_file():
@@ -382,8 +383,8 @@ def _safe_stat_segment(segment: RecordingSegment, root: Path) -> tuple[str | Non
         return rel_path, int(stat.st_size), None, target
     except FileNotFoundError:
         return rel_path, None, "missing_file", target
-    except OSError as exc:
-        return rel_path, None, "root_unavailable", target
+    except OSError:
+        return rel_path, None, "verification_error", target
 
 
 def _observe_namespace(root: Path, owned_paths: set[str]) -> dict:
@@ -489,6 +490,21 @@ def _safe_camera_usage(rows: list[dict] | None) -> list[dict]:
                 "existing_file_count": int(row.get("existing_file_count") or 0),
                 "missing_file_count": int(row.get("missing_file_count") or 0),
                 "problem_file_count": int(row.get("problem_file_count") or 0),
+                "problem_counts": {
+                    str(reason): int(count or 0)
+                    for reason, count in (row.get("problem_counts") or {}).items()
+                    if str(reason) in {
+                        "missing_file",
+                        "root_unavailable",
+                        "root_unresolved",
+                        "path_outside_storage",
+                        "invalid_path",
+                        "not_file",
+                        "metadata_unavailable",
+                        "verification_error",
+                    }
+                    and int(count or 0) > 0
+                },
                 "size_bytes": int(row.get("size_bytes") or 0),
                 "oldest_recording_at": row.get("oldest_recording_at"),
                 "newest_recording_at": row.get("newest_recording_at"),
@@ -857,20 +873,18 @@ def build_storage_monitoring_summary(
             row["existing_file_count"] += 1
             row["size_bytes"] += size
             owned_archive_size += size
-        elif problem == "root_unavailable":
-            owned_root_unavailable_count += 1
-            _bump_counter_map(row, "problem_counts", problem)
-        elif problem == "root_unresolved":
-            owned_root_unresolved_count += 1
-            owned_problem_count += 1
-            row["problem_file_count"] += 1
-            _bump_counter_map(row, "problem_counts", segment_archive_root_resolution(segment))
         else:
             owned_problem_count += 1
             row["problem_file_count"] += 1
+            if problem:
+                _bump_counter_map(row, "problem_counts", problem)
             if problem == "missing_file":
                 owned_missing_count += 1
                 row["missing_file_count"] += 1
+            elif problem == "root_unavailable":
+                owned_root_unavailable_count += 1
+            elif problem == "root_unresolved":
+                owned_root_unresolved_count += 1
             elif problem == "path_outside_storage":
                 path_outside_count += 1
             elif problem == "invalid_path":

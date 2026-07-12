@@ -16,6 +16,7 @@ from app.db.session import Base
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
 from app.models.system_settings import SystemSettings
+from app.models.user import User
 from app.routers import recordings as recordings_router
 from app.services import recorder_diagnostics
 from app.services.recording_storage import (
@@ -39,6 +40,16 @@ def db():
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     session = Session()
+    session.add(
+        User(
+            id=1,
+            username="stage21_user",
+            full_name="Stage 13.5 test owner",
+            password_hash="unused",
+            role="owner",
+            is_active=True,
+        )
+    )
     session.add(
         SystemSettings(
             system_initialized=True,
