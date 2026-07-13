@@ -15,6 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS
 from app.db.session import Base
+from app.models.camera import Camera
+from app.models.system_settings import SystemSettings
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
 from app.routers.settings import system_backup_plan, system_schema_plan, system_schema_status
 from app.services.backup_before_upgrade import (
@@ -125,6 +127,53 @@ def test_metadata_snapshot_is_secret_safe_and_uses_counts_not_secret_fields(tmp_
     assert "password_hash" not in raw
     assert "rtsp://" not in raw
     assert "storage_path_redacted" in raw
+
+
+def test_backup_metadata_uses_actual_pre_migration_schema_with_newer_orm_models(tmp_path):
+    engine, db = sqlite_session(tmp_path)
+    seed_state(db, version=3)
+    db.add(SystemSettings(recording_format="mp4", auto_free_space_cleanup_enabled=True))
+    db.add(Camera(name="Pre-migration camera", storage_folder_name="pre-migration", protocol="rtsp", host="127.0.0.1", port=554))
+    db.commit()
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE cameras DROP COLUMN retention_policy_version"))
+        connection.execute(text("ALTER TABLE system_settings DROP COLUMN auto_free_space_acknowledged_terms_version"))
+        connection.execute(text("ALTER TABLE system_settings DROP COLUMN auto_free_space_acknowledged_at"))
+        connection.execute(text("ALTER TABLE system_settings DROP COLUMN auto_free_space_acknowledged_by_user_id"))
+        connection.execute(text("ALTER TABLE system_settings DROP COLUMN recording_suspended_by_low_disk"))
+        connection.execute(text("ALTER TABLE system_settings DROP COLUMN low_disk_suspended_physical_volume_id"))
+        connection.execute(text("ALTER TABLE system_settings DROP COLUMN low_disk_suspended_at"))
+
+    payload = build_backup_metadata_snapshot(
+        db,
+        backup_id="pre-migration-test",
+        db_backend="sqlite",
+        source="test",
+        backup_checksum="abc",
+    )
+    result = create_backup_before_upgrade(db, config=backup_config(tmp_path))
+
+    assert payload["entity_counts"]["cameras"] == 1
+    assert payload["storage_settings_summary"]["recording_format"] == "mp4"
+    assert payload["storage_settings_summary"]["auto_free_space_cleanup_enabled"] is True
+    assert verify_backup_manifest(result["manifest_path"])["valid"] is True
+
+
+def test_backup_metadata_failure_removes_completed_dump_and_sidecars(tmp_path, monkeypatch):
+    _engine, db = sqlite_session(tmp_path)
+    seed_state(db, version=CURRENT_SCHEMA_VERSION)
+    root = tmp_path / "safe-db-backups"
+    monkeypatch.setattr(
+        "app.services.backup_before_upgrade.build_backup_metadata_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("metadata failed")),
+    )
+
+    with pytest.raises(BackupSafetyBlocked) as exc:
+        create_backup_before_upgrade(db, config=backup_config(tmp_path))
+
+    assert exc.value.status == "backup_failed"
+    assert list(root.iterdir()) == []
 
 
 def test_unsafe_backup_locations_and_tmp_final_destination_are_rejected(tmp_path):

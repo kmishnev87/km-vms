@@ -13,9 +13,9 @@ from app.core.config import settings
 from app.db.session import Base
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
+from app.models.storage_operation import StorageOperation
 from app.routers.settings import system_status
 from app.services import system_runtime_status as runtime_status
-from app.services.recording_retention import AUTO_RETENTION_STATE
 from app.services.system_runtime_status import build_operator_runtime_status
 from app.services.recording_storage import (
     DEFAULT_ARCHIVE_ROOT_ID,
@@ -69,19 +69,33 @@ def db():
 @pytest.fixture(autouse=True)
 def no_live_evidence(monkeypatch):
     monkeypatch.setattr(runtime_status.live_manager, "status", lambda: [])
-    AUTO_RETENTION_STATE.clear()
-    AUTO_RETENTION_STATE.update(
-        {
-            "enabled": True,
-            "running": False,
-            "last_started_at": None,
-            "last_finished_at": None,
-            "last_status": "never_run",
-            "last_error": None,
-            "last_summary": None,
-            "run_count": 0,
-        }
+
+
+def add_retention_operation(db, *, status, result_status=None, reason_code=None):
+    now = datetime.utcnow()
+    index = db.query(StorageOperation).filter(StorageOperation.operation_type == "retention_auto_run").count() + 1
+    operation = StorageOperation(
+        id=f"runtime-retention-{index}",
+        operation_type="retention_auto_run",
+        actor_kind="system",
+        actor_key="system:runtime-test",
+        system_owner="runtime-test",
+        idempotency_key=f"runtime-retention-{index}",
+        request_fingerprint=f"{index:064x}",
+        status=status,
+        scope={"global": False, "physical_volume_ids": [], "root_ids": [], "camera_ids": [index], "segment_ids": [], "scope_escalated": False},
+        progress={},
+        result={"status": result_status or status, "deleted_count": 0},
+        reason_code=reason_code,
+        queued_at=now,
+        started_at=now,
+        finished_at=now,
+        created_at=now,
+        updated_at=now,
     )
+    db.add(operation)
+    db.commit()
+    return operation
 
 
 def add_camera(
@@ -423,7 +437,7 @@ def test_retention_no_evidence_is_unknown_and_failed_state_is_error(db):
     assert "retention_never_run" in retention["reason_codes"]
     assert retention["policy_count"] == 1
 
-    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": "failed", "last_error": "/secret/path"})
+    add_retention_operation(db, status="failed", reason_code="automatic_retention_failed")
     failed_payload = build_operator_runtime_status(db)
     failed = failed_payload["domains"]["retention"]
 
@@ -443,9 +457,13 @@ def test_fresh_install_without_cameras_does_not_report_retention_policy_risk(db)
 
 
 @pytest.mark.parametrize("last_status", ["ok", "completed", "success", "completed_successfully", "succeeded"])
-def test_retention_success_statuses_map_to_ok(db, last_status):
+def test_retention_success_aliases_are_normalized(last_status):
+    assert runtime_status._normalize_retention_status(last_status) == "success"
+
+
+def test_durable_retention_completed_maps_to_ok(db):
     add_camera(db)
-    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": last_status, "run_count": 1})
+    add_retention_operation(db, status="completed", result_status="compliant")
 
     payload = build_operator_runtime_status(db)
     retention = payload["domains"]["retention"]
@@ -456,9 +474,14 @@ def test_retention_success_statuses_map_to_ok(db, last_status):
 
 
 @pytest.mark.parametrize("last_status", ["completed_with_warnings", "skipped_concurrent"])
-def test_retention_warning_statuses_map_to_warning(db, last_status):
+def test_retention_warning_aliases_are_normalized(last_status):
+    assert runtime_status._normalize_retention_status(last_status) == "warning"
+
+
+@pytest.mark.parametrize("operation_status", ["partial", "blocked", "cancelled"])
+def test_durable_retention_non_success_terminal_maps_to_warning(db, operation_status):
     add_camera(db)
-    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": last_status, "run_count": 1})
+    add_retention_operation(db, status=operation_status, result_status="no_safe_candidate")
 
     payload = build_operator_runtime_status(db)
     retention = payload["domains"]["retention"]
@@ -470,7 +493,6 @@ def test_retention_warning_statuses_map_to_warning(db, last_status):
 
 def test_retention_missing_and_unsupported_statuses_do_not_fake_ok(db):
     add_camera(db)
-    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": None, "run_count": 0})
 
     missing_payload = build_operator_runtime_status(db)
     missing = missing_payload["domains"]["retention"]
@@ -479,13 +501,7 @@ def test_retention_missing_and_unsupported_statuses_do_not_fake_ok(db):
     assert missing["evidence_status"] == "missing"
     assert "retention_never_run" in missing["reason_codes"]
 
-    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": "mystery_status", "run_count": 1})
-    unsupported_payload = build_operator_runtime_status(db)
-    unsupported = unsupported_payload["domains"]["retention"]
-
-    assert unsupported["severity"] == "unknown"
-    assert unsupported["evidence_status"] == "missing"
-    assert "retention_unknown" in unsupported["reason_codes"]
+    assert runtime_status._normalize_retention_status("mystery_status") == "unknown"
 
 
 def test_reconciliation_problem_counts_map_to_warning_without_samples_or_paths(db):

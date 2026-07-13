@@ -33,6 +33,7 @@ from app.services.schema_migrations import (
     STAGE4101_TABLES,
     STAGE4101_STORAGE_FOUNDATION_MIGRATION,
     STAGE41011_OPERATION_LINEAGE_MIGRATION,
+    STAGE4102_RETENTION_MIGRATION,
     execute_migration_plan,
     validate_schema_migrations_pre_bootstrap,
 )
@@ -604,8 +605,8 @@ def test_automatic_retention_db_failure_fails_closed(stage4101, monkeypatch):
         raise RuntimeError("database unavailable")
 
     monkeypatch.setattr(automatic_retention, "acquire_worker_lease", unavailable)
-    monkeypatch.setattr(automatic_retention, "run_automatic_retention_once", lambda *_a, **_k: calls.append("retention"))
-    monkeypatch.setattr(automatic_retention, "run_auto_free_space_cleanup_once", lambda *_a, **_k: calls.append("auto_free"))
+    monkeypatch.setattr(automatic_retention, "run_retention_signal_generation", lambda *_a, **_k: calls.append("retention"))
+    monkeypatch.setattr(automatic_retention, "run_auto_free_pressure_groups", lambda *_a, **_k: calls.append("auto_free"))
     with pytest.raises(RuntimeError, match="database unavailable"):
         automatic_retention.run_automatic_retention_cycle()
     assert calls == []
@@ -1001,7 +1002,7 @@ def _seed_schema_v1(db):
 
 
 def test_schema_clean_install_upgrade_restart_and_prebootstrap_gate():
-    assert CURRENT_SCHEMA_VERSION == 3
+    assert CURRENT_SCHEMA_VERSION == 4
     fresh = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=fresh)
     fresh_inspector = inspect(fresh)
@@ -1023,12 +1024,23 @@ def test_schema_clean_install_upgrade_restart_and_prebootstrap_gate():
     assert first["executed_migrations"] == [
         STAGE4101_STORAGE_FOUNDATION_MIGRATION.migration_id,
         STAGE41011_OPERATION_LINEAGE_MIGRATION.migration_id,
+        STAGE4102_RETENTION_MIGRATION.migration_id,
     ]
     assert second["executed_migrations"] == []
-    assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == 3
+    assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == 4
     assert all(inspector.has_table(name) for name in ("storage_operations", "storage_worker_leases", "storage_work_signals"))
     operation_columns = {item["name"] for item in inspector.get_columns("storage_operations")}
     assert {"parent_snapshot", "retry_depth"}.issubset(operation_columns)
+    camera_columns = {item["name"] for item in inspector.get_columns("cameras")}
+    settings_columns = {item["name"] for item in inspector.get_columns("system_settings")}
+    assert "retention_policy_version" in camera_columns
+    assert {
+        "auto_free_space_acknowledged_terms_version",
+        "auto_free_space_acknowledged_at",
+        "auto_free_space_acknowledged_by_user_id",
+        "low_disk_suspended_physical_volume_id",
+        "low_disk_suspended_at",
+    }.issubset(settings_columns)
     validate_schema_migrations_pre_bootstrap(engine)
     db.close()
     engine.dispose()
@@ -1901,7 +1913,7 @@ def test_schema_v2_to_v3_adds_lineage_columns():
     )
     db.commit()
 
-    result = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS)
+    result = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS, target_version=3)
     columns = {item["name"] for item in inspect(engine).get_columns("storage_operations")}
 
     assert result["executed_migrations"] == [STAGE41011_OPERATION_LINEAGE_MIGRATION.migration_id]

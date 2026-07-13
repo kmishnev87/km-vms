@@ -14,24 +14,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.config import settings
 from app.db.session import Base
-from app.models.audit_event import AuditEvent
 from app.models.camera import Camera
-from app.models.recording import RecordingJob, RecordingSegment
-from app.models.system_settings import SystemSettings
+from app.models.recording import RecordingSegment
 from app.routers.cameras import create_camera, update_camera
-from app.routers.chronology import chronology_playback
-from app.routers.recordings import collect_recording_files
 from app.schemas.camera import CameraCreate, CameraUpdate
 from app.services.recording_retention import (
-    AUTO_FREE_SPACE_STATE,
-    AUTO_FREE_SPACE_STATE_LOCK,
-    AUTO_RETENTION_STATE,
-    AUTO_RETENTION_STATE_LOCK,
+    EXECUTION_POLICY_MANUAL_COMPLETE,
     build_retention_plan,
     execute_segments,
-    retention_diagnostics,
-    low_disk_policy_status,
-    run_auto_free_space_cleanup_once,
     run_automatic_retention_once,
 )
 from app.services.recording_storage import (
@@ -68,27 +58,6 @@ def db():
     try:
         yield session
     finally:
-        with AUTO_RETENTION_STATE_LOCK:
-            AUTO_RETENTION_STATE.update(
-                {
-                    "running": False,
-                    "last_status": "never_run",
-                    "last_error": None,
-                    "last_summary": None,
-                    "run_count": 0,
-                }
-            )
-        with AUTO_FREE_SPACE_STATE_LOCK:
-            AUTO_FREE_SPACE_STATE.update(
-                {
-                    "enabled": False,
-                    "running": False,
-                    "last_status": "never_run",
-                    "last_error": None,
-                    "last_summary": None,
-                    "run_count": 0,
-                }
-            )
         session.close()
         settings.storage_root = original_storage_root
         settings.storage_previews = original_storage_previews
@@ -197,37 +166,6 @@ def add_segment(
     return segment, path
 
 
-def add_system_settings(db, *, auto_free_space_cleanup_enabled=False):
-    row = SystemSettings(
-        system_initialized=True,
-        timezone="UTC",
-        language="en",
-        storage_path=settings.storage_root,
-        recording_format="mkv",
-        auto_free_space_cleanup_enabled=auto_free_space_cleanup_enabled,
-        recording_suspended_by_low_disk=False,
-    )
-    db.add(row)
-    db.commit()
-    db.refresh(row)
-    return row
-
-
-def storage_summary(total, free):
-    return {
-        "status": "available",
-        "available": True,
-        "capacity": {
-            "total_bytes": total,
-            "used_bytes": total - free,
-            "free_bytes": free,
-            "available_bytes": free,
-            "filesystem_probe_status": "ok",
-        },
-        "storage_path_checks": {"readable": True, "writable": True},
-    }
-
-
 def test_create_camera_with_one_gb_quota_persists_without_clamp(db):
     camera = create_camera(camera_payload(storage_quota_gb=1), FakeRequest(), db=db, current_user=actor())
 
@@ -269,120 +207,7 @@ def test_retention_plan_marks_old_segments_and_quota_candidates(db):
     assert any("storage_quota" in reason for reason in reasons.values())
 
 
-def test_automatic_retention_run_once_uses_safe_runner_and_deletes_eligible_old_segment(db):
-    source = inspect.getsource(run_automatic_retention_once)
-    assert "execute_segments(" in source
-    assert ".unlink(" not in source
-
-    camera = add_camera(db, retention_days=1, storage_quota_gb=50)
-    segment, path = add_segment(db, camera, name="stage11_retention_auto_old", days_ago=3)
-
-    result = run_automatic_retention_once(db, max_candidates=5, max_bytes=1024 * 1024)
-
-    db.refresh(segment)
-    assert result["operation"] == "retention_auto_run"
-    assert result["deleted_count"] == 1
-    assert segment.status == "deleted"
-    assert segment.deletion_source == "retention_auto_run"
-    assert not path.exists()
-    assert collect_recording_files(db) == []
-    playback = chronology_playback(camera_id=camera.id, ts=segment.started_at.isoformat(), db=db, current_user=actor())
-    assert playback["has_video"] is False
-
-
-def test_automatic_retention_deletes_old_finalized_segment_but_skips_non_finalized_foreign_and_problem_segments(db):
-    camera = add_camera(db, retention_days=1, storage_quota_gb=50)
-    job = RecordingJob(id="stage11_retention_active_job", camera_id=camera.id, state="recording", started_at=datetime.utcnow())
-    db.add(job)
-    db.commit()
-    finalized, finalized_path = add_segment(db, camera, name="stage11_retention_active", days_ago=3, job_id=job.id)
-    draft, draft_path = add_segment(db, camera, name="stage11_retention_draft", days_ago=3, status="recording")
-    foreign, foreign_path = add_segment(db, camera, name="stage11_retention_foreign", days_ago=3, ownership="third_party")
-    problem, problem_path = add_segment(db, camera, name="stage11_retention_problem", days_ago=3, integrity_status="corrupted_file")
-
-    result = run_automatic_retention_once(db, max_candidates=10, max_bytes=1024 * 1024)
-
-    assert result["deleted_count"] == 1
-    db.refresh(finalized)
-    assert finalized.status == "deleted"
-    assert not finalized_path.exists()
-    for segment, path in ((draft, draft_path), (foreign, foreign_path), (problem, problem_path)):
-        db.refresh(segment)
-        assert segment.status != "deleted"
-        assert path.exists()
-
-
-def test_automatic_retention_enforces_quota_oldest_first_with_bounds(db):
-    camera = add_camera(db, retention_days=30, storage_quota_gb=1)
-    oldest, oldest_path = add_segment(db, camera, name="stage11_retention_quota_oldest", days_ago=3, apparent_size=700 * 1024 * 1024)
-    newer, newer_path = add_segment(db, camera, name="stage11_retention_quota_newer", days_ago=2, apparent_size=700 * 1024 * 1024)
-
-    result = run_automatic_retention_once(db, max_candidates=1, max_bytes=800 * 1024 * 1024)
-
-    db.refresh(oldest)
-    db.refresh(newer)
-    assert result["deleted_count"] == 1
-    assert oldest.status == "deleted"
-    assert newer.status == "finalized"
-    assert not oldest_path.exists()
-    assert newer_path.exists()
-
-
-def test_automatic_retention_makes_bounded_progress_when_plan_bytes_exceed_max_bytes(db):
-    camera = add_camera(db, retention_days=30, storage_quota_gb=1)
-    oldest, oldest_path = add_segment(db, camera, name="stage111_retention_quota_oldest", days_ago=4, apparent_size=700 * 1024 * 1024)
-    middle, middle_path = add_segment(db, camera, name="stage111_retention_quota_middle", days_ago=3, apparent_size=700 * 1024 * 1024)
-    newest, newest_path = add_segment(db, camera, name="stage111_retention_quota_newest", days_ago=2, apparent_size=700 * 1024 * 1024)
-
-    first = run_automatic_retention_once(db, max_candidates=5, max_bytes=800 * 1024 * 1024)
-    db.refresh(oldest)
-    db.refresh(middle)
-    db.refresh(newest)
-
-    assert first["deleted_count"] == 1
-    assert first["bounded_requested_count"] == 2
-    assert first["bounded_executed_count"] == 1
-    assert first["bounded_skipped_due_to_limit_count"] == 1
-    assert first["oversized_single_segment_progress"] is False
-    assert oldest.status == "deleted"
-    assert middle.status == "finalized"
-    assert newest.status == "finalized"
-    assert not oldest_path.exists()
-    assert middle_path.exists()
-    assert newest_path.exists()
-
-    second = run_automatic_retention_once(db, max_candidates=5, max_bytes=800 * 1024 * 1024)
-    db.refresh(middle)
-    db.refresh(newest)
-
-    assert second["deleted_count"] == 1
-    assert middle.status == "deleted"
-    assert newest.status == "finalized"
-    assert not middle_path.exists()
-    assert newest_path.exists()
-
-
-def test_automatic_retention_deletes_one_oversized_oldest_segment_for_progress(db):
-    camera = add_camera(db, retention_days=30, storage_quota_gb=1)
-    oversized, oversized_path = add_segment(db, camera, name="stage111_retention_oversized", days_ago=3, apparent_size=2 * 1024 * 1024 * 1024)
-    small, small_path = add_segment(db, camera, name="stage111_retention_small", days_ago=2, apparent_size=128 * 1024 * 1024)
-
-    result = run_automatic_retention_once(db, max_candidates=5, max_bytes=1024 * 1024 * 1024)
-
-    db.refresh(oversized)
-    db.refresh(small)
-    assert result["deleted_count"] == 1
-    assert result["bounded_requested_count"] == 1
-    assert result["bounded_executed_count"] == 1
-    assert result["oversized_single_segment_progress"] is True
-    assert "oversized_single_segment_progress" in result["warnings"]
-    assert oversized.status == "deleted"
-    assert small.status == "finalized"
-    assert not oversized_path.exists()
-    assert small_path.exists()
-
-
-def test_manual_retention_keeps_strict_limit_exceeded_semantics(db):
+def test_manual_retention_complete_is_not_limited_by_legacy_automatic_byte_budget(db):
     camera = add_camera(db, retention_days=30, storage_quota_gb=50)
     first, first_path = add_segment(db, camera, name="stage111_manual_first", days_ago=3, apparent_size=700 * 1024 * 1024)
     second, second_path = add_segment(db, camera, name="stage111_manual_second", days_ago=2, apparent_size=700 * 1024 * 1024)
@@ -395,124 +220,23 @@ def test_manual_retention_keeps_strict_limit_exceeded_semantics(db):
         reason="manual_limit_contract",
         max_candidates=5,
         max_bytes=800 * 1024 * 1024,
+        policy=EXECUTION_POLICY_MANUAL_COMPLETE,
     )
 
     db.refresh(first)
     db.refresh(second)
-    assert result["deleted_count"] == 0
-    assert result["limit_exceeded"] is True
-    assert first.status == "finalized"
-    assert second.status == "finalized"
-    assert first_path.exists()
-    assert second_path.exists()
+    assert result["deleted_count"] == 2
+    assert result["limit_exceeded"] is False
+    assert first.status == "deleted"
+    assert second.status == "deleted"
+    assert not first_path.exists()
+    assert not second_path.exists()
 
 
-def test_automatic_retention_is_concurrency_safe(db):
-    with AUTO_RETENTION_STATE_LOCK:
-        AUTO_RETENTION_STATE["running"] = True
-    result = run_automatic_retention_once(db)
+def test_automatic_retention_entry_point_uses_durable_coordinator_without_byte_budget():
+    source = inspect.getsource(run_automatic_retention_once)
 
-    assert result["ok"] is False
-    assert result["items"][0]["reason"] == "automatic_retention_already_running"
-
-
-def test_automatic_retention_diagnostics_and_audit_summary(db):
-    camera = add_camera(db, retention_days=1, storage_quota_gb=50)
-    add_segment(db, camera, name="stage11_retention_diag_old", days_ago=3)
-
-    result = run_automatic_retention_once(db, max_candidates=5, max_bytes=1024 * 1024)
-    diagnostics = retention_diagnostics(db)
-    event_types = {event.event_type for event in db.query(AuditEvent).all()}
-
-    assert result["deleted_count"] == 1
-    assert diagnostics["automatic_retention"]["last_summary"]["deleted_count"] == 1
-    assert "retention.auto_run_started" in event_types
-    assert "retention.auto_run_completed" in event_types
-
-
-def test_low_disk_auto_free_space_default_off_warns_but_does_not_delete(db):
-    system = add_system_settings(db, auto_free_space_cleanup_enabled=False)
-    camera = add_camera(db, retention_days=30, storage_quota_gb=50)
-    segment, path = add_segment(db, camera, name="stage1_low_disk_disabled", days_ago=2)
-
-    result = run_auto_free_space_cleanup_once(
-        db,
-        storage_summary=storage_summary(1000, 40),
-        max_candidates=10,
-        max_bytes=1024 * 1024,
-    )
-
-    db.refresh(segment)
-    db.refresh(system)
-    assert result["deleted_count"] == 0
-    assert result["items"][0]["reason"] == "auto_free_space_cleanup_disabled"
-    assert segment.status == "finalized"
-    assert path.exists()
-    assert system.recording_suspended_by_low_disk is False
-
-
-def test_critical_low_disk_sets_recording_suspend_without_deletion_when_opt_in_off(db):
-    system = add_system_settings(db, auto_free_space_cleanup_enabled=False)
-    camera = add_camera(db, retention_days=30, storage_quota_gb=50)
-    segment, path = add_segment(db, camera, name="stage1_low_disk_critical_disabled", days_ago=2)
-
-    result = run_auto_free_space_cleanup_once(
-        db,
-        storage_summary=storage_summary(1000, 5),
-        max_candidates=10,
-        max_bytes=1024 * 1024,
-    )
-
-    db.refresh(segment)
-    db.refresh(system)
-    assert result["low_disk_policy"]["state"] == "critical"
-    assert result["low_disk_policy"]["critical_recording_suspend_required"] is True
-    assert result["deleted_count"] == 0
-    assert system.recording_suspended_by_low_disk is True
-    assert segment.status == "finalized"
-    assert path.exists()
-
-
-def test_low_disk_auto_free_space_enabled_deletes_oldest_owned_metadata_safe_segment(db):
-    add_system_settings(db, auto_free_space_cleanup_enabled=True)
-    camera = add_camera(db, retention_days=30, storage_quota_gb=50)
-    oldest, oldest_path = add_segment(db, camera, name="stage1_low_disk_oldest", days_ago=5, apparent_size=20)
-    newer, newer_path = add_segment(db, camera, name="stage1_low_disk_newer", days_ago=2, apparent_size=20)
-    problem, problem_path = add_segment(db, camera, name="stage1_low_disk_problem", days_ago=6, apparent_size=20, integrity_status="corrupted_file")
-
-    result = run_auto_free_space_cleanup_once(
-        db,
-        storage_summary=storage_summary(1000, 40),
-        max_candidates=1,
-        max_bytes=100,
-    )
-
-    db.refresh(oldest)
-    db.refresh(newer)
-    db.refresh(problem)
-    assert result["operation"] == "retention_auto_free_space"
-    assert result["deleted_count"] == 1
-    assert result["low_disk_policy"]["cleanup_allowed"] is True
-    assert oldest.status == "deleted"
-    assert newer.status == "finalized"
-    assert problem.status == "finalized"
-    assert not oldest_path.exists()
-    assert newer_path.exists()
-    assert problem_path.exists()
-    assert all("relative_path" not in item for item in result["items"])
-
-
-def test_low_disk_policy_thresholds_are_percent_based_and_strict(db):
-    add_system_settings(db, auto_free_space_cleanup_enabled=True)
-
-    at_warning = low_disk_policy_status(db, storage_summary(1000, 100))
-    below_warning = low_disk_policy_status(db, storage_summary(1000, 99))
-    below_cleanup = low_disk_policy_status(db, storage_summary(1000, 49))
-    below_critical = low_disk_policy_status(db, storage_summary(1000, 9))
-
-    assert at_warning["state"] == "ok"
-    assert below_warning["state"] == "warning"
-    assert below_cleanup["state"] == "cleanup_threshold"
-    assert below_cleanup["cleanup_allowed"] is True
-    assert below_critical["state"] == "critical"
-    assert below_critical["critical_recording_suspend_required"] is True
+    assert "retention_automation" in source
+    assert "claim_retention_signal" in source
+    assert "max_bytes" not in source
+    assert "oversized_single_segment_progress" not in source

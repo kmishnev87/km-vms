@@ -24,6 +24,7 @@ import {
   freeSpaceTone,
   migrationScenarioModel,
   normalizeReconciliationSummary,
+  recentOperationPresentations,
   reconciliationScenarioModel,
   retentionScenarioModel,
   statusLabel,
@@ -135,6 +136,14 @@ function reasonText(summary, copy, language) {
   return entries.map(([key, value]) => `${humanBlockerReason(key, language)}: ${value}`).join(", ");
 }
 
+function operationReasonText(operation, copy, language) {
+  const entries = topReasonEntries(operation?.last_summary);
+  if (entries.length) {
+    return entries.map(([key, value]) => `${humanBlockerReason(key, language)}: ${value}`).join(", ");
+  }
+  return operation?.last_error ? humanBlockerReason(operation.last_error, language) : copy.noReasons;
+}
+
 function blockerText(blockers, copy, language) {
   const list = Array.isArray(blockers) ? blockers : [];
   if (!list.length) return copy.noReasons;
@@ -146,6 +155,7 @@ function errorDetailText(error, fallback, language) {
   const detail = error?.detail || error?.data?.detail || null;
   if (detail && typeof detail === "object") {
     if (Array.isArray(detail.blockers) && detail.blockers.length) return blockerText(detail.blockers, { noReasons: fallback }, language);
+    if (detail.reason_code) return humanBlockerReason(detail.reason_code, language);
     if (detail.error) return humanBlockerReason(detail.error, language);
     if (detail.reason) return humanBlockerReason(detail.reason, language);
   }
@@ -212,13 +222,6 @@ function archiveRootCleanupReason(detail, copy) {
     return copy.archiveRootCleanupRecordingProblem;
   }
   return copy.archiveRootCleanupGenericProblem;
-}
-
-function retentionSummaryText(source, copy) {
-  if (!source) return copy.retentionNoPreview;
-  return copy.retentionPreviewReady
-    .replace("{count}", String(source.planned_count || source.deleted_count || 0))
-    .replace("{bytes}", formatBytes(source.estimated_freed_bytes ?? source.bytes_freed ?? 0));
 }
 
 function reconciliationSummaryText(source, copy) {
@@ -312,6 +315,7 @@ function integrityStatusText(scenario, normalized, copy) {
 
 function retentionStatusText(scenario, copy) {
   if (scenario.status === "running") return copy.running;
+  if (scenario.status === "pending") return copy.retentionPendingStatus;
   if (scenario.status === "apply_failed") return copy.retentionFailedStatus;
   if (scenario.status === "unavailable_due_to_permissions") return copy.unavailable;
   return copy.retentionAutomaticStatus;
@@ -496,11 +500,6 @@ export default function StorageOperationsPage() {
   const [migrationTargetRootId, setMigrationTargetRootId] = useState("");
   const [migrationPreviewState, setMigrationPreviewState] = useState(null);
   const [rootAction, setRootAction] = useState("");
-  const [autoFreeMessage, setAutoFreeMessage] = useState("");
-  const [retentionMessage, setRetentionMessage] = useState("");
-  const [retentionPreview, setRetentionPreview] = useState(null);
-  const [retentionResult, setRetentionResult] = useState(null);
-  const [retentionConfirmed, setRetentionConfirmed] = useState(false);
   const [reconciliationMessage, setReconciliationMessage] = useState("");
   const [reconciliationPreview, setReconciliationPreview] = useState(null);
   const [reconciliationResult, setReconciliationResult] = useState(null);
@@ -602,6 +601,7 @@ export default function StorageOperationsPage() {
   const retention = operations.retention || {};
   const reconciliation = operations.reconciliation || {};
   const recent = operations.recent_operations || {};
+  const recentOperationRows = recentOperationPresentations(recent.items, 5);
   const archiveRoots = status?.archive_roots || operations.archive_roots || [];
   const archiveRootActivation = status?.archive_root_activation || operations.archive_root_activation || {};
   const activationModel = activationProgressModel(archiveRootActivation);
@@ -612,7 +612,16 @@ export default function StorageOperationsPage() {
   const archiveRootChoices = archiveRootDiscoveryModel.candidates;
   const inactiveArchiveRoots = archiveRoots.filter((root) => !root.is_active);
   const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
-  const autoFreeEnabled = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
+  const autoFreeConfigured = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
+  const autoFreeEnabled = settings?.auto_free_space_cleanup_effective ?? policy.auto_free_space_cleanup_effective ?? autoCleanup.effective_enabled ?? false;
+  const autoFreeTermsVersion = settings?.auto_free_space_terms_version || policy.terms_version || autoCleanup.terms_version || "";
+  const autoFreeAcknowledgedVersion = settings?.auto_free_space_acknowledged_terms_version || null;
+  const autoFreeAcknowledgementRequired = Boolean(
+    settings?.auto_free_space_acknowledgement_required
+      ?? policy.acknowledgement_required
+      ?? autoCleanup.acknowledgement_required
+      ?? (autoFreeAcknowledgedVersion !== autoFreeTermsVersion)
+  );
   const topHealth = storageTopHealthModel({ operations, pathHealth, capacity, policy, reconciliation, retention }, language);
   const tone = topHealth.tone || healthTone(operations, pathHealth, capacity, policy, reconciliation);
   const accessRights = accessRightsModel(pathHealth, language);
@@ -637,13 +646,14 @@ export default function StorageOperationsPage() {
   const visibleProblemCategories = problemDetails.categories?.length ? problemDetails.categories : normalizedReconciliation.categories;
   const visibleProblemSamples = problemDetails.samples || [];
   const manageSettingsPermission = actionPermissionState(currentUser, "manage_settings", language);
+  const manageCamerasPermission = actionPermissionState(currentUser, "manage_cameras", language);
   const retentionPermission = actionPermissionState(currentUser, "delete_recordings", language);
   const diagnosticsPermission = actionPermissionState(currentUser, "run_diagnostics", language);
   const retentionScenario = retentionScenarioModel({
-    preview: retentionPreview,
-    result: retentionResult,
+    preview: null,
+    result: null,
     retention,
-    permission: retentionPermission,
+    permission: { allowed: true, reason: "" },
     running: rootAction.startsWith("retention-"),
   }, language);
   const reconciliationScenario = reconciliationScenarioModel({
@@ -743,24 +753,96 @@ export default function StorageOperationsPage() {
     return () => window.clearTimeout(timer);
   }, [activationModel.status, archiveRootDialog?.activationOperationId]);
 
-  async function setAutoFreeSpace(nextEnabled) {
+  function requestAutoFreeSpace(nextEnabled) {
     if (!manageSettingsPermission.allowed) {
-      setAutoFreeMessage(manageSettingsPermission.reason);
+      setArchiveRootDialog({
+        id: "auto-free-permission",
+        title: copy.autoFreeChangeFailed,
+        message: manageSettingsPermission.reason,
+        closeLabel: copy.close,
+        tone: "warning",
+      });
       return;
     }
+    if (nextEnabled && autoFreeAcknowledgementRequired) {
+      if (!autoFreeTermsVersion) {
+        setArchiveRootDialog({
+          id: "auto-free-terms-unavailable",
+          title: copy.autoFreeChangeFailed,
+          message: copy.autoFreeTermsUnavailable,
+          closeLabel: copy.close,
+          tone: "warning",
+        });
+        return;
+      }
+      setArchiveRootDialog({
+        id: "auto-free-confirm",
+        title: copy.autoFreeConfirmTitle,
+        message: copy.autoFreeConfirmMessage,
+        items: [
+          copy.autoFreeConfirmOldest,
+          copy.autoFreeConfirmVolume,
+          copy.autoFreeConfirmThresholds
+            .replace("{trigger}", String(policy.cleanup_threshold_percent ?? 5))
+            .replace("{target}", String(policy.recovery_threshold_percent ?? 9))
+            .replace("{critical}", String(policy.critical_threshold_percent ?? 1)),
+          copy.autoFreeConfirmAcrossCameras,
+          copy.autoFreeConfirmDisable,
+        ],
+        detail: copy.autoFreeConfirmIrreversible,
+        confirmLabel: copy.enableAutoFreeShort,
+        cancelLabel: copy.cancel,
+        closeLabel: copy.cancel,
+        confirmTone: "danger",
+        tone: "warning",
+        onConfirm: () => setAutoFreeSpace(true, { acknowledge: true }),
+      });
+      return;
+    }
+    setAutoFreeSpace(nextEnabled);
+  }
+
+  async function setAutoFreeSpace(nextEnabled, { acknowledge = false } = {}) {
     setRootAction("auto-free");
-    setAutoFreeMessage("");
+    if (acknowledge) {
+      setArchiveRootDialog((current) => ({
+        ...(current || {}),
+        busy: true,
+        dismissible: false,
+      }));
+    }
     try {
+      const requestBody = { auto_free_space_cleanup_enabled: Boolean(nextEnabled) };
+      if (acknowledge) {
+        requestBody.auto_free_space_acknowledgement = {
+          acknowledged: true,
+          terms_version: autoFreeTermsVersion,
+        };
+      }
       const updated = await apiFetch("/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ auto_free_space_cleanup_enabled: Boolean(nextEnabled) }),
+        body: JSON.stringify(requestBody),
       });
       setSettings(updated);
-      setAutoFreeMessage(nextEnabled ? copy.autoFreeEnabled : copy.autoFreeDisabled);
       await loadStatus({ silent: true });
+      setArchiveRootDialog(null);
+      setOperationToast({
+        id: `auto-free-${nextEnabled ? "enabled" : "disabled"}-${Date.now()}`,
+        title: nextEnabled ? copy.autoFreeEnabled : copy.autoFreeDisabled,
+        message: nextEnabled ? copy.autoFreeEnabledDetail : copy.autoFreeDisabledDetail,
+        closeLabel: copy.close,
+        tone: "success",
+      });
     } catch (err) {
-      setAutoFreeMessage(errorDetailText(err, copy.autoFreeChangeFailed, language));
+      setArchiveRootDialog({
+        id: `auto-free-error-${Date.now()}`,
+        title: copy.autoFreeChangeFailed,
+        message: errorDetailText(err, copy.autoFreeChangeFailed, language),
+        action: copy.autoFreeErrorAction,
+        closeLabel: copy.close,
+        tone: "warning",
+      });
     } finally {
       setRootAction("");
     }
@@ -1095,56 +1177,6 @@ export default function StorageOperationsPage() {
     setArchiveRootDialog(null);
   }
 
-  async function runRetentionPreview() {
-    if (!retentionPermission.allowed) {
-      setRetentionMessage(retentionPermission.reason);
-      return;
-    }
-    setRootAction("retention-preview");
-    setRetentionResult(null);
-    setRetentionConfirmed(false);
-    setRetentionMessage("");
-    try {
-      const preview = await apiFetch("/recordings/retention/dry-run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      setRetentionPreview(preview);
-      setRetentionMessage(copy.retentionPreviewCompleted);
-    } catch (err) {
-      setRetentionMessage(errorDetailText(err, copy.previewFailed, language));
-    } finally {
-      setRootAction("");
-    }
-  }
-
-  async function applyRetentionPlan() {
-    if (!retentionPreview?.planned_count || !retentionConfirmed) return;
-    if (!retentionPermission.allowed) {
-      setRetentionMessage(retentionPermission.reason);
-      return;
-    }
-    setRootAction("retention-apply");
-    setRetentionMessage("");
-    try {
-      const result = await apiFetch("/recordings/retention/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
-      });
-      setRetentionResult(result);
-      setRetentionPreview(null);
-      setRetentionConfirmed(false);
-      setRetentionMessage(copy.retentionApplyCompleted);
-      await loadStatus({ silent: true });
-    } catch (err) {
-      setRetentionMessage(errorDetailText(err, copy.applyBlocked, language));
-    } finally {
-      setRootAction("");
-    }
-  }
-
   async function runReconciliationPreview() {
     if (!diagnosticsPermission.allowed) {
       setReconciliationMessage(diagnosticsPermission.reason);
@@ -1398,38 +1430,57 @@ export default function StorageOperationsPage() {
                         <MiniFact label={copy.freed} value={formatBytes(retention.last_summary?.bytes_freed)} />
                       </div>
                     )}
+                    actions={(
+                      manageCamerasPermission.allowed
+                        ? <a className="button secondary small" href="/cameras">{copy.configureCameras}</a>
+                        : <button className="button secondary small" type="button" disabled title={manageCamerasPermission.reason}>{copy.configureCameras}</button>
+                    )}
                   >
-                    {retentionMessage ? <div className="storageOpsNote storageOpsNoteStrong">{retentionMessage}</div> : null}
                     <details className="storageOpsInlineDetails">
-                      <summary>{copy.retentionDiagnostics}</summary>
-                      <button className="button secondary small" type="button" title={copy.retentionDryRun} onClick={runRetentionPreview} disabled={!!rootAction || !retentionScenario.canPreview}>{rootAction === "retention-preview" ? copy.calculating : copy.retentionPlanShort}</button>
-                      <label className="storageOpsConfirm">
-                        <input type="checkbox" checked={retentionConfirmed} onChange={(event) => setRetentionConfirmed(event.target.checked)} disabled={!retentionScenario.canApply || !!rootAction} />
-                        <span>{copy.retentionConfirm}</span>
-                      </label>
-                      <button className="button small dangerButton" type="button" title={copy.retentionApply} onClick={applyRetentionPlan} disabled={!retentionScenario.canApply || !retentionConfirmed || !!rootAction}>{rootAction === "retention-apply" ? copy.applying : copy.retentionDeleteShort}</button>
-                      <div className="storageOpsNote">{copy.retentionSafetyNote}</div>
-                      {!retentionPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{retentionPermission.reason}</div> : null}
-                      {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
-                      <SummaryRow label={copy.blockersReasons} value={reasonText(autoCleanup.last_summary, copy, language)} />
+                      <summary>{copy.supportDetails}</summary>
+                      <SummaryRow label={copy.retentionScope} value={copy.retentionScopeValue
+                        .replace("{active}", String(retention.active_camera_count || 0))
+                        .replace("{disabled}", String(retention.disabled_camera_count || 0))
+                        .replace("{retained}", String(retention.retained_deleted_camera_count || 0))} />
+                      <SummaryRow label={copy.retentionRulesMissing} value={String(retention.missing_or_invalid_rule_camera_count || 0)} />
+                      <SummaryRow label={copy.nextCheck} value={formatDateTime(retention.next_due_at, language)} />
+                      <SummaryRow label={copy.blockersReasons} value={operationReasonText(retention, copy, language)} />
+                      {!manageCamerasPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageCamerasPermission.reason}</div> : null}
                     </details>
                   </OperationRow>
 
                   <OperationRow
                     title={copy.autoFreeSpace}
-                    status={autoFreeEnabled ? copy.on : copy.off}
-                    tone={autoFreeEnabled ? "ok" : "neutral"}
+                    status={autoFreeConfigured && autoFreeAcknowledgementRequired ? copy.confirmationRequired : autoFreeEnabled ? copy.on : copy.off}
+                    tone={autoFreeConfigured && autoFreeAcknowledgementRequired ? "warning" : autoFreeEnabled ? "ok" : "neutral"}
                     description={autoFreePrimaryText}
+                    meta={(
+                      <div className="storageOpsOperationFacts">
+                        <MiniFact label={copy.lastRun} value={formatDateTime(autoCleanup.last_finished_at || autoCleanup.last_started_at, language)} />
+                        <MiniFact label={copy.deleted} value={String(autoCleanup.last_summary?.deleted_count || 0)} />
+                        <MiniFact label={copy.freed} value={formatBytes(autoCleanup.last_summary?.bytes_freed)} />
+                      </div>
+                    )}
                     actions={(
-                      <button className="button secondary small" type="button" title={autoFreeEnabled ? copy.disableAutoFree : copy.enableAutoFree} onClick={() => setAutoFreeSpace(!autoFreeEnabled)} disabled={!!rootAction || !manageSettingsPermission.allowed}>
-                        {rootAction === "auto-free" ? copy.saving : autoFreeEnabled ? copy.disableAutoFreeShort : copy.enableAutoFreeShort}
-                      </button>
+                      <>
+                        <button className="button secondary small" type="button" title={autoFreeEnabled ? copy.disableAutoFree : copy.enableAutoFree} onClick={() => requestAutoFreeSpace(!autoFreeEnabled)} disabled={!!rootAction || !manageSettingsPermission.allowed}>
+                          {rootAction === "auto-free" ? copy.saving : autoFreeEnabled ? copy.disableAutoFreeShort : copy.enableAutoFreeShort}
+                        </button>
+                        {autoFreeConfigured && autoFreeAcknowledgementRequired ? (
+                          <button className="button secondary small" type="button" title={copy.disableAutoFree} onClick={() => requestAutoFreeSpace(false)} disabled={!!rootAction || !manageSettingsPermission.allowed}>
+                            {copy.disableAutoFreeShort}
+                          </button>
+                        ) : null}
+                      </>
                     )}
                   >
-                    {autoFreeMessage ? <div className="storageOpsNote storageOpsNoteStrong">{autoFreeMessage}</div> : null}
                     <details className="storageOpsInlineDetails">
                       <summary>{copy.supportDetails}</summary>
-                      <SummaryRow label={copy.policy} value={copy.lowDiskShort} />
+                      <SummaryRow label={copy.policy} value={copy.autoFreeThresholdSummary
+                        .replace("{trigger}", String(policy.cleanup_threshold_percent ?? 5))
+                        .replace("{target}", String(policy.recovery_threshold_percent ?? 9))
+                        .replace("{critical}", String(policy.critical_threshold_percent ?? 1))} />
+                      <SummaryRow label={copy.lastError} value={operationReasonText(autoCleanup, copy, language)} />
                       {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
                     </details>
                   </OperationRow>
@@ -1639,17 +1690,52 @@ export default function StorageOperationsPage() {
                 </details>
               </Section>
 
-              {recent.available && recent.items?.length ? (
-                <Section title={copy.recentOperations} className="storageOpsSection-secondary storageOpsSection-recent">
+              {recent.available && recentOperationRows.length ? (
+                <details className="storageOpsSection storageOpsSection-secondary storageOpsSection-recent">
+                  <summary className="storageOpsSectionHead storageOpsRecentSummary">
+                    <h2>{copy.recentOperations}</h2>
+                    <span
+                      className="storageOpsRecentCount"
+                      aria-label={t("storagePage.recentOperationsCount", { count: recentOperationRows.length })}
+                    >
+                      {recentOperationRows.length}
+                    </span>
+                  </summary>
                   <div className="storageOpsRecent">
-                    {recent.items.map((item, index) => (
-                      <div className="storageOpsRecentItem" key={`${item.type || "operation"}-${index}`}>
-                        <strong>{item.title || statusLabel(item.type, language)}</strong>
-                        <span>{item.summary || statusLabel(item.status, language)}</span>
+                    {recentOperationRows.map((item) => (
+                      <div className="storageOpsRecentItem" key={item.key}>
+                        <div className="storageOpsRecentPrimary">
+                          <span className="storageOpsRecentTitle">{copy[item.typeKey] || copy.recentOperationGeneric}</span>
+                          <span className={`storageOpsStatusPill storageOpsStatusPill-${item.tone}`}>
+                            {copy[item.statusKey] || copy.recentOperationStatusUnknown}
+                          </span>
+                          {item.timestamp ? (
+                            <time dateTime={item.timestamp}>{formatDateTime(item.timestamp, language)}</time>
+                          ) : null}
+                        </div>
+                        {item.facts.length ? (
+                          <div className="storageOpsRecentFacts">
+                            {item.facts.map((fact) => (
+                              <span key={fact.labelKey}>
+                                {copy[fact.labelKey]}: {fact.format === "bytes" ? formatBytes(fact.value) : fact.value}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        {item.reasonCode ? (
+                          <div className="storageOpsRecentMessage">
+                            <span>{copy.recentOperationReason}:</span> {humanBlockerReason(item.reasonCode, language)}
+                          </div>
+                        ) : null}
+                        {item.nextActionKey ? (
+                          <div className="storageOpsRecentMessage">
+                            <span>{copy.recentOperationNextAction}:</span> {copy[item.nextActionKey]}
+                          </div>
+                        ) : null}
                       </div>
                     ))}
                   </div>
-                </Section>
+                </details>
               ) : null}
             </div>
 

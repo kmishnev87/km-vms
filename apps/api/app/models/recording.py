@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import String, Integer, DateTime, BigInteger, Boolean, ForeignKey, Text, JSON
+from sqlalchemy import String, Integer, DateTime, BigInteger, Boolean, ForeignKey, Index, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -60,6 +60,10 @@ class ArchiveRoot(Base):
 
 class RecordingSegment(Base):
     __tablename__ = "recording_segments"
+    __table_args__ = (
+        Index("ix_recording_segments_camera_status_started_id", "camera_id", "status", "started_at", "id"),
+        Index("ix_recording_segments_root_status_started_id", "archive_root_id", "status", "started_at", "id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     job_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("recording_jobs.id", ondelete="SET NULL"), index=True, nullable=True)

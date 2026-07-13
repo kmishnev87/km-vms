@@ -23,6 +23,7 @@ from app.core.security import hash_password
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.setup_lock import SetupLock
+from app.models.system_settings import SystemSettings
 from app.models.user import User
 from app.routers.deps import require_permission
 from app.routers.recordings import collect_recording_files
@@ -40,6 +41,10 @@ from app.services.recorder_diagnostics import (
 from app.services.system_runtime_status import build_operator_runtime_status
 from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.system_settings import (
+    AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT,
+    AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT,
+    AUTO_FREE_SPACE_RECOVERY_THRESHOLD_PERCENT,
+    AUTO_FREE_SPACE_TERMS_VERSION,
     active_recording_jobs_count,
     get_system_settings,
     serialize_settings,
@@ -47,6 +52,7 @@ from app.services.system_settings import (
     validate_settings_payload,
     validate_storage_path,
 )
+from app.services.retention_automation import advance_retention_signal
 from app.services.storage_contract import storage_contract
 from app.services.setup_storage import (
     build_preview as build_setup_storage_preview,
@@ -102,6 +108,13 @@ class SetupRequest(BaseModel):
     hardware_preferred_backend: str | None = None
 
 
+class AutoFreeSpaceAcknowledgement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    acknowledged: bool
+    terms_version: str = Field(min_length=1, max_length=64)
+
+
 class SettingsUpdateRequest(BaseModel):
     system_name: str | None = Field(default=None, max_length=80)
     timezone: str | None = None
@@ -110,6 +123,7 @@ class SettingsUpdateRequest(BaseModel):
     recording_format: str | None = None
     hardware_preferred_backend: str | None = None
     auto_free_space_cleanup_enabled: bool | None = None
+    auto_free_space_acknowledgement: AutoFreeSpaceAcknowledgement | None = None
 
 
 class BugReportRequest(BaseModel):
@@ -687,7 +701,61 @@ def patch_settings(
 ):
     data = payload.model_dump(exclude_unset=True)
     data.pop("storage_path", None)
-    previous = serialize_settings(get_system_settings(db))
+    acknowledgement = data.pop("auto_free_space_acknowledgement", None)
+    try:
+        data = validate_settings_payload(data, partial=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+    seeded_system = get_system_settings(db)
+    system_row = (
+        db.query(SystemSettings)
+        .filter(SystemSettings.id == seeded_system.id)
+        .with_for_update()
+        .one()
+    )
+    previous = serialize_settings(system_row)
+    requested_auto_free = data.get("auto_free_space_cleanup_enabled")
+    acknowledgement_current = (
+        previous.get("auto_free_space_acknowledged_terms_version") == AUTO_FREE_SPACE_TERMS_VERSION
+    )
+    acknowledgement_accepted = False
+    acknowledgement_rejection = None
+    if requested_auto_free is True and not acknowledgement_current:
+        acknowledged = bool((acknowledgement or {}).get("acknowledged"))
+        requested_terms = str((acknowledgement or {}).get("terms_version") or "")
+        if requested_terms and requested_terms != AUTO_FREE_SPACE_TERMS_VERSION:
+            acknowledgement_rejection = "auto_free_space_acknowledgement_stale"
+        elif not acknowledged or requested_terms != AUTO_FREE_SPACE_TERMS_VERSION:
+            acknowledgement_rejection = "auto_free_space_acknowledgement_required"
+        else:
+            acknowledgement_accepted = True
+    if acknowledgement_rejection:
+        create_event(
+            db=db,
+            actor=current_user,
+            category="settings",
+            event_type="settings.auto_free_space_acknowledgement_rejected",
+            severity="warning",
+            message_ru="Подтверждение автоосвобождения места отклонено",
+            message_en="Auto-free-space acknowledgement was rejected",
+            target_type="settings",
+            metadata={
+                "reason_code": acknowledgement_rejection,
+                "terms_version": AUTO_FREE_SPACE_TERMS_VERSION,
+            },
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "reason_code": acknowledgement_rejection,
+                "error": acknowledgement_rejection,
+                "retryable": False,
+                "next_action": "review_and_confirm_auto_free_terms",
+                "terms_version": AUTO_FREE_SPACE_TERMS_VERSION,
+            },
+        )
     if (
         "recording_format" in data
         and str(data.get("recording_format") or "").strip().lower() != previous.get("recording_format")
@@ -702,10 +770,49 @@ def patch_settings(
                     "active_change_behavior": "blocked_while_active_recording_jobs_exist",
                 },
             )
+    effective_data = {
+        key: value
+        for key, value in data.items()
+        if getattr(system_row, key, None) != value
+    }
     try:
-        system = update_system_settings(db, data)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+        system = system_row
+        if effective_data:
+            system = update_system_settings(db, effective_data, commit=False)
+        if acknowledgement_accepted:
+            system.auto_free_space_acknowledged_terms_version = AUTO_FREE_SPACE_TERMS_VERSION
+            system.auto_free_space_acknowledged_at = datetime.utcnow()
+            system.auto_free_space_acknowledged_by_user_id = int(current_user.id)
+            system.updated_at = datetime.utcnow()
+            db.add(system)
+            acknowledgement_audit = create_event(
+                db=db,
+                actor=current_user,
+                category="settings",
+                event_type="settings.auto_free_space_acknowledged",
+                message_ru=f"{current_user.username} подтвердил условия автоосвобождения места",
+                message_en=f"{current_user.username} acknowledged the auto-free-space terms",
+                target_type="settings",
+                metadata={
+                    "terms_version": AUTO_FREE_SPACE_TERMS_VERSION,
+                    "cleanup_threshold_percent": AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT,
+                    "recovery_threshold_percent": AUTO_FREE_SPACE_RECOVERY_THRESHOLD_PERCENT,
+                    "critical_threshold_percent": AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT,
+                },
+                ip_address=request_ip(request),
+                user_agent=request_user_agent(request),
+                commit=False,
+            )
+            if acknowledgement_audit is None:
+                raise RuntimeError("auto_free_space_acknowledgement_audit_failed")
+        if "timezone" in effective_data:
+            advance_retention_signal(db, commit=False)
+        db.commit()
+        db.refresh(system)
+    except Exception:
+        db.rollback()
+        raise
+    data = effective_data
     current = serialize_settings(system)
     if "hardware_preferred_backend" in data and system.hardware_preferred_backend != previous.get("hardware_preferred_backend"):
         invalidate_hardware_capabilities()
@@ -714,7 +821,6 @@ def patch_settings(
         ("timezone", "settings.timezone_changed", "Часовой пояс", "timezone"),
         ("hardware_preferred_backend", "settings.hardware_backend_changed", "Аппаратное ускорение", "hardware backend"),
         ("recording_format", "settings.recording_format_changed", "Формат записи", "recording format"),
-        ("auto_free_space_cleanup_enabled", "settings.auto_free_space_cleanup_changed", "Автоосвобождение места", "auto free-space cleanup"),
     ]
     changed = {}
     for key, event_type, label_ru, label_en in setting_events:
@@ -737,7 +843,38 @@ def patch_settings(
                 ip_address=request_ip(request),
                 user_agent=request_user_agent(request),
             )
-    if changed or data:
+    auto_free_changed = previous.get("auto_free_space_cleanup_enabled") != current.get("auto_free_space_cleanup_enabled")
+    auto_free_effective_changed = previous.get("auto_free_space_cleanup_effective") != current.get("auto_free_space_cleanup_effective")
+    if auto_free_changed or auto_free_effective_changed:
+        enabled = bool(current.get("auto_free_space_cleanup_effective"))
+        create_event(
+            db=db,
+            actor=current_user,
+            category="settings",
+            event_type=("settings.auto_free_space_enabled" if enabled else "settings.auto_free_space_disabled"),
+            message_ru=(
+                f"{current_user.username} включил автоосвобождение места"
+                if enabled
+                else f"{current_user.username} выключил автоосвобождение места"
+            ),
+            message_en=(
+                f"{current_user.username} enabled auto-free-space"
+                if enabled
+                else f"{current_user.username} disabled auto-free-space"
+            ),
+            target_type="settings",
+            metadata={
+                "enabled": enabled,
+                "terms_version": AUTO_FREE_SPACE_TERMS_VERSION if enabled else None,
+            },
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        changed["auto_free_space_cleanup_enabled"] = {
+            "old": previous.get("auto_free_space_cleanup_effective"),
+            "new": current.get("auto_free_space_cleanup_effective"),
+        }
+    if changed or acknowledgement_accepted:
         create_event(
             db=db,
             actor=current_user,

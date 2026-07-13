@@ -1,7 +1,7 @@
 from datetime import datetime
 from urllib.parse import urlsplit
 
-from sqlalchemy import String, Integer, Boolean, DateTime, Text
+from sqlalchemy import BigInteger, String, Integer, Boolean, DateTime, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -42,6 +42,7 @@ class Camera(Base):
     segment_minutes: Mapped[int] = mapped_column(Integer, default=5)
     retention_days: Mapped[int] = mapped_column(Integer, default=30)
     storage_quota_gb: Mapped[int] = mapped_column(Integer, default=50)
+    retention_policy_version: Mapped[int] = mapped_column(BigInteger, default=1, nullable=False)
 
     status: Mapped[str] = mapped_column(String(50), default="new")
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

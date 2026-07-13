@@ -479,6 +479,7 @@ def _safe_last_summary(value: dict | None) -> dict:
     value = value or {}
     return {
         "ok": value.get("ok"),
+        "status": value.get("status"),
         "operation": value.get("operation"),
         "requested_count": int(value.get("requested_count") or 0),
         "planned_count": int(value.get("planned_count") or 0),
@@ -486,6 +487,13 @@ def _safe_last_summary(value: dict | None) -> dict:
         "skipped_count": int(value.get("skipped_count") or 0),
         "failed_count": int(value.get("failed_count") or 0),
         "bytes_freed": int(value.get("bytes_freed") or 0),
+        "age_due_count": int(value.get("age_due_count") or 0),
+        "quota_overage_bytes": int(value.get("quota_overage_bytes") or 0),
+        "unknown_size_count": int(value.get("unknown_size_count") or 0),
+        "measurement_confidence": value.get("measurement_confidence"),
+        "initial_free_percent": value.get("initial_free_percent"),
+        "final_free_percent": value.get("final_free_percent"),
+        "target_percent": value.get("target_percent"),
         "reason_counts": dict(value.get("reason_counts") or {}),
         "item_reason_counts": dict(value.get("item_reason_counts") or {}),
         "skipped_reason_counts": dict(value.get("skipped_reason_counts") or {}),
@@ -636,15 +644,15 @@ def _storage_problem_details(reconciliation: dict, namespace_observations: dict)
 
 
 def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
-    from app.services.recording_retention import automatic_retention_status, auto_free_space_status
+    from app.services.retention_automation import auto_free_runtime_status, retention_runtime_status
 
     capacity = summary.get("capacity") or {}
     total = capacity.get("total_bytes")
     used = capacity.get("used_bytes")
     free = capacity.get("free_bytes")
     policy = summary.get("auto_free_space_policy") or {}
-    retention = automatic_retention_status()
-    auto_cleanup = auto_free_space_status()
+    retention = retention_runtime_status(db)
+    auto_cleanup = auto_free_runtime_status(db, policy=policy)
     reconciliation = summary.get("reconciliation_summary") or {}
     cleanup = summary.get("cleanup_candidates_summary") or {}
     namespace = summary.get("namespace_observations") or {}
@@ -724,19 +732,27 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
         "per_camera_usage": _safe_camera_usage(summary.get("camera_usage")),
         "low_disk_policy": {
             "state": policy.get("state") or "unknown",
-            "policy_state": "ON" if policy.get("auto_free_space_cleanup_enabled") else "OFF",
+            "policy_state": policy.get("policy_state") or "OFF",
             "auto_free_space_cleanup_enabled": bool(policy.get("auto_free_space_cleanup_enabled")),
+            "auto_free_space_cleanup_effective": bool(policy.get("auto_free_space_cleanup_effective")),
+            "acknowledgement_required": bool(policy.get("acknowledgement_required")),
+            "terms_version": policy.get("terms_version"),
             "warning_threshold_percent": policy.get("warning_threshold_percent"),
             "cleanup_threshold_percent": policy.get("cleanup_threshold_percent"),
+            "recovery_threshold_percent": policy.get("recovery_threshold_percent"),
             "critical_threshold_percent": policy.get("critical_threshold_percent"),
             "cleanup_allowed": bool(policy.get("cleanup_allowed")),
             "critical_recording_suspend_required": bool(policy.get("critical_recording_suspend_required")),
             "recording_suspended_by_low_disk": bool(policy.get("recording_suspended_by_low_disk")),
             "free_percent": policy.get("free_percent"),
             "free_bytes": policy.get("free_bytes"),
+            "volume_groups": list(policy.get("volume_groups") or [])[:32],
         },
         "auto_free_space_cleanup": {
             "enabled": bool(auto_cleanup.get("enabled")),
+            "effective_enabled": bool(auto_cleanup.get("effective_enabled")),
+            "acknowledgement_required": bool(auto_cleanup.get("acknowledgement_required")),
+            "terms_version": auto_cleanup.get("terms_version"),
             "running": bool(auto_cleanup.get("running")),
             "last_started_at": auto_cleanup.get("last_started_at"),
             "last_finished_at": auto_cleanup.get("last_finished_at"),
@@ -745,15 +761,26 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             "last_error": redact_text(str(auto_cleanup.get("last_error") or "")) or None,
             "run_count": int(auto_cleanup.get("run_count") or 0),
             "last_summary": auto_last,
+            "volume_groups": list(auto_cleanup.get("volume_groups") or [])[:32],
         },
         "retention": {
             "enabled": retention.get("enabled"),
+            "state": retention.get("state"),
             "running": bool(retention.get("running")),
+            "pending": bool(retention.get("pending")),
+            "pending_new_policy": bool(retention.get("pending_new_policy")),
+            "configured_camera_count": int(retention.get("configured_camera_count") or 0),
+            "active_camera_count": int(retention.get("active_camera_count") or 0),
+            "disabled_camera_count": int(retention.get("disabled_camera_count") or 0),
+            "retained_deleted_camera_count": int(retention.get("retained_deleted_camera_count") or 0),
+            "meaningful_rule_camera_count": int(retention.get("meaningful_rule_camera_count") or 0),
+            "missing_or_invalid_rule_camera_count": int(retention.get("missing_or_invalid_rule_camera_count") or 0),
+            "next_due_at": retention.get("next_due_at"),
             "last_started_at": retention.get("last_started_at"),
             "last_finished_at": retention.get("last_finished_at"),
             "last_status": retention.get("last_status") or "never_run",
             "last_error": redact_text(str(retention.get("last_error") or "")) or None,
-            "run_count": int(retention.get("run_count") or 0),
+            "run_count": int(retention.get("run_count") or retention.get("recent_count") or 0),
             "last_summary": retention_last,
         },
         "reconciliation": {
@@ -1077,9 +1104,9 @@ def build_storage_monitoring_summary(
         summary["reconciliation_summary"],
         namespace_observations,
     )
-    from app.services.recording_retention import low_disk_policy_status
+    from app.services.retention_automation import low_disk_policy_status
 
-    summary["auto_free_space_policy"] = low_disk_policy_status(db, summary)
+    summary["auto_free_space_policy"] = low_disk_policy_status(db)
     summary["storage_operations"] = _build_storage_operations_summary(db, summary)
     if write_audit:
         _maybe_audit_storage_transition(db, summary, actor=audit_actor)
@@ -1385,9 +1412,9 @@ def build_lightweight_storage_monitoring_summary(db: Session) -> dict:
         "volume_groups": _build_volume_groups(db, root_rows, archive_roots),
         "operation_summaries": operation_summaries(db),
     }
-    from app.services.recording_retention import low_disk_policy_status
+    from app.services.retention_automation import low_disk_policy_status
 
-    summary["auto_free_space_policy"] = low_disk_policy_status(db, summary)
+    summary["auto_free_space_policy"] = low_disk_policy_status(db)
     summary["storage_operations"] = _build_storage_operations_summary(db, summary)
     if active_root is None:
         summary["status"] = "unavailable"

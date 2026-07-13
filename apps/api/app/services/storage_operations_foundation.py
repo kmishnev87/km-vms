@@ -52,6 +52,8 @@ INTERRUPTED_RECOVERABLE_TYPES = frozenset(
         "manual_bulk_delete",
         "manual_delete_by_camera",
         "manual_delete_all",
+        "retention_auto_run",
+        "retention_auto_free_space",
     }
 )
 SIGNAL_STATUSES = frozenset({"idle", "pending", "running"})
@@ -402,6 +404,7 @@ def claim_operation(
     start_immediately: bool = True,
     cancel_allowed: bool = False,
     scope_is_canonical: bool = False,
+    initial_progress: dict | None = None,
 ) -> dict[str, Any]:
     op_type = _code(operation_type, field="operation_type", max_length=64)
     normalized_scope = (
@@ -410,6 +413,11 @@ def claim_operation(
         else normalize_operation_scope(scope)
     )
     fingerprint = request_fingerprint(request_identity)
+    bounded_initial_progress = bounded_payload(
+        initial_progress,
+        max_bytes=OPERATION_PROGRESS_MAX_BYTES,
+        field="progress",
+    )
     idem = _code(idempotency_key or fingerprint, field="idempotency_key", max_length=64)
     actor_kind, actor_key, actor_user_id, normalized_system_owner = actor_identity(actor, system_owner=system_owner)
     now = _db_now(db)
@@ -494,7 +502,7 @@ def claim_operation(
             request_fingerprint=fingerprint,
             status="queued",
             scope=normalized_scope,
-            progress={},
+            progress=bounded_initial_progress,
             parent_operation_id=normalized_parent_id,
             parent_snapshot=parent_snapshot,
             retry_depth=retry_depth,
@@ -522,6 +530,7 @@ def claim_operation(
                 start_immediately=start_immediately,
                 cancel_allowed=cancel_allowed,
                 scope_is_canonical=scope_is_canonical,
+                initial_progress=bounded_initial_progress,
             )
     elif (
         row.request_fingerprint != fingerprint
@@ -678,6 +687,7 @@ def create_operation(
     lease_seconds: int = OPERATION_LEASE_SECONDS,
     parent_operation_id: str | None = None,
     cancel_allowed: bool = False,
+    initial_progress: dict | None = None,
 ) -> dict[str, Any]:
     return claim_operation(
         db,
@@ -693,6 +703,7 @@ def create_operation(
         parent_operation_id=parent_operation_id,
         start_immediately=False,
         cancel_allowed=cancel_allowed,
+        initial_progress=initial_progress,
     )
 
 
@@ -1239,6 +1250,77 @@ def publish_work_signal(
         row.revision = int(row.revision or 0) + 1
         row.updated_at = now
         db.add(row)
+        db.commit()
+    return public_signal_summary(row)
+
+
+def advance_work_signal(
+    db: Session,
+    *,
+    signal_type: str,
+    scope: dict,
+    commit: bool = True,
+) -> dict:
+    """Atomically advance one coalesced work generation in the caller transaction."""
+    signal = _code(signal_type, field="signal_type", max_length=64)
+    if signal not in WORK_SIGNAL_TYPES:
+        raise StorageOperationContractError("work_signal_type_unsupported")
+    normalized_scope = normalize_work_signal_scope(scope)
+    normalized_key = canonical_work_signal_scope_key(normalized_scope)
+    now = _db_now(db)
+    row = (
+        db.query(StorageWorkSignal)
+        .filter(StorageWorkSignal.signal_type == signal, StorageWorkSignal.scope_key == normalized_key)
+        .with_for_update()
+        .first()
+    )
+    if row is None:
+        created = False
+        try:
+            with db.begin_nested():
+                row = StorageWorkSignal(
+                    signal_type=signal,
+                    scope_key=normalized_key,
+                    scope=normalized_scope,
+                    status="pending",
+                    requested_watermark=1,
+                    consumed_watermark=0,
+                    fencing_token=0,
+                    revision=1,
+                    created_at=now,
+                    updated_at=now,
+                )
+                db.add(row)
+                db.flush()
+                created = True
+        except IntegrityError:
+            row = (
+                db.query(StorageWorkSignal)
+                .filter(StorageWorkSignal.signal_type == signal, StorageWorkSignal.scope_key == normalized_key)
+                .with_for_update()
+                .one()
+            )
+        if not created:
+            if canonical_operation_scope(row.scope) != normalized_scope:
+                raise StorageOperationContractError("work_signal_scope_mismatch")
+            row.requested_watermark = int(row.requested_watermark or 0) + 1
+            if row.status != "running":
+                row.status = "pending"
+            row.revision = int(row.revision or 0) + 1
+            row.updated_at = now
+            db.add(row)
+            db.flush()
+    else:
+        if canonical_operation_scope(row.scope) != normalized_scope:
+            raise StorageOperationContractError("work_signal_scope_mismatch")
+        row.requested_watermark = int(row.requested_watermark or 0) + 1
+        if row.status != "running":
+            row.status = "pending"
+        row.revision = int(row.revision or 0) + 1
+        row.updated_at = now
+        db.add(row)
+        db.flush()
+    if commit:
         db.commit()
     return public_signal_summary(row)
 

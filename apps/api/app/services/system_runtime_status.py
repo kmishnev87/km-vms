@@ -9,8 +9,7 @@ from sqlalchemy.orm import Session
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.services.live_engine import manager as live_manager
-from app.services.recording_retention import automatic_retention_status
-from app.services.recording_retention import auto_free_space_status
+from app.services.retention_automation import auto_free_runtime_status, retention_runtime_status
 from app.services.recorder_runtime_status import (
     ACTIVE_JOB_STATES,
     HEARTBEAT_STALE_SECONDS,
@@ -68,7 +67,16 @@ SAFE_REASON_CODES = {
 RECORDING_STALE_GRACE_SECONDS = 60
 LOW_SPACE_WARNING_PERCENT = 10.0
 RETENTION_SUCCESS_STATUSES = {"ok", "completed", "success", "completed_successfully", "succeeded"}
-RETENTION_WARNING_STATUSES = {"completed_with_warnings", "skipped_concurrent", "warning", "warnings"}
+RETENTION_WARNING_STATUSES = {
+    "completed_with_warnings",
+    "skipped_concurrent",
+    "warning",
+    "warnings",
+    "partial",
+    "blocked",
+    "cancelled",
+    "interrupted",
+}
 RETENTION_FAILURE_STATUSES = {"failed", "error"}
 RETENTION_NO_EVIDENCE_STATUSES = {"", "never_run", "not_run", "none", "null"}
 
@@ -530,9 +538,15 @@ def _normalize_retention_status(value: Any) -> str:
     return "unknown"
 
 
-def _build_retention_domain(db: Session, now: datetime, ctx) -> dict[str, Any]:
-    state = automatic_retention_status()
-    free_space_state = auto_free_space_status()
+def _build_retention_domain(
+    db: Session,
+    now: datetime,
+    ctx,
+    storage_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    operation_status = dict((storage_summary or {}).get("storage_operations") or {})
+    state = dict(operation_status.get("retention") or {}) or retention_runtime_status(db)
+    free_space_state = dict(operation_status.get("auto_free_space_cleanup") or {}) or auto_free_runtime_status(db)
     camera_count = db.query(Camera).count()
     policy_count = db.query(Camera).filter(Camera.retention_days.isnot(None)).count()
     deleted_segments_count = db.query(RecordingSegment).filter(RecordingSegment.status == SEGMENT_STATUS_DELETED).count()
@@ -579,7 +593,7 @@ def _build_retention_domain(db: Session, now: datetime, ctx) -> dict[str, Any]:
         "camera_count": int(camera_count),
         "deleted_segments_count": int(deleted_segments_count),
         "summary": {
-            "run_count": int(state.get("run_count") or 0),
+            "run_count": int(state.get("run_count") or state.get("recent_count") or 0),
             "failed_count": int((state.get("last_summary") or {}).get("failed_count") or 0),
             "skipped_count": int((state.get("last_summary") or {}).get("skipped_count") or 0),
             "deleted_count": int((state.get("last_summary") or {}).get("deleted_count") or 0),
@@ -590,7 +604,7 @@ def _build_retention_domain(db: Session, now: datetime, ctx) -> dict[str, Any]:
         "auto_free_space_cleanup": free_space_state,
         "reason_codes": reasons,
         "evidence_status": "fresh" if running or normalized_status in {"success", "warning", "failed"} else "missing",
-        "source": "automatic_retention_status_memory",
+        "source": "durable_storage_operations",
     }
 
 
@@ -661,7 +675,7 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     cameras_domain = _build_camera_domain(db, now, ctx, cameras, recorder_states, live_by_camera)
     storage_summary = build_lightweight_storage_monitoring_summary(db)
     storage_domain = _build_storage_domain(storage_summary, ctx)
-    retention_domain = _build_retention_domain(db, now, ctx)
+    retention_domain = _build_retention_domain(db, now, ctx, storage_summary)
     reconciliation_domain = _build_reconciliation_domain(storage_summary, ctx)
     domain_severities = [
         cameras_domain["severity"],

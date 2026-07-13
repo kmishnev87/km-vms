@@ -556,6 +556,7 @@ def claim_operation_with_conflicts(
     idempotency_key: str | None = None,
     parent_operation_id: str | None = None,
     owner_instance_id: str | None = None,
+    initial_progress: dict | None = None,
 ) -> dict[str, Any]:
     if operation_type not in OPERATION_TYPES:
         raise StorageOperationContractError("storage_operation_type_unsupported")
@@ -598,6 +599,7 @@ def claim_operation_with_conflicts(
                 parent_operation_id=existing.parent_operation_id,
                 owner_instance_id=instance,
                 scope_is_canonical=True,
+                initial_progress=initial_progress,
             )
     coordinator = _coordinator_lease(db, instance)
     try:
@@ -658,6 +660,7 @@ def claim_operation_with_conflicts(
             parent_operation_id=parent_operation_id,
             owner_instance_id=instance,
             scope_is_canonical=True,
+            initial_progress=initial_progress,
         )
         try:
             coordinator.assert_owned()

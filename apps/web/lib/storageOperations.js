@@ -114,6 +114,89 @@ export function formatDateTime(value, language = "ru") {
   return date.toLocaleString(language === "en" ? "en-US" : language === "zh-CN" ? "zh-CN" : "ru-RU");
 }
 
+const RECENT_OPERATION_TYPE_KEYS = Object.freeze({
+  retention_auto_run: "recentOperationRetentionAutomatic",
+  retention_run: "recentOperationRetentionManual",
+  retention_auto_free_space: "recentOperationAutoFree",
+  archive_root_activation: "recentOperationRootActivation",
+  archive_root_delete: "recentOperationRootDelete",
+  camera_delete_with_files: "recentOperationCameraDelete",
+  manual_bulk_delete: "recentOperationBulkDelete",
+  manual_single_delete: "recentOperationSingleDelete",
+  integrity_metadata_repair: "recentOperationIntegrityRepair",
+  archive_migration_apply: "recentOperationMigration",
+});
+
+const RECENT_OPERATION_STATUS = Object.freeze({
+  queued: { labelKey: "recentOperationStatusQueued", tone: "neutral" },
+  running: { labelKey: "recentOperationStatusRunning", tone: "neutral" },
+  cancel_requested: { labelKey: "recentOperationStatusCancelRequested", tone: "warning" },
+  completed: { labelKey: "recentOperationStatusCompleted", tone: "ok" },
+  partial: { labelKey: "recentOperationStatusPartial", tone: "warning" },
+  blocked: { labelKey: "recentOperationStatusBlocked", tone: "warning" },
+  failed: { labelKey: "recentOperationStatusFailed", tone: "error" },
+  cancelled: { labelKey: "recentOperationStatusCancelled", tone: "neutral" },
+  interrupted: { labelKey: "recentOperationStatusInterrupted", tone: "warning" },
+  unknown: { labelKey: "recentOperationStatusUnknown", tone: "neutral" },
+});
+
+const RECENT_OPERATION_NEXT_ACTION_KEYS = Object.freeze({
+  check_storage_access: "recentOperationNextCheckStorage",
+  resume_after_storage_pressure: "recentOperationNextWaitForSpace",
+  retry_operation: "recentOperationNextRetry",
+  review_and_confirm_auto_free_terms: "recentOperationNextConfirmAutoFree",
+  review_storage_problems: "recentOperationNextReviewProblems",
+});
+
+const DELETION_OPERATION_TYPES = new Set([
+  "retention_auto_run",
+  "retention_run",
+  "retention_auto_free_space",
+  "archive_root_delete",
+  "camera_delete_with_files",
+  "manual_bulk_delete",
+  "manual_single_delete",
+]);
+
+function finiteCount(value) {
+  if (value == null || value === "") return null;
+  const count = Number(value);
+  return Number.isFinite(count) && count >= 0 ? count : null;
+}
+
+export function recentOperationPresentation(item = {}) {
+  const operationType = String(item?.operation_type || "");
+  const status = String(item?.status || "unknown");
+  const progress = item?.progress && typeof item.progress === "object" ? item.progress : {};
+  const facts = [];
+  const deletedCount = finiteCount(progress.deleted_count);
+  const completedCount = finiteCount(progress.completed_count);
+  const failedCount = finiteCount(progress.failed_count);
+  const skippedCount = finiteCount(progress.skipped_count);
+  const completedBytes = finiteCount(progress.completed_bytes ?? progress.bytes_freed);
+  const effectiveDeletedCount = deletedCount ?? (DELETION_OPERATION_TYPES.has(operationType) ? completedCount : null);
+  if (effectiveDeletedCount != null) facts.push({ labelKey: "recentOperationDeletedCount", value: effectiveDeletedCount });
+  if (completedBytes != null) facts.push({ labelKey: "recentOperationFreedBytes", value: completedBytes, format: "bytes" });
+  if (failedCount != null && failedCount > 0) facts.push({ labelKey: "recentOperationFailedCount", value: failedCount });
+  if (skippedCount != null && skippedCount > 0) facts.push({ labelKey: "recentOperationSkippedCount", value: skippedCount });
+  const statusPresentation = RECENT_OPERATION_STATUS[status] || RECENT_OPERATION_STATUS.unknown;
+  return {
+    key: String(item?.operation_id || `${operationType || "operation"}:${item?.finished_at || item?.started_at || "unknown"}`),
+    typeKey: RECENT_OPERATION_TYPE_KEYS[operationType] || "recentOperationGeneric",
+    statusKey: statusPresentation.labelKey,
+    tone: statusPresentation.tone,
+    timestamp: item?.finished_at || item?.started_at || item?.queued_at || null,
+    facts,
+    reasonCode: typeof item?.reason_code === "string" ? item.reason_code : null,
+    nextActionKey: RECENT_OPERATION_NEXT_ACTION_KEYS[item?.next_action] || null,
+  };
+}
+
+export function recentOperationPresentations(items, limit = 5) {
+  const boundedLimit = Math.max(0, Math.min(Number(limit) || 0, 5));
+  return (Array.isArray(items) ? items : []).slice(0, boundedLimit).map(recentOperationPresentation);
+}
+
 export function isStorageAccessDeniedError(error) {
   const status = Number(error?.status ?? error?.response?.status);
   if (status === 401 || status === 403) return true;
@@ -296,14 +379,14 @@ export function freeSpaceTone(capacity = {}, policy = {}) {
 }
 
 export function policyStateLabel(policy, language = "ru") {
-  const enabled = Boolean(policy?.auto_free_space_cleanup_enabled);
+  const enabled = Boolean(policy?.auto_free_space_cleanup_effective ?? policy?.auto_free_space_cleanup_enabled);
   if (language === "en") return enabled ? "ON" : "OFF";
   if (language === "zh-CN") return enabled ? "开启" : "关闭";
   return enabled ? "Включено" : "Выключено";
 }
 
 export function lowDiskPolicyText(policy, language = "ru") {
-  const cleanupEnabled = Boolean(policy?.auto_free_space_cleanup_enabled);
+  const cleanupEnabled = Boolean(policy?.auto_free_space_cleanup_effective ?? policy?.auto_free_space_cleanup_enabled);
   const warning = policy?.warning_threshold_percent ?? 10;
   const cleanup = policy?.cleanup_threshold_percent ?? 5;
   const critical = policy?.critical_threshold_percent ?? 1;
@@ -466,12 +549,132 @@ export function actionPermissionState(user, permission, language = "ru") {
 }
 
 function reasonCode(reason) {
-  return typeof reason === "string" ? reason : reason?.reason || reason?.code || reason?.error || "";
+  return typeof reason === "string" ? reason : reason?.reason_code || reason?.reason || reason?.code || reason?.error || "";
 }
 
 export function humanBlockerReason(reason, language = "ru") {
   const code = reasonCode(reason);
   const labels = {
+    auto_free_space_acknowledgement_required: {
+      ru: "Перед включением подтвердите условия автоматического удаления старых записей.",
+      en: "Review and confirm the automatic deletion terms before enabling auto-free-space.",
+      "zh-CN": "启用自动释放空间前，请查看并确认自动删除条款。",
+    },
+    auto_free_space_acknowledgement_stale: {
+      ru: "Условия автоосвобождения изменились. Ознакомьтесь с актуальной версией и подтвердите её.",
+      en: "The auto-free-space terms have changed. Review and confirm the current version.",
+      "zh-CN": "自动释放空间条款已更新。请查看并确认当前版本。",
+    },
+    auto_free_space_policy_not_effective: {
+      ru: "Автоосвобождение не включено или его условия ещё не подтверждены.",
+      en: "Auto-free-space is disabled or its terms have not been confirmed.",
+      "zh-CN": "自动释放空间未启用，或其条款尚未确认。",
+    },
+    retention_size_unknown: {
+      ru: "Размер части записей не подтверждён. Проверьте состояние архива, чтобы система могла точно применить лимит камеры.",
+      en: "The size of some recordings is unknown. Check archive health so the camera quota can be enforced accurately.",
+      "zh-CN": "部分录像大小尚未确认。请检查归档状态，以便系统准确执行摄像机配额。",
+    },
+    retention_no_safe_candidates: {
+      ru: "Правило хранения нарушено, но сейчас нет записей, которые можно безопасно удалить. Откройте проблемы архива.",
+      en: "A retention rule is exceeded, but no recording can currently be deleted safely. Review archive problems.",
+      "zh-CN": "保留规则已超限，但当前没有可安全删除的录像。请查看归档问题。",
+    },
+    retention_no_progress: {
+      ru: "Автоматическое применение правил не смогло удалить выбранные записи. Обновите состояние архива и проверьте найденные проблемы.",
+      en: "Automatic retention could not delete the selected recordings. Refresh archive status and review detected problems.",
+      "zh-CN": "自动保留策略无法删除所选录像。请刷新归档状态并检查发现的问题。",
+    },
+    retention_preempted_by_storage_pressure: {
+      ru: "Применение правил хранения временно уступило освобождению критически занятого тома и продолжится автоматически.",
+      en: "Retention temporarily yielded to cleanup of a pressured volume and will continue automatically.",
+      "zh-CN": "保留处理暂时让位于空间紧张卷的清理，并会自动继续。",
+    },
+    automatic_retention_failed: {
+      ru: "Автоматическое применение правил хранения завершилось ошибкой. Обновите состояние и повторите проверку.",
+      en: "Automatic retention failed. Refresh storage status and retry the check.",
+      "zh-CN": "自动保留处理失败。请刷新存储状态并重试检查。",
+    },
+    physical_volume_identity_unknown: {
+      ru: "Не удалось однозначно определить физический том. Проверьте доступность корней архива и обновите состояние.",
+      en: "The physical volume could not be identified reliably. Check archive-root access and refresh status.",
+      "zh-CN": "无法可靠识别物理卷。请检查归档根目录访问并刷新状态。",
+    },
+    physical_volume_identity_changed: {
+      ru: "Подключение тома изменилось после проверки. Обновите состояние хранилища перед повтором.",
+      en: "The volume mapping changed after validation. Refresh storage status before retrying.",
+      "zh-CN": "验证后卷映射发生变化。请刷新存储状态后重试。",
+    },
+    physical_volume_runtime_identity_changed: {
+      ru: "Фактическое подключение тома изменилось. Автоосвобождение остановлено до новой проверки.",
+      en: "The runtime volume mount changed. Auto-free-space stopped until the volume is checked again.",
+      "zh-CN": "运行时卷挂载已更改。自动释放空间已停止，等待重新检查。",
+    },
+    physical_volume_runtime_identity_ambiguous: {
+      ru: "Корни, указанные как один том, фактически подключены к разным устройствам. Проверьте расположения архива.",
+      en: "Roots configured as one volume are mounted on different devices. Review archive locations.",
+      "zh-CN": "配置为同一卷的归档根目录实际挂载在不同设备上。请检查归档位置。",
+    },
+    capacity_unknown: {
+      ru: "Не удалось измерить свободное место на томе. Проверьте его подключение и права чтения.",
+      en: "Free space on the volume could not be measured. Check its mount and read access.",
+      "zh-CN": "无法测量卷的可用空间。请检查挂载和读取权限。",
+    },
+    auto_free_no_safe_candidates: {
+      ru: "На заполненном томе нет записей, которые сейчас можно безопасно удалить. Откройте проблемы архива.",
+      en: "The pressured volume has no recording that can currently be deleted safely. Review archive problems.",
+      "zh-CN": "空间紧张的卷上当前没有可安全删除的录像。请查看归档问题。",
+    },
+    auto_free_no_progress: {
+      ru: "Освободить место не удалось: выбранные записи не были удалены. Обновите состояние и проверьте проблемы архива.",
+      en: "No space was recovered because the selected recordings were not deleted. Refresh status and review archive problems.",
+      "zh-CN": "未能释放空间：所选录像未被删除。请刷新状态并检查归档问题。",
+    },
+    auto_free_retry_scheduled: {
+      ru: "Повтор временно отложен, потому что состояние тома не изменилось. Система проверит его снова автоматически.",
+      en: "Retry is temporarily delayed because the volume state has not changed. The system will check it again automatically.",
+      "zh-CN": "由于卷状态未变化，重试暂时延后。系统会自动再次检查。",
+    },
+    archive_root_runtime_unavailable: {
+      ru: "Один из корней тома сейчас недоступен. Восстановите подключение и обновите состояние хранилища.",
+      en: "One of the volume roots is unavailable. Restore its mount and refresh storage status.",
+      "zh-CN": "该卷的一个归档根目录当前不可用。请恢复挂载并刷新存储状态。",
+    },
+    storage_operation_interrupted: {
+      ru: "Операция прервалась до подтверждённого завершения. Обновите состояние; система безопасно продолжит или предложит повтор.",
+      en: "The operation stopped before terminal confirmation. Refresh status; the system will safely resume or offer a retry.",
+      "zh-CN": "操作在确认完成前中断。请刷新状态；系统将安全继续或提供重试。",
+    },
+    storage_operation_lease_lost: {
+      ru: "Операция потеряла право на продолжение и была безопасно остановлена. Обновите состояние перед повтором.",
+      en: "The operation lost its execution lease and stopped safely. Refresh status before retrying.",
+      "zh-CN": "操作失去执行租约并已安全停止。重试前请刷新状态。",
+    },
+    storage_operation_conflict: {
+      ru: "С этим архивом уже выполняется несовместимая операция. Дождитесь её завершения и обновите состояние.",
+      en: "A conflicting archive operation is already running. Wait for it to finish and refresh status.",
+      "zh-CN": "正在执行冲突的归档操作。请等待其完成并刷新状态。",
+    },
+    auto_free_root_set_changed: {
+      ru: "Состав корней тома изменился во время операции. Автоосвобождение остановлено; обновите состояние хранилища.",
+      en: "The volume root set changed during cleanup. Auto-free-space stopped; refresh storage status.",
+      "zh-CN": "清理期间卷的归档根目录集合发生变化。自动释放空间已停止；请刷新存储状态。",
+    },
+    root_set_changed: {
+      ru: "Состав корней архива изменился после проверки. Обновите состояние перед повтором.",
+      en: "The archive root set changed after validation. Refresh status before retrying.",
+      "zh-CN": "验证后归档根目录集合发生变化。重试前请刷新状态。",
+    },
+    automatic_auto_free_failed: {
+      ru: "Автоматическое освобождение места завершилось ошибкой. Обновите состояние и проверьте доступность тома.",
+      en: "Automatic space cleanup failed. Refresh status and check volume access.",
+      "zh-CN": "自动空间清理失败。请刷新状态并检查卷访问。",
+    },
+    operation_terminal_persistence_failed: {
+      ru: "Не удалось подтвердить итог операции. Не повторяйте действие до обновления состояния.",
+      en: "The terminal operation result could not be confirmed. Do not retry until status is refreshed.",
+      "zh-CN": "无法确认操作最终结果。刷新状态前请勿重试。",
+    },
     active_recording_jobs: {
       ru: "Перенос заблокирован: сейчас идет запись. Остановите запись на всех камерах или выполните перенос позже.",
       en: "Migration is blocked because recording is active. Stop recording on all cameras or run migration later.",
@@ -680,7 +883,7 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
       ambiguousAvailability: "Корень архива требует проверки: чтение и запись доступны, но общая проверка архива не подтверждена. Проверьте путь, служебную папку архива и права.",
       lowDisk: "Освободите место или проверьте регламент хранения.",
       integrity: "Запустите проверку целостности и разберите найденные проблемы.",
-      retention: "Сделайте предпросмотр регламента хранения перед удалением.",
+      retention: "Проверьте правила хранения камер и причины, по которым автоматическое применение заблокировано.",
       migration: "Перенос заблокирован активной записью; выполните его позже.",
       interruptedOperation: "Предыдущая операция с архивом прервалась. Обновите состояние и повторяйте действие только после проверки результата.",
       stale: "Обновите состояние хранилища перед действиями.",
@@ -694,7 +897,7 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
       ambiguousAvailability: "Archive root needs verification: read and write checks pass, but the overall archive check is not confirmed. Check the path, archive service folder, and permissions.",
       lowDisk: "Free space or review retention policy.",
       integrity: "Run integrity check and review detected problems.",
-      retention: "Preview retention before deleting anything.",
+      retention: "Check camera retention rules and the reason automatic enforcement is blocked.",
       migration: "Migration is blocked by active recording; run it later.",
       interruptedOperation: "A previous archive operation was interrupted. Refresh the state and retry only after checking its result.",
       stale: "Refresh storage state before actions.",
@@ -708,7 +911,7 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
       ambiguousAvailability: "归档根目录需要验证：读写检查通过，但整体归档检查未确认。请检查路径、归档服务文件夹和权限。",
       lowDisk: "请释放空间或检查保留策略。",
       integrity: "请运行完整性检查并处理发现的问题。",
-      retention: "删除前请先预览保留规则。",
+      retention: "请检查摄像机保留规则以及自动应用被阻止的原因。",
       migration: "迁移被活动录像阻止；请稍后执行。",
       interruptedOperation: "上一个归档操作已中断。请刷新状态并确认结果后再重试。",
       stale: "操作前请刷新存储状态。",
@@ -793,9 +996,22 @@ export function retentionScenarioModel({ preview = null, result = null, retentio
   const source = preview || result || retention?.last_summary || null;
   const count = Number(source?.planned_count ?? source?.deleted_count ?? 0);
   const bytes = Number(source?.estimated_freed_bytes ?? source?.bytes_freed ?? 0);
-  const failed = retention?.last_status === "failed";
+  const durableState = String(retention?.state || retention?.last_status || "idle").toLowerCase();
+  const failed = ["failed", "blocked", "partial", "interrupted", "no_safe_candidate", "no_progress"].includes(durableState);
   return {
-    status: !permission.allowed ? "unavailable_due_to_permissions" : running ? "running" : result ? "apply_completed" : preview ? "preview_completed" : failed ? "apply_failed" : "idle",
+    status: !permission.allowed
+      ? "unavailable_due_to_permissions"
+      : running || durableState === "running"
+      ? "running"
+      : durableState === "pending"
+      ? "pending"
+      : result
+      ? "apply_completed"
+      : preview
+      ? "preview_completed"
+      : failed
+      ? "apply_failed"
+      : "idle",
     permissionReason: permission.allowed ? "" : permission.reason,
     hasPreview: Boolean(preview),
     canPreview: Boolean(permission.allowed && !running),

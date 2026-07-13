@@ -41,6 +41,7 @@ from app.services.onvif_service import (
     ptz_command_limits,
 )
 from app.services.recording_retention import EXECUTION_POLICY_MANUAL_COMPLETE, execute_segments, preview_segments
+from app.services.retention_automation import advance_retention_signal
 from app.services.storage_operation_conflicts import (
     StorageOperationLifecycle,
     StorageOperationConflict as StorageOuterConflict,
@@ -1521,7 +1522,15 @@ def update_camera(
         camera.status = "manual_unverified"
         camera.last_error = "updated_unverified"
 
+    retention_rules_changed = any(
+        old_values.get(key) != getattr(camera, key, None)
+        for key in ("retention_days", "storage_quota_gb")
+    )
+    if retention_rules_changed:
+        camera.retention_policy_version = int(getattr(camera, "retention_policy_version", 1) or 1) + 1
     db.add(camera)
+    if retention_rules_changed:
+        advance_retention_signal(db, commit=False)
     db.commit()
     db.refresh(camera)
     attach_test_preview_to_camera(preview_token, camera.id)
@@ -1936,6 +1945,19 @@ def delete_camera(
         camera.name = deleted_unique_value(original_camera_name, camera.id)
         camera.storage_folder_name = deleted_unique_value(original_folder_name, camera.id)
         db.add(camera)
+        retained_archive_exists = (
+            db.query(RecordingSegment.id)
+            .filter(
+                RecordingSegment.camera_id == camera.id,
+                RecordingSegment.deleted_at.is_(None),
+                RecordingSegment.status != "deleted",
+            )
+            .first()
+            is not None
+        )
+        if retained_archive_exists:
+            camera.retention_policy_version = int(getattr(camera, "retention_policy_version", 1) or 1) + 1
+            advance_retention_signal(db, commit=False)
         db.commit()
         if outer_lifecycle is not None:
             terminal_recordings = {

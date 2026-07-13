@@ -8,7 +8,16 @@ import uuid
 
 from app.core.config import settings
 from app.db.session import SessionLocal
-from app.services.recording_retention import run_auto_free_space_cleanup_once, run_automatic_retention_once
+from app.services.retention_automation import (
+    advance_retention_signal,
+    claim_retention_signal,
+    ensure_retention_signal,
+    publish_due_retention_signal,
+    retention_slice_preemption_required,
+    retention_page_size,
+    run_auto_free_pressure_groups,
+    run_retention_signal_generation,
+)
 from app.services.storage_operations_foundation import (
     StorageOperationLeaseLost,
     acquire_worker_lease,
@@ -23,6 +32,7 @@ _stop_event = threading.Event()
 _worker_lock = threading.Lock()
 _worker_thread: threading.Thread | None = None
 _worker_instance_id = f"automatic-retention:{os.getpid()}:{uuid.uuid4().hex}"
+_signal_poll_seconds = 30
 
 
 class _LeaderHeartbeat:
@@ -75,15 +85,12 @@ def automatic_retention_interval_seconds() -> int:
     return max(60, int(settings.automatic_retention_interval_seconds or 3600))
 
 
-def automatic_retention_bounds() -> tuple[int, int]:
-    return (
-        max(1, int(settings.automatic_retention_max_candidates or 25)),
-        max(1, int(settings.automatic_retention_max_bytes or 1024 * 1024 * 1024)),
-    )
+def automatic_retention_page_size() -> int:
+    return retention_page_size(settings.automatic_retention_max_candidates)
 
 
-def run_automatic_retention_cycle() -> dict:
-    max_candidates, max_bytes = automatic_retention_bounds()
+def run_automatic_retention_cycle(*, force_recovery: bool = False) -> dict:
+    page_size = automatic_retention_page_size()
     db = SessionLocal()
     leader = None
     try:
@@ -96,20 +103,23 @@ def run_automatic_retention_cycle() -> dict:
             return {"status": "not_leader", "retention": None, "auto_free_space_cleanup": None}
         with _LeaderHeartbeat(leader) as heartbeat:
             heartbeat.assert_owned()
-            retention_result = run_automatic_retention_once(
-                db,
-                max_candidates=max_candidates,
-                max_bytes=max_bytes,
-                operation_heartbeat=heartbeat.assert_owned,
-            )
+            ensure_retention_signal(db)
             heartbeat.assert_owned()
             renew_worker_lease(db, leader)
-            auto_free_space_result = run_auto_free_space_cleanup_once(
-                db,
-                max_candidates=max_candidates,
-                max_bytes=max_bytes,
-                operation_heartbeat=heartbeat.assert_owned,
-            )
+            auto_free_space_result = run_auto_free_pressure_groups(db, page_size=page_size)
+            heartbeat.assert_owned()
+            publish_due_retention_signal(db)
+            if force_recovery:
+                advance_retention_signal(db)
+            signal_handle = claim_retention_signal(db, owner_instance_id=_worker_instance_id)
+            retention_result = None
+            if signal_handle is not None:
+                retention_result = run_retention_signal_generation(
+                    db,
+                    signal_handle,
+                    page_size=page_size,
+                    should_preempt=lambda: retention_slice_preemption_required(db),
+                )
             heartbeat.assert_owned()
             history_cleanup_count = cleanup_terminal_operations(db)
             heartbeat.assert_owned()
@@ -129,13 +139,24 @@ def run_automatic_retention_cycle() -> dict:
 
 
 def _worker() -> None:
-    interval = automatic_retention_interval_seconds()
-    logger.info("Automatic retention worker started interval=%ss", interval)
-    while not _stop_event.wait(interval):
+    recovery_interval = automatic_retention_interval_seconds()
+    next_recovery_at = time.monotonic()
+    logger.info(
+        "Automatic retention worker started poll=%ss recovery=%ss",
+        _signal_poll_seconds,
+        recovery_interval,
+    )
+    while not _stop_event.is_set():
         try:
-            run_automatic_retention_cycle()
+            now = time.monotonic()
+            force_recovery = now >= next_recovery_at
+            run_automatic_retention_cycle(force_recovery=force_recovery)
+            if force_recovery:
+                next_recovery_at = time.monotonic() + recovery_interval
         except Exception:
             logger.exception("Automatic retention worker cycle failed")
+        if _stop_event.wait(_signal_poll_seconds):
+            break
     logger.info("Automatic retention worker stopped")
 
 

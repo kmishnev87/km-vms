@@ -13,16 +13,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import inspect, text
+from sqlalchemy import MetaData, Table, func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.version import APP_BUILD_VERSION, APP_VERSION
-from app.models.camera import Camera
-from app.models.recording import ArchiveRoot, RecordingJob, RecordingSegment
-from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
-from app.models.system_settings import SystemSettings
-from app.models.user import User
 from app.services.schema_versioning import schema_version_status
 
 
@@ -175,11 +170,27 @@ def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def _table_count(db: Session, model: Any) -> int | None:
+def _reflected_table(db: Session, table_name: str) -> Table:
+    return Table(table_name, MetaData(), autoload_with=db.get_bind())
+
+
+def _table_count(db: Session, table_name: str, table_names: set[str]) -> int | None:
+    if table_name not in table_names:
+        return None
     try:
-        return int(db.query(model).count())
+        table = _reflected_table(db, table_name)
+        return int(db.execute(select(func.count()).select_from(table)).scalar() or 0)
     except Exception:
         return None
+
+
+def _first_existing_row(db: Session, table_name: str, columns: tuple[str, ...]) -> dict[str, Any] | None:
+    table = _reflected_table(db, table_name)
+    selected = [table.c[name] for name in columns if name in table.c]
+    if not selected:
+        return None
+    row = db.execute(select(*selected).limit(1)).mappings().first()
+    return dict(row) if row else None
 
 
 def build_backup_metadata_snapshot(
@@ -193,18 +204,34 @@ def build_backup_metadata_snapshot(
 ) -> dict[str, Any]:
     inspector = inspect(db.get_bind())
     table_names = sorted(inspector.get_table_names())
-    settings_row = db.query(SystemSettings).first() if "system_settings" in table_names else None
+    table_name_set = set(table_names)
+    settings_row = (
+        _first_existing_row(
+            db,
+            "system_settings",
+            ("recording_format", "auto_free_space_cleanup_enabled"),
+        )
+        if "system_settings" in table_name_set
+        else None
+    )
     archive_roots = []
-    if "archive_roots" in table_names:
-        for item in db.query(ArchiveRoot).limit(50).all():
+    if "archive_roots" in table_name_set:
+        archive_root_table = _reflected_table(db, "archive_roots")
+        archive_root_columns = [
+            archive_root_table.c[name]
+            for name in ("id", "label", "is_active", "is_available", "storage_namespace")
+            if name in archive_root_table.c
+        ]
+        rows = db.execute(select(*archive_root_columns).limit(50)).mappings().all() if archive_root_columns else []
+        for item in rows:
             archive_roots.append(
                 {
-                    "id": item.id,
-                    "label": item.label,
-                    "active": bool(item.is_active),
-                    "available": bool(item.is_available),
+                    "id": item.get("id"),
+                    "label": item.get("label"),
+                    "active": bool(item.get("is_active")),
+                    "available": bool(item.get("is_available")),
                     "path_label": "archive_root_path_redacted",
-                    "namespace": item.storage_namespace,
+                    "namespace": item.get("storage_namespace"),
                 }
             )
     return {
@@ -218,19 +245,19 @@ def build_backup_metadata_snapshot(
         "migration_plan_summary": migration_plan_summary or {"available": False},
         "table_summary": {"tables": table_names, "count": len(table_names)},
         "entity_counts": {
-            "users": _table_count(db, User),
-            "cameras": _table_count(db, Camera),
-            "system_settings": _table_count(db, SystemSettings),
-            "archive_roots": _table_count(db, ArchiveRoot),
-            "recording_jobs": _table_count(db, RecordingJob),
-            "recording_segments": _table_count(db, RecordingSegment),
-            "schema_migration_history": _table_count(db, SchemaMigrationHistory),
-            "schema_version_state": _table_count(db, SchemaVersionState),
+            "users": _table_count(db, "users", table_name_set),
+            "cameras": _table_count(db, "cameras", table_name_set),
+            "system_settings": _table_count(db, "system_settings", table_name_set),
+            "archive_roots": _table_count(db, "archive_roots", table_name_set),
+            "recording_jobs": _table_count(db, "recording_jobs", table_name_set),
+            "recording_segments": _table_count(db, "recording_segments", table_name_set),
+            "schema_migration_history": _table_count(db, "schema_migration_history", table_name_set),
+            "schema_version_state": _table_count(db, "schema_version_state", table_name_set),
         },
         "storage_settings_summary": {
             "storage_path_label": "storage_path_redacted",
-            "recording_format": settings_row.recording_format if settings_row else None,
-            "auto_free_space_cleanup_enabled": bool(settings_row.auto_free_space_cleanup_enabled) if settings_row else None,
+            "recording_format": settings_row.get("recording_format") if settings_row else None,
+            "auto_free_space_cleanup_enabled": bool(settings_row.get("auto_free_space_cleanup_enabled")) if settings_row else None,
         },
         "archive_roots_summary": archive_roots,
         "backup_checksum": backup_checksum,
@@ -430,12 +457,14 @@ def create_backup_before_upgrade(
         _write_json_atomic(manifest_path, manifest)
         return {**manifest, "manifest_path": str(manifest_path), "backup_file_path": str(backup_path), "metadata_path": str(metadata_path)}
     except BackupSafetyBlocked:
-        if tmp_path.exists():
-            tmp_path.unlink()
+        for artifact in (tmp_path, backup_path, root / f"{backup_id}.metadata.json", root / f"{backup_id}.manifest.json"):
+            if artifact.exists():
+                artifact.unlink()
         raise
     except Exception as exc:
-        if tmp_path.exists():
-            tmp_path.unlink()
+        for artifact in (tmp_path, backup_path, root / f"{backup_id}.metadata.json", root / f"{backup_id}.manifest.json"):
+            if artifact.exists():
+                artifact.unlink()
         raise BackupSafetyBlocked("backup_failed", {"status": BACKUP_STATUS_FAILED, "summary": sanitize_error(exc)}) from exc
 
 

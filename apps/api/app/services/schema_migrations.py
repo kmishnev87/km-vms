@@ -236,8 +236,99 @@ STAGE41011_OPERATION_LINEAGE_MIGRATION = MigrationDefinition(
 )
 
 
+STAGE4102_COLUMNS = {
+    "cameras": {
+        "retention_policy_version": "BIGINT NOT NULL DEFAULT 1",
+    },
+    "system_settings": {
+        "auto_free_space_acknowledged_terms_version": "VARCHAR(64) NULL",
+        "auto_free_space_acknowledged_at": "TIMESTAMP NULL",
+        "auto_free_space_acknowledged_by_user_id": "INTEGER NULL",
+        "low_disk_suspended_physical_volume_id": "VARCHAR(128) NULL",
+        "low_disk_suspended_at": "TIMESTAMP NULL",
+    },
+}
+
+
+def _stage4102_retention_preflight(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    missing: dict[str, list[str]] = {}
+    for table_name, columns in STAGE4102_COLUMNS.items():
+        if not inspector.has_table(table_name):
+            raise RuntimeError(f"stage4102_{table_name}_table_missing")
+        existing = {str(item["name"]) for item in inspector.get_columns(table_name)}
+        absent = sorted(set(columns) - existing)
+        if absent:
+            missing[table_name] = absent
+    return {"status": "ready", "missing_columns": missing}
+
+
+def _stage4102_retention_apply(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    added: dict[str, list[str]] = {}
+    for table_name, columns in STAGE4102_COLUMNS.items():
+        existing = {str(item["name"]) for item in inspector.get_columns(table_name)}
+        for column_name, column_ddl in columns.items():
+            if column_name in existing:
+                continue
+            db.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_ddl}"))
+            added.setdefault(table_name, []).append(column_name)
+    db.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_recording_segments_camera_status_started_id "
+            "ON recording_segments (camera_id, status, started_at, id)"
+        )
+    )
+    db.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_recording_segments_root_status_started_id "
+            "ON recording_segments (archive_root_id, status, started_at, id)"
+        )
+    )
+    return {"added_columns": {key: sorted(value) for key, value in sorted(added.items())}}
+
+
+def _stage4102_retention_verify(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    missing: dict[str, list[str]] = {}
+    for table_name, columns in STAGE4102_COLUMNS.items():
+        actual = {str(item["name"]) for item in inspector.get_columns(table_name)}
+        absent = sorted(set(columns) - actual)
+        if absent:
+            missing[table_name] = absent
+    if missing:
+        raise RuntimeError("stage4102_retention_schema_drift")
+    index_names = {str(item.get("name") or "") for item in inspector.get_indexes("recording_segments")}
+    required_indexes = {
+        "ix_recording_segments_camera_status_started_id",
+        "ix_recording_segments_root_status_started_id",
+    }
+    if not required_indexes.issubset(index_names):
+        raise RuntimeError("stage4102_retention_index_drift")
+    return {"status": "verified", "column_drift": False, "index_drift": False}
+
+
+STAGE4102_RETENTION_MIGRATION = MigrationDefinition(
+    migration_id="stage13_5_4_10_2_retention_disk_protection_v4",
+    from_version=3,
+    to_version=4,
+    description="Add versioned retention policy, auto-free acknowledgement and low-disk suspension evidence.",
+    risk=RISK_ADDITIVE_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage4102_retention_preflight,
+    apply=_stage4102_retention_apply,
+    verify=_stage4102_retention_verify,
+    safe_failure_summary="Retention and disk-protection migration failed safely.",
+    rollback_note="Additive evidence columns and indexes are retained; destructive automatic downgrade is not supported.",
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
-    (STAGE4101_STORAGE_FOUNDATION_MIGRATION, STAGE41011_OPERATION_LINEAGE_MIGRATION)
+    (
+        STAGE4101_STORAGE_FOUNDATION_MIGRATION,
+        STAGE41011_OPERATION_LINEAGE_MIGRATION,
+        STAGE4102_RETENTION_MIGRATION,
+    )
 )
 
 

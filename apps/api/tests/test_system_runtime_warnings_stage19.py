@@ -13,8 +13,8 @@ from app.core.config import settings
 from app.db.session import Base
 from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
+from app.models.storage_operation import StorageOperation
 from app.services import system_runtime_status as runtime_status
-from app.services.recording_retention import AUTO_RETENTION_STATE
 from app.services.system_runtime_status import build_operator_runtime_status
 
 
@@ -60,22 +60,37 @@ def db():
         tmp.cleanup()
 
 
-@pytest.fixture(autouse=True)
-def stable_runtime(monkeypatch):
-    monkeypatch.setattr(runtime_status.live_manager, "status", lambda: [])
-    AUTO_RETENTION_STATE.clear()
-    AUTO_RETENTION_STATE.update(
-        {
-            "enabled": True,
-            "running": False,
-            "last_started_at": None,
-            "last_finished_at": datetime.utcnow(),
-            "last_status": "ok",
-            "last_error": None,
-            "last_summary": None,
-            "run_count": 1,
-        }
+def add_retention_operation(db, *, status, result_status=None, reason_code=None):
+    now = datetime.utcnow()
+    index = db.query(StorageOperation).filter(StorageOperation.operation_type == "retention_auto_run").count() + 1
+    db.add(
+        StorageOperation(
+            id=f"warning-retention-{index}",
+            operation_type="retention_auto_run",
+            actor_kind="system",
+            actor_key="system:warning-test",
+            system_owner="warning-test",
+            idempotency_key=f"warning-retention-{index}",
+            request_fingerprint=f"{index:064x}",
+            status=status,
+            scope={"global": False, "physical_volume_ids": [], "root_ids": [], "camera_ids": [index], "segment_ids": [], "scope_escalated": False},
+            progress={},
+            result={"status": result_status or status, "deleted_count": 0},
+            reason_code=reason_code,
+            queued_at=now,
+            started_at=now,
+            finished_at=now,
+            created_at=now,
+            updated_at=now,
+        )
     )
+    db.commit()
+
+
+@pytest.fixture(autouse=True)
+def stable_runtime(monkeypatch, db):
+    monkeypatch.setattr(runtime_status.live_manager, "status", lambda: [])
+    add_retention_operation(db, status="completed", result_status="compliant")
 
 
 def add_camera(db, *, name="stage19_camera", enabled=True, deleted=False, status="recording", last_error=None):
@@ -400,7 +415,7 @@ def test_live_failure_warns_immediately_without_starting_threshold(db, monkeypat
 def test_storage_retention_and_reconciliation_warnings_still_surface(db, monkeypatch):
     add_camera(db)
     monkeypatch.setattr(runtime_status, "build_lightweight_storage_monitoring_summary", fake_storage(storage_severity="error", reconciliation_severity="warning"))
-    AUTO_RETENTION_STATE.update({"enabled": True, "running": False, "last_status": "failed", "last_error": "/redacted/path", "run_count": 1})
+    add_retention_operation(db, status="failed", reason_code="automatic_retention_failed")
 
     payload = build_operator_runtime_status(db)
 

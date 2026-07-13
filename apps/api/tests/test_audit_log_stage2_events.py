@@ -19,7 +19,7 @@ from app.models.camera import Camera
 from app.models.recording import RecordingJob, RecordingSegment
 from app.services.audit_log import create_event, events_as_text, serialize_event
 from app.services.recording_reconciliation import reconcile_recordings
-from app.services.recording_retention import build_retention_plan, run_automatic_retention_once, run_retention
+from app.services.recording_retention import build_retention_plan, run_retention
 from app.services.storage_monitoring import build_storage_monitoring_summary, reset_storage_audit_state
 from app.services.recording_storage import (
     DEFAULT_ARCHIVE_ROOT_ID,
@@ -172,13 +172,12 @@ def test_storage_status_audits_transitions_without_poll_spam():
         close_db(db, tmp, old_root, old_previews, old_exports)
 
 
-def test_retention_dry_run_apply_and_auto_emit_safe_summary_events():
+def test_retention_dry_run_and_apply_emit_safe_summary_events():
     db, tmp, old_root, old_previews, old_exports = make_db()
     try:
         Path(settings.storage_root).mkdir(parents=True)
         build_retention_plan(db, actor=actor(), write_audit=True)
         run_retention(db, actor=actor(), max_candidates=5, max_bytes=1024)
-        run_automatic_retention_once(db, max_candidates=5, max_bytes=1024)
 
         events = db.query(AuditEvent).order_by(AuditEvent.created_at.asc()).all()
         event_types = [event.event_type for event in events]
@@ -186,8 +185,6 @@ def test_retention_dry_run_apply_and_auto_emit_safe_summary_events():
         assert "retention.dry_run_completed" in event_types
         assert "retention.apply_started" in event_types
         assert "retention.apply_completed" in event_types
-        assert "retention.auto_run_started" in event_types
-        assert "retention.auto_run_completed" in event_types
         assert all(event.category == "retention" for event in events)
         assert not any(event.event_type == "retention.deleted_segment" for event in events)
         dry_run_completed = next(event for event in events if event.event_type == "retention.dry_run_completed")

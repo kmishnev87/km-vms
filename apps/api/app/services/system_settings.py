@@ -33,7 +33,9 @@ HARDWARE_BACKENDS = {"auto", "cpu", "qsv", "vaapi", "nvenc", "amf"}
 ACTIVE_RECORDING_JOB_STATES = {"starting", "recording", "stopping", "restarting"}
 AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT = 10.0
 AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT = 5.0
+AUTO_FREE_SPACE_RECOVERY_THRESHOLD_PERCENT = 9.0
 AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT = 1.0
+AUTO_FREE_SPACE_TERMS_VERSION = "auto-free-space-v1"
 SYSTEM_NAME_MAX_LENGTH = 80
 
 
@@ -41,22 +43,30 @@ def default_timezone() -> str:
     return "Asia/Yekaterinburg"
 
 
-def get_system_settings(db: Session) -> SystemSettings:
-    row = db.query(SystemSettings).order_by(SystemSettings.id.asc()).first()
-    if row:
-        row.language = normalize_stored_language(row.language)
-        return row
-
-    row = SystemSettings(
+def _default_system_settings() -> SystemSettings:
+    return SystemSettings(
         system_initialized=False,
         system_name="KM VMS",
         timezone=default_timezone(),
-        language="ru",
+        language=LANGUAGE_RU,
         storage_path=settings.storage_root,
         recording_format="mkv",
         auto_free_space_cleanup_enabled=False,
         recording_suspended_by_low_disk=False,
     )
+
+
+def get_system_settings_read_only(db: Session) -> SystemSettings:
+    row = db.query(SystemSettings).order_by(SystemSettings.id.asc()).first()
+    return row if row is not None else _default_system_settings()
+
+
+def get_system_settings(db: Session) -> SystemSettings:
+    row = db.query(SystemSettings).order_by(SystemSettings.id.asc()).first()
+    if row is not None:
+        return row
+
+    row = _default_system_settings()
     db.add(row)
     db.commit()
     db.refresh(row)
@@ -79,8 +89,23 @@ def serialize_settings(row: SystemSettings) -> dict:
         "recording_format_contract": format_contract,
         "hardware_preferred_backend": row.hardware_preferred_backend,
         "auto_free_space_cleanup_enabled": bool(getattr(row, "auto_free_space_cleanup_enabled", False)),
+        "auto_free_space_cleanup_effective": bool(
+            getattr(row, "auto_free_space_cleanup_enabled", False)
+            and getattr(row, "auto_free_space_acknowledged_terms_version", None) == AUTO_FREE_SPACE_TERMS_VERSION
+        ),
+        "auto_free_space_acknowledgement_required": bool(
+            getattr(row, "auto_free_space_acknowledged_terms_version", None) != AUTO_FREE_SPACE_TERMS_VERSION
+        ),
+        "auto_free_space_terms_version": AUTO_FREE_SPACE_TERMS_VERSION,
+        "auto_free_space_acknowledged_terms_version": getattr(
+            row,
+            "auto_free_space_acknowledged_terms_version",
+            None,
+        ),
+        "auto_free_space_acknowledged_at": getattr(row, "auto_free_space_acknowledged_at", None),
         "auto_free_space_warning_threshold_percent": AUTO_FREE_SPACE_WARNING_THRESHOLD_PERCENT,
         "auto_free_space_cleanup_threshold_percent": AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT,
+        "auto_free_space_recovery_threshold_percent": AUTO_FREE_SPACE_RECOVERY_THRESHOLD_PERCENT,
         "auto_free_space_critical_threshold_percent": AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT,
         "recording_suspended_by_low_disk": bool(getattr(row, "recording_suspended_by_low_disk", False)),
         "created_at": row.created_at,
@@ -164,15 +189,18 @@ def validate_settings_payload(payload: dict, partial: bool = False) -> dict:
     return data
 
 
-def update_system_settings(db: Session, payload: dict) -> SystemSettings:
+def update_system_settings(db: Session, payload: dict, *, commit: bool = True) -> SystemSettings:
     row = get_system_settings(db)
     data = validate_settings_payload(payload, partial=True)
     for key, value in data.items():
         setattr(row, key, value)
     row.updated_at = datetime.utcnow()
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    if commit:
+        db.commit()
+        db.refresh(row)
+    else:
+        db.flush()
     return row
 
 

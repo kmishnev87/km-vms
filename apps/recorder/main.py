@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import json
 import os
 import re
@@ -44,6 +45,25 @@ FORMAT_METADATA = {
     "mkv": {"container_format": "mkv", "file_extension": ".mkv", "mime_type": "video/x-matroska", "segment_format": "matroska"},
     "mp4": {"container_format": "mp4", "file_extension": ".mp4", "mime_type": "video/mp4", "segment_format": "mp4"},
 }
+RETENTION_SIGNAL_TYPE = "retention_evaluate"
+RETENTION_SIGNAL_SCOPE = {
+    "camera_ids": [],
+    "global": True,
+    "physical_volume_ids": [],
+    "root_ids": [],
+    "scope_escalated": False,
+    "segment_ids": [],
+}
+RETENTION_SIGNAL_SCOPE_JSON = json.dumps(
+    RETENTION_SIGNAL_SCOPE,
+    sort_keys=True,
+    ensure_ascii=True,
+    separators=(",", ":"),
+)
+RETENTION_SIGNAL_SCOPE_KEY = (
+    "scope:"
+    + hashlib.sha256(RETENTION_SIGNAL_SCOPE_JSON.encode("utf-8")).hexdigest()[:32]
+)
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -1091,6 +1111,7 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
                   AND ownership = :ownership
                   AND source = :source
                   AND status = :writing
+                RETURNING id
                 """
             ),
             {
@@ -1114,7 +1135,65 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
                 "reconciliation_status": "ok_owned_finalized",
             },
         )
-    if result.rowcount <= 0:
+        finalized_row = result.first()
+        if finalized_row is not None:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO storage_work_signals (
+                        signal_type,
+                        scope_key,
+                        scope,
+                        status,
+                        requested_watermark,
+                        consumed_watermark,
+                        claimed_watermark,
+                        owner_token_hash,
+                        owner_instance_id,
+                        fencing_token,
+                        revision,
+                        lease_expires_at,
+                        heartbeat_at,
+                        created_at,
+                        updated_at
+                    ) VALUES (
+                        :signal_type,
+                        :scope_key,
+                        CAST(:scope AS JSON),
+                        'pending',
+                        :watermark,
+                        0,
+                        NULL,
+                        NULL,
+                        NULL,
+                        0,
+                        1,
+                        NULL,
+                        NULL,
+                        NOW(),
+                        NOW()
+                    )
+                    ON CONFLICT (signal_type, scope_key) DO UPDATE SET
+                        requested_watermark = GREATEST(
+                            storage_work_signals.requested_watermark + 1,
+                            :watermark
+                        ),
+                        status = CASE
+                            WHEN storage_work_signals.status = 'running' THEN 'running'
+                            ELSE 'pending'
+                        END,
+                        revision = storage_work_signals.revision + 1,
+                        updated_at = NOW()
+                    """
+                ),
+                {
+                    "signal_type": RETENTION_SIGNAL_TYPE,
+                    "scope_key": RETENTION_SIGNAL_SCOPE_KEY,
+                    "scope": RETENTION_SIGNAL_SCOPE_JSON,
+                    "watermark": int(finalized_row.id),
+                },
+            )
+    if finalized_row is None:
         return False
     log_event("info", "segment_finalized", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, size_bytes=stat.st_size, duration_sec=duration_sec)
     return True

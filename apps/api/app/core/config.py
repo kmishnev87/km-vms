@@ -41,7 +41,6 @@ class Settings(BaseSettings):
     automatic_retention_enabled: bool = True
     automatic_retention_interval_seconds: int = 3600
     automatic_retention_max_candidates: int = 25
-    automatic_retention_max_bytes: int = 1 * 1024 * 1024 * 1024
 
     model_config = SettingsConfigDict(
         env_file=".env",

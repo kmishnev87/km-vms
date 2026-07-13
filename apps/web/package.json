@@ -1,6 +1,6 @@
 {
   "name": "tnas-vms-web",
-  "version": "0.7.19",
+  "version": "0.7.20",
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
