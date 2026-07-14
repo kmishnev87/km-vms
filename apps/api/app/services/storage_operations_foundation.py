@@ -54,6 +54,11 @@ INTERRUPTED_RECOVERABLE_TYPES = frozenset(
         "manual_delete_all",
         "retention_auto_run",
         "retention_auto_free_space",
+        "integrity_scan",
+        "integrity_metadata_repair",
+        "integrity_catalog_retirement",
+        "integrity_recording_delete",
+        "orphan_file_cleanup",
     }
 )
 SIGNAL_STATUSES = frozenset({"idle", "pending", "running"})
@@ -822,6 +827,40 @@ def finish_operation(
     retry_mode: str | None = None,
     retry_allowed: bool = False,
 ) -> dict:
+    try:
+        now = stage_operation_terminal(
+            db,
+            handle,
+            status=status,
+            result=result,
+            progress=progress,
+            reason_code=reason_code,
+            next_action=next_action,
+            retry_mode=retry_mode,
+            retry_allowed=retry_allowed,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    row = db.get(StorageOperation, handle.operation_id)
+    ensure_operation_terminal_audit(db, row)
+    return public_operation_summary(row, now=now)
+
+
+def stage_operation_terminal(
+    db: Session,
+    handle: OperationHandle,
+    *,
+    status: str,
+    result: dict | None = None,
+    progress: dict | None = None,
+    reason_code: str | None = None,
+    next_action: str | None = None,
+    retry_mode: str | None = None,
+    retry_allowed: bool = False,
+) -> datetime:
+    """Stage a fenced terminal update in the caller's current transaction."""
     terminal = _code(status, field="terminal_status", max_length=32)
     if terminal not in TERMINAL_OPERATION_STATUSES:
         raise StorageOperationContractError("operation_terminal_status_required")
@@ -863,18 +902,33 @@ def finish_operation(
         .update(values, synchronize_session=False)
     )
     if updated != 1:
-        db.rollback()
         raise StorageOperationLeaseLost("storage_operation_lease_lost")
-    db.commit()
-    row = db.get(StorageOperation, handle.operation_id)
+    return now
+
+
+def ensure_operation_terminal_audit(db: Session, row: StorageOperation | None) -> None:
+    if row is None or row.status not in TERMINAL_OPERATION_STATUSES:
+        return
+    from app.models.audit_event import AuditEvent
+
+    exists = (
+        db.query(AuditEvent.id)
+        .filter(
+            AuditEvent.event_type == "storage_operation.finished",
+            AuditEvent.target_type == "storage_operation",
+            AuditEvent.target_id == str(row.id),
+        )
+        .first()
+    )
+    if exists is not None:
+        return
     _write_operation_audit(
         db,
         row,
         event_type="storage_operation.finished",
-        severity="info" if terminal == "completed" else "warning",
+        severity="info" if row.status == "completed" else "warning",
         metadata={"reason_code": row.reason_code, "retry_allowed": bool(row.retry_allowed)},
     )
-    return public_operation_summary(row, now=now)
 
 
 def public_operation_summary(row: StorageOperation, *, now: datetime) -> dict:

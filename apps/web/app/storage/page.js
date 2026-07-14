@@ -19,6 +19,10 @@ import {
   isStorageAccessDeniedError,
   actionPermissionState,
   accessRightsModel,
+  archiveIntegrityActionContract,
+  archiveIntegrityCategoryPresentations,
+  archiveIntegrityFindingPresentation,
+  archiveIntegrityScanModel,
   archiveRootCleanupCapabilityModel,
   archiveRootScenarioModel,
   freeSpaceTone,
@@ -114,6 +118,193 @@ function OperationRow({ title, status, tone = "neutral", description, meta = nul
       </div>
       {actions ? <div className="storageOpsOperationActions">{actions}</div> : null}
       {children ? <div className="storageOpsOperationDetails">{children}</div> : null}
+    </div>
+  );
+}
+
+function ArchiveIntegrityDialog({
+  open,
+  scan,
+  findings,
+  nextCursor,
+  busy,
+  error,
+  selectedFinding,
+  plan,
+  confirmed,
+  copy,
+  language,
+  permission,
+  onClose,
+  onStart,
+  onCancel,
+  onLoadMore,
+  onPrepare,
+  onClearPlan,
+  onConfirmChange,
+  onApply,
+}) {
+  const dialogRef = useRef(null);
+  const closeRef = useRef(null);
+  const scanModel = archiveIntegrityScanModel(scan || {}, permission);
+  const categories = archiveIntegrityCategoryPresentations(scan?.category_counts);
+  const findingRows = findings.map(archiveIntegrityFindingPresentation);
+  const selectedRow = selectedFinding ? archiveIntegrityFindingPresentation(selectedFinding) : null;
+  const actionContract = archiveIntegrityActionContract(selectedRow?.actionKey);
+  const resultState = plan && ["completed", "partial", "blocked", "failed", "cancelled"].includes(String(plan.state || ""))
+    ? String(plan.state)
+    : null;
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const timer = window.setTimeout(() => closeRef.current?.focus({ preventScroll: true }), 0);
+    return () => window.clearTimeout(timer);
+  }, [open]);
+
+  if (!open) return null;
+
+  function handleKeyDown(event) {
+    if (event.key === "Escape" && !busy) {
+      event.preventDefault();
+      onClose();
+    }
+  }
+
+  const checkedTime = scan?.finished_at || scan?.started_at || scan?.created_at;
+  const canShowFindings = ["completed", "partial"].includes(scanModel.status) && scanModel.found > 0;
+  const primaryStartLabel = scanModel.status === "not_run" ? copy.integrityCheckArchive : copy.integrityCheckAgain;
+  const resultTone = resultState === "completed" ? "ok" : resultState === "failed" ? "error" : "warning";
+
+  return (
+    <div className="storageIntegrityOverlay" role="presentation">
+      <section
+        ref={dialogRef}
+        className="storageIntegrityDialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="storage-integrity-dialog-title"
+        aria-busy={busy ? "true" : "false"}
+        tabIndex={-1}
+        onKeyDown={handleKeyDown}
+      >
+        <header className="storageIntegrityDialogHead">
+          <div>
+            <span className="storageIntegrityEyebrow">{copy.archiveProblems}</span>
+            <h2 id="storage-integrity-dialog-title">{copy.integrityModalTitle}</h2>
+          </div>
+          <button ref={closeRef} className="storageIntegrityClose" type="button" onClick={onClose} disabled={busy} aria-label={copy.close}>×</button>
+        </header>
+
+        <div className="storageIntegrityDialogBody">
+          <section className={`storageIntegrityState storageIntegrityState-${scanModel.tone}`}>
+            <div className="storageIntegrityStateHead">
+              <div>
+                <strong>{copy[scanModel.titleKey] || copy.integrityScanFailedTitle}</strong>
+                <p>{scanModel.stale ? copy.integrityScanStaleText : copy[scanModel.detailKey] || copy.integrityScanFailedText}</p>
+              </div>
+              {checkedTime ? <time dateTime={checkedTime}>{formatDateTime(checkedTime, language)}</time> : null}
+            </div>
+            {scanModel.running ? (
+              <>
+                <div className="storageIntegrityProgress" aria-label={copy.integrityProgress}>
+                  <span style={{ width: `${scanModel.percent}%` }} />
+                </div>
+                <div className="storageIntegrityProgressFacts">
+                  <span>{copy.integrityPhase}: {copy[scanModel.phaseKey] || copy.integrityPhaseChecking}</span>
+                  <span>{copy.integrityChecked}: {scanModel.checked}{scanModel.planned ? ` / ${scanModel.planned}` : ""}</span>
+                  <span>{copy.problems}: {scanModel.found}</span>
+                  {scanModel.failed ? <span>{copy.integrityFailedItems}: {scanModel.failed}</span> : null}
+                </div>
+              </>
+            ) : null}
+          </section>
+
+          {error ? <div className="storageIntegrityMessage storageIntegrityMessage-error" role="alert">{error}</div> : null}
+          {!permission.allowed ? <div className="storageIntegrityMessage storageIntegrityMessage-warning">{permission.reason}</div> : null}
+
+          {categories.length ? (
+            <section className="storageIntegrityCategories" aria-label={copy.integrityCategorySummaryTitle}>
+              {categories.map((item) => (
+                <span key={item.category}>{copy[item.labelKey] || copy.integrityCategoryUnknown}<strong>{item.count}</strong></span>
+              ))}
+            </section>
+          ) : null}
+
+          {canShowFindings ? (
+            <section className="storageIntegrityFindings">
+              <div className="storageIntegritySectionHead">
+                <h3>{copy.integrityFindingsTitle}</h3>
+                <span>{scanModel.found}</span>
+              </div>
+              <div className="storageIntegrityFindingList">
+                {findingRows.map((item, index) => (
+                  <article className={`storageIntegrityFinding storageIntegrityFinding-${item.tone}`} key={item.key || `${item.categoryKey}-${index}`}>
+                    <div className="storageIntegrityFindingHead">
+                      <strong>{copy[item.categoryKey] || copy.integrityCategoryUnknown}</strong>
+                      <span>{copy[item.impactKey] || copy.integrityImpactUnknown}</span>
+                    </div>
+                    <dl>
+                      {item.cameraName ? <div><dt>{copy.camera}</dt><dd>{item.cameraName}</dd></div> : null}
+                      {item.rootLabel ? <div><dt>{copy.integrityRootLabel}</dt><dd>{item.rootLabel}</dd></div> : null}
+                      {item.displayName ? <div><dt>{copy.integrityFileLabel}</dt><dd>{item.displayName}</dd></div> : null}
+                    </dl>
+                    <div className="storageIntegrityFindingAction">
+                      {item.actionAllowed && !item.stale ? (
+                        <button className="button secondary small" type="button" onClick={() => onPrepare(findings[index])} disabled={busy || scanModel.stale}>
+                          {copy[item.actionLabelKey]}
+                        </button>
+                      ) : (
+                        <span>{item.stale ? copy.integrityNoActionStale : copy[item.noActionLabelKey] || copy.integrityNoActionUnavailable}</span>
+                      )}
+                    </div>
+                  </article>
+                ))}
+              </div>
+              {nextCursor ? (
+                <button className="button secondary small storageIntegrityLoadMore" type="button" onClick={onLoadMore} disabled={busy}>
+                  {busy ? copy.loading : copy.integrityLoadMore}
+                </button>
+              ) : null}
+            </section>
+          ) : null}
+
+          {["completed", "partial"].includes(scanModel.status) && scanModel.found === 0 ? (
+            <div className="storageIntegrityClean">{copy.integrityNoFindings}</div>
+          ) : null}
+
+          {selectedRow && plan ? (
+            <section className={`storageIntegrityPlan storageIntegrityPlan-${resultTone}`}>
+              <div className="storageIntegritySectionHead">
+                <h3>{resultState ? copy.integrityResultTitle : copy.integrityConfirmationTitle}</h3>
+                <button type="button" className="storageIntegrityBack" onClick={onClearPlan} disabled={busy}>{copy.integrityBackToFindings}</button>
+              </div>
+              <strong>{copy[selectedRow.categoryKey] || copy.integrityCategoryUnknown}</strong>
+              <p>{resultState
+                ? copy[`integrityResult${resultState.charAt(0).toUpperCase()}${resultState.slice(1)}`] || copy.integrityResultFailed
+                : copy[actionContract.confirmationKey] || copy.integrityNoActionUnavailable}</p>
+              {!resultState ? (
+                <>
+                  <label className="storageIntegrityConfirm">
+                    <input type="checkbox" checked={confirmed} onChange={(event) => onConfirmChange(event.target.checked)} disabled={busy} />
+                    <span>{copy.integrityConfirmationAcknowledge}</span>
+                  </label>
+                  <button className={`button small ${actionContract.destructive ? "dangerButton" : ""}`} type="button" onClick={onApply} disabled={busy || !confirmed}>
+                    {busy ? copy.applying : copy.integrityApplyAction}
+                  </button>
+                </>
+              ) : (
+                <button className="button secondary small" type="button" onClick={onClearPlan}>{copy.integrityAcknowledgeResult}</button>
+              )}
+            </section>
+          ) : null}
+        </div>
+
+        <footer className="storageIntegrityDialogFooter">
+          {scanModel.canCancel ? <button className="button secondary small" type="button" onClick={onCancel} disabled={busy}>{copy.integrityCancelScan}</button> : null}
+          {scanModel.canStart ? <button className="button small" type="button" onClick={onStart} disabled={busy || !permission.allowed}>{busy ? copy.checking : primaryStartLabel}</button> : null}
+          <button className="button secondary small" type="button" onClick={onClose} disabled={busy}>{copy.close}</button>
+        </footer>
+      </section>
     </div>
   );
 }
@@ -224,16 +415,6 @@ function archiveRootCleanupReason(detail, copy) {
   return copy.archiveRootCleanupGenericProblem;
 }
 
-function reconciliationSummaryText(source, copy) {
-  if (!source) return copy.reconciliationNoPreview;
-  const normalized = normalizeReconciliationSummary(source);
-  return copy.reconciliationPreviewReady
-    .replace("{problems}", String(normalized.problemCount))
-    .replace("{safe}", String(normalized.safeFixCount))
-    .replace("{manual}", String(normalized.reviewOnlyCount || normalized.manualProblemCount))
-    .replace("{rows}", String(normalized.totalRows));
-}
-
 function healthReasonText(topHealth, recording, copy) {
   if (topHealth?.status === "availability_unconfirmed") return copy.healthReasonAvailability;
   if (topHealth?.status === "unknown") return copy.healthReasonUnknown;
@@ -305,10 +486,7 @@ function compactAccessLabel(accessRights, copy) {
 function integrityStatusText(scenario, normalized, copy) {
   if (scenario.status === "running") return copy.integrityRunning;
   if (scenario.status === "apply_completed") return copy.integrityFixed;
-  if (normalized.problemCount > 0) {
-    if (normalized.safeFixCount > 0) return copy.integrityProblemsSafe.replace("{count}", String(normalized.problemCount));
-    return copy.integrityProblemsManual.replace("{count}", String(normalized.problemCount));
-  }
+  if (normalized.problemCount > 0) return copy.archiveProblemsFound.replace("{count}", String(normalized.problemCount));
   if (scenario.status === "preview_completed") return copy.integrityNoProblems;
   return copy.integrityNotChecked;
 }
@@ -321,7 +499,9 @@ function retentionStatusText(scenario, copy) {
   return copy.retentionAutomaticStatus;
 }
 
-function archiveProblemsStatusText(normalized, copy) {
+function archiveProblemsStatusText(normalized, reconciliation, copy) {
+  if (reconciliation?.active) return copy.integrityRunning;
+  if (!["completed", "partial"].includes(String(reconciliation?.status || ""))) return copy.integrityNotChecked;
   const count = Number(normalized.problemCount || 0);
   if (!count) return copy.archiveProblemsNone;
   return copy.archiveProblemsFound.replace("{count}", String(count));
@@ -335,24 +515,6 @@ function archiveMigrationStatusText(scenario, archiveRoots, copy) {
   if (scenario.status === "apply_completed") return copy.applyCompleted;
   if (scenario.canApply) return copy.migrationPlanReadyStatus;
   return copy.migrationChooseTargetStatus;
-}
-
-function problemActionStatusText(item, copy) {
-  if (item?.safe_action_status === "future_safe_cleanup_possible") return copy.problemFutureCleanup;
-  if (item?.safe_action_status === "none") return copy.problemNoAction;
-  return copy.problemManualReview;
-}
-
-function problemCategoryLabel(item, language) {
-  if (language === "en") return item?.label_en || item?.label || item?.label_ru || "";
-  if (language === "zh-CN") return item?.label_zh_cn || item?.label || item?.label_ru || "";
-  return item?.label_ru || item?.label || "";
-}
-
-function problemCategoryReason(item, language) {
-  if (language === "en") return item?.reason_no_action_available_en || "";
-  if (language === "zh-CN") return item?.reason_no_action_available_zh_cn || "";
-  return item?.reason_no_action_available || "";
 }
 
 function migrationStatusText(scenario, archiveRoots, copy) {
@@ -500,10 +662,15 @@ export default function StorageOperationsPage() {
   const [migrationTargetRootId, setMigrationTargetRootId] = useState("");
   const [migrationPreviewState, setMigrationPreviewState] = useState(null);
   const [rootAction, setRootAction] = useState("");
-  const [reconciliationMessage, setReconciliationMessage] = useState("");
-  const [reconciliationPreview, setReconciliationPreview] = useState(null);
-  const [reconciliationResult, setReconciliationResult] = useState(null);
-  const [reconciliationConfirmed, setReconciliationConfirmed] = useState(false);
+  const [integrityDialogOpen, setIntegrityDialogOpen] = useState(false);
+  const [integrityScan, setIntegrityScan] = useState(null);
+  const [integrityFindings, setIntegrityFindings] = useState([]);
+  const [integrityNextCursor, setIntegrityNextCursor] = useState(null);
+  const [integrityBusy, setIntegrityBusy] = useState(false);
+  const [integrityError, setIntegrityError] = useState("");
+  const [integritySelectedFinding, setIntegritySelectedFinding] = useState(null);
+  const [integrityPlan, setIntegrityPlan] = useState(null);
+  const [integrityConfirmed, setIntegrityConfirmed] = useState(false);
   const [migrationMessage, setMigrationMessage] = useState("");
   const [migrationResult, setMigrationResult] = useState(null);
   const { currentUser, status: currentUserStatus } = useCurrentUser();
@@ -642,9 +809,6 @@ export default function StorageOperationsPage() {
           roots: currentArchiveRoot ? [currentArchiveRoot] : [],
         },
       ];
-  const problemDetails = reconciliation.problem_details || {};
-  const visibleProblemCategories = problemDetails.categories?.length ? problemDetails.categories : normalizedReconciliation.categories;
-  const visibleProblemSamples = problemDetails.samples || [];
   const manageSettingsPermission = actionPermissionState(currentUser, "manage_settings", language);
   const manageCamerasPermission = actionPermissionState(currentUser, "manage_cameras", language);
   const retentionPermission = actionPermissionState(currentUser, "delete_recordings", language);
@@ -657,12 +821,12 @@ export default function StorageOperationsPage() {
     running: rootAction.startsWith("retention-"),
   }, language);
   const reconciliationScenario = reconciliationScenarioModel({
-    preview: reconciliationPreview,
-    result: reconciliationResult,
+    preview: null,
+    result: null,
     reconciliation,
     canCheck: diagnosticsPermission,
     canApply: manageSettingsPermission,
-    running: rootAction.startsWith("reconciliation-"),
+    running: Boolean(reconciliation.active),
   }, language);
   const migrationScenario = migrationScenarioModel({
     preview: migrationPreview,
@@ -671,7 +835,15 @@ export default function StorageOperationsPage() {
     running: rootAction === "preview" || rootAction === "apply-migration",
   }, language);
   const retentionTone = operationTone(retentionScenario.status);
-  const reconciliationTone = operationTone(reconciliationScenario.status);
+  const reconciliationTone = !diagnosticsPermission.allowed
+    ? "neutral"
+    : reconciliation.active
+      ? "warning"
+      : normalizedReconciliation.problemCount > 0
+        ? "warning"
+        : reconciliation.status === "completed"
+          ? "ok"
+          : "unknown";
   const migrationTone = operationTone(migrationScenario.status);
   const currentArchivePath = archiveRootPath(currentArchiveRoot, archivePathText);
   const healthReason = healthReasonText(topHealth, recording, copy);
@@ -752,6 +924,46 @@ export default function StorageOperationsPage() {
     }, 2500);
     return () => window.clearTimeout(timer);
   }, [activationModel.status, archiveRootDialog?.activationOperationId]);
+
+  useEffect(() => {
+    const scanId = integrityScan?.scan_id;
+    const scanStatus = String(integrityScan?.status || "");
+    if (!integrityDialogOpen || !scanId || !["queued", "running", "cancel_requested", "interrupted"].includes(scanStatus)) {
+      return undefined;
+    }
+    let cancelled = false;
+    let polling = false;
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const next = await apiFetch(`/storage/integrity/scans/${encodeURIComponent(scanId)}`);
+        if (cancelled) return;
+        setIntegrityError("");
+        if (["completed", "partial"].includes(String(next.status || ""))) {
+          const page = await apiFetch(`/storage/integrity/scans/${encodeURIComponent(scanId)}/findings?limit=50`);
+          if (!cancelled) {
+            setIntegrityFindings(page.items || []);
+            setIntegrityNextCursor(page.next_cursor || null);
+            setIntegrityScan(next);
+            await loadStatus({ silent: true });
+          }
+        } else {
+          setIntegrityScan(next);
+        }
+      } catch (err) {
+        if (!cancelled) setIntegrityError(errorDetailText(err, copy.integrityLoadFailed, language));
+      } finally {
+        polling = false;
+      }
+    };
+    const timer = window.setInterval(poll, 1500);
+    poll();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [copy.integrityLoadFailed, integrityDialogOpen, integrityScan?.scan_id, integrityScan?.status, language, loadStatus]);
 
   function requestAutoFreeSpace(nextEnabled) {
     if (!manageSettingsPermission.allowed) {
@@ -1019,7 +1231,7 @@ export default function StorageOperationsPage() {
         label: copy.integrityCheckShort,
         onClick: () => {
           setArchiveRootDialog(null);
-          runReconciliationPreview();
+          openIntegrityDialog();
         },
       });
     }
@@ -1177,52 +1389,160 @@ export default function StorageOperationsPage() {
     setArchiveRootDialog(null);
   }
 
-  async function runReconciliationPreview() {
-    if (!diagnosticsPermission.allowed) {
-      setReconciliationMessage(diagnosticsPermission.reason);
-      return;
-    }
-    setRootAction("reconciliation-preview");
-    setReconciliationResult(null);
-    setReconciliationConfirmed(false);
-    setReconciliationMessage("");
+  async function loadIntegrityFindingPage(scanId, cursor = null, { append = false } = {}) {
+    if (!scanId) return;
+    const query = new URLSearchParams({ limit: "50" });
+    if (cursor) query.set("cursor", cursor);
+    const page = await apiFetch(`/storage/integrity/scans/${encodeURIComponent(scanId)}/findings?${query.toString()}`);
+    setIntegrityFindings((current) => append ? [...current, ...(page.items || [])] : (page.items || []));
+    setIntegrityNextCursor(page.next_cursor || null);
+  }
+
+  async function openIntegrityDialog() {
+    setIntegrityDialogOpen(true);
+    setIntegrityError("");
+    if (!diagnosticsPermission.allowed) return;
+    setIntegrityBusy(true);
     try {
-      const preview = await apiFetch("/storage/reconciliation/summary");
-      setReconciliationPreview(preview);
-      setReconciliationMessage(copy.reconciliationCheckCompleted);
+      const latest = await apiFetch("/storage/integrity/scans/latest");
+      setIntegrityScan(latest);
+      if (["completed", "partial"].includes(String(latest.status || "")) && latest.scan_id) {
+        await loadIntegrityFindingPage(latest.scan_id);
+      } else {
+        setIntegrityFindings([]);
+        setIntegrityNextCursor(null);
+      }
     } catch (err) {
-      setReconciliationMessage(errorDetailText(err, copy.previewFailed, language));
+      setIntegrityError(errorDetailText(err, copy.integrityLoadFailed, language));
     } finally {
-      setRootAction("");
+      setIntegrityBusy(false);
     }
   }
 
-  async function applyReconciliationSafe() {
-    if (!reconciliationPreview || !reconciliationConfirmed) return;
-    if (!manageSettingsPermission.allowed) {
-      setReconciliationMessage(manageSettingsPermission.reason);
+  async function startIntegrityScan() {
+    if (!diagnosticsPermission.allowed) {
+      setIntegrityError(diagnosticsPermission.reason);
       return;
     }
-    setRootAction("reconciliation-apply");
-    setReconciliationMessage("");
+    setIntegrityBusy(true);
+    setIntegrityError("");
+    setIntegrityFindings([]);
+    setIntegrityNextCursor(null);
+    setIntegritySelectedFinding(null);
+    setIntegrityPlan(null);
+    setIntegrityConfirmed(false);
     try {
-      const result = await apiFetch("/storage/reconcile", {
+      const next = await apiFetch("/storage/integrity/scans", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idempotency_key: newStorageOperationId("integrity-scan") }),
+      });
+      setIntegrityScan(next);
+      if (["completed", "partial"].includes(String(next.status || "")) && next.scan_id) {
+        await loadIntegrityFindingPage(next.scan_id);
+      }
+      await loadStatus({ silent: true });
+    } catch (err) {
+      setIntegrityError(errorDetailText(err, copy.integrityStartFailed, language));
+    } finally {
+      setIntegrityBusy(false);
+    }
+  }
+
+  async function cancelIntegrityScan() {
+    if (!integrityScan?.scan_id) return;
+    setIntegrityBusy(true);
+    setIntegrityError("");
+    try {
+      const next = await apiFetch(`/storage/integrity/scans/${encodeURIComponent(integrityScan.scan_id)}/cancel`, { method: "POST" });
+      setIntegrityScan(next);
+    } catch (err) {
+      setIntegrityError(errorDetailText(err, copy.integrityCancelFailed, language));
+    } finally {
+      setIntegrityBusy(false);
+    }
+  }
+
+  async function loadMoreIntegrityFindings() {
+    if (!integrityScan?.scan_id || !integrityNextCursor) return;
+    setIntegrityBusy(true);
+    setIntegrityError("");
+    try {
+      await loadIntegrityFindingPage(integrityScan.scan_id, integrityNextCursor, { append: true });
+    } catch (err) {
+      setIntegrityError(errorDetailText(err, copy.integrityLoadFailed, language));
+    } finally {
+      setIntegrityBusy(false);
+    }
+  }
+
+  async function prepareIntegrityAction(finding) {
+    const presentation = archiveIntegrityFindingPresentation(finding);
+    const contract = archiveIntegrityActionContract(presentation.actionKey);
+    if (!presentation.actionAllowed || !contract.planKind) return;
+    setIntegrityBusy(true);
+    setIntegrityError("");
+    setIntegritySelectedFinding(finding);
+    setIntegrityPlan(null);
+    setIntegrityConfirmed(false);
+    try {
+      const plan = await apiFetch(`/storage/integrity/findings/${encodeURIComponent(finding.finding_id)}/${contract.planKind}-plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mode: "apply_safe",
-          operation_id: newStorageOperationId("integrity-repair"),
+          action_key: presentation.actionKey,
+          idempotency_key: newStorageOperationId("integrity-plan"),
         }),
       });
-      setReconciliationResult(result);
-      setReconciliationPreview(null);
-      setReconciliationConfirmed(false);
-      setReconciliationMessage(copy.reconciliationApplyCompleted);
+      setIntegrityPlan(plan);
+    } catch (err) {
+      setIntegritySelectedFinding(null);
+      setIntegrityError(errorDetailText(err, copy.integrityPlanFailed, language));
+    } finally {
+      setIntegrityBusy(false);
+    }
+  }
+
+  async function applyIntegrityAction() {
+    if (!integrityPlan?.plan_id || !integrityConfirmed || !integritySelectedFinding) return;
+    const presentation = archiveIntegrityFindingPresentation(integritySelectedFinding);
+    const contract = archiveIntegrityActionContract(presentation.actionKey);
+    if (!contract.planKind) return;
+    setIntegrityBusy(true);
+    setIntegrityError("");
+    try {
+      const result = await apiFetch(`/storage/integrity/remediation-plans/${encodeURIComponent(integrityPlan.plan_id)}/apply-${contract.planKind}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirm: true,
+          operation_id: newStorageOperationId("integrity-apply"),
+        }),
+      });
+      setIntegrityPlan(result);
+      setIntegrityConfirmed(false);
+      const latest = await apiFetch("/storage/integrity/scans/latest");
+      setIntegrityScan(latest);
+      if (latest.scan_id) await loadIntegrityFindingPage(latest.scan_id);
       await loadStatus({ silent: true });
     } catch (err) {
-      setReconciliationMessage(errorDetailText(err, copy.applyBlocked, language));
+      setIntegrityError(errorDetailText(err, copy.integrityApplyFailed, language));
     } finally {
-      setRootAction("");
+      setIntegrityBusy(false);
+    }
+  }
+
+  async function clearIntegrityPlan() {
+    setIntegritySelectedFinding(null);
+    setIntegrityPlan(null);
+    setIntegrityConfirmed(false);
+    setIntegrityError("");
+    if (integrityScan?.scan_id && ["completed", "partial"].includes(String(integrityScan.status || ""))) {
+      try {
+        await loadIntegrityFindingPage(integrityScan.scan_id);
+      } catch (err) {
+        setIntegrityError(errorDetailText(err, copy.integrityLoadFailed, language));
+      }
     }
   }
 
@@ -1487,55 +1807,21 @@ export default function StorageOperationsPage() {
 
                   <OperationRow
                     title={copy.archiveProblems}
-                    status={archiveProblemsStatusText(normalizedReconciliation, copy)}
+                    status={archiveProblemsStatusText(normalizedReconciliation, reconciliation, copy)}
                     tone={reconciliationTone}
                     description={integrityPrimaryText}
                     meta={(
                       <div className="storageOpsOperationFacts">
                         <MiniFact label={copy.problems} value={String(normalizedReconciliation.problemCount || 0)} tone={normalizedReconciliation.problemCount ? "warning" : "ok"} />
-                        <MiniFact label={copy.safeFixes} value={String(normalizedReconciliation.safeFixCount || 0)} />
-                        <MiniFact label={copy.manualReview} value={String(normalizedReconciliation.reviewOnlyCount || normalizedReconciliation.manualProblemCount || 0)} />
+                        <MiniFact label={copy.integrityChecked} value={String(reconciliation.checked_count || 0)} />
+                        <MiniFact label={copy.integrityFailedItems} value={String(reconciliation.failed_count || 0)} tone={reconciliation.failed_count ? "warning" : "neutral"} />
                         <MiniFact label={copy.lastCheck} value={formatDateTime(reconciliation.last_checked_at, language)} />
                       </div>
                     )}
                     actions={(
-                      <button className="button secondary small" type="button" title={copy.reconciliationDryRun} onClick={runReconciliationPreview} disabled={!!rootAction || !reconciliationScenario.canCheck}>{rootAction === "reconciliation-preview" ? copy.checking : copy.integrityCheckShort}</button>
+                      <button className="button secondary small" type="button" title={copy.integrityOpenCheck} onClick={openIntegrityDialog} disabled={!!rootAction}>{copy.integrityOpenCheck}</button>
                     )}
-                  >
-                    {reconciliationMessage ? <div className="storageOpsNote storageOpsNoteStrong">{reconciliationMessage}</div> : null}
-                    {visibleProblemCategories.length ? (
-                      <div className="storageOpsProblemList">
-                        {visibleProblemCategories.map((item) => (
-                          <div key={item.code || item.label}>
-                            <strong>{problemCategoryLabel(item, language)}</strong>
-                            <span>{item.count}</span>
-                            <small>{problemActionStatusText(item, copy)}</small>
-                            {problemCategoryReason(item, language) ? <p>{problemCategoryReason(item, language)}</p> : null}
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                    {visibleProblemSamples.length ? (
-                      <div className="storageOpsNote">{copy.problemSamples}: {visibleProblemSamples.map((item) => item.sample_name || item.category).filter(Boolean).slice(0, 4).join(", ")}</div>
-                    ) : null}
-                    <details className="storageOpsInlineDetails">
-                      <summary>{copy.supportDetails}</summary>
-                      <label className="storageOpsConfirm">
-                        <input type="checkbox" checked={reconciliationConfirmed} onChange={(event) => setReconciliationConfirmed(event.target.checked)} disabled={!reconciliationScenario.canApply || !!rootAction} />
-                        <span>{copy.reconciliationConfirm}</span>
-                      </label>
-                      <button className="button small" type="button" title={copy.reconciliationApply} onClick={applyReconciliationSafe} disabled={!reconciliationScenario.canApply || !reconciliationConfirmed || !!rootAction}>{rootAction === "reconciliation-apply" ? copy.applying : copy.integrityFixShort}</button>
-                      {reconciliationScenario.noAutoFixReason ? <div className="storageOpsNote storageOpsNoteStrong">{copy.reconciliationNoAutoFixes}</div> : null}
-                      {reconciliationScenario.categories?.length ? (
-                        <div className="storageOpsNote">
-                          {copy.reconciliationCategories}: {reconciliationScenario.categories.map((item) => `${item.label}: ${item.count}`).join(", ")}
-                        </div>
-                      ) : null}
-                      {!diagnosticsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{diagnosticsPermission.reason}</div> : null}
-                      {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{reconciliationScenario.applyPermissionReason}</div> : null}
-                      <div className="storageOpsNote">{copy.integrityNote}</div>
-                    </details>
-                  </OperationRow>
+                  />
 
                   <OperationRow
                     title={copy.archiveMigration}
@@ -1741,6 +2027,28 @@ export default function StorageOperationsPage() {
 
           </>
         )}
+        <ArchiveIntegrityDialog
+          open={integrityDialogOpen}
+          scan={integrityScan}
+          findings={integrityFindings}
+          nextCursor={integrityNextCursor}
+          busy={integrityBusy}
+          error={integrityError}
+          selectedFinding={integritySelectedFinding}
+          plan={integrityPlan}
+          confirmed={integrityConfirmed}
+          copy={copy}
+          language={language}
+          permission={diagnosticsPermission}
+          onClose={() => setIntegrityDialogOpen(false)}
+          onStart={startIntegrityScan}
+          onCancel={cancelIntegrityScan}
+          onLoadMore={loadMoreIntegrityFindings}
+          onPrepare={prepareIntegrityAction}
+          onClearPlan={clearIntegrityPlan}
+          onConfirmChange={setIntegrityConfirmed}
+          onApply={applyIntegrityAction}
+        />
         <OperationDialog dialog={archiveRootDialog} onClose={closeArchiveRootDialog} />
         <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
       </div>

@@ -7,6 +7,14 @@ from app.models.system_settings import SystemSettings
 from app.models.audit_event import AuditEvent
 from app.models.workspace_layout import UserWorkspaceLayout
 from app.models.storage_operation import StorageOperation, StorageWorkerLease, StorageWorkSignal
+from app.models.archive_integrity import (
+    ArchiveIntegrityDirectoryWork,
+    ArchiveIntegrityFinding,
+    ArchiveIntegrityRemediationItem,
+    ArchiveIntegrityRemediationPlan,
+    ArchiveIntegrityScan,
+    RecorderFileReceipt,
+)
 
 __all__ = [
     "User",
@@ -24,4 +32,10 @@ __all__ = [
     "StorageOperation",
     "StorageWorkerLease",
     "StorageWorkSignal",
+    "ArchiveIntegrityScan",
+    "ArchiveIntegrityFinding",
+    "ArchiveIntegrityDirectoryWork",
+    "RecorderFileReceipt",
+    "ArchiveIntegrityRemediationPlan",
+    "ArchiveIntegrityRemediationItem",
 ]

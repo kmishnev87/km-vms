@@ -304,6 +304,7 @@ def validate_segment_for_deletion(
     active_job_ids: set[str],
     require_file: bool = True,
     block_active_job: bool = False,
+    allowed_integrity_statuses: set[str] | frozenset[str] | None = None,
 ) -> tuple[bool, str, Path | None, int]:
     if segment.ownership != OWNERSHIP_KM_VMS:
         return False, "unowned", None, 0
@@ -315,7 +316,8 @@ def validate_segment_for_deletion(
         return False, "active_job", None, 0
     if segment.status != SEGMENT_STATUS_FINALIZED:
         return False, "not_finalized", None, 0
-    if segment.integrity_status in PROBLEM_INTEGRITY_STATUSES:
+    allowed_integrity = set(allowed_integrity_statuses or ())
+    if segment.integrity_status in PROBLEM_INTEGRITY_STATUSES and segment.integrity_status not in allowed_integrity:
         return False, "integrity_problem", None, 0
 
     rel_path, file_path, path_error = _safe_rel(segment)
@@ -686,6 +688,7 @@ def execute_segments(
     expected_identities: dict[int, dict] | None = None,
     outer_operation_handle: StorageOperationHandle | None = None,
     manage_outer_operation: bool = True,
+    allowed_integrity_statuses: set[str] | frozenset[str] | None = None,
 ) -> dict:
     if policy not in {
         EXECUTION_POLICY_AUTOMATIC_BOUNDED,
@@ -765,6 +768,7 @@ def execute_segments(
                 expected_identities=expected_identities,
                 outer_operation_handle=managed_handle,
                 manage_outer_operation=False,
+                allowed_integrity_statuses=allowed_integrity_statuses,
             )
             managed_lifecycle.finish_result(
                 finished,
@@ -826,6 +830,7 @@ def execute_segments(
                             operation_heartbeat=lambda: combined_heartbeat(heartbeat.progress),
                             operation_owner_token=operation_owner_token,
                             expected_identities=expected_identities,
+                            allowed_integrity_statuses=allowed_integrity_statuses,
                         )
                 return _execute_segments_with_lease(
                     db,
@@ -844,6 +849,7 @@ def execute_segments(
                     operation_heartbeat=lambda: combined_heartbeat(operation_heartbeat),
                     operation_owner_token=None,
                     expected_identities=expected_identities,
+                    allowed_integrity_statuses=allowed_integrity_statuses,
                 )
         except DestructiveScopeConflict as exc:
             _add_item(
@@ -876,6 +882,7 @@ def execute_segments(
         operation_heartbeat=lambda: combined_heartbeat(operation_heartbeat),
         operation_owner_token=operation_owner_token,
         expected_identities=expected_identities,
+        allowed_integrity_statuses=allowed_integrity_statuses,
     )
 
 
@@ -897,6 +904,7 @@ def _execute_segments_with_lease(
     operation_heartbeat: Callable[[], None] | None,
     operation_owner_token: str | None,
     expected_identities: dict[int, dict] | None,
+    allowed_integrity_statuses: set[str] | frozenset[str] | None,
 ) -> dict:
     if policy == EXECUTION_POLICY_AUTOMATIC_BOUNDED:
         max_candidates = min(int(max_candidates or DEFAULT_MAX_CANDIDATES), HARD_MAX_CANDIDATES)
@@ -934,6 +942,7 @@ def _execute_segments_with_lease(
             segment,
             active_job_ids=active_job_ids,
             block_active_job=operation.startswith("camera_delete"),
+            allowed_integrity_statuses=allowed_integrity_statuses,
         )
         if not ok or file_path is None:
             _add_item(result, _item(segment, action="skipped", reason=item_reason, size_bytes=size))
@@ -994,6 +1003,7 @@ def _execute_segments_with_lease(
                         fresh,
                         active_job_ids=active_job_ids,
                         block_active_job=operation.startswith("camera_delete"),
+                        allowed_integrity_statuses=allowed_integrity_statuses,
                     )
                     if not ok or file_path is None:
                         _add_item(result, _item(fresh, action="skipped", reason=final_reason, size_bytes=final_size))

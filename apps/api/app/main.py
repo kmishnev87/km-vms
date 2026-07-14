@@ -23,6 +23,7 @@ from app.routers.settings import router as settings_router
 from app.routers.storage import router as storage_router
 from app.routers.users import router as users_router
 from app.services.automatic_retention import start_automatic_retention_worker, stop_automatic_retention_worker
+from app.services.archive_integrity import start_archive_integrity_worker, stop_archive_integrity_worker
 from app.services.archive_root_activation import start_archive_root_activation_closeout_worker
 from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration, ensure_system_settings
 from app.services.recording_storage import ensure_archive_roots, migrate_archive_root_identities, write_archive_roots_runtime_files
@@ -83,11 +84,13 @@ def startup():
     refresh_hardware_capabilities()
     start_archive_root_activation_closeout_worker()
     start_automatic_retention_worker()
+    start_archive_integrity_worker()
     start_cleanup_worker()
 
 
 @app.on_event("shutdown")
 def shutdown():
+    stop_archive_integrity_worker()
     stop_automatic_retention_worker()
     stop_cleanup_worker()
     stop_all_streams()

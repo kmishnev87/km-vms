@@ -11,6 +11,14 @@ from sqlalchemy.orm import Session
 from app.core.version import APP_BUILD_VERSION, APP_VERSION
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
 from app.models.storage_operation import StorageOperation, StorageWorkerLease, StorageWorkSignal
+from app.models.archive_integrity import (
+    ArchiveIntegrityDirectoryWork,
+    ArchiveIntegrityFinding,
+    ArchiveIntegrityRemediationItem,
+    ArchiveIntegrityRemediationPlan,
+    ArchiveIntegrityScan,
+    RecorderFileReceipt,
+)
 from app.services.backup_before_upgrade import backup_precondition_status
 from app.services.schema_versioning import (
     CURRENT_BASELINE_ID,
@@ -323,11 +331,117 @@ STAGE4102_RETENTION_MIGRATION = MigrationDefinition(
 )
 
 
+STAGE4103_TABLES = (
+    ArchiveIntegrityScan.__table__,
+    ArchiveIntegrityFinding.__table__,
+    ArchiveIntegrityDirectoryWork.__table__,
+    RecorderFileReceipt.__table__,
+    ArchiveIntegrityRemediationPlan.__table__,
+    ArchiveIntegrityRemediationItem.__table__,
+)
+
+STAGE4103_REQUIRED_INDEXES = {
+    "recording_segments": {
+        "ix_recording_segments_root_relative_id",
+    },
+    ArchiveIntegrityScan.__tablename__: {
+        "ix_archive_integrity_scans_status_created",
+        "ix_archive_integrity_scans_finished_id",
+    },
+    ArchiveIntegrityFinding.__tablename__: {
+        "uq_archive_integrity_active_metadata_finding",
+        "uq_archive_integrity_active_file_finding",
+        "ix_archive_integrity_findings_scan_id",
+        "ix_archive_integrity_findings_scan_category_id",
+        "ix_archive_integrity_findings_scan_root_id",
+        "ix_archive_integrity_findings_scan_camera_id",
+    },
+    ArchiveIntegrityDirectoryWork.__tablename__: {
+        "ix_archive_integrity_directory_queue",
+        "ix_archive_integrity_directory_lease",
+    },
+    RecorderFileReceipt.__tablename__: {
+        "ix_recorder_file_receipts_root_relative",
+        "ix_recorder_file_receipts_root_object",
+    },
+    ArchiveIntegrityRemediationPlan.__tablename__: {
+        "ix_archive_integrity_plans_scan_state",
+        "ix_archive_integrity_plans_operation",
+        "ix_archive_integrity_plans_apply_operation",
+    },
+    ArchiveIntegrityRemediationItem.__tablename__: {
+        "ix_archive_integrity_items_plan_state",
+        "ix_archive_integrity_items_root_object",
+    },
+}
+
+
+def _stage4103_integrity_preflight(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    existing = sorted(table.name for table in STAGE4103_TABLES if inspector.has_table(table.name))
+    if not inspector.has_table("recording_segments"):
+        raise RuntimeError("stage4103_recording_segments_table_missing")
+    return {
+        "status": "ready",
+        "existing_table_count": len(existing),
+        "required_table_count": len(STAGE4103_TABLES),
+    }
+
+
+def _stage4103_integrity_apply(db: Session) -> dict[str, Any]:
+    bind = db.connection()
+    for table in STAGE4103_TABLES:
+        table.create(bind=bind, checkfirst=True)
+    db.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_recording_segments_root_relative_id "
+            "ON recording_segments (archive_root_id, relative_path, id)"
+        )
+    )
+    return {"created_or_verified_table_count": len(STAGE4103_TABLES)}
+
+
+def _stage4103_integrity_verify(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    missing_tables = sorted(table.name for table in STAGE4103_TABLES if not inspector.has_table(table.name))
+    if missing_tables:
+        raise RuntimeError("stage4103_integrity_tables_missing")
+    missing_indexes: dict[str, list[str]] = {}
+    for table_name, required in STAGE4103_REQUIRED_INDEXES.items():
+        actual = {str(item.get("name") or "") for item in inspector.get_indexes(table_name)}
+        missing = sorted(required - actual)
+        if missing:
+            missing_indexes[table_name] = missing
+    if missing_indexes:
+        raise RuntimeError("stage4103_integrity_indexes_missing")
+    return {
+        "status": "verified",
+        "table_drift": False,
+        "index_drift": False,
+    }
+
+
+STAGE4103_ARCHIVE_INTEGRITY_MIGRATION = MigrationDefinition(
+    migration_id="stage13_5_4_10_3_archive_integrity_v5",
+    from_version=4,
+    to_version=5,
+    description="Add durable archive-integrity scans, findings, provenance and remediation plans.",
+    risk=RISK_ADDITIVE_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage4103_integrity_preflight,
+    apply=_stage4103_integrity_apply,
+    verify=_stage4103_integrity_verify,
+    safe_failure_summary="Archive-integrity schema migration failed safely.",
+    rollback_note="Additive integrity tables and indexes are retained; destructive automatic downgrade is not supported.",
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
         STAGE41011_OPERATION_LINEAGE_MIGRATION,
         STAGE4102_RETENTION_MIGRATION,
+        STAGE4103_ARCHIVE_INTEGRITY_MIGRATION,
     )
 )
 

@@ -56,6 +56,12 @@ for (const expected of [
   ["POST", "/storage/reconcile"],
   ["POST", "/recordings/retention/dry-run"],
   ["POST", "/recordings/retention/run"],
+  ["POST", "/storage/integrity/scans"],
+  ["GET", "/storage/integrity/scans/{scan_id}/findings"],
+  ["POST", "/storage/integrity/findings/{finding_id}/metadata-plan"],
+  ["POST", "/storage/integrity/findings/{finding_id}/deletion-plan"],
+  ["POST", "/storage/integrity/remediation-plans/{plan_id}/apply-metadata"],
+  ["POST", "/storage/integrity/remediation-plans/{plan_id}/apply-deletion"],
 ]) {
   assert.ok(
     endpoints.some((item) => item.method === expected[0] && item.path === expected[1]),
@@ -63,8 +69,8 @@ for (const expected of [
   );
 }
 
-assert.match(storagePage, /retentionScenario\.canPreview/, "retention preview is permission-gated before click");
-assert.match(storagePage, /retentionScenario\.canApply/, "retention apply is permission-gated before click");
-assert.match(storagePage, /reconciliationScenario\.canCheck/, "reconciliation check is permission-gated before click");
+assert.match(storagePage, /const diagnosticsPermission = actionPermissionState\(currentUser, "run_diagnostics", language\)/, "integrity diagnostics permission is resolved before rendering");
+assert.match(storagePage, /permission=\{diagnosticsPermission\}/, "integrity dialog receives the diagnostics permission gate");
+assert.match(storagePage, /!retentionPermission\.allowed/, "destructive storage actions remain permission-gated before click");
 assert.match(storagePage, /migrationScenario\.canApply/, "migration apply is permission-gated before click");
 assert.match(storagePage, /manageSettingsPermission\.reason/, "manage-settings missing permission reason remains visible");

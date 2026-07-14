@@ -87,6 +87,7 @@ from app.services.storage_operations_foundation import (
     release_worker_lease,
     renew_worker_lease,
     request_operation_cancel,
+    stage_operation_terminal,
     work_signal_scope_key,
 )
 
@@ -224,8 +225,8 @@ def test_lightweight_status_is_read_only_and_does_not_call_heavy_paths(stage4101
     assert "migration_preview" not in first
     assert "migration_preview" not in first["storage_operations"]
     assert first["namespace_observations"] is None
-    assert first["reconciliation_summary"]["evidence_status"] in {"missing", "metadata_only"}
-    assert first["reconciliation_summary"]["status"] == "unknown"
+    assert first["reconciliation_summary"]["evidence_status"] == "not_checked"
+    assert first["reconciliation_summary"]["status"] == "not_run"
     assert second["owned_archive"]["kmvms_owned_segments_count"] == 1
 
 
@@ -300,6 +301,34 @@ def test_active_recording_is_not_a_storage_or_migration_warning(stage4101):
     assert summary["status"] == "available"
     assert "migration_preview" not in summary
     assert not any("migration" in str(item).lower() for item in summary.get("warnings") or [])
+
+
+def test_staged_terminal_update_obeys_caller_transaction_boundary(stage4101):
+    db = stage4101["db"]
+    claimed = claim_operation(
+        db,
+        operation_type="retention_run",
+        scope=_scope(),
+        request_identity={"request": "staged-terminal"},
+        actor=stage4101["owner"],
+        operation_id="stage4101-staged-terminal",
+        idempotency_key="stage4101-staged-terminal",
+        owner_instance_id="stage4101-staged-terminal-worker",
+    )
+    handle = claimed["handle"]
+    stage_operation_terminal(
+        db,
+        handle,
+        status="completed",
+        result={"status": "completed", "updated_count": 1},
+    )
+    db.rollback()
+    db.expire_all()
+    assert db.get(StorageOperation, handle.operation_id).status == "running"
+    assert db.query(AuditEvent).filter(
+        AuditEvent.event_type == "storage_operation.finished",
+        AuditEvent.target_id == handle.operation_id,
+    ).count() == 0
 
 
 def test_operation_create_claim_heartbeat_cancel_finish_and_restart(stage4101):
@@ -795,10 +824,12 @@ def test_common_conflict_model_uses_active_recorder_write_guards(stage4101):
     db.commit()
     guard = active_recorder_write_guard(db)
     exact_other = normalize_operation_scope(_scope(root=root.id, camera=camera.id, segment=999, volume=None))
+    exact_current = normalize_operation_scope(_scope(root=root.id, camera=camera.id, segment=writing.id, volume=None))
     camera_scope = normalize_operation_scope(_scope(root=root.id, camera=camera.id, segment=None, volume=None))
     root_scope = normalize_operation_scope(_scope(root=root.id, camera=None, segment=None, volume=None))
 
     assert active_write_conflict("manual_single_delete", exact_other, guard) is None
+    assert active_write_conflict("integrity_metadata_repair", exact_current, guard)["conflict_scope"] == "segment"
     assert active_write_conflict("manual_delete_by_camera", camera_scope, guard) is None
     assert active_write_conflict("camera_delete_with_files", camera_scope, guard)["conflict_scope"] == "camera"
     assert active_write_conflict("archive_root_delete", root_scope, guard)["conflict_scope"] == "archive_root"

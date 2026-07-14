@@ -654,6 +654,7 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
     retention = retention_runtime_status(db)
     auto_cleanup = auto_free_runtime_status(db, policy=policy)
     reconciliation = summary.get("reconciliation_summary") or {}
+    reconciliation_categories = dict(reconciliation.get("category_counts") or {})
     cleanup = summary.get("cleanup_candidates_summary") or {}
     namespace = summary.get("namespace_observations") or {}
     durable_operations = summary.get("operation_summaries") or {
@@ -784,15 +785,15 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             "last_summary": retention_last,
         },
         "reconciliation": {
-            "status": (
-                "problems_found"
-                if int(reconciliation.get("problem_file_count") or 0) > 0
-                else "ok"
-                if reconciliation.get("evidence_status") == "fresh"
-                else "unknown"
-            ),
+            "status": reconciliation.get("status") or "not_run",
             "evidence_status": reconciliation.get("evidence_status") or "missing",
             "source": reconciliation.get("source"),
+            "scan_id": reconciliation.get("scan_id"),
+            "active": bool(reconciliation.get("active")),
+            "phase": reconciliation.get("phase"),
+            "checked_count": int(reconciliation.get("checked_count") or 0),
+            "failed_count": int(reconciliation.get("failed_count") or 0),
+            "category_counts": reconciliation_categories,
             "missing_file_count": int(reconciliation.get("missing_file_count") or 0),
             "root_unavailable_count": int(reconciliation.get("root_unavailable_count") or 0),
             "active_root_write_problem_count": int(reconciliation.get("active_root_write_problem_count") or 0),
@@ -806,13 +807,15 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
             "path_outside_storage_count": int(reconciliation.get("path_outside_storage_count") or 0),
             "foreign_unknown_count": int(reconciliation.get("foreign_unknown_count") or 0),
             "problem_file_count": int(
-                sum(int(reconciliation.get(key) or 0) for key in ("missing_file_count", "root_unavailable_count", "active_root_write_problem_count", "root_unresolved_count", "orphan_file_count", "invalid_path_count", "path_outside_storage_count"))
+                reconciliation.get("problem_file_count")
+                if reconciliation.get("problem_file_count") is not None
+                else sum(reconciliation_categories.values())
             ),
             "cleanup_candidate_count": int(cleanup.get("count") or 0),
             "cleanup_review_only": True,
             "problem_details": reconciliation.get("problem_details") or {},
             "scan_limited": bool(summary.get("scan_limited")),
-            "partial": bool(summary.get("partial")),
+            "partial": reconciliation.get("status") == "partial" or bool(summary.get("partial")),
             "last_checked_at": reconciliation.get("last_checked_at"),
         },
         "recent_operations": {
@@ -1279,6 +1282,8 @@ def _metadata_usage_aggregates(db: Session, cameras: dict[int, Camera]) -> dict:
 
 
 def build_lightweight_storage_monitoring_summary(db: Session) -> dict:
+    from app.services.archive_integrity import latest_integrity_summary_for_status
+
     checked_at = _utc_now()
     root_rows = (
         db.query(ArchiveRoot)
@@ -1331,34 +1336,47 @@ def build_lightweight_storage_monitoring_summary(db: Session) -> dict:
         path_checks.get("last_error"),
     )
     problem_totals = metadata["problem_totals"]
+    durable_integrity = latest_integrity_summary_for_status(db)
+    durable_counts = dict(durable_integrity.get("category_counts") or {})
     root_access_problem_count = sum(int(item.get("root_access_problem_count") or 0) for item in archive_roots)
     active_root_write_problem_count = sum(
         1 for item in archive_roots if item.get("is_active") and item.get("write_access_state") != "available"
     )
-    known_problem_count = int(sum(problem_totals.values())) + root_access_problem_count + active_root_write_problem_count
+    known_problem_count = int(durable_integrity.get("problem_count") or 0) + active_root_write_problem_count
     path_available = bool(path_checks["path_exists"] and path_checks["is_dir"])
     status = "unavailable" if not path_available else "degraded" if capacity_error or known_problem_count else "available"
-    last_checked = metadata.get("last_reconciliation_at")
-    evidence_status = "metadata_only" if last_checked else "missing"
+    evidence_status = str(durable_integrity.get("evidence_status") or "not_checked")
+    last_checked = durable_integrity.get("last_checked_at")
     reconciliation_summary = {
-        "status": "problems_found" if known_problem_count else "unknown",
+        "status": durable_integrity.get("status") or "not_run",
         "evidence_status": evidence_status,
-        "source": "recording_segment_reconciliation_metadata",
-        "last_checked_at": last_checked.isoformat() + "Z" if isinstance(last_checked, datetime) else None,
-        "missing_file_count": int(problem_totals.get("missing_file") or 0),
-        "root_unavailable_count": root_access_problem_count,
+        "source": "durable_archive_integrity_scan",
+        "scan_id": durable_integrity.get("scan_id"),
+        "active": bool(durable_integrity.get("active")),
+        "phase": durable_integrity.get("phase"),
+        "checked_count": int(durable_integrity.get("checked_count") or 0),
+        "failed_count": int(durable_integrity.get("failed_count") or 0),
+        "last_checked_at": last_checked,
+        "missing_file_count": int(durable_counts.get("missing_file") or 0),
+        "root_unavailable_count": int(durable_counts.get("storage_unavailable") or 0),
         "active_root_write_problem_count": active_root_write_problem_count,
-        "root_unresolved_count": int(problem_totals.get("root_unresolved") or 0),
-        "invalid_path_count": int(problem_totals.get("invalid_path") or 0),
-        "path_outside_storage_count": int(problem_totals.get("path_outside_storage") or 0),
-        "orphan_file_count": None,
-        "foreign_unknown_count": None,
+        "root_unresolved_count": int(durable_counts.get("root_unresolved") or 0),
+        "invalid_path_count": int(durable_counts.get("invalid_path") or 0),
+        "path_outside_storage_count": int(durable_counts.get("path_outside_storage") or 0),
+        "orphan_file_count": int(durable_counts.get("orphan_file") or 0),
+        "foreign_unknown_count": int(
+            sum(
+                int(durable_counts.get(key) or 0)
+                for key in ("foreign_file", "unknown_file", "legacy_archive_file", "pre_metadata_km_vms_file")
+            )
+        ),
         "problem_file_count": known_problem_count,
+        "category_counts": durable_counts,
         "problem_details": {
             "evidence_status": evidence_status,
             "categories": [
                 {"reason": str(reason), "count": int(count)}
-                for reason, count in sorted(problem_totals.items())
+                for reason, count in sorted(durable_counts.items())
                 if int(count) > 0
             ][:MAX_SAMPLE_ITEMS],
             "samples": [],
@@ -1379,8 +1397,8 @@ def build_lightweight_storage_monitoring_summary(db: Session) -> dict:
         "storage_namespace": KMVMS_RECORDINGS_NAMESPACE,
         "scan_mode": "not_run_recurring_status",
         "scan_limited": False,
-        "partial": evidence_status != "fresh",
-        "partial_reason": "explicit_reconciliation_required",
+        "partial": evidence_status not in {"completed", "running"},
+        "partial_reason": "explicit_integrity_scan_required" if evidence_status in {"not_checked", "stale"} else None,
         "warnings": ["storage_metadata_problems_present"] if known_problem_count else [],
         "errors": ["storage_capacity_probe_failed"] if capacity_error else [],
         "capacity": capacity,

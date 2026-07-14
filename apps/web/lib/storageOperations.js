@@ -124,6 +124,11 @@ const RECENT_OPERATION_TYPE_KEYS = Object.freeze({
   manual_bulk_delete: "recentOperationBulkDelete",
   manual_single_delete: "recentOperationSingleDelete",
   integrity_metadata_repair: "recentOperationIntegrityRepair",
+  integrity_catalog_retirement: "recentOperationIntegrityRetirement",
+  integrity_recording_delete: "recentOperationIntegrityRecordingDelete",
+  integrity_scan: "recentOperationIntegrityScan",
+  integrity_plan_prepare: "recentOperationIntegrityPlan",
+  orphan_file_cleanup: "recentOperationOrphanCleanup",
   archive_migration_apply: "recentOperationMigration",
 });
 
@@ -146,6 +151,8 @@ const RECENT_OPERATION_NEXT_ACTION_KEYS = Object.freeze({
   retry_operation: "recentOperationNextRetry",
   review_and_confirm_auto_free_terms: "recentOperationNextConfirmAutoFree",
   review_storage_problems: "recentOperationNextReviewProblems",
+  create_new_integrity_scan: "recentOperationNextNewIntegrityScan",
+  retry_remediation: "recentOperationNextRetryRemediation",
 });
 
 const DELETION_OPERATION_TYPES = new Set([
@@ -455,6 +462,7 @@ export function normalizeReconciliationSummary(source = {}, language = "ru") {
   const counts = {
     ...(source?.counts || {}),
     ...(source?.classification_counts || {}),
+    ...(source?.category_counts || {}),
   };
   if (!Object.keys(counts).length) {
     if (source?.missing_file_count != null) counts.missing_file = Number(source.missing_file_count || 0);
@@ -497,6 +505,162 @@ export function normalizeReconciliationSummary(source = {}, language = "ru") {
     canApplySafe: Boolean((safeFixCount || safeProblemCount) > 0),
     hasReviewOnly: reviewOnlyCount > 0 || manualProblemCount > 0,
   };
+}
+
+const ARCHIVE_INTEGRITY_CATEGORY_KEYS = Object.freeze({
+  missing_file: "integrityCategoryMissing",
+  zero_size_file: "integrityCategoryZeroSize",
+  corrupted_file: "integrityCategoryCorrupted",
+  stale_writing_segment: "integrityCategoryStaleWriting",
+  partial_file: "integrityCategoryActivePartial",
+  orphan_file: "integrityCategoryProvenOrphan",
+  pre_metadata_km_vms_file: "integrityCategoryLegacyUnproven",
+  legacy_archive_file: "integrityCategoryLegacyUnproven",
+  foreign_file: "integrityCategoryForeign",
+  unknown_file: "integrityCategoryUnknownFile",
+  invalid_path: "integrityCategoryInvalidPath",
+  path_outside_storage: "integrityCategoryOutsideStorage",
+  unreadable_file: "integrityCategoryUnreadable",
+  storage_unavailable: "integrityCategoryStorageUnavailable",
+  root_unresolved: "integrityCategoryRootUnresolved",
+  probe_unavailable: "integrityCategoryProbeUnavailable",
+  ownership_untrusted: "integrityCategoryOwnershipUntrusted",
+});
+
+const ARCHIVE_INTEGRITY_IMPACT_KEYS = Object.freeze({
+  recording_unavailable: "integrityImpactRecordingUnavailable",
+  recording_unplayable: "integrityImpactRecordingUnplayable",
+  recording_in_progress: "integrityImpactRecordingInProgress",
+  recording_incomplete: "integrityImpactRecordingIncomplete",
+  unindexed_storage_usage: "integrityImpactUnindexedSpace",
+  outside_product_ownership: "integrityImpactOutsideOwnership",
+  ownership_unknown: "integrityImpactOwnershipUnknown",
+  archive_root_unavailable: "integrityImpactRootUnavailable",
+  recording_location_unknown: "integrityImpactLocationUnknown",
+  integrity_not_fully_checked: "integrityImpactNotFullyChecked",
+});
+
+const ARCHIVE_INTEGRITY_ACTION_KEYS = Object.freeze({
+  retire_missing_recording: "integrityActionRetireMissing",
+  mark_stale_recording: "integrityActionMarkStale",
+  delete_unusable_recording: "integrityActionDeleteUnusable",
+  delete_proven_orphan: "integrityActionDeleteOrphan",
+});
+
+const ARCHIVE_INTEGRITY_NO_ACTION_KEYS = Object.freeze({
+  orphan_observation_grace_required: "integrityNoActionOrphanGrace",
+  wait_for_recording_completion: "integrityNoActionRecordingActive",
+  incomplete_recording_review_required: "integrityNoActionIncompleteReview",
+  legacy_file_review_required: "integrityNoActionLegacyReview",
+  foreign_file_not_managed: "integrityNoActionForeign",
+  unknown_file_review_required: "integrityNoActionOwnershipUnknown",
+  contact_support_with_diagnostics: "integrityNoActionSupport",
+  restore_archive_access: "integrityNoActionRestoreAccess",
+  restore_archive_root_mapping: "integrityNoActionRestoreMapping",
+  retry_integrity_check: "integrityNoActionRetryCheck",
+});
+
+const ARCHIVE_INTEGRITY_SCAN_STATUS_KEYS = Object.freeze({
+  not_run: { titleKey: "integrityScanNotRunTitle", detailKey: "integrityScanNotRunText", tone: "unknown" },
+  queued: { titleKey: "integrityScanQueuedTitle", detailKey: "integrityScanQueuedText", tone: "neutral" },
+  running: { titleKey: "integrityScanRunningTitle", detailKey: "integrityScanRunningText", tone: "neutral" },
+  cancel_requested: { titleKey: "integrityScanCancelRequestedTitle", detailKey: "integrityScanCancelRequestedText", tone: "warning" },
+  completed: { titleKey: "integrityScanCompletedTitle", detailKey: "integrityScanCompletedText", tone: "ok" },
+  partial: { titleKey: "integrityScanPartialTitle", detailKey: "integrityScanPartialText", tone: "warning" },
+  failed: { titleKey: "integrityScanFailedTitle", detailKey: "integrityScanFailedText", tone: "error" },
+  cancelled: { titleKey: "integrityScanCancelledTitle", detailKey: "integrityScanCancelledText", tone: "neutral" },
+  interrupted: { titleKey: "integrityScanInterruptedTitle", detailKey: "integrityScanInterruptedText", tone: "warning" },
+});
+
+export function archiveIntegrityScanModel(scan = {}, permission = { allowed: true, reason: "" }) {
+  const status = String(scan?.status || "not_run");
+  const presentation = ARCHIVE_INTEGRITY_SCAN_STATUS_KEYS[status] || ARCHIVE_INTEGRITY_SCAN_STATUS_KEYS.failed;
+  const progress = scan?.progress && typeof scan.progress === "object" ? scan.progress : {};
+  const planned = Math.max(0, asNumber(progress.planned_count, 0));
+  const checked = Math.max(0, asNumber(progress.checked_count, 0));
+  const found = Math.max(0, asNumber(progress.found_count, 0));
+  const failed = Math.max(0, asNumber(progress.failed_count, 0));
+  const running = ["queued", "running", "cancel_requested", "interrupted"].includes(status);
+  const stale = Boolean(scan?.stale);
+  const terminal = ["completed", "partial", "failed", "cancelled"].includes(status);
+  const operationCancelAllowed = scan?.operation?.cancel_allowed;
+  return {
+    status,
+    titleKey: presentation.titleKey,
+    detailKey: presentation.detailKey,
+    tone: stale && status === "completed" ? "warning" : presentation.tone,
+    running,
+    terminal,
+    stale,
+    planned,
+    checked,
+    found,
+    failed,
+    percent: planned > 0 ? Math.max(0, Math.min(100, (checked / planned) * 100)) : 0,
+    canStart: Boolean(permission.allowed && !running),
+    canCancel: Boolean(permission.allowed && running && operationCancelAllowed !== false && status !== "cancel_requested"),
+    permissionReason: permission.allowed ? "" : permission.reason,
+    phaseKey: `integrityPhase${String(scan?.phase || "queued").replace(/(^|_)([a-z])/g, (_, _separator, letter) => letter.toUpperCase())}`,
+  };
+}
+
+function safeIntegrityReference(value) {
+  const normalized = String(value || "").replaceAll("\\", "/");
+  const basename = normalized.split("/").filter(Boolean).at(-1) || "";
+  return basename.slice(0, 160);
+}
+
+export function archiveIntegrityFindingPresentation(finding = {}) {
+  const actionKey = String(finding?.action_key || "");
+  const noActionReason = String(finding?.no_action_reason || "");
+  const permissionDenied = finding?.action_allowed !== true && Boolean(finding?.required_permission) && !noActionReason;
+  return {
+    key: String(finding?.finding_id || ""),
+    categoryKey: ARCHIVE_INTEGRITY_CATEGORY_KEYS[finding?.category] || "integrityCategoryUnknown",
+    impactKey: ARCHIVE_INTEGRITY_IMPACT_KEYS[finding?.impact_key] || "integrityImpactUnknown",
+    actionLabelKey: ARCHIVE_INTEGRITY_ACTION_KEYS[actionKey] || null,
+    noActionLabelKey: permissionDenied
+      ? "integrityNoActionPermission"
+      : ARCHIVE_INTEGRITY_NO_ACTION_KEYS[noActionReason] || "integrityNoActionUnavailable",
+    actionKey: actionKey || null,
+    actionAllowed: finding?.action_allowed === true && Boolean(ARCHIVE_INTEGRITY_ACTION_KEYS[actionKey]),
+    permissionDenied,
+    destructive: String(finding?.confirmation_level || "").startsWith("destructive"),
+    tone: finding?.severity === "error" ? "error" : finding?.severity === "warning" ? "warning" : "neutral",
+    cameraName: String(finding?.camera_name || "").slice(0, 120),
+    rootLabel: String(finding?.root_label || "").slice(0, 120),
+    displayName: safeIntegrityReference(finding?.display_name),
+    stale: finding?.stale === true || finding?.state !== "active",
+  };
+}
+
+export function archiveIntegrityCategoryPresentations(counts = {}) {
+  return Object.entries(counts && typeof counts === "object" ? counts : {})
+    .map(([category, value]) => ({
+      category,
+      labelKey: ARCHIVE_INTEGRITY_CATEGORY_KEYS[category] || "integrityCategoryUnknown",
+      count: Math.max(0, asNumber(value, 0)),
+    }))
+    .filter((item) => item.count > 0)
+    .sort((left, right) => right.count - left.count || left.category.localeCompare(right.category))
+    .slice(0, 16);
+}
+
+export function archiveIntegrityActionContract(actionKey) {
+  const key = String(actionKey || "");
+  if (key === "mark_stale_recording") {
+    return { planKind: "metadata", confirmationKey: "integrityConfirmMarkStale", destructive: false };
+  }
+  if (key === "retire_missing_recording") {
+    return { planKind: "deletion", confirmationKey: "integrityConfirmRetireMissing", destructive: true };
+  }
+  if (key === "delete_unusable_recording") {
+    return { planKind: "deletion", confirmationKey: "integrityConfirmDeleteUnusable", destructive: true };
+  }
+  if (key === "delete_proven_orphan") {
+    return { planKind: "deletion", confirmationKey: "integrityConfirmDeleteOrphan", destructive: true };
+  }
+  return { planKind: null, confirmationKey: "integrityNoActionUnavailable", destructive: false };
 }
 
 export const STORAGE_ACTION_PERMISSIONS = Object.freeze({

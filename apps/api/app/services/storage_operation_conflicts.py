@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import and_, or_
@@ -36,6 +37,7 @@ from app.services.storage_operations_foundation import (
 
 ACTIVE_JOB_STATES = frozenset({"starting", "recording", "stopping", "restarting"})
 ACTIVE_SEGMENT_STATES = frozenset({"starting", "writing", "stopping", "restarting"})
+ACTIVE_SEGMENT_RECENCY = timedelta(minutes=15)
 COORDINATOR_WORKER_KEY = "storage-operation-claim-coordinator"
 COORDINATOR_LEASE_SECONDS = 15
 COORDINATOR_WAIT_SECONDS = 2.0
@@ -52,6 +54,10 @@ OPERATION_TYPES = frozenset(
         "retention_auto_run",
         "retention_auto_free_space",
         "integrity_metadata_repair",
+        "integrity_scan",
+        "integrity_catalog_retirement",
+        "integrity_recording_delete",
+        "integrity_plan_prepare",
         "orphan_file_cleanup",
         "archive_migration_apply",
         "archive_root_delete",
@@ -79,12 +85,14 @@ ROOT_EXCLUSIVE_TYPES = frozenset(
         "orphan_file_cleanup",
     }
 )
-EXACT_ITEM_TYPES = DELETION_EXECUTION_TYPES - {"manual_delete_by_camera", "manual_delete_all", "camera_delete_with_files"}
+EXACT_ITEM_TYPES = (
+    DELETION_EXECUTION_TYPES
+    - {"manual_delete_by_camera", "manual_delete_all", "camera_delete_with_files"}
+) | {"integrity_metadata_repair", "integrity_catalog_retirement", "integrity_recording_delete"}
 ACTIVE_WRITE_ROOT_BLOCKED_TYPES = frozenset(
     {
         "archive_root_delete",
         "archive_migration_apply",
-        "integrity_metadata_repair",
         "orphan_file_cleanup",
     }
 )
@@ -98,9 +106,12 @@ ACTIVE_WRITE_EXACT_TYPES = frozenset(
         "retention_run",
         "retention_auto_run",
         "retention_auto_free_space",
+        "integrity_metadata_repair",
+        "integrity_catalog_retirement",
+        "integrity_recording_delete",
     }
 )
-ACTIVE_WRITE_GLOBAL_BLOCKED_TYPES = frozenset({"integrity_metadata_repair"})
+ACTIVE_WRITE_GLOBAL_BLOCKED_TYPES = frozenset()
 
 
 class StorageOperationConflict(RuntimeError):
@@ -369,26 +380,46 @@ def scope_with_physical_volumes(db: Session, scope: dict) -> dict:
 
 
 def active_recorder_write_guard(db: Session) -> ActiveRecorderWriteGuard:
-    camera_ids = {
-        int(value)
-        for (value,) in db.query(RecordingJob.camera_id)
+    active_jobs = (
+        db.query(RecordingJob.id, RecordingJob.camera_id)
         .filter(RecordingJob.state.in_(tuple(ACTIVE_JOB_STATES)))
-        .distinct()
         .all()
-        if value is not None
-    }
+    )
+    active_job_ids = {str(row.id) for row in active_jobs if row.id}
+    camera_ids = {int(row.camera_id) for row in active_jobs if row.camera_id is not None}
+    recent_cutoff = database_now(db) - ACTIVE_SEGMENT_RECENCY
     segment_rows = (
-        db.query(RecordingSegment.id, RecordingSegment.camera_id, RecordingSegment.archive_root_id)
+        db.query(
+            RecordingSegment.id,
+            RecordingSegment.job_id,
+            RecordingSegment.camera_id,
+            RecordingSegment.archive_root_id,
+            RecordingSegment.started_at,
+            RecordingSegment.media_progress_at,
+            RecordingSegment.updated_at,
+        )
         .filter(
             RecordingSegment.deleted_at.is_(None),
             RecordingSegment.status.in_(tuple(ACTIVE_SEGMENT_STATES)),
         )
         .all()
     )
+    authoritative_segments = []
+    for row in segment_rows:
+        anchors = [value for value in (row.media_progress_at, row.updated_at, row.started_at) if value is not None]
+        recent = bool(anchors and max(anchors) >= recent_cutoff)
+        linked_active_job = bool(
+            (row.job_id and str(row.job_id) in active_job_ids)
+            or (row.camera_id is not None and int(row.camera_id) in camera_ids)
+        )
+        if linked_active_job or recent:
+            authoritative_segments.append(row)
     return ActiveRecorderWriteGuard(
-        camera_ids=frozenset(camera_ids | {int(row.camera_id) for row in segment_rows if row.camera_id is not None}),
-        root_ids=frozenset(str(row.archive_root_id) for row in segment_rows if row.archive_root_id),
-        segment_ids=frozenset(int(row.id) for row in segment_rows if row.id is not None),
+        camera_ids=frozenset(
+            camera_ids | {int(row.camera_id) for row in authoritative_segments if row.camera_id is not None}
+        ),
+        root_ids=frozenset(str(row.archive_root_id) for row in authoritative_segments if row.archive_root_id),
+        segment_ids=frozenset(int(row.id) for row in authoritative_segments if row.id is not None),
     )
 
 
@@ -423,6 +454,10 @@ def scopes_overlap(left: dict, right: dict) -> bool:
 def operations_conflict(left_type: str, left_scope: dict, right_type: str, right_scope: dict) -> bool:
     if left_type not in OPERATION_TYPES or right_type not in OPERATION_TYPES:
         return True
+    if "integrity_scan" in {left_type, right_type}:
+        return False
+    if "integrity_plan_prepare" in {left_type, right_type}:
+        return False
     if bool(left_scope.get("global")) or bool(right_scope.get("global")):
         return True
 

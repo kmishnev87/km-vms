@@ -64,6 +64,8 @@ RETENTION_SIGNAL_SCOPE_KEY = (
     "scope:"
     + hashlib.sha256(RETENTION_SIGNAL_SCOPE_JSON.encode("utf-8")).hexdigest()[:32]
 )
+RECORDER_RECEIPT_CONTRACT_VERSION = 1
+RECEIPT_FINGERPRINT_CHUNK_BYTES = 64 * 1024
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -227,6 +229,30 @@ def truncate_error(value: str | None) -> str:
     if len(text_value) <= MAX_ERROR_LENGTH:
         return text_value
     return text_value[-MAX_ERROR_LENGTH:]
+
+
+def bounded_file_fingerprint(file_path: Path, stat_result: os.stat_result) -> str:
+    digest = hashlib.sha256()
+    digest.update(f"v1:{int(stat_result.st_size)}:{int(stat_result.st_mtime_ns)}".encode("ascii"))
+    with file_path.open("rb") as handle:
+        digest.update(handle.read(RECEIPT_FINGERPRINT_CHUNK_BYTES))
+        if stat_result.st_size > RECEIPT_FINGERPRINT_CHUNK_BYTES:
+            handle.seek(max(0, int(stat_result.st_size) - RECEIPT_FINGERPRINT_CHUNK_BYTES))
+            digest.update(handle.read(RECEIPT_FINGERPRINT_CHUNK_BYTES))
+    return digest.hexdigest()
+
+
+def receipt_object_identity(root_id: str, relative_path: str, stat_result: os.stat_result) -> str:
+    canonical = ":".join(
+        (
+            "v1",
+            str(root_id),
+            str(relative_path),
+            str(int(stat_result.st_dev)),
+            str(int(stat_result.st_ino)),
+        )
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def redact_text(value: str | None) -> str:
@@ -471,6 +497,35 @@ def ensure_recording_metadata_schema() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_integrity_status ON recording_segments (integrity_status)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_reconciliation_status ON recording_segments (reconciliation_status)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recording_segments_deleted_at ON recording_segments (deleted_at)"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS recorder_file_receipts (
+                    id VARCHAR(36) PRIMARY KEY,
+                    contract_version INTEGER DEFAULT 1 NOT NULL,
+                    segment_id BIGINT NOT NULL UNIQUE,
+                    job_id VARCHAR(36) NULL,
+                    camera_id INTEGER NULL,
+                    root_id VARCHAR(36) NOT NULL,
+                    physical_identity VARCHAR(128) NULL,
+                    relative_path VARCHAR(1024) NOT NULL,
+                    state VARCHAR(24) NOT NULL,
+                    object_identity VARCHAR(128) NOT NULL,
+                    device_id VARCHAR(64) NULL,
+                    inode VARCHAR(64) NULL,
+                    size_bytes BIGINT DEFAULT 0 NOT NULL,
+                    mtime_ns BIGINT DEFAULT 0 NOT NULL,
+                    content_fingerprint VARCHAR(64) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                    finalized_at TIMESTAMP NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL
+                )
+                """
+            )
+        )
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recorder_file_receipts_root_relative ON recorder_file_receipts (root_id, relative_path)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recorder_file_receipts_root_object ON recorder_file_receipts (root_id, object_identity)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_recorder_file_receipts_state_finalized ON recorder_file_receipts (state, finalized_at)"))
         conn.execute(
             text(
                 """
@@ -877,6 +932,12 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
 
     started_at = parse_segment_start_time(file_path)
     media_metadata = path_format_metadata(file_path)
+    try:
+        content_fingerprint = bounded_file_fingerprint(file_path, stat)
+    except OSError:
+        content_fingerprint = hashlib.sha256(
+            f"unavailable:{int(stat.st_size)}:{int(stat.st_mtime_ns)}".encode("ascii")
+        ).hexdigest()
     with engine.begin() as conn:
         existing = conn.execute(
             text(
@@ -905,7 +966,7 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
             job.known_segment_paths.add(rel_path)
             return
 
-        conn.execute(
+        inserted = conn.execute(
             text(
                 """
                 INSERT INTO recording_segments (
@@ -939,8 +1000,7 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                     reconciliation_status,
                     created_at,
                     updated_at
-                )
-                VALUES (
+                ) VALUES (
                     :job_id,
                     :camera_id,
                     :camera_name,
@@ -972,6 +1032,7 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                     NOW(),
                     NOW()
                 )
+                RETURNING id
                 """
             ),
             {
@@ -997,6 +1058,72 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                 "media_progress_at": datetime.utcnow() if stat.st_size > 0 else None,
                 "file_mtime": datetime.fromtimestamp(stat.st_mtime),
                 "reconciliation_status": "pending",
+            },
+        ).first()
+        if inserted is None:
+            return
+        physical_identity = conn.execute(
+            text("SELECT physical_identity FROM archive_roots WHERE id = :root_id"),
+            {"root_id": job.archive_root_id},
+        ).scalar()
+        conn.execute(
+            text(
+                """
+                INSERT INTO recorder_file_receipts (
+                    id,
+                    contract_version,
+                    segment_id,
+                    job_id,
+                    camera_id,
+                    root_id,
+                    physical_identity,
+                    relative_path,
+                    state,
+                    object_identity,
+                    device_id,
+                    inode,
+                    size_bytes,
+                    mtime_ns,
+                    content_fingerprint,
+                    created_at,
+                    updated_at
+                ) VALUES (
+                    :id,
+                    :contract_version,
+                    :segment_id,
+                    :job_id,
+                    :camera_id,
+                    :root_id,
+                    :physical_identity,
+                    :relative_path,
+                    'writing',
+                    :object_identity,
+                    :device_id,
+                    :inode,
+                    :size_bytes,
+                    :mtime_ns,
+                    :content_fingerprint,
+                    NOW(),
+                    NOW()
+                )
+                ON CONFLICT (segment_id) DO NOTHING
+                """
+            ),
+            {
+                "id": str(uuid.uuid4()),
+                "contract_version": RECORDER_RECEIPT_CONTRACT_VERSION,
+                "segment_id": int(inserted.id),
+                "job_id": job.db_job_id,
+                "camera_id": job.camera_id,
+                "root_id": job.archive_root_id,
+                "physical_identity": physical_identity,
+                "relative_path": rel_path,
+                "object_identity": receipt_object_identity(job.archive_root_id, rel_path, stat),
+                "device_id": str(int(stat.st_dev)),
+                "inode": str(int(stat.st_ino)),
+                "size_bytes": max(int(stat.st_size), 0),
+                "mtime_ns": int(stat.st_mtime_ns),
+                "content_fingerprint": content_fingerprint,
             },
         )
     job.known_segment_paths.add(rel_path)
@@ -1079,6 +1206,12 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
     ended_at = datetime.fromtimestamp(stat.st_mtime)
     duration_sec = max(int((ended_at - started_at).total_seconds()), 0)
     media_metadata = path_format_metadata(file_path)
+    try:
+        final_fingerprint = bounded_file_fingerprint(file_path, stat)
+    except OSError:
+        final_fingerprint = hashlib.sha256(
+            f"unavailable:{int(stat.st_size)}:{int(stat.st_mtime_ns)}".encode("ascii")
+        ).hexdigest()
     with engine.begin() as conn:
         result = conn.execute(
             text(
@@ -1137,6 +1270,40 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
         )
         finalized_row = result.first()
         if finalized_row is not None:
+            physical_identity = conn.execute(
+                text("SELECT physical_identity FROM archive_roots WHERE id = :root_id"),
+                {"root_id": job.archive_root_id},
+            ).scalar()
+            conn.execute(
+                text(
+                    """
+                    UPDATE recorder_file_receipts
+                    SET state = 'finalized',
+                        physical_identity = :physical_identity,
+                        object_identity = :object_identity,
+                        device_id = :device_id,
+                        inode = :inode,
+                        size_bytes = :size_bytes,
+                        mtime_ns = :mtime_ns,
+                        content_fingerprint = :content_fingerprint,
+                        finalized_at = NOW(),
+                        updated_at = NOW()
+                    WHERE segment_id = :segment_id
+                      AND contract_version = :contract_version
+                    """
+                ),
+                {
+                    "physical_identity": physical_identity,
+                    "object_identity": receipt_object_identity(job.archive_root_id, rel_path, stat),
+                    "device_id": str(int(stat.st_dev)),
+                    "inode": str(int(stat.st_ino)),
+                    "size_bytes": int(stat.st_size),
+                    "mtime_ns": int(stat.st_mtime_ns),
+                    "content_fingerprint": final_fingerprint,
+                    "segment_id": int(finalized_row.id),
+                    "contract_version": RECORDER_RECEIPT_CONTRACT_VERSION,
+                },
+            )
             conn.execute(
                 text(
                     """

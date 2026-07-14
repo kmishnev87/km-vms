@@ -25,7 +25,20 @@ from app.services.recording_operations import (
     destructive_scope_guard,
     new_operation_id,
 )
-from app.services.recording_reconciliation import reconcile_recordings
+from app.services.archive_integrity import (
+    cancel_integrity_scan,
+    get_integrity_scan,
+    latest_integrity_scan,
+    legacy_reconciliation_summary,
+    list_integrity_findings,
+    start_integrity_scan,
+)
+from app.services.archive_integrity_remediation import (
+    IntegrityRemediationBlocked,
+    apply_remediation_plan,
+    create_remediation_plan,
+    get_remediation_plan,
+)
 from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
     apply_storage_migration,
@@ -52,6 +65,7 @@ from app.services.storage_operation_conflicts import (
 )
 from app.services.storage_operations_foundation import (
     OperationHeartbeatController,
+    StorageOperationContractError,
     safe_reason_code,
 )
 
@@ -72,6 +86,26 @@ class ReconciliationRequest(BaseModel):
 
     mode: str = "dry_run"
     operation_id: str | None = Field(default=None, max_length=96, pattern=OPERATION_ID_PATTERN)
+
+
+class IntegrityScanStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=64, pattern=r"^[a-z0-9][a-z0-9_.:-]{7,63}$")
+
+
+class IntegrityPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_key: str = Field(min_length=3, max_length=64, pattern=r"^[a-z0-9][a-z0-9_]{2,63}$")
+    idempotency_key: str = Field(min_length=8, max_length=64, pattern=r"^[a-z0-9][a-z0-9_.:-]{7,63}$")
+
+
+class IntegrityApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = False
+    operation_id: str = Field(min_length=8, max_length=96, pattern=OPERATION_ID_PATTERN)
 
 
 class ArchiveRootCreateRequest(BaseModel):
@@ -1150,12 +1184,203 @@ def storage_migration_apply(
         return result
 
 
+@router.post("/integrity/scans")
+def storage_integrity_scan_start(
+    payload: IntegrityScanStartRequest | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics")),
+):
+    try:
+        return start_integrity_scan(
+            db,
+            actor=current_user,
+            idempotency_key=payload.idempotency_key if payload else None,
+        )
+    except StorageOuterConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except (StorageOperationContractError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail={"reason_code": safe_reason_code(str(exc), fallback="archive_integrity_scan_start_blocked")}) from exc
+
+
+@router.get("/integrity/scans/latest")
+def storage_integrity_scan_latest(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics")),
+):
+    return latest_integrity_scan(db)
+
+
+@router.get("/integrity/scans/{scan_id}")
+def storage_integrity_scan_status(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics")),
+):
+    result = get_integrity_scan(db, scan_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail={"reason_code": "archive_integrity_scan_not_found"})
+    return result
+
+
+@router.post("/integrity/scans/{scan_id}/cancel")
+def storage_integrity_scan_cancel(
+    scan_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics")),
+):
+    try:
+        return cancel_integrity_scan(db, scan_id, actor=current_user)
+    except StorageOperationContractError as exc:
+        reason = safe_reason_code(str(exc), fallback="archive_integrity_scan_cancel_blocked")
+        status_code = 404 if reason == "archive_integrity_scan_not_found" else 409
+        raise HTTPException(status_code=status_code, detail={"reason_code": reason}) from exc
+
+
+@router.get("/integrity/scans/{scan_id}/findings")
+def storage_integrity_findings(
+    scan_id: str,
+    cursor: str | None = None,
+    limit: int = 50,
+    category: str | None = None,
+    impact: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics")),
+):
+    try:
+        return list_integrity_findings(
+            db,
+            scan_id,
+            role=current_user.role,
+            cursor=cursor,
+            limit=limit,
+            category=category,
+            impact=impact,
+        )
+    except StorageOperationContractError as exc:
+        raise HTTPException(status_code=404, detail={"reason_code": safe_reason_code(str(exc), fallback="archive_integrity_scan_not_found")}) from exc
+
+
+def _create_integrity_plan(
+    *,
+    finding_id: str,
+    payload: IntegrityPlanRequest,
+    db: Session,
+    current_user: User,
+    allowed_actions: set[str],
+):
+    if payload.action_key not in allowed_actions:
+        raise HTTPException(status_code=409, detail={"reason_code": "archive_integrity_action_permission_mismatch"})
+    try:
+        return create_remediation_plan(
+            db,
+            finding_id=finding_id,
+            action_key=payload.action_key,
+            actor=current_user,
+            idempotency_key=payload.idempotency_key,
+        )
+    except IntegrityRemediationBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason_code": exc.reason_code, "retry_mode": exc.retry_mode},
+        ) from exc
+    except StorageOperationContractError as exc:
+        raise HTTPException(status_code=409, detail={"reason_code": safe_reason_code(str(exc), fallback="archive_integrity_plan_blocked")}) from exc
+
+
+@router.post("/integrity/findings/{finding_id}/metadata-plan")
+def storage_integrity_metadata_plan(
+    finding_id: str,
+    payload: IntegrityPlanRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    return _create_integrity_plan(
+        finding_id=finding_id,
+        payload=payload,
+        db=db,
+        current_user=current_user,
+        allowed_actions={"mark_stale_recording"},
+    )
+
+
+@router.post("/integrity/findings/{finding_id}/deletion-plan")
+def storage_integrity_deletion_plan(
+    finding_id: str,
+    payload: IntegrityPlanRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("delete_recordings")),
+):
+    return _create_integrity_plan(
+        finding_id=finding_id,
+        payload=payload,
+        db=db,
+        current_user=current_user,
+        allowed_actions={"retire_missing_recording", "delete_unusable_recording", "delete_proven_orphan"},
+    )
+
+
+@router.get("/integrity/remediation-plans/{plan_id}")
+def storage_integrity_plan_status(
+    plan_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("run_diagnostics")),
+):
+    try:
+        return get_remediation_plan(db, plan_id, actor=current_user)
+    except StorageOperationContractError as exc:
+        raise HTTPException(status_code=404, detail={"reason_code": safe_reason_code(str(exc), fallback="archive_integrity_plan_not_found")}) from exc
+
+
+def _apply_integrity_plan(
+    *,
+    plan_id: str,
+    payload: IntegrityApplyRequest,
+    db: Session,
+    current_user: User,
+):
+    try:
+        return apply_remediation_plan(
+            db,
+            plan_id=plan_id,
+            actor=current_user,
+            confirm=payload.confirm,
+            operation_id=payload.operation_id,
+        )
+    except IntegrityRemediationBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"reason_code": exc.reason_code, "retry_mode": exc.retry_mode},
+        ) from exc
+    except StorageOperationContractError as exc:
+        raise HTTPException(status_code=409, detail={"reason_code": safe_reason_code(str(exc), fallback="archive_integrity_apply_blocked")}) from exc
+
+
+@router.post("/integrity/remediation-plans/{plan_id}/apply-metadata")
+def storage_integrity_apply_metadata(
+    plan_id: str,
+    payload: IntegrityApplyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    return _apply_integrity_plan(plan_id=plan_id, payload=payload, db=db, current_user=current_user)
+
+
+@router.post("/integrity/remediation-plans/{plan_id}/apply-deletion")
+def storage_integrity_apply_deletion(
+    plan_id: str,
+    payload: IntegrityApplyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("delete_recordings")),
+):
+    return _apply_integrity_plan(plan_id=plan_id, payload=payload, db=db, current_user=current_user)
+
+
 @router.get("/reconciliation/summary")
 def storage_reconciliation_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("run_diagnostics")),
 ):
-    return reconcile_recordings(db, mode="dry_run", actor=current_user, write_audit=False)
+    return legacy_reconciliation_summary(db)
 
 
 @router.post("/reconcile")
@@ -1164,48 +1389,16 @@ def storage_reconcile(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    mode = "apply_safe" if payload.mode == "apply_safe" else "dry_run"
-    if mode == "dry_run":
-        return reconcile_recordings(db, mode=mode, actor=current_user, write_audit=True)
-    try:
-        operation_id = payload.operation_id or new_operation_id("integrity-metadata-repair")
-        outer_claim = claim_operation_with_conflicts(
-            db,
-            operation_type="integrity_metadata_repair",
-            scope={"global": True, "physical_volume_ids": [], "root_ids": [], "camera_ids": [], "segment_ids": []},
-            request_identity={"mode": mode, "operation_id": operation_id},
-            actor=current_user,
-            operation_id=operation_id,
-            idempotency_key=operation_id,
-            owner_instance_id=operation_instance_id("integrity-repair"),
-        )
-    except StorageOuterConflict as exc:
-        raise HTTPException(status_code=409, detail=exc.detail) from exc
-    if outer_claim.get("state") == "terminal":
-        return terminal_replay_result(outer_claim)
-    if outer_claim.get("state") != "claimed":
-        raise HTTPException(status_code=409, detail=claim_state_detail(outer_claim))
-    outer_handle = outer_claim["handle"]
-    outer_heartbeat = OperationHeartbeatController(db.get_bind(), outer_handle)
-    with StorageOperationLifecycle(db, outer_handle, failure_reason="integrity_metadata_repair_failed") as lifecycle:
-        result = reconcile_recordings(
-            db,
-            mode=mode,
-            actor=current_user,
-            write_audit=True,
-            progress_callback=outer_heartbeat.touch,
-        )
-        lifecycle.mark_inner_persisted(result)
-        outer_heartbeat.touch(force=True)
-        lifecycle.finish_result(
-            result,
-            progress={
-                "planned_count": int(result.get("total_rows") or 0),
-                "completed_count": int(result.get("updated_count") or 0),
-                "failed_count": int(result.get("failed_count") or 0),
+    if payload.mode == "apply_safe":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "archive_integrity_broad_apply_removed",
+                "next_action": "use_exact_finding_remediation",
             },
-            reason_code=safe_reason_code(result.get("reason_code")),
-            retry_allowed=result.get("status") in {"partial", "failed"},
-            retry_mode="refresh" if result.get("status") in {"partial", "failed"} else None,
         )
-        return result
+    return start_integrity_scan(
+        db,
+        actor=current_user,
+        idempotency_key=payload.operation_id.lower() if payload.operation_id else None,
+    )
