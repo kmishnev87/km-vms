@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 from typing import Callable
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
@@ -11,7 +11,7 @@ from app.core.permissions import user_has_permission
 from app.db.session import get_db
 from app.models.recording import ArchiveRoot, RecordingSegment
 from app.models.user import User
-from app.routers.deps import require_permission
+from app.routers.deps import require_permission, require_permissions
 from app.services.archive_root_activation import (
     ArchiveRootMutationConflict,
     archive_root_mutation_guard,
@@ -39,13 +39,24 @@ from app.services.archive_integrity_remediation import (
     create_remediation_plan,
     get_remediation_plan,
 )
+from app.services.archive_migration import (
+    ArchiveMigrationBlocked,
+    active_migration_operation,
+    cancel_migration_operation,
+    cancel_migration_plan,
+    get_migration_operation,
+    get_migration_plan,
+    list_migration_items,
+    queue_migration_apply,
+    request_migration_plan,
+    retry_migration_operation,
+    takeover_migration_cleanup,
+)
 from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
-    apply_storage_migration,
     archive_root_public_status,
     archive_root_runtime_path,
     list_archive_roots,
-    migration_preview,
     resolve_segment_file_path,
     root_usage,
     sanitize_archive_root_path,
@@ -79,6 +90,23 @@ ROOT_DELETION_RETRY_STATUSES = {
 }
 ROOT_CLEANUP_EVIDENCE_STATUSES = {"partial_cleanup", "partial_finalization"}
 OPERATION_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,95}$"
+MIGRATION_CANCEL_CONTRACT_REASONS = frozenset(
+    {
+        "storage_operation_not_found",
+        "storage_operation_actor_mismatch",
+        "storage_operation_cancel_not_allowed",
+        "storage_operation_cancel_transition_invalid",
+    }
+)
+
+
+def _migration_cancel_reason(exc: Exception) -> str:
+    if isinstance(exc, ArchiveMigrationBlocked):
+        return exc.reason_code
+    candidate = str(exc) if isinstance(exc, StorageOperationContractError) else ""
+    if candidate in MIGRATION_CANCEL_CONTRACT_REASONS:
+        return candidate
+    return "migration_cancel_failed"
 
 
 class ReconciliationRequest(BaseModel):
@@ -136,14 +164,30 @@ class ArchiveRootDeleteRequest(BaseModel):
 class MigrationPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    target_root_id: str | None = None
+    source_root_id: str = Field(min_length=1, max_length=96)
+    target_root_id: str = Field(min_length=1, max_length=96)
+    idempotency_key: str = Field(min_length=8, max_length=64, pattern=r"^[a-z0-9][a-z0-9_.:-]{7,63}$")
 
 
 class MigrationApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    target_root_id: str | None = None
-    plan_id: str | None = None
+    plan_id: str = Field(min_length=8, max_length=96, pattern=OPERATION_ID_PATTERN)
+    expected_plan_hash: str = Field(min_length=64, max_length=64, pattern=r"^[a-f0-9]{64}$")
+    idempotency_key: str = Field(min_length=8, max_length=64, pattern=r"^[a-z0-9][a-z0-9_.:-]{7,63}$")
+    confirm: bool = False
+
+
+class MigrationRetryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: str = Field(min_length=8, max_length=64, pattern=r"^[a-z0-9][a-z0-9_.:-]{7,63}$")
+
+
+class MigrationCleanupTakeoverRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: str = Field(min_length=8, max_length=64, pattern=r"^[a-z0-9][a-z0-9_.:-]{7,63}$")
     confirm: bool = False
 
 
@@ -1030,158 +1074,169 @@ def delete_archive_root(
 
 @router.post("/migration/preview")
 def storage_migration_preview(
-    payload: MigrationPreviewRequest | None = None,
+    payload: MigrationPreviewRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    create_event(
-        db=db,
-        actor=current_user,
-        category="storage",
-        event_type="archive_migration.preview_started",
-        severity="info",
-        message_ru="Archive migration preview started",
-        message_en="Archive migration preview started",
-        target_type="archive_migration",
-        metadata={"target_root_id": payload.target_root_id if payload else None},
-    )
-    result = migration_preview(db, target_root_id=payload.target_root_id if payload else None)
-    create_event(
-        db=db,
-        actor=current_user,
-        category="storage",
-        event_type="archive_migration.preview_completed",
-        severity="warning" if result.get("blockers") else "info",
-        message_ru="Archive migration preview completed",
-        message_en="Archive migration preview completed",
-        target_type="archive_migration",
-        metadata={
-            "target_root_id": result.get("target_root_id"),
-            "total_would_move_count": result.get("total_would_move_count"),
-            "total_would_move_bytes": result.get("total_would_move_bytes"),
-            "blocker_count": len(result.get("blockers") or []),
-        },
-    )
-    return result
+    try:
+        return request_migration_plan(
+            db,
+            actor=current_user,
+            source_root_id=payload.source_root_id,
+            target_root_id=payload.target_root_id,
+            idempotency_key=payload.idempotency_key,
+        )
+    except ArchiveMigrationBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": exc.reason_code, "retry_mode": exc.retry_mode},
+        ) from exc
+
+
+@router.get("/migration/plans/{plan_id}")
+def storage_migration_plan_status(
+    plan_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        return get_migration_plan(db, actor=current_user, plan_id=plan_id)
+    except ArchiveMigrationBlocked as exc:
+        raise HTTPException(status_code=404 if exc.reason_code == "migration_plan_not_found" else 409, detail={"error": exc.reason_code}) from exc
+
+
+@router.get("/migration/plans/{plan_id}/items")
+def storage_migration_plan_items(
+    plan_id: str,
+    cursor: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        return list_migration_items(
+            db,
+            actor=current_user,
+            plan_id=plan_id,
+            cursor=cursor,
+            limit=limit,
+        )
+    except ArchiveMigrationBlocked as exc:
+        raise HTTPException(status_code=404 if exc.reason_code == "migration_plan_not_found" else 409, detail={"error": exc.reason_code}) from exc
+
+
+@router.post("/migration/plans/{plan_id}/cancel")
+def storage_migration_plan_cancel(
+    plan_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        return cancel_migration_plan(db, actor=current_user, plan_id=plan_id)
+    except (ArchiveMigrationBlocked, StorageOperationContractError) as exc:
+        raise HTTPException(status_code=409, detail={"error": _migration_cancel_reason(exc)}) from exc
 
 
 @router.post("/migration/apply")
 def storage_migration_apply(
     payload: MigrationApplyRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("manage_settings")),
+    current_user: User = Depends(require_permissions("manage_settings", "delete_recordings")),
 ):
     if not payload.confirm:
-        create_event(
-            db=db,
-            actor=current_user,
-            category="storage",
-            event_type="archive_migration.apply_blocked",
-            severity="warning",
-            message_ru="Archive migration apply blocked",
-            message_en="Archive migration apply blocked",
-            target_type="archive_migration",
-            metadata={"reason": "confirm_required"},
-        )
         raise HTTPException(status_code=409, detail={"error": "archive_migration_apply_requires_confirm"})
-    roots = db.query(ArchiveRoot).filter(ArchiveRoot.retired_at.is_(None)).all()
     try:
-        outer_claim = claim_operation_with_conflicts(
+        return queue_migration_apply(
             db,
-            operation_type="archive_migration_apply",
-            scope={
-                "global": False,
-                "physical_volume_ids": [root.physical_identity for root in roots if root.physical_identity],
-                "root_ids": [root.id for root in roots],
-                "camera_ids": [],
-                "segment_ids": [],
-            },
-            request_identity={"target_root_id": payload.target_root_id, "plan_id": payload.plan_id},
             actor=current_user,
-            idempotency_key=payload.plan_id,
-            owner_instance_id=operation_instance_id("archive-migration"),
+            plan_id=payload.plan_id,
+            expected_hash=payload.expected_plan_hash,
+            idempotency_key=payload.idempotency_key,
         )
     except StorageOuterConflict as exc:
         raise HTTPException(status_code=409, detail=exc.detail) from exc
-    if outer_claim.get("state") == "terminal":
-        replay = terminal_replay_result(outer_claim)
-        if replay.get("status") == "blocked":
-            raise HTTPException(status_code=409, detail=replay)
-        if replay.get("status") == "failed":
-            raise HTTPException(status_code=500, detail=replay)
-        return replay
-    if outer_claim.get("state") != "claimed":
-        raise HTTPException(status_code=409, detail=claim_state_detail(outer_claim))
-    outer_handle = outer_claim["handle"]
-    outer_heartbeat = OperationHeartbeatController(db.get_bind(), outer_handle)
-    with StorageOperationLifecycle(db, outer_handle, failure_reason="archive_migration_apply_failed") as lifecycle:
-        create_event(
-            db=db,
+    except ArchiveMigrationBlocked as exc:
+        raise HTTPException(status_code=409, detail={"error": exc.reason_code, "retry_mode": exc.retry_mode}) from exc
+
+
+@router.post("/migration/operations/{operation_id}/cleanup-takeover")
+def storage_migration_cleanup_takeover(
+    operation_id: str,
+    payload: MigrationCleanupTakeoverRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("manage_settings", "delete_recordings")),
+):
+    if not payload.confirm:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "migration_cleanup_takeover_requires_confirm"},
+        )
+    try:
+        return takeover_migration_cleanup(
+            db,
             actor=current_user,
-            category="storage",
-            event_type="archive_migration.apply_started",
-            severity="warning",
-            message_ru="Archive migration apply started",
-            message_en="Archive migration apply started",
-            target_type="archive_migration",
-            metadata={"target_root_id": payload.target_root_id, "plan_id": payload.plan_id},
+            operation_id=operation_id,
+            idempotency_key=payload.idempotency_key,
         )
-        try:
-            with archive_root_mutation_guard("archive_migration_apply"):
-                result = apply_storage_migration(
-                    db,
-                    target_root_id=payload.target_root_id,
-                    expected_plan_id=payload.plan_id,
-                    progress_callback=outer_heartbeat.touch,
-                )
-                lifecycle.mark_inner_persisted(result)
-        except ArchiveRootMutationConflict as exc:
-            lifecycle.block(
-                safe_reason_code(exc.blocker, fallback="archive_root_mutation_conflict"),
-                retry_allowed=True,
-            )
-            raise HTTPException(status_code=409, detail=exc.blocker) from exc
-        event_type = "archive_migration.apply_completed" if result["status"] == "completed" else "archive_migration.apply_blocked" if result["status"] == "blocked" else "archive_migration.apply_failed"
-        create_event(
-            db=db,
+    except StorageOuterConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except ArchiveMigrationBlocked as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": exc.reason_code, "retry_mode": exc.retry_mode},
+        ) from exc
+
+
+@router.get("/migration/operations/active")
+def storage_migration_active_operation(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    return active_migration_operation(db, actor=current_user)
+
+
+@router.get("/migration/operations/{operation_id}")
+def storage_migration_operation_status(
+    operation_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        return get_migration_operation(db, actor=current_user, operation_id=operation_id)
+    except ArchiveMigrationBlocked as exc:
+        raise HTTPException(status_code=404 if exc.reason_code == "migration_operation_not_found" else 409, detail={"error": exc.reason_code}) from exc
+
+
+@router.post("/migration/operations/{operation_id}/cancel")
+def storage_migration_operation_cancel(
+    operation_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        return cancel_migration_operation(db, actor=current_user, operation_id=operation_id)
+    except (ArchiveMigrationBlocked, StorageOperationContractError) as exc:
+        raise HTTPException(status_code=409, detail={"error": _migration_cancel_reason(exc)}) from exc
+
+
+@router.post("/migration/operations/{operation_id}/retry")
+def storage_migration_operation_retry(
+    operation_id: str,
+    payload: MigrationRetryRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permissions("manage_settings", "delete_recordings")),
+):
+    try:
+        return retry_migration_operation(
+            db,
             actor=current_user,
-            category="storage",
-            event_type=event_type,
-            severity="info" if result["status"] == "completed" else "warning",
-            message_ru="Archive migration apply finished",
-            message_en="Archive migration apply finished",
-            target_type="archive_migration",
-            metadata={
-                "status": result["status"],
-                "target_root_id": result.get("target_root_id"),
-                "plan_id": result.get("plan_id"),
-                "executed_count": len(result.get("executed") or []),
-                "blocker_count": len(result.get("blockers") or []),
-                "source_preserved": bool(result.get("source_preserved")),
-                "cleanup_pending": bool(result.get("cleanup_pending")),
-            },
+            operation_id=operation_id,
+            idempotency_key=payload.idempotency_key,
         )
-        outer_heartbeat.touch(force=True)
-        lifecycle.finish_result(
-            result,
-            progress={
-                "planned_count": int(result.get("planned_count") or result.get("total_would_move_count") or 0),
-                "completed_count": len(result.get("executed") or []),
-                "failed_count": len(result.get("failed") or []),
-                "completed_bytes": int(result.get("executed_bytes") or 0),
-            },
-            reason_code=safe_reason_code(
-                (result.get("blockers") or [None])[0] if result.get("blockers") else None,
-                fallback="archive_migration_apply_incomplete" if result.get("status") != "completed" else None,
-            ),
-            retry_allowed=result.get("status") in {"blocked", "failed"},
-            retry_mode="refresh" if result.get("status") in {"blocked", "failed"} else None,
-        )
-        if result["status"] == "blocked":
-            raise HTTPException(status_code=409, detail=result)
-        if result["status"] == "failed":
-            raise HTTPException(status_code=500, detail=result)
-        return result
+    except StorageOuterConflict as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except ArchiveMigrationBlocked as exc:
+        raise HTTPException(status_code=409, detail={"error": exc.reason_code, "retry_mode": exc.retry_mode}) from exc
 
 
 @router.post("/integrity/scans")

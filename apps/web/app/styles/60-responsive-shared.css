@@ -859,4 +859,43 @@
   .operationFeedbackFooter .button {
     min-height: 42px;
   }
+
+  .archiveMigrationSteps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .archiveMigrationFields,
+  .archiveMigrationFacts {
+    grid-template-columns: 1fr;
+  }
+
+  .archiveMigrationProgressHead,
+  .archiveMigrationProgressFacts {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .migrationNavIndicator {
+    width: 46px;
+    min-width: 46px;
+    max-width: 46px;
+    height: 46px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .migrationNavIndicator span,
+  .migrationNavIndicator strong {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .migrationNavIndicator img {
+    width: 28px;
+    height: 28px;
+  }
 }

@@ -6,12 +6,13 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from app.models.recording import ArchiveRoot, RecordingJob, RecordingSegment
+from app.models.archive_migration import ArchiveMigrationItem
 from app.models.storage_operation import StorageOperation
 from app.services.storage_operations_foundation import (
     ACTIVE_OPERATION_STATUSES,
@@ -23,6 +24,7 @@ from app.services.storage_operations_foundation import (
     actor_identity,
     canonical_operation_scope,
     claim_operation,
+    CrossActorRecoveryAuthorization,
     database_now,
     finish_operation,
     normalize_operation_scope,
@@ -92,7 +94,6 @@ EXACT_ITEM_TYPES = (
 ACTIVE_WRITE_ROOT_BLOCKED_TYPES = frozenset(
     {
         "archive_root_delete",
-        "archive_migration_apply",
         "orphan_file_cleanup",
     }
 )
@@ -482,6 +483,55 @@ def operations_conflict(left_type: str, left_scope: dict, right_type: str, right
     return bool((left_roots & right_roots) or (left_volumes & right_volumes))
 
 
+def _migration_plan_id(domain_ref: str | None) -> str | None:
+    prefix = "migration-plan:"
+    value = str(domain_ref or "")
+    return value[len(prefix):] if value.startswith(prefix) and len(value) > len(prefix) else None
+
+
+def operations_conflict_in_db(
+    db: Session,
+    left_type: str,
+    left_scope: dict,
+    left_domain_ref: str | None,
+    right_type: str,
+    right_scope: dict,
+    right_domain_ref: str | None,
+) -> bool:
+    if "integrity_scan" in {left_type, right_type} or "integrity_plan_prepare" in {left_type, right_type}:
+        return False
+    migration_on_left = left_type == "archive_migration_apply"
+    migration_on_right = right_type == "archive_migration_apply"
+    if migration_on_left == migration_on_right:
+        return operations_conflict(left_type, left_scope, right_type, right_scope)
+
+    migration_ref = left_domain_ref if migration_on_left else right_domain_ref
+    other_type = right_type if migration_on_left else left_type
+    other_scope = right_scope if migration_on_left else left_scope
+    if other_type in ROOT_EXCLUSIVE_TYPES:
+        return operations_conflict(left_type, left_scope, right_type, right_scope)
+    plan_id = _migration_plan_id(migration_ref)
+    if not plan_id:
+        return operations_conflict(left_type, left_scope, right_type, right_scope)
+    if bool(other_scope.get("global")):
+        return True
+    segment_ids = sorted(_set(other_scope, "segment_ids"))
+    camera_ids = sorted(_set(other_scope, "camera_ids"))
+    if not segment_ids and not camera_ids:
+        return operations_conflict(left_type, left_scope, right_type, right_scope)
+    predicates = []
+    if segment_ids:
+        predicates.append(ArchiveMigrationItem.segment_id.in_(segment_ids))
+    if camera_ids:
+        predicates.append(ArchiveMigrationItem.camera_id.in_(camera_ids))
+    return bool(
+        db.query(ArchiveMigrationItem.id)
+        .filter(ArchiveMigrationItem.plan_id == plan_id, or_(*predicates))
+        .limit(1)
+        .first()
+    )
+
+
 def _audit_conflict(
     db: Session,
     *,
@@ -579,6 +629,76 @@ def _coordinator_lease(db: Session, owner_instance_id: str) -> CoordinatorLeaseS
         time.sleep(0.025)
 
 
+def run_coordinated_operation_transition(
+    db: Session,
+    *,
+    operation_type: str,
+    scope: dict,
+    domain_ref: str | None,
+    current_operation_id: str,
+    transition: Callable[[dict[str, Any]], Any],
+    actor: Any = None,
+    owner_instance_id: str | None = None,
+) -> Any:
+    """Run an existing-operation transition under the shared conflict coordinator."""
+    if operation_type not in OPERATION_TYPES:
+        raise StorageOperationContractError("storage_operation_type_unsupported")
+    normalized_scope = scope_with_physical_volumes(db, scope)
+    instance = owner_instance_id or operation_instance_id()
+    coordinator = _coordinator_lease(db, instance)
+    try:
+        coordinator.assert_owned()
+        now = database_now(db)
+        active_rows = (
+            db.query(StorageOperation)
+            .filter(
+                _conflict_active_filter(now),
+                StorageOperation.id != str(current_operation_id),
+            )
+            .order_by(StorageOperation.created_at.asc(), StorageOperation.id.asc())
+            .limit(MAX_ACTIVE_OPERATION_SCAN + 1)
+            .all()
+        )
+        if len(active_rows) > MAX_ACTIVE_OPERATION_SCAN:
+            raise StorageOperationConflict(
+                {
+                    "reason_code": "storage_operation_conflict_set_unbounded",
+                    "retryable": True,
+                }
+            )
+        for active in active_rows:
+            if operations_conflict_in_db(
+                db,
+                operation_type,
+                normalized_scope,
+                domain_ref,
+                str(active.operation_type),
+                canonical_operation_scope(active.scope),
+                active.domain_ref,
+            ):
+                detail = {
+                    "reason_code": "storage_operation_scope_conflict",
+                    "conflicting_operation_type": str(active.operation_type),
+                    "retryable": True,
+                }
+                _audit_conflict(db, actor=actor, operation_type=operation_type, detail=detail)
+                raise StorageOperationConflict(detail)
+        recorder_conflict = active_write_conflict(
+            operation_type,
+            normalized_scope,
+            active_recorder_write_guard(db),
+        )
+        if recorder_conflict:
+            _audit_conflict(db, actor=actor, operation_type=operation_type, detail=recorder_conflict)
+            raise StorageOperationConflict(recorder_conflict)
+        coordinator.assert_owned()
+        result = transition(normalized_scope)
+        coordinator.assert_owned()
+        return result
+    finally:
+        coordinator.close()
+
+
 def claim_operation_with_conflicts(
     db: Session,
     *,
@@ -590,8 +710,12 @@ def claim_operation_with_conflicts(
     operation_id: str | None = None,
     idempotency_key: str | None = None,
     parent_operation_id: str | None = None,
+    cross_actor_recovery: CrossActorRecoveryAuthorization | None = None,
     owner_instance_id: str | None = None,
     initial_progress: dict | None = None,
+    start_immediately: bool = True,
+    cancel_allowed: bool = False,
+    domain_ref: str | None = None,
 ) -> dict[str, Any]:
     if operation_type not in OPERATION_TYPES:
         raise StorageOperationContractError("storage_operation_type_unsupported")
@@ -632,9 +756,13 @@ def claim_operation_with_conflicts(
                 operation_id=str(existing.id),
                 idempotency_key=idem,
                 parent_operation_id=existing.parent_operation_id,
+                cross_actor_recovery=cross_actor_recovery,
                 owner_instance_id=instance,
                 scope_is_canonical=True,
                 initial_progress=initial_progress,
+                start_immediately=start_immediately,
+                cancel_allowed=cancel_allowed,
+                domain_ref=existing.domain_ref,
             )
     coordinator = _coordinator_lease(db, instance)
     try:
@@ -665,11 +793,14 @@ def claim_operation_with_conflicts(
             )
             if same_identity:
                 continue
-            if operations_conflict(
+            if operations_conflict_in_db(
+                db,
                 operation_type,
                 normalized_scope,
+                domain_ref,
                 str(active.operation_type),
                 canonical_operation_scope(active.scope),
+                active.domain_ref,
             ):
                 detail = {
                     "reason_code": "storage_operation_scope_conflict",
@@ -693,9 +824,13 @@ def claim_operation_with_conflicts(
             operation_id=operation_id,
             idempotency_key=idem,
             parent_operation_id=parent_operation_id,
+            cross_actor_recovery=cross_actor_recovery,
             owner_instance_id=instance,
             scope_is_canonical=True,
             initial_progress=initial_progress,
+            start_immediately=start_immediately,
+            cancel_allowed=cancel_allowed,
+            domain_ref=domain_ref,
         )
         try:
             coordinator.assert_owned()
@@ -762,11 +897,14 @@ def reclaim_operation_with_conflicts(
                 {"reason_code": "storage_operation_conflict_set_unbounded", "retryable": True}
             )
         for active in active_rows:
-            if operations_conflict(
+            if operations_conflict_in_db(
+                db,
                 operation_type,
                 normalized_scope,
+                row.domain_ref,
                 str(active.operation_type),
                 canonical_operation_scope(active.scope),
+                active.domain_ref,
             ):
                 raise StorageOperationConflict(
                     {
@@ -829,7 +967,6 @@ def terminal_result_summary(result: dict | None) -> dict:
         "bytes_freed",
         "cleanup_pending",
         "cleanup_status",
-        "source_preserved",
         "total_rows",
         "updated_count",
         "segments_deleted",

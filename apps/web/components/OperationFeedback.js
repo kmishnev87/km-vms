@@ -77,7 +77,7 @@ export function OperationDialog({ dialog, onClose }) {
     <div className="operationFeedbackOverlay" role="presentation">
       <div
         ref={containerRef}
-        className={`operationFeedbackDialog operationFeedbackDialog-${dialog.tone || "warning"}`}
+        className={`operationFeedbackDialog operationFeedbackDialog-${dialog.tone || "warning"} ${dialog.className || ""}`.trim()}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -103,6 +103,7 @@ export function OperationDialog({ dialog, onClose }) {
         <div id={descriptionId} className="operationFeedbackBody" aria-live={dialog.busy ? "polite" : undefined}>
           {dialog.message ? <p>{dialog.message}</p> : null}
           {dialog.busy ? <div className="operationFeedbackBusy" aria-hidden="true"><span /></div> : null}
+          {dialog.content || null}
           {Array.isArray(dialog.summary) && dialog.summary.length ? (
             <dl className="operationFeedbackSummary">
               {dialog.summary.map((item) => (

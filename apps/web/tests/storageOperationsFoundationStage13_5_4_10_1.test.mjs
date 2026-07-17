@@ -66,11 +66,15 @@ assert.match(interruptedOperation.reason, /прервалась/);
 const page = read("app/storage/page.js");
 const storageStyles = read("app/styles/40-storage-records-shared.css");
 assert.match(page, /apiFetch\("\/storage\/status"\)/);
-assert.match(page, /refreshMigrationPreview/);
+assert.match(page, /prepareMigrationPlan/);
 assert.match(page, /apiFetch\("\/storage\/migration\/preview"/);
+assert.match(page, /apiFetch\("\/storage\/migration\/operations\/active"\)/);
+assert.match(page, /apiFetch\(`\/storage\/migration\/operations\/\$\{encodeURIComponent\(operationId\)\}`\)/);
 assert.doesNotMatch(page, /operations\.migration_preview/);
 assert.doesNotMatch(page, /status\?\.migration_preview/);
-assert.match(page, /const migrationPreview = migrationPreviewState \|\| \{\};/);
+assert.match(page, /const \[migrationPlan, setMigrationPlan\] = useState\(null\);/);
+assert.match(page, /const \[migrationOperation, setMigrationOperation\] = useState\(null\);/);
+assert.doesNotMatch(page, /migrationPreviewState/);
 assert.match(page, /if \(silent && statusRef\.current\)/, "silent refresh retains the last valid status");
 
 for (const forbidden of [

@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Layout from "../../components/Layout";
 import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
 import { apiFetch, canAccessPath, forbiddenMessage } from "../../lib/api";
@@ -508,21 +509,33 @@ function archiveProblemsStatusText(normalized, reconciliation, copy) {
 }
 
 function archiveMigrationStatusText(scenario, archiveRoots, copy) {
-  const inactiveRoots = archiveRoots.filter((root) => !root.is_active);
-  if (!inactiveRoots.length) return copy.migrationNeedsTargetStatus;
-  if (scenario.status === "running") return copy.running;
-  if (scenario.status === "apply_blocked") return copy.applyBlocked;
-  if (scenario.status === "apply_completed") return copy.applyCompleted;
-  if (scenario.canApply) return copy.migrationPlanReadyStatus;
-  return copy.migrationChooseTargetStatus;
+  if (archiveRoots.length < 2) return copy.migrationNeedsTargetStatus;
+  const labels = {
+    building: copy.migrationStatusPreparing,
+    ready: copy.migrationPlanReadyStatus,
+    ready_with_exclusions: copy.migrationPlanReadyWithExclusions,
+    queued: copy.migrationStatusQueued,
+    running: copy.migrationStatusRunning,
+    cancel_requested: copy.migrationStatusCancelRequested,
+    completed: copy.migrationStatusCompleted,
+    partial: copy.migrationStatusPartial,
+    failed: copy.migrationStatusFailed,
+    blocked: copy.migrationStatusBlocked,
+    cancelled: copy.migrationStatusCancelled,
+    expired: copy.migrationStatusExpired,
+    interrupted: copy.migrationStatusInterrupted,
+    unknown: copy.migrationUnknownValue,
+  };
+  return labels[scenario.status] || copy.migrationChooseTargetStatus;
 }
 
 function migrationStatusText(scenario, archiveRoots, copy) {
-  const inactiveRoots = archiveRoots.filter((root) => !root.is_active);
-  if (!inactiveRoots.length) return copy.migrationNeedsTarget;
-  if (scenario.blockerReason) return scenario.blockerReason;
-  if (!scenario.targetRootId) return copy.migrationChooseTargetFirst;
-  if (scenario.canApply) return copy.migrationPlanReady;
+  if (archiveRoots.length < 2) return copy.migrationNeedsTarget;
+  if (scenario.reason) return scenario.reason;
+  if (scenario.status === "completed") return copy.migrationCompletedSelectedPlan;
+  if (["partial", "failed", "blocked", "interrupted"].includes(scenario.status)) return copy.migrationNeedsAttention;
+  if (scenario.active) return copy.migrationBackgroundActive;
+  if (scenario.ready) return copy.migrationPlanReady;
   return copy.migrationScenarioText;
 }
 
@@ -643,7 +656,225 @@ function activationProgressItems(status, copy) {
   return items;
 }
 
+function migrationPhaseText(phase, copy) {
+  const labels = {
+    inventory: copy.migrationPhaseInventory,
+    building: copy.migrationPhaseInventory,
+    queued: copy.migrationPhaseQueued,
+    target_temp_create_pending: copy.migrationPhasePreparingTarget,
+    copying: copy.migrationPhaseCopying,
+    target_temp_written: copy.migrationPhaseVerifying,
+    target_verified: copy.migrationPhaseFinalizing,
+    target_finalized: copy.migrationPhaseMetadata,
+    metadata_switched: copy.migrationPhaseCleanup,
+    source_cleanup_pending: copy.migrationPhaseCleanup,
+    source_quarantined: copy.migrationPhaseCleanup,
+    source_delete_committing: copy.migrationPhaseCleanup,
+    cancel_requested: copy.migrationPhaseCancelRequested,
+    completed: copy.migrationStatusCompleted,
+    partial: copy.migrationStatusPartial,
+    failed: copy.migrationStatusFailed,
+    blocked: copy.migrationStatusBlocked,
+    cancelled: copy.migrationStatusCancelled,
+    expired: copy.migrationStatusExpired,
+  };
+  return labels[String(phase || "")] || copy.migrationPhaseUnknown;
+}
+
+function migrationEtaText(seconds, copy) {
+  if (seconds === null || seconds === undefined || seconds === "") return copy.migrationCalculating;
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return copy.migrationCalculating;
+  const rounded = Math.ceil(value);
+  if (rounded >= 86400) return copy.migrationEtaDays.replace("{value}", String(Math.ceil(rounded / 86400)));
+  if (rounded >= 3600) return copy.migrationEtaHours.replace("{value}", String(Math.ceil(rounded / 3600)));
+  if (rounded >= 60) return copy.migrationEtaMinutes.replace("{value}", String(Math.ceil(rounded / 60)));
+  return copy.migrationEtaSeconds.replace("{value}", String(rounded));
+}
+
+function migrationNextActionText(value, copy) {
+  const labels = {
+    refresh: copy.migrationNextRefreshPlan,
+    refresh_plan: copy.migrationNextRefreshPlan,
+    cleanup_only: copy.migrationNextRetryCleanup,
+    after_free_space: copy.migrationNextFreeSpace,
+    after_permission_restore: copy.migrationNextRestorePermission,
+    retry: copy.migrationNextRetry,
+  };
+  return labels[String(value || "")] || copy.migrationNextReview;
+}
+
+function ArchiveMigrationDialog({
+  open,
+  roots,
+  sourceRootId,
+  targetRootId,
+  plan,
+  operation,
+  scenario,
+  busy,
+  error,
+  copy,
+  language,
+  onClose,
+  onSourceChange,
+  onTargetChange,
+  onPrepare,
+  onApply,
+  onCancel,
+  onRetry,
+  onCleanupTakeover,
+  onReset,
+}) {
+  if (!open) return null;
+  const source = roots.find((root) => String(root.id) === String(sourceRootId));
+  const target = roots.find((root) => String(root.id) === String(targetRootId));
+  const excluded = Object.entries(plan?.excluded_summary || {}).filter(([, count]) => Number(count) > 0).slice(0, 8);
+  const blocked = Object.entries(plan?.blocker_summary || {}).filter(([, count]) => Number(count) > 0).slice(0, 8);
+  const progressKnown = scenario.percent !== null;
+  const selectedDifferent = Boolean(sourceRootId && targetRootId && String(sourceRootId) !== String(targetRootId));
+  const draft = !scenario.planId && !scenario.operationId;
+  const terminal = scenario.terminal || scenario.status === "interrupted";
+  const facts = [
+    { label: copy.migrationFiles, value: scenario.itemCount === null ? copy.migrationUnknownValue : String(scenario.itemCount) },
+    { label: copy.migrationVolume, value: scenario.totalBytes === null ? copy.migrationUnknownValue : formatBytes(scenario.totalBytes) },
+    { label: copy.migrationExcluded, value: scenario.excludedCount === null ? copy.migrationUnknownValue : String(scenario.excludedCount) },
+  ];
+  const actions = [];
+  if (scenario.canCancel) actions.push({ id: "migration-cancel", label: copy.migrationCancel, onClick: onCancel });
+  if (terminal && scenario.canRetry) actions.push({ id: "migration-retry", label: scenario.retryMode === "cleanup_only" ? copy.migrationRetryCleanup : copy.migrationRetry, onClick: onRetry });
+  if (terminal && scenario.canCleanupTakeover) actions.push({ id: "migration-cleanup-takeover", label: copy.migrationCleanupTakeover, onClick: onCleanupTakeover });
+  if (terminal) actions.push({ id: "migration-new-plan", label: copy.migrationNewPlan, onClick: onReset });
+  const canPrepare = draft && roots.length > 1 && selectedDifferent && scenario.canPrepare;
+  const hasConfirm = canPrepare || scenario.canApply;
+
+  const content = (
+    <div className="archiveMigrationWizard">
+      <div className="archiveMigrationSteps" aria-label={copy.migrationStepsLabel}>
+        <span className={draft ? "active" : "done"}>1. {copy.migrationStepSelect}</span>
+        <span className={scenario.status === "building" ? "active" : scenario.planId ? "done" : ""}>2. {copy.migrationStepPlan}</span>
+        <span className={scenario.ready ? "active" : scenario.operationId ? "done" : ""}>3. {copy.migrationStepConfirm}</span>
+        <span className={scenario.active || terminal ? "active" : ""}>4. {copy.migrationStepProgress}</span>
+      </div>
+
+      <div className="archiveMigrationFields">
+        <label>
+          <span>{copy.migrationSource}</span>
+          <select className="select" value={sourceRootId} onChange={(event) => onSourceChange(event.target.value)} disabled={!draft || busy || scenario.active}>
+            <option value="">{copy.migrationChooseSource}</option>
+            {roots.map((root) => <option key={root.id} value={root.id}>{archiveRootLabel(root, copy)} - {archiveRootPath(root)}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>{copy.migrationTarget}</span>
+          <select className="select" value={targetRootId} onChange={(event) => onTargetChange(event.target.value)} disabled={!draft || busy || scenario.active}>
+            <option value="">{copy.migrationChooseTarget}</option>
+            {roots.map((root) => <option key={root.id} value={root.id} disabled={String(root.id) === String(sourceRootId)}>{archiveRootLabel(root, copy)} - {archiveRootPath(root)}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="archiveMigrationHint">{copy.migrationActivationDifference}</div>
+
+      {scenario.planId ? (
+        <>
+          <dl className="archiveMigrationFacts">
+            {facts.map((fact) => <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>)}
+          </dl>
+          <div className="archiveMigrationCapacity">
+            <strong>{scenario.samePhysicalVolume === null ? copy.migrationCapacityUnchecked : scenario.samePhysicalVolume ? copy.migrationSameVolume : copy.migrationDifferentVolume}</strong>
+            <span>{copy.migrationFree}: {plan?.capacity_free_bytes == null ? copy.migrationUnknownValue : formatBytes(plan.capacity_free_bytes)}</span>
+            <span>{copy.migrationRequired}: {plan?.required_free_bytes == null ? copy.migrationUnknownValue : formatBytes(plan.required_free_bytes)}</span>
+            <span>{copy.migrationReserve}: {plan?.reserve_bytes == null ? copy.migrationUnknownValue : formatBytes(plan.reserve_bytes)}</span>
+          </div>
+          {plan?.expires_at && scenario.ready ? <div className="archiveMigrationHint">{copy.migrationPlanValidUntil}: {formatDateTime(plan.expires_at, language)}</div> : null}
+        </>
+      ) : null}
+
+      {(scenario.active || terminal) ? (
+        <div className={`archiveMigrationProgress archiveMigrationProgress-${scenario.status}`}>
+          <div className="archiveMigrationProgressHead">
+            <strong>{migrationPhaseText(scenario.phase, copy)}</strong>
+            <span>{progressKnown ? `${scenario.percent}%` : copy.migrationProgressUnknown}</span>
+          </div>
+          <div className="archiveMigrationProgressTrack" role={progressKnown ? "progressbar" : undefined} aria-valuemin={progressKnown ? 0 : undefined} aria-valuemax={progressKnown ? 100 : undefined} aria-valuenow={progressKnown ? scenario.percent : undefined}>
+            <span style={{ width: progressKnown ? `${scenario.percent}%` : "0%" }} />
+          </div>
+          <div className="archiveMigrationProgressFacts">
+            <span>{copy.migrationFilesCompleted}: {scenario.completedCount === null || scenario.itemCount === null ? copy.migrationUnknownValue : `${scenario.completedCount} / ${scenario.itemCount}`}</span>
+            <span>{copy.migrationBytesCompleted}: {scenario.completedBytes === null || scenario.totalBytes === null ? copy.migrationUnknownValue : `${formatBytes(scenario.completedBytes)} / ${formatBytes(scenario.totalBytes)}`}</span>
+            {scenario.phase === "copying" ? (
+              <>
+                <span>{copy.migrationSpeed}: {scenario.speedBytesPerSecond === null ? copy.migrationCalculating : copy.migrationSpeedValue.replace("{value}", formatBytes(scenario.speedBytesPerSecond))}</span>
+                <span>{copy.migrationEta}: {migrationEtaText(scenario.etaSeconds, copy)}</span>
+              </>
+            ) : null}
+          </div>
+          {scenario.status === "cancel_requested" ? <div className="archiveMigrationHint">{copy.migrationCancelBoundary}</div> : null}
+        </div>
+      ) : null}
+
+      {scenario.ready ? (
+        <div className="archiveMigrationConfirmation">
+          <strong>{copy.migrationConfirmTitle}</strong>
+          <ul>
+            <li>{copy.migrationConfirmVerify}</li>
+            <li>{copy.migrationConfirmCleanup}</li>
+            <li>{copy.migrationConfirmCancel}</li>
+            <li>{copy.migrationConfirmNewFiles}</li>
+          </ul>
+        </div>
+      ) : null}
+
+      {excluded.length ? <div className="archiveMigrationReasons"><strong>{copy.migrationExcludedTitle}</strong>{excluded.map(([code, count]) => <span key={code}>{humanBlockerReason(code, language)}: {count}</span>)}</div> : null}
+      {blocked.length ? <div className="archiveMigrationReasons archiveMigrationReasons-warning"><strong>{copy.blockers}</strong>{blocked.map(([code, count]) => <span key={code}>{humanBlockerReason(code, language)}: {count}</span>)}</div> : null}
+      {scenario.reason ? <div className="archiveMigrationMessage archiveMigrationMessage-warning"><strong>{copy.migrationWhatHappened}</strong><span>{scenario.reason}</span><span>{migrationNextActionText(scenario.nextAction || scenario.retryMode, copy)}</span></div> : null}
+      {error ? <div className="archiveMigrationMessage archiveMigrationMessage-error">{error}</div> : null}
+      {scenario.status === "completed" ? (
+        <div className="archiveMigrationMessage archiveMigrationMessage-success">
+          <strong>{copy.migrationCompletedSelectedPlan}</strong>
+          <span>{copy.migrationCompletionScopeNote}</span>
+          <span>{copy.migrationExcluded}: {scenario.excludedCount ?? copy.migrationUnknownValue}; {copy.migrationNewAfterPlan}: {scenario.newAfterHighWatermarkCount ?? copy.migrationUnknownValue}; {copy.migrationRetainedSource}: {scenario.retainedSourceCount ?? copy.migrationUnknownValue}</span>
+        </div>
+      ) : null}
+      {scenario.cleanupPending ? <div className="archiveMigrationMessage archiveMigrationMessage-warning">{copy.migrationCleanupPending}</div> : null}
+    </div>
+  );
+
+  return (
+    <OperationDialog
+      dialog={{
+        id: `archive-migration-${scenario.operationId || scenario.planId || "draft"}`,
+        title: copy.migrationDialogTitle,
+        className: "archiveMigrationDialog",
+        message: draft ? copy.migrationDialogIntro : archiveMigrationStatusText(scenario, roots, copy),
+        content,
+        tone: scenario.status === "completed" ? "success" : ["partial", "failed", "blocked", "interrupted"].includes(scenario.status) ? "error" : "warning",
+        busy,
+        dismissible: !busy,
+        actions,
+        closeLabel: copy.close,
+        cancelLabel: copy.close,
+        confirmLabel: scenario.canApply ? copy.migrationStart : copy.migrationPrepare,
+        confirmDisabled: scenario.canApply ? !scenario.canApply : !canPrepare,
+        onConfirm: hasConfirm ? (scenario.canApply ? onApply : onPrepare) : undefined,
+      }}
+      onClose={onClose}
+    />
+  );
+}
+
 export default function StorageOperationsPage() {
+  return (
+    <Suspense fallback={null}>
+      <StorageOperationsPageContent />
+    </Suspense>
+  );
+}
+
+function StorageOperationsPageContent() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedMigrationOperationId = searchParams.get("migration");
   const [status, setStatus] = useState(null);
   const statusRef = useRef(null);
   const [settings, setSettings] = useState(null);
@@ -659,8 +890,16 @@ export default function StorageOperationsPage() {
   const [operationToast, setOperationToast] = useState(null);
   const [trackedActivationOperationId, setTrackedActivationOperationId] = useState(null);
   const [dismissedActivationOperationId, setDismissedActivationOperationId] = useState(null);
+  const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
+  const [migrationSourceRootId, setMigrationSourceRootId] = useState("");
   const [migrationTargetRootId, setMigrationTargetRootId] = useState("");
-  const [migrationPreviewState, setMigrationPreviewState] = useState(null);
+  const [migrationPlan, setMigrationPlan] = useState(null);
+  const [migrationOperation, setMigrationOperation] = useState(null);
+  const [migrationBusy, setMigrationBusy] = useState(false);
+  const migrationPlanRequestKeyRef = useRef(null);
+  const migrationApplyRequestKeyRef = useRef(null);
+  const migrationRetryRequestKeyRef = useRef(null);
+  const migrationTakeoverRequestKeyRef = useRef(null);
   const [rootAction, setRootAction] = useState("");
   const [integrityDialogOpen, setIntegrityDialogOpen] = useState(false);
   const [integrityScan, setIntegrityScan] = useState(null);
@@ -672,7 +911,6 @@ export default function StorageOperationsPage() {
   const [integrityPlan, setIntegrityPlan] = useState(null);
   const [integrityConfirmed, setIntegrityConfirmed] = useState(false);
   const [migrationMessage, setMigrationMessage] = useState("");
-  const [migrationResult, setMigrationResult] = useState(null);
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { locale: language, t } = useI18n();
   const copy = useLocaleText("storagePage");
@@ -773,11 +1011,9 @@ export default function StorageOperationsPage() {
   const archiveRootActivation = status?.archive_root_activation || operations.archive_root_activation || {};
   const activationModel = activationProgressModel(archiveRootActivation);
   const archiveRootActivationReason = activationProgressReasonText(archiveRootActivation, copy, language);
-  const migrationPreview = migrationPreviewState || {};
   const archiveRootDiscoveryModel = discoveryStateModel(archiveRootDiscovery || {});
   const archiveRootDiscoveryHeader = discoveryHeaderStatusModel(archiveRootDiscovery);
   const archiveRootChoices = archiveRootDiscoveryModel.candidates;
-  const inactiveArchiveRoots = archiveRoots.filter((root) => !root.is_active);
   const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
   const autoFreeConfigured = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
   const autoFreeEnabled = settings?.auto_free_space_cleanup_effective ?? policy.auto_free_space_cleanup_effective ?? autoCleanup.effective_enabled ?? false;
@@ -813,6 +1049,10 @@ export default function StorageOperationsPage() {
   const manageCamerasPermission = actionPermissionState(currentUser, "manage_cameras", language);
   const retentionPermission = actionPermissionState(currentUser, "delete_recordings", language);
   const diagnosticsPermission = actionPermissionState(currentUser, "run_diagnostics", language);
+  const migrationApplyPermission = {
+    allowed: Boolean(manageSettingsPermission.allowed && retentionPermission.allowed),
+    reason: !manageSettingsPermission.allowed ? manageSettingsPermission.reason : !retentionPermission.allowed ? retentionPermission.reason : "",
+  };
   const retentionScenario = retentionScenarioModel({
     preview: null,
     result: null,
@@ -829,10 +1069,11 @@ export default function StorageOperationsPage() {
     running: Boolean(reconciliation.active),
   }, language);
   const migrationScenario = migrationScenarioModel({
-    preview: migrationPreview,
-    result: migrationResult,
-    permission: manageSettingsPermission,
-    running: rootAction === "preview" || rootAction === "apply-migration",
+    plan: migrationPlan,
+    operation: migrationOperation,
+    preparePermission: manageSettingsPermission,
+    applyPermission: migrationApplyPermission,
+    running: migrationBusy,
   }, language);
   const retentionTone = operationTone(retentionScenario.status);
   const reconciliationTone = !diagnosticsPermission.allowed
@@ -862,10 +1103,81 @@ export default function StorageOperationsPage() {
   }, [archiveRootChoiceId, archiveRootChoices]);
 
   useEffect(() => {
-    if (!migrationTargetRootId && inactiveArchiveRoots.length) {
-      setMigrationTargetRootId(inactiveArchiveRoots[0].id);
+    if (!migrationSourceRootId && archiveRoots.length) {
+      setMigrationSourceRootId(String(currentArchiveRoot?.id || archiveRoots[0].id));
     }
-  }, [inactiveArchiveRoots, migrationTargetRootId]);
+    if (!migrationTargetRootId && archiveRoots.length > 1) {
+      const target = archiveRoots.find((root) => String(root.id) !== String(migrationSourceRootId || currentArchiveRoot?.id));
+      if (target) setMigrationTargetRootId(String(target.id));
+    }
+  }, [archiveRoots, currentArchiveRoot?.id, migrationSourceRootId, migrationTargetRootId]);
+
+  useEffect(() => {
+    if (!currentUser || !manageSettingsPermission.allowed) return undefined;
+    let cancelled = false;
+    const requestedOperationId = requestedMigrationOperationId;
+    const restore = async () => {
+      try {
+        const data = requestedOperationId
+          ? await apiFetch(`/storage/migration/operations/${encodeURIComponent(requestedOperationId)}`)
+          : await apiFetch("/storage/migration/operations/active");
+        if (cancelled) return;
+        if (data?.plan) {
+          setMigrationPlan(data.plan);
+          setMigrationSourceRootId(String(data.plan.source_root_id || ""));
+          setMigrationTargetRootId(String(data.plan.target_root_id || ""));
+        }
+        if (data?.operation) setMigrationOperation(data.operation);
+        if (requestedOperationId) setMigrationDialogOpen(true);
+      } catch (err) {
+        if (!cancelled && requestedOperationId) {
+          setMigrationMessage(errorDetailText(err, copy.migrationLoadFailed, language));
+          setMigrationDialogOpen(true);
+        }
+      }
+    };
+    restore();
+    return () => { cancelled = true; };
+  }, [currentUser, manageSettingsPermission.allowed, copy.migrationLoadFailed, language, requestedMigrationOperationId]);
+
+  useEffect(() => {
+    const planId = migrationPlan?.plan_id;
+    const operationId = migrationOperation?.operation_id || migrationPlan?.operation_id;
+    const operationStatus = String(migrationOperation?.status || "");
+    const planStatus = String(migrationPlan?.status || "");
+    const pollOperation = operationId && ["queued", "running", "cancel_requested", "interrupted"].includes(operationStatus || planStatus);
+    const pollPlan = !operationId && planId && planStatus === "building";
+    if (!pollOperation && !pollPlan) return undefined;
+    let cancelled = false;
+    let polling = false;
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const data = pollOperation
+          ? await apiFetch(`/storage/migration/operations/${encodeURIComponent(operationId)}`)
+          : { plan: await apiFetch(`/storage/migration/plans/${encodeURIComponent(planId)}`), operation: null };
+        if (cancelled) return;
+        if (data?.plan) setMigrationPlan(data.plan);
+        if (data?.operation) setMigrationOperation(data.operation);
+        setMigrationMessage("");
+        const nextStatus = String(data?.operation?.status || data?.plan?.status || "");
+        if (["completed", "partial", "failed", "blocked", "cancelled", "expired"].includes(nextStatus)) {
+          await loadStatus({ silent: true });
+        }
+      } catch (err) {
+        if (!cancelled) setMigrationMessage(errorDetailText(err, copy.migrationLoadFailed, language));
+      } finally {
+        polling = false;
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 1500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [copy.migrationLoadFailed, language, loadStatus, migrationOperation?.operation_id, migrationOperation?.status, migrationPlan?.operation_id, migrationPlan?.plan_id, migrationPlan?.status]);
 
   useEffect(() => {
     if (!["queued", "running"].includes(String(archiveRootActivation?.status || ""))) return undefined;
@@ -1546,62 +1858,163 @@ export default function StorageOperationsPage() {
     }
   }
 
-  async function refreshMigrationPreview() {
+  async function openMigrationDialog() {
+    setMigrationDialogOpen(true);
+    if (!manageSettingsPermission.allowed) return;
+    try {
+      const active = await apiFetch("/storage/migration/operations/active");
+      if (active?.plan) {
+        setMigrationPlan(active.plan);
+        setMigrationSourceRootId(String(active.plan.source_root_id || ""));
+        setMigrationTargetRootId(String(active.plan.target_root_id || ""));
+      }
+      if (active?.operation) setMigrationOperation(active.operation);
+    } catch (_) {}
+  }
+
+  function resetMigrationDraft() {
+    setMigrationPlan(null);
+    setMigrationOperation(null);
+    setMigrationMessage("");
+    migrationPlanRequestKeyRef.current = null;
+    migrationApplyRequestKeyRef.current = null;
+    migrationRetryRequestKeyRef.current = null;
+  }
+
+  function selectMigrationSource(rootId) {
+    const next = String(rootId || "");
+    setMigrationSourceRootId(next);
+    if (next === String(migrationTargetRootId)) {
+      const alternative = archiveRoots.find((root) => String(root.id) !== next);
+      setMigrationTargetRootId(alternative ? String(alternative.id) : "");
+    }
+    resetMigrationDraft();
+  }
+
+  function selectMigrationTarget(rootId) {
+    setMigrationTargetRootId(String(rootId || ""));
+    resetMigrationDraft();
+  }
+
+  async function prepareMigrationPlan() {
     if (!manageSettingsPermission.allowed) {
       setMigrationMessage(manageSettingsPermission.reason);
       return;
     }
-    if (!migrationTargetRootId) {
-      setMigrationMessage(copy.migrationChooseTargetFirst);
+    if (!migrationSourceRootId || !migrationTargetRootId || migrationSourceRootId === migrationTargetRootId) {
+      setMigrationMessage(copy.migrationChooseSourceTarget);
       return;
     }
-    setRootAction("preview");
+    setMigrationBusy(true);
     setMigrationMessage("");
+    setMigrationOperation(null);
+    const idempotencyKey = migrationPlanRequestKeyRef.current || newStorageOperationId("migration-plan");
+    migrationPlanRequestKeyRef.current = idempotencyKey;
     try {
-      const result = await apiFetch("/storage/migration/preview", {
+      const plan = await apiFetch("/storage/migration/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target_root_id: migrationTargetRootId }),
+        body: JSON.stringify({
+          source_root_id: migrationSourceRootId,
+          target_root_id: migrationTargetRootId,
+          idempotency_key: idempotencyKey,
+        }),
       });
-      setMigrationPreviewState(result);
-      setMigrationMessage(copy.previewUpdated);
-      await loadStatus({ silent: true });
+      setMigrationPlan(plan);
     } catch (err) {
-      setMigrationMessage(errorDetailText(err, copy.previewFailed, language));
+      setMigrationMessage(errorDetailText(err, copy.migrationPrepareFailed, language));
     } finally {
-      setRootAction("");
+      setMigrationBusy(false);
     }
   }
 
   async function applyMigration() {
-    if (!migrationPreview?.apply_available || !migrationTargetRootId) return;
-    if (!manageSettingsPermission.allowed) {
-      setMigrationMessage(manageSettingsPermission.reason);
-      return;
-    }
-    if (!window.confirm(copy.applyConfirm)) return;
-    setRootAction("apply-migration");
+    if (!migrationScenario.canApply || !migrationPlan?.plan_id || !migrationPlan?.canonical_hash) return;
+    setMigrationBusy(true);
     setMigrationMessage("");
-    setMigrationResult(null);
+    const idempotencyKey = migrationApplyRequestKeyRef.current || newStorageOperationId("migration-apply");
+    migrationApplyRequestKeyRef.current = idempotencyKey;
     try {
       const result = await apiFetch("/storage/migration/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          target_root_id: migrationTargetRootId,
-          plan_id: migrationPreview.plan_id || null,
+          plan_id: migrationPlan.plan_id,
+          expected_plan_hash: migrationPlan.canonical_hash,
+          idempotency_key: idempotencyKey,
           confirm: true,
         }),
       });
-      setMigrationResult(result);
-      setMigrationMessage(copy.applyCompleted);
+      setMigrationPlan(result.plan || migrationPlan);
+      setMigrationOperation(result.operation || null);
       await loadStatus({ silent: true });
     } catch (err) {
-      const detail = err?.detail || err?.data?.detail || null;
-      setMigrationResult(detail && typeof detail === "object" ? detail : { status: "blocked", blockers: [{ reason: err?.message || copy.applyBlocked }] });
       setMigrationMessage(errorDetailText(err, copy.applyBlocked, language));
     } finally {
-      setRootAction("");
+      setMigrationBusy(false);
+    }
+  }
+
+  async function cancelMigration() {
+    const operationId = migrationOperation?.operation_id || migrationPlan?.operation_id;
+    const planId = migrationPlan?.plan_id;
+    if (!operationId && !planId) return;
+    setMigrationBusy(true);
+    setMigrationMessage("");
+    try {
+      const result = operationId
+        ? await apiFetch(`/storage/migration/operations/${encodeURIComponent(operationId)}/cancel`, { method: "POST" })
+        : await apiFetch(`/storage/migration/plans/${encodeURIComponent(planId)}/cancel`, { method: "POST" });
+      if (result?.plan) setMigrationPlan(result.plan);
+      if (result?.operation) setMigrationOperation(result.operation);
+    } catch (err) {
+      setMigrationMessage(errorDetailText(err, copy.migrationCancelFailed, language));
+    } finally {
+      setMigrationBusy(false);
+    }
+  }
+
+  async function retryMigration() {
+    const operationId = migrationOperation?.operation_id || migrationPlan?.operation_id;
+    if (!operationId || !migrationScenario.canRetry) return;
+    setMigrationBusy(true);
+    setMigrationMessage("");
+    const idempotencyKey = migrationRetryRequestKeyRef.current || newStorageOperationId("migration-retry");
+    migrationRetryRequestKeyRef.current = idempotencyKey;
+    try {
+      const result = await apiFetch(`/storage/migration/operations/${encodeURIComponent(operationId)}/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idempotency_key: idempotencyKey }),
+      });
+      if (result?.plan) setMigrationPlan(result.plan);
+      if (result?.operation) setMigrationOperation(result.operation);
+    } catch (err) {
+      setMigrationMessage(errorDetailText(err, copy.migrationRetryFailed, language));
+    } finally {
+      setMigrationBusy(false);
+    }
+  }
+
+  async function takeoverMigrationCleanup() {
+    const operationId = migrationOperation?.operation_id || migrationPlan?.operation_id;
+    if (!operationId || !migrationScenario.canCleanupTakeover) return;
+    setMigrationBusy(true);
+    setMigrationMessage("");
+    const idempotencyKey = migrationTakeoverRequestKeyRef.current || newStorageOperationId("migration-cleanup-takeover");
+    migrationTakeoverRequestKeyRef.current = idempotencyKey;
+    try {
+      const result = await apiFetch(`/storage/migration/operations/${encodeURIComponent(operationId)}/cleanup-takeover`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idempotency_key: idempotencyKey, confirm: true }),
+      });
+      if (result?.plan) setMigrationPlan(result.plan);
+      if (result?.operation) setMigrationOperation(result.operation);
+    } catch (err) {
+      setMigrationMessage(errorDetailText(err, copy.migrationCleanupTakeoverFailed, language));
+    } finally {
+      setMigrationBusy(false);
     }
   }
 
@@ -1830,38 +2243,16 @@ export default function StorageOperationsPage() {
                     description={migrationPrimaryText}
                     meta={(
                       <div className="storageOpsOperationFacts">
-                        <MiniFact label={copy.move} value={`${migrationPreview.total_would_move_count || 0} / ${formatBytes(migrationPreview.total_would_move_bytes)}`} />
-                        <MiniFact label={copy.willStay} value={String(migrationPreview.total_would_stay_count || 0)} />
-                        <MiniFact label={copy.blockers} value={String((migrationPreview.blockers || []).length)} tone={(migrationPreview.blockers || []).length ? "warning" : "ok"} />
-                        <MiniFact label={copy.applyState} value={migrationPreview.apply_available ? copy.available : copy.unavailable} tone={migrationPreview.apply_available ? "ok" : "warning"} />
+                        <MiniFact label={copy.move} value={migrationScenario.itemCount === null || migrationScenario.totalBytes === null ? copy.migrationUnknownValue : `${migrationScenario.itemCount} / ${formatBytes(migrationScenario.totalBytes)}`} />
+                        <MiniFact label={copy.migrationCompleted} value={migrationScenario.completedCount === null ? copy.migrationUnknownValue : String(migrationScenario.completedCount)} />
+                        <MiniFact label={copy.migrationExcluded} value={migrationScenario.excludedCount === null ? copy.migrationUnknownValue : String(migrationScenario.excludedCount)} tone={migrationScenario.excludedCount ? "warning" : "neutral"} />
+                        <MiniFact label={copy.applyState} value={archiveMigrationStatusText(migrationScenario, archiveRoots, copy)} tone={migrationScenario.completedProof ? "ok" : migrationScenario.manualReviewRequired ? "warning" : "neutral"} />
                       </div>
                     )}
                     actions={(
-                      <button className="button secondary small" type="button" title={copy.refreshMigrationPreview} onClick={refreshMigrationPreview} disabled={!!rootAction || !migrationScenario.canPreview}>{rootAction === "preview" ? copy.calculating : copy.migrationPreviewShort}</button>
+                      <button className="button secondary small" type="button" title={copy.migrationOpen} onClick={openMigrationDialog} disabled={!!rootAction || !manageSettingsPermission.allowed}>{copy.migrationOpen}</button>
                     )}
-                  >
-                    {migrationMessage ? <div className="storageOpsNote storageOpsNoteStrong">{migrationMessage}</div> : null}
-                    <details className="storageOpsInlineDetails">
-                      <summary>{copy.supportDetails}</summary>
-                      <div className="storageOpsNote">{copy.migrationSteps}</div>
-                      {inactiveArchiveRoots.length ? (
-                        <label className="storageOpsField">
-                          <span>{copy.migrationTarget}</span>
-                          <select className="select" value={migrationTargetRootId} onChange={(event) => setMigrationTargetRootId(event.target.value)} disabled={!!rootAction}>
-                            {inactiveArchiveRoots.map((root) => (
-                              <option key={root.id} value={root.id}>{archiveRootLabel(root, copy)} - {archiveRootPath(root, archivePathText)}</option>
-                            ))}
-                          </select>
-                        </label>
-                      ) : (
-                        <div className="storageOpsNote storageOpsNoteStrong">{copy.migrationAddTargetFirst}</div>
-                      )}
-                      <button className="button small" type="button" title={copy.applyMigration} onClick={applyMigration} disabled={!!rootAction || !migrationScenario.canApply}>{rootAction === "apply-migration" ? copy.applying : copy.applyMigrationShort}</button>
-                      {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
-                      {migrationResult ? <SummaryRow label={copy.applyReport} value={`${statusLabel(migrationResult.status, language)}; ${copy.executed}: ${(migrationResult.executed || []).length}; ${copy.sourcePreserved}: ${boolLabel(migrationResult.source_preserved, language)}; ${copy.cleanupPending}: ${boolLabel(migrationResult.cleanup_pending, language)}`} /> : null}
-                      {migrationScenario.manualReviewRequired ? <div className="storageOpsNote">{copy.migrationManualReview}</div> : null}
-                    </details>
-                  </OperationRow>
+                  />
                 </div>
                 <div className="storageOpsNote storageOpsNoteStrong">{copy.safeActionNote}</div>
               </Section>
@@ -2048,6 +2439,31 @@ export default function StorageOperationsPage() {
           onClearPlan={clearIntegrityPlan}
           onConfirmChange={setIntegrityConfirmed}
           onApply={applyIntegrityAction}
+        />
+        <ArchiveMigrationDialog
+          open={migrationDialogOpen}
+          roots={archiveRoots}
+          sourceRootId={migrationSourceRootId}
+          targetRootId={migrationTargetRootId}
+          plan={migrationPlan}
+          operation={migrationOperation}
+          scenario={migrationScenario}
+          busy={migrationBusy}
+          error={migrationMessage}
+          copy={copy}
+          language={language}
+          onClose={() => {
+            setMigrationDialogOpen(false);
+            if (requestedMigrationOperationId) router.replace("/storage", { scroll: false });
+          }}
+          onSourceChange={selectMigrationSource}
+          onTargetChange={selectMigrationTarget}
+          onPrepare={prepareMigrationPlan}
+          onApply={applyMigration}
+          onCancel={cancelMigration}
+          onRetry={retryMigration}
+          onCleanupTakeover={takeoverMigrationCleanup}
+          onReset={resetMigrationDraft}
         />
         <OperationDialog dialog={archiveRootDialog} onClose={closeArchiveRootDialog} />
         <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />

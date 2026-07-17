@@ -31,6 +31,7 @@ class StorageOperation(Base):
     system_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
     request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    domain_ref: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)
 
     status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     scope: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)

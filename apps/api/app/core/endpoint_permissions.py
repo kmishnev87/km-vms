@@ -39,7 +39,12 @@ class EndpointPermission:
             return (PUBLIC,)
         if self.decision == AUTHENTICATED:
             return (ROLE_OWNER, ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER)
-        return tuple(role for role, permissions in ROLE_PERMISSIONS.items() if self.decision in permissions)
+        required = tuple(item for item in self.decision.split("+") if item)
+        return tuple(
+            role
+            for role, permissions in ROLE_PERMISSIONS.items()
+            if required and all(permission in permissions for permission in required)
+        )
 
 
 ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
@@ -95,8 +100,15 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("storage", "POST", "/storage/archive-roots", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("storage", "POST", "/storage/archive-roots/{root_id}/activate", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("storage", "DELETE", "/storage/archive-roots/{root_id}", PERMISSION_MANAGE_SETTINGS, "require_permission"),
-    EndpointPermission("storage", "POST", "/storage/migration/preview", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only migration preview; no file move/copy/delete."),
-    EndpointPermission("storage", "POST", "/storage/migration/apply", PERMISSION_MANAGE_SETTINGS, "require_permission", "Explicit copy-only migration apply; confirm required, server-side configured roots only, source preserved."),
+    EndpointPermission("storage", "POST", "/storage/migration/preview", PERMISSION_MANAGE_SETTINGS, "require_permission", "Creates a durable explicit source-to-target read-only migration plan."),
+    EndpointPermission("storage", "GET", "/storage/migration/plans/{plan_id}", PERMISSION_MANAGE_SETTINGS, "require_permission"),
+    EndpointPermission("storage", "GET", "/storage/migration/plans/{plan_id}/items", PERMISSION_MANAGE_SETTINGS, "require_permission", "Reads one bounded page of sanitized immutable plan items."),
+    EndpointPermission("storage", "POST", "/storage/migration/plans/{plan_id}/cancel", PERMISSION_MANAGE_SETTINGS, "require_permission", "Actor or owner/admin may cancel preparation or request a safe-boundary operation cancel."),
+    EndpointPermission("storage", "POST", "/storage/migration/apply", f"{PERMISSION_MANAGE_SETTINGS}+{PERMISSION_DELETE_RECORDINGS}", "require_permissions", "Queues confirmed durable true-move apply; both permissions are required."),
+    EndpointPermission("storage", "GET", "/storage/migration/operations/active", PERMISSION_MANAGE_SETTINGS, "require_permission", "Bounded lightweight active migration summary."),
+    EndpointPermission("storage", "GET", "/storage/migration/operations/{operation_id}", PERMISSION_MANAGE_SETTINGS, "require_permission"),
+    EndpointPermission("storage", "POST", "/storage/migration/operations/{operation_id}/cancel", PERMISSION_MANAGE_SETTINGS, "require_permission", "Actor or owner/admin safe-boundary cancellation; delete permission is not required."),
+    EndpointPermission("storage", "POST", "/storage/migration/operations/{operation_id}/retry", f"{PERMISSION_MANAGE_SETTINGS}+{PERMISSION_DELETE_RECORDINGS}", "require_permissions", "Queues an authorized durable retry without rebuilding the immutable manifest."),
     EndpointPermission("storage", "POST", "/storage/integrity/scans", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Starts a durable read-only archive integrity scan and returns immediately."),
     EndpointPermission("storage", "GET", "/storage/integrity/scans/latest", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Reads bounded latest durable integrity status; never scans or mutates archive state."),
     EndpointPermission("storage", "GET", "/storage/integrity/scans/{scan_id}", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Reads one bounded durable integrity scan status."),

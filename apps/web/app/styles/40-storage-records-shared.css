@@ -3032,6 +3032,207 @@
   color: inherit;
 }
 
+/* Stage 13.5 / 4.10.4 durable archive-migration flow. */
+.archiveMigrationDialog {
+  width: min(720px, 100%);
+}
+
+.archiveMigrationWizard {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.archiveMigrationSteps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.archiveMigrationSteps span {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 11px;
+  text-align: center;
+}
+
+.archiveMigrationSteps span.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.archiveMigrationSteps span.done {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.archiveMigrationFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.archiveMigrationFields label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.archiveMigrationFields label > span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.archiveMigrationFields .select {
+  width: 100%;
+  min-width: 0;
+}
+
+.archiveMigrationHint,
+.archiveMigrationCapacity,
+.archiveMigrationConfirmation,
+.archiveMigrationMessage,
+.archiveMigrationReasons {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.archiveMigrationHint {
+  padding: 8px 10px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.archiveMigrationFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.archiveMigrationFacts div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.archiveMigrationFacts dt {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.archiveMigrationFacts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.archiveMigrationCapacity,
+.archiveMigrationProgressFacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 12px;
+}
+
+.archiveMigrationCapacity strong {
+  flex-basis: 100%;
+  color: #0f172a;
+}
+
+.archiveMigrationProgress {
+  display: grid;
+  gap: 8px;
+}
+
+.archiveMigrationProgressHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.archiveMigrationProgressHead span,
+.archiveMigrationProgressFacts {
+  color: #64748b;
+}
+
+.archiveMigrationProgressTrack {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.archiveMigrationProgressTrack > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 0.2s ease;
+}
+
+.archiveMigrationProgress-completed .archiveMigrationProgressTrack > span {
+  background: #16a34a;
+}
+
+.archiveMigrationConfirmation {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.archiveMigrationConfirmation ul {
+  display: grid;
+  gap: 5px;
+  margin: 7px 0 0;
+  padding-left: 19px;
+}
+
+.archiveMigrationReasons,
+.archiveMigrationMessage {
+  display: grid;
+  gap: 5px;
+}
+
+.archiveMigrationReasons span,
+.archiveMigrationMessage span {
+  overflow-wrap: anywhere;
+}
+
+.archiveMigrationReasons-warning,
+.archiveMigrationMessage-warning {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.archiveMigrationMessage-error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.archiveMigrationMessage-success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
 .storageOpsDashboard {
   grid-template-columns: minmax(0, 1.55fr) minmax(390px, 1fr);
   grid-template-areas:

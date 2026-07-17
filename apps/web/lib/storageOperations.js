@@ -717,7 +717,33 @@ function reasonCode(reason) {
 }
 
 export function humanBlockerReason(reason, language = "ru") {
-  const code = reasonCode(reason);
+  const rawCode = reasonCode(reason);
+  const aliases = {
+    archive_root_identity_changed: "physical_volume_identity_changed",
+    archive_root_not_readable: "archive_root_unavailable",
+    archive_root_open_failed: "archive_root_unavailable",
+    archive_root_physical_identity_unknown: "physical_volume_identity_unknown",
+    archive_root_runtime_not_directory: "archive_root_unavailable",
+    migration_final_checksum_mismatch: "migration_target_checksum_mismatch",
+    migration_final_provenance_mismatch: "migration_target_collision",
+    migration_final_provenance_unknown: "migration_target_collision",
+    migration_manifest_item_tampered: "migration_plan_stale_or_tampered",
+    migration_operation_identity_invalid: "migration_plan_stale_or_tampered",
+    migration_plan_idempotency_mismatch: "migration_plan_stale_or_tampered",
+    migration_quarantine_provenance_mismatch: "migration_source_cleanup_truth_unknown",
+    migration_segment_missing: "migration_segment_changed_after_plan",
+    migration_source_changed_after_copy: "migration_source_changed",
+    migration_source_provenance_mismatch: "migration_source_changed",
+    migration_source_short_read: "migration_source_changed",
+    migration_target_residue_provenance_mismatch: "migration_target_collision",
+    migration_target_residue_provenance_unknown: "migration_target_collision",
+    migration_temp_pending_object_ambiguous: "migration_temp_collision",
+    migration_temp_provenance_mismatch: "migration_temp_collision",
+    migration_temp_provenance_unknown: "migration_temp_collision",
+    migration_item_terminal_truth_incomplete: "migration_manifest_incomplete",
+    migration_not_processed_after_partial: "migration_manifest_incomplete",
+  };
+  const code = aliases[rawCode] || rawCode;
   const labels = {
     auto_free_space_acknowledgement_required: {
       ru: "Перед включением подтвердите условия автоматического удаления старых записей.",
@@ -1024,6 +1050,186 @@ export function humanBlockerReason(reason, language = "ru") {
       en: "Plan item disappeared after validation. Refresh the check and retry.",
       "zh-CN": "计划项在验证后消失。请刷新检查并重试。",
     },
+    migration_source_target_required: {
+      ru: "Выберите исходное и целевое расположения архива.",
+      en: "Select both the source and target archive locations.",
+      "zh-CN": "请选择源归档位置和目标归档位置。",
+    },
+    migration_source_equals_target: {
+      ru: "Исходное и целевое расположения должны отличаться.",
+      en: "Source and target archive locations must be different.",
+      "zh-CN": "源归档位置和目标归档位置必须不同。",
+    },
+    migration_plan_not_ready: {
+      ru: "План переноса ещё не готов. Дождитесь завершения проверки.",
+      en: "The migration plan is not ready yet. Wait for validation to finish.",
+      "zh-CN": "迁移计划尚未就绪。请等待验证完成。",
+    },
+    migration_plan_not_found: {
+      ru: "План переноса не найден или больше недоступен. Обновите состояние и подготовьте новый план.",
+      en: "The migration plan was not found or is no longer available. Refresh status and prepare a new plan.",
+      "zh-CN": "找不到迁移计划或该计划已不可用。请刷新状态并准备新计划。",
+    },
+    migration_operation_not_found: {
+      ru: "Операция переноса не найдена. Обновите состояние, чтобы получить её актуальный результат.",
+      en: "The migration operation was not found. Refresh status to retrieve its current result.",
+      "zh-CN": "找不到迁移操作。请刷新状态以获取当前结果。",
+    },
+    migration_plan_expired: {
+      ru: "План переноса устарел. Подготовьте новый план.",
+      en: "The migration plan has expired. Prepare a new plan.",
+      "zh-CN": "迁移计划已过期。请准备新计划。",
+    },
+    migration_plan_stale_or_tampered: {
+      ru: "План больше не соответствует подтверждённому состоянию. Подготовьте его заново.",
+      en: "The plan no longer matches the confirmed state. Prepare it again.",
+      "zh-CN": "计划不再与已确认状态匹配。请重新准备计划。",
+    },
+    migration_insufficient_target_space: {
+      ru: "На целевом томе недостаточно свободного места с учётом безопасного резерва.",
+      en: "The target volume lacks free space after the required safety reserve.",
+      "zh-CN": "目标卷在保留所需安全空间后可用空间不足。",
+    },
+    migration_no_eligible_recordings: {
+      ru: "В выбранном исходном расположении нет завершённых записей, которые сейчас можно безопасно перенести.",
+      en: "The selected source has no finalized recordings that can be moved safely now.",
+      "zh-CN": "所选源位置中当前没有可安全移动的已完成录像。",
+    },
+    migration_permission_required: {
+      ru: "Для запуска переноса нужны права управления хранилищем и удаления записей.",
+      en: "Starting a migration requires both storage-management and recording-deletion permissions.",
+      "zh-CN": "启动迁移需要存储管理权限和录像删除权限。",
+    },
+    migration_plan_actor_mismatch: {
+      ru: "Этот план подготовлен другим пользователем. Первоначальный перенос может запустить только автор плана; администратор может принять только явно доступное завершение очистки.",
+      en: "This plan was prepared by another user. Only its author can start the initial migration; an administrator may take over only an explicitly available cleanup recovery.",
+      "zh-CN": "此计划由其他用户准备。只有计划创建者可以启动首次迁移；管理员只能接管明确可用的清理恢复。",
+    },
+    migration_cleanup_takeover_not_allowed: {
+      ru: "Административное завершение сейчас недоступно: нет подтверждённой незавершённой очистки или операция уже изменилась. Обновите состояние.",
+      en: "Administrative cleanup is not available because no exact pending cleanup is proven or the operation has changed. Refresh the state.",
+      "zh-CN": "管理员清理当前不可用：未确认存在准确的待清理工作，或操作状态已更改。请刷新状态。",
+    },
+    migration_cleanup_takeover_requires_confirm: {
+      ru: "Административное завершение очистки требует явного подтверждения.",
+      en: "Administrative cleanup recovery requires explicit confirmation.",
+      "zh-CN": "管理员清理恢复需要明确确认。",
+    },
+    migration_recovery_permission_revoked: {
+      ru: "Администратор потерял необходимые права во время очистки. Изменение остановлено до восстановления прав.",
+      en: "The recovery administrator lost required permissions during cleanup. Mutation stopped until permissions are restored.",
+      "zh-CN": "恢复管理员在清理期间失去所需权限。更改已停止，等待权限恢复。",
+    },
+    migration_plan_preparation_failed: {
+      ru: "Не удалось безопасно подготовить план переноса. Обновите состояние хранилища и повторите подготовку.",
+      en: "The migration plan could not be prepared safely. Refresh storage status and prepare it again.",
+      "zh-CN": "无法安全准备迁移计划。请刷新存储状态后重新准备。",
+    },
+    migration_root_revalidation_failed: {
+      ru: "Расположение архива изменилось или стало недоступно после подготовки плана. Обновите состояние и подготовьте новый план.",
+      en: "An archive location changed or became unavailable after plan preparation. Refresh status and prepare a new plan.",
+      "zh-CN": "准备计划后归档位置已更改或不可用。请刷新状态并准备新计划。",
+    },
+    migration_temp_missing: {
+      ru: "Подтверждённый временный файл переноса отсутствует. Система остановилась без повторного копирования; обновите состояние и используйте предложенное действие.",
+      en: "The proven migration temporary file is missing. The system stopped without recopying; refresh status and use the offered action.",
+      "zh-CN": "已确认的迁移临时文件缺失。系统已停止且未重复复制；请刷新状态并执行建议操作。",
+    },
+    migration_operation_failed: {
+      ru: "Операция переноса остановилась без раскрытия внутренних технических данных. Обновите состояние и используйте предложенное безопасное действие.",
+      en: "Migration stopped without exposing internal technical details. Refresh status and use the offered safe action.",
+      "zh-CN": "迁移已停止，未公开内部技术信息。请刷新状态并执行建议的安全操作。",
+    },
+    migration_permission_revoked: {
+      ru: "Во время переноса необходимые права были отозваны. Уже завершённые файлы не откатывались.",
+      en: "Required permissions were revoked during migration. Completed files were not rolled back.",
+      "zh-CN": "迁移期间所需权限被撤销。已完成的文件不会回滚。",
+    },
+    migration_segment_became_active: {
+      ru: "Одна из записей снова используется камерой. Подготовьте новый план после завершения записи.",
+      en: "A recording became active again. Prepare a new plan after recording finishes.",
+      "zh-CN": "某个录像再次处于活动状态。请在录像结束后准备新计划。",
+    },
+    migration_segment_changed_after_plan: {
+      ru: "Данные записи изменились после подготовки плана. Подготовьте новый план.",
+      en: "Recording data changed after the plan was prepared. Prepare a new plan.",
+      "zh-CN": "计划准备后录像数据发生变化。请准备新计划。",
+    },
+    migration_source_changed: {
+      ru: "Исходный файл изменился после подготовки плана. Он не был удалён.",
+      en: "A source file changed after the plan was prepared. It was not deleted.",
+      "zh-CN": "计划准备后源文件发生变化。该文件未被删除。",
+    },
+    migration_source_checksum_changed: {
+      ru: "Контрольная сумма исходного файла изменилась. Файл оставлен на месте для безопасной проверки.",
+      en: "A source checksum changed. The file was left in place for safe review.",
+      "zh-CN": "源文件校验和发生变化。文件保留在原处以便安全检查。",
+    },
+    migration_target_collision: {
+      ru: "В целевом расположении найден чужой или неподтверждённый файл с тем же именем. Система его не изменяла.",
+      en: "A foreign or unverified file already occupies the target name. KM VMS did not modify it.",
+      "zh-CN": "目标名称已被外部或未验证文件占用。KM VMS 未修改该文件。",
+    },
+    migration_temp_collision: {
+      ru: "В служебном месте переноса обнаружен файл без подтверждённой принадлежности этой операции. Он не изменён.",
+      en: "The migration workspace contains an object not proven to belong to this operation. It was not modified.",
+      "zh-CN": "迁移工作区中存在无法证明属于本次操作的对象。该对象未被修改。",
+    },
+    migration_target_checksum_mismatch: {
+      ru: "Проверка целевой копии не совпала с исходником. Исходный файл сохранён.",
+      en: "Target verification did not match the source. The source file was preserved.",
+      "zh-CN": "目标文件验证结果与源文件不一致。源文件已保留。",
+    },
+    migration_final_target_missing: {
+      ru: "Подтверждённый целевой файл исчез. Переключение или очистка остановлены; восстановите доступ к целевому расположению и обновите состояние.",
+      en: "A proven target file disappeared. Switching or cleanup stopped; restore target access and refresh status.",
+      "zh-CN": "已确认的目标文件消失。切换或清理已停止；请恢复目标位置访问并刷新状态。",
+    },
+    migration_final_not_readable: {
+      ru: "Целевой файл создан, но не прошёл проверку обычного чтения. Исходный файл не удалён.",
+      en: "The target file was created but failed the normal read check. The source was not deleted.",
+      "zh-CN": "目标文件已创建，但未通过正常读取检查。源文件未被删除。",
+    },
+    migration_metadata_changed_before_switch: {
+      ru: "Карточка записи изменилась до переключения на новый файл. Система остановилась без удаления исходника.",
+      en: "Recording metadata changed before placement could switch. The operation stopped without deleting the source.",
+      "zh-CN": "切换到新文件前录像元数据发生变化。操作已停止，源文件未删除。",
+    },
+    migration_source_cleanup_incomplete: {
+      ru: "Запись уже переключена на целевой файл, но удаление исходной копии не завершено. Доступен безопасный повтор очистки.",
+      en: "The recording already uses the target file, but source cleanup is incomplete. A safe cleanup retry is available.",
+      "zh-CN": "录像已切换到目标文件，但源文件清理尚未完成。可以安全重试清理。",
+    },
+    migration_source_cleanup_truth_unknown: {
+      ru: "Система не смогла доказать итог удаления исходной копии. Не запускайте новый перенос до безопасного повтора очистки.",
+      en: "The source-cleanup result could not be proven. Do not start another migration until cleanup is safely retried.",
+      "zh-CN": "无法证明源文件清理结果。在安全重试清理前，请勿启动新的迁移。",
+    },
+    migration_manifest_incomplete: {
+      ru: "Не все элементы подтверждённого плана завершены. Итог сохранён как частичный.",
+      en: "Not every item in the confirmed plan completed. The result was stored as partial.",
+      "zh-CN": "已确认计划中的部分项目未完成。结果已保存为部分完成。",
+    },
+    migration_cancel_cleanup_pending: {
+      ru: "Отмена принята, но сначала система должна безопасно завершить очистку уже обработанного файла.",
+      en: "Cancellation was accepted, but cleanup of an already processed file must finish safely first.",
+      "zh-CN": "取消请求已接受，但必须先安全完成已处理文件的清理。",
+    },
+    migration_filesystem_failure: {
+      ru: "Операция с файлами завершилась ошибкой. Уже подтверждённые изменения сохранены; доступный повтор указан ниже.",
+      en: "A filesystem operation failed. Proven completed changes were kept; the available retry is shown below.",
+      "zh-CN": "文件系统操作失败。已确认完成的更改已保留；下方显示可用的重试方式。",
+    },
+    migration_worker_failure: {
+      ru: "Фоновый перенос остановился с ошибкой. Обновите состояние и используйте предложенный безопасный повтор.",
+      en: "The background migration stopped with an error. Refresh status and use the offered safe retry.",
+      "zh-CN": "后台迁移因错误停止。请刷新状态并使用提供的安全重试。",
+    },
+    migration_retry_not_allowed: {
+      ru: "Для этого результата безопасный повтор недоступен. Обновите состояние и подготовьте новый план.",
+      en: "A safe retry is not available for this result. Refresh status and prepare a new plan.",
+      "zh-CN": "此结果无法安全重试。请刷新状态并准备新计划。",
+    },
     permission_denied: {
       ru: "Недостаточно прав для действия.",
       en: "Not enough permissions for this action.",
@@ -1207,23 +1413,126 @@ export function reconciliationScenarioModel({ preview = null, result = null, rec
   };
 }
 
-export function migrationScenarioModel({ preview = {}, result = null, permission = { allowed: true }, running = false } = {}, language = "ru") {
-  const blockers = Array.isArray(preview?.blockers) ? preview.blockers : [];
-  const resultBlockers = Array.isArray(result?.blockers) ? result.blockers : [];
-  const blockerText = (resultBlockers.length ? resultBlockers : blockers).map((item) => humanBlockerReason(item, language));
-  const failed = result?.status === "failed";
-  const blocked = Boolean(blockers.length || result?.status === "blocked");
+const MIGRATION_ACTIVE_STATUSES = new Set(["building", "queued", "running", "cancel_requested", "interrupted"]);
+const MIGRATION_TERMINAL_STATUSES = new Set(["completed", "partial", "failed", "blocked", "cancelled", "expired"]);
+
+export function migrationScenarioModel({
+  plan = null,
+  operation = null,
+  preview = null,
+  result = null,
+  permission = { allowed: true, reason: "" },
+  preparePermission = null,
+  applyPermission = null,
+  running = false,
+} = {}, language = "ru") {
+  const currentPlan = plan || preview || result?.plan || {};
+  const currentOperation = operation || result?.operation || null;
+  const prepareGate = preparePermission || permission;
+  const applyGate = applyPermission || permission;
+  const operationStatus = String(currentOperation?.status || "");
+  const planStatus = String(currentPlan?.status || "");
+  let status = operationStatus || planStatus || (running ? "running" : "idle");
+  if (!MIGRATION_ACTIVE_STATUSES.has(status) && !MIGRATION_TERMINAL_STATUSES.has(status) && !["ready", "ready_with_exclusions", "idle"].includes(status)) {
+    status = status ? "unknown" : "idle";
+  }
+
+  const progress = currentOperation?.progress || {};
+  const itemCount = Number(currentPlan?.item_count ?? progress?.item_count);
+  const completedCount = Number(currentPlan?.completed_count ?? progress?.completed_count);
+  const totalBytes = Number(currentPlan?.total_bytes ?? progress?.total_bytes);
+  const completedBytes = Number(currentPlan?.completed_bytes ?? progress?.completed_bytes);
+  const currentItemBytes = Number(progress?.current_item_bytes);
+  const countsKnown = Number.isFinite(itemCount) && Number.isFinite(completedCount);
+  const bytesKnown = Number.isFinite(totalBytes) && Number.isFinite(completedBytes);
+  const cleanupPending = currentPlan?.cleanup_pending === true;
+  const completedProof = status === "completed"
+    && !cleanupPending
+    && countsKnown
+    && completedCount === itemCount;
+  let percent = null;
+  if (completedProof) {
+    percent = 100;
+  } else if (bytesKnown && totalBytes > 0) {
+    const transferred = completedBytes + (Number.isFinite(currentItemBytes) ? Math.max(0, currentItemBytes) : 0);
+    percent = Math.min(99, Math.max(0, Math.floor((transferred / totalBytes) * 100)));
+  } else if (countsKnown && itemCount > 0) {
+    percent = Math.min(99, Math.max(0, Math.floor((completedCount / itemCount) * 100)));
+  }
+
+  const phase = String(progress?.phase || currentPlan?.phase || status || "unknown");
+  const optionalBoundedNumber = (value, { minimum = 0, maximum = Number.MAX_SAFE_INTEGER } = {}) => {
+    if (value === null || value === undefined || value === "") return null;
+    const numeric = Number(value);
+    return Number.isFinite(numeric) && numeric >= minimum && numeric <= maximum ? numeric : null;
+  };
+  const speedBytesPerSecond = phase === "copying"
+    ? optionalBoundedNumber(progress?.speed_bytes_per_second, { minimum: 1 })
+    : null;
+  const etaSeconds = phase === "copying"
+    ? optionalBoundedNumber(progress?.eta_seconds)
+    : null;
+  const transferMetricsWarming = phase === "copying"
+    && (speedBytesPerSecond === null || etaSeconds === null);
+  const reasonCode = currentOperation?.reason_code || currentPlan?.reason_code || null;
+  const ready = ["ready", "ready_with_exclusions"].includes(status);
+  const active = MIGRATION_ACTIVE_STATUSES.has(status);
+  const terminal = MIGRATION_TERMINAL_STATUSES.has(status);
+  const retryAllowed = currentOperation?.retry_allowed === true;
+  const capabilities = currentOperation?.capabilities || {};
+  const ownerRetryAllowed = Object.prototype.hasOwnProperty.call(capabilities, "owner_retry_allowed")
+    ? capabilities.owner_retry_allowed === true
+    : true;
+  const cancelAllowed = currentOperation
+    ? currentOperation.cancel_allowed === true && active
+    : status === "building";
+
   return {
-    status: !permission.allowed ? "unavailable_due_to_permissions" : running ? "running" : failed ? "apply_failed" : result?.status === "completed" ? "apply_completed" : blocked ? "apply_blocked" : preview?.apply_available ? "preview_completed" : "idle",
-    permissionReason: permission.allowed ? "" : permission.reason,
-    canPreview: Boolean(permission.allowed && !running),
-    canApply: Boolean(permission.allowed && preview?.apply_available && !running && !blockers.length),
-    targetRootId: preview?.target_root_id || result?.target_root_id || null,
-    targetLabel: preview?.target_label || result?.target_label || "",
-    blockerReason: Array.from(new Set(blockerText)).join(" ") || "",
-    sourcePreserved: preview?.source_preserved ?? result?.source_preserved ?? true,
-    cleanupPending: preview?.cleanup_pending ?? result?.cleanup_pending ?? false,
-    manualReviewRequired: Boolean(failed || result?.cleanup_pending || result?.status === "blocked"),
+    status,
+    phase,
+    ready,
+    active,
+    terminal,
+    completedProof,
+    percent,
+    itemCount: Number.isFinite(itemCount) ? Math.max(0, itemCount) : null,
+    completedCount: Number.isFinite(completedCount) ? Math.max(0, completedCount) : null,
+    totalBytes: Number.isFinite(totalBytes) ? Math.max(0, totalBytes) : null,
+    completedBytes: Number.isFinite(completedBytes) ? Math.max(0, completedBytes) : null,
+    speedBytesPerSecond,
+    etaSeconds,
+    transferMetricsWarming,
+    excludedCount: Number.isFinite(Number(currentPlan?.excluded_count)) ? Math.max(0, Number(currentPlan.excluded_count)) : null,
+    newAfterHighWatermarkCount: Number.isFinite(Number(currentPlan?.new_after_high_watermark_count)) ? Math.max(0, Number(currentPlan.new_after_high_watermark_count)) : null,
+    retainedSourceCount: Number.isFinite(Number(currentPlan?.retained_source_count)) ? Math.max(0, Number(currentPlan.retained_source_count)) : null,
+    cleanupPending,
+    reasonCode,
+    reason: reasonCode ? humanBlockerReason(reasonCode, language) : "",
+    nextAction: currentOperation?.next_action || currentPlan?.next_action || null,
+    retryMode: currentOperation?.retry_mode || currentPlan?.retry_mode || null,
+    canPrepare: Boolean(prepareGate.allowed && !active),
+    canPreview: Boolean(prepareGate.allowed && !active),
+    canApply: Boolean(applyGate.allowed && ready && currentPlan?.canonical_hash && !active),
+    canCancel: Boolean(prepareGate.allowed && cancelAllowed),
+    canRetry: Boolean(applyGate.allowed && terminal && retryAllowed && ownerRetryAllowed),
+    canCleanupTakeover: Boolean(
+      applyGate.allowed
+      && terminal
+      && capabilities.cleanup_takeover_allowed === true
+    ),
+    preparePermissionReason: prepareGate.allowed ? "" : prepareGate.reason,
+    applyPermissionReason: applyGate.allowed ? "" : applyGate.reason,
+    permissionReason: prepareGate.allowed ? "" : prepareGate.reason,
+    sourceRootId: currentPlan?.source_root_id || null,
+    sourceLabel: currentPlan?.source_label || "",
+    targetRootId: currentPlan?.target_root_id || null,
+    targetLabel: currentPlan?.target_label || "",
+    samePhysicalVolume: typeof currentPlan?.same_physical_volume === "boolean" ? currentPlan.same_physical_volume : null,
+    expiresAt: currentPlan?.expires_at || null,
+    operationId: currentOperation?.operation_id || currentPlan?.operation_id || null,
+    planId: currentPlan?.plan_id || null,
+    planHash: currentPlan?.canonical_hash || null,
+    manualReviewRequired: ["partial", "failed", "blocked", "interrupted"].includes(status) || cleanupPending,
   };
 }
 

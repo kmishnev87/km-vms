@@ -15,6 +15,7 @@ from app.models.archive_integrity import (
     ArchiveIntegrityScan,
     RecorderFileReceipt,
 )
+from app.models.archive_migration import ArchiveMigrationItem, ArchiveMigrationPlan
 
 __all__ = [
     "User",
@@ -38,4 +39,6 @@ __all__ = [
     "RecorderFileReceipt",
     "ArchiveIntegrityRemediationPlan",
     "ArchiveIntegrityRemediationItem",
+    "ArchiveMigrationPlan",
+    "ArchiveMigrationItem",
 ]

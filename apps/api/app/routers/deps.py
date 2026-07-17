@@ -104,3 +104,31 @@ def require_permission(permission: str):
         return current_user
 
     return dependency
+
+
+def require_permissions(*permissions: str):
+    required = tuple(dict.fromkeys(str(item) for item in permissions if str(item)))
+    if not required:
+        raise ValueError("at_least_one_permission_required")
+
+    def dependency(
+        current_user: User = Depends(get_current_user),
+        request: Request = None,
+        db: Session = Depends(get_db),
+    ) -> User:
+        missing = [permission for permission in required if not user_has_permission(current_user.role, permission)]
+        if missing:
+            audit_security_denied(
+                db=db,
+                actor=current_user,
+                request=request,
+                event_type="security.permission_denied",
+                reason="missing_permission",
+                status_code=status.HTTP_403_FORBIDDEN,
+                required_permission="+".join(required),
+                metadata={"actor_role": getattr(current_user, "role", None)},
+            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
+        return current_user
+
+    return dependency

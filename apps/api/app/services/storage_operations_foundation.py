@@ -40,6 +40,7 @@ TERMINAL_HISTORY_MAX_ROWS = 500
 TERMINAL_CLEANUP_BATCH = 500
 MAX_RETRY_DEPTH = 4
 MAX_RETRIES_PER_PARENT = 8
+CROSS_ACTOR_RECOVERY_TYPES = frozenset({"archive_migration_apply"})
 
 TERMINAL_OPERATION_STATUSES = frozenset({"completed", "partial", "blocked", "failed", "cancelled"})
 ACTIVE_OPERATION_STATUSES = frozenset({"queued", "running", "cancel_requested"})
@@ -59,6 +60,7 @@ INTERRUPTED_RECOVERABLE_TYPES = frozenset(
         "integrity_catalog_retirement",
         "integrity_recording_delete",
         "orphan_file_cleanup",
+        "archive_migration_apply",
     }
 )
 SIGNAL_STATUSES = frozenset({"idle", "pending", "running"})
@@ -115,6 +117,20 @@ class WorkSignalHandle:
     owner_instance_id: str
     fencing_token: int
     claimed_watermark: int
+
+
+@dataclass(frozen=True)
+class CrossActorRecoveryAuthorization:
+    """Server-created proof for one exact cross-actor cleanup retry."""
+
+    operation_type: str
+    parent_operation_id: str
+    parent_actor_key: str
+    original_actor_key: str
+    parent_request_fingerprint: str
+    domain_ref: str
+    retry_mode: str
+    allow_original_actor_return: bool = False
 
 
 class OperationHeartbeatController:
@@ -182,6 +198,15 @@ def _operation_id(value: str | None, *, prefix: str) -> str:
     normalized = str(value).strip()
     if not OPAQUE_ID_RE.fullmatch(normalized):
         raise StorageOperationContractError("invalid_operation_id")
+    return normalized
+
+
+def _domain_ref(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not OPAQUE_ID_RE.fullmatch(normalized):
+        raise StorageOperationContractError("invalid_operation_domain_ref")
     return normalized
 
 
@@ -383,16 +408,6 @@ def _write_operation_audit(
         db.rollback()
 
 
-def _owner_matches(row: StorageOperation, token: str, fencing_token: int, now: datetime) -> bool:
-    return bool(
-        row.status in {"running", "cancel_requested"}
-        and row.owner_token_hash == _token_hash(token)
-        and int(row.fencing_token or 0) == int(fencing_token)
-        and row.lease_expires_at is not None
-        and row.lease_expires_at > now
-    )
-
-
 def claim_operation(
     db: Session,
     *,
@@ -406,10 +421,12 @@ def claim_operation(
     owner_instance_id: str,
     lease_seconds: int = OPERATION_LEASE_SECONDS,
     parent_operation_id: str | None = None,
+    cross_actor_recovery: CrossActorRecoveryAuthorization | None = None,
     start_immediately: bool = True,
     cancel_allowed: bool = False,
     scope_is_canonical: bool = False,
     initial_progress: dict | None = None,
+    domain_ref: str | None = None,
 ) -> dict[str, Any]:
     op_type = _code(operation_type, field="operation_type", max_length=64)
     normalized_scope = (
@@ -428,13 +445,51 @@ def claim_operation(
     now = _db_now(db)
     requested_operation_id = _operation_id(operation_id, prefix=op_type) if operation_id is not None else None
     normalized_parent_id = _operation_id(parent_operation_id, prefix=op_type) if parent_operation_id else None
+    normalized_domain_ref = _domain_ref(domain_ref)
     parent_snapshot = None
     retry_depth = 0
     if normalized_parent_id is not None:
         parent = db.get(StorageOperation, normalized_parent_id)
+        cross_actor_parent = bool(parent is not None and parent.actor_key != actor_key)
+        parent_snapshot_data = dict(parent.parent_snapshot or {}) if parent is not None else {}
+        parent_original_actor_key = str(
+            parent_snapshot_data.get("original_actor_key")
+            or (parent.actor_key if parent is not None else "")
+        )
+        recovery_continuation = bool(
+            isinstance(cross_actor_recovery, CrossActorRecoveryAuthorization)
+            and op_type in CROSS_ACTOR_RECOVERY_TYPES
+            and cross_actor_recovery.operation_type == op_type
+            and cross_actor_recovery.parent_operation_id == normalized_parent_id
+            and parent is not None
+            and cross_actor_recovery.parent_actor_key == parent.actor_key
+            and cross_actor_recovery.original_actor_key == parent_original_actor_key
+            and (
+                cross_actor_recovery.original_actor_key != actor_key
+                or (
+                    cross_actor_recovery.allow_original_actor_return
+                    and cross_actor_parent
+                    and str(parent_snapshot_data.get("cross_actor_recovery") or "")
+                    == "migration_cleanup_takeover"
+                )
+            )
+            and cross_actor_recovery.parent_request_fingerprint == parent.request_fingerprint
+            and cross_actor_recovery.domain_ref == str(parent.domain_ref or "")
+            and cross_actor_recovery.domain_ref == str(normalized_domain_ref or "")
+            and cross_actor_recovery.retry_mode == "cleanup_only"
+            and parent.retry_mode == "cleanup_only"
+            and bool(parent.retry_allowed)
+            and parent.request_fingerprint == fingerprint
+            and canonical_operation_scope(parent.scope) == normalized_scope
+        )
         if (
             parent is None
-            or parent.actor_key != actor_key
+            or (cross_actor_parent and not recovery_continuation)
+            or (
+                not cross_actor_parent
+                and cross_actor_recovery is not None
+                and not recovery_continuation
+            )
             or parent.operation_type != op_type
             or parent.status not in TERMINAL_OPERATION_STATUSES
         ):
@@ -460,6 +515,11 @@ def claim_operation(
                 "reason_code": parent.reason_code,
                 "finished_at": parent.finished_at.isoformat() if parent.finished_at else None,
                 "retry_depth": int(parent.retry_depth or 0),
+                "actor_key": str(parent.actor_key),
+                "original_actor_key": parent_original_actor_key,
+                "domain_ref": str(parent.domain_ref or ""),
+                "retry_mode": str(parent.retry_mode or ""),
+                "cross_actor_recovery": "migration_cleanup_takeover" if recovery_continuation else None,
             },
             max_bytes=1024,
             field="parent_snapshot",
@@ -480,6 +540,7 @@ def claim_operation(
             and row.request_fingerprint == fingerprint
             and canonical_operation_scope(row.scope) == normalized_scope
             and row.parent_operation_id == normalized_parent_id
+            and row.domain_ref == normalized_domain_ref
         ):
             db.rollback()
             raise StorageOperationContractError("operation_identity_mismatch")
@@ -505,6 +566,7 @@ def claim_operation(
             system_owner=normalized_system_owner,
             idempotency_key=idem,
             request_fingerprint=fingerprint,
+            domain_ref=normalized_domain_ref,
             status="queued",
             scope=normalized_scope,
             progress=bounded_initial_progress,
@@ -532,15 +594,18 @@ def claim_operation(
                 owner_instance_id=owner_instance_id,
                 lease_seconds=lease_seconds,
                 parent_operation_id=parent_operation_id,
+                cross_actor_recovery=cross_actor_recovery,
                 start_immediately=start_immediately,
                 cancel_allowed=cancel_allowed,
                 scope_is_canonical=scope_is_canonical,
                 initial_progress=bounded_initial_progress,
+                domain_ref=normalized_domain_ref,
             )
     elif (
         row.request_fingerprint != fingerprint
         or canonical_operation_scope(row.scope) != normalized_scope
         or row.parent_operation_id != normalized_parent_id
+        or row.domain_ref != normalized_domain_ref
     ):
         db.rollback()
         raise StorageOperationContractError("operation_idempotency_identity_mismatch")
@@ -693,6 +758,7 @@ def create_operation(
     parent_operation_id: str | None = None,
     cancel_allowed: bool = False,
     initial_progress: dict | None = None,
+    domain_ref: str | None = None,
 ) -> dict[str, Any]:
     return claim_operation(
         db,
@@ -709,13 +775,39 @@ def create_operation(
         start_immediately=False,
         cancel_allowed=cancel_allowed,
         initial_progress=initial_progress,
+        domain_ref=domain_ref,
+    )
+
+
+def _owned_operation_query(db: Session, handle: OperationHandle, now: datetime):
+    return db.query(StorageOperation).filter(
+        StorageOperation.id == handle.operation_id,
+        StorageOperation.status.in_(("running", "cancel_requested")),
+        StorageOperation.owner_token_hash == _token_hash(handle.owner_token),
+        StorageOperation.fencing_token == handle.fencing_token,
+        StorageOperation.lease_expires_at.isnot(None),
+        StorageOperation.lease_expires_at > now,
     )
 
 
 def assert_operation_owned(db: Session, handle: OperationHandle) -> StorageOperation:
     now = _db_now(db)
-    row = db.get(StorageOperation, handle.operation_id)
-    if row is None or not _owner_matches(row, handle.owner_token, handle.fencing_token, now):
+    row = _owned_operation_query(db, handle, now).populate_existing().one_or_none()
+    if row is None:
+        raise StorageOperationLeaseLost("storage_operation_lease_lost")
+    return row
+
+
+def lock_operation_owned(db: Session, handle: OperationHandle) -> StorageOperation:
+    """Lock a freshly read operation generation for a short mutation boundary."""
+    now = _db_now(db)
+    row = (
+        _owned_operation_query(db, handle, now)
+        .populate_existing()
+        .with_for_update()
+        .one_or_none()
+    )
+    if row is None:
         raise StorageOperationLeaseLost("storage_operation_lease_lost")
     return row
 
@@ -726,6 +818,7 @@ def request_operation_cancel(
     *,
     actor: Any = None,
     system_owner: str | None = None,
+    allow_admin_override: bool = False,
 ) -> dict:
     _actor_kind, actor_key, _actor_user_id, _normalized_system_owner = actor_identity(
         actor,
@@ -741,7 +834,12 @@ def request_operation_cancel(
     if row is None:
         db.rollback()
         raise StorageOperationContractError("storage_operation_not_found")
-    if row.actor_key != actor_key:
+    is_admin_override = bool(
+        allow_admin_override
+        and actor is not None
+        and str(getattr(actor, "role", "")).lower() in {"owner", "admin"}
+    )
+    if row.actor_key != actor_key and not is_admin_override:
         db.rollback()
         raise StorageOperationContractError("storage_operation_actor_mismatch")
     if row.status in TERMINAL_OPERATION_STATUSES:
@@ -937,6 +1035,7 @@ def public_operation_summary(row: StorageOperation, *, now: datetime) -> dict:
     return {
         "operation_id": str(row.id),
         "operation_type": str(row.operation_type),
+        "domain_ref": row.domain_ref,
         "status": effective_status if effective_status in PUBLIC_OPERATION_STATUSES else "unknown",
         "interrupted": effective_status == "interrupted",
         "recoverable": effective_status == "interrupted" and str(row.operation_type) in INTERRUPTED_RECOVERABLE_TYPES,

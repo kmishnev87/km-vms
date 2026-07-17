@@ -1474,7 +1474,7 @@ def test_stage4103_additive_schema_migration_preflight_apply_verify(stage4103):
     applied = STAGE4103_ARCHIVE_INTEGRITY_MIGRATION.apply(stage4103.db)
     verified = STAGE4103_ARCHIVE_INTEGRITY_MIGRATION.verify(stage4103.db)
     stage4103.db.commit()
-    assert CURRENT_SCHEMA_VERSION == 5
+    assert CURRENT_SCHEMA_VERSION >= 5
     assert preflight["status"] == "ready"
     assert applied["created_or_verified_table_count"] == len(STAGE4103_TABLES)
     assert verified == {"status": "verified", "table_drift": False, "index_drift": False}

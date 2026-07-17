@@ -28,11 +28,11 @@ from app.services.recording_storage import (
     archive_root_runtime_path,
     is_kmvms_namespace_relative,
     list_archive_roots,
-    migration_preview,
     resolve_segment_file_path,
     root_usage,
     segment_archive_root_resolution,
 )
+from app.services.archive_migration import bounded_migration_summary
 from app.services.storage_contract import storage_contract
 from app.services.timezone_contract import format_system_iso, timezone_context
 from app.services.storage_operations_foundation import operation_summaries, safe_reason_code
@@ -1101,7 +1101,7 @@ def build_storage_monitoring_summary(
         "namespace_observations": namespace_observations,
         "archive_roots": archive_roots,
         "volume_groups": _build_volume_groups(db, archive_root_rows, archive_roots),
-        "migration_preview": migration_preview(db),
+        "migration": bounded_migration_summary(db),
     }
     summary["reconciliation_summary"]["problem_details"] = _storage_problem_details(
         summary["reconciliation_summary"],

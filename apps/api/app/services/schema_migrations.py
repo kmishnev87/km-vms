@@ -19,6 +19,7 @@ from app.models.archive_integrity import (
     ArchiveIntegrityScan,
     RecorderFileReceipt,
 )
+from app.models.archive_migration import ArchiveMigrationItem, ArchiveMigrationPlan
 from app.services.backup_before_upgrade import backup_precondition_status
 from app.services.schema_versioning import (
     CURRENT_BASELINE_ID,
@@ -436,12 +437,125 @@ STAGE4103_ARCHIVE_INTEGRITY_MIGRATION = MigrationDefinition(
 )
 
 
+STAGE4104_TABLES = (
+    ArchiveMigrationPlan.__table__,
+    ArchiveMigrationItem.__table__,
+)
+
+STAGE4104_OPERATION_COLUMNS = {
+    "domain_ref": "VARCHAR(96) NULL",
+}
+
+
+def _stage4104_migration_preflight(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    if not inspector.has_table(StorageOperation.__tablename__):
+        raise RuntimeError("stage4104_storage_operations_table_missing")
+    existing_columns = {
+        str(item["name"])
+        for item in inspector.get_columns(StorageOperation.__tablename__)
+    }
+    existing_tables = sorted(
+        table.name for table in STAGE4104_TABLES if inspector.has_table(table.name)
+    )
+    return {
+        "status": "ready",
+        "existing_table_count": len(existing_tables),
+        "required_table_count": len(STAGE4104_TABLES),
+        "missing_operation_columns": sorted(set(STAGE4104_OPERATION_COLUMNS) - existing_columns),
+    }
+
+
+def _stage4104_migration_apply(db: Session) -> dict[str, Any]:
+    bind = db.connection()
+    for table in STAGE4104_TABLES:
+        table.create(bind=bind, checkfirst=True)
+    inspector = inspect(bind)
+    existing_columns = {
+        str(item["name"])
+        for item in inspector.get_columns(StorageOperation.__tablename__)
+    }
+    added_columns: list[str] = []
+    for column_name, column_ddl in STAGE4104_OPERATION_COLUMNS.items():
+        if column_name in existing_columns:
+            continue
+        db.execute(
+            text(
+                f"ALTER TABLE {StorageOperation.__tablename__} "
+                f"ADD COLUMN {column_name} {column_ddl}"
+            )
+        )
+        added_columns.append(column_name)
+    db.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_storage_operations_domain_ref "
+            "ON storage_operations (domain_ref)"
+        )
+    )
+    return {
+        "created_or_verified_table_count": len(STAGE4104_TABLES),
+        "added_operation_columns": sorted(added_columns),
+    }
+
+
+def _stage4104_migration_verify(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    missing_tables = sorted(
+        table.name for table in STAGE4104_TABLES if not inspector.has_table(table.name)
+    )
+    if missing_tables:
+        raise RuntimeError("stage4104_archive_migration_tables_missing")
+    drift: dict[str, list[str]] = {}
+    for table in STAGE4104_TABLES:
+        actual = {str(item["name"]) for item in inspector.get_columns(table.name)}
+        missing = sorted(set(table.c.keys()) - actual)
+        if missing:
+            drift[table.name] = missing
+    operation_columns = {
+        str(item["name"])
+        for item in inspector.get_columns(StorageOperation.__tablename__)
+    }
+    missing_operation_columns = sorted(set(STAGE4104_OPERATION_COLUMNS) - operation_columns)
+    if missing_operation_columns:
+        drift[StorageOperation.__tablename__] = missing_operation_columns
+    operation_indexes = {
+        str(item.get("name") or "")
+        for item in inspector.get_indexes(StorageOperation.__tablename__)
+    }
+    if "ix_storage_operations_domain_ref" not in operation_indexes:
+        raise RuntimeError("stage4104_archive_migration_operation_index_missing")
+    if drift:
+        raise RuntimeError("stage4104_archive_migration_schema_drift")
+    return {
+        "status": "verified",
+        "table_drift": False,
+        "column_drift": False,
+        "index_drift": False,
+    }
+
+
+STAGE4104_ARCHIVE_MIGRATION = MigrationDefinition(
+    migration_id="stage13_5_4_10_4_archive_migration_v6",
+    from_version=5,
+    to_version=6,
+    description="Add durable archive migration plans, items and operation domain references.",
+    risk=RISK_ADDITIVE_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage4104_migration_preflight,
+    apply=_stage4104_migration_apply,
+    verify=_stage4104_migration_verify,
+    safe_failure_summary="Archive migration schema migration failed safely.",
+    rollback_note="Additive migration tables and operation metadata are retained; destructive automatic downgrade is not supported.",
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
         STAGE41011_OPERATION_LINEAGE_MIGRATION,
         STAGE4102_RETENTION_MIGRATION,
         STAGE4103_ARCHIVE_INTEGRITY_MIGRATION,
+        STAGE4104_ARCHIVE_MIGRATION,
     )
 )
 

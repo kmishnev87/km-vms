@@ -34,6 +34,8 @@ from app.services.schema_migrations import (
     STAGE4101_STORAGE_FOUNDATION_MIGRATION,
     STAGE41011_OPERATION_LINEAGE_MIGRATION,
     STAGE4102_RETENTION_MIGRATION,
+    STAGE4103_ARCHIVE_INTEGRITY_MIGRATION,
+    STAGE4104_ARCHIVE_MIGRATION,
     execute_migration_plan,
     validate_schema_migrations_pre_bootstrap,
 )
@@ -61,6 +63,7 @@ from app.services.storage_operations_foundation import (
     MAX_RETRIES_PER_PARENT,
     MAX_RETRY_DEPTH,
     OPERATION_PROGRESS_MAX_BYTES,
+    CrossActorRecoveryAuthorization,
     OperationHeartbeatController,
     RECENT_SUMMARY_LIMIT,
     TERMINAL_HISTORY_DAYS,
@@ -78,6 +81,7 @@ from app.services.storage_operations_foundation import (
     finish_operation,
     heartbeat_operation,
     heartbeat_work_signal,
+    lock_operation_owned,
     normalize_operation_scope,
     operation_cancel_requested,
     operation_summaries,
@@ -87,6 +91,7 @@ from app.services.storage_operations_foundation import (
     release_worker_lease,
     renew_worker_lease,
     request_operation_cancel,
+    request_fingerprint,
     stage_operation_terminal,
     work_signal_scope_key,
 )
@@ -203,7 +208,7 @@ def test_lightweight_status_is_read_only_and_does_not_call_heavy_paths(stage4101
     def forbidden(*_args, **_kwargs):
         raise AssertionError("heavy recurring status path was called")
 
-    monkeypatch.setattr(storage_monitoring, "migration_preview", forbidden)
+    assert not hasattr(storage_monitoring, "migration_preview")
     monkeypatch.setattr(storage_monitoring, "_observe_namespace", forbidden)
     monkeypatch.setattr(storage_monitoring, "_safe_stat_segment", forbidden)
     flushes = []
@@ -464,6 +469,9 @@ def test_stale_takeover_fences_previous_operation_owner(stage4101):
     assert new.fencing_token > old.fencing_token
     with pytest.raises(StorageOperationLeaseLost):
         heartbeat_operation(db, old)
+    with pytest.raises(StorageOperationLeaseLost):
+        lock_operation_owned(db, old)
+    assert lock_operation_owned(db, new).id == new.operation_id
     with pytest.raises(StorageOperationLeaseLost):
         finish_operation(db, old, status="completed", result={"status": "completed"})
     finish_operation(db, new, status="completed", result={"status": "completed"})
@@ -738,7 +746,9 @@ def test_conflict_matrix_covers_every_operation_type_pair(scenario, left_scope, 
     left_normalized = normalize_operation_scope(left_scope)
     right_normalized = normalize_operation_scope(right_scope)
     for left_type, right_type in product(sorted(OPERATION_TYPES), repeat=2):
-        if scenario == "same_scope":
+        if "integrity_scan" in {left_type, right_type} or "integrity_plan_prepare" in {left_type, right_type}:
+            expected = False
+        elif scenario == "same_scope":
             expected = True
         elif scenario == "fully_disjoint":
             expected = False
@@ -1033,7 +1043,7 @@ def _seed_schema_v1(db):
 
 
 def test_schema_clean_install_upgrade_restart_and_prebootstrap_gate():
-    assert CURRENT_SCHEMA_VERSION == 4
+    assert CURRENT_SCHEMA_VERSION == 6
     fresh = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=fresh)
     fresh_inspector = inspect(fresh)
@@ -1056,9 +1066,11 @@ def test_schema_clean_install_upgrade_restart_and_prebootstrap_gate():
         STAGE4101_STORAGE_FOUNDATION_MIGRATION.migration_id,
         STAGE41011_OPERATION_LINEAGE_MIGRATION.migration_id,
         STAGE4102_RETENTION_MIGRATION.migration_id,
+        STAGE4103_ARCHIVE_INTEGRITY_MIGRATION.migration_id,
+        STAGE4104_ARCHIVE_MIGRATION.migration_id,
     ]
     assert second["executed_migrations"] == []
-    assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == 4
+    assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == CURRENT_SCHEMA_VERSION
     assert all(inspector.has_table(name) for name in ("storage_operations", "storage_worker_leases", "storage_work_signals"))
     operation_columns = {item["name"] for item in inspector.get_columns("storage_operations")}
     assert {"parent_snapshot", "retry_depth"}.issubset(operation_columns)
@@ -1302,67 +1314,6 @@ def test_public_operation_summary_requires_explicit_database_time(stage4101, mon
     source = Path(storage_operations_foundation.__file__).read_text(encoding="utf-8")
     summary_source = source[source.index("def public_operation_summary"):source.index("def operation_summaries")]
     assert "datetime.utcnow" not in summary_source
-
-
-def test_migration_adapter_terminal_replay_does_not_execute_twice(stage4101, monkeypatch):
-    db = stage4101["db"]
-    owner = stage4101["owner"]
-    calls = []
-
-    def apply_stub(*_args, **_kwargs):
-        calls.append(True)
-        return {
-            "status": "completed",
-            "planned_count": 1,
-            "executed": [{"segment_id": 1}],
-            "failed": [],
-            "executed_bytes": 1024,
-            "source_preserved": True,
-            "cleanup_pending": False,
-        }
-
-    monkeypatch.setattr(storage_router, "apply_storage_migration", apply_stub)
-    payload = storage_router.MigrationApplyRequest(
-        target_root_id=stage4101["root"].id,
-        plan_id="stage41011-migration-replay",
-        confirm=True,
-    )
-
-    first = storage_router.storage_migration_apply(payload, db=db, current_user=owner)
-    second = storage_router.storage_migration_apply(payload, db=db, current_user=owner)
-
-    assert first["status"] == "completed"
-    assert second["status"] == "completed"
-    assert second["executed_count"] == 1
-    assert second["replayed"] is True
-    assert calls == [True]
-
-
-def test_migration_adapter_exception_terminalizes_outer(stage4101, monkeypatch):
-    db = stage4101["db"]
-    owner = stage4101["owner"]
-
-    def fail(*_args, **_kwargs):
-        raise RuntimeError("injected migration failure")
-
-    monkeypatch.setattr(storage_router, "apply_storage_migration", fail)
-    payload = storage_router.MigrationApplyRequest(
-        target_root_id=stage4101["root"].id,
-        plan_id="stage41011-migration-failure",
-        confirm=True,
-    )
-
-    with pytest.raises(RuntimeError, match="injected migration failure"):
-        storage_router.storage_migration_apply(payload, db=db, current_user=owner)
-
-    row = (
-        db.query(StorageOperation)
-        .filter(StorageOperation.operation_type == "archive_migration_apply")
-        .order_by(StorageOperation.created_at.desc())
-        .first()
-    )
-    assert row.status == "failed"
-    assert row.lease_expires_at is None
 
 
 def test_root_delete_terminal_replay_does_not_repeat_mutation(stage4101, tmp_path, monkeypatch):
@@ -2022,3 +1973,232 @@ def test_coordinator_heartbeat_prevents_takeover_during_long_critical_section(tm
     with Session() as db:
         finish_operation(db, first_result[0]["handle"], status="completed", result={"status": "completed"})
     engine.dispose()
+
+
+def test_cross_actor_recovery_authorization_is_exact_and_migration_only(stage4101):
+    db = stage4101["db"]
+    owner = stage4101["owner"]
+    recovery_actor = stage4101["other"]
+    identity = {
+        "migration": {
+            "plan_id": "stage4104-plan",
+            "canonical_hash": "a" * 64,
+            "source_root_id": "source-root",
+            "target_root_id": "target-root",
+            "schema_version": 1,
+        }
+    }
+    scope = {
+        "root_ids": ["source-root", "target-root"],
+        "physical_volume_ids": [],
+        "camera_ids": [],
+        "segment_ids": [],
+    }
+    domain_ref = "migration-plan:stage4104-plan"
+    parent = claim_operation(
+        db,
+        operation_type="archive_migration_apply",
+        scope=scope,
+        request_identity=identity,
+        actor=owner,
+        operation_id="stage4104-parent-operation",
+        idempotency_key="stage4104-parent-idempotency",
+        owner_instance_id="stage4104-parent-worker",
+        cancel_allowed=True,
+        domain_ref=domain_ref,
+    )
+    finish_operation(
+        db,
+        parent["handle"],
+        status="partial",
+        result={"status": "partial", "cleanup_pending": True},
+        reason_code="migration_source_cleanup_incomplete",
+        retry_mode="cleanup_only",
+        retry_allowed=True,
+    )
+    parent_row = db.get(StorageOperation, "stage4104-parent-operation")
+    authorization = CrossActorRecoveryAuthorization(
+        operation_type="archive_migration_apply",
+        parent_operation_id=parent_row.id,
+        parent_actor_key=parent_row.actor_key,
+        original_actor_key=parent_row.actor_key,
+        parent_request_fingerprint=request_fingerprint(identity),
+        domain_ref=domain_ref,
+        retry_mode="cleanup_only",
+    )
+
+    invalid = CrossActorRecoveryAuthorization(
+        **{**authorization.__dict__, "parent_request_fingerprint": "0" * 64}
+    )
+    with pytest.raises(StorageOperationContractError, match="operation_retry_parent_invalid"):
+        claim_operation(
+            db,
+            operation_type="archive_migration_apply",
+            scope=scope,
+            request_identity=identity,
+            actor=recovery_actor,
+            idempotency_key="stage4104-invalid-recovery",
+            owner_instance_id="stage4104-recovery-worker",
+            parent_operation_id=parent_row.id,
+            cross_actor_recovery=invalid,
+            start_immediately=False,
+            domain_ref=domain_ref,
+        )
+
+    with pytest.raises(StorageOperationContractError, match="operation_retry_parent_invalid"):
+        claim_operation(
+            db,
+            operation_type="integrity_scan",
+            scope=scope,
+            request_identity=identity,
+            actor=recovery_actor,
+            idempotency_key="stage4104-wrong-operation-type",
+            owner_instance_id="stage4104-recovery-worker",
+            parent_operation_id=parent_row.id,
+            cross_actor_recovery=authorization,
+            start_immediately=False,
+            domain_ref=domain_ref,
+        )
+
+    child = claim_operation(
+        db,
+        operation_type="archive_migration_apply",
+        scope=scope,
+        request_identity=identity,
+        actor=recovery_actor,
+        idempotency_key="stage4104-exact-recovery",
+        owner_instance_id="stage4104-recovery-worker",
+        parent_operation_id=parent_row.id,
+        cross_actor_recovery=authorization,
+        start_immediately=False,
+        domain_ref=domain_ref,
+    )
+    child_row = db.get(StorageOperation, child["operation"]["operation_id"])
+    assert child["state"] == "queued"
+    assert child_row.parent_operation_id == parent_row.id
+    assert child_row.parent_snapshot["original_actor_key"] == parent_row.actor_key
+    assert child_row.parent_snapshot["cross_actor_recovery"] == "migration_cleanup_takeover"
+
+
+def test_original_actor_return_requires_explicit_typed_cleanup_parent(stage4101):
+    db = stage4101["db"]
+    owner = stage4101["owner"]
+    recovery_actor = stage4101["other"]
+    identity = {
+        "migration": {
+            "plan_id": "stage4104-original-return",
+            "canonical_hash": "b" * 64,
+            "source_root_id": "source-root",
+            "target_root_id": "target-root",
+            "schema_version": 1,
+        }
+    }
+    scope = {
+        "root_ids": ["source-root", "target-root"],
+        "physical_volume_ids": [],
+        "camera_ids": [],
+        "segment_ids": [],
+    }
+    domain_ref = "migration-plan:stage4104-original-return"
+    parent = claim_operation(
+        db,
+        operation_type="archive_migration_apply",
+        scope=scope,
+        request_identity=identity,
+        actor=owner,
+        operation_id="stage4104-original-return-parent",
+        idempotency_key="stage4104-original-return-parent",
+        owner_instance_id="stage4104-original-return-parent-worker",
+        domain_ref=domain_ref,
+    )
+    finish_operation(
+        db,
+        parent["handle"],
+        status="partial",
+        result={"status": "partial", "cleanup_pending": True},
+        reason_code="migration_source_cleanup_incomplete",
+        retry_mode="cleanup_only",
+        retry_allowed=True,
+    )
+    parent_row = db.get(StorageOperation, "stage4104-original-return-parent")
+    first_authorization = CrossActorRecoveryAuthorization(
+        operation_type="archive_migration_apply",
+        parent_operation_id=parent_row.id,
+        parent_actor_key=parent_row.actor_key,
+        original_actor_key=parent_row.actor_key,
+        parent_request_fingerprint=request_fingerprint(identity),
+        domain_ref=domain_ref,
+        retry_mode="cleanup_only",
+    )
+    first_child = claim_operation(
+        db,
+        operation_type="archive_migration_apply",
+        scope=scope,
+        request_identity=identity,
+        actor=recovery_actor,
+        operation_id="stage4104-recovery-admin-child",
+        idempotency_key="stage4104-recovery-admin-child",
+        owner_instance_id="stage4104-recovery-admin-worker",
+        parent_operation_id=parent_row.id,
+        cross_actor_recovery=first_authorization,
+        domain_ref=domain_ref,
+    )
+    finish_operation(
+        db,
+        first_child["handle"],
+        status="blocked",
+        result={"status": "blocked", "cleanup_pending": True},
+        reason_code="migration_recovery_permission_revoked",
+        retry_mode="cleanup_only",
+        retry_allowed=True,
+    )
+    first_child_row = db.get(StorageOperation, "stage4104-recovery-admin-child")
+    assert first_child_row.parent_snapshot["cross_actor_recovery"] == "migration_cleanup_takeover"
+
+    return_authorization = CrossActorRecoveryAuthorization(
+        operation_type="archive_migration_apply",
+        parent_operation_id=first_child_row.id,
+        parent_actor_key=first_child_row.actor_key,
+        original_actor_key=parent_row.actor_key,
+        parent_request_fingerprint=request_fingerprint(identity),
+        domain_ref=domain_ref,
+        retry_mode="cleanup_only",
+        allow_original_actor_return=True,
+    )
+    without_explicit_return = CrossActorRecoveryAuthorization(
+        **{**return_authorization.__dict__, "allow_original_actor_return": False}
+    )
+    with pytest.raises(StorageOperationContractError, match="operation_retry_parent_invalid"):
+        claim_operation(
+            db,
+            operation_type="archive_migration_apply",
+            scope=scope,
+            request_identity=identity,
+            actor=owner,
+            idempotency_key="stage4104-original-return-without-flag",
+            owner_instance_id="stage4104-original-return-worker",
+            parent_operation_id=first_child_row.id,
+            cross_actor_recovery=without_explicit_return,
+            start_immediately=False,
+            domain_ref=domain_ref,
+        )
+
+    typed_return = claim_operation(
+        db,
+        operation_type="archive_migration_apply",
+        scope=scope,
+        request_identity=identity,
+        actor=owner,
+        idempotency_key="stage4104-original-return-with-flag",
+        owner_instance_id="stage4104-original-return-worker",
+        parent_operation_id=first_child_row.id,
+        cross_actor_recovery=return_authorization,
+        start_immediately=False,
+        domain_ref=domain_ref,
+    )
+    returned_row = db.get(StorageOperation, typed_return["operation"]["operation_id"])
+    assert typed_return["state"] == "queued"
+    assert returned_row.actor_key == parent_row.actor_key
+    assert returned_row.parent_operation_id == first_child_row.id
+    assert returned_row.parent_snapshot["original_actor_key"] == parent_row.actor_key
+    assert returned_row.parent_snapshot["cross_actor_recovery"] == "migration_cleanup_takeover"

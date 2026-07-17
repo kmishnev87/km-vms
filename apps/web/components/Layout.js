@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { canAccessPath, clearAuthToken, getAuthToken } from "../lib/api";
+import { apiFetch, canAccessPath, clearAuthToken, getAuthToken } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { normalizeLocale, persistLocale, useI18n } from "../lib/i18n";
 import SystemHealthIndicator from "./SystemHealthIndicator";
@@ -14,6 +14,66 @@ const items = [
   { href: "/live", labelKey: "nav.live", iconSrc: "/assets/icons/ui/live.png" },
   { href: "/chronology", labelKey: "nav.chronology", iconSrc: "/assets/icons/ui/chronology.png" },
 ];
+
+function MigrationActivityIndicator({ enabled, t }) {
+  const [activity, setActivity] = useState(null);
+
+  useEffect(() => {
+    if (!enabled || !getAuthToken()) {
+      setActivity(null);
+      return undefined;
+    }
+    let cancelled = false;
+    let polling = false;
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const result = await apiFetch("/storage/migration/operations/active");
+        if (!cancelled) setActivity(result?.active && result?.operation && result?.plan ? result : null);
+      } catch (_) {
+        if (!cancelled) setActivity(null);
+      } finally {
+        polling = false;
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [enabled]);
+
+  if (!activity) return null;
+  const operation = activity.operation || {};
+  const plan = activity.plan || {};
+  const progress = operation.progress || {};
+  const status = String(operation.status || plan.status || "unknown");
+  const completedBytes = Number(progress.completed_bytes ?? plan.completed_bytes);
+  const currentBytes = Number(progress.current_item_bytes);
+  const totalBytes = Number(progress.total_bytes ?? plan.total_bytes);
+  const percent = Number.isFinite(completedBytes) && Number.isFinite(totalBytes) && totalBytes > 0
+    ? Math.min(99, Math.max(0, Math.floor(((completedBytes + (Number.isFinite(currentBytes) ? currentBytes : 0)) / totalBytes) * 100)))
+    : null;
+  const statusKey = status === "queued"
+    ? "nav.migrationQueued"
+    : status === "cancel_requested"
+      ? "nav.migrationCancelRequested"
+      : status === "building"
+        ? "nav.migrationPreparing"
+        : "nav.migrationRunning";
+  const operationId = operation.operation_id || plan.operation_id;
+  const href = operationId ? `/storage?migration=${encodeURIComponent(operationId)}` : "/storage";
+
+  return (
+    <Link className="migrationNavIndicator" href={href} title={t("nav.migrationOpen")} aria-label={`${t(statusKey)}${percent === null ? "" : `, ${percent}%`}`}>
+      <img src="/assets/icons/ui/storage.png" alt="" />
+      <span>{t(statusKey)}</span>
+      {percent !== null ? <strong>{percent}%</strong> : <i aria-hidden="true" />}
+    </Link>
+  );
+}
 
 export default function Layout({ children }) {
   const pathname = usePathname();
@@ -89,6 +149,7 @@ export default function Layout({ children }) {
           </nav>
 
           <div className="topNavRight">
+            <MigrationActivityIndicator enabled={Boolean(currentUser && canOpenStorage)} t={t} />
             {canOpenStorage ? (
               <Link
                 href="/storage"
