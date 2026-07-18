@@ -3,7 +3,12 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Layout from "../../components/Layout";
-import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
+import { OperationDialog, OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
+import {
+  ArchiveManagementCenter,
+  ArchiveOperationHistoryContent,
+  ArchivePolicySwitch,
+} from "../../components/storage/ArchiveManagementCenter";
 import { apiFetch, canAccessPath, forbiddenMessage } from "../../lib/api";
 import { useCurrentUser } from "../../lib/currentUser";
 import { useI18n, useLocaleText } from "../../lib/i18n";
@@ -24,17 +29,19 @@ import {
   archiveIntegrityCategoryPresentations,
   archiveIntegrityFindingPresentation,
   archiveIntegrityScanModel,
+  autoFreeOperationPresentation,
   archiveRootCleanupCapabilityModel,
   archiveRootScenarioModel,
   freeSpaceTone,
+  integrityOperationPresentation,
   migrationScenarioModel,
+  migrationOperationPresentation,
   normalizeReconciliationSummary,
+  publishStorageMigrationActivity,
   recentOperationPresentations,
-  reconciliationScenarioModel,
-  retentionScenarioModel,
+  retentionOperationPresentation,
   statusLabel,
   storageTopHealthModel,
-  topReasonEntries,
 } from "../../lib/storageOperations";
 
 const REFRESH_MS = 30000;
@@ -58,15 +65,6 @@ function Stat({ label, value, tone = "neutral" }) {
 
 function Badge({ label, tone = "neutral" }) {
   return <span className={`storageOpsBadge storageOpsBadge-${tone}`}>{label}</span>;
-}
-
-function SummaryRow({ label, value, tone = "neutral" }) {
-  return (
-    <div className={`storageOpsSummaryRow storageOpsSummaryRow-${tone}`}>
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
 }
 
 function TopMetric({ label, value, detail = "", tone = "neutral" }) {
@@ -106,21 +104,11 @@ function TrashIcon() {
   );
 }
 
-function OperationRow({ title, status, tone = "neutral", description, meta = null, actions = null, children = null }) {
-  return (
-    <div className={`storageOpsOperationRow storageOpsOperationRow-${tone}`}>
-      <div className="storageOpsOperationMain">
-        <div className="storageOpsOperationTitle">
-          <strong>{title}</strong>
-          <span className={`storageOpsStatusPill storageOpsStatusPill-${tone}`}>{status}</span>
-        </div>
-        <p>{description}</p>
-        {meta}
-      </div>
-      {actions ? <div className="storageOpsOperationActions">{actions}</div> : null}
-      {children ? <div className="storageOpsOperationDetails">{children}</div> : null}
-    </div>
-  );
+function dialogFocusableElements(container) {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll(
+    'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  )).filter((element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
 }
 
 function ArchiveIntegrityDialog({
@@ -147,6 +135,8 @@ function ArchiveIntegrityDialog({
 }) {
   const dialogRef = useRef(null);
   const closeRef = useRef(null);
+  const returnFocusRef = useRef(null);
+  useModalBodyScrollLock(open);
   const scanModel = archiveIntegrityScanModel(scan || {}, permission);
   const categories = archiveIntegrityCategoryPresentations(scan?.category_counts);
   const findingRows = findings.map(archiveIntegrityFindingPresentation);
@@ -158,9 +148,24 @@ function ArchiveIntegrityDialog({
 
   useEffect(() => {
     if (!open) return undefined;
-    const timer = window.setTimeout(() => closeRef.current?.focus({ preventScroll: true }), 0);
-    return () => window.clearTimeout(timer);
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus({ preventScroll: true });
+      returnFocusRef.current = null;
+    };
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const timer = window.setTimeout(() => {
+      const activeElement = document.activeElement;
+      const activeInsideDialog = activeElement instanceof HTMLElement && dialogRef.current?.contains(activeElement);
+      if (!busy && activeInsideDialog && activeElement !== dialogRef.current) return;
+      const target = busy ? dialogRef.current : dialogFocusableElements(dialogRef.current)[0] || dialogRef.current;
+      target?.focus({ preventScroll: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [open, busy]);
 
   if (!open) return null;
 
@@ -168,6 +173,23 @@ function ArchiveIntegrityDialog({
     if (event.key === "Escape" && !busy) {
       event.preventDefault();
       onClose();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const elements = dialogFocusableElements(dialogRef.current);
+    if (!elements.length) {
+      event.preventDefault();
+      dialogRef.current?.focus();
+      return;
+    }
+    const first = elements[0];
+    const last = elements[elements.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
     }
   }
 
@@ -322,20 +344,6 @@ function Section({ title, children, action = null, className = "" }) {
   );
 }
 
-function reasonText(summary, copy, language) {
-  const entries = topReasonEntries(summary);
-  if (!entries.length) return copy.noReasons;
-  return entries.map(([key, value]) => `${humanBlockerReason(key, language)}: ${value}`).join(", ");
-}
-
-function operationReasonText(operation, copy, language) {
-  const entries = topReasonEntries(operation?.last_summary);
-  if (entries.length) {
-    return entries.map(([key, value]) => `${humanBlockerReason(key, language)}: ${value}`).join(", ");
-  }
-  return operation?.last_error ? humanBlockerReason(operation.last_error, language) : copy.noReasons;
-}
-
 function blockerText(blockers, copy, language) {
   const list = Array.isArray(blockers) ? blockers : [];
   if (!list.length) return copy.noReasons;
@@ -351,7 +359,12 @@ function errorDetailText(error, fallback, language) {
     if (detail.error) return humanBlockerReason(detail.error, language);
     if (detail.reason) return humanBlockerReason(detail.reason, language);
   }
-  return error?.message || fallback;
+  const candidate = typeof detail === "string" ? detail : String(error?.message || "");
+  const normalized = candidate.trim();
+  if (!normalized || normalized.length > 320) return fallback;
+  if (/^(http\s+\d+|[a-z0-9]+(?:[_.:-][a-z0-9]+)+)$/i.test(normalized)) return fallback;
+  if (/[{}\[\]\\]|\/(?:api|storage|volume|app)\//i.test(normalized)) return fallback;
+  return normalized;
 }
 
 function archiveRootDialogText(error, copy, language = "ru") {
@@ -465,47 +478,10 @@ function rootProblemItems(root, copy, language) {
   return Array.from(new Set(items.length ? items : [copy.no]));
 }
 
-function retentionPolicyText(retention, copy) {
-  const gb = retention?.per_camera_gb_limit ?? retention?.camera_gb_limit ?? retention?.max_gb_per_camera;
-  const days = retention?.per_camera_days_limit ?? retention?.camera_days_limit ?? retention?.max_days_per_camera;
-  const parts = [];
-  if (gb != null) parts.push(copy.retentionLimitGb.replace("{value}", String(gb)));
-  if (days != null) parts.push(copy.retentionLimitDays.replace("{value}", String(days)));
-  return parts.length ? `${copy.retentionPolicyActive} ${parts.join("; ")}.` : copy.retentionPolicyGeneric;
-}
-
-function autoFreePolicyText(enabled, copy) {
-  return enabled ? copy.autoFreePrimaryOn : copy.autoFreePrimaryOff;
-}
-
 function compactAccessLabel(accessRights, copy) {
   if (accessRights.status === "ok") return copy.accessOkShort;
   if (accessRights.status === "unknown") return copy.accessUnknownShort;
   return accessRights.label;
-}
-
-function integrityStatusText(scenario, normalized, copy) {
-  if (scenario.status === "running") return copy.integrityRunning;
-  if (scenario.status === "apply_completed") return copy.integrityFixed;
-  if (normalized.problemCount > 0) return copy.archiveProblemsFound.replace("{count}", String(normalized.problemCount));
-  if (scenario.status === "preview_completed") return copy.integrityNoProblems;
-  return copy.integrityNotChecked;
-}
-
-function retentionStatusText(scenario, copy) {
-  if (scenario.status === "running") return copy.running;
-  if (scenario.status === "pending") return copy.retentionPendingStatus;
-  if (scenario.status === "apply_failed") return copy.retentionFailedStatus;
-  if (scenario.status === "unavailable_due_to_permissions") return copy.unavailable;
-  return copy.retentionAutomaticStatus;
-}
-
-function archiveProblemsStatusText(normalized, reconciliation, copy) {
-  if (reconciliation?.active) return copy.integrityRunning;
-  if (!["completed", "partial"].includes(String(reconciliation?.status || ""))) return copy.integrityNotChecked;
-  const count = Number(normalized.problemCount || 0);
-  if (!count) return copy.archiveProblemsNone;
-  return copy.archiveProblemsFound.replace("{count}", String(count));
 }
 
 function archiveMigrationStatusText(scenario, archiveRoots, copy) {
@@ -529,14 +505,65 @@ function archiveMigrationStatusText(scenario, archiveRoots, copy) {
   return labels[scenario.status] || copy.migrationChooseTargetStatus;
 }
 
-function migrationStatusText(scenario, archiveRoots, copy) {
-  if (archiveRoots.length < 2) return copy.migrationNeedsTarget;
-  if (scenario.reason) return scenario.reason;
-  if (scenario.status === "completed") return copy.migrationCompletedSelectedPlan;
-  if (["partial", "failed", "blocked", "interrupted"].includes(scenario.status)) return copy.migrationNeedsAttention;
-  if (scenario.active) return copy.migrationBackgroundActive;
-  if (scenario.ready) return copy.migrationPlanReady;
-  return copy.migrationScenarioText;
+function copyStatus(copy, prefix, status, fallback = "archiveManagementStatusUnknown") {
+  return copy[`${prefix}${String(status || "unknown").replace(/(^|_)([a-z])/g, (_, _separator, letter) => letter.toUpperCase())}`]
+    || copy[fallback];
+}
+
+function retentionManagementDescription(model, copy, language) {
+  if (model.status === "not_configured") return copy.archiveManagementRetentionNotConfiguredText;
+  if (model.status === "incomplete") {
+    return copy.archiveManagementRetentionIncompleteText
+      .replace("{configured}", String(model.configuredCount))
+      .replace("{total}", String(model.totalCameraCount));
+  }
+  if (model.status === "running") return copy.archiveManagementRetentionRunningText;
+  if (model.status === "pending") return copy.archiveManagementRetentionPendingText;
+  if (model.status === "needs_attention") {
+    return model.last.reasonCode ? humanBlockerReason(model.last.reasonCode, language) : copy.archiveManagementRetentionAttentionText;
+  }
+  if (model.status === "unknown") return copy.archiveManagementRetentionUnknownText;
+  return copy.archiveManagementRetentionHealthyText.replace("{count}", String(model.configuredCount));
+}
+
+function autoFreeManagementDescription(model, copy, language) {
+  if (model.status === "acknowledgement_required") return copy.archiveManagementAutoFreeAcknowledgementText;
+  if (model.status === "disabled") return copy.archiveManagementAutoFreeDisabledText;
+  if (model.status === "critical") return copy.archiveManagementAutoFreeCriticalText;
+  if (model.status === "cleanup") return copy.archiveManagementAutoFreeCleanupText;
+  if (model.status === "recovery") return copy.archiveManagementAutoFreeRecoveryText;
+  if (model.status === "warning") return copy.archiveManagementAutoFreeWarningText;
+  if (model.status === "failed") {
+    return model.last.reasonCode ? humanBlockerReason(model.last.reasonCode, language) : copy.archiveManagementAutoFreeFailedText;
+  }
+  if (model.status === "unknown") return copy.archiveManagementAutoFreeUnknownText;
+  return copy.archiveManagementAutoFreeEnabledText
+    .replace("{warning}", String(model.warningPercent))
+    .replace("{cleanup}", String(model.cleanupPercent))
+    .replace("{target}", String(model.recoveryPercent))
+    .replace("{critical}", String(model.criticalPercent));
+}
+
+function integrityManagementDescription(model, copy) {
+  if (model.status === "clean") return copy.archiveManagementIntegrityCleanText;
+  if (model.status === "findings") return copy.archiveManagementIntegrityFindingsText.replace("{count}", String(model.problemCount));
+  if (model.status === "stale") return copy.archiveManagementIntegrityStaleText.replace("{count}", String(model.problemCount));
+  if (model.status === "running") return copy.archiveManagementIntegrityRunningText;
+  if (model.status === "cancel_requested") return copy.archiveManagementIntegrityCancelText;
+  if (["partial", "failed", "interrupted", "cancelled"].includes(model.status)) return copy.archiveManagementIntegrityIncompleteText;
+  if (model.status === "unknown") return copy.archiveManagementIntegrityUnknownText;
+  return copy.archiveManagementIntegrityNotRunText;
+}
+
+function migrationManagementDescription(model, scenario, copy) {
+  if (model.status === "needs_target") return copy.migrationNeedsTarget;
+  if (model.status === "running" || model.status === "cancel_requested") return copy.migrationBackgroundActive;
+  if (model.status === "completed") return copy.migrationCompletedSelectedPlan;
+  if (model.status === "needs_attention") return scenario.reason || copy.migrationNeedsAttention;
+  if (model.status === "cancelled") return copy.archiveManagementMigrationCancelledText;
+  if (["ready", "ready_with_exclusions", "building"].includes(model.status)) return copy.migrationPlanReady;
+  if (model.status === "unknown") return copy.archiveManagementMigrationUnknownText;
+  return copy.archiveManagementMigrationIdleText;
 }
 
 function healthTone(operations, pathHealth, capacity, policy, reconciliation) {
@@ -594,14 +621,6 @@ function recordingState(operations, pathHealth, policy, copy) {
     return { label: copy.recordingNeedsCheck, detail: copy.recordingNeedsCheckDetail, tone: "warning" };
   }
   return { label: copy.recordingUnknown, detail: copy.recordingUnknownDetail, tone: "unknown" };
-}
-
-function operationTone(status = "") {
-  const value = String(status || "");
-  if (value.includes("failed") || value.includes("blocked") || value.includes("permission")) return "warning";
-  if (value.includes("completed") || value.includes("preview")) return "ok";
-  if (value.includes("running")) return "warning";
-  return "neutral";
 }
 
 function activationProgressTone(status) {
@@ -726,7 +745,7 @@ function ArchiveMigrationDialog({
   onCleanupTakeover,
   onReset,
 }) {
-  if (!open) return null;
+  if (!open) return <OperationDialog dialog={null} onClose={onClose} />;
   const source = roots.find((root) => String(root.id) === String(sourceRootId));
   const target = roots.find((root) => String(root.id) === String(targetRootId));
   const excluded = Object.entries(plan?.excluded_summary || {}).filter(([, count]) => Number(count) > 0).slice(0, 8);
@@ -888,6 +907,7 @@ function StorageOperationsPageContent() {
   const [archiveRootFolderName, setArchiveRootFolderName] = useState("KM-VMS-Recordings");
   const [archiveRootDialog, setArchiveRootDialog] = useState(null);
   const [operationToast, setOperationToast] = useState(null);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
   const [trackedActivationOperationId, setTrackedActivationOperationId] = useState(null);
   const [dismissedActivationOperationId, setDismissedActivationOperationId] = useState(null);
   const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
@@ -1016,7 +1036,7 @@ function StorageOperationsPageContent() {
   const archiveRootChoices = archiveRootDiscoveryModel.candidates;
   const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
   const autoFreeConfigured = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
-  const autoFreeEnabled = settings?.auto_free_space_cleanup_effective ?? policy.auto_free_space_cleanup_effective ?? autoCleanup.effective_enabled ?? false;
+  const autoFreeEnabled = settings?.auto_free_space_cleanup_effective ?? policy.auto_free_space_cleanup_effective ?? autoCleanup.effective_enabled ?? null;
   const autoFreeTermsVersion = settings?.auto_free_space_terms_version || policy.terms_version || autoCleanup.terms_version || "";
   const autoFreeAcknowledgedVersion = settings?.auto_free_space_acknowledged_terms_version || null;
   const autoFreeAcknowledgementRequired = Boolean(
@@ -1053,21 +1073,29 @@ function StorageOperationsPageContent() {
     allowed: Boolean(manageSettingsPermission.allowed && retentionPermission.allowed),
     reason: !manageSettingsPermission.allowed ? manageSettingsPermission.reason : !retentionPermission.allowed ? retentionPermission.reason : "",
   };
-  const retentionScenario = retentionScenarioModel({
-    preview: null,
-    result: null,
-    retention,
-    permission: { allowed: true, reason: "" },
-    running: rootAction.startsWith("retention-"),
-  }, language);
-  const reconciliationScenario = reconciliationScenarioModel({
-    preview: null,
-    result: null,
-    reconciliation,
-    canCheck: diagnosticsPermission,
-    canApply: manageSettingsPermission,
-    running: Boolean(reconciliation.active),
-  }, language);
+  const historyOperationRows = recentOperationRows.map((item) => {
+    if (item.actionKind === "integrity") {
+      return {
+        ...item,
+        action: {
+          labelKey: "operationHistoryOpenIntegrityScan",
+          disabled: !diagnosticsPermission.allowed,
+          title: diagnosticsPermission.allowed ? "" : diagnosticsPermission.reason,
+        },
+      };
+    }
+    if (item.actionKind === "migration") {
+      return {
+        ...item,
+        action: {
+          labelKey: "operationHistoryOpenMigration",
+          disabled: !manageSettingsPermission.allowed,
+          title: manageSettingsPermission.allowed ? "" : manageSettingsPermission.reason,
+        },
+      };
+    }
+    return item;
+  });
   const migrationScenario = migrationScenarioModel({
     plan: migrationPlan,
     operation: migrationOperation,
@@ -1075,24 +1103,19 @@ function StorageOperationsPageContent() {
     applyPermission: migrationApplyPermission,
     running: migrationBusy,
   }, language);
-  const retentionTone = operationTone(retentionScenario.status);
-  const reconciliationTone = !diagnosticsPermission.allowed
-    ? "neutral"
-    : reconciliation.active
-      ? "warning"
-      : normalizedReconciliation.problemCount > 0
-        ? "warning"
-        : reconciliation.status === "completed"
-          ? "ok"
-          : "unknown";
-  const migrationTone = operationTone(migrationScenario.status);
+  const retentionManagement = retentionOperationPresentation(retention);
+  const autoFreeManagement = autoFreeOperationPresentation({
+    policy,
+    cleanup: autoCleanup,
+    configured: autoFreeConfigured,
+    effective: autoFreeEnabled,
+    acknowledgementRequired: autoFreeAcknowledgementRequired,
+  });
+  const integrityManagement = integrityOperationPresentation(reconciliation);
+  const migrationManagement = migrationOperationPresentation(migrationScenario, archiveRoots.length);
   const currentArchivePath = archiveRootPath(currentArchiveRoot, archivePathText);
   const healthReason = healthReasonText(topHealth, recording, copy);
   const healthAction = healthActionText(topHealth, copy);
-  const retentionPrimaryText = retentionPolicyText(retention, copy);
-  const autoFreePrimaryText = autoFreePolicyText(autoFreeEnabled, copy);
-  const integrityPrimaryText = integrityStatusText(reconciliationScenario, normalizedReconciliation, copy);
-  const migrationPrimaryText = migrationStatusText(migrationScenario, archiveRoots, copy);
   const archiveRootSelectionReady = archiveRootDiscoveryModel.current && archiveRootFolderName.trim() && archiveRootChoiceId;
 
   useEffect(() => {
@@ -1178,6 +1201,18 @@ function StorageOperationsPageContent() {
       window.clearInterval(timer);
     };
   }, [copy.migrationLoadFailed, language, loadStatus, migrationOperation?.operation_id, migrationOperation?.status, migrationPlan?.operation_id, migrationPlan?.plan_id, migrationPlan?.status]);
+
+  useEffect(() => {
+    publishStorageMigrationActivity({
+      active: migrationScenario.active,
+      plan: migrationPlan,
+      operation: migrationOperation,
+    });
+  }, [
+    migrationOperation,
+    migrationPlan,
+    migrationScenario.active,
+  ]);
 
   useEffect(() => {
     if (!["queued", "running"].includes(String(archiveRootActivation?.status || ""))) return undefined;
@@ -1710,13 +1745,16 @@ function StorageOperationsPageContent() {
     setIntegrityNextCursor(page.next_cursor || null);
   }
 
-  async function openIntegrityDialog() {
+  async function openIntegrityDialog(scanId = null) {
     setIntegrityDialogOpen(true);
     setIntegrityError("");
     if (!diagnosticsPermission.allowed) return;
     setIntegrityBusy(true);
     try {
-      const latest = await apiFetch("/storage/integrity/scans/latest");
+      const requestedScanId = typeof scanId === "string" && scanId ? scanId : null;
+      const latest = await apiFetch(requestedScanId
+        ? `/storage/integrity/scans/${encodeURIComponent(requestedScanId)}`
+        : "/storage/integrity/scans/latest");
       setIntegrityScan(latest);
       if (["completed", "partial"].includes(String(latest.status || "")) && latest.scan_id) {
         await loadIntegrityFindingPage(latest.scan_id);
@@ -1872,6 +1910,18 @@ function StorageOperationsPageContent() {
     } catch (_) {}
   }
 
+  function openHistoryOperation(item) {
+    if (item?.actionKind === "integrity" && item.scanId && diagnosticsPermission.allowed) {
+      setHistoryDialogOpen(false);
+      window.setTimeout(() => { void openIntegrityDialog(item.scanId); }, 0);
+      return;
+    }
+    if (item?.actionKind === "migration" && item.operationId && manageSettingsPermission.allowed) {
+      setHistoryDialogOpen(false);
+      router.replace(`/storage?migration=${encodeURIComponent(item.operationId)}`, { scroll: false });
+    }
+  }
+
   function resetMigrationDraft() {
     setMigrationPlan(null);
     setMigrationOperation(null);
@@ -2018,6 +2068,146 @@ function StorageOperationsPageContent() {
     }
   }
 
+  function openArchiveRootSetup() {
+    const details = document.getElementById("storage-archive-root-add");
+    if (!(details instanceof HTMLDetailsElement)) return;
+    details.open = true;
+    details.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => details.querySelector("select, input, button")?.focus({ preventScroll: true }), 250);
+    if (!archiveRootDiscoveryModel.refreshing) loadArchiveRootDiscovery();
+  }
+
+  const lastResultText = (last) => last?.at
+    ? formatDateTime(last.at, language)
+    : copy.archiveManagementNeverRun;
+  const archiveManagementGroups = [
+    {
+      id: "protection",
+      title: copy.archiveManagementProtectionGroup,
+      rows: [
+        {
+          id: "retention",
+          title: copy.archiveManagementRetentionTitle,
+          status: copyStatus(copy, "archiveManagementRetentionStatus", retentionManagement.status),
+          tone: retentionManagement.tone,
+          description: retentionManagementDescription(retentionManagement, copy, language),
+          facts: [
+            { label: copy.archiveManagementConfiguredCameras, value: String(retentionManagement.configuredCount) },
+            { label: copy.archiveManagementLastApplication, value: lastResultText(retentionManagement.last), tone: retentionManagement.status === "needs_attention" ? "warning" : "" },
+          ],
+          action: manageCamerasPermission.allowed
+            ? <a className="button secondary small" href="/cameras">{copy.configureCameras}</a>
+            : <button className="button secondary small" type="button" disabled title={manageCamerasPermission.reason}>{copy.configureCameras}</button>,
+        },
+        {
+          id: "auto-free",
+          title: copy.archiveManagementAutoFreeTitle,
+          status: copyStatus(copy, "archiveManagementAutoFreeStatus", autoFreeManagement.status),
+          tone: autoFreeManagement.tone,
+          description: autoFreeManagementDescription(autoFreeManagement, copy, language),
+          facts: [
+            {
+              label: copy.archiveManagementFreeSpace,
+              value: autoFreeManagement.freePercent === null ? copy.archiveManagementUnknownValue : formatPercent(autoFreeManagement.freePercent),
+              tone: ["critical", "warning", "cleanup", "recovery"].includes(autoFreeManagement.status) ? "warning" : "",
+            },
+            { label: copy.archiveManagementLastCleanup, value: lastResultText(autoFreeManagement.last), tone: autoFreeManagement.status === "failed" ? "warning" : "" },
+          ],
+          action: (
+            <ArchivePolicySwitch
+              checked={autoFreeManagement.effective}
+              busy={rootAction === "auto-free"}
+              disabled={!manageSettingsPermission.allowed}
+              label={autoFreeManagement.effective ? copy.disableAutoFree : copy.enableAutoFree}
+              title={!manageSettingsPermission.allowed ? manageSettingsPermission.reason : autoFreeManagement.effective ? copy.disableAutoFree : copy.enableAutoFree}
+              onChange={requestAutoFreeSpace}
+            />
+          ),
+        },
+      ],
+    },
+    {
+      id: "maintenance",
+      title: copy.archiveManagementMaintenanceGroup,
+      rows: [
+        {
+          id: "integrity",
+          title: copy.archiveManagementIntegrityTitle,
+          status: copyStatus(copy, "archiveManagementIntegrityStatus", integrityManagement.status),
+          tone: integrityManagement.tone,
+          description: integrityManagementDescription(integrityManagement, copy),
+          facts: [
+            { label: copy.problems, value: String(integrityManagement.problemCount), tone: integrityManagement.problemCount ? "warning" : "" },
+            { label: copy.lastCheck, value: integrityManagement.lastCheckedAt ? formatDateTime(integrityManagement.lastCheckedAt, language) : copy.archiveManagementNeverRun },
+          ],
+          action: (
+            <button
+              className="button secondary small"
+              type="button"
+              title={!diagnosticsPermission.allowed ? diagnosticsPermission.reason : copy.integrityOpenCheck}
+              onClick={() => openIntegrityDialog()}
+              disabled={!!rootAction || !diagnosticsPermission.allowed}
+            >
+              {["not_run", "stale"].includes(integrityManagement.status) ? copy.integrityCheckArchive : copy.integrityOpenCheck}
+            </button>
+          ),
+        },
+        {
+          id: "migration",
+          title: copy.archiveManagementMigrationTitle,
+          status: copyStatus(copy, "archiveManagementMigrationStatus", migrationManagement.status),
+          tone: migrationManagement.tone,
+          description: migrationManagementDescription(migrationManagement, migrationScenario, copy),
+          facts: [
+            {
+              label: copy.archiveManagementPlanFiles,
+              value: migrationManagement.itemCount === null ? copy.archiveManagementUnknownValue : String(migrationManagement.itemCount),
+            },
+            {
+              label: copy.archiveManagementProgress,
+              value: migrationManagement.percent === null ? copy.archiveManagementNotRunning : `${migrationManagement.percent}%`,
+              tone: migrationManagement.status === "needs_attention" ? "warning" : "",
+            },
+          ],
+          action: migrationManagement.status === "needs_target"
+            ? <button className="button secondary small" type="button" onClick={openArchiveRootSetup}>{copy.archiveManagementAddLocation}</button>
+            : (
+              <button
+                className="button secondary small"
+                type="button"
+                title={!manageSettingsPermission.allowed ? manageSettingsPermission.reason : copy.migrationOpen}
+                onClick={openMigrationDialog}
+                disabled={!!rootAction || !manageSettingsPermission.allowed}
+              >
+                {migrationScenario.active || migrationScenario.terminal ? copy.archiveManagementContinue : copy.migrationOpen}
+              </button>
+            ),
+        },
+      ],
+    },
+  ];
+
+  const historyDialog = historyDialogOpen ? {
+    id: "archive-operation-history",
+    title: copy.operationHistoryTitle,
+    message: copy.operationHistoryIntro,
+    className: "archiveOperationHistoryDialog",
+    tone: "neutral",
+    closeLabel: copy.close,
+    content: (
+      <ArchiveOperationHistoryContent
+        available={recent.available}
+        items={historyOperationRows}
+        copy={copy}
+        language={language}
+        formatDateTime={formatDateTime}
+        formatBytes={formatBytes}
+        humanBlockerReason={humanBlockerReason}
+        onOpenItem={openHistoryOperation}
+      />
+    ),
+  } : null;
+
   return (
     <Layout>
       <div className="storageOpsPage">
@@ -2149,114 +2339,6 @@ function StorageOperationsPageContent() {
                 ) : <div className="storageOpsEmpty">{copy.noCameraOwned}</div>}
               </Section>
 
-              <Section title={copy.archiveOperations} className="storageOpsSection-operations">
-                <div className="storageOpsOperationList">
-                  <OperationRow
-                    title={copy.retentionRules}
-                    status={retentionStatusText(retentionScenario, copy)}
-                    tone={retentionTone}
-                    description={retentionPrimaryText}
-                    meta={(
-                      <div className="storageOpsOperationFacts">
-                        <MiniFact label={copy.lastRun} value={formatDateTime(retention.last_finished_at || retention.last_started_at, language)} />
-                        <MiniFact label={copy.deleted} value={String(retention.last_summary?.deleted_count || 0)} />
-                        <MiniFact label={copy.freed} value={formatBytes(retention.last_summary?.bytes_freed)} />
-                      </div>
-                    )}
-                    actions={(
-                      manageCamerasPermission.allowed
-                        ? <a className="button secondary small" href="/cameras">{copy.configureCameras}</a>
-                        : <button className="button secondary small" type="button" disabled title={manageCamerasPermission.reason}>{copy.configureCameras}</button>
-                    )}
-                  >
-                    <details className="storageOpsInlineDetails">
-                      <summary>{copy.supportDetails}</summary>
-                      <SummaryRow label={copy.retentionScope} value={copy.retentionScopeValue
-                        .replace("{active}", String(retention.active_camera_count || 0))
-                        .replace("{disabled}", String(retention.disabled_camera_count || 0))
-                        .replace("{retained}", String(retention.retained_deleted_camera_count || 0))} />
-                      <SummaryRow label={copy.retentionRulesMissing} value={String(retention.missing_or_invalid_rule_camera_count || 0)} />
-                      <SummaryRow label={copy.nextCheck} value={formatDateTime(retention.next_due_at, language)} />
-                      <SummaryRow label={copy.blockersReasons} value={operationReasonText(retention, copy, language)} />
-                      {!manageCamerasPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageCamerasPermission.reason}</div> : null}
-                    </details>
-                  </OperationRow>
-
-                  <OperationRow
-                    title={copy.autoFreeSpace}
-                    status={autoFreeConfigured && autoFreeAcknowledgementRequired ? copy.confirmationRequired : autoFreeEnabled ? copy.on : copy.off}
-                    tone={autoFreeConfigured && autoFreeAcknowledgementRequired ? "warning" : autoFreeEnabled ? "ok" : "neutral"}
-                    description={autoFreePrimaryText}
-                    meta={(
-                      <div className="storageOpsOperationFacts">
-                        <MiniFact label={copy.lastRun} value={formatDateTime(autoCleanup.last_finished_at || autoCleanup.last_started_at, language)} />
-                        <MiniFact label={copy.deleted} value={String(autoCleanup.last_summary?.deleted_count || 0)} />
-                        <MiniFact label={copy.freed} value={formatBytes(autoCleanup.last_summary?.bytes_freed)} />
-                      </div>
-                    )}
-                    actions={(
-                      <>
-                        <button className="button secondary small" type="button" title={autoFreeEnabled ? copy.disableAutoFree : copy.enableAutoFree} onClick={() => requestAutoFreeSpace(!autoFreeEnabled)} disabled={!!rootAction || !manageSettingsPermission.allowed}>
-                          {rootAction === "auto-free" ? copy.saving : autoFreeEnabled ? copy.disableAutoFreeShort : copy.enableAutoFreeShort}
-                        </button>
-                        {autoFreeConfigured && autoFreeAcknowledgementRequired ? (
-                          <button className="button secondary small" type="button" title={copy.disableAutoFree} onClick={() => requestAutoFreeSpace(false)} disabled={!!rootAction || !manageSettingsPermission.allowed}>
-                            {copy.disableAutoFreeShort}
-                          </button>
-                        ) : null}
-                      </>
-                    )}
-                  >
-                    <details className="storageOpsInlineDetails">
-                      <summary>{copy.supportDetails}</summary>
-                      <SummaryRow label={copy.policy} value={copy.autoFreeThresholdSummary
-                        .replace("{trigger}", String(policy.cleanup_threshold_percent ?? 5))
-                        .replace("{target}", String(policy.recovery_threshold_percent ?? 9))
-                        .replace("{critical}", String(policy.critical_threshold_percent ?? 1))} />
-                      <SummaryRow label={copy.lastError} value={operationReasonText(autoCleanup, copy, language)} />
-                      {!manageSettingsPermission.allowed ? <div className="storageOpsNote storageOpsNoteStrong">{manageSettingsPermission.reason}</div> : null}
-                    </details>
-                  </OperationRow>
-
-                  <OperationRow
-                    title={copy.archiveProblems}
-                    status={archiveProblemsStatusText(normalizedReconciliation, reconciliation, copy)}
-                    tone={reconciliationTone}
-                    description={integrityPrimaryText}
-                    meta={(
-                      <div className="storageOpsOperationFacts">
-                        <MiniFact label={copy.problems} value={String(normalizedReconciliation.problemCount || 0)} tone={normalizedReconciliation.problemCount ? "warning" : "ok"} />
-                        <MiniFact label={copy.integrityChecked} value={String(reconciliation.checked_count || 0)} />
-                        <MiniFact label={copy.integrityFailedItems} value={String(reconciliation.failed_count || 0)} tone={reconciliation.failed_count ? "warning" : "neutral"} />
-                        <MiniFact label={copy.lastCheck} value={formatDateTime(reconciliation.last_checked_at, language)} />
-                      </div>
-                    )}
-                    actions={(
-                      <button className="button secondary small" type="button" title={copy.integrityOpenCheck} onClick={openIntegrityDialog} disabled={!!rootAction}>{copy.integrityOpenCheck}</button>
-                    )}
-                  />
-
-                  <OperationRow
-                    title={copy.archiveMigration}
-                    status={archiveMigrationStatusText(migrationScenario, archiveRoots, copy)}
-                    tone={migrationTone}
-                    description={migrationPrimaryText}
-                    meta={(
-                      <div className="storageOpsOperationFacts">
-                        <MiniFact label={copy.move} value={migrationScenario.itemCount === null || migrationScenario.totalBytes === null ? copy.migrationUnknownValue : `${migrationScenario.itemCount} / ${formatBytes(migrationScenario.totalBytes)}`} />
-                        <MiniFact label={copy.migrationCompleted} value={migrationScenario.completedCount === null ? copy.migrationUnknownValue : String(migrationScenario.completedCount)} />
-                        <MiniFact label={copy.migrationExcluded} value={migrationScenario.excludedCount === null ? copy.migrationUnknownValue : String(migrationScenario.excludedCount)} tone={migrationScenario.excludedCount ? "warning" : "neutral"} />
-                        <MiniFact label={copy.applyState} value={archiveMigrationStatusText(migrationScenario, archiveRoots, copy)} tone={migrationScenario.completedProof ? "ok" : migrationScenario.manualReviewRequired ? "warning" : "neutral"} />
-                      </div>
-                    )}
-                    actions={(
-                      <button className="button secondary small" type="button" title={copy.migrationOpen} onClick={openMigrationDialog} disabled={!!rootAction || !manageSettingsPermission.allowed}>{copy.migrationOpen}</button>
-                    )}
-                  />
-                </div>
-                <div className="storageOpsNote storageOpsNoteStrong">{copy.safeActionNote}</div>
-              </Section>
-
               <Section title={copy.archiveRoots} className="storageOpsSection-secondary storageOpsSection-roots">
                 <div className="storageOpsRootList">
                   {(archiveRoots.length ? archiveRoots : [currentArchiveRoot]).filter(Boolean).map((root) => {
@@ -2316,6 +2398,7 @@ function StorageOperationsPageContent() {
                   {!archiveRoots.length && !currentArchiveRoot ? <div className="storageOpsEmpty">{copy.noRoots}</div> : null}
                 </div>
                 <details
+                  id="storage-archive-root-add"
                   className="storageOpsDetails storageOpsAdvancedRoot"
                   onToggle={(event) => {
                     if (event.currentTarget.open && !archiveRootDiscoveryModel.refreshing) loadArchiveRootDiscovery();
@@ -2367,53 +2450,14 @@ function StorageOperationsPageContent() {
                 </details>
               </Section>
 
-              {recent.available && recentOperationRows.length ? (
-                <details className="storageOpsSection storageOpsSection-secondary storageOpsSection-recent">
-                  <summary className="storageOpsSectionHead storageOpsRecentSummary">
-                    <h2>{copy.recentOperations}</h2>
-                    <span
-                      className="storageOpsRecentCount"
-                      aria-label={t("storagePage.recentOperationsCount", { count: recentOperationRows.length })}
-                    >
-                      {recentOperationRows.length}
-                    </span>
-                  </summary>
-                  <div className="storageOpsRecent">
-                    {recentOperationRows.map((item) => (
-                      <div className="storageOpsRecentItem" key={item.key}>
-                        <div className="storageOpsRecentPrimary">
-                          <span className="storageOpsRecentTitle">{copy[item.typeKey] || copy.recentOperationGeneric}</span>
-                          <span className={`storageOpsStatusPill storageOpsStatusPill-${item.tone}`}>
-                            {copy[item.statusKey] || copy.recentOperationStatusUnknown}
-                          </span>
-                          {item.timestamp ? (
-                            <time dateTime={item.timestamp}>{formatDateTime(item.timestamp, language)}</time>
-                          ) : null}
-                        </div>
-                        {item.facts.length ? (
-                          <div className="storageOpsRecentFacts">
-                            {item.facts.map((fact) => (
-                              <span key={fact.labelKey}>
-                                {copy[fact.labelKey]}: {fact.format === "bytes" ? formatBytes(fact.value) : fact.value}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
-                        {item.reasonCode ? (
-                          <div className="storageOpsRecentMessage">
-                            <span>{copy.recentOperationReason}:</span> {humanBlockerReason(item.reasonCode, language)}
-                          </div>
-                        ) : null}
-                        {item.nextActionKey ? (
-                          <div className="storageOpsRecentMessage">
-                            <span>{copy.recentOperationNextAction}:</span> {copy[item.nextActionKey]}
-                          </div>
-                        ) : null}
-                      </div>
-                    ))}
-                  </div>
-                </details>
-              ) : null}
+              <ArchiveManagementCenter
+                title={copy.archiveManagementTitle}
+                subtitle={refreshWarning ? copy.archiveManagementStale : copy.archiveManagementSubtitle}
+                historyLabel={copy.operationHistory}
+                historyCount={historyOperationRows.length}
+                onOpenHistory={() => setHistoryDialogOpen(true)}
+                groups={archiveManagementGroups}
+              />
             </div>
 
           </>
@@ -2465,6 +2509,7 @@ function StorageOperationsPageContent() {
           onCleanupTakeover={takeoverMigrationCleanup}
           onReset={resetMigrationDraft}
         />
+        <OperationDialog dialog={historyDialog} onClose={() => setHistoryDialogOpen(false)} />
         <OperationDialog dialog={archiveRootDialog} onClose={closeArchiveRootDialog} />
         <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
       </div>

@@ -24,9 +24,12 @@ from app.services.schema_migrations import (
     STAGE41011_OPERATION_LINEAGE_MIGRATION,
     STAGE4102_RETENTION_MIGRATION,
     STAGE4103_ARCHIVE_INTEGRITY_MIGRATION,
+    STAGE4104_ARCHIVE_MIGRATION,
+    STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
     STAGE4101_TABLES,
     STAGE4103_REQUIRED_INDEXES,
     STAGE4103_TABLES,
+    STAGE4104_TABLES,
     build_migration_plan,
     execute_migration_plan,
 )
@@ -148,6 +151,8 @@ def test_postgres_lower_safe_migration_executes_once(pg_session):
 def test_postgres_stage4101_additive_tables_upgrade_from_v1_and_restart(pg_session):
     engine, db = pg_session
     Base.metadata.create_all(bind=engine)
+    for table in reversed(STAGE4104_TABLES):
+        table.drop(bind=engine, checkfirst=True)
     for table in reversed(STAGE4103_TABLES):
         table.drop(bind=engine, checkfirst=True)
     for table in reversed(STAGE4101_TABLES):
@@ -166,6 +171,8 @@ def test_postgres_stage4101_additive_tables_upgrade_from_v1_and_restart(pg_sessi
         STAGE41011_OPERATION_LINEAGE_MIGRATION.migration_id,
         STAGE4102_RETENTION_MIGRATION.migration_id,
         STAGE4103_ARCHIVE_INTEGRITY_MIGRATION.migration_id,
+        STAGE4104_ARCHIVE_MIGRATION.migration_id,
+        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION.migration_id,
     ]
     assert second["executed_migrations"] == []
     assert all(inspector.has_table(table.name) for table in STAGE4101_TABLES)
@@ -174,7 +181,13 @@ def test_postgres_stage4101_additive_tables_upgrade_from_v1_and_restart(pg_sessi
         actual_indexes = {str(item.get("name") or "") for item in inspector.get_indexes(table_name)}
         assert required_indexes.issubset(actual_indexes)
     operation_columns = {item["name"] for item in inspector.get_columns("storage_operations")}
-    assert {"parent_snapshot", "retry_depth"}.issubset(operation_columns)
+    assert {"parent_snapshot", "retry_depth", "domain_ref"}.issubset(operation_columns)
+    state_column = next(
+        item
+        for item in inspector.get_columns("archive_integrity_remediation_items")
+        if item["name"] == "state"
+    )
+    assert state_column["type"].length == 64
     camera_columns = {item["name"] for item in inspector.get_columns("cameras")}
     settings_columns = {item["name"] for item in inspector.get_columns("system_settings")}
     assert "retention_policy_version" in camera_columns

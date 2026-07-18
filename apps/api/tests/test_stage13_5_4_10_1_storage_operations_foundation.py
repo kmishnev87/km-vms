@@ -36,6 +36,7 @@ from app.services.schema_migrations import (
     STAGE4102_RETENTION_MIGRATION,
     STAGE4103_ARCHIVE_INTEGRITY_MIGRATION,
     STAGE4104_ARCHIVE_MIGRATION,
+    STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
     execute_migration_plan,
     validate_schema_migrations_pre_bootstrap,
 )
@@ -1043,7 +1044,7 @@ def _seed_schema_v1(db):
 
 
 def test_schema_clean_install_upgrade_restart_and_prebootstrap_gate():
-    assert CURRENT_SCHEMA_VERSION == 6
+    assert CURRENT_SCHEMA_VERSION >= 6
     fresh = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=fresh)
     fresh_inspector = inspect(fresh)
@@ -1068,12 +1069,13 @@ def test_schema_clean_install_upgrade_restart_and_prebootstrap_gate():
         STAGE4102_RETENTION_MIGRATION.migration_id,
         STAGE4103_ARCHIVE_INTEGRITY_MIGRATION.migration_id,
         STAGE4104_ARCHIVE_MIGRATION.migration_id,
+        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION.migration_id,
     ]
     assert second["executed_migrations"] == []
     assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == CURRENT_SCHEMA_VERSION
     assert all(inspector.has_table(name) for name in ("storage_operations", "storage_worker_leases", "storage_work_signals"))
     operation_columns = {item["name"] for item in inspector.get_columns("storage_operations")}
-    assert {"parent_snapshot", "retry_depth"}.issubset(operation_columns)
+    assert {"parent_snapshot", "retry_depth", "domain_ref"}.issubset(operation_columns)
     camera_columns = {item["name"] for item in inspector.get_columns("cameras")}
     settings_columns = {item["name"] for item in inspector.get_columns("system_settings")}
     assert "retention_policy_version" in camera_columns

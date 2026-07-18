@@ -8,6 +8,7 @@ import uuid
 
 from app.core.config import settings
 from app.db.session import SessionLocal
+from app.services.archive_integrity import cleanup_old_integrity_generations
 from app.services.retention_automation import (
     advance_retention_signal,
     claim_retention_signal,
@@ -89,6 +90,49 @@ def automatic_retention_page_size() -> int:
     return retention_page_size(settings.automatic_retention_max_candidates)
 
 
+def _run_storage_history_maintenance() -> dict:
+    result = {
+        "status": "completed",
+        "integrity_deleted_count": 0,
+        "operation_deleted_count": 0,
+        "failed_phases": [],
+    }
+    phases = (
+        ("integrity", cleanup_old_integrity_generations, "integrity_deleted_count"),
+        ("operations", cleanup_terminal_operations, "operation_deleted_count"),
+    )
+    for phase, cleanup, count_key in phases:
+        phase_db = None
+        try:
+            phase_db = SessionLocal()
+            result[count_key] = max(0, int(cleanup(phase_db) or 0))
+        except Exception as exc:
+            if phase_db is not None:
+                try:
+                    phase_db.rollback()
+                    phase_db.expire_all()
+                except Exception:
+                    pass
+            result["failed_phases"].append(phase)
+            logger.warning(
+                "Storage history maintenance phase failed phase=%s reason=database_error error_class=%s",
+                phase,
+                type(exc).__name__,
+            )
+        finally:
+            if phase_db is not None:
+                try:
+                    phase_db.close()
+                except Exception:
+                    pass
+    failed_count = len(result["failed_phases"])
+    if failed_count == len(phases):
+        result["status"] = "failed"
+    elif failed_count:
+        result["status"] = "partial"
+    return result
+
+
 def run_automatic_retention_cycle(*, force_recovery: bool = False) -> dict:
     page_size = automatic_retention_page_size()
     db = SessionLocal()
@@ -121,13 +165,15 @@ def run_automatic_retention_cycle(*, force_recovery: bool = False) -> dict:
                     should_preempt=lambda: retention_slice_preemption_required(db),
                 )
             heartbeat.assert_owned()
-            history_cleanup_count = cleanup_terminal_operations(db)
+            history_cleanup = _run_storage_history_maintenance()
             heartbeat.assert_owned()
             return {
                 "status": "completed",
                 "retention": retention_result,
                 "auto_free_space_cleanup": auto_free_space_result,
-                "history_cleanup_count": history_cleanup_count,
+                "history_cleanup_count": int(history_cleanup["operation_deleted_count"]),
+                "integrity_history_cleanup_count": int(history_cleanup["integrity_deleted_count"]),
+                "history_cleanup": history_cleanup,
             }
     finally:
         if leader is not None:

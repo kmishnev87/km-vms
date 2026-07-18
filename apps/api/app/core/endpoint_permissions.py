@@ -109,6 +109,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("storage", "GET", "/storage/migration/operations/{operation_id}", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("storage", "POST", "/storage/migration/operations/{operation_id}/cancel", PERMISSION_MANAGE_SETTINGS, "require_permission", "Actor or owner/admin safe-boundary cancellation; delete permission is not required."),
     EndpointPermission("storage", "POST", "/storage/migration/operations/{operation_id}/retry", f"{PERMISSION_MANAGE_SETTINGS}+{PERMISSION_DELETE_RECORDINGS}", "require_permissions", "Queues an authorized durable retry without rebuilding the immutable manifest."),
+    EndpointPermission("storage", "POST", "/storage/migration/operations/{operation_id}/cleanup-takeover", f"{PERMISSION_MANAGE_SETTINGS}+{PERMISSION_DELETE_RECORDINGS}", "require_permissions", "Starts an explicit exact cleanup-only recovery for an authorized administrator."),
     EndpointPermission("storage", "POST", "/storage/integrity/scans", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Starts a durable read-only archive integrity scan and returns immediately."),
     EndpointPermission("storage", "GET", "/storage/integrity/scans/latest", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Reads bounded latest durable integrity status; never scans or mutates archive state."),
     EndpointPermission("storage", "GET", "/storage/integrity/scans/{scan_id}", PERMISSION_RUN_DIAGNOSTICS, "require_permission", "Reads one bounded durable integrity scan status."),

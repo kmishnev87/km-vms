@@ -2,6 +2,27 @@
 
 import { useEffect, useRef } from "react";
 
+let bodyScrollLockCount = 0;
+let bodyOverflowBeforeLock = "";
+
+export function useModalBodyScrollLock(active) {
+  useEffect(() => {
+    if (!active || typeof document === "undefined") return undefined;
+    if (bodyScrollLockCount === 0) {
+      bodyOverflowBeforeLock = document.body.style.overflow;
+      document.body.style.overflow = "hidden";
+    }
+    bodyScrollLockCount += 1;
+    return () => {
+      bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
+      if (bodyScrollLockCount === 0) {
+        document.body.style.overflow = bodyOverflowBeforeLock;
+        bodyOverflowBeforeLock = "";
+      }
+    };
+  }, [active]);
+}
+
 function focusableElements(container) {
   if (!container) return [];
   return Array.from(
@@ -16,27 +37,32 @@ export function OperationDialog({ dialog, onClose }) {
   const cancelRef = useRef(null);
   const closeRef = useRef(null);
   const returnFocusRef = useRef(null);
-  const wasOpenRef = useRef(false);
+  const dialogOpen = Boolean(dialog);
+
+  useModalBodyScrollLock(dialogOpen);
 
   useEffect(() => {
-    if (!dialog) {
-      if (wasOpenRef.current && returnFocusRef.current?.isConnected) {
-        returnFocusRef.current.focus({ preventScroll: true });
-      }
-      wasOpenRef.current = false;
+    if (!dialogOpen) return undefined;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => {
+      if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus({ preventScroll: true });
       returnFocusRef.current = null;
-      return undefined;
-    }
-    if (!wasOpenRef.current) {
-      returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-      wasOpenRef.current = true;
-    }
+    };
+  }, [dialogOpen]);
+
+  useEffect(() => {
+    if (!dialogOpen) return undefined;
     const timer = window.setTimeout(() => {
-      const preferred = cancelRef.current || closeRef.current || focusableElements(containerRef.current)[0] || containerRef.current;
+      const activeElement = document.activeElement;
+      const activeInsideDialog = activeElement instanceof HTMLElement && containerRef.current?.contains(activeElement);
+      if (!dialog?.busy && activeInsideDialog && activeElement !== containerRef.current) return;
+      const preferred = dialog?.busy
+        ? containerRef.current
+        : cancelRef.current || closeRef.current || focusableElements(containerRef.current)[0] || containerRef.current;
       preferred?.focus({ preventScroll: true });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [dialog?.id, Boolean(dialog)]);
+  }, [dialog?.id, dialog?.busy, dialogOpen]);
 
   if (!dialog) return null;
   const hasConfirm = typeof dialog.onConfirm === "function";
@@ -60,6 +86,7 @@ export function OperationDialog({ dialog, onClose }) {
     const elements = focusableElements(containerRef.current);
     if (!elements.length) {
       event.preventDefault();
+      containerRef.current?.focus({ preventScroll: true });
       return;
     }
     const first = elements[0];

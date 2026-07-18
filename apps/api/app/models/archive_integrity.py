@@ -290,7 +290,7 @@ class ArchiveIntegrityRemediationItem(Base):
     receipt_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     intended_mutation: Mapped[str] = mapped_column(String(64), nullable=False)
     evidence: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
-    state: Mapped[str] = mapped_column(String(24), default="prepared", nullable=False)
+    state: Mapped[str] = mapped_column(String(64), default="prepared", nullable=False)
     result_code: Mapped[str | None] = mapped_column(String(96), nullable=True)
     quarantine_ref: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)

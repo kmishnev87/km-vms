@@ -14,9 +14,9 @@ from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from sqlalchemy import func, text
+from sqlalchemy import String, and_, cast, exists, func, literal, or_, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.core.permissions import user_has_permission
 from app.core.sanitization import redact_text
@@ -24,6 +24,8 @@ from app.db.session import SessionLocal
 from app.models.archive_integrity import (
     ArchiveIntegrityDirectoryWork,
     ArchiveIntegrityFinding,
+    ArchiveIntegrityRemediationItem,
+    ArchiveIntegrityRemediationPlan,
     ArchiveIntegrityScan,
     RecorderFileReceipt,
 )
@@ -40,6 +42,7 @@ from app.services.recording_storage import (
     segment_has_resolved_archive_root,
 )
 from app.services.storage_operation_conflicts import (
+    CoordinatorLeaseSession,
     StorageOperationConflict,
     operation_instance_id,
     reclaim_operation_with_conflicts,
@@ -48,6 +51,7 @@ from app.services.storage_operations_foundation import (
     OperationHeartbeatController,
     StorageOperationContractError,
     StorageOperationLeaseLost,
+    TERMINAL_OPERATION_STATUSES,
     WorkerLeaseHandle,
     acquire_worker_lease,
     actor_identity,
@@ -59,6 +63,7 @@ from app.services.storage_operations_foundation import (
     public_operation_summary,
     release_worker_lease,
     renew_worker_lease,
+    request_fingerprint,
     request_operation_cancel,
     stage_operation_terminal,
 )
@@ -80,12 +85,28 @@ ORPHAN_OBSERVATION_GRACE = timedelta(minutes=15)
 SCAN_HISTORY_DAYS = 30
 SCAN_HISTORY_MAX_ROWS = 100
 SCAN_CLEANUP_BATCH = 20
+REMEDIATION_PLAN_COORDINATOR_KEY = "archive-integrity-plan-transition"
+REMEDIATION_PLAN_COORDINATOR_LEASE_SECONDS = 30
+REMEDIATION_PLAN_COORDINATOR_WAIT_SECONDS = 2.0
 MEDIA_PROBE_TIMEOUT_SECONDS = 5
 FINGERPRINT_CHUNK_BYTES = 64 * 1024
 ACTIVE_JOB_STATES = frozenset({"starting", "recording", "stopping", "restarting"})
 ACTIVE_SEGMENT_STATES = frozenset({"starting", "writing", "stopping", "restarting"})
 TERMINAL_SCAN_STATUSES = frozenset({"completed", "partial", "failed", "cancelled"})
 ACTIVE_SCAN_STATUSES = frozenset({"queued", "running", "cancel_requested", "interrupted"})
+TERMINAL_REMEDIATION_PLAN_STATES = frozenset({"completed", "partial", "blocked", "failed", "cancelled"})
+REMEDIATION_ACTION_OPERATION_TYPES = {
+    "retire_missing_recording": "integrity_catalog_retirement",
+    "mark_stale_recording": "integrity_metadata_repair",
+    "delete_unusable_recording": "integrity_recording_delete",
+    "delete_proven_orphan": "orphan_file_cleanup",
+}
+REMEDIATION_ACTION_MUTATIONS = {
+    "retire_missing_recording": "retire_missing_metadata",
+    "mark_stale_recording": "mark_stale_nonplayable",
+    "delete_unusable_recording": "delete_trusted_unusable_recording",
+    "delete_proven_orphan": "delete_proven_orphan_file",
+}
 
 
 CATEGORY_CONTRACT: dict[str, dict[str, Any]] = {
@@ -1917,51 +1938,662 @@ def latest_integrity_summary_for_status(db: Session) -> dict[str, Any]:
     }
 
 
-def cleanup_old_integrity_generations(db: Session, *, now: datetime | None = None) -> int:
-    current = now or database_now(db)
-    active_ids = {
-        str(value)
-        for (value,) in db.query(ArchiveIntegrityScan.id)
-        .filter(ArchiveIntegrityScan.active_slot.isnot(None))
-        .limit(8)
-        .all()
-    }
-    protected_plan_scan_ids = {
-        str(value)
-        for (value,) in db.execute(
-            # Kept as SQL to avoid importing remediation models into the scan worker hot path.
-            text(
-                "SELECT DISTINCT scan_id FROM archive_integrity_remediation_plans "
-                "WHERE state IN ('prepared', 'running', 'partial', 'blocked') LIMIT 256"
+def acquire_remediation_plan_coordinator(db: Session) -> CoordinatorLeaseSession:
+    deadline = time.monotonic() + REMEDIATION_PLAN_COORDINATOR_WAIT_SECONDS
+    owner = operation_instance_id("integrity-plan-transition")
+    while True:
+        with Session(bind=db.get_bind()) as lease_db:
+            handle = acquire_worker_lease(
+                lease_db,
+                worker_key=REMEDIATION_PLAN_COORDINATOR_KEY,
+                owner_instance_id=owner,
+                lease_seconds=REMEDIATION_PLAN_COORDINATOR_LEASE_SECONDS,
             )
-        ).all()
-    }
-    keep_ids = {
-        str(value)
-        for (value,) in db.query(ArchiveIntegrityScan.id)
-        .order_by(ArchiveIntegrityScan.created_at.desc())
-        .limit(SCAN_HISTORY_MAX_ROWS)
-        .all()
-    }
-    candidates = (
-        db.query(ArchiveIntegrityScan)
+        if handle is not None:
+            coordinator = CoordinatorLeaseSession(
+                db.get_bind(),
+                handle,
+                lease_seconds=REMEDIATION_PLAN_COORDINATOR_LEASE_SECONDS,
+            )
+            try:
+                coordinator.start()
+            except Exception:
+                coordinator.close()
+                raise
+            return coordinator
+        if time.monotonic() >= deadline:
+            raise StorageOperationConflict(
+                {
+                    "reason_code": "archive_integrity_plan_transition_busy",
+                    "retryable": True,
+                }
+            )
+        time.sleep(0.025)
+
+
+def remediation_apply_operation_identity(
+    plan: ArchiveIntegrityRemediationPlan,
+) -> tuple[dict[str, str], str]:
+    return (
+        {
+            "plan_id": str(plan.id),
+            "canonical_hash": str(plan.canonical_hash),
+            "action": str(plan.action_kind),
+        },
+        hashlib.sha256(str(plan.id).encode("ascii")).hexdigest(),
+    )
+
+
+def remediation_apply_operation_candidates(
+    db: Session,
+    plan: ArchiveIntegrityRemediationPlan,
+) -> list[StorageOperation]:
+    operation_type = REMEDIATION_ACTION_OPERATION_TYPES.get(str(plan.action_kind))
+    if operation_type is None:
+        return []
+    identity, idempotency_key = remediation_apply_operation_identity(plan)
+    fingerprint = request_fingerprint(identity)
+    return (
+        db.query(StorageOperation)
         .filter(
-            ArchiveIntegrityScan.finished_at.isnot(None),
-            ArchiveIntegrityScan.finished_at < current - timedelta(days=SCAN_HISTORY_DAYS),
+            StorageOperation.operation_type == operation_type,
+            or_(
+                StorageOperation.domain_ref == str(plan.id),
+                and_(
+                    StorageOperation.actor_key == str(plan.actor_key),
+                    StorageOperation.idempotency_key == idempotency_key,
+                    StorageOperation.request_fingerprint == fingerprint,
+                ),
+            )
         )
-        .order_by(ArchiveIntegrityScan.finished_at.asc())
-        .limit(SCAN_CLEANUP_BATCH)
+        .order_by(StorageOperation.created_at.asc(), StorageOperation.id.asc())
+        .limit(2)
         .all()
     )
-    deleted = 0
-    for row in candidates:
-        if row.id in active_ids or row.id in protected_plan_scan_ids or row.id in keep_ids:
-            continue
-        db.delete(row)
-        deleted += 1
-    if deleted:
-        db.commit()
-    return deleted
+
+
+def _json_value_absent(column):
+    return or_(column.is_(None), cast(column, String) == "null")
+
+
+def _json_value_present(column):
+    return and_(column.isnot(None), cast(column, String) != "null")
+
+
+def _operation_terminal_evidence(operation_id, *, expected_status=None):
+    operation = aliased(StorageOperation)
+    status_condition = (
+        operation.status == expected_status
+        if expected_status is not None
+        else operation.status.in_(tuple(TERMINAL_OPERATION_STATUSES))
+    )
+    return and_(
+        operation_id.isnot(None),
+        exists(
+            select(operation.id).where(
+                operation.id == operation_id,
+                status_condition,
+                operation.finished_at.isnot(None),
+                _json_value_present(operation.result),
+            )
+        ),
+        exists(
+            select(AuditEvent.id).where(
+                AuditEvent.event_type == "storage_operation.finished",
+                AuditEvent.target_type == "storage_operation",
+                AuditEvent.target_id == operation_id,
+            )
+        ),
+    )
+
+
+def _remediation_apply_operation_type_match(operation):
+    return or_(
+        *(
+            and_(
+                ArchiveIntegrityRemediationPlan.action_kind == action_kind,
+                operation.operation_type == operation_type,
+            )
+            for action_kind, operation_type in REMEDIATION_ACTION_OPERATION_TYPES.items()
+        )
+    )
+
+
+def _unbound_remediation_apply_operation_exists(dialect_name: str):
+    operation = aliased(StorageOperation)
+    identities = [
+        and_(
+            operation.domain_ref == ArchiveIntegrityRemediationPlan.id,
+            _remediation_apply_operation_type_match(operation),
+        )
+    ]
+    if dialect_name == "postgresql":
+        expected_idempotency = func.encode(
+            func.sha256(func.convert_to(ArchiveIntegrityRemediationPlan.id, literal("UTF8"))),
+            literal("hex"),
+        )
+        fingerprint_payload = func.concat(
+            literal('{"action":"'),
+            ArchiveIntegrityRemediationPlan.action_kind,
+            literal('","canonical_hash":"'),
+            ArchiveIntegrityRemediationPlan.canonical_hash,
+            literal('","plan_id":"'),
+            ArchiveIntegrityRemediationPlan.id,
+            literal('"}'),
+        )
+        expected_fingerprint = func.encode(
+            func.sha256(func.convert_to(fingerprint_payload, literal("UTF8"))),
+            literal("hex"),
+        )
+        identities.append(
+            and_(
+                operation.actor_key == ArchiveIntegrityRemediationPlan.actor_key,
+                _remediation_apply_operation_type_match(operation),
+                operation.idempotency_key == expected_idempotency,
+                operation.request_fingerprint == expected_fingerprint,
+            )
+        )
+    return exists(
+        select(operation.id)
+        .where(or_(*identities))
+        .correlate(ArchiveIntegrityRemediationPlan)
+    )
+
+
+def _never_applied_plan_retirement_evidence(current: datetime, *, dialect_name: str):
+    item_count = (
+        select(func.count(ArchiveIntegrityRemediationItem.id))
+        .where(ArchiveIntegrityRemediationItem.plan_id == ArchiveIntegrityRemediationPlan.id)
+        .correlate(ArchiveIntegrityRemediationPlan)
+        .scalar_subquery()
+    )
+    unsafe_item = exists(
+        select(ArchiveIntegrityRemediationItem.id)
+        .where(
+            ArchiveIntegrityRemediationItem.plan_id == ArchiveIntegrityRemediationPlan.id,
+            or_(
+                ArchiveIntegrityRemediationItem.state != "prepared",
+                ArchiveIntegrityRemediationItem.result_code.isnot(None),
+                ArchiveIntegrityRemediationItem.quarantine_ref.isnot(None),
+            ),
+        )
+        .correlate(ArchiveIntegrityRemediationPlan)
+    )
+    mismatched_item = exists(
+        select(ArchiveIntegrityRemediationItem.id)
+        .where(
+            ArchiveIntegrityRemediationItem.plan_id == ArchiveIntegrityRemediationPlan.id,
+            or_(
+                ArchiveIntegrityRemediationItem.finding_id
+                != ArchiveIntegrityRemediationPlan.finding_id,
+                ArchiveIntegrityRemediationItem.item_index < 0,
+                ArchiveIntegrityRemediationItem.item_index
+                >= ArchiveIntegrityRemediationPlan.item_count,
+                or_(
+                    *(
+                        and_(
+                            ArchiveIntegrityRemediationPlan.action_kind == action_kind,
+                            ArchiveIntegrityRemediationItem.intended_mutation != mutation,
+                        )
+                        for action_kind, mutation in REMEDIATION_ACTION_MUTATIONS.items()
+                    )
+                ),
+            ),
+        )
+        .correlate(ArchiveIntegrityRemediationPlan)
+    )
+    distinct_item_indexes = (
+        select(func.count(func.distinct(ArchiveIntegrityRemediationItem.item_index)))
+        .where(ArchiveIntegrityRemediationItem.plan_id == ArchiveIntegrityRemediationPlan.id)
+        .correlate(ArchiveIntegrityRemediationPlan)
+        .scalar_subquery()
+    )
+    minimum_item_index = (
+        select(func.min(ArchiveIntegrityRemediationItem.item_index))
+        .where(ArchiveIntegrityRemediationItem.plan_id == ArchiveIntegrityRemediationPlan.id)
+        .correlate(ArchiveIntegrityRemediationPlan)
+        .scalar_subquery()
+    )
+    maximum_item_index = (
+        select(func.max(ArchiveIntegrityRemediationItem.item_index))
+        .where(ArchiveIntegrityRemediationItem.plan_id == ArchiveIntegrityRemediationPlan.id)
+        .correlate(ArchiveIntegrityRemediationPlan)
+        .scalar_subquery()
+    )
+    matching_finding = exists(
+        select(ArchiveIntegrityFinding.id)
+        .where(
+            ArchiveIntegrityFinding.id == ArchiveIntegrityRemediationPlan.finding_id,
+            ArchiveIntegrityFinding.scan_id == ArchiveIntegrityRemediationPlan.scan_id,
+            ArchiveIntegrityFinding.action_key == ArchiveIntegrityRemediationPlan.action_kind,
+            ArchiveIntegrityFinding.required_permission
+            == ArchiveIntegrityRemediationPlan.required_permission,
+            ArchiveIntegrityFinding.confirmation_level
+            == ArchiveIntegrityRemediationPlan.confirmation_level,
+        )
+        .correlate(ArchiveIntegrityRemediationPlan)
+    )
+    prepare_operation = aliased(StorageOperation)
+    exact_prepare_operation = exists(
+        select(prepare_operation.id)
+        .where(
+            prepare_operation.id == ArchiveIntegrityRemediationPlan.operation_id,
+            prepare_operation.operation_type == "integrity_plan_prepare",
+            prepare_operation.status == "completed",
+            prepare_operation.finished_at.isnot(None),
+            _json_value_present(prepare_operation.result),
+            prepare_operation.result["status"].as_string() == "completed",
+            prepare_operation.result["plan_id"].as_string() == ArchiveIntegrityRemediationPlan.id,
+            prepare_operation.result["item_count"].as_integer()
+            == ArchiveIntegrityRemediationPlan.item_count,
+        )
+        .correlate(ArchiveIntegrityRemediationPlan)
+    )
+    terminal_plan_audit = exists(
+        select(AuditEvent.id)
+        .where(
+            AuditEvent.event_type.in_(
+                tuple(
+                    f"archive_integrity.remediation_{state}"
+                    for state in TERMINAL_REMEDIATION_PLAN_STATES
+                )
+            ),
+            AuditEvent.target_type == "archive_integrity_plan",
+            AuditEvent.target_id == ArchiveIntegrityRemediationPlan.id,
+        )
+        .correlate(ArchiveIntegrityRemediationPlan)
+    )
+    return and_(
+        ArchiveIntegrityRemediationPlan.expires_at <= current,
+        ArchiveIntegrityRemediationPlan.apply_operation_id.is_(None),
+        ArchiveIntegrityRemediationPlan.started_at.is_(None),
+        ArchiveIntegrityRemediationPlan.finished_at.is_(None),
+        _json_value_absent(ArchiveIntegrityRemediationPlan.result_summary),
+        or_(
+            ArchiveIntegrityRemediationPlan.state == "prepared",
+            and_(
+                ArchiveIntegrityRemediationPlan.state == "blocked",
+                ArchiveIntegrityRemediationPlan.reason_code == "archive_integrity_plan_expired",
+                ArchiveIntegrityRemediationPlan.retry_mode == "new_scan",
+            ),
+        ),
+        ArchiveIntegrityRemediationPlan.item_count > 0,
+        ArchiveIntegrityRemediationPlan.action_kind.in_(tuple(REMEDIATION_ACTION_OPERATION_TYPES)),
+        item_count == ArchiveIntegrityRemediationPlan.item_count,
+        distinct_item_indexes == ArchiveIntegrityRemediationPlan.item_count,
+        minimum_item_index == 0,
+        maximum_item_index == ArchiveIntegrityRemediationPlan.item_count - 1,
+        ~unsafe_item,
+        ~mismatched_item,
+        matching_finding,
+        exact_prepare_operation,
+        exists(
+            select(AuditEvent.id)
+            .where(
+                AuditEvent.event_type == "storage_operation.finished",
+                AuditEvent.target_type == "storage_operation",
+                AuditEvent.target_id == ArchiveIntegrityRemediationPlan.operation_id,
+            )
+            .correlate(ArchiveIntegrityRemediationPlan)
+        ),
+        exists(
+            select(AuditEvent.id)
+            .where(
+                AuditEvent.event_type == "archive_integrity.remediation_plan_created",
+                AuditEvent.target_type == "archive_integrity_plan",
+                AuditEvent.target_id == ArchiveIntegrityRemediationPlan.id,
+            )
+            .correlate(ArchiveIntegrityRemediationPlan)
+        ),
+        ~terminal_plan_audit,
+        ~_unbound_remediation_apply_operation_exists(dialect_name),
+    )
+
+
+def _remediation_plan_canonical_hash(
+    plan: ArchiveIntegrityRemediationPlan,
+    item: ArchiveIntegrityRemediationItem,
+) -> str:
+    canonical = {
+        "schema_version": int(plan.schema_version),
+        "plan_id": str(plan.id),
+        "scan_id": str(plan.scan_id),
+        "finding_id": str(plan.finding_id),
+        "action_kind": str(plan.action_kind),
+        "required_permission": str(plan.required_permission),
+        "item_id": str(item.id),
+        "item_index": int(item.item_index),
+        "intended_mutation": str(item.intended_mutation),
+        "evidence": dict(item.evidence or {}),
+    }
+    payload = json.dumps(
+        canonical,
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _never_applied_plan_revalidates(
+    db: Session,
+    plan: ArchiveIntegrityRemediationPlan,
+    items: list[ArchiveIntegrityRemediationItem],
+    *,
+    current: datetime,
+    dialect_name: str,
+) -> bool:
+    if len(items) != int(plan.item_count or 0) or len(items) != 1:
+        return False
+    item = items[0]
+    if _remediation_plan_canonical_hash(plan, item) != str(plan.canonical_hash):
+        return False
+    exact = (
+        db.query(ArchiveIntegrityRemediationPlan.id)
+        .filter(
+            ArchiveIntegrityRemediationPlan.id == str(plan.id),
+            _never_applied_plan_retirement_evidence(current, dialect_name=dialect_name),
+        )
+        .first()
+    )
+    if exact is None:
+        return False
+    return not remediation_apply_operation_candidates(db, plan)
+
+
+def _remediation_plan_revalidates_for_retirement(
+    db: Session,
+    plan: ArchiveIntegrityRemediationPlan,
+    items: list[ArchiveIntegrityRemediationItem],
+    *,
+    current: datetime,
+    dialect_name: str,
+) -> bool:
+    terminal = (
+        db.query(ArchiveIntegrityRemediationPlan.id)
+        .filter(
+            ArchiveIntegrityRemediationPlan.id == str(plan.id),
+            _remediation_plan_retirement_evidence(current),
+        )
+        .first()
+    )
+    if terminal is not None:
+        return True
+    return _never_applied_plan_revalidates(
+        db,
+        plan,
+        items,
+        current=current,
+        dialect_name=dialect_name,
+    )
+
+
+def _remediation_plan_retirement_evidence(current: datetime):
+    terminal_item_states = tuple(TERMINAL_REMEDIATION_PLAN_STATES)
+    item_count = (
+        select(func.count(ArchiveIntegrityRemediationItem.id))
+        .where(ArchiveIntegrityRemediationItem.plan_id == ArchiveIntegrityRemediationPlan.id)
+        .correlate(ArchiveIntegrityRemediationPlan)
+        .scalar_subquery()
+    )
+    nonterminal_item = exists(
+        select(ArchiveIntegrityRemediationItem.id)
+        .where(
+            ArchiveIntegrityRemediationItem.plan_id == ArchiveIntegrityRemediationPlan.id,
+            ArchiveIntegrityRemediationItem.state.notin_(terminal_item_states),
+        )
+        .correlate(ArchiveIntegrityRemediationPlan)
+    )
+    matching_finding = exists(
+        select(ArchiveIntegrityFinding.id)
+        .where(
+            ArchiveIntegrityFinding.id == ArchiveIntegrityRemediationPlan.finding_id,
+            ArchiveIntegrityFinding.scan_id == ArchiveIntegrityRemediationPlan.scan_id,
+        )
+        .correlate(ArchiveIntegrityRemediationPlan)
+    )
+    terminal_audit = or_(
+        *(
+            and_(
+                ArchiveIntegrityRemediationPlan.state == state,
+                exists(
+                    select(AuditEvent.id)
+                    .where(
+                        AuditEvent.event_type == f"archive_integrity.remediation_{state}",
+                        AuditEvent.target_type == "archive_integrity_plan",
+                        AuditEvent.target_id == ArchiveIntegrityRemediationPlan.id,
+                    )
+                    .correlate(ArchiveIntegrityRemediationPlan)
+                ),
+            )
+            for state in TERMINAL_REMEDIATION_PLAN_STATES
+        )
+    )
+    return and_(
+        ArchiveIntegrityRemediationPlan.state.in_(tuple(TERMINAL_REMEDIATION_PLAN_STATES)),
+        ArchiveIntegrityRemediationPlan.finished_at.isnot(None),
+        _json_value_present(ArchiveIntegrityRemediationPlan.result_summary),
+        ArchiveIntegrityRemediationPlan.expires_at <= current,
+        ArchiveIntegrityRemediationPlan.item_count > 0,
+        item_count == ArchiveIntegrityRemediationPlan.item_count,
+        ~nonterminal_item,
+        matching_finding,
+        _operation_terminal_evidence(
+            ArchiveIntegrityRemediationPlan.operation_id,
+            expected_status="completed",
+        ),
+        _operation_terminal_evidence(
+            ArchiveIntegrityRemediationPlan.apply_operation_id,
+            expected_status=ArchiveIntegrityRemediationPlan.state,
+        ),
+        exists(
+            select(AuditEvent.id)
+            .where(
+                AuditEvent.event_type == "archive_integrity.remediation_plan_created",
+                AuditEvent.target_type == "archive_integrity_plan",
+                AuditEvent.target_id == ArchiveIntegrityRemediationPlan.id,
+            )
+            .correlate(ArchiveIntegrityRemediationPlan)
+        ),
+        terminal_audit,
+    )
+
+
+def _scan_terminal_audit_evidence():
+    return or_(
+        *(
+            and_(
+                ArchiveIntegrityScan.status == status,
+                exists(
+                    select(AuditEvent.id)
+                    .where(
+                        AuditEvent.event_type == f"archive_integrity.scan_{status}",
+                        AuditEvent.target_type == "archive_integrity_scan",
+                        AuditEvent.target_id == ArchiveIntegrityScan.id,
+                    )
+                    .correlate(ArchiveIntegrityScan)
+                ),
+            )
+            for status in TERMINAL_SCAN_STATUSES
+        )
+    )
+
+
+def _cleanup_old_integrity_generations_once(db: Session, *, current: datetime) -> int:
+    try:
+        coordinator = acquire_remediation_plan_coordinator(db)
+    except StorageOperationConflict as exc:
+        if str(exc.detail.get("reason_code") or "") == "archive_integrity_plan_transition_busy":
+            db.rollback()
+            return 0
+        raise
+    try:
+        coordinator.assert_owned()
+        dialect_name = str(db.get_bind().dialect.name)
+        retireable_plan = or_(
+            _remediation_plan_retirement_evidence(current),
+            _never_applied_plan_retirement_evidence(current, dialect_name=dialect_name),
+        )
+        keep_scan = aliased(ArchiveIntegrityScan)
+        latest_scan = aliased(ArchiveIntegrityScan)
+        keep_ids = (
+            select(keep_scan.id)
+            .order_by(keep_scan.created_at.desc(), keep_scan.id.desc())
+            .limit(SCAN_HISTORY_MAX_ROWS)
+        )
+        latest_id = (
+            select(latest_scan.id)
+            .order_by(latest_scan.created_at.desc(), latest_scan.id.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        protected_plan = exists(
+            select(ArchiveIntegrityRemediationPlan.id)
+            .where(
+                ArchiveIntegrityRemediationPlan.scan_id == ArchiveIntegrityScan.id,
+                ~retireable_plan,
+            )
+            .correlate(ArchiveIntegrityScan)
+        )
+        candidates = (
+            db.query(ArchiveIntegrityScan)
+            .filter(
+                ArchiveIntegrityScan.status.in_(tuple(TERMINAL_SCAN_STATUSES)),
+                ArchiveIntegrityScan.active_slot.is_(None),
+                ArchiveIntegrityScan.finished_at.isnot(None),
+                ArchiveIntegrityScan.id != latest_id,
+                or_(
+                    ArchiveIntegrityScan.finished_at < current - timedelta(days=SCAN_HISTORY_DAYS),
+                    ~ArchiveIntegrityScan.id.in_(keep_ids),
+                ),
+                _operation_terminal_evidence(
+                    ArchiveIntegrityScan.operation_id,
+                    expected_status=ArchiveIntegrityScan.status,
+                ),
+                _scan_terminal_audit_evidence(),
+                ~protected_plan,
+            )
+            .order_by(ArchiveIntegrityScan.finished_at.asc(), ArchiveIntegrityScan.id.asc())
+            .with_for_update()
+            .limit(SCAN_CLEANUP_BATCH)
+            .all()
+        )
+        scan_ids = [str(row.id) for row in candidates]
+        if not scan_ids:
+            db.rollback()
+            return 0
+
+        plans = (
+            db.query(ArchiveIntegrityRemediationPlan)
+            .filter(ArchiveIntegrityRemediationPlan.scan_id.in_(scan_ids))
+            .order_by(
+                ArchiveIntegrityRemediationPlan.scan_id.asc(),
+                ArchiveIntegrityRemediationPlan.id.asc(),
+            )
+            .with_for_update()
+            .all()
+        )
+        plan_ids = [str(row.id) for row in plans]
+        items = (
+            db.query(ArchiveIntegrityRemediationItem)
+            .filter(ArchiveIntegrityRemediationItem.plan_id.in_(plan_ids))
+            .order_by(
+                ArchiveIntegrityRemediationItem.plan_id.asc(),
+                ArchiveIntegrityRemediationItem.item_index.asc(),
+                ArchiveIntegrityRemediationItem.id.asc(),
+            )
+            .with_for_update()
+            .all()
+            if plan_ids
+            else []
+        )
+        finding_ids = sorted({str(row.finding_id) for row in plans})
+        if finding_ids:
+            (
+                db.query(ArchiveIntegrityFinding)
+                .filter(ArchiveIntegrityFinding.id.in_(finding_ids))
+                .order_by(ArchiveIntegrityFinding.id.asc())
+                .with_for_update()
+                .all()
+            )
+
+        items_by_plan: dict[str, list[ArchiveIntegrityRemediationItem]] = {}
+        for item in items:
+            items_by_plan.setdefault(str(item.plan_id), []).append(item)
+        plans_by_scan: dict[str, list[ArchiveIntegrityRemediationPlan]] = {}
+        for plan in plans:
+            plans_by_scan.setdefault(str(plan.scan_id), []).append(plan)
+
+        eligible_scan_ids: list[str] = []
+        eligible_plan_ids: list[str] = []
+        for scan_id in scan_ids:
+            scan_plans = plans_by_scan.get(scan_id, [])
+            if all(
+                _remediation_plan_revalidates_for_retirement(
+                    db,
+                    plan,
+                    items_by_plan.get(str(plan.id), []),
+                    current=current,
+                    dialect_name=dialect_name,
+                )
+                for plan in scan_plans
+            ):
+                eligible_scan_ids.append(scan_id)
+                eligible_plan_ids.extend(str(plan.id) for plan in scan_plans)
+
+        if not eligible_scan_ids:
+            db.rollback()
+            return 0
+        coordinator.assert_owned()
+        if eligible_plan_ids:
+            db.query(ArchiveIntegrityRemediationItem).filter(
+                ArchiveIntegrityRemediationItem.plan_id.in_(eligible_plan_ids)
+            ).delete(synchronize_session=False)
+            db.flush()
+            deleted_plans = int(
+                db.query(ArchiveIntegrityRemediationPlan)
+                .filter(ArchiveIntegrityRemediationPlan.id.in_(eligible_plan_ids))
+                .delete(synchronize_session=False)
+                or 0
+            )
+            if deleted_plans != len(eligible_plan_ids):
+                raise StorageOperationContractError("archive_integrity_history_plan_retirement_conflict")
+            db.flush()
+
+        deleted_scans = int(
+            db.query(ArchiveIntegrityScan)
+            .filter(ArchiveIntegrityScan.id.in_(eligible_scan_ids))
+            .delete(synchronize_session=False)
+            or 0
+        )
+        if deleted_scans != len(eligible_scan_ids):
+            raise StorageOperationContractError("archive_integrity_history_scan_retirement_conflict")
+        if dialect_name == "sqlite":
+            db.commit()
+            coordinator.assert_owned()
+        else:
+            coordinator.assert_owned()
+            db.commit()
+        return deleted_scans
+    finally:
+        coordinator.close()
+
+
+def cleanup_old_integrity_generations(db: Session, *, now: datetime | None = None) -> int:
+    current = now or database_now(db)
+    for attempt in range(2):
+        try:
+            return _cleanup_old_integrity_generations_once(db, current=current)
+        except IntegrityError:
+            db.rollback()
+            db.expire_all()
+            if attempt:
+                raise
+        except Exception:
+            db.rollback()
+            raise
+    return 0
 
 
 def legacy_reconciliation_summary(db: Session) -> dict[str, Any]:

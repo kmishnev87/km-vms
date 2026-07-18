@@ -57,9 +57,19 @@ for (const [method, path] of [
   ["POST", "/storage/archive-roots"],
   ["POST", "/storage/archive-roots/{root_id}/activate"],
   ["POST", "/storage/migration/preview"],
-  ["POST", "/storage/migration/apply"],
 ]) {
   assert.equal(entries["/storage"].backendEndpoints.some((item) => item.method === method && item.path === path && item.permission === "manage_settings"), true, `${method} ${path} must require manage_settings`);
+}
+for (const path of [
+  "/storage/migration/apply",
+  "/storage/migration/operations/{operation_id}/retry",
+  "/storage/migration/operations/{operation_id}/cleanup-takeover",
+]) {
+  assert.equal(
+    entries["/storage"].backendEndpoints.some((item) => item.method === "POST" && item.path === path && item.permission === "manage_settings+delete_recordings"),
+    true,
+    `POST ${path} must require manage_settings and delete_recordings`,
+  );
 }
 assert.equal(entries["/apk"].access, routePermissions.ROUTE_ACCESS_PUBLIC);
 assert.equal(entries["/apk"].placeholderOnly, true);

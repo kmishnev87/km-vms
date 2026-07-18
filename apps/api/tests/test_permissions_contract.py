@@ -321,6 +321,14 @@ def test_settings_hardware_storage_users_and_system_info_are_permission_protecte
     assert 'Depends(require_permission("manage_settings"))' in read_app_file("main.py")
 
 
+def test_storage_migration_registry_matches_existing_route_guards():
+    combined = "manage_settings+delete_recordings"
+    assert decision("/storage/migration/apply", "POST").decision == combined
+    assert decision("/storage/migration/operations/{operation_id}/retry", "POST").decision == combined
+    assert decision("/storage/migration/operations/{operation_id}/cleanup-takeover", "POST").decision == combined
+    assert decision("/storage/migration/operations/{operation_id}/cancel", "POST").decision == "manage_settings"
+
+
 def test_permission_denial_detail_is_normalized():
     dependency = require_permission("manage_settings")
     with pytest.raises(HTTPException) as exc:

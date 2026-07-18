@@ -17,8 +17,8 @@ vm.runInNewContext(
   `${storageSource}
 this.humanBlockerReason = humanBlockerReason;
 this.storageTopHealthModel = storageTopHealthModel;
-this.retentionScenarioModel = retentionScenarioModel;
-this.reconciliationScenarioModel = reconciliationScenarioModel;
+this.retentionOperationPresentation = retentionOperationPresentation;
+this.integrityOperationPresentation = integrityOperationPresentation;
 this.migrationScenarioModel = migrationScenarioModel;
 this.archiveRootScenarioModel = archiveRootScenarioModel;`,
   context
@@ -74,20 +74,20 @@ for (const code of [
 assert.equal(context.humanBlockerReason("future_unknown_raw_code"), "Неизвестно");
 
 assert.equal(
-  context.retentionScenarioModel({ permission: { allowed: false, reason: "no" } }).status,
-  "unavailable_due_to_permissions"
+  context.retentionOperationPresentation({ configured_camera_count: 0 }).status,
+  "not_configured"
 );
 assert.equal(
-  context.retentionScenarioModel({ preview: { planned_count: 2 }, permission: { allowed: true } }).canApply,
-  true
+  context.retentionOperationPresentation({ configured_camera_count: 2, running: true }).status,
+  "running"
 );
 assert.equal(
-  context.reconciliationScenarioModel({ preview: { problem_file_count: 1 }, canCheck: { allowed: true }, canApply: { allowed: false, reason: "no" } }).canApply,
-  false
+  context.integrityOperationPresentation({ status: "completed", problem_file_count: 1 }).status,
+  "findings"
 );
 assert.equal(
-  context.migrationScenarioModel({ preview: { apply_available: false, blockers: [{ reason: "stale_or_tampered_plan" }] } }).status,
-  "apply_blocked"
+  context.migrationScenarioModel({ plan: { status: "blocked", reason_code: "stale_or_tampered_plan" } }).status,
+  "blocked"
 );
 assert.equal(
   context.archiveRootScenarioModel({ root: { is_active: false, is_available: false, problem: "namespace_missing" } }).canActivate,
@@ -96,9 +96,9 @@ assert.equal(
 
 for (const required of [
   "Что сделать сейчас",
-  "Показать, что будет удалено по правилам хранения",
-  "Удалить найденные старые записи",
-  "Исправить только безопасные проблемы метаданных",
+  "Управление архивом",
+  "Самые старые записи удаляются автоматически",
+  "Откройте список, чтобы увидеть причину",
   "Обновить состояние хранилища",
 ]) {
   assert.ok(i18n.includes(required), `${required} must be visible copy`);
@@ -111,12 +111,12 @@ for (const forbidden of [
   "Обновить проверку",
   "Доступность: Нет",
 ]) {
-  assert.equal(i18n.includes(forbidden) || storagePage.includes(forbidden), false, `${forbidden} must be replaced`);
+  assert.equal(storagePage.includes(forbidden), false, `${forbidden} must not render in primary /storage UI`);
 }
 
 assert.match(storagePage, /storageTopHealthModel/, "top health is model-driven");
 assert.match(storagePage, /errorDetailText/, "structured action errors are mapped before display");
-assert.match(storagePage, /retentionScenarioModel/, "retention state is model-driven");
-assert.match(storagePage, /reconciliationScenarioModel/, "reconciliation state is model-driven");
+assert.match(storagePage, /retentionOperationPresentation/, "retention state is model-driven");
+assert.match(storagePage, /integrityOperationPresentation/, "integrity state is model-driven");
 assert.match(storagePage, /migrationScenarioModel/, "migration state is model-driven");
 assert.match(storagePage, /archiveRootScenarioModel/, "archive roots state is model-driven");

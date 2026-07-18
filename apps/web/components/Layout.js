@@ -6,6 +6,11 @@ import { usePathname, useRouter } from "next/navigation";
 import { apiFetch, canAccessPath, clearAuthToken, getAuthToken } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { normalizeLocale, persistLocale, useI18n } from "../lib/i18n";
+import {
+  readStorageMigrationActivity,
+  STORAGE_MIGRATION_ACTIVITY_EVENT,
+  storageMigrationActivitySnapshot,
+} from "../lib/storageOperations";
 import SystemHealthIndicator from "./SystemHealthIndicator";
 
 const items = [
@@ -15,13 +20,19 @@ const items = [
   { href: "/chronology", labelKey: "nav.chronology", iconSrc: "/assets/icons/ui/chronology.png" },
 ];
 
-function MigrationActivityIndicator({ enabled, t }) {
+function MigrationActivityIndicator({ enabled, onStoragePage, t }) {
   const [activity, setActivity] = useState(null);
 
   useEffect(() => {
     if (!enabled || !getAuthToken()) {
       setActivity(null);
       return undefined;
+    }
+    if (onStoragePage) {
+      setActivity(readStorageMigrationActivity());
+      const handleActivity = (event) => setActivity(event.detail || null);
+      window.addEventListener(STORAGE_MIGRATION_ACTIVITY_EVENT, handleActivity);
+      return () => window.removeEventListener(STORAGE_MIGRATION_ACTIVITY_EVENT, handleActivity);
     }
     let cancelled = false;
     let polling = false;
@@ -30,7 +41,7 @@ function MigrationActivityIndicator({ enabled, t }) {
       polling = true;
       try {
         const result = await apiFetch("/storage/migration/operations/active");
-        if (!cancelled) setActivity(result?.active && result?.operation && result?.plan ? result : null);
+        if (!cancelled) setActivity(storageMigrationActivitySnapshot(result));
       } catch (_) {
         if (!cancelled) setActivity(null);
       } finally {
@@ -43,16 +54,13 @@ function MigrationActivityIndicator({ enabled, t }) {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [enabled]);
+  }, [enabled, onStoragePage]);
 
-  if (!activity) return null;
-  const operation = activity.operation || {};
-  const plan = activity.plan || {};
-  const progress = operation.progress || {};
-  const status = String(operation.status || plan.status || "unknown");
-  const completedBytes = Number(progress.completed_bytes ?? plan.completed_bytes);
-  const currentBytes = Number(progress.current_item_bytes);
-  const totalBytes = Number(progress.total_bytes ?? plan.total_bytes);
+  if (!enabled) return null;
+  const status = String(activity?.status || "unknown");
+  const completedBytes = Number(activity?.completedBytes);
+  const currentBytes = Number(activity?.currentItemBytes);
+  const totalBytes = Number(activity?.totalBytes);
   const percent = Number.isFinite(completedBytes) && Number.isFinite(totalBytes) && totalBytes > 0
     ? Math.min(99, Math.max(0, Math.floor(((completedBytes + (Number.isFinite(currentBytes) ? currentBytes : 0)) / totalBytes) * 100)))
     : null;
@@ -63,15 +71,19 @@ function MigrationActivityIndicator({ enabled, t }) {
       : status === "building"
         ? "nav.migrationPreparing"
         : "nav.migrationRunning";
-  const operationId = operation.operation_id || plan.operation_id;
+  const operationId = activity?.operationId;
   const href = operationId ? `/storage?migration=${encodeURIComponent(operationId)}` : "/storage";
 
   return (
-    <Link className="migrationNavIndicator" href={href} title={t("nav.migrationOpen")} aria-label={`${t(statusKey)}${percent === null ? "" : `, ${percent}%`}`}>
-      <img src="/assets/icons/ui/storage.png" alt="" />
-      <span>{t(statusKey)}</span>
-      {percent !== null ? <strong>{percent}%</strong> : <i aria-hidden="true" />}
-    </Link>
+    <span className={`migrationNavIndicatorSlot ${activity ? "isActive" : ""}`} aria-hidden={activity ? undefined : "true"}>
+      {activity ? (
+        <Link className="migrationNavIndicator" href={href} title={t("nav.migrationOpen")} aria-label={`${t(statusKey)}${percent === null ? "" : `, ${percent}%`}`}>
+          <img src="/assets/icons/ui/storage.png" alt="" />
+          <span>{t(statusKey)}</span>
+          {percent !== null ? <strong>{percent}%</strong> : <i aria-hidden="true" />}
+        </Link>
+      ) : null}
+    </span>
   );
 }
 
@@ -149,7 +161,7 @@ export default function Layout({ children }) {
           </nav>
 
           <div className="topNavRight">
-            <MigrationActivityIndicator enabled={Boolean(currentUser && canOpenStorage)} t={t} />
+            <MigrationActivityIndicator enabled={Boolean(currentUser && canOpenStorage)} onStoragePage={pathname === "/storage"} t={t} />
             {canOpenStorage ? (
               <Link
                 href="/storage"

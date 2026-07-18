@@ -646,9 +646,9 @@
     grid-template-columns: 1fr;
     grid-template-areas:
       "archive"
-      "operations"
+      "cameras"
       "roots"
-      "recent";
+      "management";
   }
 
   .storageOpsMiniGrid {
@@ -832,9 +832,8 @@
     grid-template-areas:
       "archive"
       "cameras"
-      "operations"
       "roots"
-      "recent";
+      "management";
   }
 
   .storageOpsSection-operations .storageOpsOperationList {
@@ -876,17 +875,32 @@
     gap: 4px;
   }
 
-  .migrationNavIndicator {
+  .button.archiveManagementHistoryButton,
+  .archiveManagementRowAction .button {
+    width: auto;
+    max-width: 100%;
+  }
+
+  .archiveManagementRowAction {
+    justify-content: flex-start;
+  }
+
+  .migrationNavIndicatorSlot {
     width: 46px;
     min-width: 46px;
-    max-width: 46px;
     height: 46px;
+  }
+
+  .migrationNavIndicator {
+    width: 38px;
+    min-width: 38px;
+    max-width: 38px;
+    height: 38px;
     justify-content: center;
     padding: 0;
   }
 
-  .migrationNavIndicator span,
-  .migrationNavIndicator strong {
+  .migrationNavIndicator span {
     position: absolute;
     width: 1px;
     height: 1px;
@@ -895,7 +909,7 @@
   }
 
   .migrationNavIndicator img {
-    width: 28px;
-    height: 28px;
+    width: 22px;
+    height: 22px;
   }
 }

@@ -44,7 +44,8 @@ assert.match(operations, /OPERATION_CLEANUP_DELETE_LIMIT = 128/);
 assert.match(operations, /entry\.is_symlink\(\)/);
 assert.match(operations, /entry\.is_file\(follow_symlinks=False\)/);
 
-assert.match(css, /storageOpsSection-roots > \.storageOpsRootList\s*\{\s*margin-top:\s*10px/);
+assert.match(css, /storageOpsSection-roots\s*\{[\s\S]*--storage-root-spacing:\s*10px/);
+assert.match(css, /storageOpsSection-roots > \.storageOpsRootList\s*\{\s*margin-top:\s*var\(--storage-root-spacing\)/);
 for (const column of ["40%", "20%"] ) assert.match(css, new RegExp(`width:\\s*${column.replace("%", "\\%")}`));
 assert.match(css, /th:nth-child\(n \+ 2\),[\s\S]*td:nth-child\(n \+ 2\)[\s\S]*text-align:\s*center/);
 assert.match(css, /storageOpsCameraTable\s*\{[\s\S]*overflow-x:\s*hidden/);

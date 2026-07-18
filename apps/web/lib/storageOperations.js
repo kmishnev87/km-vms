@@ -171,10 +171,22 @@ function finiteCount(value) {
   return Number.isFinite(count) && count >= 0 ? count : null;
 }
 
+function boundedIdentity(value, maxLength = 128) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maxLength) return null;
+  return normalized;
+}
+
 export function recentOperationPresentation(item = {}) {
-  const operationType = String(item?.operation_type || "");
+  const operationType = boundedIdentity(item?.operation_type, 64) || "";
+  const operationId = boundedIdentity(item?.operation_id);
   const status = String(item?.status || "unknown");
   const progress = item?.progress && typeof item.progress === "object" ? item.progress : {};
+  const scanId = boundedIdentity(progress.scan_id);
+  const retryAllowed = item?.retry_allowed === true;
+  const cancelAllowed = item?.cancel_allowed === true;
+  const hasExecutableCapability = retryAllowed || cancelAllowed;
   const facts = [];
   const deletedCount = finiteCount(progress.deleted_count);
   const completedCount = finiteCount(progress.completed_count);
@@ -188,7 +200,20 @@ export function recentOperationPresentation(item = {}) {
   if (skippedCount != null && skippedCount > 0) facts.push({ labelKey: "recentOperationSkippedCount", value: skippedCount });
   const statusPresentation = RECENT_OPERATION_STATUS[status] || RECENT_OPERATION_STATUS.unknown;
   return {
-    key: String(item?.operation_id || `${operationType || "operation"}:${item?.finished_at || item?.started_at || "unknown"}`),
+    key: operationId || `${operationType || "operation"}:${item?.finished_at || item?.started_at || "unknown"}`,
+    operationId,
+    operationType,
+    domainRef: boundedIdentity(item?.domain_ref),
+    scanId,
+    actionKind: hasExecutableCapability && operationType === "archive_migration_apply" && operationId
+      ? "migration"
+      : hasExecutableCapability && operationType === "integrity_scan" && scanId
+        ? "integrity"
+        : null,
+    retryAllowed,
+    retryMode: boundedIdentity(item?.retry_mode, 64),
+    nextAction: boundedIdentity(item?.next_action, 96),
+    cancelAllowed,
     typeKey: RECENT_OPERATION_TYPE_KEYS[operationType] || "recentOperationGeneric",
     statusKey: statusPresentation.labelKey,
     tone: statusPresentation.tone,
@@ -202,6 +227,238 @@ export function recentOperationPresentation(item = {}) {
 export function recentOperationPresentations(items, limit = 5) {
   const boundedLimit = Math.max(0, Math.min(Number(limit) || 0, 5));
   return (Array.isArray(items) ? items : []).slice(0, boundedLimit).map(recentOperationPresentation);
+}
+
+export const STORAGE_MIGRATION_ACTIVITY_EVENT = "kmvms:storage-migration-activity";
+const STORAGE_MIGRATION_ACTIVITY_WINDOW_KEY = "__kmVmsStorageMigrationActivity";
+const STORAGE_MIGRATION_ACTIVITY_STATUSES = new Set(["building", "queued", "running", "cancel_requested", "interrupted"]);
+
+export function storageMigrationActivitySnapshot(value = {}) {
+  const operation = value?.operation && typeof value.operation === "object" ? value.operation : {};
+  const plan = value?.plan && typeof value.plan === "object" ? value.plan : {};
+  const status = String(operation?.status || plan?.status || "");
+  if (!value?.active || !STORAGE_MIGRATION_ACTIVITY_STATUSES.has(status)) return null;
+  const progress = operation?.progress && typeof operation.progress === "object" ? operation.progress : {};
+  const boundedNumber = (candidate) => {
+    const number = Number(candidate);
+    return Number.isFinite(number) && number >= 0 && number <= Number.MAX_SAFE_INTEGER ? number : null;
+  };
+  const safeId = (candidate) => String(candidate || "").slice(0, 96) || null;
+  return {
+    active: true,
+    status,
+    operationId: safeId(operation?.operation_id || plan?.operation_id),
+    completedBytes: boundedNumber(progress?.completed_bytes ?? plan?.completed_bytes),
+    currentItemBytes: boundedNumber(progress?.current_item_bytes),
+    totalBytes: boundedNumber(progress?.total_bytes ?? plan?.total_bytes),
+  };
+}
+
+export function publishStorageMigrationActivity(value) {
+  if (typeof window === "undefined") return;
+  const snapshot = storageMigrationActivitySnapshot(value);
+  window[STORAGE_MIGRATION_ACTIVITY_WINDOW_KEY] = snapshot;
+  window.dispatchEvent(new CustomEvent(STORAGE_MIGRATION_ACTIVITY_EVENT, { detail: snapshot }));
+}
+
+export function readStorageMigrationActivity() {
+  if (typeof window === "undefined") return null;
+  return window[STORAGE_MIGRATION_ACTIVITY_WINDOW_KEY] || null;
+}
+
+function firstOperationReason(operation = {}) {
+  const [entry] = topReasonEntries(operation?.last_summary, 1);
+  if (entry?.[0]) return String(entry[0]);
+  return reasonCode(operation?.last_error || operation?.reason_code || "") || null;
+}
+
+function operationLastAt(operation = {}) {
+  return operation?.last_finished_at || operation?.last_started_at || operation?.updated_at || null;
+}
+
+function operationLastResult(operation = {}) {
+  const summary = operation?.last_summary && typeof operation.last_summary === "object" ? operation.last_summary : {};
+  return {
+    status: String(operation?.last_status || summary?.status || "never_run"),
+    at: operationLastAt(operation),
+    deletedCount: Math.max(0, finiteCount(summary?.deleted_count) ?? 0),
+    freedBytes: Math.max(0, finiteCount(summary?.bytes_freed) ?? 0),
+    failedCount: Math.max(0, finiteCount(summary?.failed_count) ?? 0),
+    skippedCount: Math.max(0, finiteCount(summary?.skipped_count) ?? 0),
+    reasonCode: firstOperationReason(operation),
+  };
+}
+
+export function retentionOperationPresentation(retention = {}) {
+  const configuredCount = Math.max(0, finiteCount(retention?.meaningful_rule_camera_count ?? retention?.configured_camera_count) ?? 0);
+  const totalCameraCount = Math.max(
+    configuredCount,
+    finiteCount(retention?.configured_camera_count) ?? 0,
+    (finiteCount(retention?.active_camera_count) ?? 0)
+      + (finiteCount(retention?.disabled_camera_count) ?? 0)
+      + (finiteCount(retention?.retained_deleted_camera_count) ?? 0)
+  );
+  const incompleteCount = Math.max(0, finiteCount(retention?.missing_or_invalid_rule_camera_count) ?? 0);
+  const last = operationLastResult(retention);
+  const state = String(retention?.state || "").toLowerCase();
+  let status = "healthy";
+  let tone = "ok";
+  if (retention?.running === true || state === "running") {
+    status = "running";
+    tone = "warning";
+  } else if (retention?.pending === true || retention?.pending_new_policy === true || state === "pending") {
+    status = "pending";
+    tone = "warning";
+  } else if (!totalCameraCount || !configuredCount) {
+    status = "not_configured";
+    tone = "neutral";
+  } else if (incompleteCount > 0 || configuredCount < totalCameraCount) {
+    status = "incomplete";
+    tone = "warning";
+  } else if (["blocked", "failed", "partial", "interrupted"].includes(state) || ["blocked", "failed", "partial", "interrupted"].includes(last.status)) {
+    status = "needs_attention";
+    tone = "warning";
+  } else if (!retention?.state && last.status === "never_run") {
+    status = "unknown";
+    tone = "unknown";
+  }
+  return {
+    status,
+    tone,
+    configuredCount,
+    totalCameraCount,
+    incompleteCount,
+    nextDueAt: retention?.next_due_at || null,
+    last,
+  };
+}
+
+export function autoFreeOperationPresentation({ policy = {}, cleanup = {}, configured = null, effective = null, acknowledgementRequired = false } = {}) {
+  const configuredValue = typeof configured === "boolean" ? configured : policy?.auto_free_space_cleanup_enabled ?? cleanup?.enabled;
+  const effectiveValue = typeof effective === "boolean" ? effective : policy?.auto_free_space_cleanup_effective ?? cleanup?.effective_enabled;
+  const configuredKnown = typeof configuredValue === "boolean";
+  const effectiveKnown = typeof effectiveValue === "boolean";
+  const isConfigured = configuredValue === true;
+  const isEffective = effectiveValue === true;
+  const policyState = String(policy?.policy_state || policy?.state || "unknown").toLowerCase();
+  const last = operationLastResult(cleanup);
+  let status = "enabled";
+  let tone = "ok";
+  if (policy?.recording_suspended_by_low_disk === true || policyState.includes("critical")) {
+    status = "critical";
+    tone = "error";
+  } else if (cleanup?.running === true || policyState.includes("cleanup")) {
+    status = "cleanup";
+    tone = "warning";
+  } else if (policyState.includes("recovery")) {
+    status = "recovery";
+    tone = "warning";
+  } else if (policyState.includes("warning")) {
+    status = "warning";
+    tone = "warning";
+  } else if (isConfigured && acknowledgementRequired) {
+    status = "acknowledgement_required";
+    tone = "warning";
+  } else if ((effectiveKnown && !isEffective) || (configuredKnown && !isConfigured)) {
+    status = "disabled";
+    tone = "neutral";
+  } else if (["blocked", "failed", "partial", "interrupted"].includes(last.status)) {
+    status = "failed";
+    tone = "warning";
+  } else if (!configuredKnown || !effectiveKnown || !policyState || policyState === "unknown") {
+    status = "unknown";
+    tone = "unknown";
+  }
+  return {
+    status,
+    tone,
+    configured: isConfigured,
+    effective: isEffective,
+    acknowledgementRequired: Boolean(acknowledgementRequired),
+    freePercent: Number.isFinite(Number(policy?.free_percent)) ? Number(policy.free_percent) : null,
+    warningPercent: finiteCount(policy?.warning_threshold_percent) ?? 10,
+    cleanupPercent: finiteCount(policy?.cleanup_threshold_percent) ?? 5,
+    recoveryPercent: finiteCount(policy?.recovery_threshold_percent) ?? 9,
+    criticalPercent: finiteCount(policy?.critical_threshold_percent) ?? 1,
+    last,
+  };
+}
+
+export function integrityOperationPresentation(reconciliation = {}) {
+  const statusValue = String(reconciliation?.status || "not_run").toLowerCase();
+  const stale = reconciliation?.evidence_status === "stale" || reconciliation?.stale === true;
+  const problemCount = Math.max(
+    0,
+    finiteCount(reconciliation?.problem_file_count)
+      ?? Object.values(reconciliation?.category_counts || {}).reduce((total, value) => total + Math.max(0, finiteCount(value) ?? 0), 0)
+  );
+  const active = reconciliation?.active === true || ["queued", "running", "cancel_requested"].includes(statusValue);
+  let status = "not_run";
+  let tone = "unknown";
+  if (active) {
+    status = statusValue === "cancel_requested" ? "cancel_requested" : "running";
+    tone = "warning";
+  } else if (statusValue === "completed" && stale) {
+    status = "stale";
+    tone = "warning";
+  } else if (statusValue === "completed") {
+    status = problemCount > 0 ? "findings" : "clean";
+    tone = problemCount > 0 ? "warning" : "ok";
+  } else if (["partial", "failed", "interrupted", "cancelled"].includes(statusValue)) {
+    status = statusValue;
+    tone = statusValue === "failed" ? "error" : "warning";
+  } else if (statusValue && statusValue !== "not_run" && statusValue !== "never_run") {
+    status = "unknown";
+  }
+  return {
+    status,
+    tone,
+    problemCount,
+    checkedCount: Math.max(0, finiteCount(reconciliation?.checked_count) ?? 0),
+    failedCount: Math.max(0, finiteCount(reconciliation?.failed_count) ?? 0),
+    lastCheckedAt: reconciliation?.last_checked_at || null,
+    scanId: reconciliation?.scan_id || null,
+    stale,
+  };
+}
+
+export function migrationOperationPresentation(scenario = {}, rootCount = 0) {
+  const status = String(scenario?.status || "idle");
+  let summaryStatus = "idle";
+  let tone = "neutral";
+  if (Number(rootCount) < 2) {
+    summaryStatus = "needs_target";
+  } else if (scenario?.active) {
+    summaryStatus = status === "cancel_requested" ? "cancel_requested" : "running";
+    tone = "warning";
+  } else if (status === "completed" && scenario?.completedProof) {
+    summaryStatus = "completed";
+    tone = "ok";
+  } else if (["partial", "failed", "blocked", "interrupted"].includes(status) || scenario?.cleanupPending) {
+    summaryStatus = "needs_attention";
+    tone = status === "failed" ? "error" : "warning";
+  } else if (status === "cancelled") {
+    summaryStatus = "cancelled";
+    tone = "neutral";
+  } else if (["ready", "ready_with_exclusions", "building"].includes(status)) {
+    summaryStatus = status;
+    tone = status === "ready" ? "ok" : "warning";
+  } else if (status === "unknown") {
+    summaryStatus = "unknown";
+    tone = "unknown";
+  }
+  return {
+    status: summaryStatus,
+    tone,
+    operationId: scenario?.operationId || null,
+    planId: scenario?.planId || null,
+    itemCount: finiteCount(scenario?.itemCount),
+    completedCount: finiteCount(scenario?.completedCount),
+    totalBytes: finiteCount(scenario?.totalBytes),
+    percent: finiteCount(scenario?.percent),
+    reasonCode: scenario?.reasonCode || null,
+    nextAction: scenario?.nextAction || scenario?.retryMode || null,
+  };
 }
 
 export function isStorageAccessDeniedError(error) {

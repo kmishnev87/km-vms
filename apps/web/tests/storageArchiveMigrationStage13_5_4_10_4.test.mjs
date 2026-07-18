@@ -267,10 +267,7 @@ for (const stale of [
   assert.equal(stale.test(i18n), false, `stale copy-only wording remains: ${stale}`);
 }
 
-for (const forbidden of [
-  "storageOpsArchiveOperationsV2",
-  "storageOpsMigrationScenarioRow",
-  "storageOpsOperationHistoryModal",
-]) {
-  assert.equal(page.includes(forbidden), false, `${forbidden} would start Stage 4.10.5`);
-}
+assert.match(page, /<ArchiveManagementCenter/);
+assert.match(layout, /STORAGE_MIGRATION_ACTIVITY_EVENT/);
+assert.match(layout, /if \(onStoragePage\)/);
+assert.doesNotMatch(page, /storageOpsMigrationScenarioRow/);

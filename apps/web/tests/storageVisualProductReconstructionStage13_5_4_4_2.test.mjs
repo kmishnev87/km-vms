@@ -55,22 +55,22 @@ assert.match(storagePage.slice(0, overviewStart), /copy\.lastCheck/, "last check
 assert.doesNotMatch(overview, /topHealth\.reason|primaryStorageActionText|archive_primary_path_source|sourceDeployConfig/);
 
 const primaryStart = storagePage.indexOf("<section className={`storageOpsOverview");
-const primaryEnd = storagePage.indexOf("<OperationDialog", primaryStart);
+const primaryEnd = storagePage.indexOf("<ArchiveIntegrityDialog", primaryStart);
 const primary = storagePage.slice(primaryStart, primaryEnd);
 assert.doesNotMatch(primary, /copy\.source\b|copy\.accessExplanation|copy\.dockerPath|copy\.ownershipBoundary|metadata|метаданн|кандидат|candidate/i);
 assert.match(storagePage, /copy\.healthReasonAvailability/);
 assert.match(storagePage, /copy\.actionCheckArchive/);
 
-const operationsStart = storagePage.indexOf("<Section title={copy.archiveOperations}");
-const operationsEnd = storagePage.indexOf("<Section title={copy.archiveRoots}", operationsStart);
+const operationsStart = storagePage.indexOf("const archiveManagementGroups");
+const operationsEnd = storagePage.indexOf("const historyDialog", operationsStart);
 const operations = storagePage.slice(operationsStart, operationsEnd);
 for (const required of ["copy.retentionRules", "copy.autoFreeSpace", "copy.integrityCheck", "copy.archiveMigration"]) {
   assert.match(operations, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${required} is a scenario row`);
 }
-assert.match(storagePage, /retentionPolicyText\(retention, copy\)/, "retention primary text is a policy, not candidate review");
-assert.match(storagePage, /autoFreePolicyText\(autoFreeEnabled, copy\)/, "auto-free primary text explains practical effect");
-assert.match(storagePage, /integrityStatusText\(reconciliationScenario, normalizedReconciliation, copy\)/, "integrity row uses archive-check wording");
-assert.match(storagePage, /migrationStatusText\(migrationScenario, archiveRoots, copy\)/, "migration row is truthful about missing target selection");
+assert.match(storagePage, /retentionOperationPresentation\(retention\)/, "retention primary text is model-driven, not candidate review");
+assert.match(storagePage, /autoFreeOperationPresentation\(\{/, "auto-free primary text explains practical effect from backend facts");
+assert.match(storagePage, /integrityOperationPresentation\(reconciliation\)/, "integrity row uses archive-check wording");
+assert.match(storagePage, /migrationOperationPresentation\(migrationScenario, archiveRoots\.length\)/, "migration row is truthful about missing target selection");
 assert.doesNotMatch(operations, /copy\.actionDetails/);
 
 assert.match(storagePage, /storageOpsRootList/);
@@ -79,7 +79,7 @@ assert.match(i18n, /archiveRootPlaceholder: "\/Volume3\/Archive2"/);
 assert.doesNotMatch(i18n, /archiveRootPlaceholder: "\/storage\/archive2"/);
 
 const cameraStart = storagePage.indexOf("<Section title={copy.cameras}");
-const cameraEnd = storagePage.indexOf("<Section title={copy.archiveOperations}", cameraStart);
+const cameraEnd = storagePage.indexOf("<Section title={copy.archiveRoots}", cameraStart);
 const cameraBlock = storagePage.slice(cameraStart, cameraEnd);
 assert.match(cameraBlock, /<th>\{copy\.camera\}<\/th>[\s\S]*<th>\{copy\.size\}<\/th>[\s\S]*<th>\{copy\.segments\}<\/th>[\s\S]*<th>\{copy\.problems\}<\/th>/);
 assert.doesNotMatch(cameraBlock, /copy\.range|ID \{row\.camera_id|row\.oldest_recording_at|row\.newest_recording_at/);
@@ -90,10 +90,10 @@ assert.match(storageCss, /grid-template-columns:\s*repeat\(5,\s*minmax\(0,\s*1fr
 assert.match(responsiveCss, /storageOpsRootListRow[\s\S]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
 
 for (const productText of [
-  "Система удаляет самые старые записи",
-  "Если место заканчивается",
-  "Проверка не выполнялась",
-  "Для переноса нужно добавить второе расположение",
+  "Самые старые записи удаляются автоматически",
+  "Защита тома включена",
+  "Запустите полную проверку",
+  "Для переноса нужно добавить второе расположение архива",
   "Камеры",
 ]) {
   assert.match(i18n, new RegExp(productText), `${productText} exists in RU copy`);

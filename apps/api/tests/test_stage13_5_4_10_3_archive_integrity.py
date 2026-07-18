@@ -987,7 +987,7 @@ def test_unusable_recovery_waits_for_root_return_then_converges_without_second_m
     def replace_during_recovery(db, current_finding):
         root = original_root_for_finding(db, current_finding)
         calls["count"] += 1
-        if calls["count"] == 2:
+        if calls["count"] == 1:
             stage4103.archive.rename(detached)
             (stage4103.archive / "kmvms" / "recordings").mkdir(parents=True)
         return root

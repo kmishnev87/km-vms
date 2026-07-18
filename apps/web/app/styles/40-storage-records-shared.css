@@ -8,6 +8,427 @@
   padding: 16px var(--page-x-padding) 28px;
 }
 
+/* Stage 13.5 / 4.10.5 final archive-management composition. */
+.storageOpsDashboard {
+  grid-template-columns: minmax(0, 1.55fr) minmax(390px, 1fr);
+  grid-template-areas:
+    "archive cameras"
+    "roots roots"
+    "management management";
+}
+
+.storageOpsSection-archiveManagement {
+  grid-area: management;
+  padding: 0;
+  overflow: hidden;
+}
+
+.archiveManagementHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 16px 13px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.archiveManagementHeader > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.archiveManagementHeader h2,
+.archiveManagementGroup h3,
+.archiveManagementRow h4 {
+  margin: 0;
+  color: #0f172a;
+  letter-spacing: 0;
+}
+
+.archiveManagementHeader h2 {
+  font-size: 17px;
+  line-height: 1.25;
+}
+
+.archiveManagementHeader p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.archiveManagementHistoryButton {
+  flex: 0 0 auto;
+  gap: 7px;
+  min-height: 32px;
+  padding: 5px 9px;
+  white-space: nowrap;
+}
+
+.archiveManagementHistoryButton strong {
+  display: inline-grid;
+  place-items: center;
+  min-width: 21px;
+  min-height: 20px;
+  padding: 0 5px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.archiveManagementGroups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.archiveManagementGroup {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.archiveManagementGroup + .archiveManagementGroup {
+  border-left: 1px solid #dbe3ec;
+}
+
+.archiveManagementGroup > h3 {
+  padding: 11px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f8fafc;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.archiveManagementRows {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  min-width: 0;
+}
+
+.archiveManagementRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  min-width: 0;
+  min-height: 124px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #ffffff;
+}
+
+.archiveManagementRow:last-child {
+  border-bottom: 0;
+}
+
+.archiveManagementRowBody {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+}
+
+.archiveManagementRowTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.archiveManagementRow h4 {
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.archiveManagementRow .storageOpsStatusPill {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 2px 7px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.archiveManagementRow p {
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.archiveManagementFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 0;
+}
+
+.archiveManagementFacts > div {
+  display: inline-flex;
+  gap: 5px;
+  min-width: 0;
+}
+
+.archiveManagementFacts dt,
+.archiveManagementFacts dd {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.archiveManagementFacts dt {
+  color: #64748b;
+}
+
+.archiveManagementFacts dd {
+  color: #334155;
+  font-weight: 500;
+}
+
+.archiveManagementFact-warning {
+  color: #9a6700 !important;
+}
+
+.archiveManagementRowAction {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  align-self: center;
+  min-width: 0;
+}
+
+.archiveManagementRowAction .button {
+  width: auto;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 9px;
+  white-space: normal;
+}
+
+.archiveManagementSwitch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #94a3b8;
+  border-radius: 999px;
+  background: #cbd5e1;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.archiveManagementSwitch > span {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.22);
+  transition: transform 120ms ease;
+}
+
+.archiveManagementSwitch.isChecked {
+  border-color: #15803d;
+  background: #22a55b;
+}
+
+.archiveManagementSwitch.isChecked > span {
+  transform: translateX(18px);
+}
+
+.archiveManagementSwitch:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.28);
+  outline-offset: 2px;
+}
+
+.archiveManagementSwitch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.archiveOperationHistoryDialog {
+  width: min(760px, 100%);
+}
+
+.archiveManagementHistoryList {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 7px;
+}
+
+.archiveManagementHistoryItem {
+  display: grid;
+  gap: 7px;
+  padding: 11px 12px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.archiveManagementHistoryItem:last-child {
+  border-bottom: 0;
+}
+
+.archiveManagementHistoryPrimary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.archiveManagementHistoryPrimary > strong {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.archiveManagementHistoryPrimary time,
+.archiveManagementHistoryItem p,
+.archiveManagementHistoryFacts dt,
+.archiveManagementHistoryFacts dd {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.archiveManagementHistoryPrimary time {
+  white-space: nowrap;
+}
+
+.archiveManagementHistoryFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 16px;
+  margin: 0;
+}
+
+.archiveManagementHistoryFacts > div {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.archiveManagementHistoryFacts dt,
+.archiveManagementHistoryFacts dd,
+.archiveManagementHistoryItem p {
+  margin: 0;
+}
+
+.archiveManagementHistoryFacts dd,
+.archiveManagementHistoryItem p > strong {
+  color: #334155;
+  font-weight: 500;
+}
+
+.archiveManagementHistoryAction {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.archiveManagementHistoryAction .button {
+  width: auto;
+  min-height: 30px;
+  padding: 4px 9px;
+}
+
+.archiveManagementHistoryEmpty {
+  padding: 18px;
+  border: 1px dashed #cbd5e1;
+  border-radius: 7px;
+  color: #64748b;
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 980px) {
+  .archiveManagementGroups {
+    grid-template-columns: 1fr;
+  }
+
+  .archiveManagementGroup + .archiveManagementGroup {
+    border-top: 1px solid #dbe3ec;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 980px) {
+  .storageOpsDashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "archive"
+      "cameras"
+      "roots"
+      "management";
+  }
+}
+
+@media (max-width: 760px) {
+  .archiveManagementHeader {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .archiveManagementHistoryButton {
+    align-self: flex-start;
+  }
+
+  .archiveManagementRows {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+  }
+
+  .archiveManagementRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+    min-height: 0;
+    border-right: 0;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .archiveManagementRow:last-child {
+    border-bottom: 0;
+  }
+
+  .archiveManagementHistoryPrimary {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .archiveManagementHistoryPrimary time {
+    grid-column: 1 / -1;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 520px) {
+  .archiveManagementRow {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 13px 14px;
+  }
+
+  .archiveManagementRowAction {
+    justify-content: flex-start;
+  }
+
+  .archiveManagementRowAction .button {
+    width: 100%;
+  }
+
+  .archiveManagementRowTitle {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
 .storageOpsHeader {
   align-items: center;
 }
@@ -924,19 +1345,6 @@
 
 .storageOpsDialogFooter .dangerButton:hover:not(:disabled) {
   background: #fecaca;
-}
-
-.storageOpsRecent {
-  display: grid;
-  gap: 8px;
-}
-
-.storageOpsRecentItem {
-  display: grid;
-  gap: 3px;
-  padding: 10px;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
 }
 
 .pageHeader {
@@ -1892,10 +2300,6 @@
 
 .storageOpsSection-diagnostics {
   grid-area: diagnostics;
-}
-
-.storageOpsSection-recent {
-  grid-area: recent;
 }
 
 .storageOpsSection {
@@ -3392,158 +3796,6 @@
   cursor: pointer;
 }
 
-.storageOpsSection-recent {
-  align-self: start;
-  padding: 0;
-  overflow: hidden;
-}
-
-.storageOpsSection-recent > .storageOpsSectionHead {
-  width: 100%;
-  margin: 0;
-  padding: 12px 14px 10px;
-  border-bottom: 1px solid #e5e7eb;
-  box-sizing: border-box;
-}
-
-.storageOpsRecentSummary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  justify-content: initial;
-  list-style: none;
-  cursor: pointer;
-}
-
-.storageOpsRecentSummary > h2 {
-  min-width: 0;
-  width: auto;
-}
-
-.storageOpsRecentSummary > .storageOpsRecentCount {
-  justify-self: end;
-}
-
-.storageOpsRecentSummary::-webkit-details-marker {
-  display: none;
-}
-
-.storageOpsRecentSummary::before {
-  content: "";
-  flex: 0 0 auto;
-  width: 0;
-  height: 0;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  border-left: 6px solid #475569;
-  transition: transform 120ms ease;
-}
-
-.storageOpsSection-recent[open] > .storageOpsRecentSummary::before {
-  transform: rotate(90deg);
-}
-
-.storageOpsRecentCount {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 24px;
-  min-height: 22px;
-  margin-left: auto;
-  padding: 1px 7px;
-  border: 1px solid #dbe3ef;
-  border-radius: 999px;
-  background: #f8fafc;
-  color: #475569;
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.storageOpsSection-recent > .storageOpsRecent {
-  display: block;
-  margin: 12px 14px 14px;
-  overflow: hidden;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-}
-
-.storageOpsRecentItem {
-  display: grid;
-  gap: 6px;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 0;
-  border-bottom: 1px solid #e5e7eb;
-  border-radius: 0;
-}
-
-.storageOpsRecentItem:last-child {
-  border-bottom: 0;
-}
-
-.storageOpsRecentPrimary {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  align-items: center;
-  gap: 10px;
-}
-
-.storageOpsRecentTitle {
-  min-width: 0;
-  color: #0f172a;
-  font-size: 13px;
-  font-weight: 400;
-  line-height: 1.35;
-  overflow-wrap: anywhere;
-}
-
-.storageOpsRecentPrimary .storageOpsStatusPill {
-  min-height: 22px;
-  padding: 2px 7px;
-  font-weight: 500;
-}
-
-.storageOpsRecentPrimary time {
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.35;
-  white-space: nowrap;
-}
-
-.storageOpsRecentFacts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 14px;
-  color: #475569;
-  font-size: 12px;
-  line-height: 1.35;
-}
-
-.storageOpsRecentMessage {
-  color: #475569;
-  font-size: 12px;
-  font-weight: 400;
-  line-height: 1.4;
-}
-
-.storageOpsRecentMessage > span {
-  color: #334155;
-  font-weight: 500;
-}
-
-@media (max-width: 760px) {
-  .storageOpsRecentPrimary {
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 6px 8px;
-  }
-
-  .storageOpsRecentPrimary time {
-    grid-column: 1 / -1;
-    white-space: normal;
-  }
-}
-
 .storageIntegrityOverlay {
   position: fixed;
   inset: 0;
@@ -4003,5 +4255,31 @@
 
   .storageIntegrityDialogFooter .button {
     flex: 1 1 auto;
+  }
+}
+
+/* Keep the final Stage 4.10.5 grid after the historical storage cascade. */
+.storageOpsDashboard {
+  grid-template-columns: minmax(0, 1.55fr) minmax(390px, 1fr);
+  grid-template-areas:
+    "archive cameras"
+    "roots roots"
+    "management management";
+}
+
+.storageOpsSection-archiveManagement {
+  grid-area: management;
+  padding: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 980px) {
+  .storageOpsDashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "archive"
+      "cameras"
+      "roots"
+      "management";
   }
 }

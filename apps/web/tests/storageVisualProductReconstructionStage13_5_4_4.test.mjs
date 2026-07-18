@@ -36,8 +36,9 @@ for (const pathHealth of [
 
 assert.doesNotMatch(storagePage, /<Section title=\{copy\.diagnostics\}/, "diagnostics is not a main card");
 assert.doesNotMatch(storagePage, /storageOpsSupportDetails/, "the obsolete page-level support block is not rendered");
-const primaryEnd = storagePage.indexOf("<OperationDialog");
-const primary = storagePage.slice(storagePage.indexOf("<section className={`storageOpsOverview"), primaryEnd);
+const primaryStart = storagePage.indexOf("<section className={`storageOpsOverview");
+const primaryEnd = storagePage.indexOf("<ArchiveIntegrityDialog", primaryStart);
+const primary = storagePage.slice(primaryStart, primaryEnd);
 assert.doesNotMatch(primary, /copy\.ownershipBoundary|copy\.ownershipBoundaryText|copy\.deletedExcluded|copy\.dockerPath|raw JSON|active_recording_jobs/i);
 
 assert.match(storagePage, /copy\.currentArchive/);
@@ -49,19 +50,20 @@ assert.doesNotMatch(storagePage, /storageOpsRootManageList|storageOpsRootManageR
 assert.doesNotMatch(storagePage, /copy\.addArchiveRootAdvanced|archiveRootManualPath|\brootPath\b/);
 assert.doesNotMatch(primary, /archiveRootSummary/);
 
-const operationsStart = storagePage.indexOf("<Section title={copy.archiveOperations}");
-const operationsEnd = storagePage.indexOf("<Section title={copy.archiveRoots}", operationsStart);
+const operationsStart = storagePage.indexOf("const archiveManagementGroups");
+const operationsEnd = storagePage.indexOf("const historyDialog", operationsStart);
 const operations = storagePage.slice(operationsStart, operationsEnd);
 assert.match(operations, /copy\.retentionRules/);
 assert.match(operations, /copy\.autoFreeSpace/);
 assert.match(operations, /copy\.integrityCheck/);
 assert.match(operations, /copy\.archiveMigration/);
-assert.match(operations, /setAutoFreeSpace/);
+assert.match(operations, /<ArchivePolicySwitch/);
+assert.match(operations, /onChange=\{requestAutoFreeSpace\}/);
 assert.doesNotMatch(operations, /<summary>\{copy\.technicalDetails\}<\/summary>/);
-assert.match(operations, /<summary>\{copy\.retentionDiagnostics\}<\/summary>/);
-assert.match(operations, /copy\.retentionPlanShort/);
-assert.match(operations, /copy\.integrityCheckShort/);
-assert.match(operations, /copy\.migrationPreviewShort/);
+assert.match(operations, /retentionManagementDescription/);
+assert.match(operations, /integrityManagementDescription/);
+assert.match(operations, /migrationManagementDescription/);
+assert.match(storagePage, /<OperationDialog dialog=\{historyDialog\}/);
 
 assert.match(storagePage, /storageOpsCameraCards/);
 assert.match(responsiveCss, /storageOpsCameraTable[\s\S]*display:\s*none/);

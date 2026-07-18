@@ -13,7 +13,7 @@ from app.core.version import APP_BUILD_VERSION, APP_VERSION
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
 
 
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 CURRENT_BASELINE_ID = "chapter06_stage4_baseline"
 CURRENT_MIGRATION_ID = f"{CURRENT_BASELINE_ID}_schema_v{CURRENT_SCHEMA_VERSION}"
 CURRENT_STATE_ID = "current"

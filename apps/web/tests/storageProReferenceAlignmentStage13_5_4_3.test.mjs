@@ -30,23 +30,22 @@ for (const required of [
   "copy.recording",
   "copy.archiveProblems",
   "copy.archiveSpace",
-  "copy.archiveOperations",
+  "copy.archiveManagementTitle",
+  "copy.operationHistory",
   "copy.archiveRoots",
-  "copy.supportDetails",
 ]) {
   assert.match(storagePage, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${required} is rendered`);
 }
 
-const operationsStart = storagePage.indexOf("<Section title={copy.archiveOperations}");
-const operationsEnd = storagePage.indexOf("<Section title={copy.archiveRoots}", operationsStart);
-assert.ok(operationsStart > 0, "unified archive operations section exists");
-assert.ok(operationsEnd > operationsStart, "archive roots follow the operations section");
-const operationsBlock = storagePage.slice(operationsStart, operationsEnd);
-assert.match(operationsBlock, /copy\.retentionRules/);
-assert.match(operationsBlock, /copy\.integrityCheck/);
-assert.match(operationsBlock, /copy\.archiveMigration/);
-assert.match(operationsBlock, /copy\.autoFreeSpace/);
-assert.match(operationsBlock, /setAutoFreeSpace/, "auto-free-space lives inside unified archive operations");
+const rootsStart = storagePage.indexOf("<Section title={copy.archiveRoots}");
+const managementStart = storagePage.indexOf("<ArchiveManagementCenter", rootsStart);
+assert.ok(rootsStart > 0, "archive roots section exists");
+assert.ok(managementStart > rootsStart, "full-width archive management follows archive roots");
+assert.match(storagePage, /title: copy\.retentionRules/);
+assert.match(storagePage, /title: copy\.integrityCheck/);
+assert.match(storagePage, /title: copy\.archiveMigration/);
+assert.match(storagePage, /title: copy\.autoFreeSpace/);
+assert.match(storagePage, /<ArchivePolicySwitch[\s\S]*onChange=\{requestAutoFreeSpace\}/, "auto-free-space lives inside unified archive management");
 
 for (const scattered of [
   "<Section title={copy.safeActions}",
@@ -58,13 +57,14 @@ for (const scattered of [
   assert.equal(storagePage.includes(scattered), false, `${scattered} must not return as a primary equal card`);
 }
 
-assert.match(i18n, /retentionDryRun: "Показать, что будет удалено по правилам хранения"/);
-assert.match(i18n, /retentionApply: "Удалить найденные старые записи"/);
-assert.match(i18n, /reconciliationApply: "Исправить только безопасные проблемы метаданных"/);
+assert.match(i18n, /archiveManagementTitle: "Управление архивом"/);
+assert.match(i18n, /archiveManagementProtectionGroup: "Хранение и защита"/);
+assert.match(i18n, /operationHistoryTitle: "История операций с архивом"/);
 assert.match(i18n, /refresh: "Обновить"/);
-assert.doesNotMatch(i18n, /Предпросмотр регламента|Удалить по плану|Применить безопасно|Самое безопасное действие|Доступность: Нет/);
+assert.doesNotMatch(i18n, /Предпросмотр регламента|Удалить по плану|Самое безопасное действие|Доступность: Нет/);
 
-const primaryRender = storagePage.slice(storagePage.indexOf("<section className={`storageOpsOverview"), storagePage.indexOf("<OperationDialog"));
+const primaryRenderStart = storagePage.indexOf("<section className={`storageOpsOverview");
+const primaryRender = storagePage.slice(primaryRenderStart, storagePage.indexOf("<ArchiveIntegrityDialog", primaryRenderStart));
 assert.doesNotMatch(primaryRender, /namespace|host_bind_env|Default archive|active_recording_jobs|raw JSON/i);
 assert.match(primaryRender, /archiveRootPath\(root, archivePathText\)/, "archive roots show human archive paths");
 
@@ -79,8 +79,8 @@ assert.match(storagePage, /isStorageAccessDeniedError\(err\)/);
 assert.match(storagePage, /if \(silent && statusRef\.current\)/);
 assert.match(storagePage, /setRefreshWarning\(/);
 assert.match(storagePage, /archiveRootScenarioModel/);
-assert.match(storagePage, /retentionScenarioModel/);
-assert.match(storagePage, /reconciliationScenarioModel/);
+assert.match(storagePage, /retentionOperationPresentation/);
+assert.match(storagePage, /integrityOperationPresentation/);
 assert.match(storagePage, /migrationScenarioModel/);
 
 assert.equal(settingsPage.includes("settings-storage"), false);

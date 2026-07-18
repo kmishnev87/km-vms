@@ -145,7 +145,8 @@ const i18n = read("lib/i18n.js");
 const routes = read("lib/routePermissions.js");
 
 assert.match(page, /function ArchiveIntegrityDialog\(/);
-assert.match(page, /copy\.archiveProblemsFound\.replace\("\{count\}", String\(normalized\.problemCount\)\)/);
+assert.match(page, /integrityOperationPresentation\(reconciliation\)/);
+assert.match(page, /copy\.archiveManagementIntegrityFindingsText\.replace\("\{count\}", String\(model\.problemCount\)\)/);
 assert.doesNotMatch(page, /normalized\.safeFixCount > 0\) return copy\.integrityProblemsSafe/);
 assert.match(page, /apiFetch\("\/storage\/integrity\/scans\/latest"\)/);
 assert.match(page, /apiFetch\("\/storage\/integrity\/scans",\s*\{/);
@@ -208,11 +209,7 @@ for (const key of [
   assert.equal((i18n.match(new RegExp(`${key}:`, "g")) || []).length, 3, `${key} must exist in ru/en/zh-CN`);
 }
 
-for (const forbidden of [
-  "storageOpsArchiveOperationsV2",
-  "storageOpsRetentionScenarioRow",
-  "storageOpsMigrationScenarioRow",
-  "storageOpsOperationHistoryModal",
-]) {
-  assert.equal(page.includes(forbidden), false, `${forbidden} would start Stage 4.10.5 prematurely`);
-}
+assert.match(page, /<ArchiveManagementCenter/);
+assert.match(page, /<OperationDialog dialog=\{historyDialog\}/);
+assert.doesNotMatch(page, /storageOpsRetentionScenarioRow/);
+assert.doesNotMatch(page, /storageOpsMigrationScenarioRow/);

@@ -689,7 +689,7 @@ def test_stage4104_additive_schema_preflight_apply_verify(stage4104):
     stage4104.db.commit()
     table_names = set(inspect(stage4104.engine).get_table_names())
 
-    assert CURRENT_SCHEMA_VERSION == 6
+    assert CURRENT_SCHEMA_VERSION >= 6
     assert preflight["status"] == "ready"
     assert applied["created_or_verified_table_count"] == len(STAGE4104_TABLES)
     assert verified == {

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -449,7 +449,12 @@ def claim_operation(
     parent_snapshot = None
     retry_depth = 0
     if normalized_parent_id is not None:
-        parent = db.get(StorageOperation, normalized_parent_id)
+        parent = (
+            db.query(StorageOperation)
+            .filter(StorageOperation.id == normalized_parent_id)
+            .with_for_update()
+            .first()
+        )
         cross_actor_parent = bool(parent is not None and parent.actor_key != actor_key)
         parent_snapshot_data = dict(parent.parent_snapshot or {}) if parent is not None else {}
         parent_original_actor_key = str(
@@ -1102,8 +1107,9 @@ def operation_summaries(db: Session) -> dict:
     }
 
 
-def cleanup_terminal_operations(db: Session, *, now: datetime | None = None) -> int:
-    current = now or _db_now(db)
+def _cleanup_terminal_operations_once(db: Session, *, current: datetime) -> int:
+    from app.models.archive_integrity import ArchiveIntegrityRemediationPlan, ArchiveIntegrityScan
+
     cutoff = current - timedelta(days=TERMINAL_HISTORY_DAYS)
     terminal_query = db.query(StorageOperation).filter(StorageOperation.status.in_(tuple(TERMINAL_OPERATION_STATUSES)))
     keep_ids = [
@@ -1116,9 +1122,15 @@ def cleanup_terminal_operations(db: Session, *, now: datetime | None = None) -> 
     delete_conditions = [StorageOperation.finished_at < cutoff]
     if keep_ids:
         delete_conditions.append(~StorageOperation.id.in_(keep_ids))
+    protected_reference = or_(
+        exists().where(ArchiveIntegrityScan.operation_id == StorageOperation.id),
+        exists().where(ArchiveIntegrityRemediationPlan.operation_id == StorageOperation.id),
+        exists().where(ArchiveIntegrityRemediationPlan.apply_operation_id == StorageOperation.id),
+    )
     delete_query = terminal_query.filter(
         StorageOperation.finished_at.isnot(None),
         or_(*delete_conditions),
+        ~protected_reference,
     )
     delete_rows = (
         delete_query.order_by(StorageOperation.finished_at.asc(), StorageOperation.id.asc())
@@ -1128,7 +1140,6 @@ def cleanup_terminal_operations(db: Session, *, now: datetime | None = None) -> 
     )
     delete_ids = [str(row.id) for row in delete_rows]
     if not delete_ids:
-        db.commit()
         return 0
     child_limit = TERMINAL_CLEANUP_BATCH * MAX_RETRIES_PER_PARENT
     children = (
@@ -1143,7 +1154,6 @@ def cleanup_terminal_operations(db: Session, *, now: datetime | None = None) -> 
         .all()
     )
     if len(children) > child_limit:
-        db.rollback()
         raise StorageOperationContractError("operation_lineage_cleanup_bound_exceeded")
     parent_by_id = {str(row.id): row for row in delete_rows}
     for child in children:
@@ -1168,8 +1178,25 @@ def cleanup_terminal_operations(db: Session, *, now: datetime | None = None) -> 
         .delete(synchronize_session=False)
         or 0
     )
-    db.commit()
     return deleted
+
+
+def cleanup_terminal_operations(db: Session, *, now: datetime | None = None) -> int:
+    current = now or _db_now(db)
+    for attempt in range(2):
+        try:
+            deleted = _cleanup_terminal_operations_once(db, current=current)
+            db.commit()
+            return deleted
+        except IntegrityError:
+            db.rollback()
+            db.expire_all()
+            if attempt:
+                raise
+        except Exception:
+            db.rollback()
+            raise
+    return 0
 
 
 def acquire_worker_lease(

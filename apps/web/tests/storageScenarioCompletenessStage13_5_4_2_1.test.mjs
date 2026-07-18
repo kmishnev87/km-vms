@@ -81,7 +81,7 @@ assert.equal(reviewOnly.noAutoFixReason, "review_only");
 
 assert.match(storagePage, /<MiniFact label=\{copy\.archiveSize\}/, "archive-specific facts remain");
 const archiveSectionStart = storagePage.indexOf("<Section title={copy.archiveSpace}");
-const archiveSectionEnd = storagePage.indexOf("<Section title={copy.archiveOperations}", archiveSectionStart);
+const archiveSectionEnd = storagePage.indexOf("<Section title={copy.cameras}", archiveSectionStart);
 const archiveSection = storagePage.slice(archiveSectionStart, archiveSectionEnd);
 assert.equal(archiveSection.includes("copy.total"), true, "Archive and space includes total capacity context");
 assert.equal(archiveSection.includes("copy.used"), true, "Archive and space includes used capacity context");
@@ -90,8 +90,9 @@ assert.doesNotMatch(storagePage, /<Stat label=\{copy\.foreignSkipped\}/, "owners
 assert.doesNotMatch(storagePage, /<SummaryRow label=\{copy\.ownershipBoundary\}/, "ownership boundary is not primary");
 assert.doesNotMatch(storagePage, /<dt>\{copy\.ownershipBoundary\}<\/dt>/, "ownership boundary is removed from visible support UI");
 
-assert.match(storagePage, /copy\.refreshMigrationPreview/, "migration preview has endpoint-specific wording");
-assert.equal(i18n.includes("refreshMigrationPreview: \"Обновить предпросмотр переноса\""), true);
-assert.doesNotMatch(storagePage, /<Section title=\{copy\.recentOperations\}>[\s\S]*storageOpsEmpty/, "unavailable recent operations are not shown as broken primary feature");
+assert.match(storagePage, /copy\.migrationPrepare/, "migration planning has endpoint-specific wording");
+assert.equal(i18n.includes("migrationPrepare: \"Подготовить план\""), true);
+assert.doesNotMatch(storagePage, /storageOpsSection-recent/, "recent operations are not a permanent page block");
+assert.match(storagePage, /<OperationDialog dialog=\{historyDialog\}/, "bounded operation history is available in a modal");
 assert.match(storagePage, /setRefreshWarning/, "silent refresh failure preserves last valid status with warning");
 assert.doesNotMatch(storagePage, /Запись: Да|Доступность: Нет/, "known contradictory primary phrases are absent from source");

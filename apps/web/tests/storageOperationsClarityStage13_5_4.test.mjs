@@ -14,31 +14,31 @@ const storageHelpers = read("lib/storageOperations.js");
 for (const required of [
   "healthOkTitle",
   "archiveSpace",
-  "archiveOperations",
+  "archiveManagementTitle",
+  "archiveManagementProtectionGroup",
+  "archiveManagementMaintenanceGroup",
   "retentionRules",
   "autoFreeSpace",
-  "retentionDryRun",
-  "reconciliationDryRun",
   "archiveRoots",
   "archiveMigration",
   "cameras",
-  "recentOperations",
-  "supportDetails",
-  "retentionDiagnostics",
+  "operationHistory",
 ]) {
   assert.match(storagePage, new RegExp(`copy\\.${required}\\b`), `/storage renders ${required}`);
 }
 
 assert.match(storagePage, /apiFetch\("\/settings"[\s\S]*auto_free_space_cleanup_enabled/, "/storage owns auto-free-space toggle");
-assert.match(storagePage, /apiFetch\("\/recordings\/retention\/dry-run"/, "/storage owns retention preview");
-assert.match(storagePage, /apiFetch\("\/recordings\/retention\/run"/, "/storage owns retention apply");
-assert.match(storagePage, /apiFetch\("\/storage\/reconciliation\/summary"/, "/storage owns archive integrity preview");
-assert.match(storagePage, /apiFetch\("\/storage\/reconcile"/, "/storage owns archive integrity apply");
+assert.doesNotMatch(storagePage, /apiFetch\("\/recordings\/retention\/(dry-run|run)"/, "automatic retention has no manual preview/apply UI");
+assert.match(storagePage, /apiFetch\("\/storage\/integrity\/scans\/latest"/, "/storage loads durable integrity truth");
+assert.match(storagePage, /apiFetch\("\/storage\/integrity\/scans"/, "/storage can start an explicit integrity scan");
+assert.match(storagePage, /\/storage\/integrity\/scans\/\$\{encodeURIComponent\(scanId\)\}\/findings/, "/storage exposes bounded integrity findings");
+assert.match(storagePage, /\/storage\/integrity\/remediation-plans\/\$\{encodeURIComponent\(integrityPlan\.plan_id\)\}\/apply-\$\{contract\.planKind\}/, "/storage applies only typed integrity remediation");
 assert.match(storagePage, /humanBlockerReason\(item, language\)/, "blocked actions use human wording");
 assert.match(storagePage, /Array\.from\(new Set\(labels\)\)\.join\(" "\)/, "duplicate blocked action labels are collapsed before rendering");
 assert.doesNotMatch(storagePage, /storageSourceLabel\(storageContract\.archive_primary_path_source, copy\)/, "backend source codes are not primary UI");
 assert.doesNotMatch(storagePage, /storageOpsSupportDetails/, "the obsolete page-level support block stays removed");
-assert.match(storagePage, /storageOpsInlineDetails/, "scenario-specific secondary details remain locally disclosed");
+assert.match(storagePage, /<ArchiveManagementCenter/, "archive scenarios are composed into one management center");
+assert.match(storagePage, /<OperationDialog dialog=\{historyDialog\}/, "bounded operation history is opened in a modal");
 assert.match(storagePage, /healthActionText\(topHealth, copy\)/, "primary action is reason-prioritized");
 assert.match(storagePage, /accessRightsModel\(pathHealth, language\)/, "read/write access is combined before primary rendering");
 assert.match(storagePage, /archiveRootPath\(root, archivePathText\)/, "archive root paths are mapped before display");
@@ -77,9 +77,10 @@ assert.doesNotMatch(settingsPage, /<OperatorProblemBanners[\s\S]*storage/, "Sett
 
 for (const key of [
   "healthOkTitle",
-  "retentionSafetyNote",
-  "reconciliationConfirm",
-  "supportDetails",
+  "archiveManagementTitle",
+  "archiveManagementRetentionStatusHealthy",
+  "archiveManagementIntegrityStatusNotRun",
+  "operationHistoryTitle",
   "defaultArchive",
   "addArchiveRoot",
 ]) {

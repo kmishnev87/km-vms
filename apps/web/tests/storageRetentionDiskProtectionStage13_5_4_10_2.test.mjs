@@ -99,6 +99,7 @@ assert.equal(boundedRecent[0].statusKey, "recentOperationStatusFailed");
 assert.equal(boundedRecent[0].nextActionKey, "recentOperationNextRetry");
 
 const page = read("app/storage/page.js");
+const archiveManagement = read("components/storage/ArchiveManagementCenter.js");
 const i18n = read("lib/i18n.js");
 const css = read("app/styles/40-storage-records-shared.css");
 
@@ -114,15 +115,14 @@ assert.match(page, /await loadStatus\(\{ silent: true \}\)/);
 assert.match(page, /href="\/cameras">\{copy\.configureCameras\}<\/a>/);
 assert.match(page, /actionPermissionState\(currentUser, "manage_cameras", language\)/);
 assert.match(page, /disabled title=\{manageCamerasPermission\.reason\}/);
-assert.match(page, /retention\.active_camera_count/);
-assert.match(page, /retention\.disabled_camera_count/);
-assert.match(page, /retention\.retained_deleted_camera_count/);
-assert.match(page, /retention\.missing_or_invalid_rule_camera_count/);
-assert.match(page, /retention\.next_due_at/);
-assert.match(page, /function operationReasonText\(operation, copy, language\)/);
-assert.match(page, /operation\?\.last_error \? humanBlockerReason\(operation\.last_error, language\)/);
-assert.match(page, /autoFreeConfigured && autoFreeAcknowledgementRequired/);
-assert.match(page, /onClick=\{\(\) => requestAutoFreeSpace\(false\)\}/);
+assert.match(page, /retentionOperationPresentation\(retention\)/);
+assert.match(helpers, /retention\?\.active_camera_count/);
+assert.match(helpers, /retention\?\.disabled_camera_count/);
+assert.match(helpers, /retention\?\.retained_deleted_camera_count/);
+assert.match(helpers, /retention\?\.missing_or_invalid_rule_camera_count/);
+assert.match(helpers, /retention\?\.next_due_at/);
+assert.match(page, /nextEnabled && autoFreeAcknowledgementRequired/);
+assert.match(page, /onChange=\{requestAutoFreeSpace\}/);
 assert.doesNotMatch(page, /autoFreeMessage/);
 assert.doesNotMatch(page, /setAutoFreeMessage/);
 assert.doesNotMatch(page, /runRetentionPreview/);
@@ -130,7 +130,12 @@ assert.doesNotMatch(page, /applyRetentionPlan/);
 assert.doesNotMatch(page, /\/recordings\/retention\/dry-run/);
 assert.doesNotMatch(page, /\/recordings\/retention\/run/);
 assert.match(page, /recentOperationPresentations\(recent\.items, 5\)/);
-assert.match(page, /<details className="storageOpsSection storageOpsSection-secondary storageOpsSection-recent">/);
+assert.match(page, /<ArchiveManagementCenter/);
+assert.match(page, /<OperationDialog dialog=\{historyDialog\}/);
+assert.match(archiveManagement, /export function ArchivePolicySwitch/);
+assert.match(archiveManagement, /role="switch"/);
+assert.match(archiveManagement, /export function ArchiveOperationHistoryContent/);
+assert.doesNotMatch(page, /storageOpsSection-recent/);
 assert.doesNotMatch(page, /item\.title\s*\|\|/);
 assert.doesNotMatch(page, /item\.summary\s*\|\|/);
 assert.doesNotMatch(page, /statusLabel\(item\.type/);
@@ -142,15 +147,13 @@ function lastCssRule(selector) {
   return matches.at(-1)[1];
 }
 
-assert.match(lastCssRule(".storageOpsSection-recent"), /padding:\s*0/);
-assert.match(lastCssRule(".storageOpsSection-recent > .storageOpsSectionHead"), /width:\s*100%/);
-assert.match(lastCssRule(".storageOpsRecentSummary"), /display:\s*grid/);
-assert.match(lastCssRule(".storageOpsRecentSummary"), /grid-template-columns:\s*auto minmax\(0, 1fr\) auto/);
-assert.match(lastCssRule(".storageOpsRecentSummary > h2"), /width:\s*auto/);
-assert.match(lastCssRule(".storageOpsSection-recent > .storageOpsRecent"), /margin:\s*12px 14px 14px/);
-assert.match(lastCssRule(".storageOpsRecentTitle"), /font-weight:\s*400/);
-assert.match(lastCssRule(".storageOpsRecentPrimary .storageOpsStatusPill"), /font-weight:\s*500/);
-assert.match(lastCssRule(".storageOpsRecentItem"), /border-radius:\s*0/);
+assert.match(lastCssRule(".storageOpsSection-archiveManagement"), /grid-area:\s*management/);
+assert.match(css, /\.archiveManagementRows\s*\{[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+assert.match(lastCssRule(".archiveManagementRows"), /grid-template-columns:\s*1fr/);
+assert.match(css, /\.archiveManagementRow\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\) auto/);
+assert.match(lastCssRule(".archiveManagementRow"), /grid-template-columns:\s*1fr/);
+assert.match(lastCssRule(".archiveManagementHistoryList"), /display:\s*grid/);
+assert.match(lastCssRule(".archiveManagementHistoryItem"), /border-bottom:\s*1px solid/);
 
 for (const key of [
   "autoFreeConfirmTitle",
@@ -182,10 +185,5 @@ for (const key of [
   assert.equal((i18n.match(new RegExp(`${key}:`, "g")) || []).length, 3, `${key} must exist in ru/en/zh-CN`);
 }
 
-for (const forbidden of [
-  "storageOpsArchiveOperationsV2",
-  "storageOpsRetentionScenarioRow",
-  "storageOpsAutoFreeScenarioRow",
-]) {
-  assert.equal(page.includes(forbidden), false, `${forbidden} would be a premature Stage 4.10.5 skeleton`);
-}
+assert.doesNotMatch(page, /storageOpsRetentionScenarioRow/);
+assert.doesNotMatch(page, /storageOpsAutoFreeScenarioRow/);

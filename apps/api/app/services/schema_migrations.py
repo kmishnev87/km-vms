@@ -393,6 +393,25 @@ def _stage4103_integrity_apply(db: Session) -> dict[str, Any]:
     bind = db.connection()
     for table in STAGE4103_TABLES:
         table.create(bind=bind, checkfirst=True)
+    # Keep the historical v5 PostgreSQL shape stable during multi-step upgrades.
+    # Stage 4.10.5.2.2 widens this column explicitly in the ordered v6 -> v7 step.
+    inspector = inspect(bind)
+    if bind.dialect.name == "postgresql":
+        state_column = next(
+            (
+                column
+                for column in inspector.get_columns(ArchiveIntegrityRemediationItem.__tablename__)
+                if str(column.get("name") or "") == "state"
+            ),
+            None,
+        )
+        if state_column is not None and getattr(state_column.get("type"), "length", None) != 24:
+            db.execute(
+                text(
+                    "ALTER TABLE archive_integrity_remediation_items "
+                    "ALTER COLUMN state TYPE VARCHAR(24)"
+                )
+            )
     db.execute(
         text(
             "CREATE INDEX IF NOT EXISTS ix_recording_segments_root_relative_id "
@@ -549,6 +568,194 @@ STAGE4104_ARCHIVE_MIGRATION = MigrationDefinition(
 )
 
 
+STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION_ID = (
+    "stage13_5_4_10_5_2_2_integrity_item_state_width_v7"
+)
+STAGE410522_INTEGRITY_ITEM_STATE_SOURCE_LENGTH = 24
+STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH = 64
+STAGE410522_PHYSICAL_PENDING_ITEM_STATES = (
+    "physical_mutation_prepared",
+    "quarantine_prepared",
+    "quarantined",
+    "delete_committing",
+    "physical_mutation_committed",
+)
+STAGE410522_PHYSICAL_PENDING_PLAN_STATES = ("running", "terminal_pending")
+
+
+def _stage410522_state_column(db: Session) -> tuple[str, int | None]:
+    bind = db.connection()
+    inspector = inspect(bind)
+    table_name = ArchiveIntegrityRemediationItem.__tablename__
+    if not inspector.has_table(table_name):
+        raise RuntimeError("stage410522_integrity_items_table_missing")
+    column = next(
+        (
+            item
+            for item in inspector.get_columns(table_name)
+            if str(item.get("name") or "") == "state"
+        ),
+        None,
+    )
+    if column is None:
+        raise RuntimeError("stage410522_integrity_item_state_column_missing")
+    column_type = column.get("type")
+    rendered_type = str(column_type or "").upper()
+    if not (
+        rendered_type.startswith("VARCHAR")
+        or rendered_type.startswith("CHARACTER VARYING")
+    ):
+        raise RuntimeError("stage410522_integrity_item_state_type_inconsistent")
+    return bind.dialect.name, getattr(column_type, "length", None)
+
+
+def _stage410522_migration_truth(db: Session) -> tuple[int, int, int]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is None or state.baseline_id != CURRENT_BASELINE_ID or state.status not in SAFE_STATUSES:
+        raise RuntimeError("stage410522_schema_state_inconsistent")
+    rows = (
+        db.query(SchemaMigrationHistory)
+        .filter(
+            SchemaMigrationHistory.migration_id == STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION_ID,
+            SchemaMigrationHistory.source == MIGRATION_SOURCE,
+        )
+        .all()
+    )
+    exact = [
+        row
+        for row in rows
+        if row.status == "applied"
+        and row.target_version == 7
+        and row.schema_version == 7
+        and row.baseline_id == CURRENT_BASELINE_ID
+    ]
+    return int(state.schema_version), len(rows), len(exact)
+
+
+def _stage410522_state_aggregates(db: Session) -> dict[str, int]:
+    table_name = ArchiveIntegrityRemediationItem.__tablename__
+    aggregate = db.execute(
+        text(
+            f"SELECT COUNT(*) AS row_count, "
+            f"COALESCE(MAX(LENGTH(state)), 0) AS max_state_length FROM {table_name}"
+        )
+    ).mappings().one()
+    physical_item_count = int(
+        db.query(ArchiveIntegrityRemediationItem.id)
+        .filter(ArchiveIntegrityRemediationItem.state.in_(STAGE410522_PHYSICAL_PENDING_ITEM_STATES))
+        .count()
+    )
+    physical_plan_count = int(
+        db.query(ArchiveIntegrityRemediationPlan.id)
+        .filter(ArchiveIntegrityRemediationPlan.state.in_(STAGE410522_PHYSICAL_PENDING_PLAN_STATES))
+        .count()
+    )
+    return {
+        "row_count": int(aggregate.get("row_count") or 0),
+        "max_state_length": int(aggregate.get("max_state_length") or 0),
+        "physical_pending_item_count": physical_item_count,
+        "physical_pending_plan_count": physical_plan_count,
+    }
+
+
+def _stage410522_integrity_item_state_preflight(db: Session) -> dict[str, Any]:
+    dialect, actual_length = _stage410522_state_column(db)
+    schema_version, history_count, exact_history_count = _stage410522_migration_truth(db)
+    aggregates = _stage410522_state_aggregates(db)
+    if aggregates["physical_pending_item_count"] or aggregates["physical_pending_plan_count"]:
+        raise RuntimeError("stage410522_physical_remediation_active")
+    if dialect == "postgresql":
+        source_shape = schema_version == 6 and actual_length == STAGE410522_INTEGRITY_ITEM_STATE_SOURCE_LENGTH
+        target_shape = (
+            schema_version == 7
+            and actual_length == STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH
+            and history_count == exact_history_count == 1
+        )
+        if not source_shape and not target_shape:
+            raise RuntimeError("stage410522_integrity_item_state_shape_inconsistent")
+    elif dialect == "sqlite":
+        source_shape = schema_version == 6 and actual_length in {
+            STAGE410522_INTEGRITY_ITEM_STATE_SOURCE_LENGTH,
+            STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH,
+        }
+        target_shape = (
+            schema_version == 7
+            and actual_length in {
+                STAGE410522_INTEGRITY_ITEM_STATE_SOURCE_LENGTH,
+                STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH,
+            }
+            and history_count == exact_history_count == 1
+        )
+        if not source_shape and not target_shape:
+            raise RuntimeError("stage410522_integrity_item_state_shape_inconsistent")
+    else:
+        raise RuntimeError("stage410522_integrity_item_state_dialect_unsupported")
+    if schema_version == 6 and history_count:
+        raise RuntimeError("stage410522_integrity_item_state_history_inconsistent")
+    return {
+        "status": "already_applied" if schema_version == 7 else "ready",
+        "dialect": dialect,
+        "schema_version": schema_version,
+        "column_length": actual_length,
+        **aggregates,
+    }
+
+
+def _stage410522_integrity_item_state_apply(db: Session) -> dict[str, Any]:
+    preflight = _stage410522_integrity_item_state_preflight(db)
+    if preflight["status"] == "already_applied":
+        return {"status": "already_applied", "column_length": preflight["column_length"]}
+    if preflight["dialect"] == "postgresql":
+        db.execute(
+            text(
+                "ALTER TABLE archive_integrity_remediation_items "
+                "ALTER COLUMN state TYPE VARCHAR(64)"
+            )
+        )
+        return {"status": "widened", "column_length": STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH}
+    return {
+        "status": "sqlite_model_contract_only",
+        "column_length": preflight["column_length"],
+    }
+
+
+def _stage410522_integrity_item_state_verify(db: Session) -> dict[str, Any]:
+    dialect, actual_length = _stage410522_state_column(db)
+    model_length = getattr(ArchiveIntegrityRemediationItem.__table__.c.state.type, "length", None)
+    if model_length != STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH:
+        raise RuntimeError("stage410522_integrity_item_state_model_drift")
+    if dialect == "postgresql" and actual_length != STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH:
+        raise RuntimeError("stage410522_integrity_item_state_width_not_applied")
+    if dialect == "sqlite" and actual_length not in {
+        STAGE410522_INTEGRITY_ITEM_STATE_SOURCE_LENGTH,
+        STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH,
+    }:
+        raise RuntimeError("stage410522_integrity_item_state_shape_inconsistent")
+    aggregates = _stage410522_state_aggregates(db)
+    return {
+        "status": "verified",
+        "dialect": dialect,
+        "column_length": actual_length,
+        "model_length": model_length,
+        **aggregates,
+    }
+
+
+STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION = MigrationDefinition(
+    migration_id=STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION_ID,
+    from_version=6,
+    to_version=7,
+    description="Widen durable archive-integrity remediation item states to 64 characters.",
+    risk=RISK_ADDITIVE_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage410522_integrity_item_state_preflight,
+    apply=_stage410522_integrity_item_state_apply,
+    verify=_stage410522_integrity_item_state_verify,
+    safe_failure_summary="Archive-integrity remediation state width migration failed safely.",
+    rollback_note="PostgreSQL transactional DDL preserves the v6 VARCHAR(24) shape on failure; automatic downgrade is not supported.",
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
@@ -556,6 +763,7 @@ PRODUCTION_MIGRATIONS = MigrationRegistry(
         STAGE4102_RETENTION_MIGRATION,
         STAGE4103_ARCHIVE_INTEGRITY_MIGRATION,
         STAGE4104_ARCHIVE_MIGRATION,
+        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
     )
 )
 

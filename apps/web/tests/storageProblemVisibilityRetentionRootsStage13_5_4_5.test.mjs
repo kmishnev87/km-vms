@@ -22,23 +22,21 @@ assert.match(page, /target_root_id: migrationTargetRootId/, "migration preview/a
 assert.doesNotMatch(page, /target_root_id: null/, "migration preview must not silently ask backend to choose target");
 
 const operations = page.slice(
-  page.indexOf("<Section title={copy.archiveOperations}"),
-  page.indexOf("<Section title={copy.archiveRoots}")
+  page.indexOf("const archiveManagementGroups"),
+  page.indexOf("const historyDialog")
 );
-assert.match(operations, /title=\{copy\.retentionRules\}/, "retention policy/status remains visible");
-const retentionRow = operations.slice(operations.indexOf("title={copy.retentionRules}"), operations.indexOf("title={copy.autoFreeSpace}"));
-assert.doesNotMatch(retentionRow.split("<details")[0], /retentionPlanShort|retentionConfirmed|retentionDeleteShort/, "manual retention controls must not be primary operations");
+assert.match(operations, /title: copy\.retentionRules/, "retention policy/status remains visible");
+const retentionRow = operations.slice(operations.indexOf('id: "retention"'), operations.indexOf('id: "auto-free"'));
+assert.doesNotMatch(retentionRow, /retentionPlanShort|retentionConfirmed|retentionDeleteShort|dry-run/, "manual retention controls must not be primary operations");
 
-assert.match(operations, /title=\{copy\.archiveProblems\}/, "archive problems must be a visible product row");
-assert.match(operations, /visibleProblemCategories/, "problem categories must be visible, not only hidden diagnostics");
-assert.match(operations, /visibleProblemSamples/, "problem samples must be visible with redacted display fields");
-assert.match(operations, /problemActionStatusText\(item, copy\)/, "problem categories must explain the current action boundary");
-assert.match(page, /item\?\.reason_no_action_available/, "problem viewer must show a localized reason when no action is available");
-assert.match(page, /reason_no_action_available_en/, "problem reasons must support English");
-assert.match(page, /reason_no_action_available_zh_cn/, "problem reasons must support Chinese");
-assert.doesNotMatch(operations, /status=\{statusLabel\(reconciliationScenario\.status, language\)\}/, "archive problems must not use generic preview-ready status");
-assert.doesNotMatch(operations, /status=\{statusLabel\(retentionScenario\.status, language\)\}/, "retention must not use generic preview-ready status");
-assert.doesNotMatch(operations, /status=\{statusLabel\(migrationScenario\.status, language\)\}/, "migration must not use generic preview-ready status");
+assert.match(operations, /title: copy\.integrityCheck/, "archive integrity must be a visible product row");
+assert.match(operations, /onClick=\{openIntegrityDialog\}/, "archive findings must open the complete integrity flow");
+assert.match(page, /\/storage\/integrity\/scans\/\$\{encodeURIComponent\(scanId\)\}\/findings\?limit=50/, "integrity findings are loaded through the bounded endpoint");
+assert.match(page, /archiveIntegrityFindingPresentation/, "problem findings use sanitized presentation fields");
+assert.match(page, /archiveIntegrityActionContract/, "problem findings expose only typed executable actions");
+assert.match(page, /copy\[item\.noActionLabelKey\] \|\| copy\.integrityNoActionUnavailable/, "problem viewer must show a localized reason when no action is available");
+assert.equal((i18n.match(/integrityNoActionUnavailable:/g) || []).length, 3, "problem no-action reasons support all three locales");
+assert.doesNotMatch(operations, /statusLabel\((reconciliationScenario|retentionScenario|migrationScenario)\.status/, "primary rows must not use legacy generic preview-ready statuses");
 
 assert.match(page, /rootProblemLabel\(root, copy, language\)/);
 assert.match(page, /rootHasProblems\(root\) \? copy\.yes : copy\.no/, "root problem column must show short yes/no badges");
@@ -46,7 +44,7 @@ assert.match(page, /showRootProblems\(root\)/, "root problem yes badge must open
 assert.match(page, /root\.requires_activation && !root\.is_active/, "inactive root waiting for runtime activation must not be shown as a problem");
 assert.match(page, /root\.segments_count \?\? owned\.segments_count \?\? 0/, "root row must not replace a real zero segment count with total archive count");
 assert.doesNotMatch(page, /if \(root\.is_available === true\) return copy\.available/, "problem column must not show green availability as no-problem state");
-const rootProblemCode = page.slice(page.indexOf("function rootHasProblems"), page.indexOf("function retentionPolicyText"));
+const rootProblemCode = page.slice(page.indexOf("function rootHasProblems"), page.indexOf("function compactAccessLabel"));
 assert.doesNotMatch(rootProblemCode, /missing_file_count/, "root health must not treat archive content missing files as archive root access problems");
 assert.match(page, /storageOpsRootActivateButton/, "archive root activation must live on the visible root row");
 assert.match(page, /<CheckIcon \/>/, "archive root activation must use a compact check icon action");
@@ -59,7 +57,7 @@ assert.match(page, /operation_id: operationId \|\| null/, "archive root delete m
 assert.match(page, /archiveRootStateText\(root, copy\)/, "root row must show an explicit active/inactive state");
 assert.doesNotMatch(page, /<span>\{copy\.active\}<\/span>/, "action column must not duplicate active state text above the check icon");
 assert.doesNotMatch(page, /storageOpsDeleteIcon|>×<\/span>/, "archive root delete action must not use a raw x icon");
-const rootActionFlow = page.slice(page.indexOf("function requestActivateRoot"), page.indexOf("async function runRetentionPreview"));
+const rootActionFlow = page.slice(page.indexOf("function requestActivateRoot"), page.indexOf("async function loadIntegrityFindingPage"));
 assert.doesNotMatch(rootActionFlow, /window\.confirm/, "storage root destructive/switch actions must use product dialogs, not browser confirm");
 assert.doesNotMatch(page, /storageOpsRootManageList|storageOpsRootManageRow/, "duplicate archive root management list must not remain under the add section");
 assert.match(page, /<summary>[\s\S]*\{copy\.addArchiveRoot\}[\s\S]*storageOpsDiscoveryStatus[\s\S]*<\/summary>/, "advanced section header must remain dedicated to add-root and its discovery status");

@@ -77,14 +77,10 @@ assert.match(page, /const \[migrationOperation, setMigrationOperation\] = useSta
 assert.doesNotMatch(page, /migrationPreviewState/);
 assert.match(page, /if \(silent && statusRef\.current\)/, "silent refresh retains the last valid status");
 
-for (const forbidden of [
-  "storageOpsArchiveOperationsV2",
-  "storageOpsRetentionScenarioRow",
-  "storageOpsIntegrityScenarioRow",
-  "storageOpsMigrationScenarioRow",
-]) {
-  assert.equal(page.includes(forbidden), false, `${forbidden} would be a premature Stage 4.10.5 skeleton`);
-}
+assert.match(page, /<ArchiveManagementCenter/);
+assert.doesNotMatch(page, /storageOpsRetentionScenarioRow/);
+assert.doesNotMatch(page, /storageOpsIntegrityScenarioRow/);
+assert.doesNotMatch(page, /storageOpsMigrationScenarioRow/);
 
 assert.match(page, /className="storageOpsCheckIcon">✓<\/span>/);
 assert.match(page, /className="recordingsUiIcon recordingsTrashIcon recordingsRowSvgIcon storageOpsTrashIcon" viewBox="0 1 24 24"/);
