@@ -238,6 +238,13 @@ load_compose_common() {
   . "$helper"
 }
 
+apply_permission_policy() {
+  gate="$APP_DIR/scripts/km-vms-permission-gate.sh"
+  [ -f "$gate" ] || fail "Project acquisition is incomplete: scripts/km-vms-permission-gate.sh is missing."
+  sh "$gate" --fix --app-dir "$APP_DIR" ||
+    fail "Product-source permission hardening failed."
+}
+
 validate_github_repo() {
   value="$(printf '%s' "$1" | tr -d '[:space:]')"
   printf '%s' "$value" | grep -Eq '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || fail "GitHub repo must be in owner/name format."
@@ -812,7 +819,9 @@ fi
 [ -f "$APP_DIR/docker-compose.yml" ] || fail "Project acquisition did not produce docker-compose.yml."
 [ -f "$APP_DIR/deploy/nginx/default.conf" ] || fail "Project acquisition is incomplete: deploy/nginx/default.conf is missing."
 [ -f "$APP_DIR/scripts/km-vms-storage-discovery.sh" ] || fail "Project acquisition is incomplete: scripts/km-vms-storage-discovery.sh is missing."
+[ -f "$APP_DIR/scripts/km-vms-permission-gate.sh" ] || fail "Project acquisition is incomplete: scripts/km-vms-permission-gate.sh is missing."
 
+apply_permission_policy
 load_compose_common
 check_docker
 print_plan

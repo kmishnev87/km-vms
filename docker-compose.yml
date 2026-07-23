@@ -37,6 +37,29 @@ services:
     networks:
       - vms-net
 
+  update-helper-bootstrap:
+    image: km-vms-${COMPOSE_PROJECT_NAME:-tnas-vms}-update-helper:local
+    build:
+      context: ./apps/update-helper
+      dockerfile: Dockerfile
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-update-helper-bootstrap
+    restart: "no"
+    working_dir: ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      KM_VMS_BOOTSTRAP_APP_DIR: ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}
+      KM_VMS_BOOTSTRAP_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-tnas-vms}
+      KM_VMS_BOOTSTRAP_HELPER_IMAGE: km-vms-${COMPOSE_PROJECT_NAME:-tnas-vms}-update-helper:local
+      KM_VMS_BOOTSTRAP_TIMEOUT_SECONDS: ${KM_VMS_UPDATE_HELPER_REFRESH_TIMEOUT_SECONDS:-7800}
+    command:
+      - python3
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/scripts/km-vms-update-helper-bridge.py
+      - bootstrap
+    volumes:
+      - ./:${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}
+      - /var/run/docker.sock:/var/run/docker.sock
+    network_mode: none
+
   api:
     build:
       context: ./apps/api
@@ -48,6 +71,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      update-helper-bootstrap:
+        condition: service_completed_successfully
     environment:
       TZ: ${TZ:-Asia/Yekaterinburg}
       APP_ENV: production
@@ -124,6 +149,7 @@ services:
       - vms-net
 
   update-helper:
+    image: km-vms-${COMPOSE_PROJECT_NAME:-tnas-vms}-update-helper:local
     build:
       context: ./apps/update-helper
       dockerfile: Dockerfile

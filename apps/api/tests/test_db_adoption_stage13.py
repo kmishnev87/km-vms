@@ -265,4 +265,3 @@ def test_db_adoption_apply_endpoint_does_not_pass_request_backup_root_to_service
     assert observed["actor"].username == owner.username
     assert "backup_root" not in observed
     assert "allow_tmp_backup_root_for_tests" not in observed
-

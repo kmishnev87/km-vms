@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   formatMaintenanceMessage,
   maintenanceStatusText,
+  updateApplyErrorMessages,
 } from "../lib/settingsPageHelpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -93,6 +94,10 @@ for (const [lang, copy] of Object.entries(dictionaries)) {
   assert.equal(maintenanceStatusText("complete", copy), copy.maintenanceStatuses.complete);
   assert.equal(maintenanceStatusText("drift_known_safe", copy), copy.maintenanceStatuses.drift_known_safe);
   assert.equal(maintenanceStatusText("unknown_backend_status", copy), copy.maintenanceStatuses.unknown);
+  assert.deepEqual(
+    updateApplyErrorMessages({ message: "drift_known_safe", operator_action: "draft_known_safe" }, copy, lang),
+    [copy.maintenanceMessageLabels.drift_known_safe, copy.maintenanceMessageLabels.draft_known_safe],
+  );
 }
 
 for (const forbidden of [
@@ -107,4 +112,4 @@ for (const forbidden of [
 }
 
 assert.equal(settingsPage.includes("maintenanceReadinessRows(maintenanceOverview, t)"), true);
-assert.equal(settingsPage.includes("formatMaintenanceMessage(updateApplyStatus.error.message, t, lang, \"error\")"), true);
+assert.equal(settingsPage.includes("updateApplyErrorMessages(updateApplyStatus?.error, t, lang)"), true);

@@ -8,6 +8,29 @@ const FORBIDDEN_EN = "Section unavailable. User permissions are limited.";
 const FORBIDDEN_ZH_CN = "此部分不可用。用户权限受限。";
 const LEGACY_FORBIDDEN_TEXT = ["Insufficient", "permissions"].join(" ");
 const LEGACY_FORBIDDEN_RU = "Недостаточно прав пользователя";
+const MAX_API_ERROR_MESSAGE_LENGTH = 240;
+const UNSAFE_ERROR_TEXT = /<!doctype|<html|<body|traceback|stack trace|authorization:|bearer\s|rtsp:\/\/|\.env(?:\b|_)|\/(?:volume\d*|var|etc|home|tmp)\//i;
+
+const API_ERROR_MESSAGES = {
+  ru: {
+    unauthorized: "Требуется повторный вход в систему.",
+    network_unavailable: "Нет связи с сервером. Соединение будет проверено повторно.",
+    temporarily_unavailable: "Сервис временно недоступен. Повторите попытку после восстановления соединения.",
+    request_failed: "Не удалось выполнить запрос.",
+  },
+  en: {
+    unauthorized: "Sign in again to continue.",
+    network_unavailable: "The server connection is unavailable. The connection will be checked again.",
+    temporarily_unavailable: "The service is temporarily unavailable. Try again after the connection is restored.",
+    request_failed: "The request could not be completed.",
+  },
+  "zh-CN": {
+    unauthorized: "请重新登录以继续。",
+    network_unavailable: "暂时无法连接服务器，系统将再次检查连接。",
+    temporarily_unavailable: "服务暂时不可用，请在连接恢复后重试。",
+    request_failed: "无法完成请求。",
+  },
+};
 
 export function forbiddenMessage(language = "ru") {
   if (language === "en") return FORBIDDEN_EN;
@@ -97,18 +120,59 @@ function normalizeErrorDetail(response, detail) {
   return detail || "Ошибка запроса";
 }
 
-function safeErrorMessage(response, data, fallback) {
-  const detail = data?.detail;
-  if (typeof detail === "string") return normalizeErrorDetail(response, detail);
-  if (typeof data?.message === "string") return normalizeErrorDetail(response, data.message);
-  if (typeof detail?.message === "string") return normalizeErrorDetail(response, detail.message);
-  if (typeof detail?.error === "string") return normalizeErrorDetail(response, detail.error);
-  if (typeof detail?.code === "string") return normalizeErrorDetail(response, detail.code);
-  return normalizeErrorDetail(response, fallback);
+function boundedErrorText(value) {
+  const text = String(value || "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!text || UNSAFE_ERROR_TEXT.test(text)) return "";
+  return text.slice(0, MAX_API_ERROR_MESSAGE_LENGTH);
 }
 
-function createApiError(response, data, fallback) {
-  const error = new Error(safeErrorMessage(response, data, fallback));
+function responseErrorCategory(response, isJson) {
+  if (response.status === 401) return "unauthorized";
+  if (response.status === 403) return "permission_denied";
+  if ([502, 503, 504].includes(response.status)) return "temporarily_unavailable";
+  return isJson ? "typed_backend_error" : "request_failed";
+}
+
+function localizedApiError(category, response = null) {
+  if (category === "permission_denied") return forbiddenMessage(currentUiLanguage());
+  const messages = API_ERROR_MESSAGES[currentUiLanguage()] || API_ERROR_MESSAGES.ru;
+  const base = messages[category] || messages.request_failed;
+  if (response?.status && category !== "unauthorized") return `${base} (HTTP ${response.status})`;
+  return base;
+}
+
+function typedErrorCode(data) {
+  const detail = data?.detail;
+  const value = data?.code || detail?.code || detail?.reason || detail?.error;
+  return boundedErrorText(value).slice(0, 120);
+}
+
+function objectErrorSummary(detail) {
+  if (!detail || typeof detail !== "object" || Array.isArray(detail)) return "";
+  const direct = [detail.message, detail.error, detail.reason, detail.code, detail.status]
+    .map(boundedErrorText)
+    .find(Boolean);
+  const blocker = Array.isArray(detail.blockers)
+    ? detail.blockers.map((item) => boundedErrorText(item?.reason || item?.code || item?.message)).find(Boolean)
+    : "";
+  if (direct && blocker && direct !== blocker) return boundedErrorText(`${direct}: ${blocker}`);
+  return direct || blocker || "";
+}
+
+function safeErrorMessage(response, data, category) {
+  const detail = data?.detail;
+  const candidate = typeof detail === "string"
+    ? boundedErrorText(detail)
+    : boundedErrorText(data?.message) || objectErrorSummary(detail) || boundedErrorText(data?.code);
+  if (candidate) return boundedErrorText(normalizeErrorDetail(response, candidate));
+  return localizedApiError(category, response);
+}
+
+function createApiError(response, data, isJson) {
+  const category = responseErrorCategory(response, isJson);
+  const error = new Error(safeErrorMessage(response, data, category));
+  error.category = category;
+  error.code = typedErrorCode(data);
   error.status = response.status;
   error.data = data;
   error.detail = data?.detail;
@@ -120,10 +184,29 @@ function createApiError(response, data, fallback) {
   return error;
 }
 
+function createNetworkError() {
+  const error = new Error(localizedApiError("network_unavailable"));
+  error.category = "network_unavailable";
+  error.code = "";
+  error.status = 0;
+  error.data = null;
+  error.detail = null;
+  error.response = { ok: false, status: 0, statusText: "" };
+  return error;
+}
+
+async function requestWithSafeNetworkError(url, options) {
+  try {
+    return await fetch(url, options);
+  } catch {
+    throw createNetworkError();
+  }
+}
+
 export async function apiFetch(path, options = {}) {
   const url = buildUrl(path);
   const headers = makeHeaders(options.headers || {});
-  const response = await fetch(url, { ...options, headers });
+  const response = await requestWithSafeNetworkError(url, { ...options, headers });
 
   if (response.status === 204) return null;
 
@@ -131,19 +214,13 @@ export async function apiFetch(path, options = {}) {
   const isJson = contentType.includes("application/json");
 
   if (!response.ok) {
-    let detail = `HTTP ${response.status}`;
     let data = null;
     try {
       if (isJson) {
         data = await response.json();
-        detail = typeof data?.detail === "string" ? data.detail : JSON.stringify(data);
-      } else {
-        detail = await response.text();
       }
-    } catch {
-      detail = `HTTP ${response.status}`;
-    }
-    throw createApiError(response, data, detail);
+    } catch {}
+    throw createApiError(response, data, isJson);
   }
 
   if (isJson) return response.json();
@@ -153,23 +230,18 @@ export async function apiFetch(path, options = {}) {
 export async function apiFetchBlob(path, options = {}) {
   const url = buildUrl(path);
   const headers = makeHeaders(options.headers || {});
-  const response = await fetch(url, { ...options, headers });
+  const response = await requestWithSafeNetworkError(url, { ...options, headers });
 
   if (!response.ok) {
-    let detail = `HTTP ${response.status}`;
     let data = null;
+    const contentType = response.headers.get("content-type") || "";
+    const isJson = contentType.includes("application/json");
     try {
-      const contentType = response.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) {
+      if (isJson) {
         data = await response.json();
-        detail = typeof data?.detail === "string" ? data.detail : JSON.stringify(data);
-      } else {
-        detail = await response.text();
       }
-    } catch {
-      detail = `HTTP ${response.status}`;
-    }
-    throw createApiError(response, data, detail);
+    } catch {}
+    throw createApiError(response, data, isJson);
   }
 
   const blob = await response.blob();

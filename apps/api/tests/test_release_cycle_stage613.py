@@ -7,6 +7,19 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 
 
+def _release_env_with_safe_getfacl(tmp_path: Path) -> dict[str, str]:
+    bin_dir = tmp_path / "permission-tools"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    tool = bin_dir / "getfacl"
+    tool.write_text(
+        "#!/usr/bin/env sh\n"
+        "printf 'user::rwx\ngroup::r-x\nother::r-x\n'\n",
+        encoding="utf-8",
+    )
+    os.chmod(tool, 0o755)
+    return {**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", "")}
+
+
 def _json(relative: str):
     return json.loads((ROOT / relative).read_text(encoding="utf-8"))
 
@@ -44,7 +57,8 @@ def test_stage613_release_descriptor_uses_semver_tag_evidence_model():
     assert all(isinstance(item, str) and len(item) <= 180 for item in descriptor["changelog"])
 
 
-def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files():
+def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files(tmp_path):
+    env = _release_env_with_safe_getfacl(tmp_path)
     tracked = [
         ROOT / "apps/api/app/core/version.py",
         ROOT / "apps/web/package.json",
@@ -56,6 +70,7 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files():
     check = subprocess.run(
         ["sh", "scripts/km-vms-release-cycle.sh", "--check", "--allow-dirty"],
         cwd=ROOT,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -64,6 +79,7 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files():
     dry_run = subprocess.run(
         ["sh", "scripts/km-vms-release-cycle.sh", "--dry-run", "--prepare-version", "0.7.29", "--allow-dirty"],
         cwd=ROOT,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -75,11 +91,13 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files():
     assert before == {path: path.read_bytes() for path in tracked}
 
 
-def test_stage613_release_cycle_script_rejects_unsafe_and_equal_versions():
+def test_stage613_release_cycle_script_rejects_unsafe_and_equal_versions(tmp_path):
+    env = _release_env_with_safe_getfacl(tmp_path)
     current = _current_version()
     equal = subprocess.run(
         ["sh", "scripts/km-vms-release-cycle.sh", "--dry-run", "--prepare-version", current, "--allow-dirty"],
         cwd=ROOT,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -87,6 +105,7 @@ def test_stage613_release_cycle_script_rejects_unsafe_and_equal_versions():
     unsafe = subprocess.run(
         ["sh", "scripts/km-vms-release-cycle.sh", "--dry-run", "--prepare-version", "main", "--allow-dirty"],
         cwd=ROOT,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -121,10 +140,12 @@ def test_stage613_release_cycle_script_prints_publication_preview_only():
     assert "run only after operator acceptance" in result.stdout
 
 
-def test_stage630_release_cycle_script_enforces_patch_cap_for_prepare_and_print():
+def test_stage630_release_cycle_script_enforces_patch_cap_for_prepare_and_print(tmp_path):
+    env = _release_env_with_safe_getfacl(tmp_path)
     too_high_prepare = subprocess.run(
         ["sh", "scripts/km-vms-release-cycle.sh", "--dry-run", "--prepare-version", "0.7.30", "--allow-dirty"],
         cwd=ROOT,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -132,6 +153,7 @@ def test_stage630_release_cycle_script_enforces_patch_cap_for_prepare_and_print(
     too_high_print = subprocess.run(
         ["sh", "scripts/km-vms-release-cycle.sh", "--print-github-release-commands", "--version", "0.7.30"],
         cwd=ROOT,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -139,6 +161,7 @@ def test_stage630_release_cycle_script_enforces_patch_cap_for_prepare_and_print(
     next_minor = subprocess.run(
         ["sh", "scripts/km-vms-release-cycle.sh", "--print-github-release-commands", "--version", "0.8.0"],
         cwd=ROOT,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

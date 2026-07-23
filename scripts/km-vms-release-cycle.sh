@@ -192,6 +192,24 @@ def check_dirty() -> None:
         fail("working tree is dirty; rerun with --allow-dirty for local validation only")
 
 
+def check_permission_policy() -> None:
+    gate = ROOT / "scripts/km-vms-permission-gate.sh"
+    if not gate.is_file():
+        fail("scripts/km-vms-permission-gate.sh is missing")
+    result = subprocess.run(
+        ["sh", str(gate), "--check", "--app-dir", str(ROOT)],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip()
+        fail(f"product-source permission gate failed: {detail or 'unknown error'}")
+    if result.stdout.strip():
+        print(result.stdout.strip())
+
+
 def prepare(version: str) -> None:
     if not SEMVER_RE.fullmatch(version):
         fail("--prepare-version must be semantic x.y.z")
@@ -250,12 +268,14 @@ def print_release_commands(version: str) -> None:
 
 if prepare_version:
     check_dirty()
+    check_permission_policy()
     prepare(prepare_version)
 
 if check:
     check_dirty()
     check_versions()
     validate_descriptor()
+    check_permission_policy()
     print("release-cycle check PASS")
 
 if print_commands:

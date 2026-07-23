@@ -34,6 +34,41 @@ export const AUDIT_CATEGORIES = ["auth", "users", "settings", "cameras", "live",
 export const AUDIT_SEVERITIES = ["info", "warning", "error", "security"];
 export const AUDIT_LIMIT = 50;
 export const UPDATE_APPLY_RUNNING_STATUSES = ["queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification"];
+export const UPDATE_APPLY_POLL_INTERVAL_MS = 5000;
+export const UPDATE_APPLY_MODAL_GRACE_MS = 10000;
+export const UPDATE_APPLY_ABSENCE_SETTLE_MS = 360000;
+export const UPDATE_APPLY_RECONCILIATION_STORAGE_KEY = "km_vms_update_apply_reconciliation_v1";
+const UPDATE_APPLY_STALE_DEFAULT_SECONDS = 180;
+const UPDATE_APPLY_RECONCILIATION_SCHEMA = 3;
+const UPDATE_APPLY_RECONCILIATION_STATES = new Set([
+  "unresolved",
+  "conflict",
+  "recheck_required",
+  "reconciliation_corrupt",
+  "legacy_uncorrelated",
+]);
+const UPDATE_APPLY_PRESERVED_TERMINAL_STATUSES = new Set([
+  "failed",
+  "blocked",
+  "stalled",
+  "cancelled",
+  "canceled",
+]);
+const UPDATE_APPLY_AUTHORITATIVE_TERMINAL_STATUSES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "canceled",
+]);
+const UPDATE_APPLY_CANCELLATION_ERROR_PATTERN = /^(?:cancelled|canceled)(?:_|$)/;
+const UPDATE_APPLY_FULL_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
+const UPDATE_APPLY_SUBMISSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UPDATE_APPLY_SUBMISSION_PROOF_PATTERN = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+const UPDATE_APPLY_SUBMISSION_PROOF_LIMIT = 2048;
+const UPDATE_APPLY_SYNTHETIC_PHASE_PATTERN = /^status_/;
+const UPDATE_APPLY_UNSAFE_DATA_FIELD = Symbol("update-apply-unsafe-data-field");
+// Persisted reconciliation is bounded before parsing; generated safe records are much smaller.
+const UPDATE_APPLY_RECONCILIATION_STORAGE_LIMIT = 8192;
 const AUDIT_LABELS = {
   category: {
     auth: { ru: "Авторизация", en: "Auth", "zh-CN": "授权" },
@@ -203,11 +238,579 @@ export function updateApplyIsRunning(status) {
   return UPDATE_APPLY_RUNNING_STATUSES.includes(status || "");
 }
 
-export function updateApplyEffectiveStatus(updateStatus, applyStatus, transientError = "") {
-  const status = applyStatus?.effective_status || applyStatus?.status || updateStatus?.status || "unknown";
+function boundedFiniteNumber(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, parsed));
+}
+
+function boundedContractText(value, maxLength = 160) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+function isPlainDataRecord(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+}
+
+function ownDataField(record, key) {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(record, key);
+    if (!descriptor) return undefined;
+    return Object.prototype.hasOwnProperty.call(descriptor, "value")
+      ? descriptor.value
+      : UPDATE_APPLY_UNSAFE_DATA_FIELD;
+  } catch {
+    return UPDATE_APPLY_UNSAFE_DATA_FIELD;
+  }
+}
+
+function exactBoundedDataText(value, maxLength) {
+  if (typeof value !== "string" || value.length > maxLength) return "";
+  const text = value.trim();
+  return text && text.length <= maxLength ? text : "";
+}
+
+function dataFieldIsAbsent(value, maxLength) {
+  if (value === undefined || value === null) return true;
+  return typeof value === "string" && value.length <= maxLength && value.trim() === "";
+}
+
+function isBoundedPlainDataRecord(value, maxFields = 16) {
+  if (!isPlainDataRecord(value)) return false;
+  try {
+    const keys = Reflect.ownKeys(value);
+    if (keys.length > maxFields || keys.some((key) => typeof key !== "string")) return false;
+    return keys.every((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      return Boolean(descriptor && Object.prototype.hasOwnProperty.call(descriptor, "value"));
+    });
+  } catch {
+    return false;
+  }
+}
+
+function updateApplyCancellationErrorIsCompatible(errorValue) {
+  if (errorValue === undefined || errorValue === null) return true;
+  if (!isBoundedPlainDataRecord(errorValue)) return false;
+  const categoryValue = ownDataField(errorValue, "category");
+  const category = exactBoundedDataText(categoryValue, 80).toLowerCase();
+  return Boolean(category && !UPDATE_APPLY_SYNTHETIC_PHASE_PATTERN.test(category) && UPDATE_APPLY_CANCELLATION_ERROR_PATTERN.test(category));
+}
+
+export function updateApplyIsAuthoritativeInactiveSnapshot(applyStatus) {
+  if (!isPlainDataRecord(applyStatus)) return false;
+
+  const schemaVersion = ownDataField(applyStatus, "schema_version");
+  const statusValue = ownDataField(applyStatus, "status");
+  const effectiveStatusValue = ownDataField(applyStatus, "effective_status");
+  const phaseValue = ownDataField(applyStatus, "phase");
+  const currentStepValue = ownDataField(applyStatus, "current_step");
+  const requestIdValue = ownDataField(applyStatus, "request_id");
+  const expectedCommitValue = ownDataField(applyStatus, "expected_commit");
+  const installedCommitValue = ownDataField(applyStatus, "installed_commit");
+  const commitVerified = ownDataField(applyStatus, "commit_verified");
+  const errorValue = ownDataField(applyStatus, "error");
+  const isStale = ownDataField(applyStatus, "is_stale");
+  const fields = [
+    schemaVersion,
+    statusValue,
+    effectiveStatusValue,
+    phaseValue,
+    currentStepValue,
+    requestIdValue,
+    expectedCommitValue,
+    installedCommitValue,
+    commitVerified,
+    errorValue,
+    isStale,
+  ];
+  if (fields.includes(UPDATE_APPLY_UNSAFE_DATA_FIELD)) return false;
+  if (schemaVersion !== 1 || isStale === true || (isStale !== undefined && typeof isStale !== "boolean")) return false;
+
+  const status = exactBoundedDataText(statusValue, 80).toLowerCase();
+  const effectiveStatus = exactBoundedDataText(effectiveStatusValue, 80).toLowerCase();
+  const phase = exactBoundedDataText(phaseValue, 80).toLowerCase();
+  const currentStep = currentStepValue === undefined || currentStepValue === null
+    ? ""
+    : exactBoundedDataText(currentStepValue, 80).toLowerCase();
+  if (!status || status !== effectiveStatus || !phase) return false;
+  if ((currentStepValue !== undefined && currentStepValue !== null && !currentStep) ||
+      [phase, currentStep].some((value) => value === "unknown" || UPDATE_APPLY_SYNTHETIC_PHASE_PATTERN.test(value))) {
+    return false;
+  }
+
+  if (status === "idle") {
+    return phase === "idle" &&
+      (!currentStep || currentStep === "idle") &&
+      dataFieldIsAbsent(requestIdValue, 160) &&
+      dataFieldIsAbsent(expectedCommitValue, 80) &&
+      dataFieldIsAbsent(installedCommitValue, 80) &&
+      (errorValue === undefined || errorValue === null) &&
+      commitVerified !== true &&
+      (commitVerified === undefined || typeof commitVerified === "boolean");
+  }
+
+  if (!UPDATE_APPLY_AUTHORITATIVE_TERMINAL_STATUSES.has(status)) return false;
+  const requestId = exactBoundedDataText(requestIdValue, 160);
+  const expectedCommit = exactBoundedDataText(expectedCommitValue, 40).toLowerCase();
+  if (!requestId || !UPDATE_APPLY_FULL_COMMIT_PATTERN.test(expectedCommit)) return false;
+  if (commitVerified !== undefined && typeof commitVerified !== "boolean") return false;
+
+  if (status === "completed") {
+    const installedCommit = exactBoundedDataText(installedCommitValue, 40).toLowerCase();
+    return phase === "completed" &&
+      commitVerified === true &&
+      UPDATE_APPLY_FULL_COMMIT_PATTERN.test(installedCommit) &&
+      installedCommit === expectedCommit &&
+      (errorValue === undefined || errorValue === null);
+  }
+
+  if (status === "failed") {
+    if (["idle", "completed", "cancelled", "canceled"].includes(phase)) return false;
+    if (!isBoundedPlainDataRecord(errorValue)) return false;
+    const category = exactBoundedDataText(ownDataField(errorValue, "category"), 80).toLowerCase();
+    return Boolean(category && !UPDATE_APPLY_SYNTHETIC_PHASE_PATTERN.test(category) && commitVerified !== true);
+  }
+
+  return ["cancelled", "canceled"].includes(phase) &&
+    commitVerified !== true &&
+    updateApplyCancellationErrorIsCompatible(errorValue);
+}
+
+function updateApplyRequestId(applyStatus) {
+  return boundedContractText(applyStatus?.request_id || applyStatus?.operation_id, 160);
+}
+
+function updateApplyExpectedCommit(applyStatus) {
+  return boundedContractText(applyStatus?.expected_commit || applyStatus?.source?.commit, 80).toLowerCase();
+}
+
+export function updateApplyReconnectTiming(applyStatus, receivedAtMs) {
+  const received = boundedFiniteNumber(receivedAtMs, 0, 0, Number.MAX_SAFE_INTEGER);
+  const staleAfterSeconds = boundedFiniteNumber(
+    applyStatus?.stale_after_seconds,
+    UPDATE_APPLY_STALE_DEFAULT_SECONDS,
+    1,
+    3600,
+  );
+  const lastProgressAgeSeconds = boundedFiniteNumber(
+    applyStatus?.last_progress_age_seconds,
+    0,
+    0,
+    staleAfterSeconds,
+  );
+  const allowanceMs = UPDATE_APPLY_POLL_INTERVAL_MS * 2;
+  const remainingMs = Math.max(0, staleAfterSeconds - lastProgressAgeSeconds) * 1000;
+  const hardDeadlineMs = received + (staleAfterSeconds * 1000) + allowanceMs;
+  return {
+    receivedAtMs: received,
+    staleAfterSeconds,
+    lastProgressAgeSeconds,
+    deadlineMs: Math.min(received + remainingMs + allowanceMs, hardDeadlineMs),
+    hardDeadlineMs,
+  };
+}
+
+export function updateApplyTransportPhase(applyStatus, transportError, timing, nowMs) {
+  if (!transportError) return "connected";
+  if (!updateApplyIsRunning(applyStatus?.status || applyStatus?.effective_status || "")) return "unknown";
+  const now = boundedFiniteNumber(nowMs, Number.MAX_SAFE_INTEGER, 0, Number.MAX_SAFE_INTEGER);
+  const deadline = boundedFiniteNumber(timing?.deadlineMs, -1, 0, Number.MAX_SAFE_INTEGER);
+  return deadline >= 0 && now <= deadline ? "reconnecting" : "unknown";
+}
+
+export function updateApplyCandidateSnapshot(updateStatus) {
+  const trustedCandidate = updateApplyTrustedCandidateRelease(updateStatus);
+  const latest = trustedCandidate.version && (trustedCandidate.commit || trustedCandidate.commit_sha)
+    ? trustedCandidate
+    : updateStatus?.latest || updateStatus?.latest_release || {};
+  return Object.freeze({
+    version: boundedContractText(latest.version || latest.latest_version, 80),
+    commit: boundedContractText(latest.commit || latest.commit_sha || latest.build_id, 80).toLowerCase(),
+    title: boundedContractText(latest.title, 240),
+  });
+}
+
+export function createUpdateApplyReconciliation(ticket, candidate, preSubmitStatus, submittedAtMs) {
+  const submitted = boundedFiniteNumber(submittedAtMs, 0, 0, Number.MAX_SAFE_INTEGER);
+  const version = boundedContractText(candidate?.version, 80);
+  const commit = boundedContractText(candidate?.commit, 80).toLowerCase();
+  const submissionId = boundedContractText(ticket?.submission_id, 80).toLowerCase();
+  const rawProof = typeof ticket?.submission_proof === "string" ? ticket.submission_proof : "";
+  const proof = boundedContractText(rawProof, UPDATE_APPLY_SUBMISSION_PROOF_LIMIT);
+  const proofExpiresAt = boundedContractText(ticket?.expires_at, 80);
+  const ticketVersion = boundedContractText(ticket?.target_version, 80);
+  const ticketCommit = boundedContractText(ticket?.target_commit, 40).toLowerCase();
+  if (
+    !version
+    || !UPDATE_APPLY_FULL_COMMIT_PATTERN.test(commit)
+    || !submitted
+    || !UPDATE_APPLY_SUBMISSION_ID_PATTERN.test(submissionId)
+    || rawProof.length > UPDATE_APPLY_SUBMISSION_PROOF_LIMIT
+    || !UPDATE_APPLY_SUBMISSION_PROOF_PATTERN.test(proof)
+    || !proofExpiresAt
+    || Number.isNaN(Date.parse(proofExpiresAt))
+    || ticketVersion !== version
+    || ticketCommit !== commit
+  ) return null;
+  return {
+    schema: UPDATE_APPLY_RECONCILIATION_SCHEMA,
+    state: "unresolved",
+    submissionId,
+    submissionProof: proof,
+    proofExpiresAt,
+    targetVersion: version,
+    targetCommit: commit,
+    preRequestId: updateApplyRequestId(preSubmitStatus),
+    preStatus: boundedContractText(preSubmitStatus?.status || preSubmitStatus?.effective_status, 80),
+    preExpectedCommit: updateApplyExpectedCommit(preSubmitStatus),
+    preUpdatedAt: boundedContractText(preSubmitStatus?.updated_at, 80),
+    submittedAtMs: submitted,
+    modalDeadlineAtMs: submitted + UPDATE_APPLY_MODAL_GRACE_MS,
+    settleWindowMs: UPDATE_APPLY_ABSENCE_SETTLE_MS,
+    successfulUnchangedReads: 0,
+    firstUnchangedAtMs: null,
+    lastUnchangedAtMs: null,
+  };
+}
+
+export function createCorruptUpdateApplyReconciliation(createdAtMs = Date.now()) {
+  const created = boundedFiniteNumber(createdAtMs, Date.now(), 1, Number.MAX_SAFE_INTEGER);
+  return {
+    schema: UPDATE_APPLY_RECONCILIATION_SCHEMA,
+    state: "reconciliation_corrupt",
+    targetVersion: "",
+    targetCommit: "",
+    submissionProof: "",
+    proofExpiresAt: "",
+    preRequestId: "",
+    preStatus: "",
+    preExpectedCommit: "",
+    preUpdatedAt: "",
+    submittedAtMs: created,
+    modalDeadlineAtMs: created + UPDATE_APPLY_MODAL_GRACE_MS,
+    settleWindowMs: UPDATE_APPLY_ABSENCE_SETTLE_MS,
+    successfulUnchangedReads: 0,
+    firstUnchangedAtMs: null,
+    lastUnchangedAtMs: null,
+    conflictRequestId: "",
+    conflictSubmissionId: "",
+    conflictCommit: "",
+    conflictUpdatedAt: "",
+  };
+}
+
+export function sanitizeUpdateApplyReconciliation(value, nowMs = Date.now()) {
+  if (!value || typeof value !== "object" || Number(value.schema) !== UPDATE_APPLY_RECONCILIATION_SCHEMA) return null;
+  const state = boundedContractText(value.state, 48);
+  if (!UPDATE_APPLY_RECONCILIATION_STATES.has(state)) return null;
+  const targetVersion = boundedContractText(value.targetVersion, 80);
+  const targetCommit = boundedContractText(value.targetCommit, 80).toLowerCase();
+  const submissionId = boundedContractText(value.submissionId, 80).toLowerCase();
+  const rawSubmissionProof = typeof value.submissionProof === "string" ? value.submissionProof : "";
+  const submissionProof = boundedContractText(rawSubmissionProof, UPDATE_APPLY_SUBMISSION_PROOF_LIMIT);
+  const proofExpiresAt = boundedContractText(value.proofExpiresAt, 80);
+  const submittedAtMs = boundedFiniteNumber(value.submittedAtMs, 0, 0, Number.MAX_SAFE_INTEGER);
+  const requiresCorrelation = state === "unresolved" || state === "conflict" || state === "recheck_required";
+  if (
+    (requiresCorrelation && (
+      !targetVersion
+      || !UPDATE_APPLY_FULL_COMMIT_PATTERN.test(targetCommit)
+      || !UPDATE_APPLY_SUBMISSION_ID_PATTERN.test(submissionId)
+      || rawSubmissionProof.length > UPDATE_APPLY_SUBMISSION_PROOF_LIMIT
+      || !UPDATE_APPLY_SUBMISSION_PROOF_PATTERN.test(submissionProof)
+      || !proofExpiresAt
+      || Number.isNaN(Date.parse(proofExpiresAt))
+    ))
+    || !submittedAtMs
+  ) return null;
+  const now = boundedFiniteNumber(nowMs, submittedAtMs, 0, Number.MAX_SAFE_INTEGER);
+  const safeSubmittedAtMs = Math.min(submittedAtMs, now);
+  const successfulUnchangedReads = Math.floor(boundedFiniteNumber(value.successfulUnchangedReads, 0, 0, 1000));
+  const firstUnchangedAtMs = value.firstUnchangedAtMs === null || value.firstUnchangedAtMs === undefined
+    ? null
+    : boundedFiniteNumber(value.firstUnchangedAtMs, null, safeSubmittedAtMs, now);
+  const lastUnchangedAtMs = value.lastUnchangedAtMs === null || value.lastUnchangedAtMs === undefined
+    ? null
+    : boundedFiniteNumber(value.lastUnchangedAtMs, null, safeSubmittedAtMs, now);
+  return {
+    schema: UPDATE_APPLY_RECONCILIATION_SCHEMA,
+    state,
+    submissionId: requiresCorrelation ? submissionId : "",
+    submissionProof: requiresCorrelation ? submissionProof : "",
+    proofExpiresAt: requiresCorrelation ? proofExpiresAt : "",
+    targetVersion,
+    targetCommit,
+    preRequestId: boundedContractText(value.preRequestId, 160),
+    preStatus: boundedContractText(value.preStatus, 80),
+    preExpectedCommit: boundedContractText(value.preExpectedCommit, 80).toLowerCase(),
+    preUpdatedAt: boundedContractText(value.preUpdatedAt, 80),
+    submittedAtMs: safeSubmittedAtMs,
+    modalDeadlineAtMs: safeSubmittedAtMs + UPDATE_APPLY_MODAL_GRACE_MS,
+    settleWindowMs: UPDATE_APPLY_ABSENCE_SETTLE_MS,
+    successfulUnchangedReads,
+    firstUnchangedAtMs,
+    lastUnchangedAtMs,
+    conflictRequestId: boundedContractText(value.conflictRequestId, 160),
+    conflictSubmissionId: boundedContractText(value.conflictSubmissionId, 80).toLowerCase(),
+    conflictCommit: boundedContractText(value.conflictCommit, 80).toLowerCase(),
+    conflictUpdatedAt: boundedContractText(value.conflictUpdatedAt, 80),
+  };
+}
+
+function createLegacyUpdateApplyReconciliation(value, nowMs) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || ![1, 2].includes(Number(value.schema))) return null;
+  const legacyState = boundedContractText(value.state, 48);
+  if (!["unresolved", "conflict", "recheck_required", "reconciliation_corrupt"].includes(legacyState)) return null;
+  const submittedAtMs = boundedFiniteNumber(value.submittedAtMs, 0, 1, Number.MAX_SAFE_INTEGER);
+  if (!submittedAtMs) return null;
+  if (legacyState === "reconciliation_corrupt") return createCorruptUpdateApplyReconciliation(nowMs);
+  return sanitizeUpdateApplyReconciliation({
+    schema: UPDATE_APPLY_RECONCILIATION_SCHEMA,
+    state: "legacy_uncorrelated",
+    submissionId: "",
+    targetVersion: "",
+    targetCommit: "",
+    submittedAtMs: Math.min(submittedAtMs, nowMs),
+  }, nowMs);
+}
+
+
+export function updateApplyReconciliationExactMatch(left, right, nowMs = Date.now()) {
+  const first = sanitizeUpdateApplyReconciliation(left, nowMs);
+  const second = sanitizeUpdateApplyReconciliation(right, nowMs);
+  if (!first || !second) return false;
+  return JSON.stringify(first) === JSON.stringify(second);
+}
+
+export function restoreUpdateApplyReconciliation(rawValue, nowMs = Date.now()) {
+  if (rawValue === null || rawValue === undefined) return null;
+  if (typeof rawValue !== "string" || rawValue.length > UPDATE_APPLY_RECONCILIATION_STORAGE_LIMIT) {
+    return createCorruptUpdateApplyReconciliation(nowMs);
+  }
+  try {
+    const parsed = JSON.parse(rawValue);
+    return sanitizeUpdateApplyReconciliation(parsed, nowMs)
+      || createLegacyUpdateApplyReconciliation(parsed, nowMs)
+      || createCorruptUpdateApplyReconciliation(nowMs);
+  } catch {
+    return createCorruptUpdateApplyReconciliation(nowMs);
+  }
+}
+
+function updateApplyRecheckRecord(record, observedAtMs) {
+  return sanitizeUpdateApplyReconciliation({
+    ...record,
+    state: "recheck_required",
+    successfulUnchangedReads: 0,
+    firstUnchangedAtMs: null,
+    lastUnchangedAtMs: null,
+  }, observedAtMs);
+}
+
+export function updateApplyRecheckCanClear(record, applyStatus) {
+  const safeRecord = sanitizeUpdateApplyReconciliation(record, Date.now());
+  if (!safeRecord || !["recheck_required", "reconciliation_corrupt", "legacy_uncorrelated"].includes(safeRecord.state)) return false;
+  return updateApplyHasAuthoritativeNoActiveAdmission(applyStatus);
+}
+
+export function resetUpdateApplyAbsenceEvidence(record) {
+  if (!record) return null;
+  return {
+    ...record,
+    successfulUnchangedReads: 0,
+    firstUnchangedAtMs: null,
+    lastUnchangedAtMs: null,
+  };
+}
+
+function updateApplyAdmissionContract(applyStatus) {
+  if (!isPlainDataRecord(applyStatus)) return null;
+  const admission = ownDataField(applyStatus, "admission");
+  if (!isBoundedPlainDataRecord(admission, 16)) return null;
+  const schemaVersion = ownDataField(admission, "schema_version");
+  const authority = exactBoundedDataText(ownDataField(admission, "authority"), 20).toLowerCase();
+  const state = exactBoundedDataText(ownDataField(admission, "state"), 80).toLowerCase();
+  const linearizable = ownDataField(admission, "linearizable");
+  const active = ownDataField(admission, "active");
+  const submissionId = exactBoundedDataText(ownDataField(admission, "submission_id"), 80).toLowerCase();
+  const requestId = exactBoundedDataText(ownDataField(admission, "request_id"), 160);
+  const targetCommit = exactBoundedDataText(ownDataField(admission, "target_commit"), 40).toLowerCase();
+  if (schemaVersion !== 2 || !["active", "inactive", "unknown"].includes(authority) || !state) return null;
+  if (authority === "active" && (linearizable !== true || active !== true)) return null;
+  if (authority === "inactive" && (linearizable !== true || active !== false)) return null;
+  if (authority === "unknown" && (linearizable === true || active !== null)) return null;
+  if (submissionId && !UPDATE_APPLY_SUBMISSION_ID_PATTERN.test(submissionId)) return null;
+  if (targetCommit && !UPDATE_APPLY_FULL_COMMIT_PATTERN.test(targetCommit)) return null;
+  return { authority, state, submissionId, requestId, targetCommit };
+}
+
+function updateApplyHasAuthoritativeNoActiveAdmission(applyStatus) {
+  const admission = updateApplyAdmissionContract(applyStatus);
+  return Boolean(
+    admission?.authority === "inactive"
+    && updateApplyIsAuthoritativeInactiveSnapshot(applyStatus),
+  );
+}
+
+function updateApplyIsAuthoritativeActiveSnapshot(applyStatus) {
+  if (!isPlainDataRecord(applyStatus) || applyStatus.schema_version !== 1) return false;
+  const admission = updateApplyAdmissionContract(applyStatus);
+  const requestId = updateApplyRequestId(applyStatus);
+  const submissionId = boundedContractText(applyStatus?.submission_id, 80).toLowerCase();
+  const expectedCommit = updateApplyExpectedCommit(applyStatus);
+  const status = boundedContractText(applyStatus?.status, 80).toLowerCase();
+  const effective = boundedContractText(applyStatus?.effective_status || status, 80).toLowerCase();
+  const phase = boundedContractText(applyStatus?.phase || applyStatus?.current_step, 80).toLowerCase();
+  const running = updateApplyIsRunning(status);
+  const stalled = effective === "stalled" && applyStatus?.is_stale === true && running;
+  const current = effective === status && applyStatus?.is_stale === false && running;
+  return Boolean(
+    admission?.authority === "active"
+    && requestId
+    && submissionId
+    && UPDATE_APPLY_SUBMISSION_ID_PATTERN.test(submissionId)
+    && UPDATE_APPLY_FULL_COMMIT_PATTERN.test(expectedCommit)
+    && admission.requestId === requestId
+    && admission.submissionId === submissionId
+    && admission.targetCommit === expectedCommit
+    && (current || stalled)
+    && phase
+    && phase !== "unknown"
+    && !UPDATE_APPLY_SYNTHETIC_PHASE_PATTERN.test(phase),
+  );
+}
+
+function classifyUpdateApplyOperation(record, applyStatus) {
+  const admission = updateApplyAdmissionContract(applyStatus);
+  const requestId = updateApplyRequestId(applyStatus);
+  const submissionId = boundedContractText(applyStatus?.submission_id, 80).toLowerCase();
+  const expectedCommit = updateApplyExpectedCommit(applyStatus);
+  const active = updateApplyIsAuthoritativeActiveSnapshot(applyStatus);
+  const status = boundedContractText(applyStatus?.status, 80).toLowerCase();
+  const authoritativeTerminal = updateApplyIsAuthoritativeInactiveSnapshot(applyStatus) && status !== "idle";
+  const terminal = authoritativeTerminal && admission?.authority === "inactive";
+  const exactIdentity = Boolean(
+    record.submissionId
+    && submissionId === record.submissionId
+    && admission?.submissionId === record.submissionId
+    && requestId
+    && requestId !== record.preRequestId
+    && admission.requestId === requestId,
+  );
+  const exactTarget = Boolean(
+    expectedCommit === record.targetCommit
+    && admission?.targetCommit === record.targetCommit,
+  );
+  const immutableForeignMutation = Boolean(
+    record.state === "conflict"
+    && record.conflictRequestId
+    && record.conflictRequestId === requestId
+    && record.conflictCommit
+    && record.conflictCommit !== expectedCommit,
+  );
+  const invalidMatchingIdentity = Boolean(
+    record.submissionId
+    && submissionId === record.submissionId
+    && expectedCommit === record.targetCommit
+    && (!requestId || requestId === record.preRequestId || admission?.requestId !== requestId),
+  );
+  return {
+    admission,
+    requestId,
+    submissionId,
+    expectedCommit,
+    active,
+    terminal,
+    foreignTerminal: authoritativeTerminal,
+    exact: exactIdentity && exactTarget && !immutableForeignMutation && (active || terminal),
+    noActive: updateApplyHasAuthoritativeNoActiveAdmission(applyStatus),
+    immutableForeignMutation,
+    invalidMatchingIdentity,
+  };
+}
+
+export function reconcileUpdateApplySubmission(record, applyStatus, observedAtMs) {
+  const safeRecord = sanitizeUpdateApplyReconciliation(record, observedAtMs);
+  if (!safeRecord) return { outcome: "none", record: null };
+
+  const observed = boundedFiniteNumber(observedAtMs, safeRecord.submittedAtMs, safeRecord.submittedAtMs, Number.MAX_SAFE_INTEGER);
+  const operation = classifyUpdateApplyOperation(safeRecord, applyStatus);
+
+  if (["reconciliation_corrupt", "legacy_uncorrelated"].includes(safeRecord.state)) {
+    return { outcome: safeRecord.state, record: safeRecord };
+  }
+
+  if (safeRecord.state === "recheck_required") {
+    return { outcome: "recheck_required", record: safeRecord };
+  }
+
+  if (safeRecord.state === "conflict") {
+    if (operation.exact) {
+      return { outcome: "accepted", record: safeRecord };
+    }
+    if (operation.immutableForeignMutation) {
+      return { outcome: "conflict", record: safeRecord };
+    }
+    if (operation.invalidMatchingIdentity) {
+      return { outcome: "conflict", record: safeRecord };
+    }
+    if (operation.active) {
+      return {
+        outcome: "conflict",
+        record: sanitizeUpdateApplyReconciliation({
+          ...safeRecord,
+          conflictRequestId: operation.requestId,
+          conflictSubmissionId: operation.submissionId,
+          conflictCommit: operation.expectedCommit,
+          conflictUpdatedAt: boundedContractText(applyStatus?.updated_at, 80),
+        }, observed),
+      };
+    }
+    if (operation.foreignTerminal || operation.noActive) {
+      return { outcome: "recheck_required", record: updateApplyRecheckRecord(safeRecord, observed) };
+    }
+    return { outcome: "conflict", record: safeRecord };
+  }
+
+  if (operation.exact) return { outcome: "accepted", record: safeRecord };
+  if (operation.invalidMatchingIdentity) return { outcome: "unresolved", record: safeRecord };
+  if (operation.noActive) return { outcome: "not_accepted", record: safeRecord };
+  if (operation.active) {
+    const conflictRecord = sanitizeUpdateApplyReconciliation({
+      ...safeRecord,
+      state: "conflict",
+      conflictRequestId: operation.requestId,
+      conflictSubmissionId: operation.submissionId,
+      conflictCommit: operation.expectedCommit,
+      conflictUpdatedAt: boundedContractText(applyStatus?.updated_at, 80),
+    }, observed);
+    return { outcome: "conflict", record: conflictRecord };
+  }
+  if (operation.foreignTerminal) {
+    return { outcome: "recheck_required", record: updateApplyRecheckRecord(safeRecord, observed) };
+  }
+  return { outcome: "unresolved", record: resetUpdateApplyAbsenceEvidence(safeRecord) };
+}
+
+export function updateApplyEffectiveStatus(updateStatus, applyStatus, transportContext = "") {
+  const status = boundedContractText(applyStatus?.effective_status || applyStatus?.status || updateStatus?.status || "unknown", 80).toLowerCase();
   if (applyStatus?.is_stale || status === "stalled") return "stalled";
-  if (transientError && updateApplyIsRunning(status)) return "reconnecting";
   if (status === "completed" && applyStatus?.expected_commit && applyStatus?.commit_verified === false) return "failed";
+  const context = transportContext && typeof transportContext === "object"
+    ? transportContext
+    : { applyError: transportContext };
+  if (context.applyError) {
+    if (UPDATE_APPLY_PRESERVED_TERMINAL_STATUSES.has(status) || status === "completed") return status;
+    if (transportContext && typeof transportContext !== "object" && updateApplyIsRunning(status)) return "reconnecting";
+    return updateApplyTransportPhase(applyStatus, context.applyError, context.reconnectTiming, context.nowMs);
+  }
   return status;
 }
 
@@ -390,41 +993,78 @@ function isUpdateApplyAttentionState(value) {
   return UPDATE_APPLY_ATTENTION_STATES.has(normalizedUpdateApplyState(value));
 }
 
-export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "ru", transientError = "") {
-  const effective = updateApplyEffectiveStatus(updateStatus, applyStatus, transientError);
+export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "ru", transportContext = "") {
+  const context = transportContext && typeof transportContext === "object"
+    ? transportContext
+    : { applyError: transportContext };
+  const effective = updateApplyEffectiveStatus(updateStatus, applyStatus, context);
   const comparison = updateStatus?.comparison || {};
   const status = comparison.status || updateStatus?.status || effective || "unknown";
   const normalizedEffective = normalizedUpdateApplyState(effective);
   const normalizedStatus = normalizedUpdateApplyState(status);
   const normalizedUpdateStatus = normalizedUpdateApplyState(updateStatus?.status);
-  const running = updateApplyIsRunning(applyStatus?.status || "");
+  const lastKnownRunning = updateApplyIsRunning(applyStatus?.status || "");
+  const running = lastKnownRunning && normalizedEffective !== "unknown";
+  const stateUnknown = Boolean(context.unresolvedSubmission) || (normalizedEffective === "unknown" && Boolean(context.applyError));
   const trustedCandidate = updateStatus?.trusted_apply_candidate || {};
   const freshTrustedCandidateAvailable = Boolean(trustedCandidate.fresh && trustedCandidate.can_apply_from_ui && trustedCandidate.latest);
   const liveCheckFailedWithCandidate = normalizedUpdateStatus === "check_failed" && freshTrustedCandidateAvailable;
-  const canApply = Boolean((updateStatus?.can_apply_from_ui || freshTrustedCandidateAvailable) && !running && !applyStatus?.is_stale);
+  const canApply = Boolean((updateStatus?.can_apply_from_ui || freshTrustedCandidateAvailable) && !lastKnownRunning && !applyStatus?.is_stale && !stateUnknown && !context.unresolvedSubmission);
   const lastSummary = applyStatus?.last_apply_summary || null;
   const currentVersion = updateApplyReleaseValue(updateStatus, "currentVersion");
   const availableVersion = updateApplyReleaseValue(updateStatus, "availableVersion");
   const targetCommit = updateApplyReleaseValue(updateStatus, "targetCommit") || applyStatus?.expected_commit || applyStatus?.source?.commit || "";
   const installedCommit = applyStatus?.installed_commit || updateApplyReleaseValue(updateStatus, "installedCommit");
-  const commitVerified = Boolean(
-    applyStatus?.commit_verified ||
-    lastSummary?.commit_verified ||
-    (installedCommit && targetCommit && installedCommit === targetCommit)
+  const operationExpectedCommit = applyStatus?.expected_commit || lastSummary?.expected_commit || "";
+  const operationInstalledCommit = applyStatus?.installed_commit || lastSummary?.installed_commit || installedCommit;
+  const operationCommitVerified = Boolean(
+    operationExpectedCommit &&
+    operationInstalledCommit &&
+    operationExpectedCommit === operationInstalledCommit &&
+    applyStatus?.commit_verified !== false &&
+    lastSummary?.commit_verified !== false
   );
-  const terminalSuccess = effective === "completed" && commitVerified;
+  const comparisonCommitVerified = Boolean(installedCommit && targetCommit && installedCommit === targetCommit);
+  const commitVerified = effective === "completed"
+    ? operationCommitVerified
+    : Boolean(applyStatus?.commit_verified || lastSummary?.commit_verified || comparisonCommitVerified);
+  const metadataStatusValue = updateApplyReleaseValue(updateStatus, "metadataStatus") || applyStatus?.release_identity?.metadata_status;
+  const identityComplete = normalizedUpdateApplyState(metadataStatusValue) === "complete";
+  const terminalSuccess = effective === "completed" && commitVerified && identityComplete;
+  const presentedTerminalSuccess = terminalSuccess && !stateUnknown;
+  const terminalVerificationIncomplete = effective === "completed" && !terminalSuccess;
   const current = status === "current" && !canApply && !running;
   const available = status === "update_available" && canApply;
-  const failed = !liveCheckFailedWithCandidate && (isUpdateApplyAttentionState(normalizedEffective) ||
+  const suppressUpdateCheckBlocker = lastKnownRunning && Boolean(context.applyError || running);
+  const helperFailure = isUpdateApplyAttentionState(normalizedEffective) && normalizedEffective !== "reconnecting";
+  const updateCheckFailure = !suppressUpdateCheckBlocker && !stateUnknown && (
     isUpdateApplyAttentionState(normalizedStatus) ||
     isUpdateApplyAttentionState(normalizedUpdateStatus) ||
     UPDATE_CHECK_BLOCKING_STATES.has(normalizedEffective) ||
     UPDATE_CHECK_BLOCKING_STATES.has(normalizedStatus) ||
-    UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus));
-  const severity = failed ? "blocked" : running || available || liveCheckFailedWithCandidate || transientError ? "warning" : "ok";
-  const headlineKey = terminalSuccess ? "completed" : running ? "running" : failed ? "blocked" : available || liveCheckFailedWithCandidate ? "available" : current ? "current" : "current";
-  const headline = t.updateApplyHeadlines?.[headlineKey] || maintenanceStatusText(terminalSuccess ? "completed" : status, t);
-  const recoveryStatus = isUpdateApplyAttentionState(normalizedEffective) || UPDATE_CHECK_BLOCKING_STATES.has(normalizedEffective)
+    UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus)
+  );
+  const failed = terminalVerificationIncomplete || helperFailure || (!liveCheckFailedWithCandidate && updateCheckFailure);
+  const severity = failed ? "blocked" : running || stateUnknown || available || liveCheckFailedWithCandidate || context.updateError ? "warning" : "ok";
+  const headlineKey = stateUnknown
+    ? "unknown"
+    : presentedTerminalSuccess
+    ? "completed"
+    : running
+      ? "running"
+      : failed
+          ? "blocked"
+          : available || liveCheckFailedWithCandidate
+            ? "available"
+            : current
+              ? "current"
+              : "unknown";
+  const headline = t.updateApplyHeadlines?.[headlineKey] || maintenanceStatusText(presentedTerminalSuccess ? "completed" : status, t);
+  const recoveryStatus = terminalVerificationIncomplete
+    ? (commitVerified ? "identity_incomplete" : "failed")
+    : stateUnknown
+      ? "unknown"
+      : isUpdateApplyAttentionState(normalizedEffective) || UPDATE_CHECK_BLOCKING_STATES.has(normalizedEffective)
     ? normalizedEffective
     : isUpdateApplyAttentionState(normalizedUpdateStatus) || UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus)
       ? normalizedUpdateStatus
@@ -436,11 +1076,11 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const recoverySummary = liveCheckFailedWithCandidate
     ? (t.updateApplyRecoveryLiveCheckFailedWithSnapshot || updateApplyRecoveryText("provider_unavailable", applyStatus, t))
     : updateApplyRecoveryText(recoveryStatus, applyStatus, t);
-  const summary = failed || liveCheckFailedWithCandidate ? recoverySummary : (t.updateApplySummaries?.[headlineKey] || recoverySummary);
-  const updateResult = terminalSuccess
+  const summary = failed || liveCheckFailedWithCandidate || stateUnknown ? recoverySummary : (t.updateApplySummaries?.[headlineKey] || recoverySummary);
+  const updateResult = presentedTerminalSuccess
     ? (t.updateApplyResults?.completedVerified || headline)
     : t.updateApplyResults?.[headlineKey] || headline;
-  const finishedAt = lastSummary?.finished_at || (terminalSuccess ? applyStatus?.updated_at : "") || updateApplyReleaseValue(updateStatus, "installedAt");
+  const finishedAt = lastSummary?.finished_at || (presentedTerminalSuccess ? applyStatus?.updated_at : "") || updateApplyReleaseValue(updateStatus, "installedAt");
   const elapsed = running
     ? formatDurationSeconds(applyStatus?.elapsed_seconds)
     : lastSummary?.elapsed_seconds
@@ -467,7 +1107,7 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     severity,
     headline,
     summary,
-    showHeroSummary: !terminalSuccess,
+    showHeroSummary: !presentedTerminalSuccess,
     updateResult,
     currentVersion,
     availableVersion,
@@ -481,13 +1121,15 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     commitVerified,
     installedCommitShort: shortCommit(installedCommit) || "-",
     targetCommitShort: shortCommit(targetCommit) || "-",
-    metadataStatus: releaseConfirmedText(updateApplyReleaseValue(updateStatus, "metadataStatus") || applyStatus?.release_identity?.metadata_status, t),
+    metadataStatus: releaseConfirmedText(metadataStatusValue, t),
     canApply,
     canCheck: true,
-    showApplyButton: canApply || running,
+    showApplyButton: canApply || lastKnownRunning || Boolean(context.unresolvedSubmission),
     timeline: safeTimeline.slice(0, 5),
     detailUnavailable,
     diagnosticsRows: updateApplyTechnicalRows(updateStatus, applyStatus, t),
+    stateUnknown,
+    reconnecting: normalizedEffective === "reconnecting",
   };
 }
 
@@ -639,6 +1281,15 @@ export function formatMaintenanceMessage(value, t, lang = "ru", context = "statu
     return t.maintenanceActionFallback || t.maintenanceMessageFallback || maintenanceStatusText("unknown", t);
   }
   return t.maintenanceMessageFallback || maintenanceStatusText("unknown", t);
+}
+
+export function updateApplyErrorMessages(error, t, lang = "ru") {
+  if (!error || typeof error !== "object") return [];
+  const messages = [
+    error.message ? formatMaintenanceMessage(error.message, t, lang, "error") : "",
+    error.operator_action ? formatMaintenanceMessage(error.operator_action, t, lang, "action") : "",
+  ].filter(Boolean);
+  return [...new Set(messages)];
 }
 
 export function buildUpdateApplyConfirmation(t, updateStatus) {
@@ -883,7 +1534,7 @@ export function safeMetadataRows(metadata) {
 }
 
 export function parseErrorDetail(message) {
-  if (!message) return null;
+  if (typeof message !== "string" || !message) return null;
   try {
     return JSON.parse(message);
   } catch {
@@ -891,26 +1542,135 @@ export function parseErrorDetail(message) {
   }
 }
 
-export function humanErrorText(message, fallback) {
-  if (!message) return fallback;
-  const detail = parseErrorDetail(message);
-  const value = detail?.detail ?? detail;
+const HUMAN_ERROR_INPUT_LIMIT = 4096;
+const HUMAN_ERROR_OUTPUT_LIMIT = 240;
+const HUMAN_ERROR_MAX_CONTAINER_DEPTH = 2;
+const HUMAN_ERROR_MAX_ARRAY_ITEMS = 4;
+const HUMAN_ERROR_ALLOWLISTED_FIELDS = ["detail", "summary", "error", "message", "msg"];
+const HUMAN_ERROR_INVALID_DATA = Symbol("human-error-invalid-data");
+
+function normalizedHumanErrorFallback(fallback) {
+  return String(fallback || "")
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, HUMAN_ERROR_OUTPUT_LIMIT);
+}
+
+function safeHumanErrorCandidate(value) {
+  const raw = typeof value === "string" ? value : "";
+  if (!raw || raw.length > HUMAN_ERROR_OUTPUT_LIMIT) return "";
+  const text = raw
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text || text.length > HUMAN_ERROR_OUTPUT_LIMIT) return "";
+
+  const unsafePatterns = [
+    /<(?:!doctype|\?xml|\/?[a-z][^>]*)>/i,
+    /\b(?:traceback|stack\s+trace|exception\s+in\s+thread)\b/i,
+    /\b(?:typeerror|referenceerror|syntaxerror|internalservererror)\s*:/i,
+    /\b(?:502\s+bad\s+gateway|503\s+service\s+unavailable|504\s+gateway\s+timeout)\b/i,
+    /\bfile\s+"[^"]+"\s*,\s*line\s+\d+/i,
+    /\bat\s+[^\s()]+\s*\([^)]*:\d+(?::\d+)?\)/i,
+    /\bbearer\s+[a-z0-9._~+\/-]{6,}/i,
+    /["']?(?:authorization|password|passwd|access[_ -]?token|refresh[_ -]?token|api[_ -]?key|cookie|secret)["']?\s*[:=]\s*\S+/i,
+    /\b[a-z]:\\/i,
+    /\\\\[a-z0-9_.-]+\\/i,
+    /\bfile:\/\//i,
+    /(?:^|\s)\/(?:volume\d+|app|var|etc|proc|sys|root|home|tmp|usr|opt|run|storage|data)(?:\/|\b)/i,
+    /\bhttps?:\/\//i,
+    /\b(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}\b/,
+    /\[[0-9a-f:]+\]:\d{1,5}\b/i,
+    /\b(?:api|web|nginx|postgres|redis|recorder|update-helper|setup-helper)(?:[-_.][a-z0-9-]+)*:\d{1,5}\b/i,
+    /^[a-z][a-z0-9]*(?:[_-][a-z0-9]+)+$/i,
+  ];
+  return unsafePatterns.some((pattern) => pattern.test(text)) ? "" : text;
+}
+
+function humanErrorArrayValues(value) {
+  try {
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (!lengthDescriptor || !Object.prototype.hasOwnProperty.call(lengthDescriptor, "value")) return HUMAN_ERROR_INVALID_DATA;
+    const length = lengthDescriptor.value;
+    if (!Number.isSafeInteger(length) || length < 0) return HUMAN_ERROR_INVALID_DATA;
+    const items = [];
+    for (let index = 0; index < Math.min(length, HUMAN_ERROR_MAX_ARRAY_ITEMS); index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor) continue;
+      if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) return HUMAN_ERROR_INVALID_DATA;
+      items.push(descriptor.value);
+    }
+    return items;
+  } catch {
+    return HUMAN_ERROR_INVALID_DATA;
+  }
+}
+
+function extractHumanErrorData(value, containerDepth = 0) {
   if (typeof value === "string") return value;
   if (Array.isArray(value)) {
-    return value
-      .map((item) => item?.msg || item?.message || "")
-      .filter(Boolean)
-      .join("; ") || fallback;
+    if (containerDepth > HUMAN_ERROR_MAX_CONTAINER_DEPTH) return HUMAN_ERROR_INVALID_DATA;
+    const items = humanErrorArrayValues(value);
+    if (items === HUMAN_ERROR_INVALID_DATA) return HUMAN_ERROR_INVALID_DATA;
+    const messages = [];
+    for (const item of items) {
+      const candidate = extractHumanErrorData(item, containerDepth + 1);
+      if (candidate === HUMAN_ERROR_INVALID_DATA) return HUMAN_ERROR_INVALID_DATA;
+      if (candidate) messages.push(candidate);
+    }
+    return messages.join("; ");
   }
-  if (value && typeof value === "object") {
-    if (typeof value.summary === "string") return value.summary;
-    if (typeof value.error === "string") return value.error;
-    if (typeof value.message === "string") return value.message;
-    if (typeof value.error_category === "string") return value.error_category;
-    if (value.retry_after_seconds !== undefined) return `${fallback} (${value.retry_after_seconds}s)`;
+  if (!isPlainDataRecord(value) || containerDepth > HUMAN_ERROR_MAX_CONTAINER_DEPTH || !isBoundedPlainDataRecord(value)) {
+    return HUMAN_ERROR_INVALID_DATA;
   }
-  if (!message.startsWith("{")) return message;
-  return fallback;
+
+  for (const key of HUMAN_ERROR_ALLOWLISTED_FIELDS) {
+    const fieldValue = ownDataField(value, key);
+    if (fieldValue === UPDATE_APPLY_UNSAFE_DATA_FIELD) return HUMAN_ERROR_INVALID_DATA;
+    if (fieldValue === undefined || fieldValue === null || fieldValue === "") continue;
+    const candidate = extractHumanErrorData(fieldValue, containerDepth + 1);
+    if (candidate === HUMAN_ERROR_INVALID_DATA) return HUMAN_ERROR_INVALID_DATA;
+    if (candidate) return candidate;
+  }
+  return "";
+}
+
+function boundedHumanErrorRetrySeconds(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 && value <= 3600 ? Math.floor(value) : null;
+  }
+  if (typeof value !== "string" || value.length > 16 || !/^\d+(?:\.\d+)?$/.test(value.trim())) return null;
+  const parsed = Number(value.trim());
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 3600 ? Math.floor(parsed) : null;
+}
+
+function humanErrorRetryText(value, safeFallback) {
+  if (!isBoundedPlainDataRecord(value)) return "";
+  const retryValue = ownDataField(value, "retry_after_seconds");
+  if (retryValue === UPDATE_APPLY_UNSAFE_DATA_FIELD) return "";
+  const retryAfterSeconds = boundedHumanErrorRetrySeconds(retryValue);
+  if (retryAfterSeconds === null) return "";
+  return safeHumanErrorCandidate(`${safeFallback} (${retryAfterSeconds}s)`);
+}
+
+export function humanErrorText(message, fallback) {
+  const safeFallback = normalizedHumanErrorFallback(fallback);
+  let value = message;
+  if (typeof message === "string") {
+    if (!message || message.length > HUMAN_ERROR_INPUT_LIMIT) return safeFallback;
+    const parsed = parseErrorDetail(message);
+    value = parsed ?? message;
+  } else if (!Array.isArray(message) && !isPlainDataRecord(message)) {
+    return safeFallback;
+  }
+
+  const candidate = extractHumanErrorData(value);
+  if (candidate === HUMAN_ERROR_INVALID_DATA) return safeFallback;
+  if (candidate) return safeHumanErrorCandidate(candidate) || safeFallback;
+  const retryText = humanErrorRetryText(value, safeFallback);
+  if (retryText) return retryText;
+  return safeFallback;
 }
 
 export function recordingFormatForProfile(profile) {

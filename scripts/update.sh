@@ -33,6 +33,11 @@ RELEASE_IDENTITY_HOST_STATUS=""
 RELEASE_IDENTITY_API_STATUS=""
 RELEASE_IDENTITY_API_VISIBLE=0
 RELEASE_IDENTITY_COMMIT_VERIFIED=0
+UPDATE_BOOTSTRAP_IMAGE=""
+UPDATE_BOOTSTRAP_STAGE_DIR=""
+UPDATE_BOOTSTRAP_GATE_PATH=""
+UPDATE_HELPER_IMAGE_PREPARED=0
+UPDATE_HELPER_REFRESH_SCHEDULED=0
 
 usage() {
   cat <<'EOF'
@@ -77,12 +82,13 @@ metadata_time() {
 
 progress_step_name() {
   case "$1" in
-    init|validate_app_dir|compose_detection|preflight_preservation) printf preflight ;;
+    init|validate_app_dir|compose_detection|preflight_preservation|permission_preflight) printf preflight ;;
     acquire) printf acquire_source ;;
     extract) printf extracting ;;
     validate_source_tree) printf validating_source ;;
     overlay) printf overlay ;;
     compose_config) printf compose_config ;;
+    helper_bootstrap) printf rebuilding ;;
     rebuild_recreate) printf rebuilding ;;
     health_check) printf health_check ;;
     metadata_write|postflight_preservation) printf commit_verification ;;
@@ -222,6 +228,12 @@ cleanup() {
   fi
   if [ -n "$TMP_ROOT" ] && [ -d "$TMP_ROOT" ]; then
     rm -rf "$TMP_ROOT"
+  fi
+  if [ -n "$UPDATE_BOOTSTRAP_STAGE_DIR" ] && [ -d "$UPDATE_BOOTSTRAP_STAGE_DIR" ]; then
+    rm -rf "$UPDATE_BOOTSTRAP_STAGE_DIR" 2>/dev/null || true
+  fi
+  if [ -n "$UPDATE_BOOTSTRAP_IMAGE" ] && command_exists docker; then
+    docker image rm -f "$UPDATE_BOOTSTRAP_IMAGE" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT HUP INT TERM
@@ -547,6 +559,8 @@ validate_source_tree() {
   [ -f "$source/deploy/nginx/default.conf" ] || fail "Source tree is missing deploy/nginx/default.conf."
   [ -f "$source/scripts/install.sh" ] || fail "Source tree is missing scripts/install.sh."
   [ -f "$source/scripts/km-vms-compose-common.sh" ] || fail "Source tree is missing scripts/km-vms-compose-common.sh."
+  [ -f "$source/scripts/km-vms-permission-gate.sh" ] || fail "Source tree is missing scripts/km-vms-permission-gate.sh."
+  [ -f "$source/scripts/km-vms-update-helper-bridge.py" ] || fail "Source tree is missing scripts/km-vms-update-helper-bridge.py."
   [ -f "$source/docs/INSTALL.md" ] || fail "Source tree is missing docs/INSTALL.md."
   [ -f "$source/release/km-vms-release.json" ] || fail "Source tree is missing release/km-vms-release.json."
   if [ -f "$source/scripts/update.sh" ]; then
@@ -661,6 +675,124 @@ overlay_source() {
   for relative in apps deploy docs release scripts docker-compose.yml docker-compose.pytest.yml .dockerignore .gitignore .env.example; do
     copy_allowed_path "$relative"
   done
+}
+
+helper_host_app_dir() {
+  host_app_dir="${KM_VMS_UPDATE_HOST_APP_DIR:-}"
+  [ -n "$host_app_dir" ] || fail "KM_VMS_UPDATE_HOST_APP_DIR is required for helper bootstrap."
+  case "$host_app_dir" in
+    /*) ;;
+    *) fail "KM_VMS_UPDATE_HOST_APP_DIR must be an absolute host path." ;;
+  esac
+  [ -d "$host_app_dir" ] || fail "Host app directory is not mounted inside update-helper: $host_app_dir"
+  [ -f "$host_app_dir/docker-compose.yml" ] || fail "Host app directory is missing docker-compose.yml."
+  printf '%s\n' "$host_app_dir"
+}
+
+prepare_permission_gate_runtime() {
+  [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] || return 0
+  [ -n "$UPDATE_BOOTSTRAP_IMAGE" ] && return 0
+  PHASE="permission_preflight"
+  write_helper_progress "running" "Preparing target permission inspection runtime."
+  command_exists docker || fail "Docker CLI is required for helper permission bootstrap."
+  docker version >/dev/null 2>&1 || fail "Docker daemon is unavailable for helper permission bootstrap."
+  host_app_dir=$(helper_host_app_dir)
+  bootstrap_root="$host_app_dir/data/update-control"
+  mkdir -p "$bootstrap_root" || fail "Cannot create permission bootstrap root."
+  UPDATE_BOOTSTRAP_STAGE_DIR=$(mktemp -d "$bootstrap_root/.permission-bootstrap.XXXXXX") ||
+    fail "Cannot create permission bootstrap staging directory."
+  cp "$TMP_ROOT/source/scripts/km-vms-permission-gate.sh" "$UPDATE_BOOTSTRAP_STAGE_DIR/km-vms-permission-gate.sh" ||
+    fail "Cannot stage trusted target permission gate."
+  chmod 0755 "$UPDATE_BOOTSTRAP_STAGE_DIR/km-vms-permission-gate.sh" ||
+    fail "Cannot set trusted permission gate mode."
+  UPDATE_BOOTSTRAP_GATE_PATH="$UPDATE_BOOTSTRAP_STAGE_DIR/km-vms-permission-gate.sh"
+  bootstrap_suffix=$(printf '%s' "${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-run-$$}" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_.-')
+  [ -n "$bootstrap_suffix" ] || bootstrap_suffix="run-$$"
+  UPDATE_BOOTSTRAP_IMAGE="km-vms-update-bootstrap:$bootstrap_suffix"
+  docker build -t "$UPDATE_BOOTSTRAP_IMAGE" "$TMP_ROOT/source/apps/update-helper" >/dev/null ||
+    fail "Cannot build target permission inspection runtime."
+  docker run --rm "$UPDATE_BOOTSTRAP_IMAGE" sh -c 'command -v getfacl >/dev/null 2>&1 && getfacl --version >/dev/null 2>&1' ||
+    fail "Target permission inspection runtime does not provide working getfacl."
+}
+
+run_trusted_permission_gate() {
+  contract="$1"
+  action="$2"
+  trusted_gate="$TMP_ROOT/source/scripts/km-vms-permission-gate.sh"
+  [ -f "$trusted_gate" ] || fail "Trusted source permission gate is missing."
+  if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then
+    prepare_permission_gate_runtime
+    host_app_dir=$(helper_host_app_dir)
+    if [ "$contract" = "existing" ]; then
+      docker run --rm \
+        -v "$host_app_dir:$host_app_dir" \
+        -w "$host_app_dir" \
+        "$UPDATE_BOOTSTRAP_IMAGE" \
+        sh "$UPDATE_BOOTSTRAP_GATE_PATH" --preflight-existing "$action" --app-dir "$host_app_dir"
+    else
+      docker run --rm \
+        -v "$host_app_dir:$host_app_dir" \
+        -w "$host_app_dir" \
+        "$UPDATE_BOOTSTRAP_IMAGE" \
+        sh "$UPDATE_BOOTSTRAP_GATE_PATH" "$action" --app-dir "$host_app_dir"
+    fi
+    return $?
+  fi
+  if [ "$contract" = "existing" ]; then
+    sh "$trusted_gate" --preflight-existing "$action" --app-dir "$APP_DIR"
+  else
+    sh "$trusted_gate" "$action" --app-dir "$APP_DIR"
+  fi
+}
+
+preflight_permission_policy() {
+  PHASE="permission_preflight"
+  write_helper_progress "running" "Validating the existing product tree before target overlay."
+  run_trusted_permission_gate existing --fix ||
+    fail "Pre-overlay existing-tree permission validation failed."
+}
+
+apply_permission_policy() {
+  PHASE="overlay"
+  write_helper_progress "running" "Hardening and validating the complete target product tree."
+  run_trusted_permission_gate target --fix ||
+    fail "Post-overlay target-tree permission hardening failed."
+}
+
+prepare_update_helper_image() {
+  [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] || return 0
+  PHASE="helper_bootstrap"
+  write_helper_progress "running" "Building the target update-helper image without replacing the active helper."
+  (
+    cd "$APP_DIR"
+    compose_with_archive_roots build update-helper
+    compose_with_archive_roots run --rm --no-deps update-helper \
+      sh -c 'command -v getfacl >/dev/null 2>&1 && getfacl --version >/dev/null 2>&1'
+  ) || fail "Target update-helper image build or ACL runtime verification failed."
+  UPDATE_HELPER_IMAGE_PREPARED=1
+}
+
+schedule_update_helper_recreate() {
+  [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] || return 0
+  [ "$UPDATE_HELPER_IMAGE_PREPARED" = "1" ] || fail "Target update-helper image was not prepared."
+  request_id="${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}"
+  printf '%s' "$request_id" | grep -Eq '^update-[0-9a-fA-F]{32}$' ||
+    fail "A canonical update request id is required for helper refresh handoff."
+  host_app_dir=$(helper_host_app_dir)
+  bridge_script="$host_app_dir/scripts/km-vms-update-helper-bridge.py"
+  [ -f "$bridge_script" ] || fail "Target update-helper bridge is missing."
+  bootstrap_output=$(
+    cd "$APP_DIR"
+    compose_with_archive_roots run --rm --no-deps update-helper-bootstrap \
+      python3 "$bridge_script" bootstrap --require-request-id "$request_id"
+  ) || fail "Cannot schedule update-helper refresh handoff."
+  printf '%s\n' "$bootstrap_output" | grep -Fq "update_helper_request_id=$request_id" ||
+    fail "Update-helper refresh handoff did not acknowledge the active request."
+  if printf '%s\n' "$bootstrap_output" | grep -Eq '^update_helper_bootstrap=(PASS|ALREADY_SCHEDULED)$'; then
+    UPDATE_HELPER_REFRESH_SCHEDULED=1
+    return 0
+  fi
+  fail "Update-helper refresh handoff was not scheduled."
 }
 
 compose_config() {
@@ -904,9 +1036,12 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 confirm "Apply KM VMS update now?"
+preflight_permission_policy
 overlay_source
+apply_permission_policy
 write_release_identity "precompose"
 compose_config
+prepare_update_helper_image
 rebuild_recreate
 health_check
 if apply_generated_archive_roots_compose_if_needed "$ARCHIVE_ROOTS_COMPOSE_WAS_PRESENT"; then
@@ -916,6 +1051,7 @@ write_source_provenance
 write_release_identity
 verify_api_visible_release_identity
 postflight_preservation
+schedule_update_helper_recreate
 PHASE="metadata_write"
 write_helper_progress "running" "Writing successful update metadata."
 write_update_metadata "success" ""

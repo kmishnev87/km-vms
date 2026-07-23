@@ -15,12 +15,64 @@ def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+PERMISSION_EXECUTABLE_FIXTURE_FILES = (
+    "scripts/install.sh",
+    "scripts/km-vms-adopt-release-identity.sh",
+    "scripts/km-vms-compose-common.sh",
+    "scripts/km-vms-permission-gate.sh",
+    "scripts/km-vms-publish-github-release.sh",
+    "scripts/km-vms-release-cycle.sh",
+    "scripts/km-vms-restart.sh",
+    "scripts/km-vms-setup-activation-helper.sh",
+    "scripts/km-vms-storage-apply.sh",
+    "scripts/km-vms-storage-discovery.sh",
+    "scripts/run_backend_tests.sh",
+    "scripts/update.sh",
+)
+
+
+def _write_safe_getfacl(bin_dir: Path) -> None:
+    tool = bin_dir / "getfacl"
+    tool.write_text(
+        "#!/usr/bin/env sh\n"
+        "printf 'user::rwx\ngroup::r-x\nother::r-x\n'\n",
+        encoding="utf-8",
+    )
+    os.chmod(tool, 0o755)
+
+
+def _write_permission_chain_fixture(root: Path) -> None:
+    (root / "apps/update-helper").mkdir(parents=True, exist_ok=True)
+    (root / "deploy").mkdir(parents=True, exist_ok=True)
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    (root / "release").mkdir(parents=True, exist_ok=True)
+    (root / "scripts").mkdir(parents=True, exist_ok=True)
+    dockerfile = root / "apps/update-helper/Dockerfile"
+    if not dockerfile.exists():
+        dockerfile.write_text("FROM docker:27-cli\n", encoding="utf-8")
+    helper = root / "scripts/km-vms-update-helper.py"
+    if not helper.exists():
+        helper.write_text("# fixture\n", encoding="utf-8")
+    bridge = root / "scripts/km-vms-update-helper-bridge.py"
+    if not bridge.exists():
+        bridge.write_text(read("scripts/km-vms-update-helper-bridge.py"), encoding="utf-8")
+    os.chmod(bridge, 0o644)
+    for relative in PERMISSION_EXECUTABLE_FIXTURE_FILES:
+        path = root / relative
+        if relative == "scripts/km-vms-permission-gate.sh":
+            path.write_text(read(relative), encoding="utf-8")
+        elif not path.exists():
+            path.write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+        os.chmod(path, 0o755)
+
+
 def _write_update_shell_fixture(tmp_path: Path, *, compose_function: str, commit: str = "b" * 40) -> tuple[Path, Path, Path]:
     script = read("scripts/update.sh")
     app = tmp_path / "app"
     source = tmp_path / "source"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
+    _write_safe_getfacl(bin_dir)
     for root in (app, source):
         (root / "apps/api").mkdir(parents=True)
         (root / "apps/web").mkdir(parents=True)
@@ -38,6 +90,7 @@ def _write_update_shell_fixture(tmp_path: Path, *, compose_function: str, commit
         (root / "scripts/km-vms-compose-common.sh").write_text(compose_function + "\n", encoding="utf-8")
         (root / "docs/INSTALL.md").write_text("# install\n", encoding="utf-8")
         (root / "release/km-vms-release.json").write_text('{"schema_version":1,"version":"0.7.1"}\n', encoding="utf-8")
+        _write_permission_chain_fixture(root)
     (source / "scripts/update.sh").write_text(script, encoding="utf-8")
     (app / "scripts/update.sh").write_text(script, encoding="utf-8")
     (app / ".env").write_text("HTTP_PORT=18183\nCOMPOSE_PROJECT_NAME=kmvmsfixture\n", encoding="utf-8")
@@ -165,10 +218,18 @@ def test_update_helper_classifies_health_check_failure_from_metadata(tmp_path):
     (tmp_path / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "failed_phase": "health_check"}), encoding="utf-8")
     exc = helper.classify_apply_failure(tmp_path, "health stderr")
     assert exc.category == "health_check_failed"
-    assert "health stderr" in str(exc)
+    assert str(exc) == "Update health check failed."
+    assert "health stderr" not in str(exc)
 
     (tmp_path / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "failed_phase": "rebuild_recreate"}), encoding="utf-8")
     assert helper.classify_apply_failure(tmp_path, "apply stderr").category == "docker_build_failed"
+    (tmp_path / ".km-vms-update.json").unlink()
+    generic = helper.classify_apply_failure(tmp_path, "/volume/private/raw-stderr-marker")
+    assert generic.category == "apply_failed"
+    assert str(generic) == "Update apply failed."
+    assert "/volume/private/raw-stderr-marker" not in json.dumps(
+        helper.error_payload("helper_exception", "/volume/private/raw-stderr-marker")
+    )
 
 
 def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tmp_path, monkeypatch):
@@ -214,6 +275,8 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr(helper, "run_child_with_progress", fake_run_child)
+    published = []
+    monkeypatch.setattr(helper, "publish_terminal", lambda request_arg, status: published.append((request_arg, status)))
     request = {
         "schema_version": 1,
         "request_id": "stage609-pin",
@@ -231,9 +294,10 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
     }
 
     assert helper.run_update(request) == 0
+    assert published and published[0][1]["status"] == "completed"
     assert commands[0][:6] == ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", expected]
     assert "main" not in commands[0]
-    status = json.loads((control_dir / "update-status.json").read_text(encoding="utf-8"))
+    status = published[0][1]
     assert status["status"] == "completed"
     assert status["commit_verified"] is True
     assert status["installed_commit"] == expected
@@ -291,6 +355,8 @@ def test_update_helper_uses_container_compose_override_not_host_only_path(tmp_pa
         return SimpleNamespace(returncode=0, stderr="")
 
     monkeypatch.setattr(helper, "run_child_with_progress", fake_run_child)
+    published = []
+    monkeypatch.setattr(helper, "publish_terminal", lambda request_arg, status: published.append((request_arg, status)))
     request = {
         "schema_version": 1,
         "request_id": "stage651-compose-env",
@@ -308,6 +374,7 @@ def test_update_helper_uses_container_compose_override_not_host_only_path(tmp_pa
     }
 
     assert helper.run_update(request) == 0
+    assert published and published[0][1]["status"] == "completed"
     assert seen_compose_values == ["docker-compose", "docker-compose"]
 
 
@@ -445,6 +512,8 @@ def test_update_script_validates_source_app_paths_and_rejects_traversal_and_syml
         "Source tree is missing deploy/nginx/default.conf",
         "Source tree is missing scripts/install.sh",
         "Source tree is missing scripts/km-vms-compose-common.sh",
+        "Source tree is missing scripts/km-vms-permission-gate.sh",
+        "Source tree is missing scripts/km-vms-update-helper-bridge.py",
         "Source tree is missing docs/INSTALL.md",
         "Source tree is missing release/km-vms-release.json",
         "Source tree includes scripts/update.sh",
@@ -488,11 +557,18 @@ def test_update_script_locking_preservation_dry_run_and_metadata_contracts():
     assert "GITHUB_TOKEN" not in metadata_block
     assert "KM_VMS_GITHUB_TOKEN" not in metadata_block
 
+    permission_preflight_i = script.index("preflight_permission_policy\n")
     overlay_i = script.index("overlay_source\n")
     precompose_identity_i = script.index('write_release_identity "precompose"\n')
     compose_config_i = script.index("compose_config\n")
     final_identity_i = script.index("write_release_identity\n")
-    assert overlay_i < precompose_identity_i < compose_config_i < final_identity_i
+    assert (
+        permission_preflight_i
+        < overlay_i
+        < precompose_identity_i
+        < compose_config_i
+        < final_identity_i
+    )
     assert "Release identity path is a directory and cannot be mounted by Docker Compose" in script
 
 
@@ -505,6 +581,7 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
         app.mkdir()
         source.mkdir()
         bin_dir.mkdir()
+        _write_safe_getfacl(bin_dir)
         for root in (app, source):
             (root / "apps/api").mkdir(parents=True)
             (root / "apps/web").mkdir(parents=True)
@@ -527,6 +604,7 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
             )
             (root / "docs/INSTALL.md").write_text("# install\n", encoding="utf-8")
             (root / "release/km-vms-release.json").write_text('{"schema_version":1,"version":"0.7.1"}\n', encoding="utf-8")
+            _write_permission_chain_fixture(root)
         (source / "scripts/update.sh").write_text(script, encoding="utf-8")
         (app / "scripts/update.sh").write_text(script, encoding="utf-8")
         (app / ".env").write_text("HTTP_PORT=18181\nCOMPOSE_PROJECT_NAME=kmvmsfixture\n", encoding="utf-8")
@@ -561,6 +639,52 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
         assert not (app / ".km-vms-source.json").exists()
 
 
+def test_update_permission_preflight_blocks_before_overlay_when_acl_inspection_fails(tmp_path):
+    compose_function = "\n".join(
+        [
+            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
+            "km_vms_compose_cmd() { :; }",
+        ]
+    )
+    app, _source, bin_dir = _write_update_shell_fixture(
+        tmp_path,
+        compose_function=compose_function,
+    )
+    marker = app / "apps/api/preoverlay-marker.txt"
+    marker.write_text("must-survive\n", encoding="utf-8")
+    os.chmod(marker, 0o666)
+    marker_mode_before = marker.stat().st_mode
+    (bin_dir / "getfacl").write_text(
+        "#!/usr/bin/env sh\n"
+        "printf 'simulated ACL inspection failure\\n' >&2\n"
+        "exit 73\n",
+        encoding="utf-8",
+    )
+    os.chmod(bin_dir / "getfacl", 0o755)
+
+    result = subprocess.run(
+        [
+            "sh",
+            "scripts/update.sh",
+            "--github-repo",
+            "owner/repo",
+            "--branch",
+            "main",
+            "--yes",
+        ],
+        cwd=app,
+        env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    assert result.returncode != 0
+    assert "pre-overlay existing-tree permission validation failed" in result.stderr.lower()
+    assert marker.read_text(encoding="utf-8") == "must-survive\n"
+    assert marker.stat().st_mode == marker_mode_before
+
+
 def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_source_file():
     script = read("scripts/update.sh")
     with tempfile.TemporaryDirectory(prefix="kmvms_update_overlay_fixture_") as tmp:
@@ -570,6 +694,7 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
         app.mkdir()
         source.mkdir()
         bin_dir.mkdir()
+        _write_safe_getfacl(bin_dir)
         for root in (app, source):
             (root / "apps/api").mkdir(parents=True)
             (root / "apps/web").mkdir(parents=True)
@@ -596,6 +721,7 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
             )
             (root / "docs/INSTALL.md").write_text("# install\n", encoding="utf-8")
             (root / "release/km-vms-release.json").write_text('{"schema_version":1,"version":"0.7.1"}\n', encoding="utf-8")
+            _write_permission_chain_fixture(root)
         (source / "scripts/update.sh").write_text(script, encoding="utf-8")
         (app / "scripts/update.sh").write_text(script, encoding="utf-8")
         (app / ".env").write_text("HTTP_PORT=18182\nCOMPOSE_PROJECT_NAME=kmvmsfixture\n", encoding="utf-8")
@@ -840,3 +966,74 @@ def test_docs_describe_terminal_update_without_future_stage_claims():
     assert "docker system prune" in docs
     assert "delete Docker volumes" in docs
     assert "automatically runs database migrations" not in docs
+
+
+def test_update_permission_bridge_separates_existing_and_target_gates_without_state_reset():
+    script = read("scripts/update.sh")
+
+    assert "Preparing target permission inspection runtime" in script
+    assert 'docker build -t "$UPDATE_BOOTSTRAP_IMAGE" "$TMP_ROOT/source/apps/update-helper"' in script
+    assert "run_trusted_permission_gate existing --fix" in script
+    assert "run_trusted_permission_gate target --fix" in script
+    assert "compose_with_archive_roots build update-helper" in script
+    assert "km-vms-update-helper-bridge.py" in script
+    assert "--require-request-id" in script
+    assert script.count('UPDATE_HELPER_IMAGE_PREPARED=0') == 1
+    assert script.count('UPDATE_HELPER_REFRESH_SCHEDULED=0') == 1
+
+    preflight_i = script.index("preflight_permission_policy\n")
+    overlay_i = script.index("overlay_source\n")
+    target_gate_i = script.index("apply_permission_policy\n")
+    compose_i = script.index("compose_config\n")
+    helper_image_i = script.index("prepare_update_helper_image\n")
+    rebuild_i = script.index("rebuild_recreate\n")
+    refresh_i = script.index("schedule_update_helper_recreate\n")
+    success_metadata_i = script.index('write_update_metadata "success" ""\n')
+    assert (
+        preflight_i
+        < overlay_i
+        < target_gate_i
+        < compose_i
+        < helper_image_i
+        < rebuild_i
+        < refresh_i
+        < success_metadata_i
+    )
+
+
+def test_permission_gate_existing_contract_does_not_require_target_only_files():
+    gate = read("scripts/km-vms-permission-gate.sh")
+
+    assert 'CONTRACT="target"' in gate
+    assert "--preflight-existing" in gate
+    assert 'CONTRACT="existing"' in gate
+    assert "TARGET_ONLY_PRIVILEGED_FILES=" in gate
+    assert "scripts/km-vms-permission-gate.sh" in gate
+    assert "scripts/km-vms-update-helper-bridge.py" in gate
+    assert 'if [ "$CONTRACT" = "target" ]' in gate
+    assert "permission_contract=%s" in gate
+
+
+def test_update_helper_bridge_uses_strict_json_and_exact_target_image_activation():
+    bridge = read("scripts/km-vms-update-helper-bridge.py")
+
+    assert "object_pairs_hook=reject_duplicate_object_pairs" in bridge
+    assert "parse_constant=reject_nonfinite_json_constant" in bridge
+    assert "validate_completed_status(payload, request_id)" in bridge
+    assert 'payload.get("status") != "completed"' in bridge
+    assert 'payload.get("commit_verified") is not True' in bridge
+    assert "expected_commit.lower() != installed_commit.lower()" in bridge
+    assert '"--force-recreate", "update-helper"' in bridge
+    assert '"exec"' in bridge
+    assert "getfacl --version" in bridge
+    assert "DEFAULT_TIMEOUT_SECONDS = 7800" in bridge
+    assert "docker:27-cli" not in bridge
+    assert '"scripts/km-vms-permission-gate.sh"' in bridge
+    assert 'def run_target_permission_gate(app_dir: Path) -> None:' in bridge
+    gate_call = bridge.index("    run_target_permission_gate(app_dir)\n")
+    image_call = bridge.index("    expected_image_id = docker_image_id(helper_image)\n")
+    receipt_call = bridge.index("    validate_receipt_binding(receipt_file, request_id, expected_image_id)\n")
+    schedule_call = bridge.index("    result = schedule_refresh(\n")
+    assert gate_call < image_call < receipt_call < schedule_call
+    assert 'check=False,' in bridge[bridge.index("def run_target_permission_gate"):schedule_call]
+    assert '"permission_gate=PASS"' in bridge

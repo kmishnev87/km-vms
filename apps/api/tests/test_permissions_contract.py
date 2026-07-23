@@ -177,7 +177,7 @@ def test_stage_recent_routes_have_explicit_permissions_and_no_apk_api_route():
         ("/storage/archive-roots", "GET"): "manage_settings",
         ("/storage/archive-roots/discovery", "GET"): "manage_settings",
         ("/storage/migration/preview", "POST"): "manage_settings",
-        ("/storage/migration/apply", "POST"): "manage_settings",
+        ("/storage/migration/apply", "POST"): "manage_settings+delete_recordings",
         ("/storage/reconciliation/summary", "GET"): "run_diagnostics",
     }
     for (path, method), permission in expected.items():

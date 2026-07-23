@@ -84,10 +84,18 @@ def test_setup_activation_helper_is_bounded_runtime_storage_helper():
     assert "down -v" not in helper
     assert "docker system prune" not in helper
     assert "setup-helper:" in compose
-    assert compose.count("/var/run/docker.sock:/var/run/docker.sock") == 2
+    assert compose.count("/var/run/docker.sock:/var/run/docker.sock") == 3
+    bootstrap_section = compose.split("  update-helper-bootstrap:", 1)[1].split("  api:", 1)[0]
     api_section = compose.split("  api:", 1)[1].split("  setup-helper:", 1)[0]
     helper_section = compose.split("  setup-helper:", 1)[1].split("  update-helper:", 1)[0]
     update_helper_section = compose.split("  update-helper:", 1)[1].split("  recorder:", 1)[0]
+    assert "/var/run/docker.sock:/var/run/docker.sock" in bootstrap_section
+    assert 'restart: "no"' in bootstrap_section
+    assert "km-vms-update-helper-bridge.py" in bootstrap_section
+    assert "network_mode: none" in bootstrap_section
+    assert "KM_VMS_BOOTSTRAP_HELPER_IMAGE" in bootstrap_section
+    assert "update-helper-bootstrap" in api_section
+    assert "service_completed_successfully" in api_section
     assert "/var/run/docker.sock:/var/run/docker.sock" not in api_section
     assert "restart: unless-stopped" in helper_section
     assert "/var/run/docker.sock:/var/run/docker.sock" in helper_section

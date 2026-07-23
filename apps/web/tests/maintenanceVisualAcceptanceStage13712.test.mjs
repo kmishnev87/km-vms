@@ -76,10 +76,14 @@ const copy = {
   },
 };
 
-assert.match(css, /\.settingsUpdateApplyVersionRows \{[\s\S]*?grid-template-columns: max-content max-content[\s\S]*?\}/);
-assert.match(css, /\.settingsUpdateApplyVersionRows div \{[\s\S]*?display: contents[\s\S]*?\}/);
-assert.match(css, /\.settingsUpdateApplyVersionRows dt \{[\s\S]*?white-space: nowrap[\s\S]*?\}/);
-assert.equal(cssRule(".settingsUpdateApplyVersionRows dd").includes("justify-self: end"), false);
+assert.equal(settingsPage.includes("settingsUpdateApplyVersionRows"), false);
+assert.match(
+  cssRule(".settingsUpdateApplyHero"),
+  /grid-template-columns: 38px minmax\(190px, 0\.82fr\) minmax\(0, 1\.75fr\) minmax\(150px, 0\.75fr\)/,
+);
+assert.equal(cssRule(".settingsUpdateApplyHeroFacts").includes("display: contents"), true);
+assert.equal(cssRule(".settingsUpdateApplyHeroPrimaryValue").includes("font-variant-numeric: tabular-nums"), true);
+assert.equal(css.includes("grid-template-columns: 38px minmax(0, 1fr)"), true);
 
 assert.equal(settingsPage.includes("settingsMaintenanceSupportStatus"), true);
 assert.equal(settingsPage.includes("maintenanceSupportStatusOk"), true);

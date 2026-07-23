@@ -42,16 +42,70 @@ import {
   settingsDraftFromApi,
   sortedUsersForTable,
   timezoneValueForSettings,
-  buildUpdateApplyConfirmation,
+  UPDATE_APPLY_POLL_INTERVAL_MS,
+  UPDATE_APPLY_RECONCILIATION_STORAGE_KEY,
+  createUpdateApplyReconciliation,
+  reconcileUpdateApplySubmission,
+  resetUpdateApplyAbsenceEvidence,
+  restoreUpdateApplyReconciliation,
+  sanitizeUpdateApplyReconciliation,
+  updateApplyReconciliationExactMatch,
+  shortCommit,
+  updateApplyCandidateSnapshot,
+  updateApplyErrorMessages,
   updateApplyOperatorModel,
   updateApplyButtonText,
   updateApplyIsRunning,
-  updateApplyTrustedCandidateRelease,
+  updateApplyRecheckCanClear,
+  updateApplyReconnectTiming,
   userCanBeDeleted,
   userCanBeManaged,
 } from "../../lib/settingsPageHelpers";
 
 configureSettingsPageHelpers({ normalizeLocale, translateText });
+
+let settingsBodyScrollLockCount = 0;
+let settingsBodyPreviousOverflow = "";
+
+function acquireSettingsBodyScrollLock() {
+  if (typeof document === "undefined") return () => {};
+  if (settingsBodyScrollLockCount === 0) {
+    settingsBodyPreviousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  settingsBodyScrollLockCount += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    settingsBodyScrollLockCount = Math.max(0, settingsBodyScrollLockCount - 1);
+    if (settingsBodyScrollLockCount === 0) {
+      document.body.style.overflow = settingsBodyPreviousOverflow;
+      settingsBodyPreviousOverflow = "";
+    }
+  };
+}
+
+function monotonicWallNow() {
+  if (typeof performance !== "undefined" && Number.isFinite(performance.timeOrigin) && typeof performance.now === "function") {
+    return performance.timeOrigin + performance.now();
+  }
+  return Date.now();
+}
+
+function focusableElements(container) {
+  if (!container) return [];
+  return Array.from(container.querySelectorAll(
+    'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+  )).filter((element) => !element.hasAttribute("hidden") && element.getAttribute("aria-hidden") !== "true");
+}
+
+function updateApplyRequestIsAmbiguous(error) {
+  return error?.category === "network_unavailable" ||
+    error?.category === "temporarily_unavailable" ||
+    Number(error?.status || 0) === 0 ||
+    Number(error?.status || 0) >= 500;
+}
 
 function settingsTextFor(lang) {
   if (TEXT[lang]) return TEXT[lang];
@@ -236,6 +290,32 @@ const TEXT = {
     updateApplyStart: "Применить обновление",
     updateApplyConfirm: "Запустить обновление KM VMS? Система выполнит проверку, применит trusted release через helper и может временно перезапустить сервисы.",
     updateApplyConfirmRestart: "Сервисы могут временно перезапуститься; статус продолжит обновляться после восстановления API.",
+    updateApplyModalTitle: "Подтвердите обновление KM VMS",
+    updateApplyModalTarget: "Целевая версия",
+    updateApplyModalRelease: "Релиз",
+    updateApplyModalCommit: "Commit",
+    updateApplyModalRestartTitle: "Во время обновления сервисы перезапустятся",
+    updateApplyModalRestartText: "Интерфейс может временно потерять связь. Не выключайте NAS: проверка статуса продолжится автоматически.",
+    updateApplyModalConfirm: "Применить обновление",
+    updateApplyLaunchChecking: "Проверяем запуск обновления",
+    updateApplyLaunchCheckingText: "Ответ сервера временно недоступен. KM VMS проверяет статус и не отправляет повторный запрос.",
+    updateApplyLaunchUnknown: "Результат запуска пока не подтверждён. Проверка продолжается автоматически; повторное применение заблокировано.",
+    updateApplyLaunchConflict: "Обнаружена другая операция обновления. Повторное применение заблокировано до получения итогового статуса.",
+    updateApplyLaunchNotAccepted: "Сервер подтвердил, что запрос не был принят. Для повторного запуска откройте новое подтверждение.",
+    updateApplyLaunchRejected: "Сервер отклонил запуск обновления.",
+    updateApplyPersistenceFailed: "Не удалось надёжно сохранить подтверждение обновления в этом браузере. Обновление не запускалось. Проверьте доступ к хранилищу браузера и повторите попытку.",
+    updateApplyTicketInvalid: "Сервер вернул некорректное подтверждение обновления. Обновление не запускалось. Обновите состояние и повторите попытку.",
+    updateApplySubmissionExpired: "Подтверждение обновления истекло до запуска. Обновление не запускалось. Закройте окно и подтвердите применение ещё раз.",
+    updateApplyLocked: "Проверяем запуск",
+    updateApplyPeerCheckUnavailable: "Проверка опубликованного релиза временно недоступна; статус применения обновления получен.",
+    updateApplyTransportErrors: {
+      network_unavailable: "Нет связи с сервисом обновления. Проверка продолжится автоматически.",
+      temporarily_unavailable: "Сервис обновления перезапускается или временно недоступен. Проверка продолжится автоматически.",
+      unauthorized: "Для проверки обновления требуется повторный вход.",
+      permission_denied: "Недостаточно прав для управления обновлением.",
+      request_failed: "Не удалось получить статус обновления. Проверка продолжится автоматически.",
+      typed_backend_error: "Сервис обновления сообщил об ошибке.",
+    },
     updateApplyQueued: "Запрос обновления передан helper.",
     updateApplyUnavailable: "Действие сейчас недоступно. Проверьте сообщение в этом блоке и повторите проверку обновления.",
     updateApplyConnection: "Сервис может временно перезапускаться; опрос статуса продолжится автоматически.",
@@ -268,6 +348,7 @@ const TEXT = {
       running: "Обновление выполняется",
       completed: "Завершено успешно",
       blocked: "Требуется внимание",
+      unknown: "Статус обновления временно неизвестен",
     },
     updateApplySummaries: {
       current: "Установленная версия совпадает с опубликованным релизом.",
@@ -275,6 +356,7 @@ const TEXT = {
       running: "Helper применяет обновление и обновляет прогресс автоматически.",
       completed: "Обновление установлено и подтверждено.",
       blocked: "Применение сейчас заблокировано; подробности есть в диагностике.",
+      unknown: "Последняя полученная информация устарела. Проверка статуса продолжается автоматически.",
     },
     updateApplyResults: {
       completedVerified: "Завершено успешно",
@@ -282,6 +364,7 @@ const TEXT = {
       available: "Доступно обновление",
       running: "Выполняется",
       blocked: "Требуется внимание",
+      unknown: "Статус временно неизвестен",
     },
     updateApplyReleaseChanges: "Что изменилось в этом релизе",
     updateApplyReleaseTitleFallback: "Опубликованный релиз",
@@ -737,6 +820,32 @@ const TEXT = {
     updateApplyStart: "Apply update",
     updateApplyConfirm: "Start KM VMS update? The system will run preflight, apply the trusted release through the helper and may temporarily restart services.",
     updateApplyConfirmRestart: "Services may restart temporarily; status polling will resume after the API is available.",
+    updateApplyModalTitle: "Confirm KM VMS update",
+    updateApplyModalTarget: "Target version",
+    updateApplyModalRelease: "Release",
+    updateApplyModalCommit: "Commit",
+    updateApplyModalRestartTitle: "Services will restart during the update",
+    updateApplyModalRestartText: "The UI may temporarily lose connection. Keep the NAS powered; status checking will continue automatically.",
+    updateApplyModalConfirm: "Apply update",
+    updateApplyLaunchChecking: "Checking whether the update started",
+    updateApplyLaunchCheckingText: "The server response is temporarily unavailable. KM VMS is checking status and will not send a second request.",
+    updateApplyLaunchUnknown: "The launch result is not confirmed yet. Checking continues automatically and another apply is locked.",
+    updateApplyLaunchConflict: "Another update operation was detected. Another apply is locked until its final status is known.",
+    updateApplyLaunchNotAccepted: "The server proved that the request was not accepted. Open a new confirmation before trying again.",
+    updateApplyLaunchRejected: "The server rejected the update launch.",
+    updateApplyPersistenceFailed: "The update confirmation could not be stored reliably in this browser. The update was not started. Check browser storage access and try again.",
+    updateApplyTicketInvalid: "The server returned an invalid update confirmation. The update was not started. Refresh status and try again.",
+    updateApplySubmissionExpired: "The update confirmation expired before launch. The update was not started. Close this dialog and confirm Apply again.",
+    updateApplyLocked: "Checking launch",
+    updateApplyPeerCheckUnavailable: "Published release checking is temporarily unavailable; the update apply status was received.",
+    updateApplyTransportErrors: {
+      network_unavailable: "The update service connection is unavailable. Checking will continue automatically.",
+      temporarily_unavailable: "The update service is restarting or temporarily unavailable. Checking will continue automatically.",
+      unauthorized: "Sign in again to check the update.",
+      permission_denied: "You do not have permission to manage updates.",
+      request_failed: "Update status could not be received. Checking will continue automatically.",
+      typed_backend_error: "The update service reported an error.",
+    },
     updateApplyQueued: "Update request was handed to the helper.",
     updateApplyUnavailable: "Update cannot start now. Review the message in this panel and run Check update again if needed.",
     updateApplyConnection: "Services may restart temporarily; status polling will continue automatically.",
@@ -769,6 +878,7 @@ const TEXT = {
       running: "Update is running",
       completed: "Completed successfully",
       blocked: "Attention required",
+      unknown: "Update status is temporarily unknown",
     },
     updateApplySummaries: {
       current: "Installed version matches the published release.",
@@ -776,6 +886,7 @@ const TEXT = {
       running: "The helper is applying the update and refreshing progress automatically.",
       completed: "Update is installed and verified.",
       blocked: "Apply is currently blocked; diagnostics contain safe details.",
+      unknown: "The last received information is stale. Status checking continues automatically.",
     },
     updateApplyResults: {
       completedVerified: "Completed successfully",
@@ -783,6 +894,7 @@ const TEXT = {
       available: "Update available",
       running: "Running",
       blocked: "Attention required",
+      unknown: "Status temporarily unknown",
     },
     updateApplyReleaseChanges: "What changed in this release",
     updateApplyReleaseTitleFallback: "Published release",
@@ -1209,6 +1321,32 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyStart: "应用更新",
   updateApplyConfirm: "启动 KM VMS 更新？系统将执行预检查，通过 helper 应用受信任版本，并可能短暂重启服务。",
   updateApplyConfirmRestart: "服务可能会短暂重启；API 恢复后状态轮询会继续。",
+  updateApplyModalTitle: "确认 KM VMS 更新",
+  updateApplyModalTarget: "目标版本",
+  updateApplyModalRelease: "版本",
+  updateApplyModalCommit: "Commit",
+  updateApplyModalRestartTitle: "更新期间服务将重新启动",
+  updateApplyModalRestartText: "界面可能暂时断开连接。请保持 NAS 供电，系统会自动继续检查状态。",
+  updateApplyModalConfirm: "应用更新",
+  updateApplyLaunchChecking: "正在检查更新是否已启动",
+  updateApplyLaunchCheckingText: "服务器响应暂时不可用。KM VMS 正在检查状态，不会发送第二次请求。",
+  updateApplyLaunchUnknown: "尚未确认启动结果。系统会自动继续检查，并阻止再次应用。",
+  updateApplyLaunchConflict: "检测到另一个更新操作。在获得最终状态前，无法再次应用。",
+  updateApplyLaunchNotAccepted: "服务器已确认请求未被接受。再次尝试前需重新确认。",
+  updateApplyLaunchRejected: "服务器拒绝了更新启动请求。",
+  updateApplyPersistenceFailed: "无法在此浏览器中可靠保存更新确认。更新尚未启动。请检查浏览器存储权限后重试。",
+  updateApplyTicketInvalid: "服务器返回了无效的更新确认。更新尚未启动。请刷新状态后重试。",
+  updateApplySubmissionExpired: "更新确认在启动前已过期。更新尚未启动。请关闭此窗口并重新确认应用更新。",
+  updateApplyLocked: "正在检查启动",
+  updateApplyPeerCheckUnavailable: "暂时无法检查已发布版本，但已收到更新应用状态。",
+  updateApplyTransportErrors: {
+    network_unavailable: "暂时无法连接更新服务。系统会自动继续检查。",
+    temporarily_unavailable: "更新服务正在重启或暂时不可用。系统会自动继续检查。",
+    unauthorized: "请重新登录后检查更新。",
+    permission_denied: "您没有管理更新的权限。",
+    request_failed: "无法获取更新状态。系统会自动继续检查。",
+    typed_backend_error: "更新服务报告了错误。",
+  },
   updateApplyQueued: "更新请求已交给 helper。",
   updateApplyUnavailable: "现在无法启动更新。请查看此面板中的消息，必要时重新检查更新。",
   updateApplyConnection: "服务可能会短暂重启；状态轮询会自动继续。",
@@ -1241,6 +1379,7 @@ const ZH_TEXT_OVERRIDES = {
     running: "正在应用更新",
     completed: "已成功完成",
     blocked: "需要处理",
+    unknown: "更新状态暂时未知",
   },
   updateApplySummaries: {
     current: "已安装版本与已发布版本一致。",
@@ -1248,6 +1387,7 @@ const ZH_TEXT_OVERRIDES = {
     running: "Helper 正在应用更新，并会自动刷新进度。",
     completed: "更新已安装并验证。",
     blocked: "当前无法应用；诊断中包含安全详情。",
+    unknown: "最后收到的信息已过期。系统会自动继续检查状态。",
   },
   updateApplyResults: {
     completedVerified: "已成功完成",
@@ -1255,6 +1395,7 @@ const ZH_TEXT_OVERRIDES = {
     available: "有可用更新",
     running: "进行中",
     blocked: "需要处理",
+    unknown: "状态暂时未知",
   },
   updateApplyReleaseChanges: "此版本的变更",
   updateApplyReleaseTitleFallback: "已发布版本",
@@ -1515,7 +1656,11 @@ export default function SettingsPage() {
   const [maintenanceWarningsOpen, setMaintenanceWarningsOpen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState(null);
   const [updateApplyStatus, setUpdateApplyStatus] = useState(null);
-  const [updateApplyTransientError, setUpdateApplyTransientError] = useState("");
+  const [updateTransportErrors, setUpdateTransportErrors] = useState({ update: null, apply: null });
+  const [updateApplyReconnectSnapshot, setUpdateApplyReconnectSnapshot] = useState(null);
+  const [updateApplyClockMs, setUpdateApplyClockMs] = useState(() => Date.now());
+  const [updateApplyDialog, setUpdateApplyDialog] = useState(null);
+  const [updateApplyReconciliation, setUpdateApplyReconciliation] = useState(null);
   const [diagnosticChoiceOpen, setDiagnosticChoiceOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
   const [auditEvents, setAuditEvents] = useState([]);
@@ -1527,6 +1672,14 @@ export default function SettingsPage() {
   const [bugReportText, setBugReportText] = useState("");
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
   const toastTimerRef = useRef(null);
+  const updatePollInFlightRef = useRef(false);
+  const updateApplyReconciliationRef = useRef(null);
+  const updateApplyDialogRef = useRef(null);
+  const updateApplyTriggerRef = useRef(null);
+  const updateApplyDialogElementRef = useRef(null);
+  const maintenanceDialogRef = useRef(null);
+  const maintenanceTriggerRef = useRef(null);
+  const maintenanceBusyRef = useRef("");
   const lang = languageOf(draft || savedDraft);
   const t = settingsTextFor(lang);
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
@@ -1535,21 +1688,40 @@ export default function SettingsPage() {
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
   const languageIcon = lang === "en" ? "/assets/icons/ui/language-en.png" : "/assets/icons/ui/language-ru.png";
-  const updateApplyRunning = updateApplyIsRunning(updateApplyStatus?.status || "");
-  const updateApplyAllowed = Boolean(updateStatus?.can_apply_from_ui && !updateApplyRunning && !updateApplyStatus?.is_stale && !maintenanceBusy);
-  const updateApplyPrimaryText = updateApplyButtonText(updateApplyStatus, t);
-  const updateApplyOperator = updateApplyOperatorModel(updateStatus, updateApplyStatus, t, lang, updateApplyTransientError);
+  const updateApplyReconciliationState = String(updateApplyReconciliation?.state || "");
+  const updateApplyRequiresFreshCheck = ["recheck_required", "reconciliation_corrupt", "legacy_uncorrelated"].includes(updateApplyReconciliationState);
+  const updateApplyHasUnknownLaunch = Boolean(updateApplyReconciliation) && !updateApplyRequiresFreshCheck;
+  const updateApplyOperator = updateApplyOperatorModel(updateStatus, updateApplyStatus, t, lang, {
+    updateError: updateTransportErrors.update,
+    applyError: updateTransportErrors.apply,
+    reconnectTiming: updateApplyReconnectSnapshot,
+    nowMs: updateApplyClockMs,
+    unresolvedSubmission: updateApplyHasUnknownLaunch,
+  });
+  const updateApplyRunning = updateApplyIsRunning(updateApplyStatus?.status || "") && !updateApplyOperator.stateUnknown;
+  const updateApplyAllowed = Boolean(updateApplyOperator.canApply && !updateApplyReconciliation && !updateApplyDialog && !maintenanceBusy);
+  const updateApplyPrimaryText = updateApplyRequiresFreshCheck
+    ? t.updateApplyStart
+    : updateApplyReconciliation || updateApplyOperator.stateUnknown
+      ? t.updateApplyLocked
+      : updateApplyButtonText(updateApplyStatus, t);
+  const updateApplyErrors = updateApplyErrorMessages(updateApplyStatus?.error, t, lang);
   const maintenanceBackupManager = useMemo(() => maintenanceBackupManagerModel(maintenanceOverview, t, lang), [maintenanceOverview, t, lang]);
   const maintenanceWarnings = useMemo(() => maintenanceWarningModel(maintenanceOverview, t), [maintenanceOverview, t]);
   const maintenanceBackupResultModel = useMemo(() => (
     maintenanceBackupResult ? maintenanceBackupOperationResultText(maintenanceBackupResult, t) : null
   ), [maintenanceBackupResult, t]);
-  const updateApplyProblem = Boolean(
-    updateApplyTransientError ||
-    updateApplyStatus?.error?.message ||
-    updateApplyOperator.severity === "blocked" ||
-    ["failed", "stalled", "blocked", "check_failed", "identity_incomplete", "installed_identity_drift", "metadata_stale", "provider_unavailable", "no_release_published", "installed_newer_than_available"].includes(updateApplyOperator.status)
-  );
+  const updateApplyLaunchNotice = updateApplyReconciliation?.state === "conflict"
+    ? t.updateApplyLaunchConflict
+    : updateApplyRequiresFreshCheck
+      ? t.updateApplyRecoveryRefreshRequired
+    : updateApplyReconciliation
+      ? t.updateApplyLaunchUnknown
+      : "";
+
+  maintenanceBusyRef.current = maintenanceBusy;
+  updateApplyDialogRef.current = updateApplyDialog;
+  updateApplyReconciliationRef.current = updateApplyReconciliation;
 
   useEffect(() => {
     load();
@@ -1561,6 +1733,18 @@ export default function SettingsPage() {
       window.clearTimeout(toastTimerRef.current);
       window.removeEventListener("km-vms-language", onLanguage);
     };
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY);
+      const restored = restoreUpdateApplyReconciliation(raw, Date.now());
+      if (restored) {
+        updateApplyReconciliationRef.current = restored;
+        setUpdateApplyReconciliation(restored);
+        window.sessionStorage.setItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY, JSON.stringify(restored));
+      }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -1577,12 +1761,111 @@ export default function SettingsPage() {
   }, [maintenanceModalOpen, canManageMaintenance]);
 
   useEffect(() => {
-    if (!maintenanceModalOpen || !canManageMaintenance) return undefined;
     const active = updateApplyIsRunning(updateApplyStatus?.status || "");
-    if (!active) return undefined;
-    const timer = window.setInterval(() => loadUpdateApplySurface({ silent: true }), 5000);
+    if (!canManageMaintenance || (!maintenanceModalOpen && !active && !updateApplyReconciliation)) return undefined;
+    const timer = window.setInterval(() => loadUpdateApplySurface({ silent: true }), UPDATE_APPLY_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [maintenanceModalOpen, canManageMaintenance, updateApplyStatus?.status]);
+  }, [maintenanceModalOpen, canManageMaintenance, updateApplyStatus?.status, Boolean(updateApplyReconciliation)]);
+
+  useEffect(() => {
+    if (!maintenanceModalOpen) return undefined;
+    return acquireSettingsBodyScrollLock();
+  }, [maintenanceModalOpen]);
+
+  useEffect(() => {
+    if (!updateApplyDialog) return undefined;
+    return acquireSettingsBodyScrollLock();
+  }, [Boolean(updateApplyDialog)]);
+
+  useEffect(() => {
+    if (!maintenanceModalOpen) return undefined;
+    const container = maintenanceDialogRef.current;
+    const initial = focusableElements(container)[0];
+    initial?.focus();
+    function onKeyDown(event) {
+      if (updateApplyDialogRef.current) return;
+      if (event.key === "Escape" && !maintenanceBusyRef.current) {
+        event.preventDefault();
+        closeMaintenanceModal();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = focusableElements(container);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      if (!updateApplyDialogRef.current) maintenanceTriggerRef.current?.focus();
+    };
+  }, [maintenanceModalOpen]);
+
+  useEffect(() => {
+    if (!updateApplyDialog) return undefined;
+    const container = updateApplyDialogElementRef.current;
+    (focusableElements(container)[0] || container)?.focus();
+    function onKeyDown(event) {
+      const dialog = updateApplyDialogRef.current;
+      if (!dialog) return;
+      const busy = dialog.phase === "submitting" || dialog.phase === "reconciling";
+      const deadlinePassed = Number(dialog.deadlineAtMs || 0) > 0 && Date.now() >= Number(dialog.deadlineAtMs);
+      if (event.key === "Escape") {
+        if (busy && !deadlinePassed) {
+          event.preventDefault();
+          return;
+        }
+        event.preventDefault();
+        closeUpdateApplyDialog();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusable = focusableElements(container);
+      if (!focusable.length) {
+        event.preventDefault();
+        container?.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      updateApplyTriggerRef.current?.focus();
+    };
+  }, [Boolean(updateApplyDialog)]);
+
+  useEffect(() => {
+    if (!updateApplyDialog) return;
+    const container = updateApplyDialogElementRef.current;
+    if (!container?.contains(document.activeElement)) {
+      (focusableElements(container)[0] || container)?.focus();
+    }
+  }, [updateApplyDialog?.phase]);
+
+  useEffect(() => {
+    const deadlineAtMs = Number(updateApplyDialog?.deadlineAtMs || 0);
+    const busy = updateApplyDialog?.phase === "submitting" || updateApplyDialog?.phase === "reconciling";
+    if (!busy || !deadlineAtMs) return undefined;
+    const timer = window.setTimeout(() => releaseUpdateApplyDialogToParent(), Math.max(0, deadlineAtMs - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [updateApplyDialog?.phase, updateApplyDialog?.deadlineAtMs]);
 
   function showToast(nextToast) {
     setToast(nextToast);
@@ -1822,12 +2105,110 @@ export default function SettingsPage() {
   }
 
   function closeMaintenanceModal() {
+    if (updateApplyDialogRef.current) return;
     setMaintenanceModalOpen(false);
     setMaintenanceActionResult(null);
     setMaintenanceBackupResult(null);
     setMaintenanceConfirm(null);
     setMaintenanceError("");
-    setUpdateApplyTransientError("");
+  }
+
+  function safeUpdateTransportError(error, fallback) {
+    const category = String(error?.category || "request_failed");
+    return {
+      category,
+      status: Number(error?.status || 0),
+      message: t.updateApplyTransportErrors?.[category] || fallback,
+    };
+  }
+
+  function commitUpdateApplyReconciliation(nextRecord) {
+    const safeRecord = nextRecord
+      ? sanitizeUpdateApplyReconciliation(nextRecord, Date.now())
+      : null;
+    if (nextRecord && !safeRecord) return null;
+    try {
+      if (safeRecord) {
+        const serialized = JSON.stringify(safeRecord);
+        window.sessionStorage.setItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY, serialized);
+        const readBack = window.sessionStorage.getItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY);
+        const restored = restoreUpdateApplyReconciliation(readBack, Date.now());
+        if (!restored || !updateApplyReconciliationExactMatch(safeRecord, restored, Date.now())) {
+          throw new Error("update_apply_reconciliation_readback_mismatch");
+        }
+        updateApplyReconciliationRef.current = restored;
+        setUpdateApplyReconciliation(restored);
+        return restored;
+      } else {
+        window.sessionStorage.removeItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY);
+        updateApplyReconciliationRef.current = null;
+        setUpdateApplyReconciliation(null);
+      }
+    } catch {
+      if (safeRecord) {
+        try {
+          window.sessionStorage.removeItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY);
+        } catch {}
+      }
+      return null;
+    }
+    return null;
+  }
+
+  function closeUpdateApplyDialog() {
+    const dialog = updateApplyDialogRef.current;
+    if (!dialog) return;
+    const busy = ["preparing", "submitting", "reconciling"].includes(dialog.phase);
+    if (busy && Date.now() < Number(dialog.deadlineAtMs || Number.MAX_SAFE_INTEGER)) return;
+    setUpdateApplyDialog(null);
+  }
+
+  function releaseUpdateApplyDialogToParent() {
+    const dialog = updateApplyDialogRef.current;
+    if (!dialog || !["submitting", "reconciling"].includes(dialog.phase)) return;
+    if (Date.now() < Number(dialog.deadlineAtMs || Number.MAX_SAFE_INTEGER)) return;
+    setUpdateApplyDialog(null);
+    setMaintenanceBusy((current) => current === "update-apply" ? "" : current);
+  }
+
+  function reconcilePendingUpdateApply(applyData, observedAtMs) {
+    const current = updateApplyReconciliationRef.current;
+    if (!current) return "none";
+    const result = reconcileUpdateApplySubmission(current, applyData, observedAtMs);
+    if (result.outcome === "accepted") {
+      commitUpdateApplyReconciliation(null);
+      setUpdateApplyDialog(null);
+      setMaintenanceBusy((value) => value === "update-apply" ? "" : value);
+      showToast({ variant: "success", title: t.updateApplyTitle, text: t.updateApplyQueued });
+      return result.outcome;
+    }
+    if (result.outcome === "conflict") {
+      commitUpdateApplyReconciliation(result.record);
+      setUpdateApplyDialog((dialog) => dialog ? { ...dialog, phase: "conflict", error: t.updateApplyLaunchConflict } : dialog);
+      setMaintenanceBusy((value) => value === "update-apply" ? "" : value);
+      return result.outcome;
+    }
+    if (["recheck_required", "reconciliation_corrupt", "legacy_uncorrelated"].includes(result.outcome)) {
+      commitUpdateApplyReconciliation(result.record);
+      setUpdateApplyDialog(null);
+      setMaintenanceBusy((value) => value === "update-apply" ? "" : value);
+      return result.outcome;
+    }
+    if (result.outcome === "not_accepted") {
+      commitUpdateApplyReconciliation(null);
+      setUpdateApplyDialog((dialog) => dialog ? { ...dialog, phase: "not_accepted", error: t.updateApplyLaunchNotAccepted } : dialog);
+      setMaintenanceBusy((value) => value === "update-apply" ? "" : value);
+      return result.outcome;
+    }
+    commitUpdateApplyReconciliation(result.record);
+    return result.outcome;
+  }
+
+  async function refreshMaintenanceSurface() {
+    await Promise.allSettled([
+      loadMaintenanceOverview(),
+      loadUpdateApplySurface({ silent: true }),
+    ]);
   }
 
   async function loadMaintenanceOverview() {
@@ -1840,7 +2221,6 @@ export default function SettingsPage() {
       const artifacts = overview?.flows?.restore?.details?.artifacts;
       if (!Array.isArray(artifacts) || artifacts.length === 0) setMaintenanceBackupResult(null);
     } catch (err) {
-      setMaintenanceOverview(null);
       setMaintenanceError(humanErrorText(String(err?.message || ""), t.maintenanceLoadError));
     } finally {
       setMaintenanceLoading(false);
@@ -1848,20 +2228,65 @@ export default function SettingsPage() {
   }
 
   async function loadUpdateApplySurface({ silent = false } = {}) {
-    if (!canManageMaintenance) return;
+    if (!canManageMaintenance || updatePollInFlightRef.current) return null;
+    updatePollInFlightRef.current = true;
     if (!silent) setMaintenanceBusy("update-status");
     try {
-      const [statusData, applyData] = await Promise.all([
+      const pending = sanitizeUpdateApplyReconciliation(updateApplyReconciliationRef.current, Date.now());
+      const exactLookup = pending?.submissionId && pending?.submissionProof
+        ? apiFetch(`/system/update/apply/reconciliation/${encodeURIComponent(pending.submissionId)}`, {
+            headers: { "X-KM-VMS-Update-Submission-Proof": pending.submissionProof },
+          })
+        : Promise.resolve(null);
+      const [statusResult, applyResult, exactResult] = await Promise.allSettled([
         apiFetch("/system/update/status"),
         apiFetch("/system/update/apply/status"),
+        exactLookup,
       ]);
-      setUpdateStatus(statusData);
-      setUpdateApplyStatus(applyData);
-      setUpdateApplyTransientError("");
-    } catch (err) {
-      setUpdateApplyTransientError(humanErrorText(String(err?.message || ""), t.updateApplyConnection));
+      const observedAtMs = monotonicWallNow();
+      setUpdateApplyClockMs(observedAtMs);
+
+      if (statusResult.status === "fulfilled") {
+        setUpdateStatus(statusResult.value);
+        setUpdateTransportErrors((current) => ({ ...current, update: null }));
+      } else {
+        setUpdateTransportErrors((current) => ({
+          ...current,
+          update: safeUpdateTransportError(statusResult.reason, t.updateApplyConnection),
+        }));
+      }
+
+      if (applyResult.status === "fulfilled") {
+        setUpdateApplyStatus(applyResult.value);
+        setUpdateApplyReconnectSnapshot(updateApplyReconnectTiming(applyResult.value, observedAtMs));
+        setUpdateTransportErrors((current) => ({ ...current, apply: null }));
+      } else {
+        setUpdateTransportErrors((current) => ({
+          ...current,
+          apply: safeUpdateTransportError(applyResult.reason, t.updateApplyConnection),
+        }));
+        const pending = updateApplyReconciliationRef.current;
+        if (pending) commitUpdateApplyReconciliation(resetUpdateApplyAbsenceEvidence(pending));
+      }
+      if (pending && exactResult.status === "fulfilled" && exactResult.value) {
+        const exact = exactResult.value;
+        if (exact.found && exact.apply_status) {
+          reconcilePendingUpdateApply(exact.apply_status, Date.now());
+        } else if (exact.status === "submission_expired") {
+          commitUpdateApplyReconciliation(null);
+          setUpdateApplyDialog((current) => ({
+            ...(current || { candidate: { version: pending.targetVersion, commit: pending.targetCommit, title: "" } }),
+            phase: "rejected",
+            error: t.updateApplySubmissionExpired,
+            deadlineAtMs: null,
+          }));
+          setMaintenanceBusy((current) => current === "update-apply" ? "" : current);
+        }
+      }
+      return { statusResult, applyResult, exactResult };
     } finally {
-      if (!silent) setMaintenanceBusy("");
+      updatePollInFlightRef.current = false;
+      if (!silent) setMaintenanceBusy((current) => current === "update-status" ? "" : current);
     }
   }
 
@@ -1977,16 +2402,17 @@ export default function SettingsPage() {
         body: JSON.stringify({}),
       });
       setUpdateStatus(result);
-      setUpdateApplyTransientError("");
-      try {
-        setUpdateApplyStatus(await apiFetch("/system/update/apply/status"));
-      } catch (statusErr) {
-        setUpdateApplyTransientError(humanErrorText(String(statusErr?.message || ""), t.updateApplyConnection));
+      setUpdateTransportErrors((current) => ({ ...current, update: null }));
+      const surface = await loadUpdateApplySurface({ silent: true });
+      const pending = updateApplyReconciliationRef.current;
+      if (surface?.applyResult?.status === "fulfilled" && updateApplyRecheckCanClear(pending, surface.applyResult.value)) {
+        commitUpdateApplyReconciliation(null);
       }
       showToast({ variant: "success", title: t.updateApplyCheck, text: maintenanceStatusText(result?.status, t) });
     } catch (err) {
-      const message = humanErrorText(String(err?.message || ""), t.updateApplyUnavailable);
-      setUpdateApplyTransientError(message);
+      const transportError = safeUpdateTransportError(err, t.updateApplyUnavailable);
+      const message = transportError.message;
+      setUpdateTransportErrors((current) => ({ ...current, update: transportError }));
       setMaintenanceActionResult({ flowKey: "update", status: "blocked", reason: message });
       showToast({ variant: "warning", title: t.updateApplyCheck, text: message });
     } finally {
@@ -1994,35 +2420,100 @@ export default function SettingsPage() {
     }
   }
 
-  async function startUpdateApply() {
-    if (maintenanceBusy) return;
-    if (!window.confirm(buildUpdateApplyConfirmation(t, updateStatus))) return;
+  function startUpdateApply() {
+    if (maintenanceBusy || updateApplyReconciliationRef.current) return;
+    const candidate = updateApplyCandidateSnapshot(updateStatus);
+    if (!candidate.version || !candidate.commit) {
+      showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyUnavailable });
+      return;
+    }
+    setToast(null);
+    setUpdateApplyDialog({ phase: "confirm", candidate, error: "", deadlineAtMs: null });
+  }
+
+  async function confirmUpdateApply() {
+    const dialog = updateApplyDialogRef.current;
+    if (!dialog || dialog.phase !== "confirm" || maintenanceBusy || updateApplyReconciliationRef.current) return;
+    const submittedAtMs = Date.now();
+    setUpdateApplyDialog({
+      ...dialog,
+      phase: "preparing",
+      error: "",
+      deadlineAtMs: null,
+    });
     setMaintenanceBusy("update-apply");
     setMaintenanceActionResult(null);
     try {
-      const trustedCandidate = updateApplyTrustedCandidateRelease(updateStatus);
-      const latest = trustedCandidate.version && (trustedCandidate.commit || trustedCandidate.commit_sha)
-        ? trustedCandidate
-        : updateStatus?.latest || updateStatus?.latest_release || {};
+      const ticket = await apiFetch("/system/update/apply/submission-ticket", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          expected_manifest_version: dialog.candidate.version,
+          expected_manifest_commit: dialog.candidate.commit,
+        }),
+      });
+      const reconciliation = createUpdateApplyReconciliation(
+        ticket,
+        dialog.candidate,
+        updateApplyStatus,
+        submittedAtMs,
+      );
+      if (!reconciliation) {
+        setUpdateApplyDialog({ ...dialog, phase: "rejected", error: t.updateApplyTicketInvalid });
+        return;
+      }
+      const persisted = commitUpdateApplyReconciliation(reconciliation);
+      if (!persisted || !updateApplyReconciliationExactMatch(reconciliation, persisted, Date.now())) {
+        setUpdateApplyDialog({ ...dialog, phase: "rejected", error: t.updateApplyPersistenceFailed });
+        return;
+      }
+      setUpdateApplyDialog({
+        ...dialog,
+        phase: "submitting",
+        error: "",
+        deadlineAtMs: persisted.modalDeadlineAtMs,
+      });
       const result = await apiFetch("/system/update/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           confirm: true,
-          expected_manifest_version: latest.version || latest.latest_version || null,
-          expected_manifest_commit: latest.commit || latest.commit_sha || latest.build_id || null,
+          submission_id: persisted.submissionId,
+          submission_proof: persisted.submissionProof,
+          expected_manifest_version: dialog.candidate.version,
+          expected_manifest_commit: dialog.candidate.commit,
         }),
       });
       setUpdateApplyStatus(result?.apply_status || result);
-      showToast({ variant: "success", title: t.updateApplyTitle, text: t.updateApplyQueued });
-      await loadUpdateApplySurface({ silent: true });
+      setUpdateApplyReconnectSnapshot(updateApplyReconnectTiming(result?.apply_status || result, monotonicWallNow()));
+      setUpdateTransportErrors((current) => ({ ...current, apply: null }));
+      const outcome = reconcilePendingUpdateApply(result?.apply_status || result, monotonicWallNow());
+      if (outcome !== "accepted") {
+        setUpdateApplyDialog((current) => current ? {
+          ...current,
+          phase: "reconciling",
+          error: "",
+          deadlineAtMs: persisted.modalDeadlineAtMs,
+        } : current);
+      }
+      void loadUpdateApplySurface({ silent: true });
     } catch (err) {
-      const message = humanErrorText(String(err?.message || ""), t.updateApplyUnavailable);
-      setUpdateApplyTransientError(message);
-      setMaintenanceActionResult({ flowKey: "update", status: "blocked", reason: message });
-      showToast({ variant: "warning", title: t.updateApplyTitle, text: message });
+      const persisted = updateApplyReconciliationRef.current;
+      if (persisted && updateApplyRequestIsAmbiguous(err)) {
+        setUpdateApplyDialog((current) => current ? {
+          ...current,
+          phase: "reconciling",
+          error: "",
+          deadlineAtMs: persisted.modalDeadlineAtMs,
+        } : current);
+        void loadUpdateApplySurface({ silent: true });
+      } else {
+        if (persisted) commitUpdateApplyReconciliation(null);
+        const message = humanErrorText(String(err?.message || ""), t.updateApplyLaunchRejected);
+        setUpdateApplyDialog((current) => current ? { ...current, phase: "rejected", error: message } : current);
+      }
     } finally {
-      setMaintenanceBusy("");
+      setMaintenanceBusy((current) => current === "update-apply" ? "" : current);
     }
   }
 
@@ -2201,7 +2692,7 @@ export default function SettingsPage() {
   return (
     <Layout>
       <div className="settingsPage">
-        {toast ? (
+        {toast && !updateApplyDialog ? (
           <div className={`settingsToast ${toast.variant || "info"}`}>
             <strong>{toast.title}</strong>
             {toast.text ? <span>{toast.text}</span> : null}
@@ -2339,7 +2830,7 @@ export default function SettingsPage() {
                     <span>{t.maintenanceText}</span>
                   </div>
                   <div className="settingsRowControl settingsRowControlMeta">
-                    <button className="button secondary small settingsUsersAddButton" onClick={openMaintenanceModal} disabled={!canManageMaintenance}>
+                    <button ref={maintenanceTriggerRef} className="button secondary small settingsUsersAddButton" onClick={openMaintenanceModal} disabled={!canManageMaintenance}>
                       {t.open}
                     </button>
                   </div>
@@ -2536,58 +3027,54 @@ export default function SettingsPage() {
 
         {maintenanceModalOpen ? (
           <div className="settingsModalOverlay" role="presentation">
-            <div className="settingsMaintenanceModal" role="dialog" aria-modal="true" aria-label={t.maintenanceOverview}>
+            <div
+              ref={maintenanceDialogRef}
+              className="settingsMaintenanceModal"
+              role="dialog"
+              tabIndex={-1}
+              aria-modal="true"
+              aria-label={t.maintenanceOverview}
+              aria-hidden={updateApplyDialog ? "true" : undefined}
+              inert={updateApplyDialog ? true : undefined}
+            >
               <div className="settingsMaintenanceModalHeader">
                 <h2>{t.maintenanceOverview}</h2>
                 <div className="settingsMaintenanceModalActions">
                   <button
                     type="button"
                     className="settingsMaintenanceIconButton"
-                    onClick={loadMaintenanceOverview}
+                    onClick={refreshMaintenanceSurface}
                     disabled={maintenanceLoading || Boolean(maintenanceBusy)}
                     title={t.maintenanceRefresh}
                     aria-label={t.maintenanceRefresh}
                   >
                     ↻
                   </button>
-                  <button type="button" className="settingsMaintenanceIconButton" onClick={closeMaintenanceModal} aria-label={t.close}>×</button>
+                  <button type="button" className="settingsMaintenanceIconButton" onClick={closeMaintenanceModal} disabled={Boolean(updateApplyDialog)} aria-label={t.close}>×</button>
                 </div>
               </div>
 
               {maintenanceError ? <div className="settingsJournalEmpty error">{maintenanceError}</div> : null}
-              {maintenanceLoading && !maintenanceOverview ? <div className="settingsJournalEmpty">{t.checking}</div> : null}
+              {maintenanceLoading && !maintenanceOverview && !updateStatus && !updateApplyStatus ? <div className="settingsJournalEmpty">{t.checking}</div> : null}
 
-              {maintenanceOverview ? (
+              {maintenanceOverview || updateStatus || updateApplyStatus ? (
                 <div className="settingsMaintenanceContent">
                   <section className="settingsUpdateApplyPanel">
                     <h3>{t.updateApplyTitle}</h3>
                     <div className={`settingsUpdateApplyHero is-${updateApplyOperator.severity}`}>
+                      <span className="settingsUpdateApplyHeroIcon" aria-hidden="true">
+                        {updateApplyOperator.severity === "blocked" ? "!" : updateApplyOperator.severity === "warning" ? "..." : "✓"}
+                      </span>
                       <div className="settingsUpdateApplyHeroState">
-                        <span className="settingsUpdateApplyHeroIcon" aria-hidden="true">
-                          {updateApplyOperator.severity === "blocked" ? "!" : updateApplyOperator.severity === "warning" ? "..." : "✓"}
-                        </span>
-                        <div>
-                          <strong>{updateApplyOperator.headline}</strong>
-                          {updateApplyOperator.showHeroSummary ? <p>{updateApplyOperator.summary}</p> : null}
-                          <dl className="settingsUpdateApplyVersionRows">
-                            <div>
-                              <dt>{t.maintenanceLabels.current}</dt>
-                              <dd>{updateApplyOperator.currentVersion}</dd>
-                            </div>
-                            <div>
-                              <dt>{t.maintenanceLabels.available}</dt>
-                              <dd>{updateApplyOperator.availableVersion}</dd>
-                            </div>
-                          </dl>
-                        </div>
+                        <strong>{updateApplyOperator.headline}</strong>
+                        <span className="settingsUpdateApplyHeroPrimaryValue">{updateApplyOperator.currentVersion}</span>
+                        <small>{t.maintenanceLabels.available}: {updateApplyOperator.availableVersion}</small>
+                        {updateApplyOperator.showHeroSummary ? <p>{updateApplyOperator.summary}</p> : null}
                       </div>
                       <dl className="settingsUpdateApplyHeroFacts">
                         <div>
                           <dt>{t.maintenanceLabels.releaseTitle}</dt>
                           <dd>{updateApplyOperator.releaseTitle}</dd>
-                          {updateApplyOperator.availableVersion && updateApplyOperator.availableVersion !== "-" ? (
-                            <small>{updateApplyOperator.availableVersion}</small>
-                          ) : null}
                         </div>
                         <div>
                           <dt>{t.maintenanceLabels.completedAt}</dt>
@@ -2632,31 +3119,23 @@ export default function SettingsPage() {
                       </section>
                     </div>
 
-                    {updateApplyProblem ? (
-                      <div className="settingsUpdateApplySupport">
-                        <div>
-                          <strong>{t.updateApplySupportTitle}</strong>
-                          <p>{t.updateApplySupportText}</p>
-                          {updateApplyOperator.detailUnavailable ? <small>{t.updateApplyHistoryLimited}</small> : null}
-                        </div>
-                        <button type="button" className="button secondary small" onClick={downloadMaintenanceReport} disabled={Boolean(maintenanceBusy)}>
-                          {maintenanceBusy === "report-download" ? t.checking : t.updateApplySupportAction}
-                        </button>
-                      </div>
+                    {updateApplyLaunchNotice ? <div className="settingsUpdateApplyNotice">{updateApplyLaunchNotice}</div> : null}
+                    {updateTransportErrors.update && !updateTransportErrors.apply ? (
+                      <div className="settingsUpdateApplyNotice">{t.updateApplyPeerCheckUnavailable}</div>
                     ) : null}
-                    {updateApplyTransientError ? <div className="settingsUpdateApplyNotice">{updateApplyTransientError}</div> : null}
                     <div className="settingsUpdateApplyActions">
                       <button type="button" className="button secondary small" onClick={runUpdateCheck} disabled={Boolean(maintenanceBusy)}>
                         {maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
                       </button>
                       {updateApplyOperator.showApplyButton ? (
-                        <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
-                          {maintenanceBusy === "update-apply" || updateApplyRunning ? updateApplyPrimaryText : t.updateApplyStart}
+                        <button ref={updateApplyTriggerRef} type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
+                          {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyReconciliation || updateApplyOperator.stateUnknown
+                            ? updateApplyPrimaryText
+                            : t.updateApplyStart}
                         </button>
                       ) : null}
                     </div>
-                    {updateApplyStatus?.error?.message ? <small className="settingsUpdateApplyError">{formatMaintenanceMessage(updateApplyStatus.error.message, t, lang, "error")}</small> : null}
-                    {updateApplyStatus?.error?.operator_action ? <small className="settingsUpdateApplyError">{formatMaintenanceMessage(updateApplyStatus.error.operator_action, t, lang, "error")}</small> : null}
+                    {updateApplyErrors.map((message) => <small className="settingsUpdateApplyError" key={message}>{message}</small>)}
                   </section>
 
                   <section className="settingsMaintenanceReadiness">
@@ -2781,7 +3260,7 @@ export default function SettingsPage() {
                           {maintenanceWarnings.groups.actionable ? `${t.maintenanceWarningActionable}: ${maintenanceWarnings.groups.actionable}` : t.maintenanceSupportStatusOk}
                         </span>
                         <small>
-                          {t.maintenanceReport}: {maintenanceStatusText(maintenanceOverview.upgrade_report?.status, t)} · {t.maintenanceLastAction}: {maintenanceOverview.history?.last_action?.available ? maintenanceStatusText(maintenanceOverview.history.last_action.status, t) : t.maintenanceNoHistory}
+                          {t.maintenanceReport}: {maintenanceStatusText(maintenanceOverview?.upgrade_report?.status, t)} · {t.maintenanceLastAction}: {maintenanceOverview?.history?.last_action?.available ? maintenanceStatusText(maintenanceOverview.history.last_action.status, t) : t.maintenanceNoHistory}
                         </small>
                       </div>
                       <div className="settingsMaintenanceWarningGroups">
@@ -2821,6 +3300,73 @@ export default function SettingsPage() {
                 </div>
               ) : null}
             </div>
+          </div>
+        ) : null}
+
+        {updateApplyDialog ? (
+          <div
+            className="settingsModalOverlay settingsUpdateApplyDialogOverlay"
+            role="presentation"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) closeUpdateApplyDialog();
+            }}
+          >
+            <section
+              ref={updateApplyDialogElementRef}
+              className="settingsUpdateApplyDialog"
+              role="dialog"
+              tabIndex={-1}
+              aria-modal="true"
+              aria-labelledby="settings-update-apply-dialog-title"
+              aria-describedby="settings-update-apply-dialog-description"
+              aria-busy={["preparing", "submitting", "reconciling"].includes(updateApplyDialog.phase)}
+            >
+              <button
+                type="button"
+                className="settingsModalClose settingsUpdateApplyDialogClose"
+                onClick={closeUpdateApplyDialog}
+                disabled={["preparing", "submitting", "reconciling"].includes(updateApplyDialog.phase) && Date.now() < Number(updateApplyDialog.deadlineAtMs || Number.MAX_SAFE_INTEGER)}
+                aria-label={t.close}
+              >×</button>
+              <header>
+                <span className="settingsUpdateApplyDialogIcon" aria-hidden="true">↻</span>
+                <div>
+                  <h2 id="settings-update-apply-dialog-title">
+                    {["preparing", "submitting", "reconciling"].includes(updateApplyDialog.phase)
+                      ? t.updateApplyLaunchChecking
+                      : t.updateApplyModalTitle}
+                  </h2>
+                  <p id="settings-update-apply-dialog-description">
+                    {["preparing", "submitting", "reconciling"].includes(updateApplyDialog.phase)
+                      ? t.updateApplyLaunchCheckingText
+                      : t.updateApplyConfirm}
+                  </p>
+                </div>
+              </header>
+              <dl className="settingsUpdateApplyDialogFacts">
+                <div><dt>{t.maintenanceLabels.current}</dt><dd>{updateApplyOperator.currentVersion}</dd></div>
+                <div><dt>{t.updateApplyModalTarget}</dt><dd>{updateApplyDialog.candidate.version}</dd></div>
+                <div><dt>{t.updateApplyModalRelease}</dt><dd>{updateApplyDialog.candidate.title || t.updateApplyReleaseTitleFallback}</dd></div>
+                <div><dt>{t.updateApplyModalCommit}</dt><dd>{shortCommit(updateApplyDialog.candidate.commit)}</dd></div>
+              </dl>
+              <div className="settingsUpdateApplyDialogRestart">
+                <strong>{t.updateApplyModalRestartTitle}</strong>
+                <span>{t.updateApplyModalRestartText}</span>
+              </div>
+              {updateApplyDialog.error ? <div className="settingsUpdateApplyDialogError">{updateApplyDialog.error}</div> : null}
+              <div className="settingsUpdateApplyDialogActions">
+                {updateApplyDialog.phase === "confirm" ? (
+                  <>
+                    <button type="button" className="button secondary small" onClick={closeUpdateApplyDialog}>{t.cancel}</button>
+                    <button type="button" className="button primary small" onClick={confirmUpdateApply}>{t.updateApplyModalConfirm}</button>
+                  </>
+                ) : ["preparing", "submitting", "reconciling"].includes(updateApplyDialog.phase) ? (
+                  <button type="button" className="button secondary small" disabled>{t.updateApplyLaunchChecking}</button>
+                ) : (
+                  <button type="button" className="button secondary small" onClick={closeUpdateApplyDialog}>{t.close}</button>
+                )}
+              </div>
+            </section>
           </div>
         ) : null}
 

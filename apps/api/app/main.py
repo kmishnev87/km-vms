@@ -1,8 +1,13 @@
+import json
 import logging
+import re
 from pathlib import Path
+from typing import Any
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.sanitization import redact_text
@@ -30,6 +35,7 @@ from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration
 from app.services.recording_storage import ensure_archive_roots, migrate_archive_root_identities, write_archive_roots_runtime_files
 from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
+from app.services.update_apply import adopt_update_apply_lineage_on_startup, start_update_apply_audit_coordinator, stop_update_apply_audit_coordinator
 from app.services.update_check import run_startup_due_check
 
 
@@ -49,6 +55,81 @@ class AccessLogRedactionFilter(logging.Filter):
 
 logging.getLogger("uvicorn.access").addFilter(AccessLogRedactionFilter())
 
+MAX_VALIDATION_ERRORS = 32
+MAX_VALIDATION_LOC_DEPTH = 8
+MAX_VALIDATION_LOC_INDEX = 1_000_000
+MAX_VALIDATION_TYPE_LENGTH = 80
+MAX_VALIDATION_MESSAGE_LENGTH = 300
+MAX_VALIDATION_RESPONSE_BYTES = 16 * 1024
+VALIDATION_SOURCES = {"body", "query", "path", "header", "cookie"}
+VALIDATION_TYPE_RE = re.compile(r"^[a-z][a-z0-9_.]{0,79}$")
+VALIDATION_MESSAGES = {
+    "extra_forbidden": "Extra input is not permitted.",
+    "json_invalid": "Request body is not valid JSON.",
+    "missing": "Required input is missing.",
+    "string_too_long": "Input text exceeds the allowed length.",
+    "string_too_short": "Input text is shorter than the allowed length.",
+}
+VALIDATION_FALLBACK_DETAIL = {
+    "loc": ["body"],
+    "type": "validation_error",
+    "msg": "Request validation failed.",
+}
+
+
+def _normalized_validation_type(value: Any) -> str:
+    if not isinstance(value, str) or len(value) > MAX_VALIDATION_TYPE_LENGTH:
+        return "validation_error"
+    return value if VALIDATION_TYPE_RE.fullmatch(value) else "validation_error"
+
+
+def _safe_validation_loc(value: Any, *, error_type: str) -> list[str | int]:
+    raw = value if isinstance(value, (list, tuple)) else ()
+    source = raw[0] if raw else None
+    safe: list[str | int] = [source if isinstance(source, str) and source in VALIDATION_SOURCES else "<source>"]
+    remaining = raw[1:MAX_VALIDATION_LOC_DEPTH]
+    for index, segment in enumerate(remaining, start=1):
+        is_extra_leaf = error_type == "extra_forbidden" and index == len(raw) - 1
+        if is_extra_leaf:
+            safe.append("<extra>")
+        elif isinstance(segment, int) and not isinstance(segment, bool):
+            safe.append(segment if 0 <= segment <= MAX_VALIDATION_LOC_INDEX else "<index>")
+        else:
+            safe.append("<field>")
+    if error_type == "extra_forbidden" and len(raw) > MAX_VALIDATION_LOC_DEPTH:
+        safe[-1] = "<extra>"
+    return safe
+
+
+def _safe_validation_detail(value: Any) -> dict[str, Any]:
+    error = value if isinstance(value, dict) else {}
+    error_type = _normalized_validation_type(error.get("type"))
+    message = VALIDATION_MESSAGES.get(error_type, VALIDATION_FALLBACK_DETAIL["msg"])
+    return {
+        "loc": _safe_validation_loc(error.get("loc"), error_type=error_type),
+        "type": error_type,
+        "msg": message[:MAX_VALIDATION_MESSAGE_LENGTH],
+    }
+
+
+def _validation_response_size(content: dict[str, Any]) -> int:
+    return len(
+        json.dumps(content, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    )
+
+
+def _safe_validation_response_content(errors: Any) -> dict[str, list[dict[str, Any]]]:
+    raw_errors = errors if isinstance(errors, list) else []
+    details = [_safe_validation_detail(item) for item in raw_errors[:MAX_VALIDATION_ERRORS]]
+    if not details:
+        details = [dict(VALIDATION_FALLBACK_DETAIL)]
+    content = {"detail": details}
+    while len(details) > 1 and _validation_response_size(content) > MAX_VALIDATION_RESPONSE_BYTES:
+        details.pop()
+    if _validation_response_size(content) > MAX_VALIDATION_RESPONSE_BYTES:
+        content = {"detail": [dict(VALIDATION_FALLBACK_DETAIL)]}
+    return content
+
 app = FastAPI(
     title="TNAS VMS API",
     version=APP_VERSION,
@@ -61,6 +142,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def safe_request_validation_error(
+    _request: Request,
+    exc: RequestValidationError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content=_safe_validation_response_content(exc.errors()),
+    )
 
 
 @app.on_event("startup")
@@ -87,11 +179,14 @@ def startup():
     start_automatic_retention_worker()
     start_archive_integrity_worker()
     start_archive_migration_worker()
+    adopt_update_apply_lineage_on_startup()
+    start_update_apply_audit_coordinator()
     start_cleanup_worker()
 
 
 @app.on_event("shutdown")
 def shutdown():
+    stop_update_apply_audit_coordinator()
     stop_archive_migration_worker()
     stop_archive_integrity_worker()
     stop_automatic_retention_worker()

@@ -761,6 +761,159 @@
   z-index: 8600;
 }
 
+.settingsUpdateApplyDialogOverlay {
+  z-index: 9600;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.settingsUpdateApplyDialog {
+  box-sizing: border-box;
+  position: relative;
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(88vh, 680px);
+  overflow: auto;
+  border: 1px solid #d6e0ea;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+
+.settingsUpdateApplyDialog header {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+  padding-right: 30px;
+}
+
+.settingsUpdateApplyDialogIcon {
+  width: 36px;
+  height: 36px;
+  border: 1px solid #bfdbfe;
+  border-radius: 50%;
+  background: #eff6ff;
+  color: #1d4ed8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.settingsUpdateApplyDialog h2,
+.settingsUpdateApplyDialog p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyDialog h2 {
+  color: #142033;
+  font-size: 17px;
+  line-height: 1.25;
+  font-weight: 650;
+}
+
+.settingsUpdateApplyDialog p {
+  margin-top: 4px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.settingsUpdateApplyDialogClose {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+}
+
+.settingsUpdateApplyDialogClose:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.settingsUpdateApplyDialogFacts {
+  margin: 0;
+  border-top: 1px solid #e4edf5;
+  border-bottom: 1px solid #e4edf5;
+  padding: 10px 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px 18px;
+}
+
+.settingsUpdateApplyDialogFacts div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.settingsUpdateApplyDialogFacts dt,
+.settingsUpdateApplyDialogFacts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyDialogFacts dt {
+  color: #7b8797;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.settingsUpdateApplyDialogFacts dd {
+  color: #142033;
+  font-size: 13px;
+  line-height: 1.3;
+  font-weight: 550;
+}
+
+.settingsUpdateApplyDialogRestart {
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+  padding: 10px 12px;
+  display: grid;
+  gap: 3px;
+}
+
+.settingsUpdateApplyDialogRestart strong,
+.settingsUpdateApplyDialogRestart span {
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.38;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyDialogRestart strong {
+  font-weight: 650;
+}
+
+.settingsUpdateApplyDialogError {
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #991b1b;
+  padding: 9px 11px;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyDialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settingsUpdateApplyDialogActions .button {
+  width: auto;
+  min-width: 0;
+}
+
 .settingsConfirmModal {
   width: min(420px, calc(100vw - 32px));
   border: 1px solid #dbe3ef;
@@ -1752,8 +1905,8 @@
 .settingsUpdateApplyHero {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(250px, 0.82fr) minmax(0, 2.18fr);
-  gap: 16px;
+  grid-template-columns: 38px minmax(190px, 0.82fr) minmax(0, 1.75fr) minmax(150px, 0.75fr);
+  column-gap: 14px;
   align-items: stretch;
   border: 1px solid #e4edf5;
   border-radius: 8px;
@@ -1764,9 +1917,9 @@
 .settingsUpdateApplyHeroState {
   min-width: 0;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-  gap: 11px;
-  align-items: start;
+  grid-template-rows: repeat(3, auto);
+  gap: 5px;
+  align-content: start;
 }
 
 .settingsUpdateApplyHeroIcon {
@@ -1782,6 +1935,7 @@
   font-size: 18px;
   font-weight: 650;
   line-height: 1;
+  align-self: center;
 }
 
 .settingsUpdateApplyHero.is-warning .settingsUpdateApplyHeroIcon {
@@ -1799,61 +1953,39 @@
 .settingsUpdateApplyHeroState strong {
   display: block;
   color: #142033;
-  font-size: 16px;
+  font-size: 12px;
   line-height: 1.25;
-  font-weight: 500;
+  font-weight: 600;
   overflow-wrap: anywhere;
 }
 
 .settingsUpdateApplyHeroState p {
-  margin: 0;
+  margin: 3px 0 0;
   color: #6a7685;
   font-size: 12px;
   line-height: 1.45;
   overflow-wrap: anywhere;
 }
 
-.settingsUpdateApplyVersionRows {
-  margin: 8px 0 0;
-  display: inline-grid;
-  grid-template-columns: max-content max-content;
-  gap: 4px 12px;
-  align-items: baseline;
-  max-width: 100%;
-}
-
-.settingsUpdateApplyVersionRows div {
-  display: contents;
-}
-
-.settingsUpdateApplyVersionRows dt {
-  color: #7b8797;
-  font-size: 11px;
-  line-height: 1.25;
-  font-weight: 500;
-  letter-spacing: 0;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.settingsUpdateApplyVersionRows dd {
-  margin: 0;
+.settingsUpdateApplyHeroPrimaryValue {
   color: #142033;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.25;
   font-weight: 500;
-  justify-self: start;
-  text-align: left;
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
+.settingsUpdateApplyHeroState small {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
 .settingsUpdateApplyHeroFacts {
-  min-width: 0;
-  margin: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1.75fr) minmax(150px, 0.75fr);
-  gap: 14px;
+  display: contents;
 }
 
 .settingsUpdateApplyHeroFacts div {
@@ -1876,7 +2008,7 @@
 .settingsUpdateApplySummaryGrid span {
   color: #7b8797;
   font-size: 11px;
-  line-height: 1.2;
+  line-height: 1.36;
   font-weight: 500;
   text-transform: uppercase;
   letter-spacing: 0;
@@ -1947,35 +2079,6 @@
 
 .settingsUpdateApplyTechnical .settingsUpdateApplyFacts {
   margin-top: 10px;
-}
-
-.settingsUpdateApplySupport {
-  border: 1px solid #d8e3ee;
-  border-radius: 8px;
-  background: #f8fbfd;
-  padding: 12px 14px;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: center;
-}
-
-.settingsUpdateApplySupport strong {
-  display: block;
-  color: #172236;
-  font-size: 13px;
-  line-height: 1.25;
-  font-weight: 600;
-}
-
-.settingsUpdateApplySupport p,
-.settingsUpdateApplySupport small {
-  display: block;
-  margin: 4px 0 0;
-  color: #64748b;
-  font-size: 12px;
-  line-height: 1.35;
-  font-weight: 400;
 }
 
 .settingsUpdateApplyTimeline {
@@ -2375,7 +2478,6 @@
   .settingsUpdateApplyFacts,
   .settingsUpdateApplyHero,
   .settingsUpdateApplyHeroFacts,
-  .settingsUpdateApplySupport,
   .settingsUpdateApplySummaryGrid,
   .settingsMaintenanceFlow dl {
     grid-template-columns: 1fr;
@@ -2387,7 +2489,26 @@
   }
 
   .settingsUpdateApplyHero {
+    grid-template-columns: 38px minmax(0, 1fr);
+    column-gap: 11px;
+    row-gap: 12px;
     padding: 14px;
+  }
+
+  .settingsUpdateApplyHeroState {
+    grid-column: 2;
+  }
+
+  .settingsUpdateApplyHeroIcon {
+    grid-column: 1;
+    align-self: center;
+  }
+
+  .settingsUpdateApplyHeroFacts {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
   }
 
   .settingsUpdateApplyHeroFacts div,
@@ -2456,6 +2577,19 @@
   .settingsMaintenanceSupportActions .button,
   .settingsUpdateApplyActions .button {
     width: 100%;
+  }
+
+  .settingsUpdateApplyDialogFacts {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsUpdateApplyDialogActions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settingsUpdateApplyDialogActions .button:only-child {
+    grid-column: 1 / -1;
   }
 
   .settingsMaintenanceFlow dl div,

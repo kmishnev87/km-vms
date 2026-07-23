@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import {
   maintenanceStatusClass,
   updateApplyButtonText,
+  updateApplyErrorMessages,
   updateApplyEffectiveStatus,
   updateApplyFactRows,
   updateApplyRecoveryText,
@@ -75,16 +76,17 @@ assert.equal(appRoutes.some((file) => file === "update/page.js" || file.startsWi
 assert.equal(settingsPage.includes("settingsUpdateApplyTimeline"), true);
 assert.equal(settingsPage.includes("updateApplyOperatorModel(updateStatus, updateApplyStatus, t, lang"), true);
 assert.equal(settingsPage.includes("updateApplyButtonText(updateApplyStatus, t)"), true);
-assert.equal(settingsPage.includes("updateApplyTrustedCandidateRelease(updateStatus)"), true);
-assert.equal(settingsPage.includes("updateApplyStatus?.is_stale"), true);
-assert.equal(settingsPage.includes("operator_action"), true);
+assert.equal(settingsPage.includes("updateApplyCandidateSnapshot(updateStatus)"), true);
+assert.equal(settingsHelpers.includes("applyStatus?.is_stale"), true);
+assert.equal(settingsPage.includes("updateApplyErrorMessages(updateApplyStatus?.error, t, lang)"), true);
 assert.equal(css.includes(".settingsUpdateApplyTimeline li.is-running"), true);
 assert.equal(css.includes(".settingsUpdateApplyTimeline li.is-failed"), true);
 
 assert.equal(settingsPage.includes("raw JSON"), false);
 assert.equal(settingsPage.includes("helper logs"), false);
 assert.equal(settingsPage.includes("localStorage"), false);
-assert.equal(settingsPage.includes("sessionStorage"), false);
+assert.equal(settingsPage.includes("UPDATE_APPLY_RECONCILIATION_STORAGE_KEY"), true);
+assert.equal(settingsPage.includes("sessionStorage.setItem(TOKEN_KEY"), false);
 assert.equal(settingsPage.includes('name="token"'), false);
 assert.equal(settingsPage.includes('name="url"'), false);
 assert.equal(settingsPage.includes('name="repo"'), false);
@@ -98,6 +100,12 @@ assert.equal(updateApplyButtonText({ status: "rebuilding", current_step: "rebuil
 assert.equal(updateApplyButtonText({ status: "health_check", current_step: "health_check" }, t), "Health check");
 assert.equal(updateApplyButtonText({ status: "commit_verification", current_step: "commit_verification" }, t), "Commit check");
 assert.equal(updateApplyRecoveryText("stalled", { error: { operator_action: "Check server status." } }, t), "Check server status.");
+assert.deepEqual(updateApplyErrorMessages({ message: "failed", operator_action: "retry" }, {
+  maintenanceMessageLabels: { failed: "Failure reason", retry: "Retry action" },
+  maintenanceMessageFallback: "Safe fallback",
+  maintenanceActionFallback: "Safe action fallback",
+  maintenanceStatuses: { unknown: "Unknown" },
+}, "en"), ["Failure reason", "Retry action"]);
 
 assert.deepEqual(updateApplyStepRows({ steps: [{ name: "preflight", status: "completed" }, { name: "rebuilding", status: "running" }] }, t), [
   { name: "request", label: "Request", status: "pending", statusLabel: "Pending" },

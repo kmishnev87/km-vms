@@ -259,7 +259,7 @@ def test_stage622_api_exposes_last_apply_summary_without_fake_step_times(tmp_pat
                 "max_items": 10,
                 "items": [
                     {
-                        "request_id": "update-stage622",
+                        "request_id": "update-" + "6" * 32,
                         "status": "completed",
                         "phase": "completed",
                         "started_at": "2026-07-02T00:00:00Z",
@@ -282,7 +282,7 @@ def test_stage622_api_exposes_last_apply_summary_without_fake_step_times(tmp_pat
 
     assert status["status"] == "idle"
     assert status["apply_history"]["available"] is True
-    assert status["last_apply_summary"]["request_id"] == "update-stage622"
+    assert status["last_apply_summary"]["request_id"] == "update-" + "6" * 32
     assert status["last_apply_summary"]["history_detail_status"] == "step_timestamps_unavailable"
     assert "time_label" not in status["last_apply_summary"]["steps"][0]
 

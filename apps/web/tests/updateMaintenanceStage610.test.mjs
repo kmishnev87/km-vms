@@ -31,14 +31,15 @@ assert.equal(settingsPage.includes('apiFetch("/system/update/apply"'), true);
 assert.equal(settingsPage.includes('apiFetch("/system/update/check"'), true, "Update check must stay inside the dedicated update apply panel");
 assert.equal(settingsHelpers.includes('update: { path: "/system/update/check", body: {} }'), false, "Legacy maintenance overview update flow must be removed");
 
-assert.equal(settingsPage.includes("buildUpdateApplyConfirmation(t, updateStatus)"), true);
+assert.equal(settingsPage.includes("buildUpdateApplyConfirmation(t, updateStatus)"), false);
+assert.equal(settingsPage.includes("updateApplyCandidateSnapshot(updateStatus)"), true);
 assert.equal(settingsPage.includes("expected_manifest_version"), true);
 assert.equal(settingsPage.includes("expected_manifest_commit"), true);
 assert.equal(settingsPage.includes("updateApplyOperatorModel"), true);
 assert.equal(settingsHelpers.includes("updateApplyEffectiveStatus"), true);
 assert.equal(settingsHelpers.includes("updateApplyRecoveryText"), true);
 assert.equal(settingsHelpers.includes("updateApplyFactRows"), true);
-assert.equal(settingsPage.includes("settingsUpdateApplySupport"), true);
+assert.equal(settingsPage.includes("settingsUpdateApplySupport"), false);
 assert.equal(settingsPage.includes("formatUpdateNotice(item, t, lang)"), false);
 assert.equal(settingsPage.includes("{item.message || item.code}"), false);
 assert.equal(settingsHelpers.includes("commit_verified === false"), true);
@@ -52,7 +53,8 @@ assert.equal(settingsPage.includes("Apply is not executed from this screen"), fa
 assert.equal(settingsPage.includes("raw JSON"), false);
 assert.equal(settingsPage.includes("helper logs"), false);
 assert.equal(settingsPage.includes("localStorage"), false);
-assert.equal(settingsPage.includes("sessionStorage"), false);
+assert.equal(settingsPage.includes("UPDATE_APPLY_RECONCILIATION_STORAGE_KEY"), true);
+assert.equal(settingsPage.includes("sessionStorage.setItem(TOKEN_KEY"), false);
 assert.equal(settingsPage.includes('name="token"'), false);
 assert.equal(settingsPage.includes('name="url"'), false);
 assert.equal(settingsPage.includes('name="repo"'), false);

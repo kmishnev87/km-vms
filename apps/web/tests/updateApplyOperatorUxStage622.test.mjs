@@ -85,7 +85,7 @@ const t = {
 
 assert.equal(settingsPage.includes("settingsUpdateApplyHero"), true);
 assert.equal(settingsPage.includes("settingsUpdateApplySummaryGrid"), true);
-assert.equal(settingsPage.includes("settingsUpdateApplySupport"), true);
+assert.equal(settingsPage.includes("settingsUpdateApplySupport"), false);
 assert.equal(settingsPage.includes("settingsMaintenanceModalHeader"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceBackupManager"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceBackupCreate"), false);
@@ -111,13 +111,17 @@ assert.equal(css.includes(".settingsUpdateApplyTimeline li.is-idle"), true);
 assert.equal(css.includes(".settingsMaintenanceModalHeader"), true);
 assert.equal(css.includes(".settingsMaintenanceBackupManager"), true);
 assert.equal(css.includes("settingsUpdateApplyHero.is-blocked"), true);
-assert.equal(css.includes("grid-template-columns: minmax(0, 1.75fr) minmax(150px, 0.75fr)"), true);
-assert.equal(css.includes("grid-template-columns: max-content max-content"), true);
-assert.equal(css.includes(".settingsUpdateApplyVersionRows div"), true);
-assert.equal(css.includes("display: contents"), true);
-assert.equal(css.includes("white-space: nowrap"), true);
-assert.equal(cssRule(".settingsUpdateApplyVersionRows dd").includes("justify-self: end"), false);
-assert.equal(css.includes(".settingsUpdateApplySupport"), true);
+assert.match(
+  cssRule(".settingsUpdateApplyHero"),
+  /grid-template-columns: 38px minmax\(190px, 0\.82fr\) minmax\(0, 1\.75fr\) minmax\(150px, 0\.75fr\)/,
+);
+assert.equal(settingsPage.includes("settingsUpdateApplyVersionRows"), false);
+assert.equal(css.includes(".settingsUpdateApplyVersionRows"), false);
+assert.equal(cssRule(".settingsUpdateApplyHeroFacts").includes("display: contents"), true);
+assert.equal(cssRule(".settingsUpdateApplyHeroPrimaryValue").includes("font-variant-numeric: tabular-nums"), true);
+assert.equal(css.includes("grid-template-columns: 38px minmax(0, 1fr)"), true);
+assert.equal(css.includes(".settingsUpdateApplySupport"), false);
+assert.equal(css.includes(".settingsUpdateApplyDialog"), true);
 assert.equal(css.includes("overflow-wrap: anywhere"), true);
 
 assert.equal(updateApplyRecoveryText("provider_unavailable", {}, t), "Provider-specific recovery");
@@ -249,6 +253,7 @@ const completedWithSteps = updateApplyOperatorModel(
     expected_commit: "a".repeat(40),
     installed_commit: "a".repeat(40),
     commit_verified: true,
+    release_identity: { metadata_status: "complete" },
     steps: [
       { name: "request", status: "completed" },
       { name: "preflight", status: "completed" },

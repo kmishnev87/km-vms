@@ -10,6 +10,7 @@ WORKDIR /workspace
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      acl \
       ca-certificates \
       ffmpeg \
       postgresql-client \
