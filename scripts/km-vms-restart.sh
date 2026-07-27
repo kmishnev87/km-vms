@@ -17,8 +17,9 @@ Usage:
 Environment equivalents:
   KM_VMS_APP_DIR, KM_VMS_PROJECT_NAME, KM_VMS_DOCKER_COMPOSE.
 
-This helper does not regenerate .env, does not remove volumes, and does not
-create users/settings. It only restarts the existing compose application.
+This helper does not regenerate .env, remove volumes, create users/settings,
+or re-run completed schema/update one-shot services. It reconciles only the
+persistent services of an existing compose application.
 EOF
 }
 
@@ -118,7 +119,19 @@ apply_generated_archive_roots_compose_if_needed() {
   fi
   wait_for_archive_roots_compose_file || return 0
   compose_with_archive_roots "$@" config >/dev/null
-  compose_with_archive_roots "$@" up -d --force-recreate api
+  compose_with_archive_roots "$@" up -d --no-deps --force-recreate api
+}
+
+reconcile_persistent_services() {
+  compose_with_archive_roots "$@" up -d --no-deps \
+    update-status-reader \
+    update-retry-admission \
+    api \
+    recorder \
+    web \
+    nginx \
+    setup-helper \
+    update-helper
 }
 
 write_apply_status() {
@@ -244,9 +257,9 @@ fi
   archive_roots_compose_present && archive_roots_compose_was_present=1
   compose_with_archive_roots "$@" config >/dev/null
   if [ "$VERIFY_STORAGE_SELECTION" = "1" ]; then
-    compose_with_archive_roots "$@" up -d --force-recreate api recorder web nginx
+    compose_with_archive_roots "$@" up -d --no-deps --force-recreate api recorder web nginx
   else
-    compose_with_archive_roots "$@" up -d
+    reconcile_persistent_services "$@"
   fi
   apply_generated_archive_roots_compose_if_needed "$archive_roots_compose_was_present" "$@"
 )

@@ -291,7 +291,11 @@ def test_system_status_reuses_lightweight_owner_and_preserves_unknown(stage4101,
 
     assert calls == [True]
     assert payload["domains"]["reconciliation"]["severity"] == "unknown"
-    assert payload["domains"]["reconciliation"]["evidence_status"] in {"missing", "metadata_only"}
+    assert payload["domains"]["reconciliation"]["evidence_status"] in {
+        "missing",
+        "metadata_only",
+        "not_checked",
+    }
 
 
 def test_active_recording_is_not_a_storage_or_migration_warning(stage4101):
@@ -769,8 +773,11 @@ def test_global_conflict_scopes_block_every_operation_type_pair():
     global_scope = normalize_operation_scope(_scope(global_scope=True))
     regular_scope = normalize_operation_scope(_scope())
     for left_type, right_type in product(sorted(OPERATION_TYPES), repeat=2):
-        assert operations_conflict(left_type, global_scope, right_type, regular_scope) is True
-        assert operations_conflict(left_type, regular_scope, right_type, global_scope) is True
+        expected = not bool(
+            {"integrity_scan", "integrity_plan_prepare"} & {left_type, right_type}
+        )
+        assert operations_conflict(left_type, global_scope, right_type, regular_scope) is expected
+        assert operations_conflict(left_type, regular_scope, right_type, global_scope) is expected
 
 
 def test_conflict_claims_allow_disjoint_exact_scope_and_block_overlap(stage4101):
@@ -1059,8 +1066,8 @@ def test_schema_clean_install_upgrade_restart_and_prebootstrap_gate():
     _seed_schema_v1(db)
     with pytest.raises(SchemaVersionBlocked):
         validate_schema_migrations_pre_bootstrap(engine)
-    first = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS)
-    second = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS)
+    first = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS, target_version=6)
+    second = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS, target_version=6)
     inspector = inspect(engine)
 
     assert first["executed_migrations"] == [
@@ -1069,10 +1076,9 @@ def test_schema_clean_install_upgrade_restart_and_prebootstrap_gate():
         STAGE4102_RETENTION_MIGRATION.migration_id,
         STAGE4103_ARCHIVE_INTEGRITY_MIGRATION.migration_id,
         STAGE4104_ARCHIVE_MIGRATION.migration_id,
-        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION.migration_id,
     ]
     assert second["executed_migrations"] == []
-    assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == CURRENT_SCHEMA_VERSION
+    assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == 6
     assert all(inspector.has_table(name) for name in ("storage_operations", "storage_worker_leases", "storage_work_signals"))
     operation_columns = {item["name"] for item in inspector.get_columns("storage_operations")}
     assert {"parent_snapshot", "retry_depth", "domain_ref"}.issubset(operation_columns)
@@ -1086,7 +1092,8 @@ def test_schema_clean_install_upgrade_restart_and_prebootstrap_gate():
         "low_disk_suspended_physical_volume_id",
         "low_disk_suspended_at",
     }.issubset(settings_columns)
-    validate_schema_migrations_pre_bootstrap(engine)
+    with pytest.raises(SchemaVersionBlocked):
+        validate_schema_migrations_pre_bootstrap(engine)
     db.close()
     engine.dispose()
 
@@ -1410,58 +1417,46 @@ def test_root_delete_terminal_replay_is_actor_bound(stage4101, tmp_path, monkeyp
     assert exc_info.value.detail["reason_code"] == "storage_operation_identity_mismatch"
 
 
-def test_reconciliation_terminal_replay_does_not_apply_twice(stage4101, monkeypatch):
+def test_reconciliation_route_forwards_scan_identity_to_integrity_engine(stage4101, monkeypatch):
     db = stage4101["db"]
-    calls = []
+    calls = {}
 
-    def reconcile_stub(*_args, **_kwargs):
-        calls.append(True)
-        return {"status": "completed", "total_rows": 3, "updated_count": 2, "failed_count": 0}
+    def scan_stub(_db, *, actor, idempotency_key):
+        calls.update(actor=actor, idempotency_key=idempotency_key)
+        return {"status": "queued", "operation_id": idempotency_key}
 
-    monkeypatch.setattr(storage_router, "reconcile_recordings", reconcile_stub)
+    monkeypatch.setattr(storage_router, "start_integrity_scan", scan_stub)
     payload = storage_router.ReconciliationRequest(
-        mode="apply_safe",
+        mode="dry_run",
         operation_id="stage41011-reconcile-replay",
     )
 
-    first = storage_router.storage_reconcile(payload, db=db, current_user=stage4101["owner"])
-    second = storage_router.storage_reconcile(payload, db=db, current_user=stage4101["owner"])
-
-    assert first["status"] == "completed"
-    assert second["status"] == "completed"
-    assert second["replayed"] is True
-    assert second["updated_count"] == 2
-    assert calls == [True]
+    result = storage_router.storage_reconcile(payload, db=db, current_user=stage4101["owner"])
+    assert result == {"status": "queued", "operation_id": "stage41011-reconcile-replay"}
+    assert calls == {
+        "actor": stage4101["owner"],
+        "idempotency_key": "stage41011-reconcile-replay",
+    }
 
 
-def test_inner_persisted_result_becomes_partial_if_outer_closeout_fails(stage4101, monkeypatch):
+def test_reconciliation_broad_apply_is_rejected_before_integrity_scan(stage4101, monkeypatch):
     db = stage4101["db"]
     monkeypatch.setattr(
         storage_router,
-        "reconcile_recordings",
-        lambda *_args, **_kwargs: {"status": "completed", "total_rows": 1, "updated_count": 1},
+        "start_integrity_scan",
+        lambda *_args, **_kwargs: pytest.fail(
+            "broad apply must fail before scan admission"
+        ),
     )
-
-    original_touch = storage_operations_foundation.OperationHeartbeatController.touch
-
-    def fail_forced_touch(self, *, force=False):
-        if force:
-            raise RuntimeError("injected outer closeout heartbeat failure")
-        return original_touch(self, force=force)
-
-    monkeypatch.setattr(storage_operations_foundation.OperationHeartbeatController, "touch", fail_forced_touch)
     payload = storage_router.ReconciliationRequest(
         mode="apply_safe",
         operation_id="stage41011-reconcile-partial",
     )
 
-    with pytest.raises(RuntimeError, match="outer closeout heartbeat failure"):
+    with pytest.raises(storage_router.HTTPException) as captured:
         storage_router.storage_reconcile(payload, db=db, current_user=stage4101["owner"])
-
-    row = db.get(StorageOperation, "stage41011-reconcile-partial")
-    assert row.status == "partial"
-    assert row.result["updated_count"] == 1
-    assert row.lease_expires_at is None
+    assert captured.value.status_code == 409
+    assert captured.value.detail["reason_code"] == "archive_integrity_broad_apply_removed"
 
 
 def test_root_delete_exception_terminalizes_outer(stage4101, tmp_path, monkeypatch):
@@ -1508,30 +1503,21 @@ def test_root_delete_exception_terminalizes_outer(stage4101, tmp_path, monkeypat
     assert row.lease_expires_at is None
 
 
-def test_reconciliation_exception_terminalizes_outer(stage4101, monkeypatch):
+def test_reconciliation_scan_exception_propagates_without_legacy_outer_operation(stage4101, monkeypatch):
     db = stage4101["db"]
     owner = stage4101["owner"]
     monkeypatch.setattr(
         storage_router,
-        "reconcile_recordings",
+        "start_integrity_scan",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("injected reconciliation failure")),
     )
 
     with pytest.raises(RuntimeError, match="injected reconciliation failure"):
         storage_router.storage_reconcile(
-            storage_router.ReconciliationRequest(mode="apply_safe"),
+            storage_router.ReconciliationRequest(mode="dry_run"),
             db=db,
             current_user=owner,
         )
-
-    row = (
-        db.query(StorageOperation)
-        .filter(StorageOperation.operation_type == "integrity_metadata_repair")
-        .order_by(StorageOperation.created_at.desc())
-        .first()
-    )
-    assert row.status == "failed"
-    assert row.lease_expires_at is None
 
 
 def test_activation_scheduling_exception_terminalizes_outer(stage4101, tmp_path, monkeypatch):

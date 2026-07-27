@@ -18,6 +18,7 @@ from app.services.schema_versioning import (
     CURRENT_SCHEMA_VERSION,
     CURRENT_STATE_ID,
     LEGACY_DB_ONLY_TABLES,
+    KNOWN_OPTIONAL_MODEL_TABLES,
     METADATA_INCOMPLETE_STATUS,
     SAFE_STATUSES,
     SCHEMA_METADATA_TABLES,
@@ -52,21 +53,24 @@ def _bounded(values: set[str] | list[str], limit: int = 20) -> list[str]:
     return sorted(str(item)[:120] for item in list(values))[:limit]
 
 
-def _metadata_tables_present(db: Session) -> tuple[bool, bool]:
+def _metadata_tables_present(db: Session) -> dict[str, bool]:
     inspector = inspect(db.get_bind())
-    return inspector.has_table("schema_version_state"), inspector.has_table("schema_migration_history")
+    return {
+        table_name: inspector.has_table(table_name)
+        for table_name in sorted(SCHEMA_METADATA_TABLES)
+    }
 
 
 def _metadata_summary(db: Session) -> dict[str, Any]:
-    has_state, has_history = _metadata_tables_present(db)
+    presence = _metadata_tables_present(db)
+    has_state = presence["schema_version_state"]
+    has_history = presence["schema_migration_history"]
     row = db.get(SchemaVersionState, CURRENT_STATE_ID) if has_state else None
     history_count = db.query(SchemaMigrationHistory).count() if has_history else 0
     return {
         "metadata_present": has_state and has_history and row is not None,
-        "metadata_tables": {
-            "schema_version_state": has_state,
-            "schema_migration_history": has_history,
-        },
+        "any_metadata_present": any(presence.values()),
+        "metadata_tables": presence,
         "current_state_present": row is not None,
         "history_count": history_count,
         "schema_version": row.schema_version if row else None,
@@ -80,7 +84,12 @@ def _safe_table_summary(shape) -> dict[str, Any]:
     table_names = shape.table_names
     product_tables = table_names - SCHEMA_METADATA_TABLES
     required_missing = BASELINE_MODEL_TABLES - table_names
-    expected_or_metadata = BASELINE_MODEL_TABLES | LEGACY_DB_ONLY_TABLES | SCHEMA_METADATA_TABLES
+    expected_or_metadata = (
+        BASELINE_MODEL_TABLES
+        | LEGACY_DB_ONLY_TABLES
+        | KNOWN_OPTIONAL_MODEL_TABLES
+        | SCHEMA_METADATA_TABLES
+    )
     unknown_tables = product_tables - expected_or_metadata
     return {
         "known_tables_found": len(product_tables & BASELINE_MODEL_TABLES),
@@ -193,7 +202,7 @@ def inspect_db_adoption(db: Session, *, include_backup_plan: bool = True, actor:
                 "creates_backup_files": False,
             }
 
-    if metadata["metadata_tables"]["schema_version_state"] or metadata["metadata_tables"]["schema_migration_history"]:
+    if metadata["any_metadata_present"]:
         status = _status_from_schema_status(schema_status)
         reason = "Schema metadata is already valid." if status == "already_adopted" else schema_status.get("summary", "Schema metadata is not adoptable.")
         report = _build_report(

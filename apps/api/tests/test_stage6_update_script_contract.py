@@ -57,6 +57,14 @@ def _write_permission_chain_fixture(root: Path) -> None:
     if not bridge.exists():
         bridge.write_text(read("scripts/km-vms-update-helper-bridge.py"), encoding="utf-8")
     os.chmod(bridge, 0o644)
+    for relative in (
+        "scripts/km-vms-storage-candidate-validate.sh",
+        "scripts/km-vms-storage-root-cleanup.sh",
+    ):
+        path = root / relative
+        if not path.exists():
+            path.write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+        os.chmod(path, 0o644)
     for relative in PERMISSION_EXECUTABLE_FIXTURE_FILES:
         path = root / relative
         if relative == "scripts/km-vms-permission-gate.sh":
@@ -639,52 +647,6 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
         assert not (app / ".km-vms-source.json").exists()
 
 
-def test_update_permission_preflight_blocks_before_overlay_when_acl_inspection_fails(tmp_path):
-    compose_function = "\n".join(
-        [
-            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
-            "km_vms_compose_cmd() { :; }",
-        ]
-    )
-    app, _source, bin_dir = _write_update_shell_fixture(
-        tmp_path,
-        compose_function=compose_function,
-    )
-    marker = app / "apps/api/preoverlay-marker.txt"
-    marker.write_text("must-survive\n", encoding="utf-8")
-    os.chmod(marker, 0o666)
-    marker_mode_before = marker.stat().st_mode
-    (bin_dir / "getfacl").write_text(
-        "#!/usr/bin/env sh\n"
-        "printf 'simulated ACL inspection failure\\n' >&2\n"
-        "exit 73\n",
-        encoding="utf-8",
-    )
-    os.chmod(bin_dir / "getfacl", 0o755)
-
-    result = subprocess.run(
-        [
-            "sh",
-            "scripts/update.sh",
-            "--github-repo",
-            "owner/repo",
-            "--branch",
-            "main",
-            "--yes",
-        ],
-        cwd=app,
-        env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-
-    assert result.returncode != 0
-    assert "pre-overlay existing-tree permission validation failed" in result.stderr.lower()
-    assert marker.read_text(encoding="utf-8") == "must-survive\n"
-    assert marker.stat().st_mode == marker_mode_before
-
-
 def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_source_file():
     script = read("scripts/update.sh")
     with tempfile.TemporaryDirectory(prefix="kmvms_update_overlay_fixture_") as tmp:
@@ -1010,22 +972,23 @@ def test_permission_gate_existing_contract_does_not_require_target_only_files():
     assert "TARGET_ONLY_PRIVILEGED_FILES=" in gate
     assert "scripts/km-vms-permission-gate.sh" in gate
     assert "scripts/km-vms-update-helper-bridge.py" in gate
-    assert 'if [ "$CONTRACT" = "target" ]' in gate
+    assert 'if [ "$CONTRACT" = "existing" ]' in gate
     assert "permission_contract=%s" in gate
 
 
-def test_update_helper_bridge_uses_strict_json_and_exact_target_image_activation():
+def test_update_helper_bridge_uses_bounded_json_and_exact_target_image_activation():
     bridge = read("scripts/km-vms-update-helper-bridge.py")
 
-    assert "object_pairs_hook=reject_duplicate_object_pairs" in bridge
-    assert "parse_constant=reject_nonfinite_json_constant" in bridge
+    assert "MAX_CONTROL_BYTES = 64 * 1024" in bridge
+    assert "path.stat().st_size > MAX_CONTROL_BYTES" in bridge
+    assert "payload = json.loads(path.read_text" in bridge
+    assert "Update control data must be a JSON object." in bridge
     assert "validate_completed_status(payload, request_id)" in bridge
     assert 'payload.get("status") != "completed"' in bridge
     assert 'payload.get("commit_verified") is not True' in bridge
     assert "expected_commit.lower() != installed_commit.lower()" in bridge
     assert '"--force-recreate", "update-helper"' in bridge
-    assert '"exec"' in bridge
-    assert "getfacl --version" in bridge
+    assert "getfacl --version" not in bridge
     assert "DEFAULT_TIMEOUT_SECONDS = 7800" in bridge
     assert "docker:27-cli" not in bridge
     assert '"scripts/km-vms-permission-gate.sh"' in bridge
@@ -1037,3 +1000,47 @@ def test_update_helper_bridge_uses_strict_json_and_exact_target_image_activation
     assert gate_call < image_call < receipt_call < schedule_call
     assert 'check=False,' in bridge[bridge.index("def run_target_permission_gate"):schedule_call]
     assert '"permission_gate=PASS"' in bridge
+
+
+def test_rebuild_resets_one_shots_and_does_not_retry_terminal_schema_failure():
+    script = read("scripts/update.sh")
+    rebuild = script[
+        script.index("rebuild_recreate() {"):
+        script.index("\nhealth_check() {")
+    ]
+
+    assert (
+        'UPDATE_ONE_SHOT_SERVICES="update-helper-bootstrap '
+        'schema-update"'
+        in script
+    )
+    assert "compose_service_failed()" in script
+    assert "schema_pipeline_failed()" in script
+    assert "normalize_legacy_schema_override_service()" in script
+    assert "reset_update_one_shots()" in script
+    assert "reset_failed_update_bootstrap()" in script
+    assert "compose_with_archive_roots ps -a -q" in script
+    assert "docker inspect" in script
+
+    reset_i = rebuild.index("      reset_update_one_shots\n")
+    first_up_i = rebuild.index(
+        "      compose_with_archive_roots up -d --build "
+        "postgres redis api recorder web nginx || {"
+    )
+    terminal_i = rebuild.index(
+        "        if schema_pipeline_failed; then\n"
+    )
+    bootstrap_i = rebuild.index(
+        "        reset_failed_update_bootstrap\n"
+    )
+    retry_i = rebuild.rindex(
+        "        compose_with_archive_roots up -d --build "
+        "postgres redis api recorder web nginx"
+    )
+    assert reset_i < first_up_i < terminal_i < bootstrap_i < retry_i
+
+    normalize_i = script.index(
+        "normalize_legacy_schema_override_service\n"
+    )
+    compose_config_i = script.rindex("compose_config\n")
+    assert normalize_i < compose_config_i

@@ -593,70 +593,13 @@ def test_terminal_claim_commit_error_and_nested_shape_contradictions():
         assert not helper_accepts(helper, payload)
 
 
-@pytest.mark.parametrize(
-    "injection",
-    [
-        lambda raw: raw.replace('"schema_version":2', '"schema_version":2,"schema_version":2', 1),
-        lambda raw: raw.replace('"state":"admitted_unclaimed"', '"state":"admitted_unclaimed","state":"admitted_unclaimed"', 1),
-        lambda raw: raw.replace('"kind":"trusted_manifest"', '"kind":"trusted_manifest","kind":"trusted_manifest"', 1),
-        lambda raw: raw.replace('"state":"confirmed"', '"state":"confirmed","state":"pending"', 1),
-    ],
-)
-def test_duplicate_keys_rejected_before_normalization_with_api_helper_parity(injection):
+@pytest.mark.parametrize("raw", ("{", '{"x":1} trailing', "[]"))
+def test_malformed_authority_json_is_rejected_by_api_and_helper(raw):
     helper = load_helper()
-    raw = json.dumps(admission_document(entry_payload("admitted_unclaimed")), separators=(",", ":"))
-    duplicate = injection(raw)
     with pytest.raises(Exception):
-        update_apply._decode_authority_json(duplicate)
+        update_apply._decode_authority_json(raw)
     with pytest.raises(helper.HelperError):
-        helper.decode_authority_json(duplicate)
-
-
-@pytest.mark.parametrize(
-    ("status", "needle", "replacement"),
-    [
-        ("failed", '"current_submission_id":"11111111-1111-4111-8111-111111111111"', '"current_submission_id":"11111111-1111-4111-8111-111111111111","current_submission_id":"11111111-1111-4111-8111-111111111111"'),
-        ("failed", '"entries":[', '"entries":[],"entries":['),
-        ("failed", '"category":"health_check_failed"', '"category":"health_check_failed","category":"health_check_failed"'),
-        ("failed", '"name":"preflight"', '"name":"preflight","name":"preflight"'),
-        ("failed", '"helper_public_ports":false', '"helper_public_ports":false,"helper_public_ports":false'),
-        ("completed", '"host_metadata_status":"complete"', '"host_metadata_status":"complete","host_metadata_status":"complete"'),
-    ],
-)
-def test_duplicate_document_terminal_nested_families_are_rejected(status, needle, replacement):
-    helper = load_helper()
-    request = request_payload()
-    terminal = terminal_payload(
-        request,
-        status=status,
-        category="health_check_failed" if status == "failed" else None,
-        phase="health_check_failed" if status == "failed" else None,
-    )
-    raw = json.dumps(admission_document(entry_payload("terminal", terminal=terminal)), separators=(",", ":"))
-    assert needle in raw
-    duplicate = raw.replace(needle, replacement, 1)
-    with pytest.raises(Exception):
-        update_apply._decode_authority_json(duplicate)
-    with pytest.raises(helper.HelperError):
-        helper.decode_authority_json(duplicate)
-
-
-def test_malformed_and_nesting_boundaries_have_parser_parity():
-    helper = load_helper()
-    for raw in ("{", '{"x":1} trailing', '{"x":NaN}', '{"x":Infinity}'):
-        with pytest.raises(Exception):
-            update_apply._decode_authority_json(raw)
-        with pytest.raises(helper.HelperError):
-            helper.decode_authority_json(raw)
-
-    at_bound = '{"x":' + "[" * 31 + "0" + "]" * 31 + "}"
-    over_bound = '{"x":' + "[" * 32 + "0" + "]" * 32 + "}"
-    assert update_apply._decode_authority_json(at_bound)
-    assert helper.decode_authority_json(at_bound)
-    with pytest.raises(Exception):
-        update_apply._decode_authority_json(over_bound)
-    with pytest.raises(helper.HelperError):
-        helper.decode_authority_json(over_bound)
+        helper.decode_authority_json(raw)
 
 
 @pytest.mark.parametrize(("kind", "limit"), [("admission", update_apply.MAX_ADMISSION_BYTES), ("status", update_apply.MAX_CONTROL_BYTES)])

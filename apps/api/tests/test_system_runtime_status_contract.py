@@ -504,15 +504,33 @@ def test_retention_missing_and_unsupported_statuses_do_not_fake_ok(db):
     assert runtime_status._normalize_retention_status("mystery_status") == "unknown"
 
 
-def test_reconciliation_problem_counts_map_to_warning_without_samples_or_paths(db):
+def test_reconciliation_problem_counts_map_to_warning_without_samples_or_paths(db, monkeypatch):
     camera = add_camera(db)
     add_owned_segment(db, camera, relative_path="missing/missing.mkv")
-    missing = db.query(RecordingSegment).first()
-    Path(settings.storage_root, missing.relative_path).unlink()
-    missing.reconciliation_status = "missing_file"
-    missing.reconciliation_checked_at = datetime.utcnow()
-    db.add(missing)
-    db.commit()
+    summary = runtime_status.build_lightweight_storage_monitoring_summary(db)
+    summary["reconciliation_summary"] = {
+        "status": "completed_with_findings",
+        "evidence_status": "fresh",
+        "source": "durable_archive_integrity_scan",
+        "scan_id": "runtime-contract-scan",
+        "active": False,
+        "phase": "completed",
+        "checked_count": 1,
+        "failed_count": 0,
+        "last_checked_at": datetime.utcnow().isoformat() + "Z",
+        "missing_file_count": 1,
+        "root_unavailable_count": 0,
+        "root_unresolved_count": 0,
+        "invalid_path_count": 0,
+        "path_outside_storage_count": 0,
+        "orphan_file_count": 0,
+        "problem_file_count": 1,
+    }
+    monkeypatch.setattr(
+        runtime_status,
+        "build_lightweight_storage_monitoring_summary",
+        lambda _db: summary,
+    )
 
     payload = build_operator_runtime_status(db)
     reconciliation = payload["domains"]["reconciliation"]

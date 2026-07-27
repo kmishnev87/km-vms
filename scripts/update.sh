@@ -711,8 +711,6 @@ prepare_permission_gate_runtime() {
   UPDATE_BOOTSTRAP_IMAGE="km-vms-update-bootstrap:$bootstrap_suffix"
   docker build -t "$UPDATE_BOOTSTRAP_IMAGE" "$TMP_ROOT/source/apps/update-helper" >/dev/null ||
     fail "Cannot build target permission inspection runtime."
-  docker run --rm "$UPDATE_BOOTSTRAP_IMAGE" sh -c 'command -v getfacl >/dev/null 2>&1 && getfacl --version >/dev/null 2>&1' ||
-    fail "Target permission inspection runtime does not provide working getfacl."
 }
 
 run_trusted_permission_gate() {
@@ -766,9 +764,7 @@ prepare_update_helper_image() {
   (
     cd "$APP_DIR"
     compose_with_archive_roots build update-helper
-    compose_with_archive_roots run --rm --no-deps update-helper \
-      sh -c 'command -v getfacl >/dev/null 2>&1 && getfacl --version >/dev/null 2>&1'
-  ) || fail "Target update-helper image build or ACL runtime verification failed."
+  ) || fail "Target update-helper image build failed."
   UPDATE_HELPER_IMAGE_PREPARED=1
 }
 
@@ -804,6 +800,71 @@ compose_config() {
   ) || fail "Compose config validation failed."
 }
 
+normalize_legacy_schema_override_service() {
+  override="$(archive_roots_compose_file)"
+  [ -e "$override" ] || return 0
+  [ -f "$override" ] && [ ! -L "$override" ] ||
+    fail "Generated archive-roots Compose override is not a regular file."
+  legacy_count=$(grep -c '^  operation-recovery:$' "$override" || true)
+  target_count=$(grep -c '^  schema-update:$' "$override" || true)
+  [ "$legacy_count" -le 1 ] && [ "$target_count" -le 1 ] ||
+    fail "Generated archive-roots Compose override has ambiguous schema services."
+  if [ "$legacy_count" = "1" ] && [ "$target_count" = "0" ]; then
+    tmp_override="$override.tmp.$$"
+    sed 's/^  operation-recovery:$/  schema-update:/' "$override" \
+      > "$tmp_override" ||
+      fail "Cannot normalize the generated schema service override."
+    chmod 600 "$tmp_override" 2>/dev/null || true
+    mv "$tmp_override" "$override" ||
+      fail "Cannot activate the normalized schema service override."
+  elif [ "$legacy_count" = "1" ] && [ "$target_count" = "1" ]; then
+    fail "Generated archive-roots Compose override has conflicting schema services."
+  fi
+}
+
+UPDATE_ONE_SHOT_SERVICES="update-helper-bootstrap schema-update"
+
+compose_service_failed() {
+  service="$1"
+  container_id=$(
+    compose_with_archive_roots ps -a -q "$service" 2>/dev/null |
+      head -n 1
+  )
+  [ -n "$container_id" ] || return 1
+  container_state=$(
+    docker inspect \
+      --format '{{.State.Status}}:{{.State.ExitCode}}' \
+      "$container_id" 2>/dev/null || true
+  )
+  case "$container_state" in
+    exited:0) return 1 ;;
+    exited:*|dead:*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+schema_pipeline_failed() {
+  for service in schema-update; do
+    if compose_service_failed "$service"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+reset_update_one_shots() {
+  compose_with_archive_roots rm -f -s $UPDATE_ONE_SHOT_SERVICES \
+    >/dev/null ||
+    fail "Cannot reset stopped update one-shot containers."
+}
+
+reset_failed_update_bootstrap() {
+  compose_service_failed update-helper-bootstrap || return 0
+  compose_with_archive_roots rm -f -s update-helper-bootstrap \
+    >/dev/null ||
+    fail "Cannot reset the failed update-helper bootstrap container."
+}
+
 rebuild_recreate() {
   PHASE="rebuild_recreate"
   write_helper_progress "running" "Rebuilding and recreating containers."
@@ -812,7 +873,12 @@ rebuild_recreate() {
   (
     cd "$APP_DIR"
     if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then
+      reset_update_one_shots
       compose_with_archive_roots up -d --build postgres redis api recorder web nginx || {
+        if schema_pipeline_failed; then
+          return 1
+        fi
+        reset_failed_update_bootstrap
         sleep 5
         compose_with_archive_roots up -d --build postgres redis api recorder web nginx
       }
@@ -1040,6 +1106,7 @@ preflight_permission_policy
 overlay_source
 apply_permission_policy
 write_release_identity "precompose"
+normalize_legacy_schema_override_service
 compose_config
 prepare_update_helper_image
 rebuild_recreate

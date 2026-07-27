@@ -247,7 +247,7 @@ def test_backup_failure_blocks_before_migration_execution(tmp_path, monkeypatch)
     assert "abc" not in str(exc.value)
 
 
-def test_migration_failure_report_is_sanitized_and_blocks_retry(tmp_path):
+def test_migration_failure_report_is_sanitized_and_keeps_canonical_history_applied_only(tmp_path):
     def fail(_db):
         raise RuntimeError("password=s3cr3t token=abc failed")
 
@@ -270,7 +270,15 @@ def test_migration_failure_report_is_sanitized_and_blocks_retry(tmp_path):
     assert "s3cr3t" not in raw
     assert "abc" not in raw
     assert "rollback" in payload["report"]["rollback_guidance"].lower()
-    assert inspect_migration_maintenance(db, registry=reg)["blocked_reason"] == "migration_failed_previous_attempt"
+    retry = inspect_migration_maintenance(db, registry=reg)
+    assert retry["status"] == "pending"
+    assert retry["blocked_reason"] is None
+    assert (
+        db.query(SchemaMigrationHistory)
+        .filter(SchemaMigrationHistory.migration_id == "stage13_test_migration_apply")
+        .count()
+        == 0
+    )
 
 
 def test_migration_report_and_upgrade_report_are_sanitized(tmp_path):

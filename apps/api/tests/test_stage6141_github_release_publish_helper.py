@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[3]
 HELPER = ROOT / "scripts/km-vms-publish-github-release.sh"
 DOCS = ROOT / "docs/INSTALL.md"
 SHA = "8fcc5d8a56e16613069edbb5ac796db62bddb4c0"
+TAG_OBJECT = "7d28629fcd6d93937b199cbf5c3be65d31cf5d88"
 
 
 def _current_tag():
@@ -15,25 +16,44 @@ def _current_tag():
     return descriptor["tag"]
 
 
-def _fake_git_env(tmp_path, *, tag: str | None = None, sha: str = SHA):
+def _fake_git_env(
+    tmp_path,
+    *,
+    tag: str | None = None,
+    sha: str = SHA,
+    repo: str = "kmishnev87/km-vms",
+    local_tag_type: str = "tag",
+    tag_object: str = TAG_OBJECT,
+    remote_direct: bool = True,
+    remote_dereferenced: bool = True,
+):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     git = bin_dir / "git"
     tag = tag or _current_tag()
+    local_object = tag_object if local_tag_type == "tag" else sha
+    remote_commands = []
+    if remote_direct:
+        remote_commands.append(
+            f"      printf '%s\\t%s\\n' '{tag_object}' 'refs/tags/{tag}'"
+        )
+    if remote_dereferenced:
+        remote_commands.append(
+            f"      printf '%s\\t%s\\n' '{sha}' 'refs/tags/{tag}^{{}}'"
+        )
+    remote_output = "\n".join(remote_commands) or "      :"
     git.write_text(
         f"""#!/usr/bin/env sh
 set -eu
-case "$1 $2 $3" in
-  "remote get-url origin") printf '%s\\n' 'https://github.com/kmishnev87/km-vms.git' ;;
-  "rev-parse --verify {tag}^{{commit}}") printf '%s\\n' '{sha}' ;;
-  "ls-remote --tags origin")
-    if [ "$4" = "{tag}^{{}}" ]; then
-      printf '%s\\t%s\\n' '{sha}' 'refs/tags/{tag}^{{}}'
-    elif [ "$4" = "{tag}" ]; then
-      printf '%s\\t%s\\n' '{sha}' 'refs/tags/{tag}'
-    fi
+case "$*" in
+  "remote get-url origin") printf '%s\\n' 'https://github.com/{repo}.git' ;;
+  "cat-file -t refs/tags/{tag}") printf '%s\\n' '{local_tag_type}' ;;
+  "rev-parse --verify refs/tags/{tag}") printf '%s\\n' '{local_object}' ;;
+  "rev-parse --verify refs/tags/{tag}^{{commit}}") printf '%s\\n' '{sha}' ;;
+  "ls-remote --tags origin refs/tags/{tag} refs/tags/{tag}^{{}}")
+{remote_output}
     ;;
-  "merge-base --is-ancestor {sha}") exit 0 ;;
+  "merge-base --is-ancestor {sha} origin/main") exit 0 ;;
   "rev-parse HEAD") printf '%s\\n' '{sha}' ;;
   *) printf 'unexpected git args: %s\\n' "$*" >&2; exit 1 ;;
 esac
@@ -170,6 +190,65 @@ def test_stage6141_check_with_matching_tag_works(tmp_path):
 
     assert result.returncode == 0
     assert f"matches {tag}" in result.stdout
+
+
+def test_release_guard_rejects_repository_mismatch(tmp_path):
+    result = subprocess.run(
+        ["sh", "scripts/km-vms-publish-github-release.sh", "--check"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_fake_git_env(tmp_path, repo="other-owner/other-repo"),
+    )
+
+    assert result.returncode != 0
+    assert "does not match release descriptor source_repo" in result.stderr
+
+
+def test_release_guard_rejects_local_lightweight_tag(tmp_path):
+    result = subprocess.run(
+        ["sh", "scripts/km-vms-publish-github-release.sh", "--check"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_fake_git_env(tmp_path, local_tag_type="commit"),
+    )
+
+    assert result.returncode != 0
+    assert "local release tag must be annotated" in result.stderr
+
+
+def test_release_guard_rejects_remote_direct_only_lightweight_tag(tmp_path):
+    result = subprocess.run(
+        ["sh", "scripts/km-vms-publish-github-release.sh", "--check"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_fake_git_env(tmp_path, remote_dereferenced=False),
+    )
+
+    assert result.returncode != 0
+    assert "remote release tag must be annotated" in result.stderr
+
+
+def test_release_guard_accepts_matching_annotated_tag_pair_case_insensitively(
+    tmp_path,
+):
+    result = subprocess.run(
+        ["sh", "scripts/km-vms-publish-github-release.sh", "--check"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_fake_git_env(tmp_path, repo="KMISHNEV87/KM-VMS"),
+    )
+
+    assert result.returncode == 0
+    assert "resolved repository matches descriptor source_repo" in result.stdout
+    assert "PASS: local/public release checks complete" in result.stdout
 
 
 def test_stage6141_check_with_mismatched_tag_fails_before_release_lookup(tmp_path):

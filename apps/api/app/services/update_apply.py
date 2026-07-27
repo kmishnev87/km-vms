@@ -33,7 +33,6 @@ MAX_CONTROL_BYTES = 64 * 1024
 MAX_ADMISSION_BYTES = 512 * 1024
 MAX_LINEAGE_BYTES = 4 * 1024
 MAX_ADMISSION_ENTRIES = 256
-MAX_JSON_NESTING_DEPTH = 32
 MAX_TERMINAL_STEPS = 12
 TERMINAL_RETENTION_DAYS = 90
 SUBMISSION_PROOF_TTL_SECONDS = 15 * 60
@@ -308,14 +307,6 @@ class UpdateApplyBlocked(RuntimeError):
         self.code = code
         self.diagnostics = diagnostics or {}
         super().__init__(message)
-
-
-class _DuplicateJsonKey(ValueError):
-    pass
-
-
-class _JsonNestingTooDeep(ValueError):
-    pass
 
 
 def _utcnow() -> datetime:
@@ -608,38 +599,8 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def _reject_duplicate_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise _DuplicateJsonKey
-        result[key] = value
-    return result
-
-
-def _reject_nonfinite_json_constant(_value: str) -> None:
-    raise ValueError
-
-
-def _validate_json_nesting(value: Any) -> None:
-    stack: list[tuple[Any, int]] = [(value, 1)]
-    while stack:
-        current, depth = stack.pop()
-        if depth > MAX_JSON_NESTING_DEPTH:
-            raise _JsonNestingTooDeep
-        if isinstance(current, dict):
-            stack.extend((item, depth + 1) for item in current.values() if isinstance(item, (dict, list)))
-        elif isinstance(current, list):
-            stack.extend((item, depth + 1) for item in current if isinstance(item, (dict, list)))
-
-
 def _decode_authority_json(text: str) -> dict[str, Any]:
-    payload = json.loads(
-        text,
-        object_pairs_hook=_reject_duplicate_object_pairs,
-        parse_constant=_reject_nonfinite_json_constant,
-    )
-    _validate_json_nesting(payload)
+    payload = json.loads(text)
     if not isinstance(payload, dict):
         raise TypeError
     return payload
@@ -657,10 +618,6 @@ def _read_json(path: Path) -> tuple[dict[str, Any] | None, str]:
             return None, "too_large"
         text = path.read_text(encoding="utf-8")
         payload = _decode_authority_json(text) if _is_authority_json_path(path) else json.loads(text)
-    except _DuplicateJsonKey:
-        return None, "duplicate_key"
-    except _JsonNestingTooDeep:
-        return None, "too_deep"
     except (json.JSONDecodeError, UnicodeError, OSError, RecursionError, TypeError, ValueError):
         return None, "invalid_json"
     if not isinstance(payload, dict):

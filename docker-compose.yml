@@ -51,6 +51,7 @@ services:
       KM_VMS_BOOTSTRAP_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-tnas-vms}
       KM_VMS_BOOTSTRAP_HELPER_IMAGE: km-vms-${COMPOSE_PROJECT_NAME:-tnas-vms}-update-helper:local
       KM_VMS_BOOTSTRAP_TIMEOUT_SECONDS: ${KM_VMS_UPDATE_HELPER_REFRESH_TIMEOUT_SECONDS:-7800}
+      KM_VMS_UPDATE_CONTROL_REQUEST_ID: ${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}
     command:
       - python3
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/scripts/km-vms-update-helper-bridge.py
@@ -59,6 +60,113 @@ services:
       - ./:${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}
       - /var/run/docker.sock:/var/run/docker.sock
     network_mode: none
+
+  update-status-reader:
+    image: km-vms-${COMPOSE_PROJECT_NAME:-tnas-vms}-update-control:local
+    build:
+      context: ./apps/update-control-plane
+      dockerfile: Dockerfile
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-update-status-reader
+    restart: unless-stopped
+    depends_on:
+      update-retry-admission:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      KMVMS_CONTROL_ROLE: reader
+      KMVMS_CONTROL_PORT: 8080
+      KMVMS_UPDATE_CONTROL_ROOT: /update-control
+      KMVMS_UPDATE_PUBLIC_ROOT: /update-public
+    volumes:
+      - ./data/update-public:/update-public:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=1).read()"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks:
+      - vms-net
+
+  update-retry-admission:
+    image: km-vms-${COMPOSE_PROJECT_NAME:-tnas-vms}-update-control:local
+    build:
+      context: ./apps/update-control-plane
+      dockerfile: Dockerfile
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-update-retry-admission
+    restart: unless-stopped
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      KMVMS_CONTROL_ROLE: controller-retry
+      KMVMS_CONTROL_PORT: 8080
+      KMVMS_UPDATE_CONTROL_ROOT: /update-control
+      KMVMS_UPDATE_PUBLIC_ROOT: /update-public
+      KMVMS_TEST_FAULT_INJECTION: ${KMVMS_TEST_FAULT_INJECTION:-0}
+      KMVMS_TEST_RETRY_FAILURE_MODE: ${KMVMS_TEST_RETRY_FAILURE_MODE:-}
+    volumes:
+      - ./data/update-control:/update-control
+      - ./data/update-public:/update-public
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=1).read()"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    networks:
+      - vms-net
+
+  schema-update:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-schema-update
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      update-helper-bootstrap:
+        condition: service_completed_successfully
+      update-status-reader:
+        condition: service_healthy
+      update-retry-admission:
+        condition: service_healthy
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://vms:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/vms
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      STORAGE_ROOT: /storage/archive
+      UPDATE_CONTROL_ROOT: /update-control
+      KMVMS_RELEASE_IDENTITY_FILE: /app/.km-vms-release.json
+      KMVMS_SOURCE_IDENTITY_FILE: /app/.km-vms-source.json
+      KMVMS_TEST_FAULT_INJECTION: ${KMVMS_TEST_FAULT_INJECTION:-0}
+      KMVMS_TEST_PREPARATION_FAILURE_MODE: ${KMVMS_TEST_PREPARATION_FAILURE_MODE:-}
+      KMVMS_TEST_SCHEMA_FAILURE_MODE: ${KMVMS_TEST_SCHEMA_FAILURE_MODE:-}
+      KMVMS_TARGET_SCHEMA_SHAPE_FINGERPRINT: ${KMVMS_TARGET_SCHEMA_SHAPE_FINGERPRINT:-}
+    command: ["python3", "-m", "app.services.schema_update_pipeline"]
+    volumes:
+      - ./data/update-control:/update-control
+      - ./release:/app/release:ro
+      - ./.km-vms-release.json:/app/.km-vms-release.json:ro
+      - ./.km-vms-source.json:/app/.km-vms-source.json:ro
+      - ${SURVEILLANCE_ROOT}:/storage/archive
+    networks:
+      - vms-net
 
   api:
     build:
@@ -72,6 +180,8 @@ services:
       redis:
         condition: service_healthy
       update-helper-bootstrap:
+        condition: service_completed_successfully
+      schema-update:
         condition: service_completed_successfully
     environment:
       TZ: ${TZ:-Asia/Yekaterinburg}
@@ -127,6 +237,11 @@ services:
       - "${RENDER_GID:-109}"
     ports:
       - "${API_PORT:-18000}:8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
     networks:
       - vms-net
 
@@ -183,9 +298,11 @@ services:
     restart: unless-stopped
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
       postgres:
         condition: service_healthy
+      schema-update:
+        condition: service_completed_successfully
     environment:
       TZ: ${TZ:-Asia/Yekaterinburg}
       DATABASE_URL: postgresql+psycopg://vms:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/vms
@@ -205,8 +322,8 @@ services:
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-web
     restart: unless-stopped
     depends_on:
-      api:
-        condition: service_started
+      update-status-reader:
+        condition: service_healthy
     environment:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-/api}
       TZ: ${TZ:-Asia/Yekaterinburg}
@@ -220,14 +337,17 @@ services:
     depends_on:
       web:
         condition: service_started
-      api:
-        condition: service_started
+      update-status-reader:
+        condition: service_healthy
+      update-retry-admission:
+        condition: service_healthy
     environment:
       TZ: ${TZ:-Asia/Yekaterinburg}
     ports:
       - "${HTTP_PORT:-8088}:80"
     volumes:
       - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./deploy/nginx/update-recovery.html:/etc/nginx/update-recovery.html:ro
       - ./data/exports:/var/www/exports:ro
     networks:
       - vms-net

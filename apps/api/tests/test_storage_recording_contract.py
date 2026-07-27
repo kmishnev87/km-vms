@@ -49,6 +49,7 @@ from app.services.recording_storage import (
 from app.services import recording_reconciliation, setup_storage
 from app.services.recording_reconciliation import reconcile_recordings, reconciliation_diagnostics
 from app.services.system_settings import (
+    AUTO_FREE_SPACE_TERMS_VERSION,
     active_recording_jobs_count,
     get_system_settings,
     serialize_settings,
@@ -775,7 +776,13 @@ def test_auto_free_space_setting_defaults_off_and_patches_explicitly(db):
     assert initial["auto_free_space_critical_threshold_percent"] == 1.0
 
     result = patch_settings(
-        SettingsUpdateRequest(auto_free_space_cleanup_enabled=True),
+        SettingsUpdateRequest(
+            auto_free_space_cleanup_enabled=True,
+            auto_free_space_acknowledgement={
+                "acknowledged": True,
+                "terms_version": AUTO_FREE_SPACE_TERMS_VERSION,
+            },
+        ),
         FakeRequest(),
         db=db,
         current_user=actor("owner"),

@@ -33,7 +33,6 @@ MAX_CONTROL_BYTES = 64 * 1024
 MAX_ADMISSION_BYTES = 512 * 1024
 MAX_LINEAGE_BYTES = 4 * 1024
 MAX_ADMISSION_ENTRIES = 256
-MAX_JSON_NESTING_DEPTH = 32
 MAX_TERMINAL_STEPS = 12
 ADMISSION_SCHEMA_VERSION = 2
 ADMISSION_DOCUMENT_TYPE = "update_apply_admission"
@@ -55,6 +54,10 @@ CANONICAL_UTC_TIMESTAMP_RE = re.compile(
 )
 REQUEST_ID_RE = re.compile(r"^update-[0-9a-f]{32}$", re.IGNORECASE)
 LEGACY_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,79}$")
+MIGRATION_ATTEMPT_RE = re.compile(
+    r"^migration-attempt-[0-9a-f]{32}$",
+    re.IGNORECASE,
+)
 SUBMISSION_ID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -108,6 +111,10 @@ LEGACY_MINIMAL_REQUEST_KEYS = {"schema_version", "request_id", "requested_at", "
 LEGACY_HISTORICAL_REQUEST_KEYS = LEGACY_MINIMAL_REQUEST_KEYS | {"requested_by", "preflight_required", "status_path"}
 LEGACY_SNAPSHOT_REQUEST_KEYS = LEGACY_HISTORICAL_REQUEST_KEYS | {"apply_candidate"}
 LEGACY_TRANSITIONAL_REQUEST_KEYS = LEGACY_SNAPSHOT_REQUEST_KEYS | {"submission_id"}
+SCHEMA_RETRY_REQUEST_KEYS = LEGACY_HISTORICAL_REQUEST_KEYS | {
+    "retry_of_request_id",
+    "migration_attempt_id",
+}
 LEGACY_MINIMAL_SOURCE_KEYS = {"version", "commit"}
 LEGACY_ACTOR_KEYS = {"user_id", "role"}
 LEGACY_MINIMAL_TERMINAL_KEYS = {
@@ -150,14 +157,6 @@ class HelperError(RuntimeError):
         self.phase = phase or category
         self.diagnostics = diagnostics or {}
         super().__init__(message)
-
-
-class _DuplicateJsonKey(ValueError):
-    pass
-
-
-class _JsonNestingTooDeep(ValueError):
-    pass
 
 
 def utcnow() -> str:
@@ -233,40 +232,10 @@ def contains_sensitive_content(value: Any) -> bool:
     return bool(SENSITIVE_VALUE_RE.search(rendered))
 
 
-def reject_duplicate_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise _DuplicateJsonKey
-        result[key] = value
-    return result
-
-
-def reject_nonfinite_json_constant(_value: str) -> None:
-    raise ValueError
-
-
-def validate_json_nesting(value: Any) -> None:
-    stack: list[tuple[Any, int]] = [(value, 1)]
-    while stack:
-        current, depth = stack.pop()
-        if depth > MAX_JSON_NESTING_DEPTH:
-            raise _JsonNestingTooDeep
-        if isinstance(current, dict):
-            stack.extend((item, depth + 1) for item in current.values() if isinstance(item, (dict, list)))
-        elif isinstance(current, list):
-            stack.extend((item, depth + 1) for item in current if isinstance(item, (dict, list)))
-
-
 def decode_authority_json(text: str) -> dict[str, Any]:
     try:
-        payload = json.loads(
-            text,
-            object_pairs_hook=reject_duplicate_object_pairs,
-            parse_constant=reject_nonfinite_json_constant,
-        )
-        validate_json_nesting(payload)
-    except (_DuplicateJsonKey, _JsonNestingTooDeep, json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
         raise HelperError("control_file_invalid", "Update control data is unavailable or invalid.") from exc
     if not isinstance(payload, dict):
         raise HelperError("control_file_invalid", "Update control data must be a JSON object.")
@@ -649,6 +618,8 @@ def validate_legacy_request(request: dict[str, Any]) -> dict[str, Any]:
         profile = "snapshot"
     elif keys == LEGACY_TRANSITIONAL_REQUEST_KEYS:
         profile = "transitional"
+    elif keys == SCHEMA_RETRY_REQUEST_KEYS:
+        profile = "schema_retry"
     else:
         raise HelperError("legacy_admission_invalid", "Legacy update admission is malformed.")
     source = strict_request_source(request.get("source"), minimal_legacy=profile == "minimal")
@@ -664,13 +635,35 @@ def validate_legacy_request(request: dict[str, Any]) -> dict[str, Any]:
     ):
         raise HelperError("legacy_admission_invalid", "Legacy update admission is malformed.")
     if profile != "minimal" and (
-        not strict_legacy_actor(request.get("requested_by"))
+        not (
+            strict_legacy_actor(request.get("requested_by"))
+            or (
+                profile == "schema_retry"
+                and strict_current_actor(request.get("requested_by"))
+            )
+        )
         or request.get("preflight_required") is not True
         or request.get("status_path") != "data/update-control/update-status.json"
     ):
         raise HelperError("legacy_admission_invalid", "Legacy update admission is malformed.")
     if profile in {"snapshot", "transitional"} and strict_apply_candidate(request.get("apply_candidate")) is None:
         raise HelperError("legacy_admission_invalid", "Legacy update admission is malformed.")
+    if profile == "schema_retry" and (
+        not REQUEST_ID_RE.fullmatch(request_id)
+        or not isinstance(request.get("retry_of_request_id"), str)
+        or not LEGACY_REQUEST_ID_RE.fullmatch(
+            request.get("retry_of_request_id")
+        )
+        or request.get("retry_of_request_id") == request_id
+        or not isinstance(request.get("migration_attempt_id"), str)
+        or not MIGRATION_ATTEMPT_RE.fullmatch(
+            request.get("migration_attempt_id")
+        )
+    ):
+        raise HelperError(
+            "legacy_admission_invalid",
+            "Schema retry admission is malformed.",
+        )
     submission_id = request.get("submission_id") if profile == "transitional" else None
     if submission_id is not None and (not isinstance(submission_id, str) or not SUBMISSION_ID_RE.fullmatch(submission_id)):
         raise HelperError("legacy_admission_invalid", "Legacy update admission is malformed.")

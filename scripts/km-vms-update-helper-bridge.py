@@ -16,19 +16,50 @@ from typing import Any, Sequence
 
 
 MAX_CONTROL_BYTES = 64 * 1024
-MAX_JSON_NESTING_DEPTH = 32
 DEFAULT_TIMEOUT_SECONDS = 7800
 MIN_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 9000
 DEFAULT_POLL_SECONDS = 2
 PERMISSION_GATE_TIMEOUT_SECONDS = 300
 
-REQUEST_ID_RE = re.compile(r"^update-[0-9a-f]{32}$", re.IGNORECASE)
+REQUEST_ID_RE = re.compile(
+    r"^(?:update|stage609)-[0-9a-f]{32}$",
+    re.IGNORECASE,
+)
 PROJECT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 HELPER_IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,200}:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
 IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{12,64}$")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+ARCHIVE_RUNTIME_TARGET_RE = re.compile(
+    r"^/storage/archive-roots/[A-Za-z0-9_.-]{1,180}$"
+)
+
+SOURCE_TAG_COMMITS = {
+    "0.7.2": "54e73569d8de2ba29c6900bc93f66b2edb8aeefe",
+    "0.7.3": "8fcc5d8a56e16613069edbb5ac796db62bddb4c0",
+    "0.7.4": "6f5674bd0fa8faf27e769f338a19592e4ef966d6",
+    "0.7.5": "620ae5c4f8391af44c1817ca5a1c9020e672be89",
+    "0.7.6": "e185500afcde2b4d4adc1821fec7e7be33335deb",
+    "0.7.7": "66c72134dfe50b1d395e2385658fdb5dd62978ab",
+    "0.7.8": "9cbe8cbe82a0ac5d0d6c9a8e899ddc9e6aa7c7bf",
+    "0.7.9": "6c0b6e2bc6ed51cdb943193494e53f349f63f138",
+    "0.7.10": "ed2409003a9b074174b833edb93f808356aa6f5d",
+    "0.7.11": "ae207a059f2974e012ac8453dd7e8eb3fed9946e",
+    "0.7.12": "0ab53e0bc744559005d1d21247c1c9cd49b1efe7",
+    "0.7.13": "4ad6c53fa432e19b736c5739d2ab5ffbe011c91a",
+    "0.7.14": "9a4dfd9d94b1032b3fa7687f564265617876b535",
+    "0.7.15": "5d20dea533fd2ed50fb4886b666525349e2bedd2",
+    "0.7.16": "b305efc9ada794da41bd26599a653c13cd179e9f",
+    "0.7.17": "d984d014494cf8cc00a6199a0f58b6b0fa56b4c2",
+    "0.7.18": "a41be5545935ca3a7b1740e7697595456a52b08f",
+    "0.7.19": "2714b850659fbe70898ccb512e3045fa587d27c8",
+    "0.7.20": "6f57dbca1071427e36b1da61d737a2c1a5e96650",
+    "0.7.21": "c5eee13484d93e772fce578c498a3e808e0731c5",
+    "0.7.22": "eeb09493aadfa931ad78080cc136638511637fda",
+    "0.7.23": "b00bbd7bf8a54c8bef1d623fd8856ce4f974e7e8",
+    "0.7.24": "282bd642bb89840bfcc567f613d7c70d560f8ef4",
+}
 
 ACTIVE_STATUSES = {
     "queued",
@@ -59,40 +90,8 @@ class BridgeError(RuntimeError):
         self.code = code
 
 
-class _DuplicateJsonKey(ValueError):
-    pass
-
-
-class _JsonNestingTooDeep(ValueError):
-    pass
-
-
 def utcnow() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def reject_duplicate_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise _DuplicateJsonKey(key)
-        result[key] = value
-    return result
-
-
-def reject_nonfinite_json_constant(value: str) -> None:
-    raise ValueError(value)
-
-
-def validate_json_nesting(value: Any, depth: int = 0) -> None:
-    if depth > MAX_JSON_NESTING_DEPTH:
-        raise _JsonNestingTooDeep()
-    if isinstance(value, dict):
-        for child in value.values():
-            validate_json_nesting(child, depth + 1)
-    elif isinstance(value, list):
-        for child in value:
-            validate_json_nesting(child, depth + 1)
 
 
 def read_json_object(path: Path, *, missing_ok: bool = False) -> dict[str, Any] | None:
@@ -107,12 +106,7 @@ def read_json_object(path: Path, *, missing_ok: bool = False) -> dict[str, Any] 
             raise BridgeError("control_file_invalid", "Update control data is not a regular file.")
         if path.stat().st_size > MAX_CONTROL_BYTES:
             raise BridgeError("control_file_too_large", "Update control data exceeds its size limit.")
-        payload = json.loads(
-            path.read_text(encoding="utf-8"),
-            object_pairs_hook=reject_duplicate_object_pairs,
-            parse_constant=reject_nonfinite_json_constant,
-        )
-        validate_json_nesting(payload)
+        payload = json.loads(path.read_text(encoding="utf-8"))
     except BridgeError:
         raise
     except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
@@ -141,6 +135,460 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         except OSError:
             pass
         raise BridgeError("receipt_write_failed", "Cannot persist update-helper refresh receipt.") from exc
+
+
+def read_regular_text(path: Path) -> str:
+    try:
+        if path.is_symlink() or not path.is_file():
+            raise BridgeError(
+                "archive_roots_override_invalid",
+                "Generated archive-roots Compose override is not a regular file.",
+            )
+        if path.stat().st_size > MAX_CONTROL_BYTES:
+            raise BridgeError(
+                "archive_roots_override_invalid",
+                "Generated archive-roots Compose override exceeds its size limit.",
+            )
+        return path.read_text(encoding="utf-8")
+    except BridgeError:
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise BridgeError(
+            "archive_roots_override_invalid",
+            "Generated archive-roots Compose override is unavailable.",
+        ) from exc
+
+
+def atomic_write_text(path: Path, rendered: str) -> None:
+    if len(rendered.encode("utf-8")) > MAX_CONTROL_BYTES:
+        raise BridgeError(
+            "archive_roots_override_invalid",
+            "Generated archive-roots Compose override exceeds its size limit.",
+        )
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with tmp.open("x", encoding="utf-8", newline="\n") as stream:
+            os.chmod(tmp, 0o600)
+            stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+        tmp.replace(path)
+    except OSError as exc:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise BridgeError(
+            "archive_roots_override_write_failed",
+            "Cannot normalize the generated archive-roots Compose override.",
+        ) from exc
+
+
+def _compose_yaml_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _archive_volume_lines(manifest: dict[str, Any]) -> list[str]:
+    expected_manifest_fields = {
+        "schema_version",
+        "runtime_base",
+        "compose_override_file",
+        "items",
+        "raw_runtime_paths_user_visible",
+    }
+    if (
+        set(manifest) != expected_manifest_fields
+        or manifest.get("schema_version") != 1
+        or manifest.get("runtime_base") != "/storage/archive-roots"
+        or manifest.get("compose_override_file")
+        != "docker-compose.archive-roots.yml"
+        or manifest.get("raw_runtime_paths_user_visible") is not False
+        or not isinstance(manifest.get("items"), list)
+        or len(manifest["items"]) > 128
+    ):
+        raise BridgeError(
+            "archive_roots_manifest_invalid",
+            "Generated archive-roots runtime manifest is invalid.",
+        )
+    expected_item_fields = {
+        "root_id",
+        "user_display_path",
+        "backend_runtime_path",
+        "physical_volume_id",
+        "storage_namespace",
+        "active_write_target",
+    }
+    lines: list[str] = []
+    seen_targets: set[str] = set()
+    for item in manifest["items"]:
+        if not isinstance(item, dict) or set(item) != expected_item_fields:
+            raise BridgeError(
+                "archive_roots_manifest_invalid",
+                "Generated archive-roots runtime manifest has an invalid item.",
+            )
+        source = item.get("user_display_path")
+        target = item.get("backend_runtime_path")
+        if (
+            not isinstance(source, str)
+            or not source.startswith("/")
+            or len(source) > 1024
+            or any(char in source for char in ("\x00", "\r", "\n"))
+            or any(part == ".." for part in Path(source).parts)
+            or not isinstance(target, str)
+            or not ARCHIVE_RUNTIME_TARGET_RE.fullmatch(target)
+            or target in seen_targets
+            or type(item.get("active_write_target")) is not bool
+        ):
+            raise BridgeError(
+                "archive_roots_manifest_invalid",
+                "Generated archive-roots runtime manifest has an unsafe item.",
+            )
+        seen_targets.add(target)
+        lines.extend(
+            [
+                "      - type: bind",
+                f"        source: {_compose_yaml_quote(source)}",
+                f"        target: {_compose_yaml_quote(target)}",
+                "        read_only: false",
+                "        bind:",
+                "          create_host_path: false",
+            ]
+        )
+    return lines
+
+
+def normalize_archive_roots_override(app_dir: Path) -> bool:
+    control_dir = app_dir / "data/install-control"
+    manifest_path = control_dir / "archive-roots-runtime.json"
+    override_path = control_dir / "docker-compose.archive-roots.yml"
+    manifest_exists = manifest_path.exists()
+    override_exists = override_path.exists()
+    if not manifest_exists and not override_exists:
+        return False
+    if manifest_exists != override_exists:
+        raise BridgeError(
+            "archive_roots_contract_partial",
+            "Generated archive-roots runtime contract is partial.",
+        )
+    manifest = read_json_object(manifest_path)
+    assert manifest is not None
+    volume_lines = _archive_volume_lines(manifest)
+    if volume_lines:
+        legacy = "\n".join(
+            [
+                "# Generated by KM VMS. Do not edit manually.",
+                "services:",
+                "  api:",
+                "    volumes:",
+                *volume_lines,
+                "",
+            ]
+        )
+        intermediate = "\n".join(
+            [
+                "# Generated by KM VMS. Do not edit manually.",
+                "services:",
+                "  api:",
+                "    volumes:",
+                *volume_lines,
+                "  operation-recovery:",
+                "    volumes:",
+                *volume_lines,
+                "",
+            ]
+        )
+        target = "\n".join(
+            [
+                "# Generated by KM VMS. Do not edit manually.",
+                "services:",
+                "  api:",
+                "    volumes:",
+                *volume_lines,
+                "  schema-update:",
+                "    volumes:",
+                *volume_lines,
+                "",
+            ]
+        )
+    else:
+        legacy = (
+            "# Generated by KM VMS. No archive roots configured.\n"
+            "services: {}\n"
+        )
+        intermediate = legacy
+        target = legacy
+    current = read_regular_text(override_path)
+    if current == target:
+        return False
+    if current not in {legacy, intermediate}:
+        raise BridgeError(
+            "archive_roots_override_invalid",
+            "Generated archive-roots Compose override does not match its manifest.",
+        )
+    atomic_write_text(override_path, target)
+    return True
+
+
+def extract_active_request(
+    authority: dict[str, Any],
+    *,
+    request_id: str,
+) -> dict[str, Any]:
+    if (
+        type(authority.get("schema_version")) is int
+        and authority["schema_version"] == 1
+    ):
+        if authority.get("request_id") != request_id:
+            raise BridgeError(
+                "source_handoff_request_mismatch",
+                "Legacy update request does not match the active helper request.",
+            )
+        return authority
+    document_fields = {
+        "schema_version",
+        "document_type",
+        "current_submission_id",
+        "entries",
+        "updated_at",
+    }
+    if (
+        set(authority) != document_fields
+        or type(authority.get("schema_version")) is not int
+        or authority["schema_version"] != 2
+        or authority.get("document_type")
+        != "update_apply_admission"
+        or type(authority.get("entries")) is not list
+        or len(authority["entries"]) > 64
+    ):
+        raise BridgeError(
+            "source_handoff_authority_invalid",
+            "Update admission authority has an unsupported shape.",
+        )
+    entry_fields = {
+        "submission_id",
+        "request_id",
+        "target_version",
+        "target_commit",
+        "requested_at",
+        "updated_at",
+        "state",
+        "request",
+        "audit",
+        "claimed_at",
+        "terminal",
+    }
+    matches = [
+        entry
+        for entry in authority["entries"]
+        if type(entry) is dict
+        and set(entry) == entry_fields
+        and entry.get("request_id") == request_id
+    ]
+    if len(matches) != 1:
+        raise BridgeError(
+            "source_handoff_authority_invalid",
+            "Active update admission is missing or ambiguous.",
+        )
+    entry = matches[0]
+    request = entry.get("request")
+    request_source = (
+        request.get("source")
+        if type(request) is dict
+        else None
+    )
+    entry_commit = entry.get("target_commit")
+    if (
+        authority.get("current_submission_id")
+        != entry.get("submission_id")
+        or type(entry.get("submission_id")) is not str
+        or not entry["submission_id"]
+        or entry.get("state") != "claimed"
+        or type(request) is not dict
+        or request.get("request_id") != request_id
+        or request.get("submission_id") != entry.get("submission_id")
+        or type(request.get("schema_version")) is not int
+        or request["schema_version"] != 2
+        or type(request_source) is not dict
+        or type(entry_commit) is not str
+        or not COMMIT_SHA_RE.fullmatch(entry_commit)
+        or type(request_source.get("commit")) is not str
+        or entry_commit.lower() != request_source["commit"].lower()
+        or type(entry.get("target_version")) is not str
+        or entry["target_version"] != request_source.get("version")
+    ):
+        raise BridgeError(
+            "source_handoff_authority_invalid",
+            "Active update admission bindings are contradictory.",
+        )
+    return request
+
+
+def capture_installed_source_identity(
+    app_dir: Path,
+    *,
+    request_id: str,
+) -> None:
+    control_dir = app_dir / "data/update-control"
+    authority = read_json_object(control_dir / "update-request.json")
+    source_identity = read_json_object(app_dir / ".km-vms-source.json")
+    release_identity = read_json_object(app_dir / "release/km-vms-release.json")
+    assert authority is not None
+    assert source_identity is not None
+    assert release_identity is not None
+    request = extract_active_request(
+        authority,
+        request_id=request_id,
+    )
+    source = request.get("source")
+    target_commit = (
+        str(source.get("commit") or "").lower()
+        if isinstance(source, dict)
+        else ""
+    )
+    requested_target_version = (
+        str(source.get("version") or "")
+        if isinstance(source, dict)
+        else ""
+    )
+    target_repo = (
+        str(source.get("repo") or "").lower()
+        if isinstance(source, dict)
+        else ""
+    )
+    release_commit_value = release_identity.get("commit_sha")
+    release_commit = (
+        str(release_commit_value).lower()
+        if isinstance(release_commit_value, str)
+        else None
+    )
+    release_version = str(release_identity.get("version") or "")
+    installed_commit = str(source_identity.get("commit_sha") or "").lower()
+    installed_repo = str(source_identity.get("github_repo") or "")
+    if (
+        type(request.get("schema_version")) is not int
+        or request.get("schema_version") not in {1, 2}
+        or request.get("request_id") != request_id
+        or request.get("intent") != "apply_update"
+        or request.get("confirmed") is not True
+        or not COMMIT_SHA_RE.fullmatch(target_commit)
+        or target_repo != "kmishnev87/km-vms"
+        or not release_version
+        or (
+            requested_target_version
+            and requested_target_version != release_version
+        )
+        or type(release_identity.get("schema_version")) is not int
+        or release_identity["schema_version"] != 1
+        or release_identity.get("product") != "KM VMS"
+        or release_identity.get("tag") != f"v{release_version}"
+        or release_identity.get("source_kind") != "github-release"
+        or str(release_identity.get("source_repo") or "").lower()
+        != target_repo
+        or release_identity.get("source_ref") != f"v{release_version}"
+        or release_identity.get("evidence_model")
+        != "semver_tag_resolves_to_commit"
+        or "commit_sha" not in release_identity
+        or (
+            release_commit is not None
+            and (
+                not COMMIT_SHA_RE.fullmatch(release_commit)
+                or release_commit != target_commit
+            )
+        )
+        or installed_repo.lower() != "kmishnev87/km-vms"
+        or type(source_identity.get("schema_version")) is not int
+        or source_identity["schema_version"] != 1
+        or not COMMIT_SHA_RE.fullmatch(installed_commit)
+    ):
+        raise BridgeError(
+            "source_handoff_invalid",
+            "Installed and target source identities cannot be bound safely.",
+        )
+    installed_version = next(
+        (
+            version
+            for version, commit in SOURCE_TAG_COMMITS.items()
+            if commit == installed_commit
+        ),
+        None,
+    )
+    if installed_version is None and installed_commit == target_commit:
+        installed_version = release_version
+    if installed_version is None:
+        raise BridgeError(
+            "installed_source_unsupported",
+            "Installed source commit is outside the supported update lineage.",
+        )
+    if request_id.lower().startswith("stage609-") != (
+        installed_version in {"0.7.2", "0.7.3"}
+    ):
+        raise BridgeError(
+            "source_request_family_mismatch",
+            "Installed source and legacy request families do not match.",
+        )
+    identity = {
+        "schema_version": 1,
+        "request_id": request_id.lower(),
+        "installed_version": installed_version,
+        "installed_commit": installed_commit,
+        "recorded_at": utcnow(),
+    }
+    identity_path = control_dir / "pre-overlay-source-identity.json"
+    existing = read_json_object(identity_path, missing_ok=True)
+    if existing is not None and existing.get("request_id") == request_id.lower():
+        existing_fields = {
+            "schema_version",
+            "request_id",
+            "installed_version",
+            "installed_commit",
+            "recorded_at",
+        }
+        existing_version = str(existing.get("installed_version") or "")
+        existing_commit = str(existing.get("installed_commit") or "").lower()
+        lineage_commit = SOURCE_TAG_COMMITS.get(existing_version)
+        existing_lineage_valid = (
+            lineage_commit == existing_commit
+            if lineage_commit is not None
+            else (
+                existing_version == release_version
+                and existing_commit == target_commit
+            )
+        )
+        existing_family_valid = (
+            request_id.lower().startswith("stage609-")
+            == (existing_version in {"0.7.2", "0.7.3"})
+        )
+        if (
+            set(existing) != existing_fields
+            or existing.get("schema_version") != 1
+            or existing.get("request_id") != request_id.lower()
+            or not isinstance(existing.get("recorded_at"), str)
+            or not existing.get("recorded_at")
+            or not COMMIT_SHA_RE.fullmatch(existing_commit)
+            or not existing_lineage_valid
+            or not existing_family_valid
+        ):
+            raise BridgeError(
+                "source_handoff_conflict",
+                "Installed source handoff evidence is contradictory.",
+            )
+    else:
+        atomic_write_json(identity_path, identity)
+    request_path = control_dir / "schema-update-request.json"
+    existing_request = read_json_object(request_path, missing_ok=True)
+    if existing_request is not None:
+        if (
+            existing_request.get("request_id") == request_id
+            and existing_request != request
+        ):
+            raise BridgeError(
+                "source_handoff_request_conflict",
+                "Normalized schema update request is contradictory.",
+            )
+        if existing_request.get("request_id") != request_id:
+            atomic_write_json(request_path, request)
+    else:
+        atomic_write_json(request_path, request)
 
 
 def read_status(path: Path) -> tuple[str | None, str, dict[str, Any]] | None:
@@ -180,7 +628,24 @@ def validate_completed_status(payload: dict[str, Any], request_id: str) -> None:
         or expected_commit.lower() != installed_commit.lower()
     ):
         raise BridgeError("terminal_commit_invalid", "Terminal update completion lacks matching verified commit evidence.")
-    if not isinstance(payload.get("finished_at"), str) or not payload.get("finished_at"):
+    terminal_timestamp = payload.get("finished_at")
+    if terminal_timestamp is None:
+        # Legacy helpers use updated_at as the completion timestamp and
+        # synthesize finished_at only in their immutable history item.
+        terminal_timestamp = payload.get("updated_at")
+    try:
+        parsed_terminal_timestamp = datetime.fromisoformat(
+            str(terminal_timestamp).replace("Z", "+00:00")
+        )
+    except (TypeError, ValueError):
+        parsed_terminal_timestamp = None
+    if (
+        not isinstance(terminal_timestamp, str)
+        or not terminal_timestamp
+        or len(terminal_timestamp) > 80
+        or parsed_terminal_timestamp is None
+        or parsed_terminal_timestamp.tzinfo is None
+    ):
         raise BridgeError("terminal_timestamp_invalid", "Terminal update completion lacks a finish timestamp.")
 
 
@@ -444,9 +909,24 @@ def bootstrap(args: argparse.Namespace) -> int:
     helper_image = require_helper_image(
         args.helper_image or os.getenv("KM_VMS_BOOTSTRAP_HELPER_IMAGE", "")
     )
+    explicit_request_binding = bool(args.require_request_id)
+    env_request_id = os.getenv("KM_VMS_UPDATE_CONTROL_REQUEST_ID", "").strip()
     required_request_id = (
-        require_request_id(args.require_request_id) if args.require_request_id else None
+        require_request_id(args.require_request_id)
+        if args.require_request_id
+        else require_request_id(env_request_id)
+        if env_request_id
+        else None
     )
+    if (
+        args.require_request_id
+        and env_request_id
+        and require_request_id(env_request_id) != required_request_id
+    ):
+        raise BridgeError(
+            "active_request_mismatch",
+            "Explicit and helper-owned update request identities differ.",
+        )
     raw_timeout = args.timeout_seconds
     if raw_timeout is None:
         try:
@@ -478,6 +958,16 @@ def bootstrap(args: argparse.Namespace) -> int:
         raise BridgeError("status_request_invalid", "Active update status has no canonical request identity.")
 
     run_target_permission_gate(app_dir)
+    capture_installed_source_identity(
+        app_dir,
+        request_id=request_id,
+    )
+    archive_override_changed = normalize_archive_roots_override(app_dir)
+    if archive_override_changed and not explicit_request_binding:
+        raise BridgeError(
+            "compose_reparse_required",
+            "Generated archive-root mounts were normalized; Compose must reparse them before schema recovery.",
+        )
     expected_image_id = docker_image_id(helper_image)
     receipt_file = control_dir / "update-helper-refresh.json"
     validate_receipt_binding(receipt_file, request_id, expected_image_id)
@@ -599,19 +1089,6 @@ def recreate_and_verify_helper(
 
     if inspected_container_image(container_id) != expected_image_id:
         raise BridgeError("helper_image_mismatch", "Recreated update-helper is not using the prepared target image.")
-    run_command(
-        [
-            "docker",
-            "exec",
-            container_id,
-            "sh",
-            "-c",
-            "command -v getfacl >/dev/null 2>&1 && getfacl --version >/dev/null 2>&1",
-        ],
-        timeout=30,
-        error_code="helper_acl_runtime_missing",
-        error_message="Recreated update-helper does not provide working getfacl.",
-    )
     running = run_command(
         ["docker", "inspect", "--format", "{{.State.Running}}", container_id],
         timeout=20,

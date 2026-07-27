@@ -173,31 +173,51 @@ def api_request(repo: str, path: str, token: str, method: str = "GET", payload: 
         fail("GitHub API request failed")
 
 
-def tag_commit(tag: str) -> str:
-    local = run_git("rev-parse", "--verify", f"{tag}^{{commit}}", check=False)
-    if local.returncode != 0:
+def tag_commit(tag: str) -> tuple[str, str]:
+    ref = f"refs/tags/{tag}"
+    object_type = run_git("cat-file", "-t", ref, check=False)
+    if object_type.returncode != 0:
         fail(f"local tag is missing or invalid: {tag}")
-    commit = local.stdout.strip()
+    if object_type.stdout.strip() != "tag":
+        fail(f"local release tag must be annotated: {tag}")
+    tag_object = git_out("rev-parse", "--verify", ref)
+    commit = git_out("rev-parse", "--verify", f"{ref}^{{commit}}")
+    if not SHA_RE.fullmatch(tag_object):
+        fail("local tag object evidence is invalid")
     if not SHA_RE.fullmatch(commit):
         fail("local tag commit evidence is invalid")
-    return commit
+    return tag_object.lower(), commit.lower()
 
 
-def remote_tag_commit(tag: str) -> str:
-    deref = git_out("ls-remote", "--tags", "origin", f"{tag}^{{}}")
-    if deref:
-        commit = deref.split()[0]
-    else:
-        direct = git_out("ls-remote", "--tags", "origin", tag)
-        if not direct:
-            fail(f"remote tag is missing: {tag}")
-        commit = direct.split()[0]
-        obj_type = run_git("cat-file", "-t", commit, check=False)
-        if obj_type.returncode == 0 and obj_type.stdout.strip() == "tag":
-            fail("remote tag did not provide dereferenced commit evidence")
+def remote_tag_commit(tag: str) -> tuple[str, str]:
+    direct_ref = f"refs/tags/{tag}"
+    dereferenced_ref = f"{direct_ref}^{{}}"
+    output = git_out(
+        "ls-remote",
+        "--tags",
+        "origin",
+        direct_ref,
+        dereferenced_ref,
+    )
+    evidence: dict[str, str] = {}
+    for line in output.splitlines():
+        parts = line.split()
+        if len(parts) != 2 or parts[1] not in {direct_ref, dereferenced_ref}:
+            fail("remote tag evidence is malformed")
+        if parts[1] in evidence:
+            fail("remote tag evidence contains duplicate refs")
+        evidence[parts[1]] = parts[0]
+    if direct_ref not in evidence:
+        fail(f"remote tag is missing: {tag}")
+    if dereferenced_ref not in evidence:
+        fail(f"remote release tag must be annotated: {tag}")
+    tag_object = evidence[direct_ref]
+    commit = evidence[dereferenced_ref]
+    if not SHA_RE.fullmatch(tag_object):
+        fail("remote tag object evidence is invalid")
     if not SHA_RE.fullmatch(commit):
         fail("remote tag commit evidence is invalid")
-    return commit
+    return tag_object.lower(), commit.lower()
 
 
 def origin_main_contains(commit: str) -> bool:
@@ -205,30 +225,41 @@ def origin_main_contains(commit: str) -> bool:
     return result.returncode == 0
 
 
-def validate_descriptor(descriptor: dict, tag: str) -> str | None:
+def validate_descriptor(descriptor: dict, tag: str) -> tuple[str | None, str]:
     version = descriptor.get("version")
     descriptor_tag = descriptor.get("tag") or descriptor.get("source_ref")
+    source_repo = descriptor.get("source_repo")
     if not isinstance(version, str) or not SAFE_TAG_RE.fullmatch(f"v{version}"):
         fail("release descriptor version is invalid")
     if descriptor_tag != f"v{version}" or descriptor.get("source_ref") != f"v{version}":
         fail("release descriptor tag/source_ref must match version")
     if tag != descriptor_tag:
         fail("requested tag must match current release descriptor tag/source_ref")
+    if not isinstance(source_repo, str) or not SAFE_REPO_RE.fullmatch(source_repo):
+        fail("release descriptor source_repo must be OWNER/REPO")
     info(f"descriptor version {version} matches {tag}")
     commit = descriptor.get("commit_sha")
     if commit is not None and not (isinstance(commit, str) and SHA_RE.fullmatch(commit)):
         fail("release descriptor commit_sha must be null or a full SHA")
-    return commit
+    return commit, source_repo
 
 
-def validate_release_object(repo: str, tag: str, token: str, expected_commit: str) -> bool:
+def validate_release_object(
+    repo: str,
+    tag: str,
+    token: str,
+    expected_tag_object: str,
+    expected_commit: str,
+) -> bool:
     api_request(repo, "", token)
     status, release = api_request(repo, f"/releases/tags/{tag}", token)
     if status == 404:
         return False
     if not release or release.get("tag_name") != tag:
         fail("GitHub Release object tag_name does not match expected tag")
-    remote_commit = remote_tag_commit(tag)
+    remote_tag_object, remote_commit = remote_tag_commit(tag)
+    if remote_tag_object != expected_tag_object:
+        fail("GitHub Release tag object evidence does not match expected tag object")
     if remote_commit != expected_commit:
         fail("GitHub Release tag commit evidence does not match expected commit")
     info(f"existing GitHub Release validated for {tag}")
@@ -256,15 +287,23 @@ def create_release(repo: str, tag: str, token: str, descriptor: dict, expected_c
 
 def main() -> None:
     descriptor = load_descriptor()
-    repo = resolve_repo()
     descriptor_tag = descriptor.get("tag") or descriptor.get("source_ref")
     tag = tag_override or descriptor_tag
     if not isinstance(tag, str) or not SAFE_TAG_RE.fullmatch(tag):
         fail("tag must match vX.Y.Z")
 
-    descriptor_commit = validate_descriptor(descriptor, tag)
-    local_commit = tag_commit(tag)
-    remote_commit = remote_tag_commit(tag)
+    descriptor_commit, descriptor_repo = validate_descriptor(descriptor, tag)
+    repo = resolve_repo()
+    if repo.casefold() != descriptor_repo.casefold():
+        fail(
+            "resolved GitHub repository does not match "
+            "release descriptor source_repo"
+        )
+    info(f"resolved repository matches descriptor source_repo: {descriptor_repo}")
+    local_tag_object, local_commit = tag_commit(tag)
+    remote_tag_object, remote_commit = remote_tag_commit(tag)
+    if local_tag_object != remote_tag_object:
+        fail("local and remote annotated tag object evidence do not match")
     if local_commit != remote_commit:
         fail("local and remote tag commit evidence do not match")
     expected_commit = descriptor_commit or remote_commit
@@ -283,7 +322,13 @@ def main() -> None:
             head = git_out("rev-parse", "HEAD")
             if head != expected_commit:
                 fail("current HEAD does not match release tag commit")
-        exists = validate_release_object(repo, tag, token, expected_commit)
+        exists = validate_release_object(
+            repo,
+            tag,
+            token,
+            local_tag_object,
+            expected_commit,
+        )
         if exists:
             info(f"GitHub Release already exists and is valid for {tag}")
         else:
@@ -292,7 +337,13 @@ def main() -> None:
         return
 
     if token:
-        exists = validate_release_object(repo, tag, token, expected_commit)
+        exists = validate_release_object(
+            repo,
+            tag,
+            token,
+            local_tag_object,
+            expected_commit,
+        )
         if exists:
             print(f"PASS: check complete for {repo} {tag} {expected_commit}")
         else:

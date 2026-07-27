@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.core.version import APP_VERSION
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS
 from app.core.permissions import ROLE_OPERATOR, ROLE_OWNER
 from app.core.security import create_access_token, hash_password
@@ -127,7 +128,7 @@ def manifest(path: Path, **overrides):
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     reset_update_check_cache_for_tests()
-    for name in ["KMVMS_UPDATE_MANIFEST_PATH", "KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", "KMVMS_PUBLIC_RELEASE_PROVIDER", "KMVMS_UPDATE_CHANNEL_ID", "KMVMS_BUILD_METADATA_FILE", "KMVMS_BUILD_ID", "KMVMS_INSTALL_SOURCE", "KMVMS_SOURCE_CHANNEL_ID"]:
+    for name in ["KMVMS_UPDATE_MANIFEST_PATH", "KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", "KMVMS_PUBLIC_RELEASE_PROVIDER", "KMVMS_UPDATE_CHANNEL_ID", "KMVMS_BUILD_METADATA_FILE", "KMVMS_BUILD_ID", "KMVMS_INSTALL_SOURCE", "KMVMS_SOURCE_CHANNEL_ID", "KMVMS_APP_ROOT"]:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("KMVMS_PUBLIC_RELEASE_PROVIDER", "0")
     yield
@@ -176,6 +177,28 @@ def test_update_candidate_preflight_is_sanitized_and_apply_blocked(tmp_path, mon
     monkeypatch.setenv("KMVMS_UPDATE_MANIFEST_FORCE_LOCAL", "1")
     monkeypatch.setenv("KMVMS_UPDATE_CHANNEL_ID", "stable")
     monkeypatch.setenv("KMVMS_BUILD_ID", "stage13-current-build")
+    installed_root = tmp_path / "installed"
+    installed_root.mkdir()
+    (installed_root / ".km-vms-release.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "product": "KM VMS",
+                "version": APP_VERSION,
+                "title": "Hermetic installed test identity",
+                "summary": "Hermetic installed test identity.",
+                "release_channel": "public-github",
+                "source_kind": "github-release",
+                "source_repo": "kmishnev87/km-vms",
+                "source_ref": f"v{APP_VERSION}",
+                "commit_sha": "b" * 40,
+                "metadata_status": "complete",
+                "metadata_source": "pytest",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(installed_root))
 
     payload = dry_run_update_maintenance(db)
     rendered = json.dumps(payload, ensure_ascii=False)
@@ -244,7 +267,7 @@ def test_update_apply_public_payload_contract_and_permissions(client_db):
     assert client.post("/system/update/dry-run", json={}, headers=auth_headers(operator)).status_code == 404
     assert client.post("/system/update/dry-run", json={}, headers=auth_headers(owner)).status_code == 404
     assert client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(operator)).status_code == 403
-    assert client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner)).status_code == 409
+    assert client.post("/system/update/apply", json={"confirm": True}, headers=auth_headers(owner)).status_code == 422
 
     rows = {(item.method, item.path, item.decision) for item in ENDPOINT_PERMISSIONS}
     assert ("POST", "/system/update/dry-run", "manage_settings") not in rows

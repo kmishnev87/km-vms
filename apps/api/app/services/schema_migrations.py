@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import inspect as python_inspect
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -38,9 +41,14 @@ MIGRATION_SOURCE = "migration_runner"
 PRODUCTION_ADOPTION_DEFERRED = "production_adoption_deferred"
 RISK_METADATA_ONLY = "metadata_only"
 RISK_ADDITIVE_SAFE = "additive_safe"
+RISK_TRANSACTIONAL_SAFE = "transactional_schema_safe"
 RISK_REQUIRES_BACKUP = "risky_requires_backup"
 RISK_MANUAL_ONLY = "manual_only"
-EXECUTABLE_RISKS = {RISK_METADATA_ONLY, RISK_ADDITIVE_SAFE}
+EXECUTABLE_RISKS = {
+    RISK_METADATA_ONLY,
+    RISK_ADDITIVE_SAFE,
+    RISK_TRANSACTIONAL_SAFE,
+}
 SUPPORTED_RISKS = EXECUTABLE_RISKS | {RISK_REQUIRES_BACKUP, RISK_MANUAL_ONLY}
 TRANSACTION_DEFAULT = "session_transaction"
 HISTORY_APPLIED = "applied"
@@ -74,6 +82,7 @@ class MigrationDefinition:
     verify: Callable[[Session], dict[str, Any] | None]
     safe_failure_summary: str
     rollback_note: str
+    definition_material: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{2,99}", self.migration_id):
@@ -82,6 +91,30 @@ class MigrationDefinition:
             raise MigrationRegistryError("migration to_version must be greater than from_version")
         if self.risk not in SUPPORTED_RISKS:
             raise MigrationRegistryError(f"unsupported migration risk: {self.risk}")
+
+
+@dataclass(frozen=True)
+class SchemaPreparationDefinition:
+    preparation_id: str
+    description: str
+    risk: str
+    transaction_mode: str
+    preflight: Callable[[Session], dict[str, Any] | None]
+    apply: Callable[[Session], dict[str, Any] | None]
+    verify: Callable[[Session], dict[str, Any] | None]
+    safe_failure_summary: str
+    rollback_note: str
+    definition_material: dict[str, Any] | None = None
+
+    def __post_init__(self) -> None:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{2,99}", self.preparation_id):
+            raise MigrationRegistryError(
+                "preparation_id must be stable lowercase id-like text"
+            )
+        if self.risk not in EXECUTABLE_RISKS:
+            raise MigrationRegistryError(
+                f"unsupported preparation risk: {self.risk}"
+            )
 
 
 class MigrationRegistry:
@@ -756,6 +789,1056 @@ STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION = MigrationDefinition(
 )
 
 
+STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION_ID = (
+    "stage660128_remediation_state_width_compatibility"
+)
+STAGE660128_V6_TO_V7_FINALIZATION_ID = (
+    "stage660128_remediation_safe_schema_v6_to_v7"
+)
+STAGE660128_V7_DROP_DEFAULT_COLUMNS = {
+    "archive_roots": (
+        "created_at",
+        "is_active",
+        "is_available",
+        "is_readable",
+        "is_writable",
+        "storage_namespace",
+        "updated_at",
+    ),
+    "cameras": (
+        "retention_days",
+        "segment_minutes",
+        "storage_quota_gb",
+    ),
+    "recording_jobs": (
+        "created_at",
+        "created_by",
+        "ownership",
+        "source",
+        "updated_at",
+    ),
+    "recording_segments": (
+        "cleanup_candidate",
+        "created_at",
+        "ownership",
+        "source",
+        "updated_at",
+    ),
+    "storage_operations": ("retry_depth",),
+    "system_settings": (
+        "auto_free_space_cleanup_enabled",
+        "recording_suspended_by_low_disk",
+    ),
+    "users": ("is_active", "updated_at"),
+}
+STAGE660128_V7_NOT_NULL_COLUMNS = {
+    "cameras": (
+        "retention_days",
+        "segment_minutes",
+        "storage_quota_gb",
+    ),
+    "schema_migration_history": (
+        "applied_at",
+        "created_at",
+        "details",
+        "service_name",
+    ),
+    "schema_version_state": (
+        "applied_at",
+        "created_at",
+        "drift_classification",
+        "updated_at",
+    ),
+}
+STAGE660128_V7_REQUIRED_FOREIGN_KEYS = {
+    "recording_segments_archive_root_id_fkey": {
+        "table": "recording_segments",
+        "columns": ("archive_root_id",),
+        "referred_table": "archive_roots",
+        "referred_columns": ("id",),
+        "ondelete": "SET NULL",
+    },
+    "recording_segments_job_id_fkey": {
+        "table": "recording_segments",
+        "columns": ("job_id",),
+        "referred_table": "recording_jobs",
+        "referred_columns": ("id",),
+        "ondelete": "SET NULL",
+    },
+}
+
+
+def _stage660128_preparation_history_rows(db: Session) -> list[SchemaMigrationHistory]:
+    return (
+        db.query(SchemaMigrationHistory)
+        .filter(
+            SchemaMigrationHistory.migration_id
+            == STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION_ID,
+            SchemaMigrationHistory.source == MIGRATION_SOURCE,
+        )
+        .all()
+    )
+
+
+def _stage660128_v7_preparation_preflight(
+    db: Session,
+) -> dict[str, Any]:
+    if db.get_bind().dialect.name != "postgresql":
+        raise RuntimeError(
+            "stage660128_v7_preparation_dialect_unsupported"
+        )
+    inspector = inspect(db.connection())
+    required_columns = {
+        **STAGE660128_V7_DROP_DEFAULT_COLUMNS,
+        **STAGE660128_V7_NOT_NULL_COLUMNS,
+    }
+    column_shapes: dict[str, dict[str, dict[str, Any]]] = {}
+    for table_name, column_names in required_columns.items():
+        if not inspector.has_table(table_name):
+            raise RuntimeError(
+                "stage660128_v7_preparation_table_missing"
+            )
+        actual = {
+            str(column.get("name") or ""): column
+            for column in inspector.get_columns(table_name)
+        }
+        if set(column_names) - set(actual):
+            raise RuntimeError(
+                "stage660128_v7_preparation_column_missing"
+            )
+        column_shapes[table_name] = actual
+
+    default_drift = {
+        (table_name, column_name)
+        for table_name, column_names in (
+            STAGE660128_V7_DROP_DEFAULT_COLUMNS.items()
+        )
+        for column_name in column_names
+        if str(
+            column_shapes[table_name][column_name].get("default")
+            or ""
+        ).strip()
+    }
+    nullable_drift = {
+        (table_name, column_name)
+        for table_name, column_names in (
+            STAGE660128_V7_NOT_NULL_COLUMNS.items()
+        )
+        for column_name in column_names
+        if bool(
+            column_shapes[table_name][column_name].get("nullable")
+        )
+    }
+    actual_foreign_keys = {
+        str(item.get("name") or ""): item
+        for item in inspector.get_foreign_keys("recording_segments")
+    }
+    missing_foreign_keys: set[str] = set()
+    for constraint_name, spec in (
+        STAGE660128_V7_REQUIRED_FOREIGN_KEYS.items()
+    ):
+        actual_foreign_key = actual_foreign_keys.get(
+            constraint_name
+        )
+        if actual_foreign_key is None:
+            missing_foreign_keys.add(constraint_name)
+            continue
+        if (
+            tuple(
+                actual_foreign_key.get("constrained_columns") or ()
+            )
+            != spec["columns"]
+            or str(
+                actual_foreign_key.get("referred_table") or ""
+            )
+            != spec["referred_table"]
+            or tuple(
+                actual_foreign_key.get("referred_columns") or ()
+            )
+            != spec["referred_columns"]
+            or str(
+                (
+                    actual_foreign_key.get("options") or {}
+                ).get("ondelete")
+                or ""
+            ).upper()
+            != spec["ondelete"]
+        ):
+            raise RuntimeError(
+                "stage660128_v7_preparation_foreign_key_invalid"
+            )
+
+    null_counts: dict[str, int] = {}
+    for table_name, column_names in (
+        STAGE660128_V7_NOT_NULL_COLUMNS.items()
+    ):
+        for column_name in column_names:
+            key = f"{table_name}.{column_name}"
+            null_counts[key] = int(
+                db.execute(
+                    text(
+                        f"SELECT COUNT(*) FROM {table_name} "
+                        f"WHERE {column_name} IS NULL"
+                    )
+                ).scalar_one()
+                or 0
+            )
+    orphan_counts = {
+        "recording_segments.archive_root_id": int(
+            db.execute(
+                text(
+                    "SELECT COUNT(*) FROM recording_segments segment "
+                    "WHERE segment.archive_root_id IS NOT NULL "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM archive_roots root "
+                    "WHERE root.id=segment.archive_root_id)"
+                )
+            ).scalar_one()
+            or 0
+        ),
+        "recording_segments.job_id": int(
+            db.execute(
+                text(
+                    "SELECT COUNT(*) FROM recording_segments segment "
+                    "WHERE segment.job_id IS NOT NULL "
+                    "AND NOT EXISTS ("
+                    "SELECT 1 FROM recording_jobs job "
+                    "WHERE job.id=segment.job_id)"
+                )
+            ).scalar_one()
+            or 0
+        ),
+    }
+    if any(null_counts.values()):
+        raise RuntimeError(
+            "stage660128_v7_preparation_null_data_blocked"
+        )
+    if any(orphan_counts.values()):
+        raise RuntimeError(
+            "stage660128_v7_preparation_orphan_data_blocked"
+        )
+    rows = _stage660128_preparation_history_rows(db)
+    if rows:
+        expected = preparation_definition_fingerprint(
+            STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION
+        )
+        matching = [
+            row
+            for row in rows
+            if row.status == "applied"
+            and row.checksum == expected
+            and row.previous_version == 7
+            and row.target_version == 7
+            and row.schema_version == 7
+        ]
+        if len(rows) != 1 or len(matching) != 1:
+            raise RuntimeError(
+                "stage660128_v7_preparation_receipt_inconsistent"
+            )
+        _stage660128_v7_preparation_verify(db)
+        return {
+            "status": "already_applied",
+            "schema_version": 7,
+            "normalization_profile": (
+                "exact_supported_v7_bootstrap_shape"
+            ),
+            "null_counts": null_counts,
+            "orphan_counts": orphan_counts,
+        }
+    expected_default_drift = {
+        (table_name, column_name)
+        for table_name, column_names in (
+            STAGE660128_V7_DROP_DEFAULT_COLUMNS.items()
+        )
+        for column_name in column_names
+    }
+    expected_nullable_drift = {
+        (table_name, column_name)
+        for table_name, column_names in (
+            STAGE660128_V7_NOT_NULL_COLUMNS.items()
+        )
+        for column_name in column_names
+    }
+    expected_missing_foreign_keys = set(
+        STAGE660128_V7_REQUIRED_FOREIGN_KEYS
+    )
+    if (
+        not default_drift
+        and not nullable_drift
+        and not missing_foreign_keys
+    ):
+        return {
+            "status": "not_required",
+            "schema_version": 7,
+            "normalization_profile": "canonical_v7_source",
+            "null_counts": null_counts,
+            "orphan_counts": orphan_counts,
+        }
+    if (
+        default_drift != expected_default_drift
+        or nullable_drift != expected_nullable_drift
+        or missing_foreign_keys
+        != expected_missing_foreign_keys
+    ):
+        raise RuntimeError(
+            "stage660128_v7_preparation_shape_inconsistent"
+        )
+    return {
+        "status": "ready",
+        "schema_version": 7,
+        "normalization_profile": (
+            "exact_supported_v7_bootstrap_shape"
+        ),
+        "null_counts": null_counts,
+        "orphan_counts": orphan_counts,
+    }
+
+
+def _stage660128_v7_preparation_apply(
+    db: Session,
+) -> dict[str, Any]:
+    preflight = _stage660128_v7_preparation_preflight(db)
+    for table_name, column_names in (
+        STAGE660128_V7_DROP_DEFAULT_COLUMNS.items()
+    ):
+        for column_name in column_names:
+            db.execute(
+                text(
+                    f"ALTER TABLE {table_name} "
+                    f"ALTER COLUMN {column_name} DROP DEFAULT"
+                )
+            )
+    for table_name, column_names in (
+        STAGE660128_V7_NOT_NULL_COLUMNS.items()
+    ):
+        for column_name in column_names:
+            db.execute(
+                text(
+                    f"ALTER TABLE {table_name} "
+                    f"ALTER COLUMN {column_name} SET NOT NULL"
+                )
+            )
+
+    inspector = inspect(db.connection())
+    existing_foreign_keys = {
+        str(item.get("name") or ""): item
+        for item in inspector.get_foreign_keys("recording_segments")
+    }
+    added_foreign_keys: list[str] = []
+    for constraint_name, spec in (
+        STAGE660128_V7_REQUIRED_FOREIGN_KEYS.items()
+    ):
+        if constraint_name in existing_foreign_keys:
+            continue
+        columns = ", ".join(spec["columns"])
+        referred_columns = ", ".join(spec["referred_columns"])
+        db.execute(
+            text(
+                f"ALTER TABLE {spec['table']} "
+                f"ADD CONSTRAINT {constraint_name} "
+                f"FOREIGN KEY ({columns}) "
+                f"REFERENCES {spec['referred_table']} "
+                f"({referred_columns}) "
+                f"ON DELETE {spec['ondelete']}"
+            )
+        )
+        added_foreign_keys.append(constraint_name)
+    return {
+        "status": "normalized",
+        "normalization_profile": preflight[
+            "normalization_profile"
+        ],
+        "dropped_default_count": sum(
+            len(columns)
+            for columns in (
+                STAGE660128_V7_DROP_DEFAULT_COLUMNS.values()
+            )
+        ),
+        "not_null_column_count": sum(
+            len(columns)
+            for columns in (
+                STAGE660128_V7_NOT_NULL_COLUMNS.values()
+            )
+        ),
+        "added_foreign_keys": sorted(added_foreign_keys),
+    }
+
+
+def _stage660128_v7_preparation_verify(
+    db: Session,
+) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    for table_name, column_names in (
+        STAGE660128_V7_DROP_DEFAULT_COLUMNS.items()
+    ):
+        actual = {
+            str(column.get("name") or ""): column
+            for column in inspector.get_columns(table_name)
+        }
+        if any(
+            str(actual[column_name].get("default") or "").strip()
+            for column_name in column_names
+        ):
+            raise RuntimeError(
+                "stage660128_v7_preparation_default_not_normalized"
+            )
+    for table_name, column_names in (
+        STAGE660128_V7_NOT_NULL_COLUMNS.items()
+    ):
+        actual = {
+            str(column.get("name") or ""): column
+            for column in inspector.get_columns(table_name)
+        }
+        if any(
+            bool(actual[column_name].get("nullable"))
+            for column_name in column_names
+        ):
+            raise RuntimeError(
+                "stage660128_v7_preparation_nullability_not_normalized"
+            )
+
+    actual_foreign_keys = {
+        str(item.get("name") or ""): item
+        for item in inspector.get_foreign_keys("recording_segments")
+    }
+    for constraint_name, spec in (
+        STAGE660128_V7_REQUIRED_FOREIGN_KEYS.items()
+    ):
+        actual = actual_foreign_keys.get(constraint_name)
+        if (
+            actual is None
+            or tuple(actual.get("constrained_columns") or ())
+            != spec["columns"]
+            or str(actual.get("referred_table") or "")
+            != spec["referred_table"]
+            or tuple(actual.get("referred_columns") or ())
+            != spec["referred_columns"]
+            or str(
+                (actual.get("options") or {}).get("ondelete") or ""
+            ).upper()
+            != spec["ondelete"]
+        ):
+            raise RuntimeError(
+                "stage660128_v7_preparation_foreign_key_invalid"
+            )
+    return {
+        "status": "verified",
+        "schema_version": 7,
+        "normalization_profile": (
+            "exact_supported_v7_bootstrap_shape"
+        ),
+    }
+
+
+def _stage660128_remediation_compatibility_preflight(
+    db: Session,
+) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is not None and state.schema_version == 7:
+        return _stage660128_v7_preparation_preflight(db)
+    if state is None or state.schema_version not in {5, 6}:
+        return {
+            "status": "not_required",
+            "schema_version": state.schema_version if state is not None else None,
+            "column_length": None,
+            "physical_pending_item_count": 0,
+            "physical_pending_plan_count": 0,
+        }
+    dialect, actual_length = _stage410522_state_column(db)
+    aggregates = _stage410522_state_aggregates(db)
+    active = bool(
+        aggregates["physical_pending_item_count"]
+        or aggregates["physical_pending_plan_count"]
+    )
+    if not active:
+        return {
+            "status": "not_required",
+            "schema_version": state.schema_version,
+            "column_length": actual_length,
+            **aggregates,
+        }
+    if dialect != "postgresql":
+        raise RuntimeError("stage660128_remediation_preparation_dialect_unsupported")
+    if actual_length == STAGE410522_INTEGRITY_ITEM_STATE_SOURCE_LENGTH:
+        return {
+            "status": "ready",
+            "schema_version": state.schema_version,
+            "column_length": actual_length,
+            **aggregates,
+        }
+    if actual_length != STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH:
+        raise RuntimeError("stage660128_remediation_preparation_shape_inconsistent")
+    expected = preparation_definition_fingerprint(
+        STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION
+    )
+    rows = _stage660128_preparation_history_rows(db)
+    matching = [
+        row
+        for row in rows
+        if row.status == "applied"
+        and row.checksum == expected
+        and row.schema_version in {5, 6}
+        and row.target_version == row.schema_version
+    ]
+    if len(rows) != 1 or len(matching) != 1:
+        raise RuntimeError(
+            "stage660128_remediation_preparation_receipt_inconsistent"
+        )
+    return {
+        "status": "already_applied",
+        "schema_version": state.schema_version,
+        "column_length": actual_length,
+        **aggregates,
+    }
+
+
+def _stage660128_remediation_compatibility_apply(
+    db: Session,
+) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is not None and state.schema_version == 7:
+        return _stage660128_v7_preparation_apply(db)
+    preflight = _stage660128_remediation_compatibility_preflight(db)
+    if preflight["status"] != "ready":
+        return {
+            "status": preflight["status"],
+            "column_length": preflight["column_length"],
+        }
+    db.execute(
+        text(
+            "ALTER TABLE archive_integrity_remediation_items "
+            "ALTER COLUMN state TYPE VARCHAR(64)"
+        )
+    )
+    return {
+        "status": "widened",
+        "column_length": STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH,
+    }
+
+
+def _stage660128_remediation_compatibility_verify(
+    db: Session,
+) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is not None and state.schema_version == 7:
+        return _stage660128_v7_preparation_verify(db)
+    dialect, actual_length = _stage410522_state_column(db)
+    aggregates = (
+        _stage410522_state_aggregates(db)
+        if state is not None and state.schema_version in {5, 6}
+        else {
+            "row_count": 0,
+            "max_state_length": 0,
+            "physical_pending_item_count": 0,
+            "physical_pending_plan_count": 0,
+        }
+    )
+    active = bool(
+        aggregates["physical_pending_item_count"]
+        or aggregates["physical_pending_plan_count"]
+    )
+    if active and (
+        dialect != "postgresql"
+        or actual_length != STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH
+    ):
+        raise RuntimeError("stage660128_remediation_preparation_not_applied")
+    return {
+        "status": "verified" if active else "not_required",
+        "schema_version": state.schema_version if state is not None else None,
+        "column_length": actual_length,
+        **aggregates,
+    }
+
+
+STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION = (
+    SchemaPreparationDefinition(
+        preparation_id=STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION_ID,
+        description=(
+            "Under writer quiescence, normalize an exact supported legacy "
+            "schema before bounded recovery and canonical migration."
+        ),
+        risk=RISK_TRANSACTIONAL_SAFE,
+        transaction_mode="session_transaction",
+        preflight=_stage660128_remediation_compatibility_preflight,
+        apply=_stage660128_remediation_compatibility_apply,
+        verify=_stage660128_remediation_compatibility_verify,
+        safe_failure_summary=(
+            "Remediation compatibility preparation failed safely."
+        ),
+        rollback_note=(
+            "PostgreSQL transactional DDL preserves the exact source shape "
+            "when the preparation transaction does not commit."
+        ),
+        definition_material={
+            "eligible_schema_versions": [5, 6, 7],
+            "physical_remediation_transition": {
+                "table": "archive_integrity_remediation_items",
+                "column": "state",
+                "from_type": "VARCHAR(24)",
+                "to_type": "VARCHAR(64)",
+            },
+            "v7_drop_default_columns": (
+                STAGE660128_V7_DROP_DEFAULT_COLUMNS
+            ),
+            "v7_not_null_columns": (
+                STAGE660128_V7_NOT_NULL_COLUMNS
+            ),
+            "v7_required_foreign_keys": (
+                STAGE660128_V7_REQUIRED_FOREIGN_KEYS
+            ),
+            "requires_active_physical_remediation": True,
+            "admits_new_work": False,
+            "mutates_business_rows": False,
+        },
+    )
+)
+
+
+def _stage660128_v6_to_v7_preflight(db: Session) -> dict[str, Any]:
+    dialect, actual_length = _stage410522_state_column(db)
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    aggregates = _stage410522_state_aggregates(db)
+    if state is None or state.schema_version != 6:
+        raise RuntimeError("stage660128_v6_to_v7_source_state_invalid")
+    if aggregates["physical_pending_item_count"] or aggregates[
+        "physical_pending_plan_count"
+    ]:
+        raise RuntimeError("stage660128_v6_to_v7_remediation_not_reconciled")
+    if dialect != "postgresql" or actual_length not in {
+        STAGE410522_INTEGRITY_ITEM_STATE_SOURCE_LENGTH,
+        STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH,
+    }:
+        raise RuntimeError("stage660128_v6_to_v7_source_shape_inconsistent")
+    prepared = False
+    if actual_length == STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH:
+        expected = preparation_definition_fingerprint(
+            STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION
+        )
+        rows = _stage660128_preparation_history_rows(db)
+        matching = [
+            row
+            for row in rows
+            if row.status == "applied"
+            and row.checksum == expected
+            and row.schema_version in {5, 6}
+            and row.target_version == row.schema_version
+        ]
+        if len(rows) != 1 or len(matching) != 1:
+            raise RuntimeError(
+                "stage660128_v6_to_v7_preparation_lineage_missing"
+            )
+        prepared = True
+    return {
+        "status": "ready",
+        "dialect": dialect,
+        "schema_version": state.schema_version,
+        "column_length": actual_length,
+        "compatibility_prepared": prepared,
+        **aggregates,
+    }
+
+
+def _stage660128_v6_to_v7_apply(db: Session) -> dict[str, Any]:
+    preflight = _stage660128_v6_to_v7_preflight(db)
+    if (
+        preflight["column_length"]
+        == STAGE410522_INTEGRITY_ITEM_STATE_SOURCE_LENGTH
+    ):
+        db.execute(
+            text(
+                "ALTER TABLE archive_integrity_remediation_items "
+                "ALTER COLUMN state TYPE VARCHAR(64)"
+            )
+        )
+        return {"status": "widened_without_active_remediation"}
+    return {"status": "compatibility_preparation_reused"}
+
+
+def _stage660128_v6_to_v7_verify(db: Session) -> dict[str, Any]:
+    dialect, actual_length = _stage410522_state_column(db)
+    aggregates = _stage410522_state_aggregates(db)
+    if (
+        dialect != "postgresql"
+        or actual_length != STAGE410522_INTEGRITY_ITEM_STATE_TARGET_LENGTH
+        or aggregates["physical_pending_item_count"]
+        or aggregates["physical_pending_plan_count"]
+    ):
+        raise RuntimeError("stage660128_v6_to_v7_target_shape_invalid")
+    return {
+        "status": "verified",
+        "dialect": dialect,
+        "column_length": actual_length,
+        **aggregates,
+    }
+
+
+STAGE660128_V6_TO_V7_FINALIZATION = MigrationDefinition(
+    migration_id=STAGE660128_V6_TO_V7_FINALIZATION_ID,
+    from_version=6,
+    to_version=7,
+    description=(
+        "Finalize schema v7 through a new lineage that safely handles either "
+        "an inactive VARCHAR(24) source or the exact compatibility-prepared "
+        "VARCHAR(64) recovery source."
+    ),
+    risk=RISK_TRANSACTIONAL_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage660128_v6_to_v7_preflight,
+    apply=_stage660128_v6_to_v7_apply,
+    verify=_stage660128_v6_to_v7_verify,
+    safe_failure_summary="Remediation-safe schema v6 to v7 finalization failed.",
+    rollback_note=(
+        "The finalization is transactional and never reuses or changes the "
+        "published Stage 4.10.5.2.2 migration definition."
+    ),
+    definition_material={
+        "published_migration_preserved": (
+            STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION_ID
+        ),
+        "source_schema_version": 6,
+        "target_schema_version": 7,
+        "direct_source_type": "VARCHAR(24)",
+        "prepared_source_type": "VARCHAR(64)",
+        "target_type": "VARCHAR(64)",
+        "active_physical_remediation_required": False,
+    },
+)
+
+
+STAGE660128_UNIVERSAL_SCHEMA_MIGRATION_ID = (
+    "stage660128_universal_skipped_release_schema_v8"
+)
+STAGE660128_BOOTSTRAP_COLUMNS = {
+    "archive_roots": {
+        "physical_identity": "VARCHAR(128) NULL",
+        "retirement_status": "VARCHAR(50) NULL",
+        "retirement_problem": "TEXT NULL",
+        "retirement_operation_id": "VARCHAR(96) NULL",
+        "retirement_cleanup_status": "VARCHAR(64) NULL",
+        "retirement_cleanup_result": "JSON NULL",
+    },
+    "recording_segments": {
+        "archive_root_resolution_status": "VARCHAR(64) NULL",
+        "archive_root_resolution_detail": "TEXT NULL",
+        "archive_root_resolved_at": "TIMESTAMP NULL",
+        "media_progress_at": "TIMESTAMP NULL",
+    },
+}
+STAGE660128_REQUIRED_INDEXES = {
+    "archive_roots": {
+        "ix_archive_roots_physical_identity": ("physical_identity",),
+        "ix_archive_roots_retirement_status": ("retirement_status",),
+        "ix_archive_roots_retirement_operation_id": ("retirement_operation_id",),
+        "ix_archive_roots_retirement_cleanup_status": ("retirement_cleanup_status",),
+    },
+    "recording_segments": {
+        "ix_recording_segments_archive_root_resolution_status": (
+            "archive_root_resolution_status",
+        ),
+    },
+}
+STAGE660128_OBSOLETE_INDEXES = {
+    "recording_segments": {"ix_recording_segments_root_relative_id"},
+}
+STAGE660128_ACTIVE_STATUS_QUERIES = {
+    "storage_operations": (
+        "SELECT COUNT(*) FROM storage_operations "
+        "WHERE status IN ('queued','running','cancel_requested')"
+    ),
+    "archive_integrity_scans": (
+        "SELECT COUNT(*) FROM archive_integrity_scans "
+        "WHERE status IN ('queued','running','cancel_requested')"
+    ),
+    "archive_integrity_remediation_plans": (
+        "SELECT COUNT(*) FROM archive_integrity_remediation_plans "
+        "WHERE state IN ('running','terminal_pending')"
+    ),
+    "archive_migration_plans": (
+        "SELECT COUNT(*) FROM archive_migration_plans "
+        "WHERE status IN ('building','queued','running','cancel_requested')"
+    ),
+}
+STAGE660128_TARGET_TABLES = {
+    "archive_export_jobs",
+    "archive_integrity_directory_work",
+    "archive_integrity_findings",
+    "archive_integrity_remediation_items",
+    "archive_integrity_remediation_plans",
+    "archive_integrity_scans",
+    "archive_migration_items",
+    "archive_migration_plans",
+    "archive_roots",
+    "audit_events",
+    "cameras",
+    "recorder_file_receipts",
+    "recorder_runtime_status",
+    "recording_jobs",
+    "recording_segments",
+    "schema_migration_attempts",
+    "schema_migration_control",
+    "schema_migration_history",
+    "schema_version_state",
+    "setup_locks",
+    "storage_operations",
+    "storage_work_signals",
+    "storage_worker_leases",
+    "system_settings",
+    "user_workspace_layouts",
+    "users",
+}
+
+
+def migration_definition_fingerprint(migration: MigrationDefinition) -> str:
+    payload = {
+        "schema_version": 1,
+        "migration_id": migration.migration_id,
+        "from_version": migration.from_version,
+        "to_version": migration.to_version,
+        "description": migration.description,
+        "risk": migration.risk,
+        "transaction_mode": migration.transaction_mode,
+        "safe_failure_summary": migration.safe_failure_summary,
+        "rollback_note": migration.rollback_note,
+        "definition_material": migration.definition_material,
+        "callables": [
+            {
+                "module": callback.__module__,
+                "qualname": callback.__qualname__,
+                "source": hashlib.sha256(
+                    python_inspect.getsource(callback).encode("utf-8")
+                ).hexdigest(),
+            }
+            for callback in (migration.preflight, migration.apply, migration.verify)
+        ],
+    }
+    rendered = json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(rendered).hexdigest()
+
+
+def preparation_definition_fingerprint(
+    preparation: SchemaPreparationDefinition,
+) -> str:
+    payload = {
+        "schema_version": 1,
+        "preparation_id": preparation.preparation_id,
+        "description": preparation.description,
+        "risk": preparation.risk,
+        "transaction_mode": preparation.transaction_mode,
+        "safe_failure_summary": preparation.safe_failure_summary,
+        "rollback_note": preparation.rollback_note,
+        "definition_material": preparation.definition_material,
+        "callables": [
+            {
+                "module": callback.__module__,
+                "qualname": callback.__qualname__,
+                "source": hashlib.sha256(
+                    python_inspect.getsource(callback).encode("utf-8")
+                ).hexdigest(),
+            }
+            for callback in (
+                preparation.preflight,
+                preparation.apply,
+                preparation.verify,
+            )
+        ],
+    }
+    rendered = json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(rendered).hexdigest()
+
+
+def _stage660128_active_operation_counts(db: Session) -> dict[str, int]:
+    inspector = inspect(db.connection())
+    counts: dict[str, int] = {}
+    for table_name, statement in STAGE660128_ACTIVE_STATUS_QUERIES.items():
+        if not inspector.has_table(table_name):
+            counts[table_name] = 0
+            continue
+        counts[table_name] = int(db.execute(text(statement)).scalar_one() or 0)
+    return counts
+
+
+def _stage660128_universal_schema_preflight(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if (
+        state is None
+        or state.schema_version != 7
+        or state.baseline_id != CURRENT_BASELINE_ID
+        or state.status not in SAFE_STATUSES
+    ):
+        raise RuntimeError("stage660128_source_schema_state_invalid")
+    inspector = inspect(db.connection())
+    missing_control = sorted(
+        table_name
+        for table_name in ("schema_migration_control", "schema_migration_attempts")
+        if not inspector.has_table(table_name)
+    )
+    if missing_control:
+        raise RuntimeError("stage660128_migration_control_not_bootstrapped")
+    active_counts = _stage660128_active_operation_counts(db)
+    if any(active_counts.values()):
+        raise RuntimeError("stage660128_active_operation_not_reconciled")
+    missing_columns: dict[str, list[str]] = {}
+    for table_name, declared in STAGE660128_BOOTSTRAP_COLUMNS.items():
+        if not inspector.has_table(table_name):
+            raise RuntimeError(f"stage660128_{table_name}_missing")
+        actual = {str(column["name"]) for column in inspector.get_columns(table_name)}
+        absent = sorted(set(declared) - actual)
+        if absent:
+            missing_columns[table_name] = absent
+    return {
+        "status": "ready",
+        "active_operation_counts": active_counts,
+        "missing_columns": missing_columns,
+    }
+
+
+def _stage660128_universal_schema_apply(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    added: dict[str, list[str]] = {}
+    for table_name, declared in STAGE660128_BOOTSTRAP_COLUMNS.items():
+        actual = {str(column["name"]) for column in inspector.get_columns(table_name)}
+        for column_name, column_ddl in declared.items():
+            if column_name in actual:
+                continue
+            db.execute(
+                text(
+                    f"ALTER TABLE {table_name} "
+                    f"ADD COLUMN {column_name} {column_ddl}"
+                )
+            )
+            added.setdefault(table_name, []).append(column_name)
+    for table_name, indexes in STAGE660128_REQUIRED_INDEXES.items():
+        for index_name, columns in indexes.items():
+            rendered_columns = ", ".join(columns)
+            db.execute(
+                text(
+                    f"CREATE INDEX IF NOT EXISTS {index_name} "
+                    f"ON {table_name} ({rendered_columns})"
+                )
+            )
+    # The historical v4 migration added a server default that clean v7
+    # installations never had.  V8 declares one canonical model-equivalent
+    # shape without changing any stored value.
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(
+            text(
+                "ALTER TABLE cameras "
+                "ALTER COLUMN retention_policy_version DROP DEFAULT"
+            )
+        )
+    for table_name, indexes in STAGE660128_OBSOLETE_INDEXES.items():
+        for index_name in indexes:
+            db.execute(text(f"DROP INDEX IF EXISTS {index_name}"))
+    return {
+        "added_columns": {
+            table_name: sorted(column_names)
+            for table_name, column_names in sorted(added.items())
+        },
+        "canonical_default_normalized": True,
+        "obsolete_index_removed": True,
+    }
+
+
+def _stage660128_universal_schema_verify(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    actual_tables = set(inspector.get_table_names())
+    missing_tables = sorted(STAGE660128_TARGET_TABLES - actual_tables)
+    unknown_tables = sorted(actual_tables - STAGE660128_TARGET_TABLES)
+    if missing_tables or unknown_tables:
+        raise RuntimeError("stage660128_target_table_set_mismatch")
+    for table_name, declared in STAGE660128_BOOTSTRAP_COLUMNS.items():
+        actual = {str(column["name"]): column for column in inspector.get_columns(table_name)}
+        if set(declared) - set(actual):
+            raise RuntimeError("stage660128_target_column_set_incomplete")
+    for table_name, indexes in STAGE660128_REQUIRED_INDEXES.items():
+        actual = {
+            str(index.get("name") or ""): tuple(
+                str(column) for column in index.get("column_names") or []
+            )
+            for index in inspector.get_indexes(table_name)
+        }
+        for index_name, columns in indexes.items():
+            if actual.get(index_name) != columns:
+                raise RuntimeError("stage660128_target_index_mismatch")
+    for table_name, obsolete in STAGE660128_OBSOLETE_INDEXES.items():
+        actual = {
+            str(index.get("name") or "")
+            for index in inspector.get_indexes(table_name)
+        }
+        if actual & obsolete:
+            raise RuntimeError("stage660128_obsolete_index_present")
+    if db.get_bind().dialect.name == "postgresql":
+        default = next(
+            column.get("default")
+            for column in inspector.get_columns("cameras")
+            if str(column.get("name") or "") == "retention_policy_version"
+        )
+        if default not in {None, ""}:
+            raise RuntimeError("stage660128_retention_default_mismatch")
+    active_counts = _stage660128_active_operation_counts(db)
+    if any(active_counts.values()):
+        raise RuntimeError("stage660128_active_operation_reappeared")
+    return {
+        "status": "verified",
+        "table_count": len(actual_tables),
+        "active_operation_counts": active_counts,
+        "semantic_shape_verified": True,
+    }
+
+
+def validate_stage660128_target_schema(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if (
+        state is None
+        or state.schema_version != 8
+        or state.baseline_id != CURRENT_BASELINE_ID
+        or state.status not in SAFE_STATUSES
+    ):
+        raise RuntimeError("stage660128_target_schema_state_invalid")
+    return _stage660128_universal_schema_verify(db)
+
+
+STAGE660128_UNIVERSAL_SCHEMA_MIGRATION = MigrationDefinition(
+    migration_id=STAGE660128_UNIVERSAL_SCHEMA_MIGRATION_ID,
+    from_version=7,
+    to_version=8,
+    description=(
+        "Declare and normalize all previously bootstrap-owned schema deltas for "
+        "universal skipped-release updates."
+    ),
+    risk=RISK_TRANSACTIONAL_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage660128_universal_schema_preflight,
+    apply=_stage660128_universal_schema_apply,
+    verify=_stage660128_universal_schema_verify,
+    safe_failure_summary="Universal target schema transition failed safely.",
+    rollback_note=(
+        "PostgreSQL transactional DDL preserves the verified v7 shape on "
+        "failure; automatic source downgrade is not supported."
+    ),
+    definition_material={
+        "declared_bootstrap_columns": STAGE660128_BOOTSTRAP_COLUMNS,
+        "required_indexes": STAGE660128_REQUIRED_INDEXES,
+        "obsolete_indexes": {
+            table_name: sorted(indexes)
+            for table_name, indexes in STAGE660128_OBSOLETE_INDEXES.items()
+        },
+        "target_tables": sorted(STAGE660128_TARGET_TABLES),
+        "camera_retention_policy_version_server_default": None,
+    },
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
@@ -763,9 +1846,45 @@ PRODUCTION_MIGRATIONS = MigrationRegistry(
         STAGE4102_RETENTION_MIGRATION,
         STAGE4103_ARCHIVE_INTEGRITY_MIGRATION,
         STAGE4104_ARCHIVE_MIGRATION,
-        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
+        STAGE660128_V6_TO_V7_FINALIZATION,
+        STAGE660128_UNIVERSAL_SCHEMA_MIGRATION,
     )
 )
+
+
+def migration_registry_fingerprint(
+    registry: MigrationRegistry = PRODUCTION_MIGRATIONS,
+) -> str:
+    payload = {
+        "schema_version": 1,
+        "target_version": registry.target_version,
+        "preparations": [
+            {
+                "preparation_id": (
+                    STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION.preparation_id
+                ),
+                "definition_fingerprint": preparation_definition_fingerprint(
+                    STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION
+                ),
+            }
+        ],
+        "migrations": [
+            {
+                "migration_id": migration.migration_id,
+                "from_version": migration.from_version,
+                "to_version": migration.to_version,
+                "definition_fingerprint": migration_definition_fingerprint(migration),
+            }
+            for migration in registry.migrations
+        ],
+    }
+    rendered = json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(rendered).hexdigest()
 
 
 def _has_metadata_tables(db: Session) -> tuple[bool, bool]:
@@ -781,6 +1900,13 @@ def _current_history_count(db: Session, row: SchemaVersionState) -> int:
             SchemaMigrationHistory.source == row.source,
             SchemaMigrationHistory.schema_version == row.schema_version,
             SchemaMigrationHistory.target_version == row.schema_version,
+            (
+                SchemaMigrationHistory.previous_version.is_(None)
+                | (
+                    SchemaMigrationHistory.previous_version
+                    != SchemaMigrationHistory.target_version
+                )
+            ),
         )
         .count()
     )
@@ -850,10 +1976,14 @@ def migration_history_status(db: Session, migration: MigrationDefinition) -> dic
     if not rows:
         return {"status": HISTORY_MISSING, "summary": "Migration history is missing."}
 
+    expected_fingerprint = migration_definition_fingerprint(migration)
     applied = [
         row
         for row in rows
-        if row.status == "applied" and row.target_version == migration.to_version and row.schema_version == migration.to_version
+        if row.status == "applied"
+        and row.target_version == migration.to_version
+        and row.schema_version == migration.to_version
+        and row.checksum == expected_fingerprint
     ]
     incompatible_applied = [row for row in rows if row.status == "applied" and row not in applied]
     non_applied = [row for row in rows if row.status != "applied"]
@@ -1010,10 +2140,12 @@ def _record_runner_history(
     details: dict[str, Any],
     error_summary: str | None = None,
 ) -> None:
+    if status != "applied":
+        raise MigrationRegistryError(
+            "canonical schema history accepts applied transitions only"
+        )
     history = migration_history_status(db, migration)
     if status == "applied" and history["status"] == HISTORY_APPLIED:
-        return
-    if status == "failed" and history["status"] == HISTORY_PREVIOUS_FAILURE:
         return
     db.add(
         SchemaMigrationHistory(
@@ -1025,9 +2157,9 @@ def _record_runner_history(
             app_version=APP_VERSION,
             app_build_version=APP_BUILD_VERSION,
             status=status,
-            checksum=None,
+            checksum=migration_definition_fingerprint(migration),
             source=MIGRATION_SOURCE,
-            service_name="api_bootstrap",
+            service_name="schema_migration_gate",
             details=details,
             error_summary=error_summary,
         )
@@ -1119,15 +2251,6 @@ def execute_migration_plan(
         except Exception as exc:
             db.rollback()
             safe_error = _sanitize_failure(str(exc) or migration.safe_failure_summary)
-            _record_runner_history(
-                db,
-                migration,
-                previous_version=migration.from_version,
-                status="failed",
-                details={"risk": migration.risk, "safe_failure_summary": migration.safe_failure_summary},
-                error_summary=safe_error,
-            )
-            db.commit()
             raise SchemaMigrationBlocked("migration_failed", {**plan, "summary": safe_error}) from exc
 
     return {

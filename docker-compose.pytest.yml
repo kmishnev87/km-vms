@@ -31,7 +31,7 @@ services:
       STORAGE_EXPORTS: /tmp/kmvms-pytest/exports
       STORAGE_HOST_ROOT: ""
       SURVEILLANCE_ROOT: ""
-      PYTEST_ADDOPTS: --cache-clear -p no:cacheprovider
+      PYTEST_ADDOPTS: --cache-clear -p no:cacheprovider --basetemp=/tmp/kmvms-pytest/pytest
       KMVMS_STAGE2_POSTGRES_URL: ${KMVMS_STAGE2_POSTGRES_URL:-postgresql+psycopg://kmvms_pytest:kmvms_pytest_password@postgres-test:5432/kmvms_pytest}
       KMVMS_STAGE3_POSTGRES_URL: ${KMVMS_STAGE3_POSTGRES_URL:-postgresql+psycopg://kmvms_pytest:kmvms_pytest_password@postgres-test:5432/kmvms_pytest}
     depends_on:
@@ -39,6 +39,8 @@ services:
         condition: service_healthy
     volumes:
       - .:/workspace:ro
+    # Keep pytest temp files off the NAS overlay; several contract tests execute
+    # generated command shims from tmp_path, so this isolated test mount is exec.
     tmpfs:
-      - /tmp/kmvms-pytest
+      - /tmp/kmvms-pytest:exec
     command: ["pytest", "apps/api/tests"]

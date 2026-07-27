@@ -39,6 +39,8 @@ from app.services.schema_migrations import (
     PRODUCTION_MIGRATIONS,
     STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
     STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION_ID,
+    STAGE660128_V6_TO_V7_FINALIZATION,
+    STAGE660128_V6_TO_V7_FINALIZATION_ID,
     MigrationRegistry,
     SchemaMigrationBlocked,
     build_migration_plan,
@@ -1396,10 +1398,11 @@ def test_postgresql_v6_to_v7_width_migration_preserves_rows_and_is_idempotent(
     }
     _force_v6_schema(ctx)
 
-    plan = build_migration_plan(ctx.db, registry=PRODUCTION_MIGRATIONS)
+    width_registry = MigrationRegistry([STAGE660128_V6_TO_V7_FINALIZATION])
+    plan = build_migration_plan(ctx.db, registry=width_registry)
     assert plan["status"] == "ready"
     assert [item["migration_id"] for item in plan["pending_migrations"]] == [
-        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION_ID
+        STAGE660128_V6_TO_V7_FINALIZATION_ID
     ]
     monkeypatch.setattr(
         migration_maintenance,
@@ -1412,15 +1415,15 @@ def test_postgresql_v6_to_v7_width_migration_preserves_rows_and_is_idempotent(
     )
     maintenance = migration_maintenance.inspect_migration_maintenance(
         ctx.db,
-        registry=PRODUCTION_MIGRATIONS,
+        registry=width_registry,
         actor=owner(4522),
     )
     assert maintenance["status"] == "pending"
     assert maintenance["backup_required"] is True
     assert maintenance["can_apply"] is True
 
-    applied = execute_migration_plan(ctx.db, registry=PRODUCTION_MIGRATIONS)
-    repeated = execute_migration_plan(ctx.db, registry=PRODUCTION_MIGRATIONS)
+    applied = execute_migration_plan(ctx.db, registry=width_registry)
+    repeated = execute_migration_plan(ctx.db, registry=width_registry)
     ctx.db.expire_all()
     item_after = ctx.db.get(ArchiveIntegrityRemediationItem, prepared.item_id)
     inspector = sa_inspect(ctx.engine)
@@ -1437,14 +1440,15 @@ def test_postgresql_v6_to_v7_width_migration_preserves_rows_and_is_idempotent(
         for item in inspector.get_foreign_keys("archive_integrity_remediation_items")
     }
 
-    assert applied["executed_migrations"] == [STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION_ID]
+    assert applied["executed_migrations"] == [STAGE660128_V6_TO_V7_FINALIZATION_ID]
     assert repeated["executed_migrations"] == []
     assert _state_column_length(ctx) == 64
-    assert ctx.db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == CURRENT_SCHEMA_VERSION == 7
+    assert ctx.db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == 7
+    assert CURRENT_SCHEMA_VERSION == 8
     assert (
         ctx.db.query(SchemaMigrationHistory)
         .filter(
-            SchemaMigrationHistory.migration_id == STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION_ID,
+            SchemaMigrationHistory.migration_id == STAGE660128_V6_TO_V7_FINALIZATION_ID,
             SchemaMigrationHistory.status == "applied",
         )
         .count()
@@ -1453,7 +1457,7 @@ def test_postgresql_v6_to_v7_width_migration_preserves_rows_and_is_idempotent(
     assert (item_after.state, item_after.intended_mutation, dict(item_after.evidence or {})) == value_before
     assert indexes_after == indexes_before
     assert foreign_keys_after == foreign_keys_before
-    assert STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION.preflight(ctx.db)["status"] == "already_applied"
+    assert STAGE660128_V6_TO_V7_FINALIZATION.verify(ctx.db)["status"] == "verified"
 
 
 def test_postgresql_width_migration_failure_rolls_back_shape_version_and_history(stage410522_postgres):
@@ -1464,7 +1468,7 @@ def test_postgresql_width_migration_failure_rolls_back_shape_version_and_history
         raise RuntimeError("stage410522_injected_verify_failure")
 
     failing = replace(
-        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
+        STAGE660128_V6_TO_V7_FINALIZATION,
         migration_id="stage13_5_4_10_5_2_2_integrity_item_state_width_failure_test",
         verify=fail_verify,
     )
@@ -1479,10 +1483,13 @@ def test_postgresql_width_migration_failure_rolls_back_shape_version_and_history
         .filter(SchemaMigrationHistory.migration_id == failing.migration_id)
         .all()
     )
-    assert len(failed_rows) == 1 and failed_rows[0].status == "failed"
+    assert failed_rows == []
     assert (
         ctx.db.query(SchemaMigrationHistory)
-        .filter(SchemaMigrationHistory.migration_id == STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION_ID)
+        .filter(
+            SchemaMigrationHistory.migration_id
+            == STAGE660128_V6_TO_V7_FINALIZATION_ID
+        )
         .count()
         == 0
     )
@@ -1521,7 +1528,10 @@ def test_postgresql_current_model_declares_and_creates_state_width_64(stage41052
 
 @pytest.mark.parametrize(
     ("version", "baseline", "blocked_reason"),
-    ((8, CURRENT_BASELINE_ID, "future_version"), (6, "foreign-baseline", "unknown")),
+    (
+        (CURRENT_SCHEMA_VERSION + 1, CURRENT_BASELINE_ID, "future_version"),
+        (6, "foreign-baseline", "unknown"),
+    ),
 )
 def test_postgresql_width_migration_keeps_schema_version_guards(
     stage410522_postgres,

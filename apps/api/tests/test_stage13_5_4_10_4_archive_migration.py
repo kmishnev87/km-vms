@@ -3768,7 +3768,7 @@ def test_worker_unknown_infrastructure_failure_aborts_poll_without_cursor_advanc
     )
     add_archive_root(stage4104, name="infrastructure-source")
     add_archive_root(stage4104, name="infrastructure-target")
-    _second_plan, second_operation, _second_source = create_queued_migration(
+    second_plan, second_operation, _second_source = create_queued_migration(
         stage4104,
         key="worker-infrastructure-second",
         source_name="infrastructure-source",
@@ -3776,6 +3776,16 @@ def test_worker_unknown_infrastructure_failure_aborts_poll_without_cursor_advanc
     )
     first_before = operation_invariant_snapshot(first_operation)
     second_before = operation_invariant_snapshot(second_operation)
+    expected_plan, expected_operation = min(
+        (
+            (first_plan, first_operation),
+            (second_plan, second_operation),
+        ),
+        key=lambda pair: (
+            pair[1].queued_at,
+            str(pair[1].id),
+        ),
+    )
     calls = []
     real_reclaim = migration.reclaim_operation_with_conflicts
 
@@ -3785,7 +3795,7 @@ def test_worker_unknown_infrastructure_failure_aborts_poll_without_cursor_advanc
 
     monkeypatch.setattr(migration, "reclaim_operation_with_conflicts", fail_reclaim)
     assert migration._claim_next_operation() is None
-    assert calls == [str(first_operation.id)]
+    assert calls == [str(expected_operation.id)]
     assert migration._worker_candidate_cursor_snapshot() is None
 
     verify_db = stage4104.Session()
@@ -3800,8 +3810,8 @@ def test_worker_unknown_infrastructure_failure_aborts_poll_without_cursor_advanc
     assert claimed is not None
     worker_db, worker_plan, handle = claimed
     try:
-        assert worker_plan.id == first_plan.id
-        assert handle.operation_id == first_operation.id
+        assert worker_plan.id == expected_plan.id
+        assert handle.operation_id == expected_operation.id
     finally:
         worker_db.rollback()
         worker_db.close()

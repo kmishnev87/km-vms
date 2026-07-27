@@ -49,7 +49,7 @@ def test_language_contract_rejects_unsupported_input():
     assert "language" in str(exc.value)
 
 
-def test_existing_bad_stored_language_falls_back_safely(db):
+def test_existing_bad_stored_language_falls_back_safely_without_hidden_write(db):
     db.add(
         SystemSettings(
             system_initialized=True,
@@ -63,5 +63,5 @@ def test_existing_bad_stored_language_falls_back_safely(db):
 
     row = get_system_settings(db)
 
-    assert row.language == "ru"
+    assert row.language == "bad"
     assert serialize_settings(row)["language"] == "ru"

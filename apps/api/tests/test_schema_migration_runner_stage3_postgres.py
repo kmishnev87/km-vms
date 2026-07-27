@@ -30,6 +30,10 @@ from app.services.schema_migrations import (
     STAGE4103_REQUIRED_INDEXES,
     STAGE4103_TABLES,
     STAGE4104_TABLES,
+    STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION,
+    STAGE660128_V7_DROP_DEFAULT_COLUMNS,
+    STAGE660128_V7_NOT_NULL_COLUMNS,
+    STAGE660128_V7_REQUIRED_FOREIGN_KEYS,
     build_migration_plan,
     execute_migration_plan,
 )
@@ -162,8 +166,8 @@ def test_postgres_stage4101_additive_tables_upgrade_from_v1_and_restart(pg_sessi
     db.commit()
     seed_state(db, version=1)
 
-    first = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS)
-    second = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS)
+    first = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS, target_version=6)
+    second = execute_migration_plan(db, registry=PRODUCTION_MIGRATIONS, target_version=6)
     inspector = inspect(engine)
 
     assert first["executed_migrations"] == [
@@ -172,7 +176,6 @@ def test_postgres_stage4101_additive_tables_upgrade_from_v1_and_restart(pg_sessi
         STAGE4102_RETENTION_MIGRATION.migration_id,
         STAGE4103_ARCHIVE_INTEGRITY_MIGRATION.migration_id,
         STAGE4104_ARCHIVE_MIGRATION.migration_id,
-        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION.migration_id,
     ]
     assert second["executed_migrations"] == []
     assert all(inspector.has_table(table.name) for table in STAGE4101_TABLES)
@@ -187,7 +190,7 @@ def test_postgres_stage4101_additive_tables_upgrade_from_v1_and_restart(pg_sessi
         for item in inspector.get_columns("archive_integrity_remediation_items")
         if item["name"] == "state"
     )
-    assert state_column["type"].length == 64
+    assert state_column["type"].length == 24
     camera_columns = {item["name"] for item in inspector.get_columns("cameras")}
     settings_columns = {item["name"] for item in inspector.get_columns("system_settings")}
     assert "retention_policy_version" in camera_columns
@@ -198,7 +201,123 @@ def test_postgres_stage4101_additive_tables_upgrade_from_v1_and_restart(pg_sessi
         "low_disk_suspended_physical_volume_id",
         "low_disk_suspended_at",
     }.issubset(settings_columns)
-    assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == CURRENT_SCHEMA_VERSION
+    assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == 6
+
+
+def test_postgres_stage660128_v7_bootstrap_drift_normalizes_without_row_rewrite(
+    pg_session,
+):
+    engine, db = pg_session
+    Base.metadata.create_all(bind=engine)
+    db.query(SchemaMigrationHistory).delete()
+    db.query(SchemaVersionState).delete()
+    db.commit()
+    seed_state(db, version=7)
+
+    drift_defaults = {
+        ("archive_roots", "created_at"): "CURRENT_TIMESTAMP",
+        ("archive_roots", "is_active"): "false",
+        ("archive_roots", "is_available"): "true",
+        ("archive_roots", "is_readable"): "true",
+        ("archive_roots", "is_writable"): "true",
+        ("archive_roots", "storage_namespace"): "'kmvms/recordings'",
+        ("archive_roots", "updated_at"): "CURRENT_TIMESTAMP",
+        ("cameras", "retention_days"): "30",
+        ("cameras", "segment_minutes"): "5",
+        ("cameras", "storage_quota_gb"): "50",
+        ("recording_jobs", "created_at"): "CURRENT_TIMESTAMP",
+        ("recording_jobs", "created_by"): "'KM VMS'",
+        ("recording_jobs", "ownership"): "'KM VMS'",
+        ("recording_jobs", "source"): "'recorder'",
+        ("recording_jobs", "updated_at"): "CURRENT_TIMESTAMP",
+        ("recording_segments", "cleanup_candidate"): "false",
+        ("recording_segments", "created_at"): "CURRENT_TIMESTAMP",
+        ("recording_segments", "ownership"): "'KM VMS'",
+        ("recording_segments", "source"): "'recorder'",
+        ("recording_segments", "updated_at"): "CURRENT_TIMESTAMP",
+        ("storage_operations", "retry_depth"): "0",
+        (
+            "system_settings",
+            "auto_free_space_cleanup_enabled",
+        ): "false",
+        (
+            "system_settings",
+            "recording_suspended_by_low_disk",
+        ): "false",
+        ("users", "is_active"): "true",
+        ("users", "updated_at"): "CURRENT_TIMESTAMP",
+    }
+    assert set(drift_defaults) == {
+        (table_name, column_name)
+        for table_name, column_names in (
+            STAGE660128_V7_DROP_DEFAULT_COLUMNS.items()
+        )
+        for column_name in column_names
+    }
+    for (table_name, column_name), expression in (
+        drift_defaults.items()
+    ):
+        db.execute(
+            text(
+                f"ALTER TABLE {table_name} "
+                f"ALTER COLUMN {column_name} "
+                f"SET DEFAULT {expression}"
+            )
+        )
+    for table_name, column_names in (
+        STAGE660128_V7_NOT_NULL_COLUMNS.items()
+    ):
+        for column_name in column_names:
+            db.execute(
+                text(
+                    f"ALTER TABLE {table_name} "
+                    f"ALTER COLUMN {column_name} DROP NOT NULL"
+                )
+            )
+    for constraint_name in (
+        STAGE660128_V7_REQUIRED_FOREIGN_KEYS
+    ):
+        db.execute(
+            text(
+                "ALTER TABLE recording_segments "
+                f"DROP CONSTRAINT IF EXISTS {constraint_name}"
+            )
+        )
+    db.commit()
+
+    before_counts = {
+        table_name: int(
+            db.execute(
+                text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar_one()
+        )
+        for table_name in (
+            "users",
+            "cameras",
+            "recording_jobs",
+            "recording_segments",
+            "archive_roots",
+        )
+    }
+    preparation = (
+        STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION
+    )
+    assert preparation.preflight(db)["status"] == "ready"
+    result = preparation.apply(db)
+    verified = preparation.verify(db)
+    db.commit()
+    after_counts = {
+        table_name: int(
+            db.execute(
+                text(f"SELECT COUNT(*) FROM {table_name}")
+            ).scalar_one()
+        )
+        for table_name in before_counts
+    }
+
+    assert result["status"] == "normalized"
+    assert verified["status"] == "verified"
+    assert before_counts == after_counts
 
 
 def test_postgres_future_unknown_incomplete_and_read_only_plan(pg_session):
@@ -260,7 +379,7 @@ def test_postgres_risky_and_manual_are_not_executed(pg_session):
         assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == 0
 
 
-def test_postgres_failed_history_rerun_does_not_mark_current(pg_session):
+def test_postgres_failed_transition_rolls_back_without_polluting_canonical_history(pg_session):
     _engine, db = pg_session
     seed_state(db, version=0)
     migration = pg_failing_migration()
@@ -270,24 +389,22 @@ def test_postgres_failed_history_rerun_does_not_mark_current(pg_session):
         execute_migration_plan(db, registry=registry)
 
     row = db.get(SchemaVersionState, CURRENT_STATE_ID)
-    failed = db.query(SchemaMigrationHistory).filter(SchemaMigrationHistory.migration_id == "stage3_pg_test_failure").one()
     assert row.schema_version == 0
-    assert failed.status == "failed"
-    assert "pg-secret" not in failed.error_summary
-    assert "pg-token" not in failed.error_summary
     assert "pg-secret" not in first.value.diagnostics["summary"]
+    assert "pg-token" not in first.value.diagnostics["summary"]
+    assert (
+        db.query(SchemaMigrationHistory)
+        .filter(SchemaMigrationHistory.migration_id == "stage3_pg_test_failure")
+        .count()
+        == 0
+    )
 
     retry_plan = build_migration_plan(db, registry=registry)
-    assert retry_plan["blocked_reason"] == "migration_failed_previous_attempt"
+    assert retry_plan["status"] == "ready"
     with pytest.raises(SchemaMigrationBlocked) as second:
         execute_migration_plan(db, registry=registry)
 
     db.refresh(row)
     assert row.schema_version == 0
-    assert second.value.status == "migration_failed_previous_attempt"
-    assert (
-        db.query(SchemaMigrationHistory)
-        .filter(SchemaMigrationHistory.migration_id == "stage3_pg_test_failure", SchemaMigrationHistory.status == "applied")
-        .count()
-        == 0
-    )
+    assert second.value.status == "migration_failed"
+    assert db.query(SchemaMigrationHistory).filter(SchemaMigrationHistory.migration_id == "stage3_pg_test_failure").count() == 0

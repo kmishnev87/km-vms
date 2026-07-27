@@ -53,7 +53,9 @@ def test_previews_are_proxied_to_api_not_read_directly_by_nginx():
     nginx = read("deploy/nginx/default.conf")
     nginx_section = compose.split("  nginx:", 1)[1].split("networks:", 1)[0]
 
-    assert "proxy_pass http://api:8000/previews/;" in nginx
+    previews = nginx.split("location /previews/", 1)[1].split("}", 1)[0]
+    assert "set $api_upstream api:8000;" in nginx
+    assert "proxy_pass http://$api_upstream;" in previews
     assert "alias /var/www/previews/;" not in nginx
     assert "./data/previews:/var/www/previews" not in nginx_section
 

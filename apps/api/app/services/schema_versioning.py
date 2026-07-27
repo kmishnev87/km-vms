@@ -13,11 +13,16 @@ from app.core.version import APP_BUILD_VERSION, APP_VERSION
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
 
 
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 CURRENT_BASELINE_ID = "chapter06_stage4_baseline"
 CURRENT_MIGRATION_ID = f"{CURRENT_BASELINE_ID}_schema_v{CURRENT_SCHEMA_VERSION}"
 CURRENT_STATE_ID = "current"
-SCHEMA_METADATA_TABLES = {"schema_version_state", "schema_migration_history"}
+SCHEMA_METADATA_TABLES = {
+    "schema_version_state",
+    "schema_migration_history",
+    "schema_migration_control",
+    "schema_migration_attempts",
+}
 BASELINE_MODEL_TABLES = {
     "users",
     "cameras",
@@ -36,6 +41,14 @@ BASELINE_MODEL_TABLES = {
     "archive_migration_items",
 }
 LEGACY_DB_ONLY_TABLES = {"recorder_runtime_status"}
+KNOWN_OPTIONAL_MODEL_TABLES = {
+    "archive_integrity_scans",
+    "archive_integrity_findings",
+    "archive_integrity_directory_work",
+    "recorder_file_receipts",
+    "archive_integrity_remediation_plans",
+    "archive_integrity_remediation_items",
+}
 KNOWN_SAFE_MISSING_TABLES = {
     "setup_locks",
     "recorder_runtime_status",
@@ -126,7 +139,12 @@ def classify_schema_shape(shape: SchemaShape) -> dict[str, Any]:
             "table_counts": {"observed": 0},
         }
 
-    expected_or_legacy = BASELINE_MODEL_TABLES | LEGACY_DB_ONLY_TABLES | SCHEMA_METADATA_TABLES
+    expected_or_legacy = (
+        BASELINE_MODEL_TABLES
+        | LEGACY_DB_ONLY_TABLES
+        | KNOWN_OPTIONAL_MODEL_TABLES
+        | SCHEMA_METADATA_TABLES
+    )
     missing_tables = BASELINE_MODEL_TABLES - table_names
     unknown_tables = product_tables - expected_or_legacy
     known_safe: list[dict[str, Any]] = []

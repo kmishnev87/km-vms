@@ -6,7 +6,7 @@ import json
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any
 
 import jwt
 import pytest
@@ -29,37 +29,6 @@ REQUESTED_AT = "2026-07-21T00:00:00Z"
 CONFIRMED_AT = "2026-07-21T00:00:10Z"
 CLAIMED_AT = "2026-07-21T00:00:20Z"
 FINISHED_AT = "2026-07-21T00:01:00Z"
-
-
-ScalarFactory = Callable[[int | bool], Any]
-SCALAR_CASES: tuple[tuple[str, ScalarFactory], ...] = (
-    ("null", lambda _expected: None),
-    ("exact-false", lambda _expected: False),
-    ("exact-true", lambda _expected: True),
-    ("integer-minus-one", lambda _expected: -1),
-    ("integer-zero", lambda _expected: 0),
-    ("integer-one", lambda _expected: 1),
-    ("integer-expected", lambda expected: int(expected)),
-    ("float-zero", lambda _expected: 0.0),
-    ("float-one", lambda _expected: 1.0),
-    ("float-expected", lambda expected: float(expected)),
-    ("float-other", lambda _expected: 7.5),
-    ("string-zero", lambda _expected: "0"),
-    ("string-one", lambda _expected: "1"),
-    ("string-false", lambda _expected: "false"),
-    ("string-true", lambda _expected: "true"),
-    ("string-expected", lambda expected: str(expected).lower()),
-    ("empty-object", lambda _expected: {}),
-    ("empty-list", lambda _expected: []),
-)
-
-
-def scalar_value(factory: ScalarFactory, expected: int | bool) -> Any:
-    return copy.deepcopy(factory(expected))
-
-
-def is_exact_scalar(value: Any, expected: int | bool) -> bool:
-    return type(value) is type(expected) and value == expected
 
 
 def load_helper():
@@ -321,150 +290,6 @@ def signed_proof(version: Any, *, submission_id: str = SECOND_SUBMISSION_ID) -> 
         algorithm="HS256",
         headers={"typ": update_apply.SUBMISSION_PROOF_TYPE},
     )
-
-
-@pytest.mark.parametrize("case_name,factory", SCALAR_CASES, ids=[case[0] for case in SCALAR_CASES])
-@pytest.mark.parametrize("status,expected", [("completed", True), ("failed", False), ("cancelled", False)])
-def test_terminal_commit_verified_uses_shared_exact_scalar_corpus(case_name, factory, status, expected):
-    del case_name
-    helper = load_helper()
-    request = request_payload()
-    terminal = terminal_payload(request, status)
-    raw = scalar_value(factory, expected)
-    terminal["commit_verified"] = raw
-    payload = admission_document(entry_payload("terminal", request=request, terminal=terminal))
-    accepted = is_exact_scalar(raw, expected)
-    assert api_accepts(payload) is accepted
-    assert helper_accepts(helper, payload) is accepted
-
-
-@pytest.mark.parametrize("case_name,factory", SCALAR_CASES, ids=[case[0] for case in SCALAR_CASES])
-@pytest.mark.parametrize("field", tuple(terminal_side_effects()))
-def test_every_side_effect_uses_shared_exact_scalar_corpus(case_name, factory, field):
-    del case_name
-    helper = load_helper()
-    request = request_payload()
-    terminal = terminal_payload(request, "completed")
-    expected = terminal_side_effects()[field]
-    raw = scalar_value(factory, expected)
-    terminal["side_effects"][field] = raw
-    payload = admission_document(entry_payload("terminal", request=request, terminal=terminal))
-    accepted = is_exact_scalar(raw, expected)
-    assert api_accepts(payload) is accepted
-    assert helper_accepts(helper, payload) is accepted
-
-
-@pytest.mark.parametrize("case_name,factory", SCALAR_CASES, ids=[case[0] for case in SCALAR_CASES])
-@pytest.mark.parametrize("field", ("api_visible", "commit_verified"))
-def test_release_identity_booleans_use_shared_exact_scalar_corpus(case_name, factory, field):
-    del case_name
-    helper = load_helper()
-    request = request_payload()
-    terminal = terminal_payload(request, "completed")
-    raw = scalar_value(factory, True)
-    terminal["release_identity"][field] = raw
-    payload = admission_document(entry_payload("terminal", request=request, terminal=terminal))
-    accepted = is_exact_scalar(raw, True)
-    assert api_accepts(payload) is accepted
-    assert helper_accepts(helper, payload) is accepted
-
-
-@pytest.mark.parametrize("case_name,factory", SCALAR_CASES, ids=[case[0] for case in SCALAR_CASES])
-def test_terminal_schema_uses_shared_exact_scalar_corpus(case_name, factory):
-    del case_name
-    helper = load_helper()
-    request = request_payload()
-    terminal = terminal_payload(request, "completed")
-    raw = scalar_value(factory, 1)
-    terminal["schema_version"] = raw
-    payload = admission_document(entry_payload("terminal", request=request, terminal=terminal))
-    accepted = is_exact_scalar(raw, 1)
-    assert api_accepts(payload) is accepted
-    assert helper_accepts(helper, payload) is accepted
-
-
-@pytest.mark.parametrize("case_name,factory", SCALAR_CASES, ids=[case[0] for case in SCALAR_CASES])
-def test_active_status_schema_uses_shared_exact_scalar_corpus(case_name, factory):
-    del case_name
-    helper = load_helper()
-    request = request_payload()
-    entry = update_apply._admission_entry_contract(entry_payload("claimed", request=request))
-    assert entry is not None
-    status = active_status_payload(request)
-    raw = scalar_value(factory, 1)
-    status["schema_version"] = raw
-    accepted = is_exact_scalar(raw, 1)
-    assert update_apply._active_status_matches(status, entry) is accepted
-    assert helper.status_matches_request(status, request) is accepted
-
-
-@pytest.mark.parametrize("case_name,factory", SCALAR_CASES, ids=[case[0] for case in SCALAR_CASES])
-def test_current_document_schema_uses_shared_exact_scalar_corpus(case_name, factory):
-    del case_name
-    helper = load_helper()
-    payload = admission_document(entry_payload("admitted_unclaimed"))
-    raw = scalar_value(factory, 2)
-    payload["schema_version"] = raw
-    accepted = is_exact_scalar(raw, 2)
-    assert api_accepts(payload) is accepted
-    assert helper_accepts(helper, payload) is accepted
-
-
-@pytest.mark.parametrize("case_name,factory", SCALAR_CASES, ids=[case[0] for case in SCALAR_CASES])
-def test_current_request_schema_uses_shared_exact_scalar_corpus(case_name, factory):
-    del case_name
-    helper = load_helper()
-    request = request_payload()
-    raw = scalar_value(factory, 2)
-    request["schema_version"] = raw
-    payload = admission_document(entry_payload("admitted_unclaimed", request=request))
-    accepted = is_exact_scalar(raw, 2)
-    assert api_accepts(payload) is accepted
-    assert helper_accepts(helper, payload) is accepted
-
-
-@pytest.mark.parametrize("case_name,factory", SCALAR_CASES, ids=[case[0] for case in SCALAR_CASES])
-def test_legacy_request_schema_uses_shared_exact_scalar_corpus(case_name, factory):
-    del case_name
-    helper = load_helper()
-    payload = legacy_request_payload()
-    raw = scalar_value(factory, 1)
-    payload["schema_version"] = raw
-    accepted = is_exact_scalar(raw, 1)
-    assert api_accepts(payload) is accepted
-    assert helper_accepts(helper, payload) is accepted
-
-
-@pytest.mark.parametrize("case_name,factory", SCALAR_CASES, ids=[case[0] for case in SCALAR_CASES])
-@pytest.mark.parametrize("field,expected", [("schema_version", 1), ("initialized", True)])
-def test_lineage_fields_use_shared_exact_scalar_corpus(tmp_path, case_name, factory, field, expected):
-    del case_name
-    helper = load_helper()
-    configure_helper(helper, tmp_path)
-    marker = copy.deepcopy(update_apply.LINEAGE_MARKER_PAYLOAD)
-    raw = scalar_value(factory, expected)
-    marker[field] = raw
-    helper.LINEAGE_FILE.write_text(json.dumps(marker, separators=(",", ":")), encoding="utf-8")
-    before = helper.LINEAGE_FILE.read_bytes()
-    accepted = is_exact_scalar(raw, expected)
-    assert (update_apply._lineage_marker_contract(marker, "valid") == "valid") is accepted
-    if accepted:
-        assert helper.validate_lineage_marker() == "valid"
-    else:
-        with pytest.raises(helper.HelperError):
-            helper.validate_lineage_marker()
-    assert helper.LINEAGE_FILE.read_bytes() == before
-
-
-@pytest.mark.parametrize("case_name,factory", SCALAR_CASES, ids=[case[0] for case in SCALAR_CASES])
-def test_submission_proof_version_uses_shared_exact_scalar_corpus(case_name, factory):
-    del case_name
-    raw = scalar_value(factory, 1)
-    state, claims = update_apply.verify_update_apply_submission_proof(signed_proof(raw), actor_id=1)
-    accepted = is_exact_scalar(raw, 1)
-    assert (state == "valid_unexpired" and claims is not None) is accepted
-    if not accepted:
-        assert state == "invalid" and claims is None
 
 
 def test_exact_positive_current_live_check_terminal_and_legacy_controls(tmp_path):

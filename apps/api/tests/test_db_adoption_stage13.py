@@ -18,7 +18,7 @@ from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
 from app.models.user import User
 from app.services.backup_before_upgrade import BackupExecutionConfig, BackupSafetyBlocked
 from app.services.db_adoption import apply_db_adoption, assert_adoption_report_secret_safe, dry_run_db_adoption, inspect_db_adoption
-from app.services.schema_versioning import CURRENT_SCHEMA_VERSION
+from app.services.schema_versioning import CURRENT_SCHEMA_VERSION, SCHEMA_METADATA_TABLES
 from test_schema_migration_runner_stage3 import seed_state
 
 
@@ -28,8 +28,10 @@ def sqlite_session(tmp_path, *, create_product=True, drop_metadata=True):
     if create_product:
         Base.metadata.create_all(bind=engine)
         if drop_metadata:
-            SchemaMigrationHistory.__table__.drop(bind=engine, checkfirst=True)
-            SchemaVersionState.__table__.drop(bind=engine, checkfirst=True)
+            for table_name in sorted(SCHEMA_METADATA_TABLES, reverse=True):
+                table = Base.metadata.tables.get(table_name)
+                if table is not None:
+                    table.drop(bind=engine, checkfirst=True)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     return engine, Session()
 
@@ -129,6 +131,21 @@ def test_inconsistent_metadata_is_blocked(tmp_path):
 
     assert payload["status"] == "blocked"
     assert payload["metadata_present"] is False
+
+
+def test_migration_control_metadata_without_current_state_is_blocked(tmp_path):
+    engine, db = sqlite_session(
+        tmp_path,
+        create_product=False,
+        drop_metadata=False,
+    )
+    Base.metadata.tables["schema_migration_control"].create(bind=engine)
+
+    payload = inspect_db_adoption(db)
+
+    assert payload["status"] == "blocked"
+    assert payload["metadata_present"] is False
+    assert payload["can_adopt"] is False
 
 
 def test_apply_requires_confirmation_and_backup_failure_writes_no_metadata(tmp_path, monkeypatch):

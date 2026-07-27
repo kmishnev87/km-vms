@@ -383,6 +383,9 @@ def _add_never_applied_plan(
         finished_at=None,
         updated_at=when,
     )
+    prepare.actor_key = plan.actor_key
+    prepare.idempotency_key = plan.idempotency_key
+    prepare.request_fingerprint = plan.request_fingerprint
     ctx.db.add(plan)
     ctx.db.flush()
     item = ArchiveIntegrityRemediationItem(
@@ -860,17 +863,41 @@ def test_postgresql_ambiguous_plan_preserves_scan_and_protected_oldest_does_not_
 def _fake_global_apply_context(db, plan):
     item = remediation._plan_item(db, plan)
     finding = db.get(ArchiveIntegrityFinding, str(plan.finding_id))
-    return (
-        item,
-        finding,
-        remediation.MUTATING_ACTIONS[str(plan.action_kind)],
-        {
+    root_id = item.root_id or finding.root_id
+    segment_ids = {
+        int(value)
+        for value in (item.segment_id, finding.segment_id)
+        if value is not None
+    }
+    if root_id is None:
+        scope = {
             "global": True,
             "physical_volume_ids": [],
             "root_ids": [],
             "camera_ids": [],
             "segment_ids": [],
-        },
+        }
+    else:
+        scope = {
+            "global": False,
+            "physical_volume_ids": (
+                [str(finding.physical_identity)]
+                if finding.physical_identity
+                else []
+            ),
+            "root_ids": [str(root_id)],
+            "camera_ids": (
+                [int(finding.camera_id)]
+                if finding.camera_id is not None
+                else []
+            ),
+            "segment_ids": sorted(segment_ids),
+        }
+    return (
+        item,
+        finding,
+        remediation.MUTATING_ACTIONS[str(plan.action_kind)],
+        scope,
     )
 
 
@@ -882,10 +909,25 @@ def test_postgresql_apply_claim_crosses_foundation_commit_and_cleanup_revalidate
     now = datetime.utcnow()
     old = now - timedelta(days=60)
     scan, _ = _add_terminal_scan(ctx, label="apply-wins", when=old)
-    plan, item, _finding, _prepare = _add_never_applied_plan(ctx, scan=scan, when=old)
+    plan, item, finding, _prepare = _add_never_applied_plan(ctx, scan=scan, when=old)
+    item.root_id = "stage41052-apply-wins-root"
+    finding.root_id = item.root_id
+    root = ArchiveRoot(
+        id=item.root_id,
+        label="Stage 4.10.5.2 apply wins",
+        root_path="/stage41052/apply-wins",
+        storage_namespace="kmvms/recordings",
+        is_active=True,
+        is_readable=True,
+        is_writable=True,
+        is_available=True,
+        physical_identity="stage41052-apply-wins-volume",
+    )
+    finding.physical_identity = root.physical_identity
     plan.actor_key = "system:system"
+    _prepare.actor_key = plan.actor_key
     plan.expires_at = datetime.utcnow() + timedelta(milliseconds=600)
-    ctx.db.add(plan)
+    ctx.db.add_all((root, plan, item, finding, _prepare))
     ctx.db.commit()
     _add_terminal_scan(ctx, label="apply-wins-latest", when=now)
     plan_id = str(plan.id)

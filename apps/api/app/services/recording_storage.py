@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import uuid
 from datetime import datetime
 from hashlib import sha256
@@ -20,6 +21,10 @@ DEFAULT_ARCHIVE_ROOT_ID = "default"
 ARCHIVE_ROOTS_RUNTIME_BASE = "/storage/archive-roots"
 ARCHIVE_ROOTS_RUNTIME_MANIFEST = "archive-roots-runtime.json"
 ARCHIVE_ROOTS_COMPOSE_OVERRIDE = "docker-compose.archive-roots.yml"
+MAX_ARCHIVE_ROOTS_RUNTIME_MANIFEST_BYTES = 128 * 1024
+ARCHIVE_ROOT_RUNTIME_TARGET_RE = re.compile(
+    r"^/storage/archive-roots/[A-Za-z0-9_.-]{1,80}$"
+)
 ROOT_RESOLUTION_RESOLVED = "resolved"
 ROOT_RESOLUTION_UNRESOLVED = "root_unresolved"
 ROOT_RESOLUTION_AMBIGUOUS = "root_unresolved_ambiguous"
@@ -49,6 +54,129 @@ def archive_roots_manifest_path() -> Path:
 
 def archive_roots_compose_override_path() -> Path:
     return Path(settings.storage_install_control) / ARCHIVE_ROOTS_COMPOSE_OVERRIDE
+
+
+def _reject_json_constant(value: str):
+    raise ValueError(f"archive_roots_runtime_non_finite:{value}")
+
+
+def _reject_duplicate_json_keys(
+    pairs: list[tuple[str, object]],
+) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("archive_roots_runtime_duplicate_key")
+        result[key] = value
+    return result
+
+
+def _archive_roots_runtime_entries() -> dict[str, dict]:
+    path = archive_roots_manifest_path()
+    try:
+        descriptor = os.lstat(path)
+    except FileNotFoundError:
+        return {}
+    if stat.S_ISLNK(descriptor.st_mode) or not stat.S_ISREG(
+        descriptor.st_mode
+    ):
+        raise ValueError("archive_roots_runtime_manifest_not_regular")
+    if (
+        descriptor.st_size <= 1
+        or descriptor.st_size > MAX_ARCHIVE_ROOTS_RUNTIME_MANIFEST_BYTES
+    ):
+        raise ValueError("archive_roots_runtime_manifest_size_invalid")
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(
+            "archive_roots_runtime_manifest_unavailable"
+        ) from exc
+    if len(raw) != descriptor.st_size:
+        raise ValueError("archive_roots_runtime_manifest_changed")
+    try:
+        manifest = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_json_constant,
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "archive_roots_runtime_manifest_invalid"
+        ) from exc
+    except ValueError:
+        raise
+    expected_manifest_fields = {
+        "schema_version",
+        "runtime_base",
+        "compose_override_file",
+        "items",
+        "raw_runtime_paths_user_visible",
+    }
+    if (
+        not isinstance(manifest, dict)
+        or set(manifest) != expected_manifest_fields
+        or manifest.get("schema_version") != 1
+        or manifest.get("runtime_base")
+        != archive_roots_runtime_base().as_posix()
+        or manifest.get("compose_override_file")
+        != ARCHIVE_ROOTS_COMPOSE_OVERRIDE
+        or manifest.get("raw_runtime_paths_user_visible") is not False
+        or not isinstance(manifest.get("items"), list)
+        or len(manifest["items"]) > 128
+    ):
+        raise ValueError("archive_roots_runtime_manifest_invalid")
+    expected_item_fields = {
+        "root_id",
+        "user_display_path",
+        "backend_runtime_path",
+        "physical_volume_id",
+        "storage_namespace",
+        "active_write_target",
+    }
+    entries: dict[str, dict] = {}
+    seen_targets: set[str] = set()
+    for item in manifest["items"]:
+        if not isinstance(item, dict) or set(item) != expected_item_fields:
+            raise ValueError("archive_roots_runtime_manifest_item_invalid")
+        root_id = item.get("root_id")
+        source = item.get("user_display_path")
+        target = item.get("backend_runtime_path")
+        physical_volume_id = item.get("physical_volume_id")
+        namespace = item.get("storage_namespace")
+        if (
+            not isinstance(root_id, str)
+            or not root_id
+            or len(root_id) > 128
+            or any(char in root_id for char in ("\x00", "\r", "\n"))
+            or root_id in entries
+            or not isinstance(source, str)
+            or not source.startswith("/")
+            or len(source) > 1024
+            or any(char in source for char in ("\x00", "\r", "\n"))
+            or any(part == ".." for part in Path(source).parts)
+            or not isinstance(target, str)
+            or not ARCHIVE_ROOT_RUNTIME_TARGET_RE.fullmatch(target)
+            or target in seen_targets
+            or not isinstance(physical_volume_id, str)
+            or not physical_volume_id
+            or len(physical_volume_id) > 1024
+            or any(
+                char in physical_volume_id
+                for char in ("\x00", "\r", "\n")
+            )
+            or not isinstance(namespace, str)
+            or not namespace
+            or len(namespace) > 128
+            or any(char in namespace for char in ("\x00", "\r", "\n"))
+            or type(item.get("active_write_target")) is not bool
+        ):
+            raise ValueError(
+                "archive_roots_runtime_manifest_item_invalid"
+            )
+        entries[root_id] = item
+        seen_targets.add(target)
+    return entries
 
 
 def approved_archive_base() -> Path:
@@ -99,6 +227,10 @@ def _configured_host_storage_root() -> str | None:
 
 
 def archive_root_host_display_path(root_row) -> str:
+    root_id = str(getattr(root_row, "id", "") or "")
+    existing = _archive_roots_runtime_entries().get(root_id)
+    if existing is not None:
+        return str(existing["user_display_path"])
     stored = _stored_root_path(root_row)
     if stored.as_posix() == Path(settings.storage_root).as_posix():
         host_path = _configured_host_storage_root()
@@ -112,6 +244,10 @@ def _root_path(root_row) -> Path:
 
 
 def archive_root_runtime_mount_path(root_row) -> Path:
+    root_id = str(getattr(root_row, "id", "") or "")
+    existing = _archive_roots_runtime_entries().get(root_id)
+    if existing is not None:
+        return Path(str(existing["backend_runtime_path"]))
     return archive_roots_runtime_base() / safe_archive_root_mount_id(getattr(root_row, "id", None))
 
 
@@ -278,6 +414,7 @@ def write_archive_roots_runtime_files(db: Session) -> dict:
         .order_by(ArchiveRoot.is_active.desc(), ArchiveRoot.created_at.asc(), ArchiveRoot.id.asc())
         .all()
     )
+    existing_entries = _archive_roots_runtime_entries()
     items = []
     volume_lines = []
     seen_targets: set[str] = set()
@@ -285,8 +422,13 @@ def write_archive_roots_runtime_files(db: Session) -> dict:
         root_id = str(root.id or "")
         if not root_id:
             continue
-        host_path = archive_root_host_display_path(root)
-        target_path = archive_root_runtime_mount_path(root).as_posix()
+        existing = existing_entries.get(root_id)
+        if existing is not None:
+            host_path = str(existing["user_display_path"])
+            target_path = str(existing["backend_runtime_path"])
+        else:
+            host_path = archive_root_host_display_path(root)
+            target_path = archive_root_runtime_mount_path(root).as_posix()
         if target_path in seen_targets:
             continue
         seen_targets.add(target_path)
@@ -324,7 +466,19 @@ def write_archive_roots_runtime_files(db: Session) -> dict:
     compose_path = archive_roots_compose_override_path()
     tmp_compose = compose_path.with_name(f"{compose_path.name}.tmp")
     if volume_lines:
-        compose_text = "\n".join(["# Generated by KM VMS. Do not edit manually.", "services:", "  api:", "    volumes:", *volume_lines, ""])
+        compose_text = "\n".join(
+            [
+                "# Generated by KM VMS. Do not edit manually.",
+                "services:",
+                "  api:",
+                "    volumes:",
+                *volume_lines,
+                "  schema-update:",
+                "    volumes:",
+                *volume_lines,
+                "",
+            ]
+        )
     else:
         compose_text = "# Generated by KM VMS. No archive roots configured.\nservices: {}\n"
     tmp_compose.write_text(compose_text, encoding="utf-8")

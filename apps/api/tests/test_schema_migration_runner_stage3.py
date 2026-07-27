@@ -268,7 +268,7 @@ def test_risky_and_manual_migrations_are_planned_but_not_executed_before_stage4(
         assert db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == 0
 
 
-def test_migration_failure_does_not_mark_current_and_sanitizes_error():
+def test_migration_failure_rolls_back_and_keeps_canonical_history_applied_only():
     def fail(_db):
         raise RuntimeError("password=s3cr3t token=abc failed")
 
@@ -292,29 +292,25 @@ def test_migration_failure_does_not_mark_current_and_sanitizes_error():
         execute_migration_plan(db, registry=MigrationRegistry([migration]))
 
     row = db.get(SchemaVersionState, CURRENT_STATE_ID)
-    failed = db.query(SchemaMigrationHistory).filter(SchemaMigrationHistory.migration_id == "stage3_test_failure").one()
     assert row.schema_version == 0
-    assert failed.status == "failed"
-    assert "s3cr3t" not in failed.error_summary
-    assert "abc" not in failed.error_summary
     assert "s3cr3t" not in exc.value.diagnostics["summary"]
+    assert "abc" not in exc.value.diagnostics["summary"]
+    assert (
+        db.query(SchemaMigrationHistory)
+        .filter(SchemaMigrationHistory.migration_id == "stage3_test_failure")
+        .count()
+        == 0
+    )
 
     retry_plan = build_migration_plan(db, registry=MigrationRegistry([migration]))
-    assert retry_plan["status"] == "blocked"
-    assert retry_plan["blocked_reason"] == "migration_failed_previous_attempt"
+    assert retry_plan["status"] == "ready"
     with pytest.raises(SchemaMigrationBlocked) as retry_exc:
         execute_migration_plan(db, registry=MigrationRegistry([migration]))
 
     db.refresh(row)
     assert row.schema_version == 0
-    assert retry_exc.value.status == "migration_failed_previous_attempt"
-    assert db.query(SchemaMigrationHistory).filter(SchemaMigrationHistory.migration_id == "stage3_test_failure").count() == 1
-    assert (
-        db.query(SchemaMigrationHistory)
-        .filter(SchemaMigrationHistory.migration_id == "stage3_test_failure", SchemaMigrationHistory.status == "applied")
-        .count()
-        == 0
-    )
+    assert retry_exc.value.status == "migration_failed"
+    assert db.query(SchemaMigrationHistory).filter(SchemaMigrationHistory.migration_id == "stage3_test_failure").count() == 0
     assert "s3cr3t" not in retry_exc.value.diagnostics["summary"]
     assert "abc" not in retry_exc.value.diagnostics["summary"]
 

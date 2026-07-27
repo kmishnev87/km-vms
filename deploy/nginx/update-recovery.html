@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>KM VMS — восстановление обновления</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #07111d; color: #eef6ff; }
+    main { width: min(680px, calc(100% - 32px)); border: 1px solid #284661; border-radius: 16px; padding: 24px; background: #0d1d2d; box-shadow: 0 20px 60px #0008; }
+    h1 { margin: 0 0 12px; font-size: 24px; }
+    p { color: #b8cad9; line-height: 1.5; }
+    dl { display: grid; grid-template-columns: 150px 1fr; gap: 10px; margin: 20px 0; }
+    dt { color: #8fa9bc; }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    .state { color: #ffd187; font-weight: 700; }
+    .safe { padding: 12px; border-radius: 10px; background: #112a3f; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>KM VMS — обслуживание обновления</h1>
+    <p id="lead">Проверяем безопасный статус. Обычные функции временно недоступны.</p>
+    <dl>
+      <dt>Состояние</dt><dd id="state" class="state">Подключение…</dd>
+      <dt>Этап</dt><dd id="phase">—</dd>
+      <dt>Целевая версия</dt><dd id="target">—</dd>
+      <dt>Безопасное действие</dt><dd id="action">Дождитесь результата.</dd>
+    </dl>
+    <p class="safe">Страница не показывает SQL, пути, учётные данные или внутренние журналы. Повтор доступен только при отдельном подтверждённом разрешении сервера.</p>
+  </main>
+  <script>
+    (() => {
+      const token = localStorage.getItem("token") || sessionStorage.getItem("token") || "";
+      const set = (id, value) => { document.getElementById(id).textContent = String(value || "—").slice(0, 300); };
+      if (!token) {
+        set("state", "Требуется действующий вход");
+        set("action", "После восстановления API войдите в систему повторно.");
+        return;
+      }
+      const headers = { Authorization: `Bearer ${token}` };
+      Promise.all([
+        fetch("/api/system/update/status", { headers, cache: "no-store" }),
+        fetch("/api/system/update/apply/status", { headers, cache: "no-store" }),
+      ]).then(async ([checkResponse, applyResponse]) => {
+        if (!checkResponse.ok || !applyResponse.ok) throw new Error("status_unavailable");
+        const check = await checkResponse.json();
+        const apply = await applyResponse.json();
+        const error = apply && typeof apply.error === "object" ? apply.error : {};
+        set("state", apply.effective_status || apply.status || check.status || "Обслуживание");
+        set("phase", apply.current_step || apply.phase || "preparing_database");
+        set("target", check.latest?.version || check.latest_release?.version || "—");
+        set("action", error.operator_action || check.summary || "Дождитесь результата.");
+      }).catch(() => {
+        set("state", "Статус временно недоступен");
+        set("action", "Не запускайте параллельное обновление; повторите проверку позже.");
+      });
+    })();
+  </script>
+</body>
+</html>
