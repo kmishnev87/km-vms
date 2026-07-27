@@ -194,7 +194,12 @@ def test_stage621_failure_timelines_and_operator_actions_are_product_safe():
     def statuses(category, phase=None):
         return {step["name"]: step["status"] for step in helper.failed_steps(category, phase)}
 
-    for category in ["jellyfin_ffmpeg_repo_unavailable", "build_network_dependency_failed", "docker_build_failed"]:
+    for category in [
+        "jellyfin_ffmpeg_repo_unavailable",
+        "build_network_dependency_failed",
+        "docker_build_failed",
+        "schema_update_failed",
+    ]:
         mapped = statuses(category)
         assert mapped["compose_config"] == "completed"
         assert mapped["rebuilding"] == "failed"

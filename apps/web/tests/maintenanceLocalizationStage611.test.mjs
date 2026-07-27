@@ -26,6 +26,8 @@ const dictionaries = {
     maintenanceMessageLabels: {
       schema_metadata_valid: "Метаданные схемы уже в порядке.",
       schema_current_no_pending_migrations: "Схема актуальна, ожидающих миграций нет.",
+      schema_update_failed: "Подготовка схемы базы данных завершилась ошибкой.",
+      schema_update_retry_after_cause_resolved: "Устраните причину ошибки подготовки базы данных и только затем повторите обновление.",
       restore_no_valid_artifacts: "В настроенной папке резервных копий нет подходящих артефактов восстановления.",
       update_apply_not_available_for_release: "Применение этого релиза из интерфейса недоступно.",
       maintenance_history_limited: "Долговременная история ограничена: показаны текущий статус и последний безопасный отчёт.",
@@ -46,6 +48,8 @@ const dictionaries = {
     maintenanceMessageLabels: {
       schema_metadata_valid: "Schema metadata is already valid.",
       schema_current_no_pending_migrations: "Schema is current; no pending migrations.",
+      schema_update_failed: "Database schema preparation failed.",
+      schema_update_retry_after_cause_resolved: "Resolve the database schema preparation failure before retrying the update.",
       restore_no_valid_artifacts: "No valid restore artifacts are available in the configured backup root.",
       update_apply_not_available_for_release: "In-app apply is not available for this release.",
       maintenance_history_limited: "Durable history is limited: current status and the latest safe report are shown.",
@@ -66,6 +70,8 @@ const dictionaries = {
     maintenanceMessageLabels: {
       schema_metadata_valid: "架构元数据已有效。",
       schema_current_no_pending_migrations: "架构已是最新，没有待执行的迁移。",
+      schema_update_failed: "数据库架构准备失败。",
+      schema_update_retry_after_cause_resolved: "解决数据库架构准备失败的原因后再重试更新。",
       restore_no_valid_artifacts: "配置的备份根目录中没有可用的恢复工件。",
       update_apply_not_available_for_release: "此版本不支持在界面内应用。",
       maintenance_history_limited: "持久历史记录有限：仅显示当前状态和最新安全报告。",
@@ -97,6 +103,17 @@ for (const [lang, copy] of Object.entries(dictionaries)) {
   assert.deepEqual(
     updateApplyErrorMessages({ message: "drift_known_safe", operator_action: "draft_known_safe" }, copy, lang),
     [copy.maintenanceMessageLabels.drift_known_safe, copy.maintenanceMessageLabels.draft_known_safe],
+  );
+  assert.deepEqual(
+    updateApplyErrorMessages({
+      category: "schema_update_failed",
+      message: "Database schema preparation failed during update apply.",
+      operator_action: "Review the database schema preparation failure before retrying the update.",
+    }, copy, lang),
+    [
+      copy.maintenanceMessageLabels.schema_update_failed,
+      copy.maintenanceMessageLabels.schema_update_retry_after_cause_resolved,
+    ],
   );
 }
 

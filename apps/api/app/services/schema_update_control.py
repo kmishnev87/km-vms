@@ -2153,20 +2153,36 @@ def resolve_schema_execution_mode(db: Session) -> str:
     return "exact_target_noop"
 
 
-def wait_for_writer_quiescence(db: Session, *, timeout_seconds: int = 30) -> None:
+def wait_for_writer_quiescence(
+    db: Session,
+    *,
+    owned_backend_pid: int | None = None,
+    timeout_seconds: int = 30,
+) -> None:
+    if owned_backend_pid is not None and (
+        type(owned_backend_pid) is not int or owned_backend_pid <= 0
+    ):
+        raise SchemaControlError("schema_pipeline_backend_pid_invalid")
+    owned_backend_clause = ""
+    parameters: dict[str, int] = {}
+    if owned_backend_pid is not None:
+        owned_backend_clause = "AND pid <> :owned_backend_pid"
+        parameters["owned_backend_pid"] = owned_backend_pid
     deadline = time.monotonic() + timeout_seconds
     while True:
         rows = db.execute(
             text(
-                """
+                f"""
                 SELECT pid
                 FROM pg_stat_activity
                 WHERE datname = current_database()
                   AND pid <> pg_backend_pid()
+                  {owned_backend_clause}
                   AND backend_type = 'client backend'
                 ORDER BY pid
                 """
-            )
+            ),
+            parameters,
         ).all()
         if not rows:
             return
@@ -2176,11 +2192,15 @@ def wait_for_writer_quiescence(db: Session, *, timeout_seconds: int = 30) -> Non
         time.sleep(0.5)
 
 
-def resolve_schema_pipeline_execution_mode(db: Session) -> str:
+def resolve_schema_pipeline_execution_mode(
+    db: Session,
+    *,
+    owned_backend_pid: int | None = None,
+) -> str:
     mode = resolve_schema_execution_mode(db)
     if mode != "authorized_update":
         return mode
-    wait_for_writer_quiescence(db)
+    wait_for_writer_quiescence(db, owned_backend_pid=owned_backend_pid)
     return resolve_schema_execution_mode(db)
 
 
@@ -3694,8 +3714,12 @@ def write_stage_receipt(
     )
 
 
-def acquire_schema_lock(db: Session) -> None:
+def acquire_schema_lock(db: Session) -> int:
+    backend_pid = db.execute(text("SELECT pg_backend_pid()")).scalar_one()
+    if type(backend_pid) is not int or backend_pid <= 0:
+        raise SchemaControlError("schema_pipeline_backend_pid_invalid")
     db.execute(text("SELECT pg_advisory_lock(660128)"))
+    return backend_pid
 
 
 def release_schema_lock(db: Session) -> None:

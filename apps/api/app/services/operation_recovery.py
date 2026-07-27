@@ -204,7 +204,11 @@ def _storage_operation_ids(db: Session) -> list[str]:
     ]
 
 
-def main(*, manage_lock: bool = True) -> None:
+def main(
+    *,
+    manage_lock: bool = True,
+    pipeline_lock_backend_pid: int | None = None,
+) -> None:
     context = None
     generation = 0
     initial_candidates: list[dict[str, Any]] = []
@@ -214,7 +218,10 @@ def main(*, manage_lock: bool = True) -> None:
         if manage_lock:
             acquire_schema_lock(db)
         try:
-            mode = resolve_schema_pipeline_execution_mode(db)
+            mode = resolve_schema_pipeline_execution_mode(
+                db,
+                owned_backend_pid=pipeline_lock_backend_pid,
+            )
             if mode in {"fresh_install", "exact_target_noop"}:
                 return
             context = load_existing_update_context(db)

@@ -499,7 +499,11 @@ def _replay_existing_failed_attempt(
     raise SystemExit(42 if retryable else 43)
 
 
-def main(*, manage_lock: bool = True) -> None:
+def main(
+    *,
+    manage_lock: bool = True,
+    pipeline_lock_backend_pid: int | None = None,
+) -> None:
     context = None
     generation = 0
     active_attempt_id = ""
@@ -513,7 +517,10 @@ def main(*, manage_lock: bool = True) -> None:
         if manage_lock:
             acquire_schema_lock(db)
         try:
-            mode = resolve_schema_pipeline_execution_mode(db)
+            mode = resolve_schema_pipeline_execution_mode(
+                db,
+                owned_backend_pid=pipeline_lock_backend_pid,
+            )
             if mode in {"fresh_install", "exact_target_noop"}:
                 return
             context = load_existing_update_context(db)

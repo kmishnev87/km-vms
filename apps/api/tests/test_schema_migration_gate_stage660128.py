@@ -50,7 +50,7 @@ def test_pipeline_holds_one_lock_while_running_all_phases(
     monkeypatch.setattr(
         pipeline,
         "acquire_schema_lock",
-        lambda db: events.append("lock") if db is lock_db else None,
+        lambda db: (events.append("lock") or 4242) if db is lock_db else None,
     )
     monkeypatch.setattr(
         pipeline,
@@ -60,17 +60,23 @@ def test_pipeline_holds_one_lock_while_running_all_phases(
     monkeypatch.setattr(
         pipeline.schema_preparation,
         "main",
-        lambda *, manage_lock: events.append(f"prepare:{manage_lock}"),
+        lambda *, manage_lock, pipeline_lock_backend_pid: events.append(
+            f"prepare:{manage_lock}:{pipeline_lock_backend_pid}"
+        ),
     )
     monkeypatch.setattr(
         pipeline.operation_recovery,
         "main",
-        lambda *, manage_lock: events.append(f"recover:{manage_lock}"),
+        lambda *, manage_lock, pipeline_lock_backend_pid: events.append(
+            f"recover:{manage_lock}:{pipeline_lock_backend_pid}"
+        ),
     )
     monkeypatch.setattr(
         pipeline.schema_migration_gate,
         "main",
-        lambda *, manage_lock: events.append(f"migrate:{manage_lock}"),
+        lambda *, manage_lock, pipeline_lock_backend_pid: events.append(
+            f"migrate:{manage_lock}:{pipeline_lock_backend_pid}"
+        ),
     )
 
     pipeline.main()
@@ -78,9 +84,9 @@ def test_pipeline_holds_one_lock_while_running_all_phases(
     assert events == [
         "session",
         "lock",
-        "prepare:False",
-        "recover:False",
-        "migrate:False",
+        "prepare:False:4242",
+        "recover:False:4242",
+        "migrate:False:4242",
         "unlock",
         "session_closed",
     ]

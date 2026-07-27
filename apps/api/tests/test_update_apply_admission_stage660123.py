@@ -375,6 +375,7 @@ def test_valid_nonterminal_state_parity(state):
         ("failed", "jellyfin_ffmpeg_repo_unavailable", "jellyfin_ffmpeg_repo_unavailable"),
         ("failed", "build_network_dependency_failed", "build_network_dependency_failed"),
         ("failed", "docker_build_failed", "docker_build_failed"),
+        ("failed", "schema_update_failed", "schema_update_failed"),
         ("failed", "health_check_failed", "health_check_failed"),
         ("failed", "commit_mismatch", "commit_verification"),
         ("failed", "commit_missing", "commit_verification"),

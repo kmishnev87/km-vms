@@ -17,11 +17,20 @@ from app.services.schema_update_control import (
 def main() -> None:
     """Run every schema-update phase under one process-wide advisory lock."""
     with Session(engine) as lock_db:
-        acquire_schema_lock(lock_db)
+        lock_backend_pid = acquire_schema_lock(lock_db)
         try:
-            schema_preparation.main(manage_lock=False)
-            operation_recovery.main(manage_lock=False)
-            schema_migration_gate.main(manage_lock=False)
+            schema_preparation.main(
+                manage_lock=False,
+                pipeline_lock_backend_pid=lock_backend_pid,
+            )
+            operation_recovery.main(
+                manage_lock=False,
+                pipeline_lock_backend_pid=lock_backend_pid,
+            )
+            schema_migration_gate.main(
+                manage_lock=False,
+                pipeline_lock_backend_pid=lock_backend_pid,
+            )
         finally:
             release_schema_lock(lock_db)
 

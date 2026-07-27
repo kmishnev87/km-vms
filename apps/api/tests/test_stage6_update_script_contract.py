@@ -190,6 +190,7 @@ def test_update_helper_failure_steps_match_failed_phase():
     assert statuses(helper.failed_steps("apply_failed"))["overlay"] == "failed"
     assert statuses(helper.failed_steps("health_check_failed"))["health_check"] == "failed"
     assert statuses(helper.failed_steps("docker_build_failed"))["rebuilding"] == "failed"
+    assert statuses(helper.failed_steps("schema_update_failed"))["rebuilding"] == "failed"
     assert statuses(helper.failed_steps("compose_config_failed"))["compose_config"] == "failed"
 
 
@@ -231,6 +232,13 @@ def test_update_helper_classifies_health_check_failure_from_metadata(tmp_path):
 
     (tmp_path / ".km-vms-update.json").write_text(json.dumps({"schema_version": 1, "failed_phase": "rebuild_recreate"}), encoding="utf-8")
     assert helper.classify_apply_failure(tmp_path, "apply stderr").category == "docker_build_failed"
+    (tmp_path / ".km-vms-update.json").write_text(
+        json.dumps({"schema_version": 1, "failed_phase": "schema_update"}),
+        encoding="utf-8",
+    )
+    schema_failure = helper.classify_apply_failure(tmp_path, "apply stderr")
+    assert schema_failure.category == "schema_update_failed"
+    assert schema_failure.phase == "schema_update_failed"
     (tmp_path / ".km-vms-update.json").unlink()
     generic = helper.classify_apply_failure(tmp_path, "/volume/private/raw-stderr-marker")
     assert generic.category == "apply_failed"
@@ -1016,6 +1024,8 @@ def test_rebuild_resets_one_shots_and_does_not_retry_terminal_schema_failure():
     )
     assert "compose_service_failed()" in script
     assert "schema_pipeline_failed()" in script
+    assert 'PHASE="schema_update"' in rebuild
+    assert 'fail "Database schema preparation failed."' in rebuild
     assert "normalize_legacy_schema_override_service()" in script
     assert "reset_update_one_shots()" in script
     assert "reset_failed_update_bootstrap()" in script

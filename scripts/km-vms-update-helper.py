@@ -141,6 +141,7 @@ TERMINAL_FAILURE_PHASES = {
     "jellyfin_ffmpeg_repo_unavailable": {"jellyfin_ffmpeg_repo_unavailable"},
     "build_network_dependency_failed": {"build_network_dependency_failed"},
     "docker_build_failed": {"docker_build_failed"},
+    "schema_update_failed": {"schema_update_failed"},
     "health_check_failed": {"health_check_failed"},
     "commit_mismatch": {"commit_verification"},
     "commit_missing": {"commit_verification"},
@@ -360,6 +361,7 @@ def error_payload(category: str, message: str) -> dict[str, str]:
         "jellyfin_ffmpeg_repo_unavailable": "The external FFmpeg repository was unavailable during the update build.",
         "build_network_dependency_failed": "A required network dependency was unavailable during the update build.",
         "docker_build_failed": "Docker image rebuild failed during update apply.",
+        "schema_update_failed": "Database schema preparation failed during update apply.",
         "health_check_failed": "Update health check failed.",
         "commit_mismatch": "Installed commit did not match the trusted release commit.",
         "commit_missing": "Installed commit evidence is unavailable.",
@@ -373,6 +375,8 @@ def error_payload(category: str, message: str) -> dict[str, str]:
         action = "External FFmpeg repository or network dependency failed during API image build. Retry after repository connectivity is restored or use the documented terminal recovery path."
     elif category == "docker_build_failed":
         action = "Docker image rebuild failed. Review sanitized update status and retry after the build cause is fixed."
+    elif category == "schema_update_failed":
+        action = "Review the database schema preparation failure before retrying the update."
     elif category == "compose_config_failed":
         action = "Compose configuration failed. Review server-side compose configuration before retrying."
     elif category == "health_check_failed":
@@ -427,7 +431,12 @@ def failed_steps(category: str, phase: str | None = None) -> list[dict[str, str]
         return steps_for("preflight", failed=True)
     if category == "compose_config_failed":
         return steps_for("compose_config", failed=True)
-    if category in {"jellyfin_ffmpeg_repo_unavailable", "build_network_dependency_failed", "docker_build_failed"}:
+    if category in {
+        "jellyfin_ffmpeg_repo_unavailable",
+        "build_network_dependency_failed",
+        "docker_build_failed",
+        "schema_update_failed",
+    }:
         return steps_for("rebuilding", failed=True)
     if category == "apply_timeout":
         timeout_phase = phase if phase in STEP_ORDER else "rebuilding"
@@ -1227,6 +1236,11 @@ def classify_apply_failure(update_dir: Path, stderr: str) -> HelperError:
         return HelperError("health_check_failed", "Update health check failed.")
     if failed_phase == "compose_config":
         return HelperError("compose_config_failed", "Docker Compose configuration validation failed.")
+    if failed_phase == "schema_update":
+        return HelperError(
+            "schema_update_failed",
+            "Database schema preparation failed during update apply.",
+        )
     if failed_phase == "rebuild_recreate":
         if any(token in lowered for token in ("jellyfin", "repo.jellyfin.org", "jellyfin_team.gpg.key", "jellyfin-ffmpeg")):
             return HelperError(

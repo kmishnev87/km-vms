@@ -259,7 +259,9 @@ def test_terminal_noop_skips_writer_wait_and_authorized_run_rechecks(
     monkeypatch.setattr(
         control,
         "wait_for_writer_quiescence",
-        lambda _db: pytest.fail("terminal no-op must not wait for writers"),
+        lambda _db, **_kwargs: pytest.fail(
+            "terminal no-op must not wait for writers"
+        ),
     )
     assert (
         control.resolve_schema_pipeline_execution_mode(object())
@@ -276,7 +278,7 @@ def test_terminal_noop_skips_writer_wait_and_authorized_run_rechecks(
     monkeypatch.setattr(
         control,
         "wait_for_writer_quiescence",
-        lambda _db: calls.append("quiesced"),
+        lambda _db, **_kwargs: calls.append("quiesced"),
     )
     assert (
         control.resolve_schema_pipeline_execution_mode(object())
@@ -315,7 +317,7 @@ def test_schema_phases_exit_before_mutation_for_terminal_noop(
     monkeypatch.setattr(
         module,
         "resolve_schema_pipeline_execution_mode",
-        lambda value: (
+        lambda value, **_kwargs: (
             calls.append("resolve") or "exact_target_noop"
             if value is db
             else "invalid"

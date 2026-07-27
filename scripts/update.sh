@@ -88,8 +88,7 @@ progress_step_name() {
     validate_source_tree) printf validating_source ;;
     overlay) printf overlay ;;
     compose_config) printf compose_config ;;
-    helper_bootstrap) printf rebuilding ;;
-    rebuild_recreate) printf rebuilding ;;
+    helper_bootstrap|rebuild_recreate|schema_update) printf rebuilding ;;
     health_check) printf health_check ;;
     metadata_write|postflight_preservation) printf commit_verification ;;
     cleanup) printf completed ;;
@@ -178,7 +177,7 @@ fail() {
   write_helper_progress "failed" "$message" 2>/dev/null || true
   if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] && [ -n "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
     case "$PHASE" in
-      rebuild_recreate|health_check)
+      rebuild_recreate|schema_update|health_check)
         (
           cd "$APP_DIR"
           compose_with_archive_roots up -d postgres redis api recorder web nginx >/dev/null 2>&1
@@ -885,7 +884,16 @@ rebuild_recreate() {
     else
       compose_with_archive_roots up -d --build
     fi
-  ) || fail "Compose rebuild/recreate failed."
+  ) || {
+    if (
+      cd "$APP_DIR"
+      schema_pipeline_failed
+    ); then
+      PHASE="schema_update"
+      fail "Database schema preparation failed."
+    fi
+    fail "Compose rebuild/recreate failed."
+  }
 }
 
 health_check() {

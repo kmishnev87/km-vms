@@ -1265,6 +1265,8 @@ function normalizeMaintenanceBackendText(value) {
   if (lower === "schema metadata is already valid") return "schema_metadata_valid";
   if (lower === "schema is current; no pending migrations.") return "schema_current_no_pending_migrations";
   if (lower === "schema is current; no pending migrations") return "schema_current_no_pending_migrations";
+  if (lower === "database schema preparation failed during update apply.") return "schema_update_failed";
+  if (lower === "review the database schema preparation failure before retrying the update.") return "schema_update_retry_after_cause_resolved";
   if (lower === "no valid restore artifacts are available in configured backup root.") return "restore_no_valid_artifacts";
   if (lower === "no valid restore artifacts are available in the configured backup root.") return "restore_no_valid_artifacts";
   if (lower.includes("no durable maintenance action history is available")) return "maintenance_history_limited";
@@ -1285,8 +1287,10 @@ export function formatMaintenanceMessage(value, t, lang = "ru", context = "statu
 
 export function updateApplyErrorMessages(error, t, lang = "ru") {
   if (!error || typeof error !== "object") return [];
+  const categoryKey = normalizeMaintenanceBackendText(error.category);
+  const categoryMessage = categoryKey ? t.maintenanceMessageLabels?.[categoryKey] || "" : "";
   const messages = [
-    error.message ? formatMaintenanceMessage(error.message, t, lang, "error") : "",
+    categoryMessage || (error.message ? formatMaintenanceMessage(error.message, t, lang, "error") : ""),
     error.operator_action ? formatMaintenanceMessage(error.operator_action, t, lang, "action") : "",
   ].filter(Boolean);
   return [...new Set(messages)];

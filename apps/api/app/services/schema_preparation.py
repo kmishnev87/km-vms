@@ -123,7 +123,11 @@ def _matching_applied_attempt(
     return rows[0]
 
 
-def main(*, manage_lock: bool = True) -> None:
+def main(
+    *,
+    manage_lock: bool = True,
+    pipeline_lock_backend_pid: int | None = None,
+) -> None:
     context = None
     generation = -1
     active_attempt_id = ""
@@ -134,7 +138,10 @@ def main(*, manage_lock: bool = True) -> None:
         if manage_lock:
             acquire_schema_lock(db)
         try:
-            mode = resolve_schema_pipeline_execution_mode(db)
+            mode = resolve_schema_pipeline_execution_mode(
+                db,
+                owned_backend_pid=pipeline_lock_backend_pid,
+            )
             if mode in {"fresh_install", "exact_target_noop"}:
                 return
             control_tables_exist = _control_tables_exist(db)
