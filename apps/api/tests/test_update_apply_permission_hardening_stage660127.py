@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import stat
@@ -210,29 +211,51 @@ def test_permission_fix_is_bounded_and_idempotent(tmp_path: Path) -> None:
 
     for relative in (".", "apps", "apps/update-helper", "scripts"):
         target = app if relative == "." else app / relative
-        assert mode(target) == 0o755
+        assert mode(target) == 0o775
     for relative in PRIVILEGED_EXECUTABLES:
-        assert mode(app / relative) == 0o755
+        assert mode(app / relative) == 0o775
     for relative in PRIVILEGED_NON_EXECUTABLES:
-        assert mode(app / relative) == 0o644
+        assert mode(app / relative) == 0o664
     for relative, expected in untouched.items():
         assert (mode(app / relative), (app / relative).read_bytes()) == expected
     for relative, expected_mode in untouched_dirs.items():
         assert mode(app / relative) == expected_mode
 
-    checked = run_gate(app)
-    assert_pass(checked)
+    fixed_again = run_gate(app, "--fix")
+    assert_pass(fixed_again)
+    assert_pass(run_gate(app))
+
+
+@pytest.mark.parametrize(
+    ("relative", "group_managed_mode"),
+    (
+        ("scripts/update.sh", 0o775),
+        ("scripts/km-vms-update-helper.py", 0o660),
+        ("docker-compose.yml", 0o640),
+    ),
+)
+def test_permission_gate_accepts_group_managed_privileged_chain(
+    tmp_path: Path,
+    relative: str,
+    group_managed_mode: int,
+) -> None:
+    app = permission_tree(tmp_path)
+    assert_pass(run_gate(app, "--fix"))
+    os.chmod(app / relative, group_managed_mode)
+
+    assert_pass(run_gate(app))
 
 
 @pytest.mark.parametrize(
     ("relative", "bad_mode"),
     (
-        ("scripts/update.sh", 0o775),
-        ("scripts/km-vms-update-helper.py", 0o666),
-        ("docker-compose.yml", 0o646),
+        ("scripts/update.sh", 0o757),
+        ("scripts/km-vms-update-helper.py", 0o646),
+        ("docker-compose.yml", 0o666),
+        ("scripts/update.sh", 0o4755),
     ),
 )
-def test_permission_gate_rejects_shared_write_on_privileged_chain(
+def test_permission_gate_rejects_world_write_or_special_bits(
     tmp_path: Path,
     relative: str,
     bad_mode: int,
@@ -244,7 +267,7 @@ def test_permission_gate_rejects_shared_write_on_privileged_chain(
     rejected = run_gate(app)
 
     assert rejected.returncode != 0
-    assert "group/world-writable" in rejected.stderr
+    assert "world-writable or has special bits" in rejected.stderr
 
 
 def test_permission_gate_ignores_unlisted_non_executable_asset_mode(
@@ -273,6 +296,21 @@ def test_permission_gate_rejects_privileged_symlink(tmp_path: Path) -> None:
     assert "must not be a symlink" in rejected.stderr
 
 
+def test_permission_gate_rejects_privileged_file_changed_to_directory(
+    tmp_path: Path,
+) -> None:
+    app = permission_tree(tmp_path)
+    assert_pass(run_gate(app, "--fix"))
+    target = app / "scripts/km-vms-update-helper-bridge.py"
+    target.unlink()
+    target.mkdir()
+
+    rejected = run_gate(app)
+
+    assert rejected.returncode != 0
+    assert "km-vms-update-helper-bridge.py" in rejected.stderr
+
+
 def test_permission_gate_accepts_harmless_named_read_acl(tmp_path: Path) -> None:
     app = permission_tree(tmp_path)
     assert_pass(run_gate(app, "--fix"))
@@ -291,12 +329,12 @@ def test_permission_gate_accepts_harmless_named_read_acl(tmp_path: Path) -> None
     assert_pass(result)
 
 
-def test_permission_gate_rejects_named_write_acl(tmp_path: Path) -> None:
+def test_permission_gate_accepts_named_write_acl(tmp_path: Path) -> None:
     app = permission_tree(tmp_path)
     assert_pass(run_gate(app, "--fix"))
     target = app / "scripts/km-vms-update-helper.py"
 
-    rejected = run_gate(
+    result = run_gate(
         app,
         tool_dirs=(selective_acl_tool_dir(tmp_path),),
         use_safe_getfacl=False,
@@ -306,8 +344,35 @@ def test_permission_gate_rejects_named_write_acl(tmp_path: Path) -> None:
         },
     )
 
+    assert_pass(result)
+
+
+@pytest.mark.parametrize(
+    "acl_line",
+    (
+        "other::rwx",
+        "default:other::rwx",
+    ),
+)
+def test_permission_gate_rejects_acl_world_write(
+    tmp_path: Path,
+    acl_line: str,
+) -> None:
+    app = permission_tree(tmp_path)
+    assert_pass(run_gate(app, "--fix"))
+
+    rejected = run_gate(
+        app,
+        tool_dirs=(selective_acl_tool_dir(tmp_path),),
+        use_safe_getfacl=False,
+        extra_env={
+            "KMVMS_TEST_ACL_PATH": str(app),
+            "KMVMS_TEST_ACL_LINE": acl_line,
+        },
+    )
+
     assert rejected.returncode != 0
-    assert "ACL grants non-owner write" in rejected.stderr
+    assert "ACL grants world write" in rejected.stderr
 
 
 def test_permission_gate_passes_without_getfacl(tmp_path: Path) -> None:
@@ -329,15 +394,21 @@ def test_permission_fix_preserves_runtime_authority_files(tmp_path: Path) -> Non
     app = permission_tree(tmp_path)
     install_control = app / "data/install-control"
     install_control.mkdir()
-    os.chmod(app / "data", 0o750)
-    os.chmod(install_control, 0o750)
+    os.chmod(app / "data", 0o770)
+    os.chmod(install_control, 0o770)
     write(install_control / "archive-roots-runtime.json", "{}\n")
     write(
         install_control / "docker-compose.archive-roots.yml",
         "services: {}\n",
     )
     for path in install_control.iterdir():
-        os.chmod(path, 0o640)
+        os.chmod(path, 0o660)
+    for path in (
+        app / ".env",
+        app / ".km-vms-source.json",
+        app / ".km-vms-release.json",
+    ):
+        os.chmod(path, 0o660)
     before = {
         path: (mode(path), path.read_bytes())
         for path in (
@@ -352,8 +423,21 @@ def test_permission_fix_preserves_runtime_authority_files(tmp_path: Path) -> Non
 
     for path, expected in before.items():
         assert (mode(path), path.read_bytes()) == expected
-    assert mode(app / "data") == 0o750
-    assert mode(install_control) == 0o750
+    assert mode(app / "data") == 0o770
+    assert mode(install_control) == 0o770
+
+
+def test_permission_gate_rejects_world_writable_runtime_authority(
+    tmp_path: Path,
+) -> None:
+    app = permission_tree(tmp_path)
+    assert_pass(run_gate(app, "--fix"))
+    os.chmod(app / ".env", 0o646)
+
+    rejected = run_gate(app)
+
+    assert rejected.returncode != 0
+    assert "Runtime authority is world-writable" in rejected.stderr
 
 
 def test_existing_contract_allows_target_only_files_to_be_absent(
@@ -402,6 +486,11 @@ def test_permission_scope_and_update_integrations_are_narrow() -> None:
     assert "permission_scope=privileged_chain" in gate
     assert "command -v getfacl" in gate
     assert "getfacl is required" not in gate
+    assert "chown " not in gate
+    assert "setfacl" not in gate
+    assert 'chmod o-w "$path"' in gate
+    assert 'chmod u+rwx "$path"' in gate
+    assert "0.7.18" not in gate
     assert "getfacl --version" not in update
     assert "getfacl --version" not in bridge
     assert "helper_acl_runtime_missing" not in bridge
@@ -490,3 +579,114 @@ def test_bridge_does_not_publish_fix_pass_when_followup_check_fails(
 
     assert captured.value.code == "target_permission_check_failed"
     assert "permission_gate=PASS" not in capsys.readouterr().out
+
+
+def test_v0718_post_overlay_handoff_accepts_host_managed_acl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bridge = load_bridge()
+    app = permission_tree(tmp_path)
+    shutil.copyfile(GATE, app / "scripts/km-vms-permission-gate.sh")
+    shutil.copyfile(
+        ROOT / "scripts/km-vms-update-helper-bridge.py",
+        app / "scripts/km-vms-update-helper-bridge.py",
+    )
+    request_id = "update-" + ("7" * 32)
+    target_commit = "5" * 40
+    update_request = {
+        "schema_version": 1,
+        "request_id": request_id,
+        "requested_at": "2026-07-27T00:00:00Z",
+        "requested_by": {"user_id": "1", "role": "owner"},
+        "intent": "apply_update",
+        "source": {
+            "kind": "github-tarball",
+            "repo": "kmishnev87/km-vms",
+            "ref": target_commit,
+            "commit": target_commit,
+            "apply_ref": target_commit,
+        },
+        "confirmed": True,
+    }
+
+    def write_json(path: Path, payload: dict) -> None:
+        write(path, json.dumps(payload, ensure_ascii=False) + "\n")
+
+    write_json(
+        app / "data/update-control/update-request.json",
+        update_request,
+    )
+    write_json(
+        app / ".km-vms-source.json",
+        {
+            "schema_version": 1,
+            "source_kind": "github-tarball",
+            "github_repo": "kmishnev87/km-vms",
+            "ref": "v0.7.18",
+            "commit_sha": bridge.SOURCE_TAG_COMMITS["0.7.18"],
+            "recorded_at": "2026-07-26T00:00:00Z",
+        },
+    )
+    write_json(
+        app / "release/km-vms-release.json",
+        {
+            "schema_version": 1,
+            "product": "KM VMS",
+            "version": "0.7.25",
+            "tag": "v0.7.25",
+            "source_kind": "github-release",
+            "source_repo": "kmishnev87/km-vms",
+            "source_ref": "v0.7.25",
+            "evidence_model": "semver_tag_resolves_to_commit",
+            "commit_sha": None,
+        },
+    )
+
+    acl_tool_dir = selective_acl_tool_dir(tmp_path)
+    monkeypatch.setenv(
+        "PATH",
+        os.pathsep.join((str(acl_tool_dir), os.environ["PATH"])),
+    )
+    monkeypatch.setenv("KMVMS_TEST_ACL_PATH", str(app))
+    monkeypatch.setenv(
+        "KMVMS_TEST_ACL_LINE",
+        "\n".join(
+            (
+                "user:nas-owner:rwx",
+                "group:nas-admin:rwx",
+                "mask::rwx",
+                "default:user::rwx",
+                "default:user:nas-owner:rwx",
+                "default:group::r-x",
+                "default:group:nas-admin:rwx",
+                "default:mask::rwx",
+                "default:other::---",
+            )
+        ),
+    )
+
+    bridge.run_target_permission_gate(app)
+    bridge.capture_installed_source_identity(
+        app,
+        request_id=request_id,
+    )
+
+    identity = json.loads(
+        (
+            app
+            / "data/update-control/pre-overlay-source-identity.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert identity["installed_version"] == "0.7.18"
+    assert (
+        identity["installed_commit"]
+        == "a41be5545935ca3a7b1740e7697595456a52b08f"
+    )
+    assert json.loads(
+        (
+            app
+            / "data/update-control/schema-update-request.json"
+        ).read_text(encoding="utf-8")
+    ) == update_request
+    assert mode(app) == 0o775

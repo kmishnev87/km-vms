@@ -161,23 +161,21 @@ fi
 command -v stat >/dev/null 2>&1 ||
   fail "stat is required for privileged-chain inspection"
 if [ "$ACTION" = "fix" ]; then
-  for required_command in chown chmod; do
-    command -v "$required_command" >/dev/null 2>&1 ||
-      fail "$required_command is required for privileged-chain repair"
-  done
+  command -v chmod >/dev/null 2>&1 ||
+    fail "chmod is required for privileged-chain repair"
 fi
 
 ROOT_OWNER_GROUP=$(stat_owner_group "$APP_DIR") ||
   fail "Cannot read app-dir owner/group"
 ROOT_UID=$(printf '%s\n' "$ROOT_OWNER_GROUP" | cut -d: -f1)
 
-unsafe_write_mode() {
+unsafe_mode() {
   mode="$1"
   case "$mode" in
     [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
     *) return 0 ;;
   esac
-  [ $((0$mode & 0022)) -eq 0 ] || return 0
+  [ $((0$mode & 0002)) -eq 0 ] || return 0
   [ $((0$mode & 07000)) -eq 0 ] || return 0
   return 1
 }
@@ -225,13 +223,17 @@ check_path_acl() {
   fi
   while IFS= read -r acl_line; do
     case "$acl_line" in
-      ''|'#'*|user::*|mask::*|default:user::*|default:mask::*)
+      ''|'#'*)
         ;;
-      group::*|other::*|default:group::*|default:other::*|user:*:*|group:*:*|default:user:*:*|default:group:*:*)
+      user::*|group::*|mask::*|default:user::*|default:group::*|default:mask::*|user:*:*|group:*:*|default:user:*:*|default:group:*:*)
+        acl_permissions_field "$acl_line" >/dev/null ||
+          fail "Unsupported ACL permissions on privileged path: $relative"
+        ;;
+      other::*|default:other::*)
         permissions=$(acl_permissions_field "$acl_line") ||
           fail "Unsupported ACL permissions on privileged path: $relative"
         if acl_has_write "$permissions"; then
-          fail "ACL grants non-owner write on privileged path: $relative"
+          fail "ACL grants world write on privileged path: $relative"
         fi
         ;;
       *)
@@ -247,6 +249,12 @@ is_executable_file() {
     [ "$candidate" != "$relative" ] || return 0
   done
   return 1
+}
+
+mode_has_bits() {
+  mode="$1"
+  required="$2"
+  [ $((0$mode & 0$required)) -eq $((0$required)) ]
 }
 
 preflight_path() {
@@ -271,23 +279,17 @@ check_secure_path() {
   trusted_owner "$path" ||
     fail "Privileged-chain owner is not trusted: $relative"
   mode=$(stat_mode "$path") || fail "Cannot read mode: $relative"
-  unsafe_write_mode "$mode" &&
-    fail "Privileged-chain path is group/world-writable or has special bits: $relative mode=$mode"
+  unsafe_mode "$mode" &&
+    fail "Privileged-chain path is world-writable or has special bits: $relative mode=$mode"
   if [ "$expected_type" = "dir" ]; then
-    case "$mode" in
-      700|750|755) ;;
-      *) fail "Privileged-chain directory mode must be 0700, 0750 or 0755: $relative mode=$mode" ;;
-    esac
+    mode_has_bits "$mode" 700 ||
+      fail "Privileged-chain directory owner must have rwx access: $relative mode=$mode"
   elif is_executable_file "$relative"; then
-    case "$mode" in
-      700|750|755) ;;
-      *) fail "Privileged executable mode must be 0700, 0750 or 0755: $relative mode=$mode" ;;
-    esac
+    mode_has_bits "$mode" 500 ||
+      fail "Privileged executable owner must have read/execute access: $relative mode=$mode"
   else
-    case "$mode" in
-      600|640|644) ;;
-      *) fail "Privileged non-executable mode must be 0600, 0640 or 0644: $relative mode=$mode" ;;
-    esac
+    mode_has_bits "$mode" 400 ||
+      fail "Privileged non-executable owner must have read access: $relative mode=$mode"
   fi
 }
 
@@ -295,15 +297,18 @@ normalize_path() {
   path="$1"
   relative="$2"
   expected_type="$3"
-  desired_mode="644"
-  [ "$expected_type" != "dir" ] || desired_mode="755"
-  if [ "$expected_type" = "file" ] && is_executable_file "$relative"; then
-    desired_mode="755"
+  if [ "$expected_type" = "dir" ]; then
+    chmod u+rwx "$path" ||
+      fail "Cannot grant owner access to privileged-chain directory: $relative"
+  elif is_executable_file "$relative"; then
+    chmod u+rx "$path" ||
+      fail "Cannot grant owner access to privileged executable: $relative"
+  else
+    chmod u+r "$path" ||
+      fail "Cannot grant owner read access to privileged file: $relative"
   fi
-  chown "$ROOT_OWNER_GROUP" "$path" ||
-    fail "Cannot set privileged-chain owner/group: $relative"
-  chmod "$desired_mode" "$path" ||
-    fail "Cannot set privileged-chain mode: $relative"
+  chmod o-w "$path" ||
+    fail "Cannot remove world write from privileged-chain path: $relative"
   chmod u-s,g-s,o-t "$path" ||
     fail "Cannot clear privileged-chain special mode bits: $relative"
 }
@@ -364,8 +369,8 @@ for relative in $RUNTIME_CRITICAL_FILES; do
   trusted_owner "$path" ||
     fail "Runtime authority owner is not trusted: $relative"
   mode=$(stat_mode "$path") || fail "Cannot read mode: $relative"
-  unsafe_write_mode "$mode" &&
-    fail "Runtime authority is group/world-writable or has special bits: $relative mode=$mode"
+  unsafe_mode "$mode" &&
+    fail "Runtime authority is world-writable or has special bits: $relative mode=$mode"
   check_path_acl "$path" "$relative"
 done
 
@@ -379,8 +384,8 @@ if [ -e "$APP_DIR/data/install-control" ] || [ -L "$APP_DIR/data/install-control
     trusted_owner "$path" ||
       fail "Runtime authority parent owner is not trusted: $relative"
     mode=$(stat_mode "$path") || fail "Cannot read mode: $relative"
-    unsafe_write_mode "$mode" &&
-      fail "Runtime authority parent is group/world-writable or has special bits: $relative mode=$mode"
+    unsafe_mode "$mode" &&
+      fail "Runtime authority parent is world-writable or has special bits: $relative mode=$mode"
     check_path_acl "$path" "$relative"
   done
 fi
