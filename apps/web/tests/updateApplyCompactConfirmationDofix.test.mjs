@@ -1,0 +1,66 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const pageSource = fs.readFileSync(resolve(__dirname, "../app/settings/page.js"), "utf8");
+const cssSource = fs.readFileSync(resolve(__dirname, "../app/styles/20-settings-maintenance.css"), "utf8");
+
+const dialogStart = pageSource.indexOf("{updateApplyDialog ? (");
+const dialogEnd = pageSource.indexOf("{securityModalOpen ? (", dialogStart);
+assert.ok(dialogStart >= 0 && dialogEnd > dialogStart);
+const dialogSource = pageSource.slice(dialogStart, dialogEnd);
+
+assert.equal(dialogSource.includes('className="settingsUpdateApplyDialog"'), true);
+assert.equal(dialogSource.includes("settingsModalActions"), true);
+assert.equal(dialogSource.includes("updateApplyModalTitle"), true);
+assert.equal(dialogSource.includes("updateApplyConfirm"), true);
+assert.equal(dialogSource.includes("updateApplyDialog.candidate"), false);
+assert.equal(dialogSource.includes("updateApplyOperator.currentVersion"), false);
+assert.equal(dialogSource.includes("shortCommit"), false);
+assert.equal(dialogSource.includes("settingsUpdateApplyDialogFacts"), false);
+assert.equal(dialogSource.includes("settingsUpdateApplyDialogRestart"), false);
+assert.equal(dialogSource.includes("settingsUpdateApplyDialogError"), false);
+assert.equal(dialogSource.includes("updateApplyLaunchChecking"), false);
+
+const confirmStart = pageSource.indexOf("async function confirmUpdateApply");
+const confirmEnd = pageSource.indexOf("async function downloadMaintenanceReport", confirmStart);
+assert.ok(confirmStart >= 0 && confirmEnd > confirmStart);
+const confirmSource = pageSource.slice(confirmStart, confirmEnd);
+
+assert.ok(
+  confirmSource.indexOf("setUpdateApplyDialog(null)") <
+    confirmSource.indexOf('apiFetch("/system/update/apply/submission-ticket"'),
+);
+assert.equal(confirmSource.includes("humanErrorText"), false);
+assert.equal(confirmSource.includes("safeUpdateLaunchError(err)"), true);
+assert.equal(confirmSource.includes("setMaintenanceActionResult"), true);
+assert.equal(confirmSource.includes("displayReason: message"), true);
+assert.equal(confirmSource.includes("showToast"), true);
+
+const safeErrorStart = pageSource.indexOf("function safeUpdateLaunchError");
+const safeErrorEnd = pageSource.indexOf("function commitUpdateApplyReconciliation", safeErrorStart);
+assert.ok(safeErrorStart >= 0 && safeErrorEnd > safeErrorStart);
+const safeErrorSource = pageSource.slice(safeErrorStart, safeErrorEnd);
+assert.equal(safeErrorSource.includes('"update_already_running"'), true);
+assert.equal(safeErrorSource.includes('"update_admission_unknown"'), true);
+assert.equal(safeErrorSource.includes("error?.message"), false);
+assert.equal(
+  pageSource.includes("maintenanceActionResult.displayReason || formatMaintenanceMessage"),
+  true,
+);
+
+assert.equal(pageSource.includes("window.confirm"), false);
+assert.equal(pageSource.includes("updateApplyModalTarget"), false);
+assert.equal(pageSource.includes("updateApplyModalRelease"), false);
+assert.equal(pageSource.includes("updateApplyModalCommit"), false);
+assert.equal(pageSource.includes("updateApplyModalRestartTitle"), false);
+assert.equal(pageSource.includes("updateApplyModalRestartText"), false);
+assert.equal(cssSource.includes(".settingsUpdateApplyDialogFacts"), false);
+assert.equal(cssSource.includes(".settingsUpdateApplyDialogRestart"), false);
+assert.equal(cssSource.includes(".settingsUpdateApplyDialogError"), false);
+assert.match(cssSource, /\.settingsUpdateApplyDialogOverlay\s*\{[^}]*z-index:\s*9600/s);
+assert.match(cssSource, /\.settingsConfirmModal,\s*\.settingsUpdateApplyDialog\s*\{/s);
+
+console.log("Compact update confirmation dofix tests passed");

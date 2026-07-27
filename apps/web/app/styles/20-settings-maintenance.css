@@ -766,155 +766,8 @@
   background: rgba(15, 23, 42, 0.48);
 }
 
+.settingsConfirmModal,
 .settingsUpdateApplyDialog {
-  box-sizing: border-box;
-  position: relative;
-  width: min(520px, calc(100vw - 32px));
-  max-height: min(88vh, 680px);
-  overflow: auto;
-  border: 1px solid #d6e0ea;
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
-  padding: 20px;
-  display: grid;
-  gap: 16px;
-}
-
-.settingsUpdateApplyDialog header {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr);
-  gap: 11px;
-  align-items: start;
-  padding-right: 30px;
-}
-
-.settingsUpdateApplyDialogIcon {
-  width: 36px;
-  height: 36px;
-  border: 1px solid #bfdbfe;
-  border-radius: 50%;
-  background: #eff6ff;
-  color: #1d4ed8;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  line-height: 1;
-}
-
-.settingsUpdateApplyDialog h2,
-.settingsUpdateApplyDialog p {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.settingsUpdateApplyDialog h2 {
-  color: #142033;
-  font-size: 17px;
-  line-height: 1.25;
-  font-weight: 650;
-}
-
-.settingsUpdateApplyDialog p {
-  margin-top: 4px;
-  color: #64748b;
-  font-size: 13px;
-  line-height: 1.4;
-}
-
-.settingsUpdateApplyDialogClose {
-  position: absolute;
-  top: 12px;
-  right: 12px;
-}
-
-.settingsUpdateApplyDialogClose:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.settingsUpdateApplyDialogFacts {
-  margin: 0;
-  border-top: 1px solid #e4edf5;
-  border-bottom: 1px solid #e4edf5;
-  padding: 10px 0;
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px 18px;
-}
-
-.settingsUpdateApplyDialogFacts div {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.settingsUpdateApplyDialogFacts dt,
-.settingsUpdateApplyDialogFacts dd {
-  min-width: 0;
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.settingsUpdateApplyDialogFacts dt {
-  color: #7b8797;
-  font-size: 11px;
-  line-height: 1.25;
-}
-
-.settingsUpdateApplyDialogFacts dd {
-  color: #142033;
-  font-size: 13px;
-  line-height: 1.3;
-  font-weight: 550;
-}
-
-.settingsUpdateApplyDialogRestart {
-  border: 1px solid #fde68a;
-  border-radius: 8px;
-  background: #fffbeb;
-  padding: 10px 12px;
-  display: grid;
-  gap: 3px;
-}
-
-.settingsUpdateApplyDialogRestart strong,
-.settingsUpdateApplyDialogRestart span {
-  color: #92400e;
-  font-size: 12px;
-  line-height: 1.38;
-  overflow-wrap: anywhere;
-}
-
-.settingsUpdateApplyDialogRestart strong {
-  font-weight: 650;
-}
-
-.settingsUpdateApplyDialogError {
-  border: 1px solid #fecaca;
-  border-radius: 8px;
-  background: #fef2f2;
-  color: #991b1b;
-  padding: 9px 11px;
-  font-size: 12px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.settingsUpdateApplyDialogActions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.settingsUpdateApplyDialogActions .button {
-  width: auto;
-  min-width: 0;
-}
-
-.settingsConfirmModal {
   width: min(420px, calc(100vw - 32px));
   border: 1px solid #dbe3ef;
   border-radius: 18px;
@@ -925,47 +778,57 @@
   text-align: center;
 }
 
-.settingsConfirmModal p {
+.settingsConfirmModal p,
+.settingsUpdateApplyDialog p {
   margin: 8px 0 22px;
   color: #475569;
   line-height: 1.45;
   font-size: 18px;
   font-weight: 800;
+  overflow-wrap: anywhere;
 }
 
 .settingsConfirmModal p span,
-.settingsConfirmModal p strong {
+.settingsConfirmModal p strong,
+.settingsUpdateApplyDialog p span,
+.settingsUpdateApplyDialog p strong {
   display: block;
 }
 
-.settingsConfirmModal p strong {
+.settingsConfirmModal p strong,
+.settingsUpdateApplyDialog p strong {
   margin-top: 4px;
   color: #0f172a;
 }
 
-.settingsConfirmClose {
+.settingsConfirmClose,
+.settingsUpdateApplyDialogClose {
   position: absolute;
   right: 14px;
   top: 14px;
 }
 
-.settingsConfirmModal .settingsModalActions {
+.settingsConfirmModal .settingsModalActions,
+.settingsUpdateApplyDialog .settingsModalActions {
   display: grid;
   grid-template-columns: 1fr auto 1fr auto 1fr;
   gap: 0;
   align-items: center;
 }
 
-.settingsConfirmModal .settingsModalActions .button {
+.settingsConfirmModal .settingsModalActions .button,
+.settingsUpdateApplyDialog .settingsModalActions .button {
   min-width: 104px;
   justify-content: center;
 }
 
-.settingsConfirmModal .settingsModalActions .button:first-child {
+.settingsConfirmModal .settingsModalActions .button:first-child,
+.settingsUpdateApplyDialog .settingsModalActions .button:first-child {
   grid-column: 2;
 }
 
-.settingsConfirmModal .settingsModalActions .button:last-child {
+.settingsConfirmModal .settingsModalActions .button:last-child,
+.settingsUpdateApplyDialog .settingsModalActions .button:last-child {
   grid-column: 4;
 }
 
@@ -2577,19 +2440,6 @@
   .settingsMaintenanceSupportActions .button,
   .settingsUpdateApplyActions .button {
     width: 100%;
-  }
-
-  .settingsUpdateApplyDialogFacts {
-    grid-template-columns: 1fr;
-  }
-
-  .settingsUpdateApplyDialogActions {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .settingsUpdateApplyDialogActions .button:only-child {
-    grid-column: 1 / -1;
   }
 
   .settingsMaintenanceFlow dl div,

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.28",
-  "tag": "v0.7.28",
-  "title": "KM VMS 0.7.28 — Legacy Terminal, Sequential Update Continuity and Schema-Control Rollover Dofix",
-  "summary": "Recognizes exact verified legacy update completion, preserves truthful terminal progress, and safely rolls completed schema-control state forward for the next release.",
+  "version": "0.7.29",
+  "tag": "v0.7.29",
+  "title": "KM VMS 0.7.29 — Compact Update Confirmation Dofix",
+  "summary": "Replaces the oversized update dialog with a compact application confirmation and keeps launch errors localized on the existing Maintenance surface.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.28",
+  "source_ref": "v0.7.29",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,12 +16,11 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Recognizes the exact verified legacy completed shape consistently in the API and update helper.",
-    "Retires confirmed legacy admission safely so the next exact update submission is not blocked.",
-    "Uses one canonical release-lineage artifact through 0.7.27 for API and helper bridge validation.",
-    "Checks only the immediate published predecessor during release preparation.",
-    "Rolls completed schema-control state into a fenced new generation without duplicating same-schema migrations or history.",
-    "Preserves completed and failed five-step terminal truth in Settings Maintenance.",
-    "Keeps database schema, service topology, rollback architecture and the separate Stage 6.6.1 boundary unchanged."
+    "Uses the same compact confirmation pattern as other Settings actions, with only the question and Cancel/Update buttons.",
+    "Keeps version, release and commit details on the existing Maintenance surface instead of duplicating them in the confirmation.",
+    "Closes the confirmation immediately after submission and leaves launch reconciliation on the existing update panel.",
+    "Maps known admission failures to localized operator text instead of displaying raw backend responses.",
+    "Registers 0.7.28 as the immediate trusted predecessor for the 0.7.29 release.",
+    "Keeps update trust, admission, polling, database schema, service topology, retention and Stage 6.6.1 boundaries unchanged."
   ]
 }

@@ -288,19 +288,15 @@ const TEXT = {
     updateApplyTitle: "Применение обновления",
     updateApplyCheck: "Проверить обновление",
     updateApplyStart: "Применить обновление",
-    updateApplyConfirm: "Запустить обновление KM VMS? Система выполнит проверку, применит trusted release через helper и может временно перезапустить сервисы.",
+    updateApplyConfirm: "Установить доступное обновление?",
     updateApplyConfirmRestart: "Сервисы могут временно перезапуститься; статус продолжит обновляться после восстановления API.",
-    updateApplyModalTitle: "Подтвердите обновление KM VMS",
-    updateApplyModalTarget: "Целевая версия",
-    updateApplyModalRelease: "Релиз",
-    updateApplyModalCommit: "Commit",
-    updateApplyModalRestartTitle: "Во время обновления сервисы перезапустятся",
-    updateApplyModalRestartText: "Интерфейс может временно потерять связь. Не выключайте NAS: проверка статуса продолжится автоматически.",
-    updateApplyModalConfirm: "Применить обновление",
+    updateApplyModalTitle: "Обновление KM VMS",
+    updateApplyModalConfirm: "Обновить",
     updateApplyLaunchChecking: "Проверяем запуск обновления",
     updateApplyLaunchCheckingText: "Ответ сервера временно недоступен. KM VMS проверяет статус и не отправляет повторный запрос.",
     updateApplyLaunchUnknown: "Результат запуска пока не подтверждён. Проверка продолжается автоматически; повторное применение заблокировано.",
     updateApplyLaunchConflict: "Обнаружена другая операция обновления. Повторное применение заблокировано до получения итогового статуса.",
+    updateApplyAdmissionUnknown: "Состояние предыдущего обновления не подтверждено. Обновите статус и повторите попытку.",
     updateApplyLaunchNotAccepted: "Сервер подтвердил, что запрос не был принят. Для повторного запуска откройте новое подтверждение.",
     updateApplyLaunchRejected: "Сервер отклонил запуск обновления.",
     updateApplyPersistenceFailed: "Не удалось надёжно сохранить подтверждение обновления в этом браузере. Обновление не запускалось. Проверьте доступ к хранилищу браузера и повторите попытку.",
@@ -820,19 +816,15 @@ const TEXT = {
     updateApplyTitle: "Update apply",
     updateApplyCheck: "Check update",
     updateApplyStart: "Apply update",
-    updateApplyConfirm: "Start KM VMS update? The system will run preflight, apply the trusted release through the helper and may temporarily restart services.",
+    updateApplyConfirm: "Install the available update?",
     updateApplyConfirmRestart: "Services may restart temporarily; status polling will resume after the API is available.",
-    updateApplyModalTitle: "Confirm KM VMS update",
-    updateApplyModalTarget: "Target version",
-    updateApplyModalRelease: "Release",
-    updateApplyModalCommit: "Commit",
-    updateApplyModalRestartTitle: "Services will restart during the update",
-    updateApplyModalRestartText: "The UI may temporarily lose connection. Keep the NAS powered; status checking will continue automatically.",
-    updateApplyModalConfirm: "Apply update",
+    updateApplyModalTitle: "KM VMS update",
+    updateApplyModalConfirm: "Update",
     updateApplyLaunchChecking: "Checking whether the update started",
     updateApplyLaunchCheckingText: "The server response is temporarily unavailable. KM VMS is checking status and will not send a second request.",
     updateApplyLaunchUnknown: "The launch result is not confirmed yet. Checking continues automatically and another apply is locked.",
     updateApplyLaunchConflict: "Another update operation was detected. Another apply is locked until its final status is known.",
+    updateApplyAdmissionUnknown: "The previous update state is not confirmed. Refresh the status and try again.",
     updateApplyLaunchNotAccepted: "The server proved that the request was not accepted. Open a new confirmation before trying again.",
     updateApplyLaunchRejected: "The server rejected the update launch.",
     updateApplyPersistenceFailed: "The update confirmation could not be stored reliably in this browser. The update was not started. Check browser storage access and try again.",
@@ -1323,19 +1315,15 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyTitle: "应用更新",
   updateApplyCheck: "检查更新",
   updateApplyStart: "应用更新",
-  updateApplyConfirm: "启动 KM VMS 更新？系统将执行预检查，通过 helper 应用受信任版本，并可能短暂重启服务。",
+  updateApplyConfirm: "安装可用更新？",
   updateApplyConfirmRestart: "服务可能会短暂重启；API 恢复后状态轮询会继续。",
-  updateApplyModalTitle: "确认 KM VMS 更新",
-  updateApplyModalTarget: "目标版本",
-  updateApplyModalRelease: "版本",
-  updateApplyModalCommit: "Commit",
-  updateApplyModalRestartTitle: "更新期间服务将重新启动",
-  updateApplyModalRestartText: "界面可能暂时断开连接。请保持 NAS 供电，系统会自动继续检查状态。",
-  updateApplyModalConfirm: "应用更新",
+  updateApplyModalTitle: "KM VMS 更新",
+  updateApplyModalConfirm: "更新",
   updateApplyLaunchChecking: "正在检查更新是否已启动",
   updateApplyLaunchCheckingText: "服务器响应暂时不可用。KM VMS 正在检查状态，不会发送第二次请求。",
   updateApplyLaunchUnknown: "尚未确认启动结果。系统会自动继续检查，并阻止再次应用。",
   updateApplyLaunchConflict: "检测到另一个更新操作。在获得最终状态前，无法再次应用。",
+  updateApplyAdmissionUnknown: "尚未确认上一次更新的状态。请刷新状态后重试。",
   updateApplyLaunchNotAccepted: "服务器已确认请求未被接受。再次尝试前需重新确认。",
   updateApplyLaunchRejected: "服务器拒绝了更新启动请求。",
   updateApplyPersistenceFailed: "无法在此浏览器中可靠保存更新确认。更新尚未启动。请检查浏览器存储权限后重试。",
@@ -1865,14 +1853,6 @@ export default function SettingsPage() {
     }
   }, [updateApplyDialog?.phase]);
 
-  useEffect(() => {
-    const deadlineAtMs = Number(updateApplyDialog?.deadlineAtMs || 0);
-    const busy = updateApplyDialog?.phase === "submitting" || updateApplyDialog?.phase === "reconciling";
-    if (!busy || !deadlineAtMs) return undefined;
-    const timer = window.setTimeout(() => releaseUpdateApplyDialogToParent(), Math.max(0, deadlineAtMs - Date.now()));
-    return () => window.clearTimeout(timer);
-  }, [updateApplyDialog?.phase, updateApplyDialog?.deadlineAtMs]);
-
   function showToast(nextToast) {
     setToast(nextToast);
     window.clearTimeout(toastTimerRef.current);
@@ -2128,6 +2108,13 @@ export default function SettingsPage() {
     };
   }
 
+  function safeUpdateLaunchError(error) {
+    const code = String(error?.code || "");
+    if (code === "update_already_running") return t.updateApplyLaunchConflict;
+    if (code === "update_admission_unknown") return t.updateApplyAdmissionUnknown;
+    return safeUpdateTransportError(error, t.updateApplyLaunchRejected).message;
+  }
+
   function commitUpdateApplyReconciliation(nextRecord) {
     const safeRecord = nextRecord
       ? sanitizeUpdateApplyReconciliation(nextRecord, Date.now())
@@ -2162,19 +2149,8 @@ export default function SettingsPage() {
   }
 
   function closeUpdateApplyDialog() {
-    const dialog = updateApplyDialogRef.current;
-    if (!dialog) return;
-    const busy = ["preparing", "submitting", "reconciling"].includes(dialog.phase);
-    if (busy && Date.now() < Number(dialog.deadlineAtMs || Number.MAX_SAFE_INTEGER)) return;
+    if (!updateApplyDialogRef.current) return;
     setUpdateApplyDialog(null);
-  }
-
-  function releaseUpdateApplyDialogToParent() {
-    const dialog = updateApplyDialogRef.current;
-    if (!dialog || !["submitting", "reconciling"].includes(dialog.phase)) return;
-    if (Date.now() < Number(dialog.deadlineAtMs || Number.MAX_SAFE_INTEGER)) return;
-    setUpdateApplyDialog(null);
-    setMaintenanceBusy((current) => current === "update-apply" ? "" : current);
   }
 
   function reconcilePendingUpdateApply(applyData, observedAtMs) {
@@ -2190,8 +2166,14 @@ export default function SettingsPage() {
     }
     if (result.outcome === "conflict") {
       commitUpdateApplyReconciliation(result.record);
-      setUpdateApplyDialog((dialog) => dialog ? { ...dialog, phase: "conflict", error: t.updateApplyLaunchConflict } : dialog);
       setMaintenanceBusy((value) => value === "update-apply" ? "" : value);
+      setMaintenanceActionResult({
+        flowKey: "update",
+        status: "blocked",
+        reason: "update_launch_conflict",
+        displayReason: t.updateApplyLaunchConflict,
+      });
+      showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyLaunchConflict });
       return result.outcome;
     }
     if (["recheck_required", "reconciliation_corrupt", "legacy_uncorrelated"].includes(result.outcome)) {
@@ -2202,8 +2184,14 @@ export default function SettingsPage() {
     }
     if (result.outcome === "not_accepted") {
       commitUpdateApplyReconciliation(null);
-      setUpdateApplyDialog((dialog) => dialog ? { ...dialog, phase: "not_accepted", error: t.updateApplyLaunchNotAccepted } : dialog);
       setMaintenanceBusy((value) => value === "update-apply" ? "" : value);
+      setMaintenanceActionResult({
+        flowKey: "update",
+        status: "blocked",
+        reason: "update_launch_not_accepted",
+        displayReason: t.updateApplyLaunchNotAccepted,
+      });
+      showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyLaunchNotAccepted });
       return result.outcome;
     }
     commitUpdateApplyReconciliation(result.record);
@@ -2441,12 +2429,7 @@ export default function SettingsPage() {
     const dialog = updateApplyDialogRef.current;
     if (!dialog || dialog.phase !== "confirm" || maintenanceBusy || updateApplyReconciliationRef.current) return;
     const submittedAtMs = Date.now();
-    setUpdateApplyDialog({
-      ...dialog,
-      phase: "preparing",
-      error: "",
-      deadlineAtMs: null,
-    });
+    setUpdateApplyDialog(null);
     setMaintenanceBusy("update-apply");
     setMaintenanceActionResult(null);
     try {
@@ -2465,20 +2448,26 @@ export default function SettingsPage() {
         submittedAtMs,
       );
       if (!reconciliation) {
-        setUpdateApplyDialog({ ...dialog, phase: "rejected", error: t.updateApplyTicketInvalid });
+        setMaintenanceActionResult({
+          flowKey: "update",
+          status: "blocked",
+          reason: "update_ticket_invalid",
+          displayReason: t.updateApplyTicketInvalid,
+        });
+        showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyTicketInvalid });
         return;
       }
       const persisted = commitUpdateApplyReconciliation(reconciliation);
       if (!persisted || !updateApplyReconciliationExactMatch(reconciliation, persisted, Date.now())) {
-        setUpdateApplyDialog({ ...dialog, phase: "rejected", error: t.updateApplyPersistenceFailed });
+        setMaintenanceActionResult({
+          flowKey: "update",
+          status: "blocked",
+          reason: "update_persistence_failed",
+          displayReason: t.updateApplyPersistenceFailed,
+        });
+        showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyPersistenceFailed });
         return;
       }
-      setUpdateApplyDialog({
-        ...dialog,
-        phase: "submitting",
-        error: "",
-        deadlineAtMs: persisted.modalDeadlineAtMs,
-      });
       const result = await apiFetch("/system/update/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -2493,30 +2482,22 @@ export default function SettingsPage() {
       setUpdateApplyStatus(result?.apply_status || result);
       setUpdateApplyReconnectSnapshot(updateApplyReconnectTiming(result?.apply_status || result, monotonicWallNow()));
       setUpdateTransportErrors((current) => ({ ...current, apply: null }));
-      const outcome = reconcilePendingUpdateApply(result?.apply_status || result, monotonicWallNow());
-      if (outcome !== "accepted") {
-        setUpdateApplyDialog((current) => current ? {
-          ...current,
-          phase: "reconciling",
-          error: "",
-          deadlineAtMs: persisted.modalDeadlineAtMs,
-        } : current);
-      }
+      reconcilePendingUpdateApply(result?.apply_status || result, monotonicWallNow());
       void loadUpdateApplySurface({ silent: true });
     } catch (err) {
       const persisted = updateApplyReconciliationRef.current;
       if (persisted && updateApplyRequestIsAmbiguous(err)) {
-        setUpdateApplyDialog((current) => current ? {
-          ...current,
-          phase: "reconciling",
-          error: "",
-          deadlineAtMs: persisted.modalDeadlineAtMs,
-        } : current);
         void loadUpdateApplySurface({ silent: true });
       } else {
         if (persisted) commitUpdateApplyReconciliation(null);
-        const message = humanErrorText(String(err?.message || ""), t.updateApplyLaunchRejected);
-        setUpdateApplyDialog((current) => current ? { ...current, phase: "rejected", error: message } : current);
+        const message = safeUpdateLaunchError(err);
+        setMaintenanceActionResult({
+          flowKey: "update",
+          status: "blocked",
+          reason: String(err?.code || err?.category || "update_launch_rejected"),
+          displayReason: message,
+        });
+        showToast({ variant: "warning", title: t.updateApplyTitle, text: message });
       }
     } finally {
       setMaintenanceBusy((current) => current === "update-apply" ? "" : current);
@@ -3299,7 +3280,9 @@ export default function SettingsPage() {
                   {maintenanceActionResult ? (
                     <div className={`settingsMaintenanceResult ${maintenanceStatusClass(maintenanceActionResult.status)}`}>
                       <strong>{t.maintenanceFlows?.[maintenanceActionResult.flowKey] || maintenanceActionResult.flowKey}: {maintenanceStatusText(maintenanceActionResult.status, t)}</strong>
-                      {maintenanceActionResult.reason ? <span>{formatMaintenanceMessage(maintenanceActionResult.reason, t, lang, "action")}</span> : null}
+                      {maintenanceActionResult.reason ? (
+                        <span>{maintenanceActionResult.displayReason || formatMaintenanceMessage(maintenanceActionResult.reason, t, lang, "action")}</span>
+                      ) : null}
                     </div>
                   ) : null}
 
@@ -3325,52 +3308,20 @@ export default function SettingsPage() {
               aria-modal="true"
               aria-labelledby="settings-update-apply-dialog-title"
               aria-describedby="settings-update-apply-dialog-description"
-              aria-busy={["preparing", "submitting", "reconciling"].includes(updateApplyDialog.phase)}
             >
               <button
                 type="button"
                 className="settingsModalClose settingsUpdateApplyDialogClose"
                 onClick={closeUpdateApplyDialog}
-                disabled={["preparing", "submitting", "reconciling"].includes(updateApplyDialog.phase) && Date.now() < Number(updateApplyDialog.deadlineAtMs || Number.MAX_SAFE_INTEGER)}
                 aria-label={t.close}
               >×</button>
-              <header>
-                <span className="settingsUpdateApplyDialogIcon" aria-hidden="true">↻</span>
-                <div>
-                  <h2 id="settings-update-apply-dialog-title">
-                    {["preparing", "submitting", "reconciling"].includes(updateApplyDialog.phase)
-                      ? t.updateApplyLaunchChecking
-                      : t.updateApplyModalTitle}
-                  </h2>
-                  <p id="settings-update-apply-dialog-description">
-                    {["preparing", "submitting", "reconciling"].includes(updateApplyDialog.phase)
-                      ? t.updateApplyLaunchCheckingText
-                      : t.updateApplyConfirm}
-                  </p>
-                </div>
-              </header>
-              <dl className="settingsUpdateApplyDialogFacts">
-                <div><dt>{t.maintenanceLabels.current}</dt><dd>{updateApplyOperator.currentVersion}</dd></div>
-                <div><dt>{t.updateApplyModalTarget}</dt><dd>{updateApplyDialog.candidate.version}</dd></div>
-                <div><dt>{t.updateApplyModalRelease}</dt><dd>{updateApplyDialog.candidate.title || t.updateApplyReleaseTitleFallback}</dd></div>
-                <div><dt>{t.updateApplyModalCommit}</dt><dd>{shortCommit(updateApplyDialog.candidate.commit)}</dd></div>
-              </dl>
-              <div className="settingsUpdateApplyDialogRestart">
-                <strong>{t.updateApplyModalRestartTitle}</strong>
-                <span>{t.updateApplyModalRestartText}</span>
-              </div>
-              {updateApplyDialog.error ? <div className="settingsUpdateApplyDialogError">{updateApplyDialog.error}</div> : null}
-              <div className="settingsUpdateApplyDialogActions">
-                {updateApplyDialog.phase === "confirm" ? (
-                  <>
-                    <button type="button" className="button secondary small" onClick={closeUpdateApplyDialog}>{t.cancel}</button>
-                    <button type="button" className="button primary small" onClick={confirmUpdateApply}>{t.updateApplyModalConfirm}</button>
-                  </>
-                ) : ["preparing", "submitting", "reconciling"].includes(updateApplyDialog.phase) ? (
-                  <button type="button" className="button secondary small" disabled>{t.updateApplyLaunchChecking}</button>
-                ) : (
-                  <button type="button" className="button secondary small" onClick={closeUpdateApplyDialog}>{t.close}</button>
-                )}
+              <p>
+                <span id="settings-update-apply-dialog-title">{t.updateApplyModalTitle}</span>
+                <strong id="settings-update-apply-dialog-description">{t.updateApplyConfirm}</strong>
+              </p>
+              <div className="settingsModalActions">
+                <button type="button" className="button secondary small" onClick={closeUpdateApplyDialog}>{t.cancel}</button>
+                <button type="button" className="button primary small" onClick={confirmUpdateApply}>{t.updateApplyModalConfirm}</button>
               </div>
             </section>
           </div>
