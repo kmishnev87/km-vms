@@ -250,10 +250,26 @@ LEGACY_HISTORICAL_COMPLETED_TERMINAL_KEYS = {
     "side_effects",
     "error",
 }
+LEGACY_VERIFIED_COMPLETED_TERMINAL_KEYS = LEGACY_HISTORICAL_COMPLETED_TERMINAL_KEYS | {
+    "release_identity",
+}
 LEGACY_HISTORICAL_COMPLETED_STEP_NAMES = (
     "request",
     "preflight",
     "apply",
+    "health_check",
+    "commit_verification",
+)
+LEGACY_VERIFIED_COMPLETED_STEP_NAMES = (
+    "queued",
+    "preflight",
+    "acquire_source",
+    "extracting",
+    "validating_source",
+    "overlay",
+    "compose_config",
+    "rebuilding",
+    "restarting",
     "health_check",
     "commit_verification",
 )
@@ -1812,6 +1828,21 @@ def _strict_legacy_historical_completed_steps(value: Any) -> list[dict[str, str]
     return result
 
 
+def _strict_legacy_verified_completed_steps(value: Any) -> list[dict[str, str]] | None:
+    if not isinstance(value, list) or len(value) != len(LEGACY_VERIFIED_COMPLETED_STEP_NAMES):
+        return None
+    result: list[dict[str, str]] = []
+    for item, expected_name in zip(value, LEGACY_VERIFIED_COMPLETED_STEP_NAMES):
+        if (
+            not _has_exact_keys(item, TERMINAL_STEP_KEYS)
+            or item.get("name") != expected_name
+            or item.get("status") != "completed"
+        ):
+            return None
+        result.append({"name": expected_name, "status": "completed"})
+    return result
+
+
 def _strict_terminal_side_effects(value: Any) -> bool:
     return bool(
         _has_exact_keys(value, TERMINAL_SIDE_EFFECT_KEYS)
@@ -1841,6 +1872,8 @@ def _terminal_shape(payload: dict[str, Any], entry: dict[str, Any]) -> str | Non
         return "legacy_minimal"
     if legacy and status_value == "completed" and keys == LEGACY_HISTORICAL_COMPLETED_TERMINAL_KEYS:
         return "legacy_historical_completed"
+    if legacy and status_value == "completed" and keys == LEGACY_VERIFIED_COMPLETED_TERMINAL_KEYS:
+        return "legacy_verified_completed"
     if keys == PRE_CLOSEOUT_CANCEL_KEYS and status_value == "cancelled":
         return "pre_closeout_cancel"
     common = set(TERMINAL_COMMON_KEYS)
@@ -1893,7 +1926,11 @@ def _strict_terminal_snapshot(payload: Any, entry: dict[str, Any]) -> dict[str, 
         return None
     started_at = payload.get("started_at")
     updated_at = payload.get("updated_at")
-    finished_at = payload.get("updated_at") if shape == "legacy_historical_completed" else payload.get("finished_at")
+    finished_at = (
+        payload.get("updated_at")
+        if shape in {"legacy_historical_completed", "legacy_verified_completed"}
+        else payload.get("finished_at")
+    )
     started_time = _parse_iso(started_at)
     updated_time = _parse_iso(updated_at)
     finished_time = _parse_iso(finished_at)
@@ -1916,6 +1953,8 @@ def _strict_terminal_snapshot(payload: Any, entry: dict[str, Any]) -> dict[str, 
         steps = []
     elif shape == "legacy_historical_completed":
         steps = _strict_legacy_historical_completed_steps(payload.get("steps"))
+    elif shape == "legacy_verified_completed":
+        steps = _strict_legacy_verified_completed_steps(payload.get("steps"))
     else:
         steps = _strict_terminal_steps(payload.get("steps"))
     if steps is None:
@@ -1927,11 +1966,15 @@ def _strict_terminal_snapshot(payload: Any, entry: dict[str, Any]) -> dict[str, 
         or payload.get("rollback_supported") is not False
     ):
         return None
-    if shape == "legacy_historical_completed" and (
+    if shape in {"legacy_historical_completed", "legacy_verified_completed"} and (
         not _strict_terminal_source(payload.get("source"), entry)
         or not _strict_terminal_side_effects(payload.get("side_effects"))
         or payload.get("can_cancel") is not False
         or payload.get("rollback_supported") is not False
+    ):
+        return None
+    if shape == "legacy_verified_completed" and not _strict_terminal_release_identity(
+        payload.get("release_identity")
     ):
         return None
     if shape == "pre_closeout_cancel" and (

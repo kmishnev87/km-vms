@@ -33,6 +33,7 @@ PRIVILEGED_EXECUTABLES = (
 PRIVILEGED_NON_EXECUTABLES = (
     "docker-compose.yml",
     "apps/update-helper/Dockerfile",
+    "release/km-vms-update-lineage.json",
     "scripts/km-vms-update-helper.py",
     "scripts/km-vms-update-helper-bridge.py",
     "scripts/km-vms-storage-candidate-validate.sh",
@@ -444,6 +445,7 @@ def test_existing_contract_allows_target_only_files_to_be_absent(
     tmp_path: Path,
 ) -> None:
     app = permission_tree(tmp_path)
+    (app / "release/km-vms-update-lineage.json").unlink()
     (app / "scripts/km-vms-permission-gate.sh").unlink()
     (app / "scripts/km-vms-update-helper-bridge.py").unlink()
 
@@ -465,6 +467,16 @@ def test_target_contract_requires_update_helper_bridge(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "km-vms-update-helper-bridge.py" in result.stderr
+
+
+def test_target_contract_requires_update_lineage(tmp_path: Path) -> None:
+    app = permission_tree(tmp_path)
+    (app / "release/km-vms-update-lineage.json").unlink()
+
+    result = run_gate(app)
+
+    assert result.returncode != 0
+    assert "release/km-vms-update-lineage.json" in result.stderr
 
 
 def test_permission_scope_and_update_integrations_are_narrow() -> None:

@@ -87,6 +87,7 @@ VERSION_FILES = [
     Path("apps/web/package-lock.json"),
     Path("release/km-vms-release.json"),
 ]
+LINEAGE_PATH = Path("release/km-vms-update-lineage.json")
 
 
 def fail(message: str) -> None:
@@ -173,6 +174,94 @@ def validate_descriptor() -> dict:
     return descriptor
 
 
+def validate_update_lineage() -> dict:
+    payload = load_json(LINEAGE_PATH)
+    required = {
+        "schema_version",
+        "product",
+        "tag_commits",
+        "schema_versions",
+        "shape_fingerprints",
+        "shape_alternates",
+    }
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != required
+        or type(payload.get("schema_version")) is not int
+        or payload["schema_version"] != 1
+        or payload.get("product") != "KM VMS"
+    ):
+        fail("update lineage contract is invalid")
+    tag_commits = payload.get("tag_commits")
+    schema_versions = payload.get("schema_versions")
+    shapes = payload.get("shape_fingerprints")
+    alternates = payload.get("shape_alternates")
+    if (
+        not isinstance(tag_commits, dict)
+        or not tag_commits
+        or len(tag_commits) > 256
+        or not isinstance(schema_versions, dict)
+        or not isinstance(shapes, dict)
+        or not isinstance(alternates, dict)
+        or set(tag_commits) != set(schema_versions)
+        or set(tag_commits) != set(shapes)
+        or not set(alternates).issubset(tag_commits)
+    ):
+        fail("update lineage maps are inconsistent")
+    ordered = list(tag_commits)
+    if ordered != sorted(ordered, key=parse_version):
+        fail("update lineage versions must be unique and ordered")
+    for version in ordered:
+        commit = tag_commits.get(version)
+        schema_version = schema_versions.get(version)
+        shape = shapes.get(version)
+        variants = alternates.get(version, [])
+        if (
+            not SEMVER_RE.fullmatch(version)
+            or not isinstance(commit, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", commit)
+            or type(schema_version) is not int
+            or not 1 <= schema_version <= 8
+            or not isinstance(shape, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", shape)
+            or not isinstance(variants, list)
+            or len(variants) > 4
+            or len(variants) != len(set(variants))
+            or shape in variants
+            or any(
+                not isinstance(item, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", item)
+                for item in variants
+            )
+        ):
+            fail(f"update lineage evidence is invalid for {version}")
+    return payload
+
+
+def validate_immediate_previous_release(version: str) -> None:
+    lineage = validate_update_lineage()
+    commits = lineage["tag_commits"]
+    if list(commits)[-1] != version:
+        fail(
+            "update lineage must end at the immediate previous public "
+            f"release {version}"
+        )
+    tag = f"v{version}"
+    try:
+        tagged_commit = run_git(
+            "rev-parse",
+            "--verify",
+            f"refs/tags/{tag}^{{commit}}",
+        ).lower()
+    except subprocess.CalledProcessError:
+        fail(f"immediate previous public release tag is missing: {tag}")
+    if tagged_commit != commits[version]:
+        fail(
+            "immediate previous public release tag commit does not match "
+            "the canonical update lineage"
+        )
+
+
 def check_versions() -> None:
     values = versions()
     unique = {value for value in values.values() if value}
@@ -217,6 +306,7 @@ def prepare(version: str) -> None:
     current = versions()["release_descriptor"]
     if parse_version(version) <= parse_version(current):
         fail(f"target version {version} must be greater than current {current}")
+    validate_immediate_previous_release(current)
     if dry_run:
         print(f"DRY-RUN: would prepare release version {version}")
         return
@@ -275,6 +365,7 @@ if check:
     check_dirty()
     check_versions()
     validate_descriptor()
+    validate_update_lineage()
     check_permission_policy()
     print("release-cycle check PASS")
 

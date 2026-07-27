@@ -35,31 +35,107 @@ ARCHIVE_RUNTIME_TARGET_RE = re.compile(
     r"^/storage/archive-roots/[A-Za-z0-9_.-]{1,180}$"
 )
 
-SOURCE_TAG_COMMITS = {
-    "0.7.2": "54e73569d8de2ba29c6900bc93f66b2edb8aeefe",
-    "0.7.3": "8fcc5d8a56e16613069edbb5ac796db62bddb4c0",
-    "0.7.4": "6f5674bd0fa8faf27e769f338a19592e4ef966d6",
-    "0.7.5": "620ae5c4f8391af44c1817ca5a1c9020e672be89",
-    "0.7.6": "e185500afcde2b4d4adc1821fec7e7be33335deb",
-    "0.7.7": "66c72134dfe50b1d395e2385658fdb5dd62978ab",
-    "0.7.8": "9cbe8cbe82a0ac5d0d6c9a8e899ddc9e6aa7c7bf",
-    "0.7.9": "6c0b6e2bc6ed51cdb943193494e53f349f63f138",
-    "0.7.10": "ed2409003a9b074174b833edb93f808356aa6f5d",
-    "0.7.11": "ae207a059f2974e012ac8453dd7e8eb3fed9946e",
-    "0.7.12": "0ab53e0bc744559005d1d21247c1c9cd49b1efe7",
-    "0.7.13": "4ad6c53fa432e19b736c5739d2ab5ffbe011c91a",
-    "0.7.14": "9a4dfd9d94b1032b3fa7687f564265617876b535",
-    "0.7.15": "5d20dea533fd2ed50fb4886b666525349e2bedd2",
-    "0.7.16": "b305efc9ada794da41bd26599a653c13cd179e9f",
-    "0.7.17": "d984d014494cf8cc00a6199a0f58b6b0fa56b4c2",
-    "0.7.18": "a41be5545935ca3a7b1740e7697595456a52b08f",
-    "0.7.19": "2714b850659fbe70898ccb512e3045fa587d27c8",
-    "0.7.20": "6f57dbca1071427e36b1da61d737a2c1a5e96650",
-    "0.7.21": "c5eee13484d93e772fce578c498a3e808e0731c5",
-    "0.7.22": "eeb09493aadfa931ad78080cc136638511637fda",
-    "0.7.23": "b00bbd7bf8a54c8bef1d623fd8856ce4f974e7e8",
-    "0.7.24": "282bd642bb89840bfcc567f613d7c70d560f8ef4",
-}
+UPDATE_LINEAGE_FILENAME = "km-vms-update-lineage.json"
+UPDATE_LINEAGE_MAX_BYTES = 128 * 1024
+
+
+def load_update_lineage() -> dict[str, Any]:
+    configured = str(os.getenv("KMVMS_UPDATE_LINEAGE_FILE") or "").strip()
+    candidates = (
+        [Path(configured)]
+        if configured
+        else [
+            parent / "release" / UPDATE_LINEAGE_FILENAME
+            for parent in (Path.cwd(), *Path(__file__).resolve().parents)
+        ]
+    )
+    path = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if path is None:
+        raise RuntimeError("update_lineage_file_missing")
+    info = path.lstat()
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or info.st_size <= 1
+        or info.st_size > UPDATE_LINEAGE_MAX_BYTES
+    ):
+        raise RuntimeError("update_lineage_file_invalid")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError("update_lineage_json_invalid") from exc
+    required = {
+        "schema_version",
+        "product",
+        "tag_commits",
+        "schema_versions",
+        "shape_fingerprints",
+        "shape_alternates",
+    }
+    tag_commits = payload.get("tag_commits") if type(payload) is dict else None
+    schema_versions = payload.get("schema_versions") if type(payload) is dict else None
+    shape_fingerprints = (
+        payload.get("shape_fingerprints") if type(payload) is dict else None
+    )
+    shape_alternates = (
+        payload.get("shape_alternates") if type(payload) is dict else None
+    )
+    if (
+        type(payload) is not dict
+        or set(payload) != required
+        or type(payload.get("schema_version")) is not int
+        or payload["schema_version"] != 1
+        or payload.get("product") != "KM VMS"
+        or type(tag_commits) is not dict
+        or type(schema_versions) is not dict
+        or type(shape_fingerprints) is not dict
+        or type(shape_alternates) is not dict
+        or not tag_commits
+        or len(tag_commits) > 256
+        or set(tag_commits) != set(schema_versions)
+        or set(tag_commits) != set(shape_fingerprints)
+        or not set(shape_alternates).issubset(tag_commits)
+    ):
+        raise RuntimeError("update_lineage_contract_invalid")
+    versions = list(tag_commits)
+
+    def version_key(value: str) -> tuple[int, int, int]:
+        if not re.fullmatch(r"\d+\.\d+\.\d+", value):
+            raise RuntimeError("update_lineage_version_invalid")
+        return tuple(int(part) for part in value.split("."))
+
+    if versions != sorted(versions, key=version_key):
+        raise RuntimeError("update_lineage_order_invalid")
+    for version in versions:
+        commit = tag_commits.get(version)
+        schema_version = schema_versions.get(version)
+        shape = shape_fingerprints.get(version)
+        alternates = shape_alternates.get(version, [])
+        if (
+            type(commit) is not str
+            or not COMMIT_SHA_RE.fullmatch(commit)
+            or commit != commit.lower()
+            or type(schema_version) is not int
+            or schema_version < 1
+            or schema_version > 8
+            or type(shape) is not str
+            or not re.fullmatch(r"[0-9a-f]{64}", shape)
+            or type(alternates) is not list
+            or len(alternates) > 4
+            or len(set(alternates)) != len(alternates)
+            or shape in alternates
+            or any(
+                type(item) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}", item)
+                for item in alternates
+            )
+        ):
+            raise RuntimeError("update_lineage_entry_invalid")
+    return payload
+
+
+UPDATE_LINEAGE = load_update_lineage()
+SOURCE_TAG_COMMITS: dict[str, str] = dict(UPDATE_LINEAGE["tag_commits"])
 
 ACTIVE_STATUSES = {
     "queued",

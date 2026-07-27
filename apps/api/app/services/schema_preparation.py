@@ -146,7 +146,10 @@ def main(
                 return
             control_tables_exist = _control_tables_exist(db)
             if control_tables_exist:
-                context = load_existing_update_context(db)
+                context = load_existing_update_context(
+                    db,
+                    allow_completed_rollover=True,
+                )
             else:
                 context = load_prebootstrap_update_context(db)
             actor_user_id, actor_subject, actor_role = actor_snapshot(

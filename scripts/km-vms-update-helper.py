@@ -126,9 +126,13 @@ LEGACY_HISTORICAL_COMPLETED_TERMINAL_KEYS = {
     "source", "expected_commit", "installed_commit", "commit_verified", "steps", "can_cancel",
     "rollback_supported", "side_effects", "error",
 }
+LEGACY_VERIFIED_COMPLETED_TERMINAL_KEYS = LEGACY_HISTORICAL_COMPLETED_TERMINAL_KEYS | {
+    "release_identity",
+}
 LEGACY_HISTORICAL_COMPLETED_STEP_NAMES = (
     "request", "preflight", "apply", "health_check", "commit_verification",
 )
+LEGACY_VERIFIED_COMPLETED_STEP_NAMES = tuple(STEP_ORDER)
 TERMINAL_STEP_NAMES = {"request", *STEP_ORDER}
 TERMINAL_STEP_STATUSES = {"pending", "running", "completed", "failed"}
 TERMINAL_FAILURE_PHASES = {
@@ -945,6 +949,17 @@ def strict_legacy_historical_completed_steps(value: Any) -> bool:
     )
 
 
+def strict_legacy_verified_completed_steps(value: Any) -> bool:
+    if not isinstance(value, list) or len(value) != len(LEGACY_VERIFIED_COMPLETED_STEP_NAMES):
+        return False
+    return all(
+        has_exact_keys(item, TERMINAL_STEP_KEYS)
+        and item.get("name") == expected_name
+        and item.get("status") == "completed"
+        for item, expected_name in zip(value, LEGACY_VERIFIED_COMPLETED_STEP_NAMES)
+    )
+
+
 def strict_terminal_error(value: Any) -> str | None:
     if not has_exact_keys(value, TERMINAL_ERROR_KEYS):
         return None
@@ -996,6 +1011,8 @@ def terminal_shape(payload: dict[str, Any], request: dict[str, Any]) -> str | No
         return "legacy_minimal"
     if legacy and status_value == "completed" and keys == LEGACY_HISTORICAL_COMPLETED_TERMINAL_KEYS:
         return "legacy_historical_completed"
+    if legacy and status_value == "completed" and keys == LEGACY_VERIFIED_COMPLETED_TERMINAL_KEYS:
+        return "legacy_verified_completed"
     if keys == PRE_CLOSEOUT_CANCEL_KEYS and status_value == "cancelled":
         return "pre_closeout_cancel"
     common = set(TERMINAL_COMMON_KEYS)
@@ -1033,7 +1050,11 @@ def terminal_status_for_request(payload: dict[str, Any], request: dict[str, Any]
         return False
     started_at = payload.get("started_at")
     updated_at = payload.get("updated_at")
-    finished_at = payload.get("updated_at") if shape == "legacy_historical_completed" else payload.get("finished_at")
+    finished_at = (
+        payload.get("updated_at")
+        if shape in {"legacy_historical_completed", "legacy_verified_completed"}
+        else payload.get("finished_at")
+    )
     started_time = parsed_timestamp(started_at)
     updated_time = parsed_timestamp(updated_at)
     finished_time = parsed_timestamp(finished_at)
@@ -1060,6 +1081,15 @@ def terminal_status_for_request(payload: dict[str, Any], request: dict[str, Any]
         not strict_terminal_source(payload.get("source"), request)
         or not strict_legacy_historical_completed_steps(payload.get("steps"))
         or not strict_terminal_side_effects(payload.get("side_effects"))
+        or payload.get("can_cancel") is not False
+        or payload.get("rollback_supported") is not False
+    ):
+        return False
+    if shape == "legacy_verified_completed" and (
+        not strict_terminal_source(payload.get("source"), request)
+        or not strict_legacy_verified_completed_steps(payload.get("steps"))
+        or not strict_terminal_side_effects(payload.get("side_effects"))
+        or not strict_terminal_release_identity(payload.get("release_identity"))
         or payload.get("can_cancel") is not False
         or payload.get("rollback_supported") is not False
     ):

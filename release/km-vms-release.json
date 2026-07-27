@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.27",
-  "tag": "v0.7.27",
-  "title": "Schema Update Self-Quiescence and Failure Truth Fix",
-  "summary": "Prevents the schema update pipeline from treating its own advisory-lock connection as a foreign database writer and reports schema preparation failures truthfully.",
+  "version": "0.7.28",
+  "tag": "v0.7.28",
+  "title": "KM VMS 0.7.28 — Legacy Terminal, Sequential Update Continuity and Schema-Control Rollover Dofix",
+  "summary": "Recognizes exact verified legacy update completion, preserves truthful terminal progress, and safely rolls completed schema-control state forward for the next release.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.27",
+  "source_ref": "v0.7.28",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,11 +16,12 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Excludes the schema pipeline's own advisory-lock backend from writer quiescence checks.",
-    "Keeps real external database sessions blocking schema mutation until the database is quiescent.",
-    "Classifies schema preparation failures separately from Docker image build failures.",
-    "Shows a localized schema preparation failure and safe retry guidance in Maintenance.",
-    "Adds a real PostgreSQL regression test for the owned-lock and external-writer cases.",
-    "Does not change database schema, update topology, rollback architecture or the Stage 6.6.1 boundary."
+    "Recognizes the exact verified legacy completed shape consistently in the API and update helper.",
+    "Retires confirmed legacy admission safely so the next exact update submission is not blocked.",
+    "Uses one canonical release-lineage artifact through 0.7.27 for API and helper bridge validation.",
+    "Checks only the immediate published predecessor during release preparation.",
+    "Rolls completed schema-control state into a fenced new generation without duplicating same-schema migrations or history.",
+    "Preserves completed and failed five-step terminal truth in Settings Maintenance.",
+    "Keeps database schema, service topology, rollback architecture and the separate Stage 6.6.1 boundary unchanged."
   ]
 }

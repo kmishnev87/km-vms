@@ -240,7 +240,7 @@ def _validate_released_history_lineage(
                 and row.previous_version in {5, 6, 7}
                 and row.target_version == row.previous_version
                 and row.schema_version == row.previous_version
-                and row.schema_version == context.source_schema_version
+                and row.schema_version <= context.source_schema_version
                 and row.checksum
                 == preparation_definition_fingerprint(
                     STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION

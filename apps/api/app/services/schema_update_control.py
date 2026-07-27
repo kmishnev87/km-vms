@@ -186,98 +186,127 @@ RELEASE_IDENTITY_FIELDS = {
 }
 
 
-SOURCE_TAG_COMMITS = {
-    "0.7.2": "54e73569d8de2ba29c6900bc93f66b2edb8aeefe",
-    "0.7.3": "8fcc5d8a56e16613069edbb5ac796db62bddb4c0",
-    "0.7.4": "6f5674bd0fa8faf27e769f338a19592e4ef966d6",
-    "0.7.5": "620ae5c4f8391af44c1817ca5a1c9020e672be89",
-    "0.7.6": "e185500afcde2b4d4adc1821fec7e7be33335deb",
-    "0.7.7": "66c72134dfe50b1d395e2385658fdb5dd62978ab",
-    "0.7.8": "9cbe8cbe82a0ac5d0d6c9a8e899ddc9e6aa7c7bf",
-    "0.7.9": "6c0b6e2bc6ed51cdb943193494e53f349f63f138",
-    "0.7.10": "ed2409003a9b074174b833edb93f808356aa6f5d",
-    "0.7.11": "ae207a059f2974e012ac8453dd7e8eb3fed9946e",
-    "0.7.12": "0ab53e0bc744559005d1d21247c1c9cd49b1efe7",
-    "0.7.13": "4ad6c53fa432e19b736c5739d2ab5ffbe011c91a",
-    "0.7.14": "9a4dfd9d94b1032b3fa7687f564265617876b535",
-    "0.7.15": "5d20dea533fd2ed50fb4886b666525349e2bedd2",
-    "0.7.16": "b305efc9ada794da41bd26599a653c13cd179e9f",
-    "0.7.17": "d984d014494cf8cc00a6199a0f58b6b0fa56b4c2",
-    "0.7.18": "a41be5545935ca3a7b1740e7697595456a52b08f",
-    "0.7.19": "2714b850659fbe70898ccb512e3045fa587d27c8",
-    "0.7.20": "6f57dbca1071427e36b1da61d737a2c1a5e96650",
-    "0.7.21": "c5eee13484d93e772fce578c498a3e808e0731c5",
-    "0.7.22": "eeb09493aadfa931ad78080cc136638511637fda",
-    "0.7.23": "b00bbd7bf8a54c8bef1d623fd8856ce4f974e7e8",
-    "0.7.24": "282bd642bb89840bfcc567f613d7c70d560f8ef4",
-}
+UPDATE_LINEAGE_FILENAME = "km-vms-update-lineage.json"
+UPDATE_LINEAGE_MAX_BYTES = 128 * 1024
 
-SOURCE_SCHEMA_VERSIONS = {
-    **{f"0.7.{minor}": 1 for minor in range(2, 19)},
-    "0.7.19": 3,
-    "0.7.20": 4,
-    "0.7.21": 5,
-    "0.7.22": 6,
-    "0.7.23": 7,
-    "0.7.24": 7,
-}
 
-# Derived from exact fresh PostgreSQL tag fixtures. The fingerprints
-# intentionally describe only pre-control product/metadata tables.
-SOURCE_SHAPE_FINGERPRINTS: dict[str, str] = {
-    **{
-        f"0.7.{minor}": (
-            "7006f5b00ce1c82240ee43e6778a5730"
-            "e8d2195523b1a93081694f5c7b77a0cf"
+def _update_lineage_path() -> Path:
+    configured = str(os.getenv("KMVMS_UPDATE_LINEAGE_FILE") or "").strip()
+    if configured:
+        return Path(configured)
+    candidates = [
+        parent / "release" / UPDATE_LINEAGE_FILENAME
+        for parent in (Path.cwd(), *Path(__file__).resolve().parents)
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError("update_lineage_file_missing")
+
+
+def _load_update_lineage() -> dict[str, Any]:
+    path = _update_lineage_path()
+    info = path.lstat()
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_size <= 1
+        or info.st_size > UPDATE_LINEAGE_MAX_BYTES
+    ):
+        raise RuntimeError("update_lineage_file_invalid")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise RuntimeError("update_lineage_json_invalid") from exc
+    expected_keys = {
+        "schema_version",
+        "product",
+        "tag_commits",
+        "schema_versions",
+        "shape_fingerprints",
+        "shape_alternates",
+    }
+    if (
+        type(payload) is not dict
+        or set(payload) != expected_keys
+        or type(payload.get("schema_version")) is not int
+        or payload["schema_version"] != 1
+        or payload.get("product") != "KM VMS"
+    ):
+        raise RuntimeError("update_lineage_contract_invalid")
+    tag_commits = payload.get("tag_commits")
+    schema_versions = payload.get("schema_versions")
+    shape_fingerprints = payload.get("shape_fingerprints")
+    shape_alternates = payload.get("shape_alternates")
+    if not all(
+        type(value) is dict
+        for value in (
+            tag_commits,
+            schema_versions,
+            shape_fingerprints,
+            shape_alternates,
         )
-        for minor in range(2, 17)
-    },
-    "0.7.17": (
-        "be80804ab86836751e032f7bd97fc11b"
-        "7aeef0f86d7b43aa661255db65240fe3"
-    ),
-    "0.7.18": (
-        "c19dd7ef8157c0c5f9037248dadb128d"
-        "bda8fba9a209e63790490464d047a43c"
-    ),
-    "0.7.19": (
-        "0036925cc590f47e1b1f66cf0eab46a2"
-        "e7c059b972c1bc135f04890325ddebec"
-    ),
-    "0.7.20": (
-        "9b1b7babc3a275a8494dfee52e091e1e"
-        "f73fbfe0e4a2517d9997492ce7965572"
-    ),
-    "0.7.21": (
-        "893cc7615c18dafb369870dbaa6b2ae0"
-        "07e09da9f2f1e7f69aca8764713538ea"
-    ),
-    "0.7.22": (
-        "f8847188182d79653ec6891f2f719289"
-        "67318db34474b728abd5c7bb3cccaed6"
-    ),
-    "0.7.23": (
-        "ef448218bdb68b505519e289574f0eac"
-        "4fbf5879c25941232eb1c2f04a30fbc4"
-    ),
-    "0.7.24": (
-        "ef448218bdb68b505519e289574f0eac"
-        "4fbf5879c25941232eb1c2f04a30fbc4"
-    ),
-}
-WORKING_NAS_V0724_SOURCE_SHAPE_FINGERPRINT = (
-    "a1d7e23972ebc732ea6b04e936974e7c"
-    "f9187aa3b41458299e6264bb8c511ebd"
+    ):
+        raise RuntimeError("update_lineage_maps_invalid")
+    versions = list(tag_commits)
+    if (
+        not versions
+        or len(versions) > 256
+        or set(versions) != set(schema_versions)
+        or set(versions) != set(shape_fingerprints)
+        or not set(shape_alternates).issubset(versions)
+    ):
+        raise RuntimeError("update_lineage_versions_invalid")
+
+    def version_key(value: str) -> tuple[int, int, int]:
+        if not re.fullmatch(r"\d+\.\d+\.\d+", value):
+            raise RuntimeError("update_lineage_version_invalid")
+        return tuple(int(part) for part in value.split("."))
+
+    if versions != sorted(versions, key=version_key):
+        raise RuntimeError("update_lineage_order_invalid")
+    for version in versions:
+        commit = tag_commits.get(version)
+        schema_version = schema_versions.get(version)
+        shape = shape_fingerprints.get(version)
+        alternates = shape_alternates.get(version, [])
+        if (
+            type(commit) is not str
+            or not re.fullmatch(r"[0-9a-f]{40}", commit)
+            or type(schema_version) is not int
+            or schema_version < 1
+            or schema_version > TARGET_SCHEMA_VERSION
+            or type(shape) is not str
+            or not re.fullmatch(r"[0-9a-f]{64}", shape)
+            or type(alternates) is not list
+            or len(alternates) > 4
+            or len(set(alternates)) != len(alternates)
+            or shape in alternates
+            or any(
+                type(item) is not str
+                or not re.fullmatch(r"[0-9a-f]{64}", item)
+                for item in alternates
+            )
+        ):
+            raise RuntimeError("update_lineage_entry_invalid")
+    return payload
+
+
+_UPDATE_LINEAGE = _load_update_lineage()
+SOURCE_TAG_COMMITS: dict[str, str] = dict(_UPDATE_LINEAGE["tag_commits"])
+SOURCE_SCHEMA_VERSIONS: dict[str, int] = dict(
+    _UPDATE_LINEAGE["schema_versions"]
+)
+SOURCE_SHAPE_FINGERPRINTS: dict[str, str] = dict(
+    _UPDATE_LINEAGE["shape_fingerprints"]
 )
 SOURCE_SHAPE_FINGERPRINT_ALTERNATES: dict[str, frozenset[str]] = {
-    # Exact schema-only evidence from the healthy working-NAS v0.7.24
-    # installation.  This is the historically evolved bootstrap shape, not
-    # an arbitrary-drift allowance.  Compatibility preparation normalizes it
-    # transactionally before the canonical v7 -> v8 migration.
-    "0.7.24": frozenset(
-        {WORKING_NAS_V0724_SOURCE_SHAPE_FINGERPRINT}
-    ),
+    version: frozenset(values)
+    for version, values in _UPDATE_LINEAGE["shape_alternates"].items()
 }
+WORKING_NAS_V0724_SOURCE_SHAPE_FINGERPRINT = next(
+    iter(SOURCE_SHAPE_FINGERPRINT_ALTERNATES["0.7.24"])
+)
 TARGET_SHAPE_FINGERPRINT = (
     "18055105892ae40bff200d32fa6a898d"
     "18ffbde340c164d6585c3c893f4f501a"
@@ -1356,28 +1385,91 @@ def _validate_migrated_target_history(
         for attempt in attempts
         if attempt.status == "applied"
     }
+    current_generation = int(control.fencing_generation)
+    historical_groups: dict[
+        tuple[str, str, str, str, str, str],
+        list[SchemaMigrationAttempt],
+    ] = {}
     for attempt in attempts:
+        if attempt.migration_id == CONTROL_BOOTSTRAP_MIGRATION_ID:
+            expected_definition = CONTROL_DEFINITION_FINGERPRINT
+        elif (
+            attempt.migration_id
+            == STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION.preparation_id
+        ):
+            expected_definition = preparation_definition_fingerprint(
+                STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION
+            )
+        else:
+            migration = known.get(attempt.migration_id)
+            expected_definition = (
+                migration_definition_fingerprint(migration)
+                if migration is not None
+                else None
+            )
         if (
             attempt.status in {"started", "interrupted"}
             or not ATTEMPT_RE.fullmatch(attempt.attempt_id)
             or not ATTEMPT_RE.fullmatch(attempt.admission_attempt_id)
             or not REQUEST_RE.fullmatch(attempt.request_id)
+            or attempt.fencing_generation < 1
+            or attempt.fencing_generation > current_generation
+            or expected_definition is None
+            or attempt.definition_fingerprint != expected_definition
         ):
             raise SchemaControlError(
                 "no_active_target_attempt_ambiguous"
             )
-        if (
-            attempt.target_release != control.target_release
-            or attempt.target_commit.lower()
-            != control.target_commit.lower()
-            or attempt.registry_fingerprint
-            != control.registry_fingerprint
-            or attempt.plan_fingerprint != control.plan_fingerprint
-            or attempt.fencing_generation < 1
-        ):
-            raise SchemaControlError(
-                "no_active_target_attempt_binding_invalid"
+        if attempt.fencing_generation == current_generation:
+            if (
+                attempt.admission_attempt_id
+                != control.owner_attempt_id
+                or attempt.request_id != control.request_id
+                or attempt.target_release != control.target_release
+                or attempt.target_commit.lower()
+                != control.target_commit.lower()
+                or attempt.registry_fingerprint
+                != control.registry_fingerprint
+                or attempt.plan_fingerprint != control.plan_fingerprint
+            ):
+                raise SchemaControlError(
+                    "no_active_target_attempt_binding_invalid"
+                )
+        else:
+            expected_installed_commit = SOURCE_TAG_COMMITS.get(
+                str(attempt.installed_version or "")
             )
+            if (
+                expected_installed_commit is None
+                or attempt.installed_commit != expected_installed_commit
+                or not re.fullmatch(
+                    r"[A-Za-z0-9][A-Za-z0-9._+-]{0,79}",
+                    str(attempt.target_release or ""),
+                )
+                or not COMMIT_RE.fullmatch(
+                    str(attempt.target_commit or "")
+                )
+                or not re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    str(attempt.registry_fingerprint or ""),
+                )
+                or not re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    str(attempt.plan_fingerprint or ""),
+                )
+            ):
+                raise SchemaControlError(
+                    "no_active_historical_attempt_lineage_invalid"
+                )
+            binding = (
+                str(attempt.installed_version),
+                str(attempt.installed_commit),
+                str(attempt.target_release),
+                str(attempt.target_commit).lower(),
+                str(attempt.registry_fingerprint),
+                str(attempt.plan_fingerprint),
+            )
+            historical_groups.setdefault(binding, []).append(attempt)
         if attempt.status == "applied":
             if (
                 attempt.completed_at is None
@@ -1399,6 +1491,51 @@ def _validate_migrated_target_history(
         ):
             raise SchemaControlError(
                 "no_active_target_terminal_attempt_unresolved"
+            )
+    for binding, group in historical_groups.items():
+        (
+            installed_version,
+            installed_commit,
+            target_release,
+            target_commit,
+            registry_fingerprint,
+            stored_plan,
+        ) = binding
+        source_schema = SOURCE_SCHEMA_VERSIONS[installed_version]
+        source_shapes = {
+            SOURCE_SHAPE_FINGERPRINTS[installed_version],
+            *SOURCE_SHAPE_FINGERPRINT_ALTERNATES.get(
+                installed_version,
+                frozenset(),
+            ),
+        }
+        source_attempts = [
+            attempt
+            for attempt in group
+            if attempt.previous_version == source_schema
+            and attempt.before_shape_fingerprint in source_shapes
+        ]
+        if not source_attempts:
+            raise SchemaControlError(
+                "no_active_historical_attempt_plan_unverifiable"
+            )
+        expected_plans = {
+            plan_fingerprint(
+                installed_version=installed_version,
+                installed_commit=installed_commit,
+                source_schema_version=source_schema,
+                source_shape_fingerprint=attempt.before_shape_fingerprint,
+                target_release=target_release,
+                target_commit=target_commit,
+            )
+            for attempt in source_attempts
+        }
+        if (
+            registry_fingerprint != REGISTRY_FINGERPRINT
+            or expected_plans != {stored_plan}
+        ):
+            raise SchemaControlError(
+                "no_active_historical_attempt_plan_invalid"
             )
     for migration in expected_path:
         lineage = (
@@ -1859,24 +1996,58 @@ def _validate_terminal_auth_snapshot(
         )
 
 
-def _validate_terminal_bootstrap_evidence(
+def _bootstrap_context_from_receipt(
+    payload: dict[str, Any],
+) -> UpdateContext:
+    raw_source_schema = payload.get("source_schema_version")
+    return UpdateContext(
+        request={},
+        request_id=str(payload.get("request_id") or ""),
+        admission_attempt_id=str(
+            payload.get("admission_attempt_id") or ""
+        ),
+        target_release=str(payload.get("target_release") or ""),
+        target_commit=str(payload.get("target_commit") or ""),
+        installed_version=str(payload.get("installed_version") or ""),
+        installed_commit=str(payload.get("installed_commit") or ""),
+        source_schema_version=(
+            raw_source_schema
+            if type(raw_source_schema) is int
+            else 0
+        ),
+        source_shape_fingerprint=str(
+            payload.get("source_shape_fingerprint") or ""
+        ),
+        registry_fingerprint=str(
+            payload.get("registry_fingerprint") or ""
+        ),
+        plan_fingerprint=str(payload.get("plan_fingerprint") or ""),
+    )
+
+
+def _validate_persistent_bootstrap_evidence(
     db: Session,
     payload: dict[str, Any],
     *,
-    context: UpdateContext,
     current_generation: int,
-) -> None:
-    _validate_bootstrap_receipt(payload, context=context)
+    allow_prepared: bool = False,
+) -> tuple[UpdateContext, str]:
+    receipt_context = _bootstrap_context_from_receipt(payload)
+    _validate_bootstrap_receipt(payload, context=receipt_context)
     receipt_generation = int(payload["fencing_generation"])
     if (
-        payload.get("state") != "adopted"
+        payload.get("state")
+        not in ({"prepared", "adopted"} if allow_prepared else {"adopted"})
         or receipt_generation > current_generation
     ):
         raise SchemaControlError(
             "schema_execution_terminal_bootstrap_receipt_mismatch"
         )
     control_shape = verify_control_shape(db)
-    if payload.get("control_shape_fingerprint") != control_shape:
+    if (
+        payload.get("state") == "adopted"
+        and payload.get("control_shape_fingerprint") != control_shape
+    ):
         raise SchemaControlError(
             "schema_execution_terminal_bootstrap_shape_mismatch"
         )
@@ -1893,14 +2064,20 @@ def _validate_terminal_bootstrap_evidence(
         != payload["admission_attempt_id"]
         or attempt.migration_id != CONTROL_BOOTSTRAP_MIGRATION_ID
         or attempt.fencing_generation != receipt_generation
-        or attempt.target_release != context.target_release
-        or attempt.target_commit.lower() != context.target_commit
-        or attempt.registry_fingerprint != context.registry_fingerprint
-        or attempt.plan_fingerprint != context.plan_fingerprint
+        or attempt.previous_version
+        != receipt_context.source_schema_version
+        or attempt.target_version != receipt_context.source_schema_version
+        or attempt.installed_version != receipt_context.installed_version
+        or attempt.installed_commit != receipt_context.installed_commit
+        or attempt.target_release != receipt_context.target_release
+        or attempt.target_commit.lower() != receipt_context.target_commit
+        or attempt.registry_fingerprint
+        != receipt_context.registry_fingerprint
+        or attempt.plan_fingerprint != receipt_context.plan_fingerprint
         or attempt.definition_fingerprint
         != CONTROL_DEFINITION_FINGERPRINT
         or attempt.before_shape_fingerprint
-        != context.source_shape_fingerprint
+        != receipt_context.source_shape_fingerprint
         or attempt.after_shape_fingerprint != control_shape
         or attempt.failure_class is not None
         or attempt.failure_summary is not None
@@ -1909,6 +2086,7 @@ def _validate_terminal_bootstrap_evidence(
         raise SchemaControlError(
             "schema_execution_terminal_bootstrap_database_mismatch"
         )
+    return receipt_context, control_shape
 
 
 def _validate_completed_terminal_authority(
@@ -1971,10 +2149,9 @@ def _validate_completed_terminal_authority(
 
     bootstrap_receipt = read_signed(CONTROL_BOOTSTRAP_RECEIPT_PATH)
     assert bootstrap_receipt is not None
-    _validate_terminal_bootstrap_evidence(
+    _validate_persistent_bootstrap_evidence(
         db,
         bootstrap_receipt,
-        context=context,
         current_generation=generation,
     )
 
@@ -2006,8 +2183,7 @@ def _validate_completed_terminal_authority(
             )
 
     retry_expected = bool(context.request.get("migration_attempt_id"))
-    retry_present = _regular_file_presence(RETRY_ADMISSION_PATH)
-    if retry_present != retry_expected:
+    if retry_expected and not _regular_file_presence(RETRY_ADMISSION_PATH):
         raise SchemaControlError(
             "schema_execution_terminal_retry_authority_mismatch"
         )
@@ -2805,6 +2981,7 @@ def load_existing_update_context(
     db: Session,
     *,
     terminal_evidence: bool = False,
+    allow_completed_rollover: bool = False,
 ) -> UpdateContext:
     request = read_regular_json(REQUEST_PATH)
     assert request is not None
@@ -2829,14 +3006,21 @@ def load_existing_update_context(
     ).mappings().one_or_none()
     if row is None:
         raise SchemaControlError("schema_migration_control_row_missing")
-    if (
+    target_mismatch = (
         str(row["target_commit"]).lower() != target_commit
         or str(row["target_release"]) != target_release
         or int(row["target_schema_version"]) != TARGET_SCHEMA_VERSION
         or str(row["registry_fingerprint"]) != REGISTRY_FINGERPRINT
         or str(row["control_definition_fingerprint"])
         != CONTROL_DEFINITION_FINGERPRINT
-    ):
+    )
+    if target_mismatch and allow_completed_rollover:
+        if str(row["state"]) != "completed":
+            raise SchemaControlError(
+                "schema_migration_control_rollover_requires_completed"
+            )
+        return load_prebootstrap_update_context(db)
+    if target_mismatch:
         raise SchemaControlError("schema_migration_control_target_mismatch")
     expected_plan = plan_fingerprint(
         installed_version=str(row["installed_version"]),
@@ -3396,55 +3580,34 @@ def bootstrap_or_resume_control(
         )
         return generation
 
-    control_shape = verify_control_shape(db)
-    receipt = read_signed(CONTROL_BOOTSTRAP_RECEIPT_PATH)
-    assert receipt is not None
-    _validate_bootstrap_receipt(receipt, context=context)
-    bootstrap_attempt_id = transition_attempt_id(
-        str(receipt["admission_attempt_id"]),
-        CONTROL_BOOTSTRAP_MIGRATION_ID,
-    )
-    bootstrap_attempt = db.get(
-        SchemaMigrationAttempt,
-        bootstrap_attempt_id,
-    )
-    if (
-        bootstrap_attempt is None
-        or bootstrap_attempt.status != "applied"
-        or bootstrap_attempt.request_id != receipt["request_id"]
-        or bootstrap_attempt.admission_attempt_id
-        != receipt["admission_attempt_id"]
-        or bootstrap_attempt.definition_fingerprint
-        != CONTROL_DEFINITION_FINGERPRINT
-        or bootstrap_attempt.after_shape_fingerprint != control_shape
-    ):
-        raise SchemaControlError(
-            "control_bootstrap_database_evidence_inconsistent"
-        )
-    if receipt.get("state") == "prepared":
-        generation = int(receipt["fencing_generation"])
-        write_signed(
-            CONTROL_BOOTSTRAP_RECEIPT_PATH,
-            _bootstrap_receipt_payload(
-                context=context,
-                generation=generation,
-                state="adopted",
-                control_shape_fingerprint=control_shape,
-            ),
-        )
-    else:
-        if receipt.get("control_shape_fingerprint") != control_shape:
-            raise SchemaControlError(
-                "control_bootstrap_shape_receipt_mismatch"
-            )
-        generation = int(receipt["fencing_generation"])
-
     row = db.execute(
         text(
             "SELECT * FROM schema_migration_control "
             "WHERE id='current' FOR UPDATE"
         )
     ).mappings().one()
+    receipt = read_signed(CONTROL_BOOTSTRAP_RECEIPT_PATH)
+    assert receipt is not None
+    (
+        receipt_context,
+        control_shape,
+    ) = _validate_persistent_bootstrap_evidence(
+        db,
+        receipt,
+        current_generation=int(row["fencing_generation"]),
+        allow_prepared=True,
+    )
+    if receipt.get("state") == "prepared":
+        write_signed(
+            CONTROL_BOOTSTRAP_RECEIPT_PATH,
+            _bootstrap_receipt_payload(
+                context=receipt_context,
+                generation=int(receipt["fencing_generation"]),
+                state="adopted",
+                control_shape_fingerprint=control_shape,
+            ),
+        )
+
     same_admission = (
         str(row["owner_attempt_id"]) == context.admission_attempt_id
         and str(row["request_id"]) == context.request_id
@@ -3452,29 +3615,81 @@ def bootstrap_or_resume_control(
     if same_admission:
         generation = int(row["fencing_generation"])
     else:
+        prior_state = str(row["state"])
+        if prior_state == "completed":
+            validate_exact_target_noop(db)
+        elif prior_state == "failed":
+            if (
+                context.request.get("retry_of_request_id")
+                != str(row["request_id"])
+                or not context.request.get("migration_attempt_id")
+            ):
+                raise SchemaControlError(
+                    "migration_control_failed_rollover_forbidden"
+                )
+        else:
+            raise SchemaControlError(
+                "migration_control_active_rollover_forbidden"
+            )
         generation = int(row["fencing_generation"]) + 1
-        db.execute(
+        updated = db.execute(
             text(
                 """
                 UPDATE schema_migration_control
                 SET fencing_generation=:generation,
                     owner_attempt_id=:owner_attempt_id,
                     request_id=:request_id,
+                    installed_version=:installed_version,
+                    installed_commit=:installed_commit,
+                    source_schema_version=:source_schema_version,
+                    target_commit=:target_commit,
+                    target_release=:target_release,
+                    target_schema_version=:target_schema_version,
+                    registry_fingerprint=:registry_fingerprint,
+                    plan_fingerprint=:plan_fingerprint,
+                    source_shape_fingerprint=:source_shape_fingerprint,
+                    control_definition_fingerprint=:control_definition_fingerprint,
                     state='prepared',
                     lease_expires_at=:lease_expires_at,
                     updated_at=:updated_at
                 WHERE id='current'
+                  AND fencing_generation=:prior_generation
+                  AND owner_attempt_id=:prior_owner_attempt_id
+                  AND request_id=:prior_request_id
+                  AND state=:prior_state
                 """
             ),
             {
                 "generation": generation,
                 "owner_attempt_id": context.admission_attempt_id,
                 "request_id": context.request_id,
+                "installed_version": context.installed_version,
+                "installed_commit": context.installed_commit,
+                "source_schema_version": context.source_schema_version,
+                "target_commit": context.target_commit,
+                "target_release": context.target_release,
+                "target_schema_version": TARGET_SCHEMA_VERSION,
+                "registry_fingerprint": context.registry_fingerprint,
+                "plan_fingerprint": context.plan_fingerprint,
+                "source_shape_fingerprint": (
+                    context.source_shape_fingerprint
+                ),
+                "control_definition_fingerprint": (
+                    CONTROL_DEFINITION_FINGERPRINT
+                ),
                 "lease_expires_at": naive_utc_now()
                 + timedelta(minutes=15),
                 "updated_at": naive_utc_now(),
+                "prior_generation": int(row["fencing_generation"]),
+                "prior_owner_attempt_id": str(row["owner_attempt_id"]),
+                "prior_request_id": str(row["request_id"]),
+                "prior_state": prior_state,
             },
         )
+        if updated.rowcount != 1:
+            raise SchemaControlError(
+                "migration_control_rollover_fence_lost"
+            )
         db.commit()
     write_auth_snapshot(
         context=context,

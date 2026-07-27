@@ -92,6 +92,7 @@ scripts/km-vms-storage-discovery.sh
 "
 
 TARGET_ONLY_PRIVILEGED_FILES="
+release/km-vms-update-lineage.json
 scripts/km-vms-permission-gate.sh
 scripts/km-vms-update-helper-bridge.py
 scripts/km-vms-publish-github-release.sh

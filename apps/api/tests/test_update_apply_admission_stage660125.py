@@ -177,6 +177,43 @@ def terminal_payload(request: dict[str, Any], status: str) -> dict[str, Any]:
     return payload
 
 
+def verified_legacy_terminal(request: dict[str, Any]) -> dict[str, Any]:
+    source = request["source"]
+    return {
+        "schema_version": 1,
+        "request_id": request["request_id"],
+        "status": "completed",
+        "phase": "commit_verification",
+        "current_step": "commit_verification",
+        "started_at": request["requested_at"],
+        "updated_at": FINISHED_AT,
+        "source": {
+            "kind": "github-tarball",
+            "repo": source["repo"],
+            "ref": source["ref"],
+            "commit": source["commit"],
+            "apply_ref": source["apply_ref"],
+        },
+        "expected_commit": source["commit"],
+        "installed_commit": source["commit"],
+        "commit_verified": True,
+        "steps": [
+            {"name": name, "status": "completed"}
+            for name in update_apply.LEGACY_VERIFIED_COMPLETED_STEP_NAMES
+        ],
+        "can_cancel": False,
+        "rollback_supported": False,
+        "side_effects": terminal_side_effects(),
+        "release_identity": {
+            "host_metadata_status": "complete",
+            "api_metadata_status": "complete",
+            "api_visible": True,
+            "commit_verified": True,
+        },
+        "error": None,
+    }
+
+
 def active_status_payload(request: dict[str, Any]) -> dict[str, Any]:
     return {
         "schema_version": 1,
@@ -311,6 +348,76 @@ def test_exact_positive_current_live_check_terminal_and_legacy_controls(tmp_path
     before = surface_bytes(tmp_path)
     assert helper.claim_current_request() is None
     assert surface_bytes(tmp_path) == before
+
+
+def test_exact_verified_legacy_completion_retires_and_allows_next_ticket(tmp_path, monkeypatch):
+    control = tmp_path / "control"
+    control.mkdir()
+    monkeypatch.setattr(settings, "update_control_root", str(control))
+    monkeypatch.setattr(settings, "kmvms_update_helper_enabled", True)
+
+    source = request_payload()["source"]
+    legacy = {
+        "schema_version": 1,
+        "request_id": "legacy-snapshot-request",
+        "requested_at": REQUESTED_AT,
+        "requested_by": {"user_id": 1, "role": "owner"},
+        "intent": "apply_update",
+        "confirmed": True,
+        "preflight_required": True,
+        "status_path": "data/update-control/update-status.json",
+        "source": source,
+        "apply_candidate": canonical_candidate(),
+    }
+    terminal = verified_legacy_terminal(legacy)
+    (control / "update-request.json").write_text(
+        json.dumps(legacy, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    (control / "update-status.json").write_text(
+        json.dumps(terminal, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    helper = load_helper()
+    assert helper.terminal_status_for_request(terminal, legacy)
+    assert update_apply._legacy_can_retire(
+        update_apply._legacy_request_contract(legacy, "valid")[1]
+    )
+    status = update_apply.read_update_apply_status()
+    assert status["status"] == "completed"
+    assert status["effective_status"] == "completed"
+    assert status["admission"]["authority"] == "inactive"
+
+    monkeypatch.setattr(
+        update_apply,
+        "_select_apply_candidate",
+        lambda _db, *, expected_version, expected_commit: (
+            {"version": expected_version, "commit": expected_commit},
+            {"source": "trusted_snapshot", "snapshot": {}},
+        ),
+    )
+    monkeypatch.setattr(update_apply, "_check_token_precondition", lambda: None)
+    ticket = update_apply.issue_update_apply_submission_ticket(
+        SimpleNamespace(rollback=lambda: None),
+        expected_manifest_version=TARGET_VERSION,
+        expected_manifest_commit=TARGET_COMMIT,
+        actor=SimpleNamespace(id=1, username="owner", role="owner"),
+    )
+    assert ticket["target_version"] == TARGET_VERSION
+    assert ticket["target_commit"] == TARGET_COMMIT
+
+    for mutation in (
+        lambda value: value.__setitem__("unexpected", True),
+        lambda value: value["steps"][3].update(status="failed"),
+        lambda value: value["release_identity"].update(api_visible=False),
+        lambda value: value.update(installed_commit="d" * 40),
+    ):
+        malformed = copy.deepcopy(terminal)
+        mutation(malformed)
+        assert not helper.terminal_status_for_request(malformed, legacy)
+        entry = update_apply._legacy_request_contract(legacy, "valid")[1]
+        assert update_apply._strict_terminal_snapshot(malformed, entry) is None
 
 
 def test_canonical_claim_fence_and_compact_read_only_compatibility(tmp_path):

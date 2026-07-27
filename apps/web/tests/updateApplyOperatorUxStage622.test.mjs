@@ -267,7 +267,58 @@ const completedWithSteps = updateApplyOperatorModel(
 );
 
 assert.equal(completedWithSteps.headline, "Completed successfully");
-assert.equal(completedWithSteps.timeline.every((step) => step.status === "idle" && step.timeLabel === ""), true);
+assert.equal(completedWithSteps.timeline.every((step) => step.status === "completed" && step.timeLabel === ""), true);
+
+const failedWithSteps = updateApplyOperatorModel(
+  {
+    status: "current",
+    can_apply_from_ui: false,
+    comparison: { status: "current" },
+    installed_release: { version: "0.7.4", commit: "a".repeat(40) },
+    available_release: { version: "0.7.4", commit: "a".repeat(40) },
+  },
+  {
+    status: "failed",
+    steps: [
+      { name: "queued", status: "completed" },
+      { name: "preflight", status: "completed" },
+      { name: "overlay", status: "failed" },
+      { name: "health_check", status: "pending" },
+      { name: "commit_verification", status: "pending" },
+    ],
+  },
+  t,
+  "en",
+);
+
+assert.deepEqual(
+  failedWithSteps.timeline.map((step) => step.status),
+  ["completed", "completed", "failed", "pending", "pending"],
+);
+
+const oldFailedHistory = updateApplyOperatorModel(
+  {
+    status: "current",
+    can_apply_from_ui: false,
+    comparison: { status: "current" },
+    installed_release: { version: "0.7.4", commit: "a".repeat(40) },
+    available_release: { version: "0.7.4", commit: "a".repeat(40) },
+  },
+  {
+    status: "idle",
+    last_apply_summary: {
+      status: "failed",
+      steps: [
+        { name: "queued", status: "completed" },
+        { name: "preflight", status: "failed" },
+      ],
+    },
+  },
+  t,
+  "en",
+);
+
+assert.equal(oldFailedHistory.timeline.every((step) => step.status === "idle"), true);
 
 const ruFallback = updateApplyOperatorModel(
   {

@@ -1093,7 +1093,14 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     : historyStepsAvailable
       ? lastSummary
       : null;
-  const inactiveTimeline = !running;
+  const terminalTimelineTruth = liveStepsAvailable && [
+    "completed",
+    "failed",
+    "blocked",
+    "cancelled",
+    "canceled",
+  ].includes(normalizedUpdateApplyState(applyStatus?.status));
+  const inactiveTimeline = !running && !terminalTimelineTruth;
   const timeline = updateApplyStepRows(stepsSource || {}, t).map((step) => ({
     ...step,
     status: inactiveTimeline ? "idle" : step.status,

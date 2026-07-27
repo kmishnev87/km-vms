@@ -562,6 +562,7 @@ validate_source_tree() {
   [ -f "$source/scripts/km-vms-update-helper-bridge.py" ] || fail "Source tree is missing scripts/km-vms-update-helper-bridge.py."
   [ -f "$source/docs/INSTALL.md" ] || fail "Source tree is missing docs/INSTALL.md."
   [ -f "$source/release/km-vms-release.json" ] || fail "Source tree is missing release/km-vms-release.json."
+  [ -f "$source/release/km-vms-update-lineage.json" ] || fail "Source tree is missing release/km-vms-update-lineage.json."
   if [ -f "$source/scripts/update.sh" ]; then
     info "Source tree includes scripts/update.sh."
   else
