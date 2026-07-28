@@ -121,7 +121,7 @@ assert.equal(cssRule(".settingsUpdateApplyHeroFacts").includes("display: content
 assert.equal(cssRule(".settingsUpdateApplyHeroPrimaryValue").includes("font-variant-numeric: tabular-nums"), true);
 assert.equal(css.includes("grid-template-columns: 38px minmax(0, 1fr)"), true);
 assert.equal(css.includes(".settingsUpdateApplySupport"), false);
-assert.equal(css.includes(".settingsUpdateApplyDialog"), true);
+assert.equal(settingsPage.includes("<OperationDialog"), true);
 assert.equal(css.includes("overflow-wrap: anywhere"), true);
 
 assert.equal(updateApplyRecoveryText("provider_unavailable", {}, t), "Provider-specific recovery");

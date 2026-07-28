@@ -77,9 +77,16 @@ def update_context(*, request: dict | None = None) -> control.UpdateContext:
 
 
 class _Result:
-    def __init__(self, *, row: dict | None = None, rowcount: int = 1):
+    def __init__(
+        self,
+        *,
+        row: dict | None = None,
+        rowcount: int = 1,
+        scalar: int | None = None,
+    ):
         self.row = row
         self.rowcount = rowcount
+        self.scalar = scalar
 
     def mappings(self):
         return self
@@ -90,6 +97,10 @@ class _Result:
 
     def one_or_none(self):
         return self.row
+
+    def scalar_one(self):
+        assert self.scalar is not None
+        return self.scalar
 
 
 class _RolloverDb:
@@ -398,6 +409,173 @@ def test_noncompleted_foreign_control_cannot_roll_over(
     assert db.commits == 0
 
 
+def _stage_receipt(
+    context: control.UpdateContext,
+    *,
+    generation: int,
+    state: str,
+    error_code: str = "",
+    details: dict | None = None,
+) -> dict:
+    return {
+        "schema_version": 1,
+        "request_id": context.request_id,
+        "admission_attempt_id": context.admission_attempt_id,
+        "target_version": context.target_release,
+        "target_commit": context.target_commit,
+        "target_schema_version": 8,
+        "registry_fingerprint": context.registry_fingerprint,
+        "plan_fingerprint": context.plan_fingerprint,
+        "fencing_generation": generation,
+        "attempt_id": context.admission_attempt_id,
+        "state": state,
+        "phase": "preparing_database",
+        "retryable": False,
+        "error_code": error_code,
+        "summary": "Bounded schema result.",
+        "operator_action": "Continue only when the evidence is exact.",
+        "details": details or {},
+        "updated_at": "2026-07-28T12:00:00Z",
+    }
+
+
+def test_exact_known_false_legacy_gate_failure_is_reconciled_without_history_rewrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    old_registry = hashlib.sha256(b"old-registry").hexdigest()
+    old_target = "0.7.29"
+    old_target_commit = control.SOURCE_TAG_COMMITS[old_target]
+    old_source = "0.7.27"
+    old_source_commit = control.SOURCE_TAG_COMMITS[old_source]
+    old_plan = control.plan_fingerprint(
+        installed_version=old_source,
+        installed_commit=old_source_commit,
+        source_schema_version=8,
+        source_shape_fingerprint=control.TARGET_SHAPE_FINGERPRINT,
+        target_release=old_target,
+        target_commit=old_target_commit,
+        registry_fingerprint_value=old_registry,
+    )
+    row = {
+        "fencing_generation": 2,
+        "owner_attempt_id": OLD_ADMISSION_ID,
+        "request_id": OLD_REQUEST_ID,
+        "installed_version": old_source,
+        "installed_commit": old_source_commit,
+        "source_schema_version": 8,
+        "source_shape_fingerprint": control.TARGET_SHAPE_FINGERPRINT,
+        "target_release": old_target,
+        "target_commit": old_target_commit,
+        "target_schema_version": 8,
+        "registry_fingerprint": old_registry,
+        "plan_fingerprint": old_plan,
+        "control_definition_fingerprint": (
+            control.CONTROL_DEFINITION_FINGERPRINT
+        ),
+        "state": "failed",
+    }
+    context = control._failed_control_context(row)
+    preparation_path = tmp_path / "preparation.signed.json"
+    recovery_path = tmp_path / "recovery.signed.json"
+    gate_path = tmp_path / "gate.signed.json"
+    mutation_path = tmp_path / "mutation-state.json"
+    monkeypatch.setattr(
+        control,
+        "JWT_SECRET",
+        "known-false-legacy-gate-test-secret",
+    )
+    monkeypatch.setattr(
+        control,
+        "PREPARATION_RECEIPT_PATH",
+        preparation_path,
+    )
+    monkeypatch.setattr(
+        control,
+        "RECOVERY_RECEIPT_PATH",
+        recovery_path,
+    )
+    monkeypatch.setattr(control, "GATE_RECEIPT_PATH", gate_path)
+    monkeypatch.setattr(
+        control,
+        "SCHEMA_MUTATION_STATE_PATH",
+        mutation_path,
+    )
+    control.write_signed(
+        preparation_path,
+        _stage_receipt(context, generation=2, state="completed"),
+    )
+    control.write_signed(
+        recovery_path,
+        _stage_receipt(context, generation=2, state="completed"),
+    )
+    retry_evidence = {
+        "schema_version": 1,
+        "mutation_started": False,
+        "physical_mutation_possible": False,
+        "transaction_rolled_back": True,
+        "rollback_verified": False,
+        "schema_shape_unchanged": False,
+        "history_unchanged": False,
+        "canonical_transition_committed": False,
+        "foreign_state_detected": False,
+    }
+    control.write_signed(
+        gate_path,
+        _stage_receipt(
+            context,
+            generation=2,
+            state="blocked",
+            error_code="legacy_migration_history_unknown_id",
+            details={"retry_evidence": retry_evidence},
+        ),
+    )
+    validated: list[str] = []
+    monkeypatch.setattr(
+        control,
+        "validate_exact_target_noop",
+        lambda _db, *, expected_control_state: validated.append(
+            expected_control_state
+        ),
+    )
+
+    class ReconcileDb(_RolloverDb):
+        def execute(self, statement, parameters=None):
+            sql = str(statement)
+            if (
+                "SELECT COUNT(*)" in sql
+                and "schema_migration_attempts" in sql
+            ):
+                return _Result(scalar=0)
+            return super().execute(statement, parameters)
+
+    db = ReconcileDb(row)
+    assert control._reconcile_known_false_legacy_gate_failure(db, row)
+    assert validated == ["failed"]
+    assert len(db.updates) == 1
+    assert db.updates[0]["generation"] == 2
+    assert db.updates[0]["request_id"] == OLD_REQUEST_ID
+
+    unsafe_evidence = dict(retry_evidence)
+    unsafe_evidence["mutation_started"] = True
+    control.write_signed(
+        gate_path,
+        _stage_receipt(
+            context,
+            generation=2,
+            state="blocked",
+            error_code="legacy_migration_history_unknown_id",
+            details={"retry_evidence": unsafe_evidence},
+        ),
+    )
+    unsafe_db = ReconcileDb(row)
+    assert not control._reconcile_known_false_legacy_gate_failure(
+        unsafe_db,
+        row,
+    )
+    assert unsafe_db.updates == []
+
+
 def _history_rows():
     rows = [
         SimpleNamespace(
@@ -429,9 +607,14 @@ def _history_rows():
     return rows
 
 
-def _historical_attempts():
+def _historical_attempts(*, registry_fingerprint: str | None = None):
     source_shape = control.SOURCE_SHAPE_FINGERPRINTS["0.7.18"]
     target_commit = control.SOURCE_TAG_COMMITS["0.7.27"]
+    registry_fingerprint = (
+        control.REGISTRY_FINGERPRINT
+        if registry_fingerprint is None
+        else registry_fingerprint
+    )
     historical_plan = control.plan_fingerprint(
         installed_version="0.7.18",
         installed_commit=control.SOURCE_TAG_COMMITS["0.7.18"],
@@ -439,6 +622,7 @@ def _historical_attempts():
         source_shape_fingerprint=source_shape,
         target_release="0.7.27",
         target_commit=target_commit,
+        registry_fingerprint_value=registry_fingerprint,
     )
     common = {
         "admission_attempt_id": OLD_ADMISSION_ID,
@@ -448,7 +632,7 @@ def _historical_attempts():
         "installed_commit": control.SOURCE_TAG_COMMITS["0.7.18"],
         "target_release": "0.7.27",
         "target_commit": target_commit,
-        "registry_fingerprint": control.REGISTRY_FINGERPRINT,
+        "registry_fingerprint": registry_fingerprint,
         "plan_fingerprint": historical_plan,
         "status": "applied",
         "completed_at": object(),
@@ -500,7 +684,10 @@ def test_completed_previous_generation_history_is_preserved_but_tampering_fails(
         plan_fingerprint="5" * 64,
     )
     histories = _history_rows()
-    attempts = _historical_attempts()
+    old_registry = hashlib.sha256(b"historical-registry").hexdigest()
+    attempts = _historical_attempts(
+        registry_fingerprint=old_registry,
+    )
 
     control._validate_migrated_target_history(
         histories,

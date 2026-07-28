@@ -6,23 +6,24 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pageSource = fs.readFileSync(resolve(__dirname, "../app/settings/page.js"), "utf8");
 const cssSource = fs.readFileSync(resolve(__dirname, "../app/styles/20-settings-maintenance.css"), "utf8");
+const operationFeedbackSource = fs.readFileSync(resolve(__dirname, "../components/OperationFeedback.js"), "utf8");
 
-const dialogStart = pageSource.indexOf("{updateApplyDialog ? (");
-const dialogEnd = pageSource.indexOf("{securityModalOpen ? (", dialogStart);
+const dialogStart = pageSource.indexOf("<OperationDialog");
+const dialogEnd = pageSource.indexOf("/>", dialogStart) + 2;
 assert.ok(dialogStart >= 0 && dialogEnd > dialogStart);
 const dialogSource = pageSource.slice(dialogStart, dialogEnd);
 
-assert.equal(dialogSource.includes('className="settingsUpdateApplyDialog"'), true);
-assert.equal(dialogSource.includes("settingsModalActions"), true);
+assert.equal(dialogSource.includes('overlayClassName: "settingsUpdateApplyDialogOverlay"'), true);
 assert.equal(dialogSource.includes("updateApplyModalTitle"), true);
 assert.equal(dialogSource.includes("updateApplyConfirm"), true);
 assert.equal(dialogSource.includes("updateApplyDialog.candidate"), false);
 assert.equal(dialogSource.includes("updateApplyOperator.currentVersion"), false);
 assert.equal(dialogSource.includes("shortCommit"), false);
-assert.equal(dialogSource.includes("settingsUpdateApplyDialogFacts"), false);
-assert.equal(dialogSource.includes("settingsUpdateApplyDialogRestart"), false);
-assert.equal(dialogSource.includes("settingsUpdateApplyDialogError"), false);
+assert.equal(dialogSource.includes("settingsModalActions"), false);
 assert.equal(dialogSource.includes("updateApplyLaunchChecking"), false);
+assert.equal(dialogSource.includes("onConfirm: confirmUpdateApply"), true);
+assert.equal(pageSource.includes("previewUpdateApplyDialog"), false);
+assert.equal(pageSource.includes("updateApplyTest"), false);
 
 const confirmStart = pageSource.indexOf("async function confirmUpdateApply");
 const confirmEnd = pageSource.indexOf("async function downloadMaintenanceReport", confirmStart);
@@ -59,10 +60,9 @@ assert.equal(pageSource.includes("updateApplyModalRelease"), false);
 assert.equal(pageSource.includes("updateApplyModalCommit"), false);
 assert.equal(pageSource.includes("updateApplyModalRestartTitle"), false);
 assert.equal(pageSource.includes("updateApplyModalRestartText"), false);
-assert.equal(cssSource.includes(".settingsUpdateApplyDialogFacts"), false);
-assert.equal(cssSource.includes(".settingsUpdateApplyDialogRestart"), false);
-assert.equal(cssSource.includes(".settingsUpdateApplyDialogError"), false);
-assert.match(cssSource, /\.settingsUpdateApplyDialogOverlay\s*\{[^}]*z-index:\s*9600/s);
-assert.match(cssSource, /\.settingsConfirmModal,\s*\.settingsUpdateApplyDialog\s*\{/s);
+assert.match(cssSource, /\.operationFeedbackOverlay\.settingsUpdateApplyDialogOverlay\s*\{[^}]*z-index:\s*9600/s);
+assert.equal(cssSource.includes(".settingsUpdateApplyDialog {"), false);
+assert.equal(operationFeedbackSource.includes("dialog.overlayClassName"), true);
+assert.equal(operationFeedbackSource.includes('className={`operationFeedbackOverlay'), true);
 
 console.log("Compact update confirmation dofix tests passed");

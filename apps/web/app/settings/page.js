@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
+import { OperationDialog } from "../../components/OperationFeedback";
 import { apiFetch, apiFetchBlob, clearAuthToken, forbiddenMessage } from "../../lib/api";
 import { LanguageSelect, normalizeLocale, persistLocale, translateText } from "../../lib/i18n";
 
@@ -1667,8 +1668,6 @@ export default function SettingsPage() {
   const updatePollInFlightRef = useRef(false);
   const updateApplyPendingRef = useRef(null);
   const updateApplyDialogRef = useRef(null);
-  const updateApplyTriggerRef = useRef(null);
-  const updateApplyDialogElementRef = useRef(null);
   const maintenanceDialogRef = useRef(null);
   const maintenanceTriggerRef = useRef(null);
   const maintenanceBusyRef = useRef("");
@@ -1754,11 +1753,6 @@ export default function SettingsPage() {
   }, [maintenanceModalOpen]);
 
   useEffect(() => {
-    if (!updateApplyDialog) return undefined;
-    return acquireSettingsBodyScrollLock();
-  }, [Boolean(updateApplyDialog)]);
-
-  useEffect(() => {
     if (!maintenanceModalOpen) return undefined;
     const container = maintenanceDialogRef.current;
     const initial = focusableElements(container)[0];
@@ -1789,50 +1783,6 @@ export default function SettingsPage() {
       if (!updateApplyDialogRef.current) maintenanceTriggerRef.current?.focus();
     };
   }, [maintenanceModalOpen]);
-
-  useEffect(() => {
-    if (!updateApplyDialog) return undefined;
-    const container = updateApplyDialogElementRef.current;
-    (focusableElements(container)[0] || container)?.focus();
-    function onKeyDown(event) {
-      const dialog = updateApplyDialogRef.current;
-      if (!dialog) return;
-      if (event.key === "Escape") {
-        event.preventDefault();
-        closeUpdateApplyDialog();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const focusable = focusableElements(container);
-      if (!focusable.length) {
-        event.preventDefault();
-        container?.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      updateApplyTriggerRef.current?.focus();
-    };
-  }, [Boolean(updateApplyDialog)]);
-
-  useEffect(() => {
-    if (!updateApplyDialog) return;
-    const container = updateApplyDialogElementRef.current;
-    if (!container?.contains(document.activeElement)) {
-      (focusableElements(container)[0] || container)?.focus();
-    }
-  }, [updateApplyDialog?.phase]);
 
   function showToast(nextToast) {
     setToast(nextToast);
@@ -3019,7 +2969,7 @@ export default function SettingsPage() {
                         {maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
                       </button>
                       {updateApplyOperator.showApplyButton ? (
-                        <button ref={updateApplyTriggerRef} type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
+                        <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
                           {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyPending || updateApplyOperator.stateUnknown
                             ? updateApplyPrimaryText
                             : t.updateApplyStart}
@@ -3196,40 +3146,20 @@ export default function SettingsPage() {
           </div>
         ) : null}
 
-        {updateApplyDialog ? (
-          <div
-            className="settingsModalOverlay settingsUpdateApplyDialogOverlay"
-            role="presentation"
-            onMouseDown={(event) => {
-              if (event.target === event.currentTarget) closeUpdateApplyDialog();
-            }}
-          >
-            <section
-              ref={updateApplyDialogElementRef}
-              className="settingsUpdateApplyDialog"
-              role="dialog"
-              tabIndex={-1}
-              aria-modal="true"
-              aria-labelledby="settings-update-apply-dialog-title"
-              aria-describedby="settings-update-apply-dialog-description"
-            >
-              <button
-                type="button"
-                className="settingsModalClose settingsUpdateApplyDialogClose"
-                onClick={closeUpdateApplyDialog}
-                aria-label={t.close}
-              >×</button>
-              <p>
-                <span id="settings-update-apply-dialog-title">{t.updateApplyModalTitle}</span>
-                <strong id="settings-update-apply-dialog-description">{t.updateApplyConfirm}</strong>
-              </p>
-              <div className="settingsModalActions">
-                <button type="button" className="button secondary small" onClick={closeUpdateApplyDialog}>{t.cancel}</button>
-                <button type="button" className="button primary small" onClick={confirmUpdateApply}>{t.updateApplyModalConfirm}</button>
-              </div>
-            </section>
-          </div>
-        ) : null}
+        <OperationDialog
+          dialog={updateApplyDialog ? {
+            id: "update-apply-confirm",
+            title: t.updateApplyModalTitle,
+            message: t.updateApplyConfirm,
+            overlayClassName: "settingsUpdateApplyDialogOverlay",
+            tone: "warning",
+            closeLabel: t.close,
+            cancelLabel: t.cancel,
+            confirmLabel: t.updateApplyModalConfirm,
+            onConfirm: confirmUpdateApply,
+          } : null}
+          onClose={closeUpdateApplyDialog}
+        />
 
         {securityModalOpen ? (
           <div className="settingsModalOverlay" role="presentation">

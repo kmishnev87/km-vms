@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.0",
-  "tag": "v0.8.0",
-  "title": "KM VMS 0.8.0 — Reasonable Core Reconstruction and Universal Direct Updates",
-  "summary": "Simplifies the in-app update path and supports direct updates from older releases through the canonical migration registry without mandatory intermediate application releases.",
+  "version": "0.8.1",
+  "tag": "v0.8.1",
+  "title": "KM VMS 0.8.1 — Universal Update Continuity and Compact Confirmation",
+  "summary": "Preserves valid historical migration evidence across later releases, safely recovers the known pre-mutation legacy gate false failure, and uses the shared compact application confirmation for updates.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.0",
+  "source_ref": "v0.8.1",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,13 +16,10 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Reduces update admission and control to one durable request, one helper execution and the minimum topology required by the read/write privilege boundary.",
-    "Allows supported older installations to update directly through the canonical migration registry without mandatory intermediate application releases.",
-    "Stops only for a genuinely active helper, schema mutation or proven incompatible database state; terminal history no longer blocks a new request.",
-    "Keeps mutation_started false until the first real schema, preparation or recovery mutation, allowing safe recovery from pre-mutation failures.",
-    "Preserves restart-tolerant status and recovery, compact application confirmation and bounded localized errors without raw backend response text.",
-    "Validates representative 0.7.18 and exact-schema-8 0.7.28 paths, tampered-history rejection, API restart recovery and healthy product services.",
-    "Registers 0.7.29 as the immediate schema-equivalent predecessor for the 0.8.0 release.",
+    "Validates each historical migration plan against its own stored registry fingerprint instead of incorrectly requiring today's fingerprint.",
+    "Recovers only the signed legacy_migration_history_unknown_id false failure when the database is already exact and no mutation attempt started.",
+    "Keeps arbitrary, mutated or ambiguous failed migration controls blocked and preserves historical database evidence without rewriting it.",
+    "Uses the shared Storage-style compact application dialog for update confirmation without duplicated update details or a test-only button.",
     "Keeps atomic release-slot activation and automatic post-activation rollback in the separate planned Stage 6.6.1."
   ]
 }

@@ -304,8 +304,9 @@ assert.equal(pageSource.includes("/system/update/apply/reconciliation/"), false)
 assert.equal((pageSource.match(/apiFetch\("\/system\/update\/apply"/g) || []).length, 1);
 assert.equal(pageSource.includes("settingsUpdateApplySupport"), false);
 assert.equal(pageSource.includes('inert={updateApplyDialog ? true : undefined}'), true);
-assert.match(pageSource, /className="settingsUpdateApplyDialog"\s+role="dialog"\s+tabIndex=\{-1\}/);
-assert.equal(pageSource.includes('(focusableElements(container)[0] || container)?.focus()'), true);
+assert.equal(pageSource.includes('import { OperationDialog } from "../../components/OperationFeedback"'), true);
+assert.equal(pageSource.includes("<OperationDialog"), true);
+assert.equal(pageSource.includes("updateApplyDialogElementRef"), false);
 assert.equal(cssSource.includes(".settingsUpdateApplyDialogOverlay"), true);
 assert.equal(cssSource.includes("z-index: 9600"), true);
 assert.equal(pageSource.includes("updateApplyModalTitle"), true);

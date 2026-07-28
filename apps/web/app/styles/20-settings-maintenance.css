@@ -761,13 +761,11 @@
   z-index: 8600;
 }
 
-.settingsUpdateApplyDialogOverlay {
+.operationFeedbackOverlay.settingsUpdateApplyDialogOverlay {
   z-index: 9600;
-  background: rgba(15, 23, 42, 0.48);
 }
 
-.settingsConfirmModal,
-.settingsUpdateApplyDialog {
+.settingsConfirmModal {
   width: min(420px, calc(100vw - 32px));
   border: 1px solid #dbe3ef;
   border-radius: 18px;
@@ -778,8 +776,7 @@
   text-align: center;
 }
 
-.settingsConfirmModal p,
-.settingsUpdateApplyDialog p {
+.settingsConfirmModal p {
   margin: 8px 0 22px;
   color: #475569;
   line-height: 1.45;
@@ -789,46 +786,38 @@
 }
 
 .settingsConfirmModal p span,
-.settingsConfirmModal p strong,
-.settingsUpdateApplyDialog p span,
-.settingsUpdateApplyDialog p strong {
+.settingsConfirmModal p strong {
   display: block;
 }
 
-.settingsConfirmModal p strong,
-.settingsUpdateApplyDialog p strong {
+.settingsConfirmModal p strong {
   margin-top: 4px;
   color: #0f172a;
 }
 
-.settingsConfirmClose,
-.settingsUpdateApplyDialogClose {
+.settingsConfirmClose {
   position: absolute;
   right: 14px;
   top: 14px;
 }
 
-.settingsConfirmModal .settingsModalActions,
-.settingsUpdateApplyDialog .settingsModalActions {
+.settingsConfirmModal .settingsModalActions {
   display: grid;
   grid-template-columns: 1fr auto 1fr auto 1fr;
   gap: 0;
   align-items: center;
 }
 
-.settingsConfirmModal .settingsModalActions .button,
-.settingsUpdateApplyDialog .settingsModalActions .button {
+.settingsConfirmModal .settingsModalActions .button {
   min-width: 104px;
   justify-content: center;
 }
 
-.settingsConfirmModal .settingsModalActions .button:first-child,
-.settingsUpdateApplyDialog .settingsModalActions .button:first-child {
+.settingsConfirmModal .settingsModalActions .button:first-child {
   grid-column: 2;
 }
 
-.settingsConfirmModal .settingsModalActions .button:last-child,
-.settingsUpdateApplyDialog .settingsModalActions .button:last-child {
+.settingsConfirmModal .settingsModalActions .button:last-child {
   grid-column: 4;
 }
 

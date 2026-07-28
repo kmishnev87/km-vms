@@ -101,7 +101,7 @@ export function OperationDialog({ dialog, onClose }) {
   }
 
   return (
-    <div className="operationFeedbackOverlay" role="presentation">
+    <div className={`operationFeedbackOverlay ${dialog.overlayClassName || ""}`.trim()} role="presentation">
       <div
         ref={containerRef}
         className={`operationFeedbackDialog operationFeedbackDialog-${dialog.tone || "warning"} ${dialog.className || ""}`.trim()}

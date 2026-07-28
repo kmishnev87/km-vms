@@ -53,6 +53,7 @@ PREPARATION_RECEIPT_PATH = CONTROL_ROOT / "schema-preparation-receipt.signed.jso
 RECOVERY_RECEIPT_PATH = CONTROL_ROOT / "operation-recovery-receipt.signed.json"
 GATE_RECEIPT_PATH = CONTROL_ROOT / "schema-gate-receipt.signed.json"
 RETRY_ADMISSION_PATH = CONTROL_ROOT / "update-retry-admission.signed.json"
+SCHEMA_MUTATION_STATE_PATH = CONTROL_ROOT / "schema-mutation-state.json"
 RELEASE_PATH = Path(
     os.getenv("KMVMS_RELEASE_IDENTITY_FILE") or "/app/.km-vms-release.json"
 )
@@ -1338,7 +1339,13 @@ def validate_released_source_history(
 
 def _validate_terminal_control(
     controls: list[SchemaMigrationControl],
+    *,
+    expected_state: str = "completed",
 ) -> SchemaMigrationControl:
+    if expected_state not in {"completed", "failed"}:
+        raise SchemaControlError(
+            "no_active_terminal_control_expected_state_invalid"
+        )
     if len(controls) != 1 or controls[0].id != CURRENT_STATE_ID:
         raise SchemaControlError(
             "no_active_terminal_control_count_invalid"
@@ -1364,11 +1371,15 @@ def _validate_terminal_control(
         source_shape_fingerprint=row.source_shape_fingerprint,
         target_release=row.target_release,
         target_commit=row.target_commit.lower(),
+        registry_fingerprint_value=row.registry_fingerprint,
     )
     if (
-        row.state != "completed"
+        row.state != expected_state
         or row.target_schema_version != TARGET_SCHEMA_VERSION
-        or row.registry_fingerprint != REGISTRY_FINGERPRINT
+        or not re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(row.registry_fingerprint or ""),
+        )
         or row.control_definition_fingerprint
         != CONTROL_DEFINITION_FINGERPRINT
         or expected_commit is None
@@ -1650,11 +1661,14 @@ def _validate_migrated_target_history(
                 source_shape_fingerprint=attempt.before_shape_fingerprint,
                 target_release=target_release,
                 target_commit=target_commit,
+                registry_fingerprint_value=registry_fingerprint,
             )
             for attempt in source_attempts
         }
+        expected_target_commit = SOURCE_TAG_COMMITS.get(target_release)
         if (
-            registry_fingerprint != REGISTRY_FINGERPRINT
+            expected_target_commit is None
+            or target_commit != expected_target_commit
             or expected_plans != {stored_plan}
         ):
             raise SchemaControlError(
@@ -1671,7 +1685,11 @@ def _validate_migrated_target_history(
             )
 
 
-def validate_exact_target_noop(db: Session) -> None:
+def validate_exact_target_noop(
+    db: Session,
+    *,
+    expected_control_state: str = "completed",
+) -> None:
     inspector = inspect(db.connection())
     tables = set(inspector.get_table_names(schema="public"))
     required = {"schema_version_state", "schema_migration_history"}
@@ -1727,7 +1745,10 @@ def validate_exact_target_noop(db: Session) -> None:
             attempts,
         )
     else:
-        control = _validate_terminal_control(controls)
+        control = _validate_terminal_control(
+            controls,
+            expected_state=expected_control_state,
+        )
         _validate_migrated_target_history(
             histories,
             control,
@@ -2798,7 +2819,15 @@ def plan_fingerprint(
     source_shape_fingerprint: str,
     target_release: str,
     target_commit: str,
+    registry_fingerprint_value: str | None = None,
 ) -> str:
+    registry_fingerprint_value = (
+        REGISTRY_FINGERPRINT
+        if registry_fingerprint_value is None
+        else registry_fingerprint_value
+    )
+    if not re.fullmatch(r"[0-9a-f]{64}", registry_fingerprint_value):
+        raise SchemaControlError("plan_registry_fingerprint_invalid")
     transitions = PRODUCTION_MIGRATIONS.path(
         source_schema_version,
         TARGET_SCHEMA_VERSION,
@@ -2812,7 +2841,7 @@ def plan_fingerprint(
         "target_release": target_release,
         "target_commit": target_commit,
         "target_schema_version": TARGET_SCHEMA_VERSION,
-        "registry_fingerprint": REGISTRY_FINGERPRINT,
+        "registry_fingerprint": registry_fingerprint_value,
         "conditional_preparation": {
             "preparation_id": (
                 STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION.preparation_id
@@ -3096,6 +3125,178 @@ def load_initial_update_context(db: Session) -> UpdateContext:
     return context
 
 
+def _failed_control_context(row: Mapping[str, Any]) -> UpdateContext:
+    return UpdateContext(
+        request={},
+        request_id=str(row["request_id"]),
+        admission_attempt_id=str(row["owner_attempt_id"]),
+        target_release=str(row["target_release"]),
+        target_commit=str(row["target_commit"]).lower(),
+        installed_version=str(row["installed_version"]),
+        installed_commit=str(row["installed_commit"]).lower(),
+        source_schema_version=int(row["source_schema_version"]),
+        source_shape_fingerprint=str(row["source_shape_fingerprint"]),
+        registry_fingerprint=str(row["registry_fingerprint"]),
+        plan_fingerprint=str(row["plan_fingerprint"]),
+    )
+
+
+def _reconcile_known_false_legacy_gate_failure(
+    db: Session,
+    row: Mapping[str, Any],
+) -> bool:
+    if str(row.get("state") or "") != "failed":
+        return False
+    try:
+        context = _failed_control_context(row)
+        if (
+            SOURCE_TAG_COMMITS.get(context.target_release)
+            != context.target_commit
+        ):
+            return False
+        validate_exact_target_noop(
+            db,
+            expected_control_state="failed",
+        )
+        current_attempt_count = db.execute(
+            text(
+                """
+                SELECT COUNT(*)
+                FROM schema_migration_attempts
+                WHERE fencing_generation=:generation
+                """
+            ),
+            {"generation": int(row["fencing_generation"])},
+        ).scalar_one()
+        if int(current_attempt_count) != 0:
+            return False
+
+        for path in (
+            PREPARATION_RECEIPT_PATH,
+            RECOVERY_RECEIPT_PATH,
+        ):
+            receipt = read_signed(path)
+            assert receipt is not None
+            validate_stage_receipt_payload(
+                receipt,
+                context=context,
+                generation=int(row["fencing_generation"]),
+                expected_state="completed",
+            )
+            if receipt.get("retryable") is not False:
+                return False
+
+        gate_receipt = read_signed(GATE_RECEIPT_PATH)
+        assert gate_receipt is not None
+        validate_stage_receipt_payload(
+            gate_receipt,
+            context=context,
+            generation=int(row["fencing_generation"]),
+            expected_state="blocked",
+        )
+        retry_evidence = gate_receipt.get("details", {}).get(
+            "retry_evidence"
+        )
+        retry_evidence_fields = {
+            "schema_version",
+            "mutation_started",
+            "physical_mutation_possible",
+            "transaction_rolled_back",
+            "rollback_verified",
+            "schema_shape_unchanged",
+            "history_unchanged",
+            "canonical_transition_committed",
+            "foreign_state_detected",
+        }
+        if (
+            gate_receipt.get("retryable") is not False
+            or gate_receipt.get("error_code")
+            != "legacy_migration_history_unknown_id"
+            or type(retry_evidence) is not dict
+            or set(retry_evidence) != retry_evidence_fields
+            or type(retry_evidence.get("schema_version")) is not int
+            or retry_evidence["schema_version"] != 1
+            or any(
+                type(retry_evidence.get(key)) is not bool
+                for key in retry_evidence_fields - {"schema_version"}
+            )
+            or retry_evidence["mutation_started"]
+            or retry_evidence["physical_mutation_possible"]
+            or not retry_evidence["transaction_rolled_back"]
+            or retry_evidence["canonical_transition_committed"]
+            or retry_evidence["foreign_state_detected"]
+        ):
+            return False
+
+        mutation_state = read_regular_json(
+            SCHEMA_MUTATION_STATE_PATH,
+            required=False,
+        )
+        if (
+            mutation_state is not None
+            and mutation_state.get("request_id") == context.request_id
+            and (
+                set(mutation_state)
+                != {
+                    "schema_version",
+                    "request_id",
+                    "target_release",
+                    "target_commit",
+                    "mutation_started",
+                    "state",
+                    "backup_id",
+                    "updated_at",
+                }
+                or mutation_state.get("schema_version") != 1
+                or mutation_state.get("target_release")
+                != context.target_release
+                or str(mutation_state.get("target_commit") or "").lower()
+                != context.target_commit
+                or mutation_state.get("mutation_started") is not False
+                or mutation_state.get("state") != "backup_pending"
+            )
+        ):
+            return False
+    except (KeyError, TypeError, ValueError, SchemaControlError):
+        return False
+
+    reconciled_at = naive_utc_now()
+    result = db.execute(
+        text(
+            """
+            UPDATE schema_migration_control
+            SET state='completed',
+                lease_expires_at=:reconciled_at,
+                updated_at=:reconciled_at
+            WHERE id='current'
+              AND fencing_generation=:generation
+              AND owner_attempt_id=:owner_attempt_id
+              AND request_id=:request_id
+              AND target_release=:target_release
+              AND target_commit=:target_commit
+              AND registry_fingerprint=:registry_fingerprint
+              AND plan_fingerprint=:plan_fingerprint
+              AND state='failed'
+            """
+        ),
+        {
+            "reconciled_at": reconciled_at,
+            "generation": int(row["fencing_generation"]),
+            "owner_attempt_id": context.admission_attempt_id,
+            "request_id": context.request_id,
+            "target_release": context.target_release,
+            "target_commit": context.target_commit,
+            "registry_fingerprint": context.registry_fingerprint,
+            "plan_fingerprint": context.plan_fingerprint,
+        },
+    )
+    if result.rowcount != 1:
+        raise SchemaControlError(
+            "schema_migration_control_false_failure_reconcile_fence_lost"
+        )
+    return True
+
+
 def load_existing_update_context(
     db: Session,
     *,
@@ -3134,7 +3335,13 @@ def load_existing_update_context(
         != CONTROL_DEFINITION_FINGERPRINT
     )
     if target_mismatch and allow_completed_rollover:
-        if str(row["state"]) != "completed":
+        state = str(row["state"])
+        if (
+            state == "failed"
+            and _reconcile_known_false_legacy_gate_failure(db, row)
+        ):
+            state = "completed"
+        if state != "completed":
             raise SchemaControlError(
                 "schema_migration_control_rollover_requires_completed"
             )
