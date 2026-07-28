@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.1",
-  "tag": "v0.8.1",
-  "title": "KM VMS 0.8.1 — Universal Update Continuity and Compact Confirmation",
-  "summary": "Preserves valid historical migration evidence across later releases, safely recovers the known pre-mutation legacy gate false failure, and uses the shared compact application confirmation for updates.",
+  "version": "0.8.2",
+  "tag": "v0.8.2",
+  "title": "KM VMS 0.8.2 — Candidate Lineage Handoff Fix",
+  "summary": "Uses the downloaded target release lineage during legacy bridge preflight, preventing a valid skipped-release update from being rejected by the older installed lineage.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.1",
+  "source_ref": "v0.8.2",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,10 +16,10 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Validates each historical migration plan against its own stored registry fingerprint instead of incorrectly requiring today's fingerprint.",
-    "Recovers only the signed legacy_migration_history_unknown_id false failure when the database is already exact and no mutation attempt started.",
-    "Keeps arbitrary, mutated or ambiguous failed migration controls blocked and preserves historical database evidence without rewriting it.",
-    "Uses the shared Storage-style compact application dialog for update confirmation without duplicated update details or a test-only button.",
-    "Keeps atomic release-slot activation and automatic post-activation rollback in the separate planned Stage 6.6.1."
+    "Resolves the bridge lineage from the downloaded target source before falling back to the installed working directory.",
+    "Prevents stale installed lineage from falsely rejecting a valid source version already supported by the target release.",
+    "Preserves the existing fallback for environments where the bridge has no adjacent candidate lineage file.",
+    "Adds a subprocess regression test with deliberately stale installed lineage and current candidate lineage.",
+    "Does not change database schema, stored data, service topology, permissions or the planned Stage 6.6.1 rollback architecture."
   ]
 }

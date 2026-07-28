@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 
-APP_VERSION = "0.8.1"
+APP_VERSION = "0.8.2"
 DEVELOPMENT_BUILD_ID = "development"
 
 

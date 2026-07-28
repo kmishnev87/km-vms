@@ -104,7 +104,7 @@ def load_update_lineage() -> dict[str, Any]:
         if configured
         else [
             parent / "release" / UPDATE_LINEAGE_FILENAME
-            for parent in (Path.cwd(), *Path(__file__).resolve().parents)
+            for parent in (*Path(__file__).resolve().parents, Path.cwd())
         ]
     )
     path = next((candidate for candidate in candidates if candidate.is_file()), None)

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -324,6 +326,47 @@ def test_pre_overlay_handoff_uses_staged_target_descriptor(
     )
     assert identity["installed_version"] == "0.7.18"
     assert request["request_id"] == request_id
+
+
+def test_bridge_prefers_candidate_lineage_over_stale_installed_cwd(
+    tmp_path: Path,
+) -> None:
+    installed = tmp_path / "installed"
+    candidate = tmp_path / "candidate"
+    candidate_bridge = candidate / "scripts/km-vms-update-helper-bridge.py"
+    candidate_bridge.parent.mkdir(parents=True)
+    candidate_bridge.write_bytes(BRIDGE_PATH.read_bytes())
+
+    lineage_path = BRIDGE_PATH.parents[1] / "release/km-vms-update-lineage.json"
+    lineage = json.loads(lineage_path.read_text(encoding="utf-8"))
+    latest_version = list(lineage["tag_commits"])[-1]
+    _write_json(candidate / "release/km-vms-update-lineage.json", lineage)
+
+    stale_lineage = json.loads(json.dumps(lineage))
+    for field in ("tag_commits", "schema_versions", "shape_fingerprints"):
+        stale_lineage[field].pop(latest_version)
+    stale_lineage["shape_alternates"].pop(latest_version, None)
+    _write_json(installed / "release/km-vms-update-lineage.json", stale_lineage)
+
+    probe = "\n".join(
+        [
+            "import importlib.util",
+            f"spec = importlib.util.spec_from_file_location('candidate_bridge', {str(candidate_bridge)!r})",
+            "module = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(module)",
+            f"print(module.SOURCE_TAG_COMMITS.get({latest_version!r}, 'MISSING'))",
+        ]
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=installed,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == lineage["tag_commits"][latest_version]
 
 
 def test_post_overlay_bootstrap_rejects_tampered_pre_overlay_identity(
