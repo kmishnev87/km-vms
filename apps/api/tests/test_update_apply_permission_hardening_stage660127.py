@@ -620,6 +620,8 @@ def test_v0718_post_overlay_handoff_accepts_host_managed_acl(
             "apply_ref": target_commit,
         },
         "confirmed": True,
+        "preflight_required": True,
+        "status_path": "data/update-control/update-status.json",
     }
 
     def write_json(path: Path, payload: dict) -> None:

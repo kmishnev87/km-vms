@@ -38,6 +38,11 @@ UPDATE_BOOTSTRAP_STAGE_DIR=""
 UPDATE_BOOTSTRAP_GATE_PATH=""
 UPDATE_HELPER_IMAGE_PREPARED=0
 UPDATE_HELPER_REFRESH_SCHEDULED=0
+SCHEMA_CANDIDATE_IMAGE=""
+SCHEMA_CANDIDATE_OVERRIDE=""
+SCHEMA_MIGRATION_REQUIRED=0
+SCHEMA_WRITERS_STOPPED=0
+SCHEMA_MUTATION_STARTED=0
 
 usage() {
   cat <<'EOF'
@@ -82,7 +87,7 @@ metadata_time() {
 
 progress_step_name() {
   case "$1" in
-    init|validate_app_dir|compose_detection|preflight_preservation|permission_preflight) printf preflight ;;
+    init|validate_app_dir|compose_detection|preflight_preservation|permission_preflight|schema_preflight) printf preflight ;;
     acquire) printf acquire_source ;;
     extract) printf extracting ;;
     validate_source_tree) printf validating_source ;;
@@ -173,9 +178,23 @@ write_update_metadata() {
 
 fail() {
   message="$*"
+  refresh_schema_mutation_truth 2>/dev/null || true
   printf 'ERROR [%s]: %s\n' "$PHASE" "$message" >&2
   write_helper_progress "failed" "$message" 2>/dev/null || true
-  if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] && [ -n "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
+  if [ "$SCHEMA_MUTATION_STARTED" = "1" ] && [ -n "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
+    (
+      cd "$APP_DIR"
+      compose_with_archive_roots stop api recorder >/dev/null 2>&1
+    ) || true
+  fi
+  if [ "$SCHEMA_WRITERS_STOPPED" = "1" ] && [ "$SCHEMA_MUTATION_STARTED" != "1" ]; then
+    (
+      cd "$APP_DIR"
+      compose_with_archive_roots up -d api recorder >/dev/null 2>&1
+    ) || true
+    SCHEMA_WRITERS_STOPPED=0
+  fi
+  if [ "$SCHEMA_MUTATION_STARTED" != "1" ] && [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] && [ -n "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
     case "$PHASE" in
       rebuild_recreate|schema_update|health_check)
         (
@@ -233,6 +252,9 @@ cleanup() {
   fi
   if [ -n "$UPDATE_BOOTSTRAP_IMAGE" ] && command_exists docker; then
     docker image rm -f "$UPDATE_BOOTSTRAP_IMAGE" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$SCHEMA_CANDIDATE_IMAGE" ] && command_exists docker; then
+    docker image rm -f "$SCHEMA_CANDIDATE_IMAGE" >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT HUP INT TERM
@@ -757,6 +779,285 @@ apply_permission_policy() {
     fail "Post-overlay target-tree permission hardening failed."
 }
 
+preflight_target_permission_policy() {
+  PHASE="permission_preflight"
+  write_helper_progress "running" "Validating the staged target critical permission chain."
+  sh "$TMP_ROOT/source/scripts/km-vms-permission-gate.sh" \
+    --check --app-dir "$TMP_ROOT/source" ||
+    fail "Staged target permission validation failed."
+}
+
+prepare_schema_handoff() {
+  [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] || return 0
+  PHASE="schema_preflight"
+  request_id="${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}"
+  printf '%s' "$request_id" |
+    grep -Eq '^(update|stage609)-[0-9a-fA-F]{32}$' ||
+    fail "A canonical request id is required for schema handoff."
+  python3 "$TMP_ROOT/source/scripts/km-vms-update-helper-bridge.py" \
+    handoff \
+    --app-dir "$APP_DIR" \
+    --target-source-dir "$TMP_ROOT/source" \
+    --request-id "$request_id" >/dev/null ||
+    fail "Cannot prepare the pre-overlay schema handoff."
+}
+
+staged_compose_with_archive_roots() {
+  staged_compose="$TMP_ROOT/source/docker-compose.yml"
+  archive_override="$(archive_roots_compose_file)"
+  if [ -n "$PROJECT_NAME" ]; then
+    if [ -f "$archive_override" ]; then
+      compose_cmd --env-file "$APP_DIR/.env" \
+        -p "$PROJECT_NAME" \
+        -f "$staged_compose" \
+        -f "$archive_override" "$@"
+    else
+      compose_cmd --env-file "$APP_DIR/.env" \
+        -p "$PROJECT_NAME" \
+        -f "$staged_compose" "$@"
+    fi
+  elif [ -f "$archive_override" ]; then
+    compose_cmd --env-file "$APP_DIR/.env" \
+      -f "$staged_compose" \
+      -f "$archive_override" "$@"
+  else
+    compose_cmd --env-file "$APP_DIR/.env" \
+      -f "$staged_compose" "$@"
+  fi
+}
+
+staged_compose_config() {
+  PHASE="compose_config"
+  write_helper_progress "running" "Validating staged target Docker Compose config."
+  staged_compose_with_archive_roots config >/dev/null ||
+    fail "Staged target Compose config validation failed."
+}
+
+staged_release_descriptor_value() {
+  key="$1"
+  file="$TMP_ROOT/source/release/km-vms-release.json"
+  sed -n "s/^[[:space:]]*\"$key\"[[:space:]]*:[[:space:]]*\"\(.*\)\"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p" "$file" |
+    head -n 1
+}
+
+write_schema_candidate_identity() {
+  candidate_dir="$TMP_ROOT/source/apps/api/.km-vms-candidate"
+  mkdir -p "$candidate_dir" ||
+    fail "Cannot create the schema candidate metadata directory."
+  cp "$TMP_ROOT/source/release/km-vms-update-lineage.json" \
+    "$candidate_dir/update-lineage.json" ||
+    fail "Cannot stage target update lineage for schema preflight."
+  version=$(staged_release_descriptor_value version)
+  title=$(staged_release_descriptor_value title)
+  summary=$(staged_release_descriptor_value summary)
+  channel=$(staged_release_descriptor_value release_channel)
+  source_kind=$(staged_release_descriptor_value source_kind)
+  source_repo=$(staged_release_descriptor_value source_repo)
+  source_ref=$(staged_release_descriptor_value source_ref)
+  [ -n "$version" ] && [ -n "$title" ] && [ -n "$summary" ] &&
+    [ -n "$channel" ] && [ -n "$source_kind" ] &&
+    [ -n "$source_repo" ] && [ -n "$source_ref" ] ||
+    fail "Target release descriptor is incomplete."
+  [ -n "$SOURCE_COMMIT_SHA" ] ||
+    fail "Trusted target commit is missing for schema preflight."
+  identity="$candidate_dir/release-identity.json"
+  installed_at=$(metadata_time)
+  {
+    printf '{\n'
+    printf '  "schema_version": 1,\n'
+    printf '  "product": "KM VMS",\n'
+    printf '  "version": "%s",\n' "$(json_escape "$version")"
+    printf '  "title": "%s",\n' "$(json_escape "$title")"
+    printf '  "summary": "%s",\n' "$(json_escape "$summary")"
+    printf '  "release_channel": "%s",\n' "$(json_escape "$channel")"
+    printf '  "source_kind": "%s",\n' "$(json_escape "$source_kind")"
+    printf '  "source_repo": "%s",\n' "$(json_escape "$source_repo")"
+    printf '  "source_ref": "%s",\n' "$(json_escape "$source_ref")"
+    printf '  "commit_sha": "%s",\n' "$(json_escape "$SOURCE_COMMIT_SHA")"
+    printf '  "installed_at": "%s",\n' "$(json_escape "$installed_at")"
+    printf '  "installed_by": "in_app_helper",\n'
+    printf '  "metadata_status": "precompose",\n'
+    printf '  "metadata_source": "helper"\n'
+    printf '}\n'
+  } > "$identity" ||
+    fail "Cannot write target schema candidate identity."
+}
+
+validated_backup_paths() {
+  host_app_dir=$(helper_host_app_dir)
+  host_backup=$(read_env_value KMVMS_HOST_DB_BACKUP_ROOT)
+  container_backup=$(read_env_value KMVMS_DB_BACKUP_ROOT)
+  [ -n "$container_backup" ] ||
+    container_backup="/storage/backups/db"
+  case "$host_backup" in
+    "") host_backup="$host_app_dir/data/backups/db" ;;
+    /*) ;;
+    *)
+      case "/$host_backup/" in
+        */../*) fail "Configured DB backup root contains parent traversal." ;;
+      esac
+      host_backup="$host_app_dir/$host_backup"
+      ;;
+  esac
+  case "$host_backup:$container_backup" in
+    *\"*|*\\*) fail "Configured DB backup roots contain unsupported characters." ;;
+  esac
+  case "$container_backup" in
+    /*) ;;
+    *) fail "Container DB backup root must be absolute." ;;
+  esac
+  case "/$container_backup/" in
+    */../*) fail "Container DB backup root contains parent traversal." ;;
+  esac
+  printf '%s\n%s\n' "$host_backup" "$container_backup"
+}
+
+prepare_schema_candidate_image() {
+  [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] || return 0
+  PHASE="schema_preflight"
+  write_helper_progress "running" "Building a bounded target schema preflight image."
+  command_exists docker ||
+    fail "Docker CLI is required for target schema preflight."
+  write_schema_candidate_identity
+  candidate_suffix=$(printf '%s' "${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-run-$$}" |
+    tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_.-')
+  [ -n "$candidate_suffix" ] || candidate_suffix="run-$$"
+  SCHEMA_CANDIDATE_IMAGE="km-vms-schema-candidate:$candidate_suffix"
+  docker build -t "$SCHEMA_CANDIDATE_IMAGE" \
+    "$TMP_ROOT/source/apps/api" >/dev/null ||
+    fail "Target schema preflight image build failed."
+
+  backup_paths=$(validated_backup_paths)
+  host_backup=$(printf '%s\n' "$backup_paths" | sed -n '1p')
+  container_backup=$(printf '%s\n' "$backup_paths" | sed -n '2p')
+  host_app_dir=$(helper_host_app_dir)
+  SCHEMA_CANDIDATE_OVERRIDE="$TMP_ROOT/schema-candidate.yml"
+  {
+    printf 'services:\n'
+    printf '  schema-update:\n'
+    printf '    image: "%s"\n' "$SCHEMA_CANDIDATE_IMAGE"
+    printf '    environment:\n'
+    printf '      KMVMS_RELEASE_IDENTITY_FILE: /app/.km-vms-candidate/release-identity.json\n'
+    printf '      KMVMS_UPDATE_LINEAGE_FILE: /app/.km-vms-candidate/update-lineage.json\n'
+    printf '      KMVMS_DB_BACKUP_ROOT: "%s"\n' "$container_backup"
+    printf '    volumes:\n'
+    printf '      - type: bind\n'
+    printf '        source: "%s/data/update-control"\n' "$host_app_dir"
+    printf '        target: /update-control\n'
+    printf '        bind:\n'
+    printf '          create_host_path: false\n'
+    printf '      - type: bind\n'
+    printf '        source: "%s/data/update-control"\n' "$host_app_dir"
+    printf '        target: /app/release\n'
+    printf '        read_only: true\n'
+    printf '        bind:\n'
+    printf '          create_host_path: false\n'
+    printf '      - type: bind\n'
+    printf '        source: "%s/data/update-control/schema-update-request.json"\n' "$host_app_dir"
+    printf '        target: /app/.km-vms-release.json\n'
+    printf '        read_only: true\n'
+    printf '        bind:\n'
+    printf '          create_host_path: false\n'
+    printf '      - type: bind\n'
+    printf '        source: "%s/data/update-control/schema-update-request.json"\n' "$host_app_dir"
+    printf '        target: /app/.km-vms-source.json\n'
+    printf '        read_only: true\n'
+    printf '        bind:\n'
+    printf '          create_host_path: false\n'
+    printf '      - type: bind\n'
+    printf '        source: "%s"\n' "$host_backup"
+    printf '        target: "%s"\n' "$container_backup"
+    printf '        bind:\n'
+    printf '          create_host_path: true\n'
+  } > "$SCHEMA_CANDIDATE_OVERRIDE" ||
+    fail "Cannot create target schema candidate Compose override."
+  schema_candidate_compose config >/dev/null ||
+    fail "Target schema candidate Compose config validation failed."
+}
+
+schema_candidate_compose() {
+  staged_compose="$TMP_ROOT/source/docker-compose.yml"
+  archive_override="$(archive_roots_compose_file)"
+  if [ -n "$PROJECT_NAME" ]; then
+    if [ -f "$archive_override" ]; then
+      compose_cmd --env-file "$APP_DIR/.env" \
+        -p "$PROJECT_NAME" \
+        -f "$staged_compose" \
+        -f "$SCHEMA_CANDIDATE_OVERRIDE" \
+        -f "$archive_override" "$@"
+    else
+      compose_cmd --env-file "$APP_DIR/.env" \
+        -p "$PROJECT_NAME" \
+        -f "$staged_compose" \
+        -f "$SCHEMA_CANDIDATE_OVERRIDE" "$@"
+    fi
+  elif [ -f "$archive_override" ]; then
+    compose_cmd --env-file "$APP_DIR/.env" \
+      -f "$staged_compose" \
+      -f "$SCHEMA_CANDIDATE_OVERRIDE" \
+      -f "$archive_override" "$@"
+  else
+    compose_cmd --env-file "$APP_DIR/.env" \
+      -f "$staged_compose" \
+      -f "$SCHEMA_CANDIDATE_OVERRIDE" "$@"
+  fi
+}
+
+run_schema_preflight() {
+  [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] || return 0
+  PHASE="schema_preflight"
+  output="$TMP_ROOT/schema-preflight.out"
+  if ! schema_candidate_compose run --rm --no-deps schema-update \
+    python3 -m app.services.schema_update_pipeline --preflight \
+    >"$output" 2>&1; then
+    fail "Target schema/history/backup preflight failed before source activation."
+  fi
+  required=$(sed -n 's/^schema_migration_required=//p' "$output" |
+    tail -n 1)
+  case "$required" in
+    true) SCHEMA_MIGRATION_REQUIRED=1 ;;
+    false) SCHEMA_MIGRATION_REQUIRED=0 ;;
+    *) fail "Target schema preflight returned no exact migration decision." ;;
+  esac
+}
+
+refresh_schema_mutation_truth() {
+  [ "$SCHEMA_MUTATION_STARTED" = "1" ] && return 0
+  marker="$APP_DIR/data/update-control/schema-mutation-state.json"
+  [ -f "$marker" ] && [ ! -L "$marker" ] || return 0
+  request_id="${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}"
+  grep -Fq "\"request_id\": \"$request_id\"" "$marker" || return 0
+  if grep -Fq '"mutation_started": true' "$marker"; then
+    SCHEMA_MUTATION_STARTED=1
+  fi
+}
+
+stop_schema_writers() {
+  [ "$SCHEMA_MIGRATION_REQUIRED" = "1" ] || return 0
+  PHASE="schema_update"
+  write_helper_progress "running" "Pausing database writers immediately before backup and migration."
+  (
+    cd "$APP_DIR"
+    compose_with_archive_roots stop api recorder
+  ) || fail "Cannot pause API and recorder before schema migration."
+  SCHEMA_WRITERS_STOPPED=1
+}
+
+run_schema_migration() {
+  [ "$SCHEMA_MIGRATION_REQUIRED" = "1" ] || return 0
+  PHASE="schema_update"
+  output="$TMP_ROOT/schema-migration.out"
+  if ! schema_candidate_compose run --rm --no-deps schema-update \
+    python3 -m app.services.schema_update_pipeline --migrate \
+    >"$output" 2>&1; then
+    refresh_schema_mutation_truth
+    fail "Target database backup/migration did not complete."
+  fi
+  refresh_schema_mutation_truth
+  [ "$SCHEMA_MUTATION_STARTED" = "1" ] ||
+    fail "Schema migration completed without durable mutation truth."
+}
+
 prepare_update_helper_image() {
   [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] || return 0
   PHASE="helper_bootstrap"
@@ -1112,10 +1413,17 @@ fi
 
 confirm "Apply KM VMS update now?"
 preflight_permission_policy
+preflight_target_permission_policy
+prepare_schema_handoff
+normalize_legacy_schema_override_service
+staged_compose_config
+prepare_schema_candidate_image
+run_schema_preflight
+stop_schema_writers
+run_schema_migration
 overlay_source
 apply_permission_policy
 write_release_identity "precompose"
-normalize_legacy_schema_override_service
 compose_config
 prepare_update_helper_image
 rebuild_recreate

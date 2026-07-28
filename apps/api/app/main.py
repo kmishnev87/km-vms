@@ -35,7 +35,6 @@ from app.services.bootstrap import init_db, ensure_admin, ensure_owner_migration
 from app.services.recording_storage import ensure_archive_roots, migrate_archive_root_identities, write_archive_roots_runtime_files
 from app.services.hardware import refresh_hardware_capabilities
 from app.services.live_engine import start_cleanup_worker, stop_all_streams, stop_cleanup_worker
-from app.services.update_apply import adopt_update_apply_lineage_on_startup, start_update_apply_audit_coordinator, stop_update_apply_audit_coordinator
 from app.services.update_check import run_startup_due_check
 
 
@@ -179,14 +178,11 @@ def startup():
     start_automatic_retention_worker()
     start_archive_integrity_worker()
     start_archive_migration_worker()
-    adopt_update_apply_lineage_on_startup()
-    start_update_apply_audit_coordinator()
     start_cleanup_worker()
 
 
 @app.on_event("shutdown")
 def shutdown():
-    stop_update_apply_audit_coordinator()
     stop_archive_migration_worker()
     stop_archive_integrity_worker()
     stop_automatic_retention_worker()

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.7.29",
-  "tag": "v0.7.29",
-  "title": "KM VMS 0.7.29 — Compact Update Confirmation Dofix",
-  "summary": "Replaces the oversized update dialog with a compact application confirmation and keeps launch errors localized on the existing Maintenance surface.",
+  "version": "0.8.0",
+  "tag": "v0.8.0",
+  "title": "KM VMS 0.8.0 — Reasonable Core Reconstruction and Universal Direct Updates",
+  "summary": "Simplifies the in-app update path and supports direct updates from older releases through the canonical migration registry without mandatory intermediate application releases.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.7.29",
+  "source_ref": "v0.8.0",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,11 +16,13 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Uses the same compact confirmation pattern as other Settings actions, with only the question and Cancel/Update buttons.",
-    "Keeps version, release and commit details on the existing Maintenance surface instead of duplicating them in the confirmation.",
-    "Closes the confirmation immediately after submission and leaves launch reconciliation on the existing update panel.",
-    "Maps known admission failures to localized operator text instead of displaying raw backend responses.",
-    "Registers 0.7.28 as the immediate trusted predecessor for the 0.7.29 release.",
-    "Keeps update trust, admission, polling, database schema, service topology, retention and Stage 6.6.1 boundaries unchanged."
+    "Reduces update admission and control to one durable request, one helper execution and the minimum topology required by the read/write privilege boundary.",
+    "Allows supported older installations to update directly through the canonical migration registry without mandatory intermediate application releases.",
+    "Stops only for a genuinely active helper, schema mutation or proven incompatible database state; terminal history no longer blocks a new request.",
+    "Keeps mutation_started false until the first real schema, preparation or recovery mutation, allowing safe recovery from pre-mutation failures.",
+    "Preserves restart-tolerant status and recovery, compact application confirmation and bounded localized errors without raw backend response text.",
+    "Validates representative 0.7.18 and exact-schema-8 0.7.28 paths, tampered-history rejection, API restart recovery and healthy product services.",
+    "Registers 0.7.29 as the immediate schema-equivalent predecessor for the 0.8.0 release.",
+    "Keeps atomic release-slot activation and automatic post-activation rollback in the separate planned Stage 6.6.1."
   ]
 }

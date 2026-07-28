@@ -4,7 +4,7 @@ import hashlib
 import os
 import stat
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -15,17 +15,9 @@ from app.models.schema_version import SchemaMigrationHistory
 from app.services.schema_migrations import (
     MIGRATION_SOURCE,
     PRODUCTION_MIGRATIONS,
-    STAGE4101_STORAGE_FOUNDATION_MIGRATION,
-    STAGE41011_OPERATION_LINEAGE_MIGRATION,
-    STAGE4102_RETENTION_MIGRATION,
-    STAGE4103_ARCHIVE_INTEGRITY_MIGRATION,
-    STAGE4104_ARCHIVE_MIGRATION,
-    STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
     STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION,
-    STAGE660128_UNIVERSAL_SCHEMA_MIGRATION,
     execute_migration_plan,
     migration_definition_fingerprint,
-    preparation_definition_fingerprint,
     validate_stage660128_target_schema,
 )
 from app.services.schema_update_control import (
@@ -47,6 +39,7 @@ from app.services.schema_update_control import (
     target_shape_is_exact,
     transition_attempt_id,
     update_control_state,
+    validate_released_source_history,
     validate_stage_receipt_payload,
     write_stage_receipt,
 )
@@ -66,23 +59,6 @@ RETRY_MARKER = CONTROL_ROOT / "test-retry-once-consumed"
 
 class TerminalAttemptReplayEvidenceError(SchemaControlError):
     pass
-
-
-PUBLISHED_MIGRATIONS = {
-    migration.migration_id: migration
-    for migration in (
-        STAGE4101_STORAGE_FOUNDATION_MIGRATION,
-        STAGE41011_OPERATION_LINEAGE_MIGRATION,
-        STAGE4102_RETENTION_MIGRATION,
-        STAGE4103_ARCHIVE_INTEGRITY_MIGRATION,
-        STAGE4104_ARCHIVE_MIGRATION,
-        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
-    )
-}
-TARGET_MIGRATIONS = {
-    migration.migration_id: migration
-    for migration in PRODUCTION_MIGRATIONS.migrations
-}
 
 
 def _control_generation(db: Session, context: Any) -> int:
@@ -198,16 +174,17 @@ def _validate_released_history_lineage(
     *,
     generation: int,
 ) -> dict[str, int]:
+    source_evidence = validate_released_source_history(
+        db,
+        source_schema_version=context.source_schema_version,
+        allow_target_rows=True,
+    )
     rows = (
         db.query(SchemaMigrationHistory)
         .filter(SchemaMigrationHistory.source == MIGRATION_SOURCE)
         .order_by(SchemaMigrationHistory.id.asc())
         .all()
     )
-    seen: set[str] = set()
-    null_checksum_count = 0
-    exact_checksum_count = 0
-    compatibility_preparation_count = 0
     target_applied_count = 0
     target_started_count = 0
     version = current_schema_version(db)
@@ -230,62 +207,17 @@ def _validate_released_history_lineage(
             str(row.migration_id)
             == STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION.preparation_id
         ):
-            if row.migration_id in seen:
-                raise SchemaControlError(
-                    "compatibility_preparation_history_duplicate"
-                )
-            seen.add(str(row.migration_id))
-            if not (
-                row.status == "applied"
-                and row.previous_version in {5, 6, 7}
-                and row.target_version == row.previous_version
-                and row.schema_version == row.previous_version
-                and row.schema_version <= context.source_schema_version
-                and row.checksum
-                == preparation_definition_fingerprint(
-                    STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION
-                )
-            ):
-                raise SchemaControlError(
-                    "compatibility_preparation_history_invalid"
-                )
-            compatibility_preparation_count += 1
             continue
         migration_id = str(row.migration_id)
-        if migration_id in seen:
-            raise SchemaControlError("legacy_migration_history_duplicate")
-        seen.add(migration_id)
-        published_migration = PUBLISHED_MIGRATIONS.get(migration_id)
-        target_migration = TARGET_MIGRATIONS.get(migration_id)
-        migration = published_migration or target_migration
+        migration = PRODUCTION_MIGRATIONS.published_by_id(migration_id)
         if migration is None:
             raise SchemaControlError("legacy_migration_history_unknown_id")
-        if (
-            row.status != "applied"
-            or row.previous_version != migration.from_version
-            or row.target_version != migration.to_version
-            or row.schema_version != migration.to_version
-        ):
-            raise SchemaControlError("legacy_migration_history_lineage_invalid")
-
         if migration.to_version <= context.source_schema_version:
-            if published_migration is None:
-                raise SchemaControlError(
-                    "legacy_migration_history_unknown_id"
-                )
-            if row.checksum is None:
-                # Acceptance is not based on NULL.  It is based on the exact
-                # public tag commit + source schema version + source shape
-                # validated before control DDL.
-                null_checksum_count += 1
-            elif row.checksum == migration_definition_fingerprint(migration):
-                exact_checksum_count += 1
-            else:
-                raise SchemaControlError(
-                    "legacy_migration_history_definition_mismatch"
-                )
             continue
 
+        target_migration = PRODUCTION_MIGRATIONS.canonical_by_id(
+            migration_id
+        )
         if (
             target_migration is None
             or migration_id not in expected_target_ids
@@ -316,14 +248,7 @@ def _validate_released_history_lineage(
             "target_migration_registry_path_duplicate"
         )
     return {
-        "legacy_applied_count": (
-            null_checksum_count + exact_checksum_count
-        ),
-        "legacy_null_checksum_adopted_count": null_checksum_count,
-        "legacy_exact_checksum_count": exact_checksum_count,
-        "compatibility_preparation_count": (
-            compatibility_preparation_count
-        ),
+        **source_evidence,
         "target_applied_attempt_count": target_applied_count,
         "target_started_attempt_count": target_started_count,
     }
@@ -366,7 +291,9 @@ def _reconcile_started_attempts(db: Session, context: Any) -> int:
     reconciled = 0
     version = current_schema_version(db)
     for attempt in attempts:
-        migration = TARGET_MIGRATIONS.get(str(attempt.migration_id))
+        migration = PRODUCTION_MIGRATIONS.canonical_by_id(
+            str(attempt.migration_id)
+        )
         if migration is None:
             continue
         if (
@@ -503,6 +430,7 @@ def main(
     *,
     manage_lock: bool = True,
     pipeline_lock_backend_pid: int | None = None,
+    on_mutation_start: Callable[[], None] | None = None,
 ) -> None:
     context = None
     generation = 0
@@ -659,11 +587,19 @@ def main(
                     )
                     raise SystemExit(42 if retry.retryable else 43)
 
-                mutation_started = True
+                def mark_gate_mutation_started() -> None:
+                    nonlocal mutation_started
+                    if mutation_started:
+                        return
+                    if on_mutation_start is not None:
+                        on_mutation_start()
+                    mutation_started = True
+
                 result = execute_migration_plan(
                     db,
                     registry=PRODUCTION_MIGRATIONS,
                     target_version=active_migration.to_version,
+                    on_mutation_start=mark_gate_mutation_started,
                 )
                 committed = _canonical_transition_applied(
                     db,

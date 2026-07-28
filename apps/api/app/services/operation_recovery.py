@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -208,6 +208,7 @@ def main(
     *,
     manage_lock: bool = True,
     pipeline_lock_backend_pid: int | None = None,
+    on_mutation_start: Callable[[], None] | None = None,
 ) -> None:
     context = None
     generation = 0
@@ -261,6 +262,8 @@ def main(
                         "accepted_remediation_recovery_incomplete"
                     )
                 before_ids = {row["plan_id"] for row in remaining}
+                if on_mutation_start is not None:
+                    on_mutation_start()
                 physical_recovery_started = True
                 progressed = recover_pending_remediation_once(db)
                 db.expire_all()

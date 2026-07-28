@@ -86,6 +86,7 @@ VERSION_FILES = [
     Path("apps/web/package.json"),
     Path("apps/web/package-lock.json"),
     Path("release/km-vms-release.json"),
+    Path("release/km-vms-update-lineage.json"),
 ]
 LINEAGE_PATH = Path("release/km-vms-update-lineage.json")
 
@@ -238,24 +239,84 @@ def validate_update_lineage() -> dict:
     return payload
 
 
-def validate_immediate_previous_release(version: str) -> None:
-    lineage = validate_update_lineage()
-    commits = lineage["tag_commits"]
-    if list(commits)[-1] != version:
-        fail(
-            "update lineage must end at the immediate previous public "
-            f"release {version}"
-        )
+def tagged_commit(version: str) -> str:
     tag = f"v{version}"
     try:
-        tagged_commit = run_git(
+        return run_git(
             "rev-parse",
             "--verify",
             f"refs/tags/{tag}^{{commit}}",
         ).lower()
     except subprocess.CalledProcessError:
         fail(f"immediate previous public release tag is missing: {tag}")
-    if tagged_commit != commits[version]:
+
+
+def register_current_release(
+    version: str,
+    descriptor: dict,
+    *,
+    apply: bool,
+) -> dict:
+    """Append one schema-equivalent release without four manual edits."""
+
+    lineage = validate_update_lineage()
+    commits = lineage["tag_commits"]
+    tagged = tagged_commit(version)
+    if version in commits:
+        if commits[version] != tagged:
+            fail(
+                "immediate previous public release tag commit does not "
+                "match the canonical update lineage"
+            )
+        return lineage
+    previous = list(commits)[-1]
+    if parse_version(previous) >= parse_version(version):
+        fail(
+            "update lineage ends at a release that is not older than "
+            f"the current release {version}"
+        )
+    if descriptor.get("requires_migration") is not False:
+        fail(
+            "a schema-changing current release needs explicit lineage "
+            "metadata and cannot inherit the previous schema family"
+        )
+    lineage["tag_commits"][version] = tagged
+    lineage["schema_versions"][version] = lineage[
+        "schema_versions"
+    ][previous]
+    lineage["shape_fingerprints"][version] = lineage[
+        "shape_fingerprints"
+    ][previous]
+    previous_alternates = lineage["shape_alternates"].get(previous)
+    if previous_alternates:
+        lineage["shape_alternates"][version] = list(
+            previous_alternates
+        )
+    if apply:
+        write_json(LINEAGE_PATH, lineage)
+        print(
+            "Registered current schema-equivalent release "
+            f"{version} in update lineage"
+        )
+    else:
+        print(
+            "DRY-RUN: would register current schema-equivalent release "
+            f"{version} in update lineage"
+        )
+    return lineage
+
+
+def validate_immediate_previous_release(
+    version: str,
+    lineage: dict,
+) -> None:
+    commits = lineage["tag_commits"]
+    if list(commits)[-1] != version:
+        fail(
+            "update lineage must end at the immediate previous public "
+            f"release {version}"
+        )
+    if tagged_commit(version) != commits[version]:
         fail(
             "immediate previous public release tag commit does not match "
             "the canonical update lineage"
@@ -306,7 +367,13 @@ def prepare(version: str) -> None:
     current = versions()["release_descriptor"]
     if parse_version(version) <= parse_version(current):
         fail(f"target version {version} must be greater than current {current}")
-    validate_immediate_previous_release(current)
+    descriptor = validate_descriptor()
+    lineage = register_current_release(
+        current,
+        descriptor,
+        apply=not dry_run,
+    )
+    validate_immediate_previous_release(current, lineage)
     if dry_run:
         print(f"DRY-RUN: would prepare release version {version}")
         return

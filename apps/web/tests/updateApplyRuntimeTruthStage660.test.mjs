@@ -3,13 +3,11 @@ import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  UPDATE_APPLY_ABSENCE_SETTLE_MS,
   UPDATE_APPLY_MODAL_GRACE_MS,
-  UPDATE_APPLY_RECONCILIATION_STORAGE_KEY,
-  createUpdateApplyReconciliation,
-  reconcileUpdateApplySubmission,
-  resetUpdateApplyAbsenceEvidence,
-  sanitizeUpdateApplyReconciliation,
+  UPDATE_APPLY_PENDING_STORAGE_KEY,
+  createUpdateApplyPending,
+  reconcileUpdateApplyPending,
+  sanitizeUpdateApplyPending,
   updateApplyCandidateSnapshot,
   updateApplyErrorMessages,
   updateApplyOperatorModel,
@@ -20,7 +18,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pageSource = fs.readFileSync(resolve(__dirname, "../app/settings/page.js"), "utf8");
 const cssSource = fs.readFileSync(resolve(__dirname, "../app/styles/20-settings-maintenance.css"), "utf8");
-assert.equal(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY, "km_vms_update_apply_reconciliation_v1");
+assert.equal(UPDATE_APPLY_PENDING_STORAGE_KEY, "km_vms_update_apply_pending_v1");
 
 const t = {
   yes: "Yes",
@@ -83,7 +81,6 @@ const t = {
 const installedCommit = "a".repeat(40);
 const targetCommit = "b".repeat(40);
 const submissionId = "11111111-1111-4111-8111-111111111111";
-const submissionProof = "eyJhbGciOiJIUzI1NiJ9.eyJ0eXAiOiJ0ZXN0In0.signature";
 const runningApply = {
   request_id: "request-new",
   status: "rebuilding",
@@ -215,24 +212,12 @@ assert.equal(candidate.version, "0.7.24");
 assert.equal(candidate.commit, targetCommit);
 assert.equal(Object.isFrozen(candidate), true);
 
-const preSubmitStatus = {
-  request_id: "request-old",
-  status: "completed",
-  expected_commit: installedCommit,
-  updated_at: "2026-07-18T09:00:00Z",
-};
 const submittedAtMs = 100000;
-const record = createUpdateApplyReconciliation({
-  submission_id: submissionId,
-  submission_proof: submissionProof,
-  target_version: candidate.version,
-  target_commit: candidate.commit,
-  expires_at: "2026-07-19T00:15:00Z",
-}, candidate, preSubmitStatus, submittedAtMs);
-assert.equal(record.modalDeadlineAtMs, submittedAtMs + UPDATE_APPLY_MODAL_GRACE_MS);
-assert.equal(record.settleWindowMs, UPDATE_APPLY_ABSENCE_SETTLE_MS);
+const record = createUpdateApplyPending(submissionId, candidate, submittedAtMs);
+assert.equal(record.submissionId, submissionId);
+assert.equal(record.targetCommit, targetCommit);
 
-const accepted = reconcileUpdateApplySubmission(record, {
+const accepted = reconcileUpdateApplyPending(record, {
   schema_version: 1,
   request_id: "request-new",
   submission_id: submissionId,
@@ -246,10 +231,9 @@ const accepted = reconcileUpdateApplySubmission(record, {
   is_stale: false,
   updated_at: "2026-07-18T10:00:01Z",
   admission: {
-    schema_version: 2,
+    schema_version: 3,
     authority: "active",
-    state: "request_admitted",
-    linearizable: true,
+    state: "admitted",
     active: true,
     submission_id: submissionId,
     request_id: "request-new",
@@ -258,7 +242,7 @@ const accepted = reconcileUpdateApplySubmission(record, {
 }, submittedAtMs + 1000);
 assert.equal(accepted.outcome, "accepted");
 
-const conflict = reconcileUpdateApplySubmission(record, {
+const conflict = reconcileUpdateApplyPending(record, {
   schema_version: 1,
   request_id: "request-other",
   submission_id: "22222222-2222-4222-8222-222222222222",
@@ -272,10 +256,9 @@ const conflict = reconcileUpdateApplySubmission(record, {
   is_stale: false,
   updated_at: "2026-07-18T10:00:01Z",
   admission: {
-    schema_version: 2,
+    schema_version: 3,
     authority: "active",
-    state: "request_admitted",
-    linearizable: true,
+    state: "admitted",
     active: true,
     submission_id: "22222222-2222-4222-8222-222222222222",
     request_id: "request-other",
@@ -283,27 +266,41 @@ const conflict = reconcileUpdateApplySubmission(record, {
   },
 }, submittedAtMs + 1000);
 assert.equal(conflict.outcome, "conflict");
-assert.equal(conflict.record.state, "conflict");
 
-const firstUnchanged = reconcileUpdateApplySubmission(record, preSubmitStatus, submittedAtMs + 1000);
-assert.equal(firstUnchanged.outcome, "unresolved");
-assert.equal(firstUnchanged.record.successfulUnchangedReads, 0);
-const tooEarly = reconcileUpdateApplySubmission(firstUnchanged.record, preSubmitStatus, submittedAtMs + UPDATE_APPLY_ABSENCE_SETTLE_MS);
-assert.equal(tooEarly.outcome, "unresolved", "elapsed time and an ordinary old snapshot must not prove absence");
+const inactive = {
+  schema_version: 1,
+  request_id: null,
+  submission_id: null,
+  status: "idle",
+  admission: {
+    schema_version: 3,
+    authority: "inactive",
+    state: "idle",
+    active: false,
+    submission_id: null,
+    request_id: null,
+    target_commit: null,
+  },
+};
+assert.equal(
+  reconcileUpdateApplyPending(record, inactive, submittedAtMs + UPDATE_APPLY_MODAL_GRACE_MS - 1).outcome,
+  "pending",
+);
+assert.equal(
+  reconcileUpdateApplyPending(record, inactive, submittedAtMs + UPDATE_APPLY_MODAL_GRACE_MS).outcome,
+  "not_accepted",
+);
 
-const reset = resetUpdateApplyAbsenceEvidence(firstUnchanged.record);
-assert.equal(reset.successfulUnchangedReads, 0);
-assert.equal(reset.firstUnchangedAtMs, null);
-assert.equal(reconcileUpdateApplySubmission(reset, preSubmitStatus, submittedAtMs + UPDATE_APPLY_ABSENCE_SETTLE_MS + 2000).outcome, "unresolved");
-
-const restored = sanitizeUpdateApplyReconciliation(record, submittedAtMs + 5000);
-assert.equal(restored.modalDeadlineAtMs, record.modalDeadlineAtMs, "reload must not extend the modal deadline");
+const restored = sanitizeUpdateApplyPending(record, submittedAtMs + 5000);
 assert.equal(JSON.stringify(restored).includes("token"), false);
 assert.equal(JSON.stringify(restored).includes("Authorization"), false);
 
 assert.equal(pageSource.includes("window.confirm"), false);
 assert.equal(pageSource.includes("Promise.allSettled"), true);
-assert.equal(pageSource.includes("UPDATE_APPLY_RECONCILIATION_STORAGE_KEY"), true);
+assert.equal(pageSource.includes("UPDATE_APPLY_PENDING_STORAGE_KEY"), true);
+assert.equal(pageSource.includes("submission-ticket"), false);
+assert.equal(pageSource.includes("submission_proof"), false);
+assert.equal(pageSource.includes("/system/update/apply/reconciliation/"), false);
 assert.equal((pageSource.match(/apiFetch\("\/system\/update\/apply"/g) || []).length, 1);
 assert.equal(pageSource.includes("settingsUpdateApplySupport"), false);
 assert.equal(pageSource.includes('inert={updateApplyDialog ? true : undefined}'), true);

@@ -10,7 +10,7 @@ import zipfile
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
@@ -69,11 +69,8 @@ from app.services.backup_before_upgrade import BackupExecutionConfig, BackupSafe
 from app.services.upgrade_report import build_upgrade_report, upgrade_report_text_summary
 from app.services.update_check import UpdateCheckBlocked, build_update_status, run_update_check
 from app.services.update_apply import (
-    SUBMISSION_PROOF_HEADER,
     UpdateApplyBlocked,
     cancel_update_apply,
-    issue_update_apply_submission_ticket,
-    read_update_apply_reconciliation,
     read_update_apply_status,
     reject_forbidden_apply_fields,
     request_update_apply,
@@ -155,17 +152,9 @@ class UpdateApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     confirm: bool = False
-    submission_id: str | None = Field(default=None, max_length=80)
-    submission_proof: str = Field(min_length=1, max_length=2048)
+    submission_id: str = Field(min_length=36, max_length=36)
     expected_manifest_version: str | None = Field(default=None, max_length=80)
     expected_manifest_commit: str | None = Field(default=None, max_length=40)
-
-
-class UpdateApplySubmissionTicketRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    expected_manifest_version: str = Field(min_length=1, max_length=80)
-    expected_manifest_commit: str = Field(min_length=40, max_length=40)
 
 
 @router.get("/system/status")
@@ -339,26 +328,6 @@ def system_update_check(
     return result
 
 
-@router.post("/system/update/apply/submission-ticket")
-def system_update_apply_submission_ticket(
-    payload: UpdateApplySubmissionTicketRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("manage_settings")),
-):
-    try:
-        return issue_update_apply_submission_ticket(
-            db,
-            expected_manifest_version=payload.expected_manifest_version,
-            expected_manifest_commit=payload.expected_manifest_commit,
-            actor=current_user,
-        )
-    except UpdateApplyBlocked as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": exc.code, "message": str(exc), **exc.diagnostics},
-        )
-
-
 @router.post("/system/update/apply")
 def system_update_apply(
     payload: UpdateApplyRequest,
@@ -368,13 +337,11 @@ def system_update_apply(
 ):
     try:
         request_fields = payload.model_dump(exclude_none=True)
-        submission_proof = request_fields.pop("submission_proof")
         reject_forbidden_apply_fields(request_fields)
         result = request_update_apply(
             db,
             confirm=payload.confirm,
             submission_id=payload.submission_id,
-            submission_proof=submission_proof,
             expected_manifest_version=payload.expected_manifest_version,
             expected_manifest_commit=payload.expected_manifest_commit,
             actor=current_user,
@@ -399,28 +366,6 @@ def system_update_apply(
         response_status = status.HTTP_503_SERVICE_UNAVAILABLE if exc.code == "accepted_audit_unavailable" else status.HTTP_409_CONFLICT
         raise HTTPException(status_code=response_status, detail={"code": exc.code, "message": str(exc), **exc.diagnostics})
     return result
-
-
-@router.get("/system/update/apply/reconciliation/{submission_id}")
-def system_update_apply_reconciliation(
-    submission_id: str,
-    submission_proof: str | None = Header(default=None, alias=SUBMISSION_PROOF_HEADER),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("manage_settings")),
-):
-    actor_id = current_user.id
-    db.rollback()
-    try:
-        return read_update_apply_reconciliation(
-            submission_id=submission_id,
-            submission_proof=submission_proof,
-            actor_id=actor_id,
-        )
-    except UpdateApplyBlocked as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": exc.code, "message": str(exc), **exc.diagnostics},
-        )
 
 
 @router.get("/system/update/apply/status")

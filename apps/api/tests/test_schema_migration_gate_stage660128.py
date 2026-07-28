@@ -15,7 +15,9 @@ from app.services import schema_migration_gate as gate
 from app.services import schema_update_pipeline as pipeline
 from app.services.schema_migrations import (
     MIGRATION_SOURCE,
+    PRODUCTION_MIGRATIONS,
     STAGE4101_STORAGE_FOUNDATION_MIGRATION,
+    STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
     migration_definition_fingerprint,
 )
 from app.services import schema_update_control as control
@@ -60,21 +62,30 @@ def test_pipeline_holds_one_lock_while_running_all_phases(
     monkeypatch.setattr(
         pipeline.schema_preparation,
         "main",
-        lambda *, manage_lock, pipeline_lock_backend_pid: events.append(
+        lambda *,
+        manage_lock,
+        pipeline_lock_backend_pid,
+        on_mutation_start: events.append(
             f"prepare:{manage_lock}:{pipeline_lock_backend_pid}"
         ),
     )
     monkeypatch.setattr(
         pipeline.operation_recovery,
         "main",
-        lambda *, manage_lock, pipeline_lock_backend_pid: events.append(
+        lambda *,
+        manage_lock,
+        pipeline_lock_backend_pid,
+        on_mutation_start: events.append(
             f"recover:{manage_lock}:{pipeline_lock_backend_pid}"
         ),
     )
     monkeypatch.setattr(
         pipeline.schema_migration_gate,
         "main",
-        lambda *, manage_lock, pipeline_lock_backend_pid: events.append(
+        lambda *,
+        manage_lock,
+        pipeline_lock_backend_pid,
+        on_mutation_start: events.append(
             f"migrate:{manage_lock}:{pipeline_lock_backend_pid}"
         ),
     )
@@ -89,6 +100,235 @@ def test_pipeline_holds_one_lock_while_running_all_phases(
         "migrate:False:4242",
         "unlock",
         "session_closed",
+    ]
+
+
+def test_exact_schema_v8_preflight_is_read_only_noop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context()
+    context.source_schema_version = 8
+    events: list[str] = []
+    monkeypatch.setattr(
+        pipeline,
+        "load_initial_update_context",
+        lambda _db: context,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "validate_released_source_history",
+        lambda *_args, **_kwargs: (
+            events.append("history")
+            or {
+                "legacy_applied_count": 7,
+                "legacy_null_checksum_adopted_count": 0,
+                "legacy_exact_checksum_count": 7,
+                "compatibility_preparation_count": 0,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "build_backup_plan",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("no-op preflight requested a backup")
+        ),
+    )
+
+    loaded, summary = pipeline.read_only_update_preflight(object())
+
+    assert loaded is context
+    assert summary["migration_required"] is False
+    assert summary["migration_count"] == 0
+    assert summary["backup_preflight"]["required"] is False
+    assert events == ["history"]
+
+
+def test_safe_backup_failure_retries_without_duplicate_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context()
+    summary = {
+        "source_schema_version": 1,
+        "target_schema_version": 8,
+        "migration_required": True,
+        "migration_count": 7,
+        "migration_ids": [
+            migration.migration_id
+            for migration in PRODUCTION_MIGRATIONS.migrations
+        ],
+    }
+    events: list[str] = []
+    writes: list[dict] = []
+    attempts = {"count": 0}
+
+    class LockDb:
+        def rollback(self) -> None:
+            events.append("read_transaction_closed")
+
+    lock_db = LockDb()
+
+    class LockSession:
+        def __init__(self, _engine: object) -> None:
+            pass
+
+        def __enter__(self) -> object:
+            return lock_db
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+    def backup(*_args: object, **_kwargs: object) -> dict:
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("safe pre-mutation backup failure")
+        return {"backup_id": "backup-1"}
+
+    monkeypatch.setattr(pipeline, "Session", LockSession)
+    monkeypatch.setattr(pipeline, "acquire_schema_lock", lambda _db: 4242)
+    monkeypatch.setattr(
+        pipeline,
+        "release_schema_lock",
+        lambda _db: events.append("unlock"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "read_only_update_preflight",
+        lambda _db: (context, summary),
+    )
+    monkeypatch.setattr(pipeline, "create_backup_before_upgrade", backup)
+    monkeypatch.setattr(
+        pipeline,
+        "atomic_write",
+        lambda _path, payload: writes.append(dict(payload)),
+    )
+    def run_phases(
+        backend_pid: int,
+        *,
+        on_mutation_start,
+    ) -> None:
+        events.append(f"phases:{backend_pid}")
+        on_mutation_start()
+
+    monkeypatch.setattr(pipeline, "_run_phases", run_phases)
+
+    with pytest.raises(
+        RuntimeError,
+        match="safe pre-mutation backup failure",
+    ):
+        pipeline.run_update_migration()
+    assert [item["mutation_started"] for item in writes] == [False]
+    assert not any(item.startswith("phases:") for item in events)
+
+    pipeline.run_update_migration()
+
+    assert [item["mutation_started"] for item in writes] == [
+        False,
+        False,
+        True,
+        True,
+    ]
+    assert [item["state"] for item in writes] == [
+        "backup_pending",
+        "backup_pending",
+        "migrating",
+        "completed",
+    ]
+    assert events.count("phases:4242") == 1
+    assert events.index("read_transaction_closed") < events.index(
+        "phases:4242"
+    )
+
+
+def test_failure_before_first_real_mutation_keeps_marker_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = _context()
+    summary = {
+        "source_schema_version": 1,
+        "target_schema_version": 8,
+        "migration_required": True,
+        "migration_count": 7,
+        "migration_ids": [
+            migration.migration_id
+            for migration in PRODUCTION_MIGRATIONS.migrations
+        ],
+    }
+    writes: list[dict] = []
+    events: list[str] = []
+
+    class LockDb:
+        def rollback(self) -> None:
+            events.append("read_transaction_closed")
+
+    lock_db = LockDb()
+
+    class LockSession:
+        def __init__(self, _engine: object) -> None:
+            pass
+
+        def __enter__(self) -> object:
+            return lock_db
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+    def fail_before_mutation(
+        backend_pid: int,
+        *,
+        on_mutation_start,
+    ) -> None:
+        assert backend_pid == 4242
+        assert callable(on_mutation_start)
+        events.append("phases_entered")
+        raise RuntimeError("pre-mutation phase validation failed")
+
+    monkeypatch.setattr(pipeline, "Session", LockSession)
+    monkeypatch.setattr(
+        pipeline,
+        "acquire_schema_lock",
+        lambda _db: 4242,
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "release_schema_lock",
+        lambda _db: events.append("unlock"),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "read_only_update_preflight",
+        lambda _db: (context, summary),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "create_backup_before_upgrade",
+        lambda *_args, **_kwargs: {"backup_id": "backup-1"},
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "atomic_write",
+        lambda _path, payload: writes.append(dict(payload)),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "_run_phases",
+        fail_before_mutation,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="pre-mutation phase validation failed",
+    ):
+        pipeline.run_update_migration()
+
+    assert [
+        (item["state"], item["mutation_started"])
+        for item in writes
+    ] == [("backup_pending", False)]
+    assert events == [
+        "read_transaction_closed",
+        "phases_entered",
+        "unlock",
     ]
 
 
@@ -410,9 +650,264 @@ def test_source_history_keeps_strict_legacy_null_checksum_contract(
     assert evidence["target_applied_attempt_count"] == 0
 
 
-def test_exact_working_nas_v0724_shape_is_a_bounded_source_variant(
+@pytest.mark.parametrize("source_schema_version", range(1, 9))
+def test_each_canonical_schema_prefix_is_registry_driven(
+    source_schema_version: int,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr(
+        gate,
+        "current_schema_version",
+        lambda _db: source_schema_version,
+    )
+    context = _context()
+    context.source_schema_version = source_schema_version
+
+    with _lineage_session() as db:
+        for migration in PRODUCTION_MIGRATIONS.path(
+            1,
+            source_schema_version,
+        ):
+            db.add(
+                SchemaMigrationHistory(
+                    migration_id=migration.migration_id,
+                    previous_version=migration.from_version,
+                    target_version=migration.to_version,
+                    schema_version=migration.to_version,
+                    baseline_id="chapter06_stage4_baseline",
+                    app_version="0.7.27",
+                    app_build_version="test",
+                    status="applied",
+                    checksum=migration_definition_fingerprint(migration),
+                    source=MIGRATION_SOURCE,
+                    service_name="schema_migration_gate",
+                    details={},
+                )
+            )
+        db.commit()
+
+        evidence = gate._validate_released_history_lineage(
+            db,
+            context,
+            generation=7,
+        )
+
+    expected_count = max(source_schema_version - 1, 0)
+    assert evidence["legacy_applied_count"] == expected_count
+    assert evidence["legacy_exact_checksum_count"] == expected_count
+    assert evidence["target_applied_attempt_count"] == 0
+
+
+def test_published_schema_v8_history_from_v0727_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "current_schema_version", lambda _db: 8)
+    context = _context()
+    context.source_schema_version = 8
+    context.installed_version = "0.7.27"
+
+    with _lineage_session() as db:
+        for migration in PRODUCTION_MIGRATIONS.migrations:
+            db.add(
+                SchemaMigrationHistory(
+                    migration_id=migration.migration_id,
+                    previous_version=migration.from_version,
+                    target_version=migration.to_version,
+                    schema_version=migration.to_version,
+                    baseline_id="chapter06_stage4_baseline",
+                    app_version="0.7.27",
+                    app_build_version="test",
+                    status="applied",
+                    checksum=migration_definition_fingerprint(migration),
+                    source=MIGRATION_SOURCE,
+                    service_name="schema_migration_gate",
+                    details={},
+                )
+            )
+        db.commit()
+
+        evidence = gate._validate_released_history_lineage(
+            db,
+            context,
+            generation=7,
+        )
+
+    assert evidence["legacy_applied_count"] == 7
+    assert evidence["legacy_exact_checksum_count"] == 7
+    assert evidence["target_applied_attempt_count"] == 0
+
+
+def test_published_historical_v6_to_v7_variant_is_accepted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "current_schema_version", lambda _db: 7)
+    context = _context()
+    context.source_schema_version = 7
+    path_to_six = PRODUCTION_MIGRATIONS.path(1, 6)
+
+    with _lineage_session() as db:
+        for migration in (
+            *path_to_six,
+            STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
+        ):
+            db.add(
+                SchemaMigrationHistory(
+                    migration_id=migration.migration_id,
+                    previous_version=migration.from_version,
+                    target_version=migration.to_version,
+                    schema_version=migration.to_version,
+                    baseline_id="chapter06_stage4_baseline",
+                    app_version="0.7.23",
+                    app_build_version="test",
+                    status="applied",
+                    checksum=migration_definition_fingerprint(migration),
+                    source=MIGRATION_SOURCE,
+                    service_name="schema_migration_gate",
+                    details={},
+                )
+            )
+        db.commit()
+
+        evidence = gate._validate_released_history_lineage(
+            db,
+            context,
+            generation=7,
+        )
+
+    assert evidence["legacy_applied_count"] == 6
+
+
+def test_two_published_ids_for_one_edge_are_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "current_schema_version", lambda _db: 7)
+    context = _context()
+    context.source_schema_version = 7
+    canonical = PRODUCTION_MIGRATIONS.path(6, 7)[0]
+
+    with _lineage_session() as db:
+        for migration in (
+            *PRODUCTION_MIGRATIONS.path(1, 6),
+            STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
+            canonical,
+        ):
+            db.add(
+                SchemaMigrationHistory(
+                    migration_id=migration.migration_id,
+                    previous_version=migration.from_version,
+                    target_version=migration.to_version,
+                    schema_version=migration.to_version,
+                    baseline_id="chapter06_stage4_baseline",
+                    app_version="0.7.27",
+                    app_build_version="test",
+                    status="applied",
+                    checksum=migration_definition_fingerprint(migration),
+                    source=MIGRATION_SOURCE,
+                    service_name="schema_migration_gate",
+                    details={},
+                )
+            )
+        db.commit()
+
+        with pytest.raises(
+            gate.SchemaControlError,
+            match="legacy_migration_history_duplicate_edge",
+        ):
+            gate._validate_released_history_lineage(
+                db,
+                context,
+                generation=7,
+            )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    (
+        ("checksum", "f" * 64, "definition_mismatch"),
+        ("previous_version", 0, "lineage_invalid"),
+        ("target_version", 3, "lineage_invalid"),
+    ),
+)
+def test_known_history_with_tampered_definition_or_edge_is_rejected(
+    field: str,
+    value: object,
+    error: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "current_schema_version", lambda _db: 2)
+    context = _context()
+    context.source_schema_version = 2
+    migration = STAGE4101_STORAGE_FOUNDATION_MIGRATION
+    values = {
+        "migration_id": migration.migration_id,
+        "previous_version": migration.from_version,
+        "target_version": migration.to_version,
+        "schema_version": migration.to_version,
+        "baseline_id": "chapter06_stage4_baseline",
+        "app_version": "0.7.18",
+        "app_build_version": "test",
+        "status": "applied",
+        "checksum": migration_definition_fingerprint(migration),
+        "source": MIGRATION_SOURCE,
+        "service_name": "schema_migration_gate",
+        "details": {},
+    }
+    values[field] = value
+
+    with _lineage_session() as db:
+        db.add(SchemaMigrationHistory(**values))
+        db.commit()
+        with pytest.raises(gate.SchemaControlError, match=error):
+            gate._validate_released_history_lineage(
+                db,
+                context,
+                generation=7,
+            )
+
+
+def test_schema_v8_history_still_rejects_an_unpublished_migration_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(gate, "current_schema_version", lambda _db: 8)
+    context = _context()
+    context.source_schema_version = 8
+
+    with _lineage_session() as db:
+        db.add(
+            SchemaMigrationHistory(
+                migration_id="unpublished_schema_transition_v99",
+                previous_version=8,
+                target_version=8,
+                schema_version=8,
+                baseline_id="chapter06_stage4_baseline",
+                app_version="0.7.27",
+                app_build_version="test",
+                status="applied",
+                checksum="f" * 64,
+                source=MIGRATION_SOURCE,
+                service_name="schema_migration_gate",
+                details={},
+            )
+        )
+        db.commit()
+
+        with pytest.raises(
+            gate.SchemaControlError,
+            match="legacy_migration_history_unknown_id",
+        ):
+            gate._validate_released_history_lineage(
+                db,
+                context,
+                generation=7,
+            )
+
+
+def test_declared_v0724_shape_alternate_is_a_bounded_source_variant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    alternate = next(
+        iter(control.SOURCE_SHAPE_FINGERPRINT_ALTERNATES["0.7.24"])
+    )
     monkeypatch.setattr(
         control,
         "_source_identity_payload",
@@ -432,9 +927,7 @@ def test_exact_working_nas_v0724_shape_is_a_bounded_source_variant(
     monkeypatch.setattr(
         control,
         "database_shape_fingerprint",
-        lambda _db: (
-            control.WORKING_NAS_V0724_SOURCE_SHAPE_FINGERPRINT
-        ),
+        lambda _db: alternate,
     )
 
     lineage = control.validate_source_lineage(
@@ -448,12 +941,12 @@ def test_exact_working_nas_v0724_shape_is_a_bounded_source_variant(
         "0.7.24",
         control.SOURCE_TAG_COMMITS["0.7.24"],
         7,
-        control.WORKING_NAS_V0724_SOURCE_SHAPE_FINGERPRINT,
+        alternate,
     )
     assert control.SOURCE_SHAPE_FINGERPRINT_ALTERNATES == {
         "0.7.24": frozenset(
             {
-                control.WORKING_NAS_V0724_SOURCE_SHAPE_FINGERPRINT
+                alternate
             }
         )
     }

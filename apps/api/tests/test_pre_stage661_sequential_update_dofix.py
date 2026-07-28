@@ -213,6 +213,11 @@ def test_completed_rollover_rebinds_every_control_field_and_increments_generatio
     monkeypatch.setattr(control, "_control_tables_present", lambda _db: (True, True))
     monkeypatch.setattr(
         control,
+        "control_table_population",
+        lambda _db: (1, 1),
+    )
+    monkeypatch.setattr(
+        control,
         "read_signed",
         lambda _path, **_kwargs: {"state": "adopted"},
     )
@@ -273,6 +278,73 @@ def test_completed_rollover_rebinds_every_control_field_and_increments_generatio
     assert auth[0]["generation"] == 8
 
 
+def test_precreated_empty_control_tables_bootstrap_first_update(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            SchemaMigrationControl.__table__,
+            SchemaMigrationAttempt.__table__,
+        ],
+    )
+    session = sessionmaker(bind=engine)()
+    context = update_context()
+    receipts: list[dict] = []
+    auth: list[dict] = []
+    monkeypatch.setattr(
+        control,
+        "_control_tables_present",
+        lambda _db: (True, True),
+    )
+    monkeypatch.setattr(
+        control,
+        "read_signed",
+        lambda _path, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        control,
+        "write_signed",
+        lambda _path, payload: receipts.append(payload),
+    )
+    monkeypatch.setattr(
+        control,
+        "write_auth_snapshot",
+        lambda **kwargs: auth.append(kwargs),
+    )
+    monkeypatch.setattr(
+        control,
+        "verify_control_shape",
+        lambda _db: "9" * 64,
+    )
+
+    generation = control.bootstrap_or_resume_control(
+        session,
+        context=context,
+        actor_user_id=1,
+        actor_subject="owner",
+        actor_role="owner",
+    )
+
+    current = session.get(
+        SchemaMigrationControl,
+        control.CURRENT_STATE_ID,
+    )
+    attempts = session.query(SchemaMigrationAttempt).all()
+    assert generation == 1
+    assert current is not None
+    assert current.request_id == NEW_REQUEST_ID
+    assert current.source_schema_version == 8
+    assert len(attempts) == 1
+    assert attempts[0].status == "applied"
+    assert [payload["state"] for payload in receipts] == [
+        "prepared",
+        "adopted",
+    ]
+    assert auth[0]["generation"] == 1
+
+
 @pytest.mark.parametrize(
     ("state", "error"),
     (
@@ -295,6 +367,11 @@ def test_noncompleted_foreign_control_cannot_roll_over(
     }
     db = _RolloverDb(row)
     monkeypatch.setattr(control, "_control_tables_present", lambda _db: (True, True))
+    monkeypatch.setattr(
+        control,
+        "control_table_population",
+        lambda _db: (1, 1),
+    )
     monkeypatch.setattr(
         control,
         "read_signed",

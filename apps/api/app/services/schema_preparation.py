@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
@@ -25,6 +25,7 @@ from app.services.schema_update_control import (
     bootstrap_or_resume_control,
     canonical_schema_history_fingerprint,
     classify_retry,
+    control_table_population,
     current_schema_version,
     database_shape_fingerprint,
     finish_attempt,
@@ -60,7 +61,18 @@ def _control_tables_exist(db: Session) -> bool:
     attempts = inspector.has_table("schema_migration_attempts")
     if control != attempts:
         raise SchemaControlError("migration_control_partial_shape")
-    return control
+    if not control:
+        return False
+    control_rows, attempt_rows = control_table_population(db)
+    if control_rows == 0:
+        if attempt_rows != 0:
+            raise SchemaControlError(
+                "migration_control_empty_state_inconsistent"
+            )
+        # Released schema-v8 databases already contain these tables, but they
+        # have no state until their first target-controlled update.
+        return False
+    return True
 
 
 def _record_preparation_history(
@@ -127,6 +139,7 @@ def main(
     *,
     manage_lock: bool = True,
     pipeline_lock_backend_pid: int | None = None,
+    on_mutation_start: Callable[[], None] | None = None,
 ) -> None:
     context = None
     generation = -1
@@ -275,6 +288,8 @@ def main(
                 raise SchemaControlError(
                     "test_injected_preparation_failure_before_ddl"
                 )
+            if on_mutation_start is not None:
+                on_mutation_start()
             mutation_started = True
             applied = preparation.apply(db) or {}
             verified = preparation.verify(db) or {}

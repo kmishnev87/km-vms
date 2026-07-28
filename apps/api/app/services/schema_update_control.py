@@ -27,9 +27,7 @@ from app.models.schema_version import (
 from app.services.schema_migrations import (
     MIGRATION_SOURCE,
     PRODUCTION_MIGRATIONS,
-    STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
     STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION,
-    STAGE660128_UNIVERSAL_SCHEMA_MIGRATION,
     migration_definition_fingerprint,
     migration_registry_fingerprint,
     preparation_definition_fingerprint,
@@ -304,9 +302,6 @@ SOURCE_SHAPE_FINGERPRINT_ALTERNATES: dict[str, frozenset[str]] = {
     version: frozenset(values)
     for version, values in _UPDATE_LINEAGE["shape_alternates"].items()
 }
-WORKING_NAS_V0724_SOURCE_SHAPE_FINGERPRINT = next(
-    iter(SOURCE_SHAPE_FINGERPRINT_ALTERNATES["0.7.24"])
-)
 TARGET_SHAPE_FINGERPRINT = (
     "18055105892ae40bff200d32fa6a898d"
     "18ffbde340c164d6585c3c893f4f501a"
@@ -1207,14 +1202,138 @@ def _validate_fresh_target_history(
 
 
 def _known_history_migrations() -> dict[str, Any]:
-    migrations = {
+    return {
         migration.migration_id: migration
-        for migration in PRODUCTION_MIGRATIONS.migrations
+        for migration in PRODUCTION_MIGRATIONS.published_migrations
     }
-    migrations[
-        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION.migration_id
-    ] = STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION
-    return migrations
+
+
+def validate_released_source_history(
+    db: Session | None,
+    *,
+    source_schema_version: int,
+    allow_target_rows: bool,
+    histories: Iterable[SchemaMigrationHistory] | None = None,
+) -> dict[str, int]:
+    """Validate one ordered published migration prefix for a trusted source.
+
+    The caller first binds the installed commit, declared source schema and
+    physical DB shape.  A NULL checksum from an older release is therefore
+    accepted only inside that already-bound source prefix.  New target-side
+    rows always require their canonical fingerprint in the gate.
+    """
+
+    if not 1 <= source_schema_version <= TARGET_SCHEMA_VERSION:
+        raise SchemaControlError("migration_history_version_invalid")
+    if histories is None:
+        if db is None:
+            raise SchemaControlError("migration_history_session_missing")
+        rows = (
+            db.query(SchemaMigrationHistory)
+            .filter(SchemaMigrationHistory.source == MIGRATION_SOURCE)
+            .order_by(SchemaMigrationHistory.id.asc())
+            .all()
+        )
+    else:
+        rows = [
+            row
+            for row in histories
+            if row.source == MIGRATION_SOURCE
+        ]
+    seen_ids: set[str] = set()
+    seen_edges: set[tuple[int, int]] = set()
+    source_edges: list[tuple[int, int]] = []
+    null_checksum_count = 0
+    exact_checksum_count = 0
+    preparation_count = 0
+
+    for row in rows:
+        migration_id = str(row.migration_id)
+        if (
+            migration_id
+            == STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION.preparation_id
+        ):
+            if migration_id in seen_ids:
+                raise SchemaControlError(
+                    "compatibility_preparation_history_duplicate"
+                )
+            seen_ids.add(migration_id)
+            if not (
+                row.status == "applied"
+                and row.previous_version in {5, 6, 7}
+                and row.target_version == row.previous_version
+                and row.schema_version == row.previous_version
+                and row.schema_version <= source_schema_version
+                and row.checksum
+                == preparation_definition_fingerprint(
+                    STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION
+                )
+            ):
+                raise SchemaControlError(
+                    "compatibility_preparation_history_invalid"
+                )
+            preparation_count += 1
+            continue
+
+        if migration_id in seen_ids:
+            raise SchemaControlError("legacy_migration_history_duplicate")
+        seen_ids.add(migration_id)
+        migration = PRODUCTION_MIGRATIONS.published_by_id(migration_id)
+        if migration is None:
+            raise SchemaControlError("legacy_migration_history_unknown_id")
+        edge = (migration.from_version, migration.to_version)
+        if edge in seen_edges:
+            raise SchemaControlError(
+                "legacy_migration_history_duplicate_edge"
+            )
+        seen_edges.add(edge)
+        if (
+            row.status != "applied"
+            or row.previous_version != migration.from_version
+            or row.target_version != migration.to_version
+            or row.schema_version != migration.to_version
+            or PRODUCTION_MIGRATIONS.canonical_for_edge(*edge) is None
+        ):
+            raise SchemaControlError(
+                "legacy_migration_history_lineage_invalid"
+            )
+        if migration.to_version > source_schema_version:
+            if not allow_target_rows:
+                raise SchemaControlError(
+                    "migration_history_ahead_of_source"
+                )
+            continue
+        if row.checksum is None:
+            null_checksum_count += 1
+        elif row.checksum == migration_definition_fingerprint(migration):
+            exact_checksum_count += 1
+        else:
+            raise SchemaControlError(
+                "legacy_migration_history_definition_mismatch"
+            )
+        source_edges.append(edge)
+
+    if source_edges:
+        previous_target = source_edges[0][0]
+        for from_version, to_version in source_edges:
+            if from_version != previous_target:
+                raise SchemaControlError(
+                    "legacy_migration_history_path_inconsistent"
+                )
+            previous_target = to_version
+        if previous_target != source_schema_version:
+            raise SchemaControlError(
+                "legacy_migration_history_path_incomplete"
+            )
+
+    return {
+        "legacy_applied_count": (
+            null_checksum_count + exact_checksum_count
+        ),
+        "legacy_null_checksum_adopted_count": null_checksum_count,
+        "legacy_exact_checksum_count": exact_checksum_count,
+        "compatibility_preparation_count": preparation_count,
+    }
 
 
 def _validate_terminal_control(
@@ -1273,6 +1392,12 @@ def _validate_migrated_target_history(
     control: SchemaMigrationControl,
     attempts: list[SchemaMigrationAttempt],
 ) -> None:
+    validate_released_source_history(
+        None,
+        source_schema_version=control.source_schema_version,
+        allow_target_rows=True,
+        histories=histories,
+    )
     seen: set[tuple[str, str]] = set()
     known = _known_history_migrations()
     baseline_count = 0
@@ -1373,8 +1498,6 @@ def _validate_migrated_target_history(
     if (
         len(expected_ids) != len(expected_path)
         or not expected_ids.issubset(observed_runner)
-        or STAGE660128_UNIVERSAL_SCHEMA_MIGRATION.migration_id
-        not in observed_runner
     ):
         raise SchemaControlError(
             "no_active_target_history_lineage_incomplete"
@@ -2633,10 +2756,6 @@ def expected_source_lineage(
             )
         )
     )
-    if request_id.startswith("stage609-") != (
-        installed_version in {"0.7.2", "0.7.3"}
-    ):
-        raise SchemaControlError("request_id_source_family_mismatch")
     return (
         installed_version,
         installed_commit,
@@ -3062,6 +3181,16 @@ def _control_tables_present(db: Session) -> tuple[bool, bool]:
     )
 
 
+def control_table_population(db: Session) -> tuple[int, int]:
+    control_rows = db.execute(
+        text("SELECT COUNT(*) FROM schema_migration_control")
+    ).scalar_one()
+    attempt_rows = db.execute(
+        text("SELECT COUNT(*) FROM schema_migration_attempts")
+    ).scalar_one()
+    return int(control_rows), int(attempt_rows)
+
+
 def verify_control_shape(db: Session) -> str:
     inspector = inspect(db.connection())
     expected_columns = {
@@ -3478,14 +3607,23 @@ def bootstrap_or_resume_control(
     has_control, has_attempts = _control_tables_present(db)
     if has_control != has_attempts:
         raise SchemaControlError("migration_control_partial_shape")
-    if not has_control:
+    precreated_empty_tables = False
+    if has_control:
+        control_rows, attempt_rows = control_table_population(db)
+        if control_rows == 0:
+            if attempt_rows != 0:
+                raise SchemaControlError(
+                    "migration_control_empty_state_inconsistent"
+                )
+            precreated_empty_tables = True
+    if not has_control or precreated_empty_tables:
         existing_receipt = read_signed(
             CONTROL_BOOTSTRAP_RECEIPT_PATH,
             required=False,
         )
         if existing_receipt is not None:
             raise SchemaControlError(
-                "control_bootstrap_receipt_without_tables"
+                "control_bootstrap_receipt_without_state"
             )
         generation = 1
         write_auth_snapshot(
@@ -3504,7 +3642,8 @@ def bootstrap_or_resume_control(
                 control_shape_fingerprint=None,
             ),
         )
-        db.execute(text(CONTROL_DDL))
+        if not has_control:
+            db.execute(text(CONTROL_DDL))
         control_shape = verify_control_shape(db)
         now = naive_utc_now()
         db.execute(

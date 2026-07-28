@@ -53,7 +53,7 @@ assert.equal(settingsPage.includes("expected_manifest_commit"), true);
 assert.equal(settingsPage.includes('type="password"'), true);
 assert.equal(settingsPage.includes("github-token"), false);
 assert.equal(settingsPage.includes("localStorage"), false);
-assert.equal(settingsPage.includes("UPDATE_APPLY_RECONCILIATION_STORAGE_KEY"), true);
+assert.equal(settingsPage.includes("UPDATE_APPLY_PENDING_STORAGE_KEY"), true);
 assert.equal(settingsPage.includes("sessionStorage.setItem(TOKEN_KEY"), false);
 assert.equal(settingsPage.includes("/system/migrations/apply"), false);
 assert.equal(settingsPage.includes("/system/restore/apply"), false);

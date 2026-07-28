@@ -31,8 +31,10 @@ const confirmSource = pageSource.slice(confirmStart, confirmEnd);
 
 assert.ok(
   confirmSource.indexOf("setUpdateApplyDialog(null)") <
-    confirmSource.indexOf('apiFetch("/system/update/apply/submission-ticket"'),
+    confirmSource.indexOf('apiFetch("/system/update/apply"'),
 );
+assert.equal(confirmSource.includes("submission-ticket"), false);
+assert.equal(confirmSource.includes("submission_proof"), false);
 assert.equal(confirmSource.includes("humanErrorText"), false);
 assert.equal(confirmSource.includes("safeUpdateLaunchError(err)"), true);
 assert.equal(confirmSource.includes("setMaintenanceActionResult"), true);
@@ -40,11 +42,11 @@ assert.equal(confirmSource.includes("displayReason: message"), true);
 assert.equal(confirmSource.includes("showToast"), true);
 
 const safeErrorStart = pageSource.indexOf("function safeUpdateLaunchError");
-const safeErrorEnd = pageSource.indexOf("function commitUpdateApplyReconciliation", safeErrorStart);
+const safeErrorEnd = pageSource.indexOf("function commitUpdateApplyPending", safeErrorStart);
 assert.ok(safeErrorStart >= 0 && safeErrorEnd > safeErrorStart);
 const safeErrorSource = pageSource.slice(safeErrorStart, safeErrorEnd);
 assert.equal(safeErrorSource.includes('"update_already_running"'), true);
-assert.equal(safeErrorSource.includes('"update_admission_unknown"'), true);
+assert.equal(safeErrorSource.includes('"update_admission_unknown"'), false);
 assert.equal(safeErrorSource.includes("error?.message"), false);
 assert.equal(
   pageSource.includes("maintenanceActionResult.displayReason || formatMaintenanceMessage"),

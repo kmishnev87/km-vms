@@ -16,6 +16,8 @@ from typing import Any, Sequence
 
 
 MAX_CONTROL_BYTES = 64 * 1024
+MAX_LEGACY_ADMISSION_BYTES = 512 * 1024
+MAX_LEGACY_ADMISSION_ENTRIES = 256
 DEFAULT_TIMEOUT_SECONDS = 7800
 MIN_TIMEOUT_SECONDS = 30
 MAX_TIMEOUT_SECONDS = 9000
@@ -34,6 +36,62 @@ COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 ARCHIVE_RUNTIME_TARGET_RE = re.compile(
     r"^/storage/archive-roots/[A-Za-z0-9_.-]{1,180}$"
 )
+SUBMISSION_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+LEGACY_HISTORICAL_REQUEST_FIELDS = {
+    "schema_version",
+    "request_id",
+    "requested_at",
+    "requested_by",
+    "intent",
+    "source",
+    "confirmed",
+    "preflight_required",
+    "status_path",
+}
+LEGACY_SNAPSHOT_REQUEST_FIELDS = LEGACY_HISTORICAL_REQUEST_FIELDS | {
+    "apply_candidate",
+}
+SCHEMA_RETRY_REQUEST_FIELDS = LEGACY_HISTORICAL_REQUEST_FIELDS | {
+    "retry_of_request_id",
+    "migration_attempt_id",
+}
+CURRENT_SINGLE_REQUEST_FIELDS = {
+    "schema_version",
+    "document_type",
+    "request_id",
+    "submission_id",
+    "requested_at",
+    "updated_at",
+    "requested_by",
+    "intent",
+    "source",
+    "apply_candidate",
+    "confirmed",
+    "preflight_required",
+    "status_path",
+    "state",
+    "claimed_at",
+    "terminal",
+    "audit_event_id",
+}
+NORMALIZED_REQUEST_FIELDS = {
+    "schema_version",
+    "request_id",
+    "submission_id",
+    "requested_at",
+    "requested_by",
+    "intent",
+    "source",
+    "apply_candidate",
+    "confirmed",
+    "preflight_required",
+    "status_path",
+}
 
 UPDATE_LINEAGE_FILENAME = "km-vms-update-lineage.json"
 UPDATE_LINEAGE_MAX_BYTES = 128 * 1024
@@ -170,7 +228,12 @@ def utcnow() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def read_json_object(path: Path, *, missing_ok: bool = False) -> dict[str, Any] | None:
+def read_json_object(
+    path: Path,
+    *,
+    missing_ok: bool = False,
+    max_bytes: int = MAX_CONTROL_BYTES,
+) -> dict[str, Any] | None:
     try:
         if path.is_symlink():
             raise BridgeError("control_file_invalid", "Update control data is not a regular file.")
@@ -180,7 +243,7 @@ def read_json_object(path: Path, *, missing_ok: bool = False) -> dict[str, Any] 
             raise BridgeError("control_file_missing", "Required update control data is missing.")
         if not path.is_file() or path.is_symlink():
             raise BridgeError("control_file_invalid", "Update control data is not a regular file.")
-        if path.stat().st_size > MAX_CONTROL_BYTES:
+        if path.stat().st_size > max_bytes:
             raise BridgeError("control_file_too_large", "Update control data exceeds its size limit.")
         payload = json.loads(path.read_text(encoding="utf-8"))
     except BridgeError:
@@ -410,16 +473,47 @@ def extract_active_request(
     *,
     request_id: str,
 ) -> dict[str, Any]:
-    if (
-        type(authority.get("schema_version")) is int
-        and authority["schema_version"] == 1
-    ):
+    schema_version = authority.get("schema_version")
+    if type(schema_version) is int and schema_version == 1:
+        if frozenset(authority) not in {
+            frozenset(LEGACY_HISTORICAL_REQUEST_FIELDS),
+            frozenset(LEGACY_SNAPSHOT_REQUEST_FIELDS),
+            frozenset(SCHEMA_RETRY_REQUEST_FIELDS),
+        }:
+            raise BridgeError(
+                "source_handoff_authority_invalid",
+                "Legacy update request has an unsupported published shape.",
+            )
         if authority.get("request_id") != request_id:
             raise BridgeError(
                 "source_handoff_request_mismatch",
                 "Legacy update request does not match the active helper request.",
             )
         return authority
+    if type(schema_version) is int and schema_version == 3:
+        source = authority.get("source")
+        if (
+            set(authority) != CURRENT_SINGLE_REQUEST_FIELDS
+            or authority.get("document_type") != "update_apply_request"
+            or authority.get("request_id") != request_id
+            or authority.get("state") != "claimed"
+            or authority.get("terminal") is not None
+            or type(authority.get("submission_id")) is not str
+            or not SUBMISSION_ID_RE.fullmatch(authority["submission_id"])
+            or type(authority.get("claimed_at")) is not str
+            or not authority["claimed_at"]
+            or type(source) is not dict
+            or type(source.get("commit")) is not str
+            or not COMMIT_SHA_RE.fullmatch(source["commit"])
+        ):
+            raise BridgeError(
+                "source_handoff_authority_invalid",
+                "Current update admission is not an exact claimed request.",
+            )
+        return {
+            key: authority[key]
+            for key in NORMALIZED_REQUEST_FIELDS
+        } | {"schema_version": 2}
     document_fields = {
         "schema_version",
         "document_type",
@@ -434,7 +528,7 @@ def extract_active_request(
         or authority.get("document_type")
         != "update_apply_admission"
         or type(authority.get("entries")) is not list
-        or len(authority["entries"]) > 64
+        or len(authority["entries"]) > MAX_LEGACY_ADMISSION_ENTRIES
     ):
         raise BridgeError(
             "source_handoff_authority_invalid",
@@ -484,6 +578,7 @@ def extract_active_request(
         or request.get("submission_id") != entry.get("submission_id")
         or type(request.get("schema_version")) is not int
         or request["schema_version"] != 2
+        or set(request) != NORMALIZED_REQUEST_FIELDS
         or type(request_source) is not dict
         or type(entry_commit) is not str
         or not COMMIT_SHA_RE.fullmatch(entry_commit)
@@ -503,11 +598,18 @@ def capture_installed_source_identity(
     app_dir: Path,
     *,
     request_id: str,
+    target_source_dir: Path | None = None,
 ) -> None:
     control_dir = app_dir / "data/update-control"
-    authority = read_json_object(control_dir / "update-request.json")
+    authority = read_json_object(
+        control_dir / "update-request.json",
+        max_bytes=MAX_LEGACY_ADMISSION_BYTES,
+    )
     source_identity = read_json_object(app_dir / ".km-vms-source.json")
-    release_identity = read_json_object(app_dir / "release/km-vms-release.json")
+    release_root = target_source_dir or app_dir
+    release_identity = read_json_object(
+        release_root / "release/km-vms-release.json"
+    )
     assert authority is not None
     assert source_identity is not None
     assert release_identity is not None
@@ -665,6 +767,38 @@ def capture_installed_source_identity(
             atomic_write_json(request_path, request)
     else:
         atomic_write_json(request_path, request)
+
+
+def handoff(args: argparse.Namespace) -> int:
+    """Normalize one legacy/current request before any source overlay."""
+
+    app_dir = require_app_dir(args.app_dir)
+    target_source_dir = Path(args.target_source_dir).resolve()
+    if (
+        not target_source_dir.is_dir()
+        or target_source_dir.is_symlink()
+        or not (
+            target_source_dir / "release/km-vms-release.json"
+        ).is_file()
+    ):
+        raise BridgeError(
+            "target_source_invalid",
+            "The staged target source is unavailable or incomplete.",
+        )
+    request_id = require_request_id(args.request_id)
+    capture_installed_source_identity(
+        app_dir,
+        request_id=request_id,
+        target_source_dir=target_source_dir,
+    )
+    archive_override_changed = normalize_archive_roots_override(app_dir)
+    print("schema_handoff=PASS")
+    print(f"schema_handoff_request_id={request_id}")
+    print(
+        "archive_roots_override="
+        + ("normalized" if archive_override_changed else "unchanged")
+    )
+    return 0
 
 
 def read_status(path: Path) -> tuple[str | None, str, dict[str, Any]] | None:
@@ -1091,22 +1225,25 @@ def wait_for_terminal_status(
     raise BridgeError("terminal_wait_timeout", "Timed out waiting for terminal update completion.")
 
 
-def wait_for_helper_lease_release(control_dir: Path, timeout_seconds: int = 60) -> None:
+def acquire_helper_transition_lease(control_dir: Path):
     lease_file = control_dir / "update-helper-claim.lock"
-    deadline = time.monotonic() + timeout_seconds
     try:
-        with lease_file.open("a+", encoding="utf-8") as stream:
-            while time.monotonic() < deadline:
-                try:
-                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except BlockingIOError:
-                    time.sleep(1)
-                    continue
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
-                return
+        stream = lease_file.open("a+", encoding="utf-8")
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        return stream
     except OSError as exc:
+        try:
+            stream.close()
+        except (NameError, OSError):
+            pass
         raise BridgeError("helper_lease_unavailable", "Cannot inspect the active update-helper lease.") from exc
-    raise BridgeError("helper_lease_timeout", "The active update-helper did not release its execution lease.")
+
+
+def release_helper_transition_lease(stream: Any) -> None:
+    try:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+    finally:
+        stream.close()
 
 
 def compose_base(app_dir: Path, project_name: str) -> list[str]:
@@ -1194,12 +1331,15 @@ def refresh(args: argparse.Namespace) -> int:
     )
     try:
         ensure_docker_runtime()
-        wait_for_terminal_status(
-            control_dir / "update-status.json",
-            request_id=request_id,
-            timeout_seconds=timeout_seconds,
-        )
-        wait_for_helper_lease_release(control_dir)
+        helper_lease = acquire_helper_transition_lease(control_dir)
+        try:
+            wait_for_terminal_status(
+                control_dir / "update-status.json",
+                request_id=request_id,
+                timeout_seconds=timeout_seconds,
+            )
+        finally:
+            release_helper_transition_lease(helper_lease)
         write_receipt(
             receipt_file,
             request_id=request_id,
@@ -1256,6 +1396,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
     )
     bootstrap_parser.set_defaults(handler=bootstrap)
+
+    handoff_parser = subparsers.add_parser(
+        "handoff",
+        help="normalize source identity and schema request before overlay",
+    )
+    handoff_parser.add_argument("--app-dir", required=True)
+    handoff_parser.add_argument("--target-source-dir", required=True)
+    handoff_parser.add_argument("--request-id", required=True)
+    handoff_parser.set_defaults(handler=handoff)
 
     refresh_parser = subparsers.add_parser("refresh", help="wait for completion and recreate update-helper")
     refresh_parser.add_argument("--app-dir", required=True)

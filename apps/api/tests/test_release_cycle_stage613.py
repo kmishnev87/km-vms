@@ -64,6 +64,7 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files(tmp
         ROOT / "apps/web/package.json",
         ROOT / "apps/web/package-lock.json",
         ROOT / "release/km-vms-release.json",
+        ROOT / "release/km-vms-update-lineage.json",
     ]
     before = {path: path.read_bytes() for path in tracked}
 
@@ -77,7 +78,7 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files(tmp
         check=True,
     )
     dry_run = subprocess.run(
-        ["sh", "scripts/km-vms-release-cycle.sh", "--dry-run", "--prepare-version", "0.7.29", "--allow-dirty"],
+        ["sh", "scripts/km-vms-release-cycle.sh", "--dry-run", "--prepare-version", "0.8.1", "--allow-dirty"],
         cwd=ROOT,
         env=env,
         text=True,
@@ -87,7 +88,8 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files(tmp
     )
 
     assert "release-cycle check PASS" in check.stdout
-    assert "DRY-RUN: would prepare release version 0.7.29" in dry_run.stdout
+    assert "DRY-RUN: would register current schema-equivalent release 0.8.0" in dry_run.stdout
+    assert "DRY-RUN: would prepare release version 0.8.1" in dry_run.stdout
     assert before == {path: path.read_bytes() for path in tracked}
 
 
@@ -119,7 +121,7 @@ def test_stage613_release_cycle_script_rejects_unsafe_and_equal_versions(tmp_pat
 
 def test_stage613_release_cycle_script_prints_publication_preview_only():
     result = subprocess.run(
-        ["sh", "scripts/km-vms-release-cycle.sh", "--print-github-release-commands", "--version", "0.7.29"],
+        ["sh", "scripts/km-vms-release-cycle.sh", "--print-github-release-commands", "--version", "0.8.0"],
         cwd=ROOT,
         text=True,
         stdout=subprocess.PIPE,
@@ -127,10 +129,10 @@ def test_stage613_release_cycle_script_prints_publication_preview_only():
         check=True,
     )
 
-    assert "git tag -a v0.7.29" in result.stdout
+    assert "git tag -a v0.8.0" in result.stdout
     assert "gh release create" not in result.stdout
-    assert "sh scripts/km-vms-publish-github-release.sh --check --tag v0.7.29" in result.stdout
-    assert "sh scripts/km-vms-publish-github-release.sh --publish --tag v0.7.29" in result.stdout
+    assert "sh scripts/km-vms-publish-github-release.sh --check --tag v0.8.0" in result.stdout
+    assert "sh scripts/km-vms-publish-github-release.sh --publish --tag v0.8.0" in result.stdout
     assert "KM_VMS_GITHUB_RELEASE_TOKEN_FILE=data/update-control/.github-release-token" in result.stdout
     assert "/secure/path/km-vms-github-release-token" not in result.stdout
     assert "trusted commit evidence is the validated semver tag commit" in result.stdout

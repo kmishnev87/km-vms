@@ -118,13 +118,50 @@ class SchemaPreparationDefinition:
 
 
 class MigrationRegistry:
-    def __init__(self, migrations: list[MigrationDefinition] | tuple[MigrationDefinition, ...] = ()):
-        self._migrations = tuple(sorted(migrations, key=lambda item: (item.from_version, item.to_version, item.migration_id)))
+    def __init__(
+        self,
+        migrations: list[MigrationDefinition] | tuple[MigrationDefinition, ...] = (),
+        *,
+        published_variants: (
+            list[MigrationDefinition] | tuple[MigrationDefinition, ...]
+        ) = (),
+    ):
+        self._migrations = tuple(
+            sorted(
+                migrations,
+                key=lambda item: (
+                    item.from_version,
+                    item.to_version,
+                    item.migration_id,
+                ),
+            )
+        )
+        self._published_variants = tuple(
+            sorted(
+                published_variants,
+                key=lambda item: (
+                    item.from_version,
+                    item.to_version,
+                    item.migration_id,
+                ),
+            )
+        )
         self._validate()
 
     @property
     def migrations(self) -> tuple[MigrationDefinition, ...]:
         return self._migrations
+
+    @property
+    def published_migrations(self) -> tuple[MigrationDefinition, ...]:
+        """All accepted immutable history definitions.
+
+        ``migrations`` remains the one executable target path.  A published
+        variant is history-only evidence for a transition that an older public
+        release already executed; it never creates a second executable path.
+        """
+
+        return self._migrations + self._published_variants
 
     @property
     def target_version(self) -> int:
@@ -143,6 +180,59 @@ class MigrationRegistry:
             if edge in seen_edges:
                 raise MigrationRegistryError(f"conflicting migration edge: {migration.from_version}->{migration.to_version}")
             seen_edges.add(edge)
+        for migration in self._published_variants:
+            if migration.migration_id in seen_ids:
+                raise MigrationRegistryError(
+                    f"duplicate migration_id: {migration.migration_id}"
+                )
+            seen_ids.add(migration.migration_id)
+            edge = (migration.from_version, migration.to_version)
+            if edge not in seen_edges:
+                raise MigrationRegistryError(
+                    "published history variant has no canonical edge: "
+                    f"{migration.from_version}->{migration.to_version}"
+                )
+
+    def canonical_by_id(
+        self,
+        migration_id: str,
+    ) -> MigrationDefinition | None:
+        return next(
+            (
+                migration
+                for migration in self._migrations
+                if migration.migration_id == migration_id
+            ),
+            None,
+        )
+
+    def published_by_id(
+        self,
+        migration_id: str,
+    ) -> MigrationDefinition | None:
+        return next(
+            (
+                migration
+                for migration in self.published_migrations
+                if migration.migration_id == migration_id
+            ),
+            None,
+        )
+
+    def canonical_for_edge(
+        self,
+        from_version: int,
+        to_version: int,
+    ) -> MigrationDefinition | None:
+        return next(
+            (
+                migration
+                for migration in self._migrations
+                if migration.from_version == from_version
+                and migration.to_version == to_version
+            ),
+            None,
+        )
 
     def path(self, current_version: int, target_version: int | None = None) -> list[MigrationDefinition]:
         target = self.target_version if target_version is None else target_version
@@ -1848,7 +1938,10 @@ PRODUCTION_MIGRATIONS = MigrationRegistry(
         STAGE4104_ARCHIVE_MIGRATION,
         STAGE660128_V6_TO_V7_FINALIZATION,
         STAGE660128_UNIVERSAL_SCHEMA_MIGRATION,
-    )
+    ),
+    published_variants=(
+        STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
+    ),
 )
 
 
@@ -1876,6 +1969,19 @@ def migration_registry_fingerprint(
                 "definition_fingerprint": migration_definition_fingerprint(migration),
             }
             for migration in registry.migrations
+        ],
+        "published_history_variants": [
+            {
+                "migration_id": migration.migration_id,
+                "from_version": migration.from_version,
+                "to_version": migration.to_version,
+                "risk": migration.risk,
+                "definition_fingerprint": (
+                    migration_definition_fingerprint(migration)
+                ),
+            }
+            for migration in registry.published_migrations
+            if registry.canonical_by_id(migration.migration_id) is None
         ],
     }
     rendered = json.dumps(
@@ -2173,6 +2279,7 @@ def execute_migration_plan(
     target_version: int | None = None,
     backup_manifest_path: str | None = None,
     manual_authorized: bool = False,
+    on_mutation_start: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     plan = build_migration_plan(
         db,
@@ -2186,6 +2293,8 @@ def execute_migration_plan(
     if plan["status"] != "ready":
         raise SchemaMigrationBlocked(str(plan.get("blocked_reason") or plan["status"]), plan)
 
+    if on_mutation_start is not None:
+        on_mutation_start()
     create_schema_version_tables(db.get_bind())
     row = db.get(SchemaVersionState, CURRENT_STATE_ID)
     if row is None:

@@ -181,8 +181,8 @@ Release preparation is checked with:
 
 ```sh
 sh scripts/km-vms-release-cycle.sh --check
-sh scripts/km-vms-release-cycle.sh --dry-run --prepare-version 0.7.29
-sh scripts/km-vms-release-cycle.sh --print-github-release-commands --version 0.7.29
+sh scripts/km-vms-release-cycle.sh --dry-run --prepare-version 0.8.1
+sh scripts/km-vms-release-cycle.sh --print-github-release-commands --version 0.8.1
 ```
 
 The helper validates version consistency across API, web package files and `release/km-vms-release.json`, and rejects patch values above `29`. It also validates that the descriptor uses the Stage 6.1.3 evidence model: the public release tag `vX.Y.Z` resolves to the immutable commit SHA. The descriptor in the repository is allowed to have `commit_sha: null` because the trusted commit evidence for normal releases is derived from the immutable semver tag. If `commit_sha` is present, it must match the resolved tag commit.

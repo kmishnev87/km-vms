@@ -48,6 +48,8 @@ def _fixture(root: Path, request_id: str) -> None:
                 "apply_ref": TARGET_COMMIT,
             },
             "confirmed": True,
+            "preflight_required": True,
+            "status_path": "data/update-control/update-status.json",
         },
     )
     _write_json(
@@ -146,6 +148,20 @@ def _v2_admission(request_id: str) -> tuple[dict, dict]:
     return admission, request
 
 
+def _v3_request(request_id: str) -> dict:
+    _admission, request = _v2_admission(request_id)
+    return {
+        **request,
+        "schema_version": 3,
+        "document_type": "update_apply_request",
+        "updated_at": "2026-07-25T07:31:23Z",
+        "state": "claimed",
+        "claimed_at": "2026-07-25T07:31:23Z",
+        "terminal": None,
+        "audit_event_id": "48e9d399-84a8-5385-b362-aac2101f3489",
+    }
+
+
 def test_bridge_accepts_exact_v0724_claimed_admission_document() -> None:
     request_id = "update-" + ("6" * 32)
     admission, request = _v2_admission(request_id)
@@ -157,6 +173,56 @@ def test_bridge_accepts_exact_v0724_claimed_admission_document() -> None:
         )
         == request
     )
+
+
+def test_bridge_projects_current_single_request_to_schema_control_shape() -> None:
+    request_id = "update-" + ("a" * 32)
+    current = _v3_request(request_id)
+
+    projected = bridge.extract_active_request(current, request_id=request_id)
+
+    assert projected["schema_version"] == 2
+    assert set(projected) == bridge.NORMALIZED_REQUEST_FIELDS
+    assert projected["request_id"] == request_id
+    assert projected["submission_id"] == current["submission_id"]
+    assert "state" not in projected
+    assert "audit_event_id" not in projected
+
+
+@pytest.mark.parametrize("with_snapshot", (False, True))
+def test_bridge_accepts_only_published_schema_v1_request_shapes(
+    with_snapshot: bool,
+) -> None:
+    request_id = "update-" + ("b" * 32)
+    request = {
+        "schema_version": 1,
+        "request_id": request_id,
+        "requested_at": "2026-07-24T00:00:00Z",
+        "requested_by": {"user_id": "1", "role": "owner"},
+        "intent": "apply_update",
+        "source": _v2_admission(request_id)[1]["source"],
+        "confirmed": True,
+        "preflight_required": True,
+        "status_path": "data/update-control/update-status.json",
+    }
+    if with_snapshot:
+        request["apply_candidate"] = _v2_admission(request_id)[1][
+            "apply_candidate"
+        ]
+
+    assert (
+        bridge.extract_active_request(request, request_id=request_id)
+        == request
+    )
+
+    minimal = {
+        key: value
+        for key, value in request.items()
+        if key not in {"requested_by", "preflight_required", "status_path", "apply_candidate"}
+    }
+    with pytest.raises(bridge.BridgeError) as captured:
+        bridge.extract_active_request(minimal, request_id=request_id)
+    assert captured.value.code == "source_handoff_authority_invalid"
 
 
 @pytest.mark.parametrize(
@@ -212,6 +278,52 @@ def test_post_overlay_bootstrap_reuses_valid_pre_overlay_identity(
         request_id=request_id,
     )
     assert identity_path.read_bytes() == original_identity
+
+
+def test_pre_overlay_handoff_uses_staged_target_descriptor(
+    tmp_path: Path,
+) -> None:
+    request_id = "update-" + ("c" * 32)
+    _fixture(tmp_path, request_id)
+    staged = tmp_path / "staged-target"
+    staged_release = json.loads(
+        (tmp_path / "release/km-vms-release.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    _write_json(
+        staged / "release/km-vms-release.json",
+        staged_release,
+    )
+    installed_release = dict(staged_release)
+    installed_release["version"] = "0.7.24"
+    installed_release["tag"] = "v0.7.24"
+    installed_release["source_ref"] = "v0.7.24"
+    _write_json(
+        tmp_path / "release/km-vms-release.json",
+        installed_release,
+    )
+
+    bridge.capture_installed_source_identity(
+        tmp_path,
+        request_id=request_id,
+        target_source_dir=staged,
+    )
+
+    identity = json.loads(
+        (
+            tmp_path
+            / "data/update-control/pre-overlay-source-identity.json"
+        ).read_text(encoding="utf-8")
+    )
+    request = json.loads(
+        (
+            tmp_path
+            / "data/update-control/schema-update-request.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert identity["installed_version"] == "0.7.18"
+    assert request["request_id"] == request_id
 
 
 def test_post_overlay_bootstrap_rejects_tampered_pre_overlay_identity(

@@ -152,6 +152,7 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
       STORAGE_ROOT: /storage/archive
       UPDATE_CONTROL_ROOT: /update-control
+      KMVMS_DB_BACKUP_ROOT: ${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
       KMVMS_RELEASE_IDENTITY_FILE: /app/.km-vms-release.json
       KMVMS_SOURCE_IDENTITY_FILE: /app/.km-vms-source.json
       KMVMS_TEST_FAULT_INJECTION: ${KMVMS_TEST_FAULT_INJECTION:-0}
@@ -165,6 +166,7 @@ services:
       - ./.km-vms-release.json:/app/.km-vms-release.json:ro
       - ./.km-vms-source.json:/app/.km-vms-source.json:ro
       - ${SURVEILLANCE_ROOT}:/storage/archive
+      - ${KMVMS_HOST_DB_BACKUP_ROOT:-./data/backups/db}:${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
     networks:
       - vms-net
 

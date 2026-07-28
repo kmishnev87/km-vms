@@ -43,20 +43,17 @@ import {
   sortedUsersForTable,
   timezoneValueForSettings,
   UPDATE_APPLY_POLL_INTERVAL_MS,
-  UPDATE_APPLY_RECONCILIATION_STORAGE_KEY,
-  createUpdateApplyReconciliation,
-  reconcileUpdateApplySubmission,
-  resetUpdateApplyAbsenceEvidence,
-  restoreUpdateApplyReconciliation,
-  sanitizeUpdateApplyReconciliation,
-  updateApplyReconciliationExactMatch,
+  UPDATE_APPLY_PENDING_STORAGE_KEY,
+  createUpdateApplyPending,
+  reconcileUpdateApplyPending,
+  restoreUpdateApplyPending,
+  sanitizeUpdateApplyPending,
   shortCommit,
   updateApplyCandidateSnapshot,
   updateApplyErrorMessages,
   updateApplyOperatorModel,
   updateApplyButtonText,
   updateApplyIsRunning,
-  updateApplyRecheckCanClear,
   updateApplyReconnectTiming,
   userCanBeDeleted,
   userCanBeManaged,
@@ -105,6 +102,19 @@ function updateApplyRequestIsAmbiguous(error) {
     error?.category === "temporarily_unavailable" ||
     Number(error?.status || 0) === 0 ||
     Number(error?.status || 0) >= 500;
+}
+
+function createUpdateApplySubmissionId() {
+  const browserCrypto = globalThis.crypto;
+  if (typeof browserCrypto?.randomUUID === "function") {
+    return browserCrypto.randomUUID();
+  }
+  if (typeof browserCrypto?.getRandomValues !== "function") return "";
+  const bytes = browserCrypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0"));
+  return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
 }
 
 function settingsTextFor(lang) {
@@ -296,12 +306,8 @@ const TEXT = {
     updateApplyLaunchCheckingText: "Ответ сервера временно недоступен. KM VMS проверяет статус и не отправляет повторный запрос.",
     updateApplyLaunchUnknown: "Результат запуска пока не подтверждён. Проверка продолжается автоматически; повторное применение заблокировано.",
     updateApplyLaunchConflict: "Обнаружена другая операция обновления. Повторное применение заблокировано до получения итогового статуса.",
-    updateApplyAdmissionUnknown: "Состояние предыдущего обновления не подтверждено. Обновите статус и повторите попытку.",
     updateApplyLaunchNotAccepted: "Сервер подтвердил, что запрос не был принят. Для повторного запуска откройте новое подтверждение.",
     updateApplyLaunchRejected: "Сервер отклонил запуск обновления.",
-    updateApplyPersistenceFailed: "Не удалось надёжно сохранить подтверждение обновления в этом браузере. Обновление не запускалось. Проверьте доступ к хранилищу браузера и повторите попытку.",
-    updateApplyTicketInvalid: "Сервер вернул некорректное подтверждение обновления. Обновление не запускалось. Обновите состояние и повторите попытку.",
-    updateApplySubmissionExpired: "Подтверждение обновления истекло до запуска. Обновление не запускалось. Закройте окно и подтвердите применение ещё раз.",
     updateApplyLocked: "Проверяем запуск",
     updateApplyPeerCheckUnavailable: "Проверка опубликованного релиза временно недоступна; статус применения обновления получен.",
     updateApplyTransportErrors: {
@@ -824,12 +830,8 @@ const TEXT = {
     updateApplyLaunchCheckingText: "The server response is temporarily unavailable. KM VMS is checking status and will not send a second request.",
     updateApplyLaunchUnknown: "The launch result is not confirmed yet. Checking continues automatically and another apply is locked.",
     updateApplyLaunchConflict: "Another update operation was detected. Another apply is locked until its final status is known.",
-    updateApplyAdmissionUnknown: "The previous update state is not confirmed. Refresh the status and try again.",
     updateApplyLaunchNotAccepted: "The server proved that the request was not accepted. Open a new confirmation before trying again.",
     updateApplyLaunchRejected: "The server rejected the update launch.",
-    updateApplyPersistenceFailed: "The update confirmation could not be stored reliably in this browser. The update was not started. Check browser storage access and try again.",
-    updateApplyTicketInvalid: "The server returned an invalid update confirmation. The update was not started. Refresh status and try again.",
-    updateApplySubmissionExpired: "The update confirmation expired before launch. The update was not started. Close this dialog and confirm Apply again.",
     updateApplyLocked: "Checking launch",
     updateApplyPeerCheckUnavailable: "Published release checking is temporarily unavailable; the update apply status was received.",
     updateApplyTransportErrors: {
@@ -1323,12 +1325,8 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyLaunchCheckingText: "服务器响应暂时不可用。KM VMS 正在检查状态，不会发送第二次请求。",
   updateApplyLaunchUnknown: "尚未确认启动结果。系统会自动继续检查，并阻止再次应用。",
   updateApplyLaunchConflict: "检测到另一个更新操作。在获得最终状态前，无法再次应用。",
-  updateApplyAdmissionUnknown: "尚未确认上一次更新的状态。请刷新状态后重试。",
   updateApplyLaunchNotAccepted: "服务器已确认请求未被接受。再次尝试前需重新确认。",
   updateApplyLaunchRejected: "服务器拒绝了更新启动请求。",
-  updateApplyPersistenceFailed: "无法在此浏览器中可靠保存更新确认。更新尚未启动。请检查浏览器存储权限后重试。",
-  updateApplyTicketInvalid: "服务器返回了无效的更新确认。更新尚未启动。请刷新状态后重试。",
-  updateApplySubmissionExpired: "更新确认在启动前已过期。更新尚未启动。请关闭此窗口并重新确认应用更新。",
   updateApplyLocked: "正在检查启动",
   updateApplyPeerCheckUnavailable: "暂时无法检查已发布版本，但已收到更新应用状态。",
   updateApplyTransportErrors: {
@@ -1654,7 +1652,7 @@ export default function SettingsPage() {
   const [updateApplyReconnectSnapshot, setUpdateApplyReconnectSnapshot] = useState(null);
   const [updateApplyClockMs, setUpdateApplyClockMs] = useState(() => Date.now());
   const [updateApplyDialog, setUpdateApplyDialog] = useState(null);
-  const [updateApplyReconciliation, setUpdateApplyReconciliation] = useState(null);
+  const [updateApplyPending, setUpdateApplyPending] = useState(null);
   const [diagnosticChoiceOpen, setDiagnosticChoiceOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
   const [auditEvents, setAuditEvents] = useState([]);
@@ -1667,7 +1665,7 @@ export default function SettingsPage() {
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
   const toastTimerRef = useRef(null);
   const updatePollInFlightRef = useRef(false);
-  const updateApplyReconciliationRef = useRef(null);
+  const updateApplyPendingRef = useRef(null);
   const updateApplyDialogRef = useRef(null);
   const updateApplyTriggerRef = useRef(null);
   const updateApplyDialogElementRef = useRef(null);
@@ -1682,9 +1680,7 @@ export default function SettingsPage() {
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
   const languageIcon = lang === "en" ? "/assets/icons/ui/language-en.png" : "/assets/icons/ui/language-ru.png";
-  const updateApplyReconciliationState = String(updateApplyReconciliation?.state || "");
-  const updateApplyRequiresFreshCheck = ["recheck_required", "reconciliation_corrupt", "legacy_uncorrelated"].includes(updateApplyReconciliationState);
-  const updateApplyHasUnknownLaunch = Boolean(updateApplyReconciliation) && !updateApplyRequiresFreshCheck;
+  const updateApplyHasUnknownLaunch = Boolean(updateApplyPending);
   const updateApplyOperator = updateApplyOperatorModel(updateStatus, updateApplyStatus, t, lang, {
     updateError: updateTransportErrors.update,
     applyError: updateTransportErrors.apply,
@@ -1693,10 +1689,8 @@ export default function SettingsPage() {
     unresolvedSubmission: updateApplyHasUnknownLaunch,
   });
   const updateApplyRunning = updateApplyIsRunning(updateApplyStatus?.status || "") && !updateApplyOperator.stateUnknown;
-  const updateApplyAllowed = Boolean(updateApplyOperator.canApply && !updateApplyReconciliation && !updateApplyDialog && !maintenanceBusy);
-  const updateApplyPrimaryText = updateApplyRequiresFreshCheck
-    ? t.updateApplyStart
-    : updateApplyReconciliation || updateApplyOperator.stateUnknown
+  const updateApplyAllowed = Boolean(updateApplyOperator.canApply && !updateApplyPending && !updateApplyDialog && !maintenanceBusy);
+  const updateApplyPrimaryText = updateApplyPending || updateApplyOperator.stateUnknown
       ? t.updateApplyLocked
       : updateApplyButtonText(updateApplyStatus, t);
   const updateApplyErrors = updateApplyErrorMessages(updateApplyStatus?.error, t, lang);
@@ -1705,17 +1699,11 @@ export default function SettingsPage() {
   const maintenanceBackupResultModel = useMemo(() => (
     maintenanceBackupResult ? maintenanceBackupOperationResultText(maintenanceBackupResult, t) : null
   ), [maintenanceBackupResult, t]);
-  const updateApplyLaunchNotice = updateApplyReconciliation?.state === "conflict"
-    ? t.updateApplyLaunchConflict
-    : updateApplyRequiresFreshCheck
-      ? t.updateApplyRecoveryRefreshRequired
-    : updateApplyReconciliation
-      ? t.updateApplyLaunchUnknown
-      : "";
+  const updateApplyLaunchNotice = updateApplyPending ? t.updateApplyLaunchUnknown : "";
 
   maintenanceBusyRef.current = maintenanceBusy;
   updateApplyDialogRef.current = updateApplyDialog;
-  updateApplyReconciliationRef.current = updateApplyReconciliation;
+  updateApplyPendingRef.current = updateApplyPending;
 
   useEffect(() => {
     load();
@@ -1731,12 +1719,11 @@ export default function SettingsPage() {
 
   useEffect(() => {
     try {
-      const raw = window.sessionStorage.getItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY);
-      const restored = restoreUpdateApplyReconciliation(raw, Date.now());
+      const raw = window.sessionStorage.getItem(UPDATE_APPLY_PENDING_STORAGE_KEY);
+      const restored = restoreUpdateApplyPending(raw, Date.now());
       if (restored) {
-        updateApplyReconciliationRef.current = restored;
-        setUpdateApplyReconciliation(restored);
-        window.sessionStorage.setItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY, JSON.stringify(restored));
+        updateApplyPendingRef.current = restored;
+        setUpdateApplyPending(restored);
       }
     } catch {}
   }, []);
@@ -1756,10 +1743,10 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const active = updateApplyIsRunning(updateApplyStatus?.status || "");
-    if (!canManageMaintenance || (!maintenanceModalOpen && !active && !updateApplyReconciliation)) return undefined;
+    if (!canManageMaintenance || (!maintenanceModalOpen && !active && !updateApplyPending)) return undefined;
     const timer = window.setInterval(() => loadUpdateApplySurface({ silent: true }), UPDATE_APPLY_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [maintenanceModalOpen, canManageMaintenance, updateApplyStatus?.status, Boolean(updateApplyReconciliation)]);
+  }, [maintenanceModalOpen, canManageMaintenance, updateApplyStatus?.status, Boolean(updateApplyPending)]);
 
   useEffect(() => {
     if (!maintenanceModalOpen) return undefined;
@@ -1810,13 +1797,7 @@ export default function SettingsPage() {
     function onKeyDown(event) {
       const dialog = updateApplyDialogRef.current;
       if (!dialog) return;
-      const busy = dialog.phase === "submitting" || dialog.phase === "reconciling";
-      const deadlinePassed = Number(dialog.deadlineAtMs || 0) > 0 && Date.now() >= Number(dialog.deadlineAtMs);
       if (event.key === "Escape") {
-        if (busy && !deadlinePassed) {
-          event.preventDefault();
-          return;
-        }
         event.preventDefault();
         closeUpdateApplyDialog();
         return;
@@ -2111,41 +2092,24 @@ export default function SettingsPage() {
   function safeUpdateLaunchError(error) {
     const code = String(error?.code || "");
     if (code === "update_already_running") return t.updateApplyLaunchConflict;
-    if (code === "update_admission_unknown") return t.updateApplyAdmissionUnknown;
     return safeUpdateTransportError(error, t.updateApplyLaunchRejected).message;
   }
 
-  function commitUpdateApplyReconciliation(nextRecord) {
+  function commitUpdateApplyPending(nextRecord) {
     const safeRecord = nextRecord
-      ? sanitizeUpdateApplyReconciliation(nextRecord, Date.now())
+      ? sanitizeUpdateApplyPending(nextRecord, Date.now())
       : null;
     if (nextRecord && !safeRecord) return null;
+    updateApplyPendingRef.current = safeRecord;
+    setUpdateApplyPending(safeRecord);
     try {
       if (safeRecord) {
-        const serialized = JSON.stringify(safeRecord);
-        window.sessionStorage.setItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY, serialized);
-        const readBack = window.sessionStorage.getItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY);
-        const restored = restoreUpdateApplyReconciliation(readBack, Date.now());
-        if (!restored || !updateApplyReconciliationExactMatch(safeRecord, restored, Date.now())) {
-          throw new Error("update_apply_reconciliation_readback_mismatch");
-        }
-        updateApplyReconciliationRef.current = restored;
-        setUpdateApplyReconciliation(restored);
-        return restored;
+        window.sessionStorage.setItem(UPDATE_APPLY_PENDING_STORAGE_KEY, JSON.stringify(safeRecord));
       } else {
-        window.sessionStorage.removeItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY);
-        updateApplyReconciliationRef.current = null;
-        setUpdateApplyReconciliation(null);
+        window.sessionStorage.removeItem(UPDATE_APPLY_PENDING_STORAGE_KEY);
       }
-    } catch {
-      if (safeRecord) {
-        try {
-          window.sessionStorage.removeItem(UPDATE_APPLY_RECONCILIATION_STORAGE_KEY);
-        } catch {}
-      }
-      return null;
-    }
-    return null;
+    } catch {}
+    return safeRecord;
   }
 
   function closeUpdateApplyDialog() {
@@ -2154,18 +2118,17 @@ export default function SettingsPage() {
   }
 
   function reconcilePendingUpdateApply(applyData, observedAtMs) {
-    const current = updateApplyReconciliationRef.current;
+    const current = updateApplyPendingRef.current;
     if (!current) return "none";
-    const result = reconcileUpdateApplySubmission(current, applyData, observedAtMs);
+    const result = reconcileUpdateApplyPending(current, applyData, observedAtMs);
     if (result.outcome === "accepted") {
-      commitUpdateApplyReconciliation(null);
+      commitUpdateApplyPending(null);
       setUpdateApplyDialog(null);
       setMaintenanceBusy((value) => value === "update-apply" ? "" : value);
       showToast({ variant: "success", title: t.updateApplyTitle, text: t.updateApplyQueued });
       return result.outcome;
     }
     if (result.outcome === "conflict") {
-      commitUpdateApplyReconciliation(result.record);
       setMaintenanceBusy((value) => value === "update-apply" ? "" : value);
       setMaintenanceActionResult({
         flowKey: "update",
@@ -2176,14 +2139,8 @@ export default function SettingsPage() {
       showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyLaunchConflict });
       return result.outcome;
     }
-    if (["recheck_required", "reconciliation_corrupt", "legacy_uncorrelated"].includes(result.outcome)) {
-      commitUpdateApplyReconciliation(result.record);
-      setUpdateApplyDialog(null);
-      setMaintenanceBusy((value) => value === "update-apply" ? "" : value);
-      return result.outcome;
-    }
     if (result.outcome === "not_accepted") {
-      commitUpdateApplyReconciliation(null);
+      commitUpdateApplyPending(null);
       setMaintenanceBusy((value) => value === "update-apply" ? "" : value);
       setMaintenanceActionResult({
         flowKey: "update",
@@ -2194,7 +2151,6 @@ export default function SettingsPage() {
       showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyLaunchNotAccepted });
       return result.outcome;
     }
-    commitUpdateApplyReconciliation(result.record);
     return result.outcome;
   }
 
@@ -2226,16 +2182,10 @@ export default function SettingsPage() {
     updatePollInFlightRef.current = true;
     if (!silent) setMaintenanceBusy("update-status");
     try {
-      const pending = sanitizeUpdateApplyReconciliation(updateApplyReconciliationRef.current, Date.now());
-      const exactLookup = pending?.submissionId && pending?.submissionProof
-        ? apiFetch(`/system/update/apply/reconciliation/${encodeURIComponent(pending.submissionId)}`, {
-            headers: { "X-KM-VMS-Update-Submission-Proof": pending.submissionProof },
-          })
-        : Promise.resolve(null);
-      const [statusResult, applyResult, exactResult] = await Promise.allSettled([
+      const pending = sanitizeUpdateApplyPending(updateApplyPendingRef.current, Date.now());
+      const [statusResult, applyResult] = await Promise.allSettled([
         apiFetch("/system/update/status"),
         apiFetch("/system/update/apply/status"),
-        exactLookup,
       ]);
       const observedAtMs = monotonicWallNow();
       setUpdateApplyClockMs(observedAtMs);
@@ -2254,30 +2204,14 @@ export default function SettingsPage() {
         setUpdateApplyStatus(applyResult.value);
         setUpdateApplyReconnectSnapshot(updateApplyReconnectTiming(applyResult.value, observedAtMs));
         setUpdateTransportErrors((current) => ({ ...current, apply: null }));
+        if (pending) reconcilePendingUpdateApply(applyResult.value, observedAtMs);
       } else {
         setUpdateTransportErrors((current) => ({
           ...current,
           apply: safeUpdateTransportError(applyResult.reason, t.updateApplyConnection),
         }));
-        const pending = updateApplyReconciliationRef.current;
-        if (pending) commitUpdateApplyReconciliation(resetUpdateApplyAbsenceEvidence(pending));
       }
-      if (pending && exactResult.status === "fulfilled" && exactResult.value) {
-        const exact = exactResult.value;
-        if (exact.found && exact.apply_status) {
-          reconcilePendingUpdateApply(exact.apply_status, Date.now());
-        } else if (exact.status === "submission_expired") {
-          commitUpdateApplyReconciliation(null);
-          setUpdateApplyDialog((current) => ({
-            ...(current || { candidate: { version: pending.targetVersion, commit: pending.targetCommit, title: "" } }),
-            phase: "rejected",
-            error: t.updateApplySubmissionExpired,
-            deadlineAtMs: null,
-          }));
-          setMaintenanceBusy((current) => current === "update-apply" ? "" : current);
-        }
-      }
-      return { statusResult, applyResult, exactResult };
+      return { statusResult, applyResult };
     } finally {
       updatePollInFlightRef.current = false;
       if (!silent) setMaintenanceBusy((current) => current === "update-status" ? "" : current);
@@ -2397,11 +2331,7 @@ export default function SettingsPage() {
       });
       setUpdateStatus(result);
       setUpdateTransportErrors((current) => ({ ...current, update: null }));
-      const surface = await loadUpdateApplySurface({ silent: true });
-      const pending = updateApplyReconciliationRef.current;
-      if (surface?.applyResult?.status === "fulfilled" && updateApplyRecheckCanClear(pending, surface.applyResult.value)) {
-        commitUpdateApplyReconciliation(null);
-      }
+      await loadUpdateApplySurface({ silent: true });
       showToast({ variant: "success", title: t.updateApplyCheck, text: maintenanceStatusText(result?.status, t) });
     } catch (err) {
       const transportError = safeUpdateTransportError(err, t.updateApplyUnavailable);
@@ -2415,7 +2345,7 @@ export default function SettingsPage() {
   }
 
   function startUpdateApply() {
-    if (maintenanceBusy || updateApplyReconciliationRef.current) return;
+    if (maintenanceBusy || updateApplyPendingRef.current) return;
     const candidate = updateApplyCandidateSnapshot(updateStatus);
     if (!candidate.version || !candidate.commit) {
       showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyUnavailable });
@@ -2427,54 +2357,29 @@ export default function SettingsPage() {
 
   async function confirmUpdateApply() {
     const dialog = updateApplyDialogRef.current;
-    if (!dialog || dialog.phase !== "confirm" || maintenanceBusy || updateApplyReconciliationRef.current) return;
+    if (!dialog || dialog.phase !== "confirm" || maintenanceBusy || updateApplyPendingRef.current) return;
     const submittedAtMs = Date.now();
+    const submissionId = createUpdateApplySubmissionId();
+    const pending = createUpdateApplyPending(
+      submissionId,
+      dialog.candidate,
+      submittedAtMs,
+    );
+    if (!pending) {
+      showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyUnavailable });
+      return;
+    }
     setUpdateApplyDialog(null);
     setMaintenanceBusy("update-apply");
     setMaintenanceActionResult(null);
+    commitUpdateApplyPending(pending);
     try {
-      const ticket = await apiFetch("/system/update/apply/submission-ticket", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          expected_manifest_version: dialog.candidate.version,
-          expected_manifest_commit: dialog.candidate.commit,
-        }),
-      });
-      const reconciliation = createUpdateApplyReconciliation(
-        ticket,
-        dialog.candidate,
-        updateApplyStatus,
-        submittedAtMs,
-      );
-      if (!reconciliation) {
-        setMaintenanceActionResult({
-          flowKey: "update",
-          status: "blocked",
-          reason: "update_ticket_invalid",
-          displayReason: t.updateApplyTicketInvalid,
-        });
-        showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyTicketInvalid });
-        return;
-      }
-      const persisted = commitUpdateApplyReconciliation(reconciliation);
-      if (!persisted || !updateApplyReconciliationExactMatch(reconciliation, persisted, Date.now())) {
-        setMaintenanceActionResult({
-          flowKey: "update",
-          status: "blocked",
-          reason: "update_persistence_failed",
-          displayReason: t.updateApplyPersistenceFailed,
-        });
-        showToast({ variant: "warning", title: t.updateApplyTitle, text: t.updateApplyPersistenceFailed });
-        return;
-      }
       const result = await apiFetch("/system/update/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           confirm: true,
-          submission_id: persisted.submissionId,
-          submission_proof: persisted.submissionProof,
+          submission_id: pending.submissionId,
           expected_manifest_version: dialog.candidate.version,
           expected_manifest_commit: dialog.candidate.commit,
         }),
@@ -2485,11 +2390,10 @@ export default function SettingsPage() {
       reconcilePendingUpdateApply(result?.apply_status || result, monotonicWallNow());
       void loadUpdateApplySurface({ silent: true });
     } catch (err) {
-      const persisted = updateApplyReconciliationRef.current;
-      if (persisted && updateApplyRequestIsAmbiguous(err)) {
+      if (updateApplyPendingRef.current && updateApplyRequestIsAmbiguous(err)) {
         void loadUpdateApplySurface({ silent: true });
       } else {
-        if (persisted) commitUpdateApplyReconciliation(null);
+        commitUpdateApplyPending(null);
         const message = safeUpdateLaunchError(err);
         setMaintenanceActionResult({
           flowKey: "update",
@@ -3116,7 +3020,7 @@ export default function SettingsPage() {
                       </button>
                       {updateApplyOperator.showApplyButton ? (
                         <button ref={updateApplyTriggerRef} type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
-                          {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyReconciliation || updateApplyOperator.stateUnknown
+                          {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyPending || updateApplyOperator.stateUnknown
                             ? updateApplyPrimaryText
                             : t.updateApplyStart}
                         </button>
