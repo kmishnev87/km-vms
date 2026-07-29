@@ -65,7 +65,14 @@ from app.services.setup_storage import (
 )
 from app.services.schema_migrations import build_migration_plan
 from app.services.schema_versioning import schema_version_status
-from app.services.backup_before_upgrade import BackupExecutionConfig, BackupSafetyBlocked, build_backup_plan, create_backup_before_upgrade
+from app.services.backup_before_upgrade import BackupSafetyBlocked, build_backup_plan, run_backup_create_operation
+from app.services.backup_manager import (
+    BackupManagerBlocked,
+    build_backup_operation_diagnostics,
+    build_backup_snapshot,
+    get_backup_operation,
+    safe_receipt,
+)
 from app.services.upgrade_report import build_upgrade_report, upgrade_report_text_summary
 from app.services.update_check import UpdateCheckBlocked, build_update_status, run_update_check
 from app.services.update_apply import (
@@ -132,9 +139,10 @@ class BugReportRequest(BaseModel):
 
 
 class BackupCreateRequest(BaseModel):
-    source: str = Field(default="manual_admin", pattern="^(pre_upgrade|pre_adoption|manual_admin|test)$")
-    backup_root: str | None = Field(default=None, max_length=1024)
+    model_config = ConfigDict(extra="forbid")
+
     confirm: bool = False
+    submission_id: str = Field(min_length=36, max_length=36)
 
 
 class StorageValidateRequest(BaseModel):
@@ -419,7 +427,7 @@ def system_backup_create(
             message_ru="Database backup creation was blocked because explicit confirmation is required.",
             message_en="Database backup creation was blocked because explicit confirmation is required.",
             target_type="db_backup",
-            metadata={"status": "blocked", "reason": "confirmation_required", "source": audit_redact_text(payload.source)[:80]},
+            metadata={"status": "blocked", "reason": "confirmation_required", "source": "manual_admin"},
             ip_address=request_ip(request),
             user_agent=request_user_agent(request),
         )
@@ -432,20 +440,12 @@ def system_backup_create(
             },
         )
     try:
-        config = BackupExecutionConfig(backup_root=Path(payload.backup_root) if payload.backup_root else None, source=payload.source)
-        result = create_backup_before_upgrade(db, config=config, migration_plan_summary=build_migration_plan(db))
-        response = {
-            "backup_id": result["backup_id"],
-            "status": result["status"],
-            "db_backend": result["db_backend"],
-            "source": result["source"],
-            "backup_file_label": result["backup_file_label"],
-            "metadata_file_label": result["metadata_file_label"],
-            "file_size": result["file_size"],
-            "checksum_sha256": result["checksum_sha256"],
-            "restore_validation_status": result["restore_validation_status"],
-            "video_archive_files_included": False,
-        }
+        response = run_backup_create_operation(
+            db,
+            submission_id=payload.submission_id,
+            actor=current_user,
+            migration_plan_summary=build_migration_plan(db),
+        )
         create_event(
             db=db,
             actor=current_user,
@@ -455,13 +455,13 @@ def system_backup_create(
             message_ru="Database backup was created.",
             message_en="Database backup was created.",
             target_type="db_backup",
-            target_id=response["backup_id"],
+            target_id=response.get("artifact_id"),
             metadata={
-                "status": response["status"],
-                "db_backend": response["db_backend"],
-                "source": response["source"],
-                "file_size": response["file_size"],
-                "restore_validation_status": response["restore_validation_status"],
+                "operation_id": response.get("operation_id"),
+                "state": response.get("state"),
+                "phase": response.get("phase"),
+                "replayed": bool(response.get("replayed")),
+                "source": "manual_admin",
                 "video_archive_files_included": False,
             },
             ip_address=request_ip(request),
@@ -481,7 +481,7 @@ def system_backup_create(
             metadata={
                 "status": "blocked",
                 "reason": audit_redact_text(str(exc.diagnostics.get("reason") or exc))[:300],
-                "source": audit_redact_text(payload.source)[:80],
+                "source": "manual_admin",
             },
             ip_address=request_ip(request),
             user_agent=request_user_agent(request),
@@ -502,6 +502,19 @@ def system_backup_create(
             user_agent=request_user_agent(request),
         )
         raise
+
+
+@router.get("/system/backup/operations/{submission_id}")
+def system_backup_operation_status(
+    submission_id: str,
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        receipt = get_backup_operation(submission_id=submission_id, actor=current_user)
+        return safe_receipt(receipt)
+    except BackupManagerBlocked as exc:
+        response_status = status.HTTP_404_NOT_FOUND if exc.code == "receipt_not_found" else status.HTTP_409_CONFLICT
+        raise HTTPException(status_code=response_status, detail={"code": exc.code, **exc.diagnostics}) from exc
 
 
 @router.get("/system/runtime/status")
@@ -1150,6 +1163,73 @@ def build_log_archive(
         limit=1000,
         since_minutes=30 if mode == "extended" else 10,
     )
+    diagnostic_log_minutes = 30 if mode == "extended" else 10
+    backup_item_limit = 20
+    backup_receipt_limit = 20
+    database_backend = str(db.get_bind().url.get_backend_name()).lower()
+    backup_snapshot = build_backup_snapshot(
+        db_backend=database_backend,
+        limit=backup_item_limit,
+    )
+    backup_operations = build_backup_operation_diagnostics(limit=backup_receipt_limit)
+    diagnostic_coverage = {
+        "schema": "stage13.7.10.1.diagnostic-coverage.v1",
+        "archive_mode": mode,
+        "full_diagnostic_archive": True,
+        "docker_log_minutes": diagnostic_log_minutes,
+        "audit_minutes": diagnostic_log_minutes,
+        "domains": {
+            "system": [
+                "system/info.json",
+                "system/settings.json",
+                "system/timezone.json",
+                "system/operator_runtime_status.json",
+            ],
+            "update": [
+                "update/status.json",
+                "update/apply_status.json",
+                "upgrade/report.json",
+            ],
+            "backup": [
+                "backup/snapshot.json",
+                "backup/recent_operations.json",
+            ],
+            "storage_and_recording": [
+                "storage/status.json",
+                "storage/storage_monitoring_summary.json",
+                "storage/recording_integrity_summary.json",
+                "storage/retention_summary.json",
+                "recordings/summary.json",
+                "chronology/summary.json",
+            ],
+            "runtime": [
+                "hardware/capabilities.json",
+                "cameras/cameras.json",
+                "live/status.json",
+                "live/debug.json",
+                "recorder/*",
+            ],
+            "audit": [
+                "audit/events_recent.json",
+                "audit/summary.json",
+                "audit/redaction_proof.json",
+            ],
+        },
+        "bounds": {
+            "backup_snapshot_items": backup_item_limit,
+            "backup_operation_receipts": backup_receipt_limit,
+            "audit_event_limit": 1000,
+            "audit_minutes": diagnostic_log_minutes,
+            "docker_log_minutes": diagnostic_log_minutes,
+        },
+        "privacy": {
+            "backup_dump_contents_included": False,
+            "backup_checksums_included": False,
+            "backup_paths_included": False,
+            "backup_operation_actor_bindings_included": False,
+            "backup_operation_recovery_targets_included": False,
+        },
+    }
     archive = io.BytesIO()
     with zipfile.ZipFile(archive, mode="w", compression=zipfile.ZIP_DEFLATED) as bundle:
         write_json(
@@ -1193,6 +1273,8 @@ def build_log_archive(
         )
         write_json(bundle, "system/settings.json", serialize_settings(get_system_settings(db)))
         write_json(bundle, "system/timezone.json", time_context)
+        write_json(bundle, "system/operator_runtime_status.json", build_operator_runtime_status(db))
+        write_json(bundle, "system/diagnostic_coverage.json", diagnostic_coverage)
         write_json(bundle, "storage/status.json", storage_diagnostics())
         write_json(bundle, "storage/storage_monitoring_summary.json", build_storage_monitoring_summary(db))
         write_json(bundle, "storage/recording_integrity_summary.json", reconciliation_diagnostics(db))
@@ -1212,6 +1294,9 @@ def build_log_archive(
         write_json(bundle, "upgrade/report.json", upgrade_report)
         bundle.writestr("upgrade/summary.txt", audit_redact_text(upgrade_report_text_summary(upgrade_report)) + "\n")
         write_json(bundle, "update/status.json", build_update_status(db))
+        write_json(bundle, "update/apply_status.json", read_update_apply_status())
+        write_json(bundle, "backup/snapshot.json", backup_snapshot)
+        write_json(bundle, "backup/recent_operations.json", backup_operations)
         write_json(
             bundle,
             "audit/redaction_proof.json",

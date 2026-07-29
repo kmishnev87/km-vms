@@ -90,12 +90,12 @@ def test_upgrade_report_is_read_only_and_has_stable_core_schema(tmp_path):
     assert report["status"] == "complete"
     assert report["data_freshness"]["status"] == "current_read_only_snapshot"
     assert set(["data_sources", "limitations", "versions", "migration_runner", "backup", "warnings", "redaction"]).issubset(report)
-    assert report["backup"]["backup_status_source"] == "source_unavailable"
-    assert report["backup"]["status"] == "backup_status_source_unavailable"
-    assert report["backup"]["status_semantics"] == "source_unavailable"
-    assert report["restore_validation"]["status_source"] == "source_unavailable"
-    assert report["restore_validation"]["status"] == "restore_status_source_unavailable"
-    assert report["restore_validation"]["status_semantics"] == "source_unavailable"
+    assert report["backup"]["backup_status_source"] == "configured_backup_snapshot"
+    assert report["backup"]["status"] == "backup_not_available"
+    assert report["backup"]["status_semantics"] == "backup_not_available"
+    assert report["restore_validation"]["status_source"] == "artifact_terminal_evidence"
+    assert report["restore_validation"]["status"] == "not_performed"
+    assert report["restore_validation"]["status_semantics"] == "not_performed"
     assert db.query(SchemaMigrationHistory).count() == before_history
     assert db.get(SchemaVersionState, CURRENT_STATE_ID).updated_at == before_state
     assert report["side_effects"] == {
@@ -137,8 +137,9 @@ def test_upgrade_report_versions_migrations_and_warnings_are_safe(tmp_path):
     assert "upgrade_report_json_fields" in report["redaction"]["checked_outputs"]
     assert "installed_build_development_fallback" in warning_codes
     assert "production_adoption_deferred" in warning_codes
-    assert "backup_status_source_unavailable" in warning_codes
-    assert "restore_validation_status_source_unavailable" in warning_codes
+    assert "backup_not_available_for_report" in warning_codes
+    assert "backup_status_source_unavailable" not in warning_codes
+    assert "restore_validation_status_source_unavailable" not in warning_codes
     assert "video_archive_restore_not_covered" in warning_codes
     forbidden_values = [
         "secret" + "-token",
@@ -305,17 +306,17 @@ def test_diagnostic_archive_includes_upgrade_report_and_excludes_forbidden_artif
     assert "upgrade/report.json" in names
     assert "upgrade/summary.txt" in names
     assert report["diagnostic_archive"]["included_in_existing_diagnostic_archive"] is True
-    assert report["backup"]["backup_status_source"] == "source_unavailable"
-    assert report["backup"]["status"] == "backup_status_source_unavailable"
-    assert report["restore_validation"]["status_source"] == "source_unavailable"
-    assert report["restore_validation"]["status"] == "restore_status_source_unavailable"
+    assert report["backup"]["backup_status_source"] == "configured_backup_snapshot"
+    assert report["backup"]["status"] == "backup_not_available"
+    assert report["restore_validation"]["status_source"] == "artifact_terminal_evidence"
+    assert report["restore_validation"]["status"] == "not_performed"
     assert report["redaction"]["redaction_scope"] == "upgrade_report_fields_only"
     assert report["diagnostic_archive"]["redaction_scope"] == "upgrade_report_fields_and_diagnostic_archive_upgrade_summary"
     assert report["update_check"]["status"] == "not_configured"
     assert "production_restore_executed: false" in summary
     assert "update_check_status: not_configured" in summary
-    assert "backup_status_source: source_unavailable" in summary
-    assert "restore_validation_status_source: source_unavailable" in summary
+    assert "backup_status_source: configured_backup_snapshot" in summary
+    assert "restore_validation_status_source: artifact_terminal_evidence" in summary
     for forbidden_name in names:
         assert not forbidden_name.endswith((".dump", ".sqlite3", ".db", ".env"))
     forbidden_values = ["secret" + "-token", "hash-value-not-exported", "rtsp://", "postgresql://", "sqlite:///"]

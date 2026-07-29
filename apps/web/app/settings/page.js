@@ -45,9 +45,13 @@ import {
   timezoneValueForSettings,
   UPDATE_APPLY_POLL_INTERVAL_MS,
   UPDATE_APPLY_PENDING_STORAGE_KEY,
+  BACKUP_OPERATION_PENDING_STORAGE_KEY,
+  createBackupOperationPending,
   createUpdateApplyPending,
   reconcileUpdateApplyPending,
   restoreUpdateApplyPending,
+  restoreBackupOperationPending,
+  sanitizeBackupOperationPending,
   sanitizeUpdateApplyPending,
   shortCommit,
   updateApplyCandidateSnapshot,
@@ -63,6 +67,8 @@ import {
 configureSettingsPageHelpers({ normalizeLocale, translateText });
 
 const CREDENTIALS_CHANGED_NOTICE_KEY = "km_vms_credentials_changed_notice";
+const MAINTENANCE_BACKUP_PAGE_SIZE = 5;
+const MAINTENANCE_BACKUP_POLL_INTERVAL_MS = 3000;
 
 let settingsBodyScrollLockCount = 0;
 let settingsBodyPreviousOverflow = "";
@@ -219,6 +225,47 @@ const TEXT = {
     maintenanceBackupSchema: "Схема",
     maintenanceBackupList: "Последние копии",
     maintenanceBackupNothingToCheck: "Проверять пока нечего",
+    maintenanceBackupCheckConfirm: "Проверить копию от {date} реальным восстановлением во временную базу? Рабочая база и видеоархив не изменятся.",
+    maintenanceBackupChecking: "Проверка во временной базе...",
+    maintenanceBackupRecovering: "Восстанавливается статус незавершённой операции...",
+    maintenanceBackupTotalSize: "Общий размер",
+    maintenanceBackupPage: "{start}–{end} из {total}",
+    maintenanceBackupPrevious: "Назад",
+    maintenanceBackupNext: "Далее",
+    maintenanceBackupIntegrity: "Целостность",
+    maintenanceBackupCompatibility: "Совместимость",
+    maintenanceBackupValidation: "Пробное восстановление",
+    maintenanceBackupAvailability: "Доступность",
+    maintenanceBackupCheckedAt: "Проверено: {date}",
+    maintenanceBackupValidatedAt: "Восстановление проверено: {date}",
+    maintenanceBackupAvailabilityStatuses: {
+      available: "Доступна",
+      incomplete: "Неполная",
+      missing: "Файл отсутствует",
+      unsafe: "Небезопасная структура",
+      unknown: "Неизвестно",
+    },
+    maintenanceBackupIntegrityStatuses: {
+      not_checked: "Не проверена",
+      verified: "Цела",
+      failed: "Повреждена",
+      stale_evidence: "Нужна повторная проверка",
+      unknown: "Неизвестно",
+    },
+    maintenanceBackupCompatibilityStatuses: {
+      compatible: "Совместима",
+      migration_required: "Нужна миграция",
+      newer_than_supported: "Создана более новой версией",
+      unsupported_backend: "Неподдерживаемый тип БД",
+      unknown: "Неизвестно",
+    },
+    maintenanceBackupValidationStatuses: {
+      not_performed: "Не выполнялось",
+      passed: "Пройдена",
+      failed: "Не пройдена",
+      stale_evidence: "Нужна повторная проверка",
+      unknown: "Неизвестно",
+    },
     maintenanceBackupOperationLabels: {
       check: "Проверка",
       create: "Создание",
@@ -232,6 +279,9 @@ const TEXT = {
       blocked: "Проверка заблокирована",
       invalid: "Проблема",
       check_failed: "Проверка не прошла",
+      validated: "Пробное восстановление пройдено",
+      passed: "Пробное восстановление пройдено",
+      interrupted: "Проверка прервана; её можно повторить",
       problem: "Проблема",
     },
     maintenanceBackupCheckStatuses: {
@@ -243,6 +293,11 @@ const TEXT = {
       invalid: "Копия повреждена или неполная",
       check_failed: "Проверка не прошла",
       fallback: "Статус проверки получен",
+    },
+    maintenanceBackupCheckOutcomes: {
+      integrity_verified_migration_required: "Целостность подтверждена. Пробное восстановление не выполнялось: для этой копии требуется совместимая миграция.",
+      integrity_failed: "Целостность копии не подтверждена: копия повреждена или неполная.",
+      restore_failed: "Целостность копии подтверждена, но пробное восстановление не прошло.",
     },
     maintenanceBackupCreateStatuses: {
       created: "Резервная копия создана",
@@ -258,10 +313,15 @@ const TEXT = {
       deleted_with_missing_files: "Резервная копия удалена; часть файлов уже отсутствовала",
       blocked: "Удаление заблокировано",
       failed: "Не удалось удалить резервную копию",
+      partial_retryable: "Удаление завершено частично; его можно повторить",
       delete_failed: "Не удалось удалить резервную копию",
       not_found: "Резервная копия уже не найдена",
       fallback: "Статус удаления получен",
     },
+    maintenanceDbAdoptionApply: "Принять базу",
+    maintenanceDbAdoptionApplyConfirm: "Принять существующую базу данных как рабочую базу KM VMS? Действие выполнится только после встроенных проверок и резервной копии.",
+    maintenanceDbAdoptionApplied: "Существующая база данных принята.",
+    maintenanceDbAdoptionApplyFailed: "Не удалось принять существующую базу данных.",
     maintenanceDryRun: "Проверить",
     maintenanceDryRunResult: "Проверка выполнена.",
     maintenanceNoApply: "Обновление применяется только через подтверждённый helper-процесс.",
@@ -601,9 +661,12 @@ const TEXT = {
     journalSinceAll: "Любое время",
     reportSendingPending: "Отправка отчётов будет подключена после реализации backend-отправки.",
     diagnosticArchiveReady: "Диагностический архив создан, прикреплён и скачан.",
-    diagnosticArchiveQuestion: "Какой лог снять?",
+    diagnosticArchiveQuestion: "Выберите диагностический архив",
     diagnosticArchiveNormal: "Обычный",
     diagnosticArchiveExtended: "Расширенный",
+    diagnosticArchiveMessage: "Оба варианта содержат полный диагностический архив. Отличается только временной диапазон Docker-логов и аудита.",
+    diagnosticArchiveNormalDescription: "Полная диагностика и текущее состояние; Docker-логи и аудит за последние 10 минут.",
+    diagnosticArchiveExtendedDescription: "Та же полная диагностика; Docker-логи и аудит за последние 30 минут.",
     resetPasswordLabel: "Новый пароль (сброс администратором)",
     users: "Пользователи и роли",
     usersText: "Управление пользователями, ролями и доступом к системе.",
@@ -749,6 +812,47 @@ const TEXT = {
     maintenanceBackupSchema: "Schema",
     maintenanceBackupList: "Recent backups",
     maintenanceBackupNothingToCheck: "Nothing to check yet",
+    maintenanceBackupCheckConfirm: "Check the backup from {date} by restoring it into a temporary database? The working database and video archive will not change.",
+    maintenanceBackupChecking: "Checking in a temporary database...",
+    maintenanceBackupRecovering: "Recovering the unfinished operation status...",
+    maintenanceBackupTotalSize: "Total size",
+    maintenanceBackupPage: "{start}–{end} of {total}",
+    maintenanceBackupPrevious: "Previous",
+    maintenanceBackupNext: "Next",
+    maintenanceBackupIntegrity: "Integrity",
+    maintenanceBackupCompatibility: "Compatibility",
+    maintenanceBackupValidation: "Trial restore",
+    maintenanceBackupAvailability: "Availability",
+    maintenanceBackupCheckedAt: "Checked: {date}",
+    maintenanceBackupValidatedAt: "Restore checked: {date}",
+    maintenanceBackupAvailabilityStatuses: {
+      available: "Available",
+      incomplete: "Incomplete",
+      missing: "File missing",
+      unsafe: "Unsafe structure",
+      unknown: "Unknown",
+    },
+    maintenanceBackupIntegrityStatuses: {
+      not_checked: "Not checked",
+      verified: "Intact",
+      failed: "Damaged",
+      stale_evidence: "Recheck required",
+      unknown: "Unknown",
+    },
+    maintenanceBackupCompatibilityStatuses: {
+      compatible: "Compatible",
+      migration_required: "Migration required",
+      newer_than_supported: "Created by a newer version",
+      unsupported_backend: "Unsupported database type",
+      unknown: "Unknown",
+    },
+    maintenanceBackupValidationStatuses: {
+      not_performed: "Not performed",
+      passed: "Passed",
+      failed: "Failed",
+      stale_evidence: "Recheck required",
+      unknown: "Unknown",
+    },
     maintenanceBackupOperationLabels: {
       check: "Check",
       create: "Create",
@@ -762,6 +866,9 @@ const TEXT = {
       blocked: "Check blocked",
       invalid: "Problem",
       check_failed: "Check failed",
+      validated: "Trial restore passed",
+      passed: "Trial restore passed",
+      interrupted: "Check was interrupted and can be retried",
       problem: "Problem",
     },
     maintenanceBackupCheckStatuses: {
@@ -773,6 +880,11 @@ const TEXT = {
       invalid: "Backup is damaged or incomplete",
       check_failed: "Check failed",
       fallback: "Check status received",
+    },
+    maintenanceBackupCheckOutcomes: {
+      integrity_verified_migration_required: "Integrity is verified. Trial restore was not run because this backup requires a compatible migration.",
+      integrity_failed: "Backup integrity could not be verified: the backup is damaged or incomplete.",
+      restore_failed: "Backup integrity is verified, but the trial restore failed.",
     },
     maintenanceBackupCreateStatuses: {
       created: "Backup was created",
@@ -788,10 +900,15 @@ const TEXT = {
       deleted_with_missing_files: "Backup was deleted; some files were already missing",
       blocked: "Delete is blocked",
       failed: "Failed to delete backup",
+      partial_retryable: "Deletion is partial and can be retried",
       delete_failed: "Failed to delete backup",
       not_found: "Backup is no longer found",
       fallback: "Delete status received",
     },
+    maintenanceDbAdoptionApply: "Adopt database",
+    maintenanceDbAdoptionApplyConfirm: "Adopt the existing database as the KM VMS working database? The action runs only after the built-in checks and backup gate pass.",
+    maintenanceDbAdoptionApplied: "The existing database was adopted.",
+    maintenanceDbAdoptionApplyFailed: "Failed to adopt the existing database.",
     maintenanceDryRun: "Check",
     maintenanceDryRunResult: "Check completed.",
     maintenanceNoApply: "Updates apply only through the confirmed helper process.",
@@ -1131,9 +1248,12 @@ const TEXT = {
     journalSinceAll: "Any time",
     reportSendingPending: "Report sending will be connected after backend sending is implemented.",
     diagnosticArchiveReady: "Diagnostic archive created, attached and downloaded.",
-    diagnosticArchiveQuestion: "Which log should be collected?",
+    diagnosticArchiveQuestion: "Choose a diagnostic archive",
     diagnosticArchiveNormal: "Normal",
     diagnosticArchiveExtended: "Extended",
+    diagnosticArchiveMessage: "Both options contain the full diagnostic archive. Only the Docker log and audit time range differs.",
+    diagnosticArchiveNormalDescription: "Full diagnostics and current state; Docker logs and audit for the last 10 minutes.",
+    diagnosticArchiveExtendedDescription: "The same full diagnostics; Docker logs and audit for the last 30 minutes.",
     resetPasswordLabel: "New password (admin reset)",
     users: "Users and roles",
     usersText: "Manage users, roles and system access.",
@@ -1250,6 +1370,47 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceBackupSchema: "结构",
   maintenanceBackupList: "最近备份",
   maintenanceBackupNothingToCheck: "暂无可检查的备份",
+  maintenanceBackupCheckConfirm: "通过恢复到临时数据库来检查 {date} 的备份？工作数据库和视频归档不会更改。",
+  maintenanceBackupChecking: "正在临时数据库中检查...",
+  maintenanceBackupRecovering: "正在恢复未完成操作的状态...",
+  maintenanceBackupTotalSize: "总大小",
+  maintenanceBackupPage: "第 {start}–{end} 项，共 {total} 项",
+  maintenanceBackupPrevious: "上一页",
+  maintenanceBackupNext: "下一页",
+  maintenanceBackupIntegrity: "完整性",
+  maintenanceBackupCompatibility: "兼容性",
+  maintenanceBackupValidation: "试恢复",
+  maintenanceBackupAvailability: "可用性",
+  maintenanceBackupCheckedAt: "检查时间：{date}",
+  maintenanceBackupValidatedAt: "恢复检查时间：{date}",
+  maintenanceBackupAvailabilityStatuses: {
+    available: "可用",
+    incomplete: "不完整",
+    missing: "文件缺失",
+    unsafe: "结构不安全",
+    unknown: "未知",
+  },
+  maintenanceBackupIntegrityStatuses: {
+    not_checked: "未检查",
+    verified: "完整",
+    failed: "已损坏",
+    stale_evidence: "需要重新检查",
+    unknown: "未知",
+  },
+  maintenanceBackupCompatibilityStatuses: {
+    compatible: "兼容",
+    migration_required: "需要迁移",
+    newer_than_supported: "由较新版本创建",
+    unsupported_backend: "不支持的数据库类型",
+    unknown: "未知",
+  },
+  maintenanceBackupValidationStatuses: {
+    not_performed: "未执行",
+    passed: "已通过",
+    failed: "未通过",
+    stale_evidence: "需要重新检查",
+    unknown: "未知",
+  },
   maintenanceBackupOperationLabels: {
     check: "检查",
     create: "创建",
@@ -1263,6 +1424,9 @@ const ZH_TEXT_OVERRIDES = {
     blocked: "检查被阻止",
     invalid: "有问题",
     check_failed: "检查失败",
+    validated: "试恢复已通过",
+    passed: "试恢复已通过",
+    interrupted: "检查已中断，可以重试",
     problem: "有问题",
   },
   maintenanceBackupCheckStatuses: {
@@ -1275,6 +1439,17 @@ const ZH_TEXT_OVERRIDES = {
     check_failed: "检查失败",
     fallback: "已收到检查状态",
   },
+  maintenanceBackupCheckOutcomes: {
+    integrity_verified_migration_required: "完整性已确认。未执行试恢复：此备份需要兼容迁移。",
+    integrity_failed: "无法确认备份完整性：备份已损坏或不完整。",
+    restore_failed: "备份完整性已确认，但试恢复失败。",
+  },
+  diagnosticArchiveQuestion: "选择诊断归档",
+  diagnosticArchiveNormal: "普通",
+  diagnosticArchiveExtended: "扩展",
+  diagnosticArchiveMessage: "两个选项都包含完整诊断归档，区别仅在 Docker 日志和审计的时间范围。",
+  diagnosticArchiveNormalDescription: "完整诊断和当前状态；最近 10 分钟的 Docker 日志与审计。",
+  diagnosticArchiveExtendedDescription: "相同的完整诊断；最近 30 分钟的 Docker 日志与审计。",
   maintenanceBackupCreateStatuses: {
     created: "备份已创建",
     verified: "备份已创建",
@@ -1289,10 +1464,15 @@ const ZH_TEXT_OVERRIDES = {
     deleted_with_missing_files: "备份已删除；部分文件此前已不存在",
     blocked: "删除被阻止",
     failed: "无法删除备份",
+    partial_retryable: "删除只完成了一部分，可以重试",
     delete_failed: "无法删除备份",
     not_found: "备份已不存在",
     fallback: "已收到删除状态",
   },
+  maintenanceDbAdoptionApply: "采用数据库",
+  maintenanceDbAdoptionApplyConfirm: "将现有数据库采用为 KM VMS 工作数据库？仅在内置检查和备份条件通过后执行。",
+  maintenanceDbAdoptionApplied: "已采用现有数据库。",
+  maintenanceDbAdoptionApplyFailed: "无法采用现有数据库。",
   maintenanceDryRun: "检查",
   maintenanceDryRunResult: "检查已完成。",
   maintenanceNoApply: "更新只会通过已确认的 helper 流程应用。",
@@ -1642,6 +1822,22 @@ function InfoTip({ text }) {
   );
 }
 
+function MaintenanceCheckIcon() {
+  return <span aria-hidden="true" className="storageOpsCheckIcon">✓</span>;
+}
+
+function MaintenanceTrashIcon() {
+  return (
+    <svg className="recordingsUiIcon recordingsTrashIcon recordingsRowSvgIcon storageOpsTrashIcon" viewBox="0 1 24 24" aria-hidden="true" focusable="false">
+      <path d="M4.2 6.8h15.6"></path>
+      <path d="M8.9 6.8V4.5h6.2v2.3"></path>
+      <path d="M6.7 7.2 7.6 19c.1 1.05 1 1.9 2.05 1.9h4.7c1.05 0 1.95-.85 2.05-1.9l.9-11.8"></path>
+      <path d="M10.1 10.7v6.6"></path>
+      <path d="M13.9 10.7v6.6"></path>
+    </svg>
+  );
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const [draft, setDraft] = useState(null);
@@ -1660,12 +1856,14 @@ export default function SettingsPage() {
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
   const [maintenanceModalOpen, setMaintenanceModalOpen] = useState(false);
   const [maintenanceOverview, setMaintenanceOverview] = useState(null);
+  const [maintenanceBackupStatus, setMaintenanceBackupStatus] = useState(null);
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
   const [maintenanceError, setMaintenanceError] = useState("");
   const [maintenanceBusy, setMaintenanceBusy] = useState("");
   const [maintenanceActionResult, setMaintenanceActionResult] = useState(null);
   const [maintenanceBackupResult, setMaintenanceBackupResult] = useState(null);
   const [maintenanceConfirm, setMaintenanceConfirm] = useState(null);
+  const [maintenanceBackupPending, setMaintenanceBackupPending] = useState(null);
   const [maintenanceWarningsOpen, setMaintenanceWarningsOpen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState(null);
   const [updateApplyStatus, setUpdateApplyStatus] = useState(null);
@@ -1686,6 +1884,8 @@ export default function SettingsPage() {
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
   const updatePollInFlightRef = useRef(false);
   const updateApplyPendingRef = useRef(null);
+  const maintenanceBackupPendingRef = useRef(null);
+  const maintenanceBackupPollInFlightRef = useRef(false);
   const updateApplyDialogRef = useRef(null);
   const maintenanceDialogRef = useRef(null);
   const maintenanceTriggerRef = useRef(null);
@@ -1712,7 +1912,10 @@ export default function SettingsPage() {
       ? t.updateApplyLocked
       : updateApplyButtonText(updateApplyStatus, t);
   const updateApplyErrors = updateApplyErrorMessages(updateApplyStatus?.error, t, lang);
-  const maintenanceBackupManager = useMemo(() => maintenanceBackupManagerModel(maintenanceOverview, t, lang), [maintenanceOverview, t, lang]);
+  const maintenanceBackupManager = useMemo(
+    () => maintenanceBackupManagerModel(maintenanceOverview, t, lang, maintenanceBackupStatus),
+    [maintenanceOverview, maintenanceBackupStatus, t, lang],
+  );
   const maintenanceWarnings = useMemo(() => maintenanceWarningModel(maintenanceOverview, t), [maintenanceOverview, t]);
   const maintenanceBackupResultModel = useMemo(() => (
     maintenanceBackupResult ? maintenanceBackupOperationResultText(maintenanceBackupResult, t) : null
@@ -1722,6 +1925,7 @@ export default function SettingsPage() {
   maintenanceBusyRef.current = maintenanceBusy;
   updateApplyDialogRef.current = updateApplyDialog;
   updateApplyPendingRef.current = updateApplyPending;
+  maintenanceBackupPendingRef.current = maintenanceBackupPending;
 
   useEffect(() => {
     load();
@@ -1732,6 +1936,19 @@ export default function SettingsPage() {
     return () => {
       window.removeEventListener("km-vms-language", onLanguage);
     };
+  }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
+      const restored = restoreBackupOperationPending(raw, Date.now());
+      if (restored) {
+        maintenanceBackupPendingRef.current = restored;
+        setMaintenanceBackupPending(restored);
+      } else if (raw !== null) {
+        window.sessionStorage.removeItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
+      }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -1764,6 +1981,16 @@ export default function SettingsPage() {
     const timer = window.setInterval(() => loadUpdateApplySurface({ silent: true }), UPDATE_APPLY_POLL_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [maintenanceModalOpen, canManageMaintenance, updateApplyStatus?.status, Boolean(updateApplyPending)]);
+
+  useEffect(() => {
+    if (!canManageMaintenance || !maintenanceBackupPending) return undefined;
+    reconcilePendingBackupOperation();
+    const timer = window.setInterval(
+      reconcilePendingBackupOperation,
+      MAINTENANCE_BACKUP_POLL_INTERVAL_MS,
+    );
+    return () => window.clearInterval(timer);
+  }, [canManageMaintenance, maintenanceBackupPending?.submissionId]);
 
   useEffect(() => {
     if (!maintenanceModalOpen) return undefined;
@@ -2082,6 +2309,125 @@ export default function SettingsPage() {
     return safeRecord;
   }
 
+  function commitBackupOperationPending(nextRecord) {
+    const safeRecord = nextRecord
+      ? sanitizeBackupOperationPending(nextRecord, Date.now())
+      : null;
+    if (nextRecord && !safeRecord) return null;
+    try {
+      if (safeRecord) {
+        window.sessionStorage.setItem(
+          BACKUP_OPERATION_PENDING_STORAGE_KEY,
+          JSON.stringify(safeRecord),
+        );
+      } else {
+        window.sessionStorage.removeItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
+      }
+    } catch {
+      if (safeRecord) return null;
+    }
+    maintenanceBackupPendingRef.current = safeRecord;
+    setMaintenanceBackupPending(safeRecord);
+    return safeRecord;
+  }
+
+  function backupOperationFallback(kind) {
+    if (kind === "create") return t.maintenanceBackupCreateFailed;
+    if (kind === "delete") return t.maintenanceBackupDeleteFailed;
+    return t.maintenanceBackupCheckStatuses?.check_failed || t.maintenanceLoadError;
+  }
+
+  function backupOperationSuccess(kind) {
+    if (kind === "create") return t.maintenanceBackupCreated;
+    if (kind === "delete") return t.maintenanceBackupDeleted;
+    return t.maintenanceBackupCheckStatuses?.validated || t.maintenanceDryRunResult;
+  }
+
+  async function acceptBackupOperationReceipt(receipt, pendingRecord, { recovered = false } = {}) {
+    const state = String(receipt?.state || "");
+    const kind = String(receipt?.kind || pendingRecord?.kind || "check");
+    const terminal = ["completed", "failed", "interrupted"].includes(state);
+    const resultStatus = receipt?.result?.status || state || "failed";
+    const presentationResult = {
+      kind,
+      status: resultStatus,
+      state,
+      phase: receipt?.phase || "",
+      reason: receipt?.reason_code || "",
+      result: receipt?.result || null,
+      recovered,
+    };
+    const presentation = maintenanceBackupOperationResultText(presentationResult, t);
+    setMaintenanceBackupResult(presentationResult);
+    if (!terminal) {
+      setMaintenanceBusy(`backup-${kind}`);
+      return false;
+    }
+    commitBackupOperationPending(null);
+    setMaintenanceBusy((current) => current.startsWith("backup-") ? "" : current);
+    if (state === "completed") {
+      showToast({
+        variant: "success",
+        title: t.maintenanceBackupOperationLabels?.[kind] || t.maintenanceBackupsTitle,
+        text: presentation.text || backupOperationSuccess(kind),
+      });
+    } else {
+      showToast({
+        variant: "warning",
+        title: t.maintenanceBackupOperationLabels?.[kind] || t.maintenanceBackupsTitle,
+        text: presentation.text || backupOperationFallback(kind),
+      });
+    }
+    await loadMaintenanceOverview();
+    return true;
+  }
+
+  async function reconcilePendingBackupOperation() {
+    if (maintenanceBackupPollInFlightRef.current) return;
+    const pending = sanitizeBackupOperationPending(
+      maintenanceBackupPendingRef.current,
+      Date.now(),
+    );
+    if (!pending) {
+      if (maintenanceBackupPendingRef.current) commitBackupOperationPending(null);
+      return;
+    }
+    maintenanceBackupPollInFlightRef.current = true;
+    try {
+      const receipt = await apiFetch(
+        `/system/backup/operations/${encodeURIComponent(pending.submissionId)}`,
+      );
+      await acceptBackupOperationReceipt(receipt, pending, { recovered: true });
+    } catch (err) {
+      if (Number(err?.status || 0) === 404) {
+        commitBackupOperationPending(null);
+        setMaintenanceBusy((current) => current.startsWith("backup-") ? "" : current);
+        setMaintenanceBackupResult({
+          kind: pending.kind,
+          status: "failed",
+          state: "failed",
+          reason: "receipt_not_found",
+        });
+        showToast({
+          variant: "warning",
+          title: t.maintenanceBackupOperationLabels?.[pending.kind] || t.maintenanceBackupsTitle,
+          text: backupOperationFallback(pending.kind),
+        });
+      } else {
+        setMaintenanceBusy(`backup-${pending.kind}`);
+        setMaintenanceBackupResult({
+          kind: pending.kind,
+          status: "running",
+          state: "running",
+          reason: "",
+          recovering: true,
+        });
+      }
+    } finally {
+      maintenanceBackupPollInFlightRef.current = false;
+    }
+  }
+
   function closeUpdateApplyDialog() {
     if (!updateApplyDialogRef.current) return;
     setUpdateApplyDialog(null);
@@ -2131,19 +2477,42 @@ export default function SettingsPage() {
     ]);
   }
 
-  async function loadMaintenanceOverview() {
+  async function loadMaintenanceOverview(offset = 0) {
     if (!canManageMaintenance) return;
     setMaintenanceLoading(true);
     setMaintenanceError("");
     try {
-      const overview = await apiFetch("/system/maintenance/overview");
+      const safeOffset = Math.max(0, Number(offset || 0));
+      const [overview, backupStatus] = await Promise.all([
+        apiFetch("/system/maintenance/overview"),
+        apiFetch(`/system/restore/status?offset=${safeOffset}&limit=${MAINTENANCE_BACKUP_PAGE_SIZE}`),
+      ]);
       setMaintenanceOverview(overview);
-      const artifacts = overview?.flows?.restore?.details?.artifacts;
-      if (!Array.isArray(artifacts) || artifacts.length === 0) setMaintenanceBackupResult(null);
+      setMaintenanceBackupStatus(backupStatus);
     } catch (err) {
       setMaintenanceError(humanErrorText(String(err?.message || ""), t.maintenanceLoadError));
     } finally {
       setMaintenanceLoading(false);
+    }
+  }
+
+  async function loadMaintenanceBackupPage(offset) {
+    if (!canManageMaintenance || maintenanceBusy) return;
+    const safeOffset = Math.max(0, Number(offset || 0));
+    setMaintenanceBusy("backup-page");
+    try {
+      const backupStatus = await apiFetch(
+        `/system/restore/status?offset=${safeOffset}&limit=${MAINTENANCE_BACKUP_PAGE_SIZE}`,
+      );
+      setMaintenanceBackupStatus(backupStatus);
+    } catch (err) {
+      showToast({
+        variant: "warning",
+        title: t.maintenanceBackupsTitle,
+        text: humanErrorText(String(err?.message || ""), t.maintenanceLoadError),
+      });
+    } finally {
+      setMaintenanceBusy("");
     }
   }
 
@@ -2214,8 +2583,58 @@ export default function SettingsPage() {
     }
   }
 
-  async function createMaintenanceBackup() {
+  function requestDbAdoptionApply() {
     if (maintenanceBusy) return;
+    setMaintenanceConfirm({
+      kind: "db-adoption-apply",
+      title: t.maintenanceDbAdoptionApply,
+      text: t.maintenanceDbAdoptionApplyConfirm,
+      confirmLabel: t.maintenanceDbAdoptionApply,
+      danger: false,
+      onConfirm: performDbAdoptionApply,
+    });
+  }
+
+  async function performDbAdoptionApply() {
+    if (maintenanceBusy) return;
+    setMaintenanceBusy("db-adoption-apply");
+    setMaintenanceConfirm(null);
+    setMaintenanceActionResult(null);
+    try {
+      const result = await apiFetch("/system/db-adoption/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      });
+      setMaintenanceActionResult({
+        flowKey: "db_adoption",
+        status: result?.status || "completed",
+        reason: result?.reason || "",
+      });
+      showToast({
+        variant: "success",
+        title: t.maintenanceDbAdoptionApply,
+        text: t.maintenanceDbAdoptionApplied,
+      });
+      await loadMaintenanceOverview();
+    } catch {
+      setMaintenanceActionResult({
+        flowKey: "db_adoption",
+        status: "failed",
+        reason: t.maintenanceDbAdoptionApplyFailed,
+      });
+      showToast({
+        variant: "warning",
+        title: t.maintenanceDbAdoptionApply,
+        text: t.maintenanceDbAdoptionApplyFailed,
+      });
+    } finally {
+      setMaintenanceBusy("");
+    }
+  }
+
+  async function createMaintenanceBackup() {
+    if (maintenanceBusy || maintenanceBackupPendingRef.current) return;
     setMaintenanceConfirm({
       kind: "backup-create",
       title: t.maintenanceBackupCreate,
@@ -2227,34 +2646,24 @@ export default function SettingsPage() {
   }
 
   async function performMaintenanceBackupCreate() {
-    setMaintenanceBusy("backup-create");
-    setMaintenanceConfirm(null);
-    setMaintenanceActionResult(null);
-    try {
-      const result = await apiFetch("/system/backup/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ source: "manual_admin", confirm: true }),
-      });
-      setMaintenanceBackupResult({ kind: "create", ...result });
-      showToast({ variant: "success", title: t.maintenanceBackupCreate, text: t.maintenanceBackupCreated });
-      await loadMaintenanceOverview();
-    } catch (err) {
-      const message = humanErrorText(String(err?.message || ""), t.maintenanceBackupCreateFailed);
-      setMaintenanceBackupResult({ kind: "create", status: "blocked", reason: message });
-      showToast({ variant: "warning", title: t.maintenanceBackupCreate, text: message });
-    } finally {
-      setMaintenanceBusy("");
-    }
+    await performMaintenanceBackupOperation("create", null);
   }
 
-  async function checkMaintenanceBackup(artifactId = "") {
-    const body = artifactId ? { artifact_id: artifactId, target_kind: "temporary_validation_db" } : {};
-    await runMaintenanceDryRun("restore", body);
+  function requestCheckMaintenanceBackup(artifact) {
+    if (!artifact?.id || maintenanceBusy || maintenanceBackupPendingRef.current) return;
+    setMaintenanceConfirm({
+      kind: "backup-check",
+      title: t.maintenanceBackupCheck,
+      text: t.maintenanceBackupCheckConfirm.replace("{date}", artifact.createdAt || "-"),
+      confirmLabel: t.maintenanceBackupCheck,
+      danger: false,
+      artifact,
+      onConfirm: () => performMaintenanceBackupOperation("check", artifact),
+    });
   }
 
   function requestDeleteMaintenanceBackup(artifact) {
-    if (!artifact?.id || maintenanceBusy) return;
+    if (!artifact?.id || maintenanceBusy || maintenanceBackupPendingRef.current) return;
     setMaintenanceConfirm({
       kind: "backup-delete",
       title: t.maintenanceBackupDelete,
@@ -2262,30 +2671,63 @@ export default function SettingsPage() {
       confirmLabel: t.maintenanceBackupDelete,
       danger: true,
       artifact,
-      onConfirm: () => deleteMaintenanceBackup(artifact),
+      onConfirm: () => performMaintenanceBackupOperation("delete", artifact),
     });
   }
 
-  async function deleteMaintenanceBackup(artifact) {
-    if (!artifact?.id || maintenanceBusy) return;
-    setMaintenanceBusy("backup-delete");
+  async function performMaintenanceBackupOperation(kind, artifact) {
+    if (
+      maintenanceBusy
+      || maintenanceBackupPendingRef.current
+      || !["create", "check", "delete"].includes(kind)
+      || (kind !== "create" && !artifact?.id)
+    ) return;
+    const submissionId = createUpdateApplySubmissionId();
+    const pending = createBackupOperationPending(
+      kind,
+      artifact?.id || "",
+      submissionId,
+      Date.now(),
+    );
+    if (!pending || !commitBackupOperationPending(pending)) {
+      showToast({
+        variant: "warning",
+        title: t.maintenanceBackupOperationLabels?.[kind] || t.maintenanceBackupsTitle,
+        text: backupOperationFallback(kind),
+      });
+      return;
+    }
+    setMaintenanceBusy(`backup-${kind}`);
     setMaintenanceConfirm(null);
     setMaintenanceActionResult(null);
+    setMaintenanceBackupResult(null);
+    let endpoint = "/system/backup/create";
+    let body = { confirm: true, submission_id: pending.submissionId };
+    if (kind === "check") {
+      endpoint = "/system/restore/apply";
+      body = { ...body, artifact_id: artifact.id };
+    } else if (kind === "delete") {
+      endpoint = `/system/restore/artifacts/${encodeURIComponent(artifact.id)}/delete`;
+    }
     try {
-      const result = await apiFetch(`/system/restore/artifacts/${encodeURIComponent(artifact.id)}/delete`, {
+      const receipt = await apiFetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
+        body: JSON.stringify(body),
       });
-      setMaintenanceBackupResult({ kind: "delete", ...result });
-      showToast({ variant: "success", title: t.maintenanceBackupDelete, text: t.maintenanceBackupDeleted });
-      await loadMaintenanceOverview();
-    } catch (err) {
-      const message = humanErrorText(String(err?.message || ""), t.maintenanceBackupDeleteFailed);
-      setMaintenanceBackupResult({ kind: "delete", status: "blocked", reason: message });
-      showToast({ variant: "warning", title: t.maintenanceBackupDelete, text: message });
+      await acceptBackupOperationReceipt(receipt, pending);
+    } catch {
+      setMaintenanceBackupResult({
+        kind,
+        status: "running",
+        state: "running",
+        recovering: true,
+      });
+      await reconcilePendingBackupOperation();
     } finally {
-      setMaintenanceBusy("");
+      if (!maintenanceBackupPendingRef.current) {
+        setMaintenanceBusy((current) => current === `backup-${kind}` ? "" : current);
+      }
     }
   }
 
@@ -2375,20 +2817,6 @@ export default function SettingsPage() {
       }
     } finally {
       setMaintenanceBusy((current) => current === "update-apply" ? "" : current);
-    }
-  }
-
-  async function downloadMaintenanceReport() {
-    if (maintenanceBusy) return;
-    setMaintenanceBusy("report-download");
-    try {
-      const { blob } = await apiFetchBlob("/system/upgrade/report");
-      downloadBlob(blob, "km-vms-upgrade-report.json");
-      showToast({ variant: "success", title: t.maintenanceReport, text: t.maintenanceReportReady });
-    } catch (err) {
-      showToast({ variant: "warning", title: t.maintenanceReport, text: humanErrorText(String(err?.message || ""), t.maintenanceReportUnavailable) });
-    } finally {
-      setMaintenanceBusy("");
     }
   }
 
@@ -2811,7 +3239,13 @@ export default function SettingsPage() {
             closeLabel: t.close,
             confirmLabel: maintenanceBusy === "backup-delete"
               ? t.maintenanceBackupDeleting
-              : maintenanceConfirm.confirmLabel,
+              : maintenanceBusy === "backup-check"
+                ? t.maintenanceBackupChecking
+                : maintenanceBusy === "backup-create"
+                  ? t.maintenanceBackupCreating
+                  : maintenanceBusy === "db-adoption-apply"
+                    ? t.saving
+                    : maintenanceConfirm.confirmLabel,
             confirmTone: maintenanceConfirm.danger ? "danger" : undefined,
             tone: maintenanceConfirm.danger ? "error" : "warning",
             onConfirm: maintenanceConfirm.onConfirm,
@@ -3032,6 +3466,11 @@ export default function SettingsPage() {
                               {maintenanceBusy === row.key ? t.checking : row.checkLabel}
                             </button>
                           ) : null}
+                          {row.showApply ? (
+                            <button type="button" className="button primary small" onClick={requestDbAdoptionApply} disabled={Boolean(maintenanceBusy)}>
+                              {maintenanceBusy === "db-adoption-apply" ? t.saving : row.applyLabel}
+                            </button>
+                          ) : null}
                         </article>
                       ))}
                     </div>
@@ -3045,64 +3484,139 @@ export default function SettingsPage() {
                       </div>
                       <div className="settingsMaintenanceBackupCounts">
                         <strong>{maintenanceBackupManager.statusText}</strong>
-                        {maintenanceBackupManager.problemCount ? <span>{t.maintenanceBackupProblems}: {maintenanceBackupManager.problemCount}</span> : null}
-                      </div>
-                    </div>
-                    <div className="settingsMaintenanceBackupSummary">
-                      <div>
-                        <span>{t.maintenanceBackupLatest}</span>
-                        <strong>{maintenanceBackupManager.latestCreatedAt}</strong>
-                      </div>
-                      <div>
-                        <span>{t.status}</span>
-                        <strong>{maintenanceBackupManager.latestStatus}</strong>
-                      </div>
-                      <div>
-                        <span>{t.maintenanceBackupRestore}</span>
-                        <strong>{maintenanceBackupManager.restoreSupported ? t.yes : t.no}</strong>
+                        <span>{t.maintenanceBackupTotalSize}: {maintenanceBackupManager.totalBytesText}</span>
                       </div>
                     </div>
                     <p className="settingsMaintenanceBackupScope">{t.maintenanceBackupScope}</p>
                     <div className="settingsMaintenanceBackupActions">
-                      <button type="button" className="button secondary small" onClick={createMaintenanceBackup} disabled={Boolean(maintenanceBusy)}>
+                      <button type="button" className="button secondary small" onClick={createMaintenanceBackup} disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending)}>
                         {maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreateShort}
-                      </button>
-                      <button type="button" className="button secondary small" onClick={() => checkMaintenanceBackup(maintenanceBackupManager.latest?.artifact_id)} disabled={Boolean(maintenanceBusy) || !maintenanceBackupManager.canCheck}>
-                        {maintenanceBusy === "restore" ? t.checking : maintenanceBackupManager.canCheck ? t.maintenanceBackupCheck : t.maintenanceBackupNothingToCheck}
-                      </button>
-                      <button type="button" className="button secondary small" disabled title={maintenanceBackupManager.restoreReason}>
-                        {t.maintenanceBackupRestore}
                       </button>
                     </div>
                     <div className="settingsMaintenanceBackupRestoreNote">
                       <strong>{maintenanceBackupManager.restoreText}</strong>
                       <span>{maintenanceBackupManager.restoreReason}</span>
                     </div>
+                    {maintenanceBackupPending || maintenanceBackupResult?.recovering ? (
+                      <div className="settingsMaintenanceBackupPending" role="status">
+                        {t.maintenanceBackupRecovering}
+                      </div>
+                    ) : null}
                     {maintenanceBackupManager.artifacts.length ? (
                       <div className="settingsMaintenanceBackupList">
                         <div className="settingsMaintenanceBackupListHead">
                           <span>{t.maintenanceBackupList}</span>
+                          <span>
+                            {t.maintenanceBackupPage
+                              .replace("{start}", String(maintenanceBackupManager.pageStart))
+                              .replace("{end}", String(maintenanceBackupManager.pageEnd))
+                              .replace("{total}", String(maintenanceBackupManager.totalCount))}
+                          </span>
                         </div>
                         {maintenanceBackupManager.artifacts.map((artifact) => (
-                          <article className={`settingsMaintenanceBackupItem ${artifact.valid ? "is-valid" : "is-problem"}`} key={artifact.id}>
-                            <div>
-                              <strong>{artifact.createdAt}</strong>
-                              <span>{artifact.status} · {t.maintenanceBackupSize}: {artifact.size} · {t.maintenanceBackupSchema}: {artifact.schema}</span>
-                            </div>
-                            <div className="settingsMaintenanceBackupItemActions">
-                              <button type="button" className="settingsMaintenanceMiniButton" onClick={() => checkMaintenanceBackup(artifact.id)} disabled={Boolean(maintenanceBusy) || !artifact.canCheck} title={t.maintenanceBackupCheck} aria-label={t.maintenanceBackupCheck}>✓</button>
-                              <button type="button" className="settingsMaintenanceMiniButton danger" onClick={() => requestDeleteMaintenanceBackup(artifact)} disabled={Boolean(maintenanceBusy) || !artifact.deletable} title={t.maintenanceBackupDelete} aria-label={t.maintenanceBackupDelete}>×</button>
+                          <article className={`settingsMaintenanceBackupItem ${artifact.hasProblem ? "is-problem" : ""}`} key={artifact.id}>
+                            <div className="settingsMaintenanceBackupItemBody">
+                              <div className="settingsMaintenanceBackupItemHead">
+                                <span className="settingsMaintenanceBackupCreatedAt">{artifact.createdAt}</span>
+                                <span className="settingsMaintenanceBackupMeta">{t.maintenanceBackupSize}: {artifact.size} · {t.maintenanceBackupSchema}: {artifact.schema} · {artifact.backend}</span>
+                              </div>
+                              <div className="settingsMaintenanceBackupDetailRow">
+                                <div className="settingsMaintenanceBackupStatusGrid">
+                                  <div>
+                                    <span>{t.maintenanceBackupAvailability}</span>
+                                    <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.availabilityTone}`}>{artifact.availabilityLabel}</strong>
+                                  </div>
+                                  <div>
+                                    <span>{t.maintenanceBackupIntegrity}</span>
+                                    <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.integrityTone}`}>{artifact.integrityLabel}</strong>
+                                  </div>
+                                  <div>
+                                    <span>{t.maintenanceBackupCompatibility}</span>
+                                    <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.compatibilityTone}`}>{artifact.compatibilityLabel}</strong>
+                                  </div>
+                                  <div>
+                                    <span>{t.maintenanceBackupValidation}</span>
+                                    <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.validationTone}`}>{artifact.validationLabel}</strong>
+                                  </div>
+                                </div>
+                                <div className="settingsMaintenanceBackupItemActions">
+                                  <span
+                                    className="settingsMaintenanceIconAction"
+                                    title={maintenanceBusy === "backup-check" ? t.maintenanceBackupChecking : t.maintenanceBackupCheck}
+                                  >
+                                    <button
+                                      type="button"
+                                      className="settingsMaintenanceMiniButton"
+                                      onClick={() => requestCheckMaintenanceBackup(artifact)}
+                                      disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || !artifact.canCheck}
+                                      aria-label={maintenanceBusy === "backup-check" ? t.maintenanceBackupChecking : t.maintenanceBackupCheck}
+                                      aria-busy={maintenanceBusy === "backup-check" ? "true" : undefined}
+                                    >
+                                      <MaintenanceCheckIcon />
+                                    </button>
+                                  </span>
+                                  <span
+                                    className="settingsMaintenanceIconAction"
+                                    title={maintenanceBusy === "backup-delete" ? t.maintenanceBackupDeleting : t.maintenanceBackupDelete}
+                                  >
+                                    <button
+                                      type="button"
+                                      className="settingsMaintenanceMiniButton danger"
+                                      onClick={() => requestDeleteMaintenanceBackup(artifact)}
+                                      disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || !artifact.deletable}
+                                      aria-label={maintenanceBusy === "backup-delete" ? t.maintenanceBackupDeleting : t.maintenanceBackupDelete}
+                                      aria-busy={maintenanceBusy === "backup-delete" ? "true" : undefined}
+                                    >
+                                      <MaintenanceTrashIcon />
+                                    </button>
+                                  </span>
+                                </div>
+                              </div>
+                              {artifact.checkedAt || artifact.validatedAt ? (
+                                <small className="settingsMaintenanceBackupEvidenceTime">
+                                  {artifact.checkedAt ? t.maintenanceBackupCheckedAt.replace("{date}", artifact.checkedAt) : ""}
+                                  {artifact.checkedAt && artifact.validatedAt ? " · " : ""}
+                                  {artifact.validatedAt ? t.maintenanceBackupValidatedAt.replace("{date}", artifact.validatedAt) : ""}
+                                </small>
+                              ) : null}
                             </div>
                           </article>
                         ))}
+                        <div className="settingsMaintenanceBackupPagination">
+                          <span
+                            className="settingsMaintenanceIconAction"
+                            title={t.maintenanceBackupPrevious}
+                          >
+                            <button
+                              type="button"
+                              className="settingsMaintenanceMiniButton"
+                              onClick={() => loadMaintenanceBackupPage(Math.max(0, maintenanceBackupManager.offset - maintenanceBackupManager.limit))}
+                              disabled={Boolean(maintenanceBusy) || !maintenanceBackupManager.hasPrevious}
+                              aria-label={t.maintenanceBackupPrevious}
+                            >
+                              <span aria-hidden="true">←</span>
+                            </button>
+                          </span>
+                          <span
+                            className="settingsMaintenanceIconAction"
+                            title={t.maintenanceBackupNext}
+                          >
+                            <button
+                              type="button"
+                              className="settingsMaintenanceMiniButton"
+                              onClick={() => loadMaintenanceBackupPage(maintenanceBackupManager.offset + maintenanceBackupManager.limit)}
+                              disabled={Boolean(maintenanceBusy) || !maintenanceBackupManager.hasMore}
+                              aria-label={t.maintenanceBackupNext}
+                            >
+                              <span aria-hidden="true">→</span>
+                            </button>
+                          </span>
+                        </div>
                       </div>
-                    ) : null}
+                    ) : <div className="settingsJournalEmpty">{t.maintenanceBackupStatusEmpty}</div>}
                     {maintenanceBackupResultModel ? (
                       <small className="settingsMaintenanceBackupResult">
                         {maintenanceBackupResultModel.label}: {maintenanceBackupResultModel.text}
-                        {maintenanceBackupResult.reason && maintenanceBackupResultModel.showReason
-                          ? ` · ${formatMaintenanceMessage(maintenanceBackupResult.reason, t, lang, "action")}`
-                          : ""}
                       </small>
                     ) : null}
                   </section>
@@ -3128,8 +3642,8 @@ export default function SettingsPage() {
                       </div>
                     </div>
                     <div className="settingsMaintenanceSupportActions">
-                      <button type="button" className="button secondary small" onClick={downloadMaintenanceReport} disabled={Boolean(maintenanceBusy)}>
-                        {maintenanceBusy === "report-download" ? t.checking : t.maintenanceReportDownload}
+                      <button type="button" className="button secondary small" onClick={() => setDiagnosticChoiceOpen(true)} disabled={Boolean(maintenanceBusy) || securityBusy}>
+                        {t.createDiagnosticArchive}
                       </button>
                       <button type="button" className="button secondary small" onClick={() => setMaintenanceWarningsOpen((value) => !value)} disabled={!maintenanceWarnings.total}>
                         {maintenanceWarningsOpen ? t.maintenanceWarningHide : t.maintenanceWarningDetails}
@@ -3177,6 +3691,36 @@ export default function SettingsPage() {
             onConfirm: confirmUpdateApply,
           } : null}
           onClose={closeUpdateApplyDialog}
+        />
+
+        <OperationDialog
+          dialog={diagnosticChoiceOpen ? {
+            id: "diagnostic-archive-choice",
+            title: t.diagnosticArchiveQuestion,
+            message: t.diagnosticArchiveMessage,
+            overlayClassName: "settingsDiagnosticDialogOverlay",
+            descriptions: [
+              { label: t.diagnosticArchiveNormal, value: t.diagnosticArchiveNormalDescription },
+              { label: t.diagnosticArchiveExtended, value: t.diagnosticArchiveExtendedDescription },
+            ],
+            busy: securityBusy,
+            dismissible: !securityBusy,
+            closeLabel: t.close,
+            showFooterClose: false,
+            actions: [
+              {
+                id: "diagnostic-normal",
+                label: t.diagnosticArchiveNormal,
+                onClick: () => downloadLogArchive("normal"),
+              },
+              {
+                id: "diagnostic-extended",
+                label: t.diagnosticArchiveExtended,
+                onClick: () => downloadLogArchive("extended"),
+              },
+            ],
+          } : null}
+          onClose={() => setDiagnosticChoiceOpen(false)}
         />
 
         {securityModalOpen ? (
@@ -3311,32 +3855,6 @@ export default function SettingsPage() {
                 </button>
               </section>
 
-              {diagnosticChoiceOpen ? (
-                <div className="settingsDiagnosticChoiceOverlay" role="presentation">
-                  <div className="settingsDiagnosticChoice" role="dialog" aria-modal="true" aria-label={t.diagnosticArchiveQuestion}>
-                    <h3>{t.diagnosticArchiveQuestion}</h3>
-                    <div className="settingsDiagnosticChoiceActions">
-                      <button
-                        type="button"
-                        className="button secondary small settingsDiagnosticChoiceButton"
-                        onClick={() => downloadLogArchive("normal")}
-                        disabled={securityBusy}
-                      >
-                        {t.diagnosticArchiveNormal}
-                      </button>
-                      <button
-                        type="button"
-                        className="button small settingsDiagnosticChoiceButton"
-                        onClick={() => downloadLogArchive("extended")}
-                        disabled={securityBusy}
-                      >
-                        {t.diagnosticArchiveExtended}
-                      </button>
-                    </div>
-                    <button type="button" className="settingsModalClose settingsDiagnosticChoiceClose" onClick={() => setDiagnosticChoiceOpen(false)} aria-label={t.close}>×</button>
-                  </div>
-                </div>
-              ) : null}
             </div>
           </div>
         ) : null}

@@ -167,20 +167,69 @@ def test_diagnostic_archive_contains_audit_summary_and_redaction_proof(db, monke
     monkeypatch.setattr(settings_router.live_manager, "debug", lambda: {})
     monkeypatch.setattr(settings_router, "recordings_diagnostics", lambda db: {"count": 0})
     monkeypatch.setattr(settings_router, "chronology_diagnostics", lambda db: {"items": []})
+    monkeypatch.setattr(settings_router, "build_operator_runtime_status", lambda db: {"status": "healthy"})
+    monkeypatch.setattr(settings_router, "build_update_status", lambda db: {"status": "current"})
+    monkeypatch.setattr(settings_router, "read_update_apply_status", lambda: {"status": "idle"})
+    monkeypatch.setattr(
+        settings_router,
+        "build_backup_snapshot",
+        lambda **kwargs: {
+            "status": "available",
+            "total_count": 1,
+            "limit": kwargs["limit"],
+            "has_more": False,
+            "items": [{"artifact_id": "kmvms-db-20260729T120000Z-aaaaaaaaaaaa"}],
+        },
+    )
+    monkeypatch.setattr(
+        settings_router,
+        "build_backup_operation_diagnostics",
+        lambda **kwargs: {
+            "status": "available",
+            "total_count": 1,
+            "limit": kwargs["limit"],
+            "has_more": False,
+            "items": [{"kind": "check", "state": "completed"}],
+        },
+    )
 
     archive = settings_router.build_log_archive(db, mode="extended", report_text="Authorization: Bearer stage4-report-secret", include_logs=False)
     with zipfile.ZipFile(archive) as bundle:
         names = set(bundle.namelist())
         assert "audit/summary.json" in names
         assert "audit/redaction_proof.json" in names
+        assert "system/operator_runtime_status.json" in names
+        assert "system/diagnostic_coverage.json" in names
+        assert "update/apply_status.json" in names
+        assert "backup/snapshot.json" in names
+        assert "backup/recent_operations.json" in names
         summary = json.loads(bundle.read("audit/summary.json").decode("utf-8"))
         proof = json.loads(bundle.read("audit/redaction_proof.json").decode("utf-8"))
+        coverage = json.loads(bundle.read("system/diagnostic_coverage.json").decode("utf-8"))
+        backup_snapshot = json.loads(bundle.read("backup/snapshot.json").decode("utf-8"))
+        backup_operations = json.loads(bundle.read("backup/recent_operations.json").decode("utf-8"))
         rendered = "\n".join(bundle.read(name).decode("utf-8", errors="replace") for name in names if name.startswith(("audit/", "bug-report")))
+    normal_archive = settings_router.build_log_archive(db, mode="normal", include_logs=False)
+    with zipfile.ZipFile(normal_archive) as bundle:
+        normal_coverage = json.loads(bundle.read("system/diagnostic_coverage.json").decode("utf-8"))
+        normal_manifest = json.loads(bundle.read("system/manifest.json").decode("utf-8"))
 
     assert summary["by_category"]["security"] == 1
     assert summary["by_severity"]["warning"] == 1
     assert summary["recent_security_warning_error"][0]["event_type"] == "security.permission_denied"
     assert proof["status"] == "PASS"
+    assert coverage["full_diagnostic_archive"] is True
+    assert coverage["docker_log_minutes"] == 30
+    assert coverage["audit_minutes"] == 30
+    assert normal_coverage["docker_log_minutes"] == 10
+    assert normal_coverage["audit_minutes"] == 10
+    assert normal_manifest["docker_log_rule"] == "--since=10m"
+    assert normal_manifest["audit_event_rule"] == "last 10 minutes"
+    assert coverage["bounds"]["backup_snapshot_items"] == 20
+    assert coverage["bounds"]["backup_operation_receipts"] == 20
+    assert coverage["privacy"]["backup_dump_contents_included"] is False
+    assert backup_snapshot["limit"] == 20
+    assert backup_operations["limit"] == 20
     for forbidden in ("stage4-archive-secret", "stage4-report-secret", "stage4-raw-body-secret", "pass@example"):
         assert forbidden not in rendered
     assert "Bearer ***" in rendered

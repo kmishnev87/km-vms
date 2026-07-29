@@ -24,11 +24,11 @@ def fake_user():
 def test_stage630_backup_create_requires_explicit_confirmation(monkeypatch):
     calls = []
     monkeypatch.setattr(settings, "create_event", lambda **kwargs: calls.append(kwargs))
-    monkeypatch.setattr(settings, "create_backup_before_upgrade", lambda *args, **kwargs: pytest.fail("backup must not run"))
+    monkeypatch.setattr(settings, "run_backup_create_operation", lambda *args, **kwargs: pytest.fail("backup must not run"))
 
     with pytest.raises(HTTPException) as exc:
         system_backup_create(
-            BackupCreateRequest(source="manual_admin"),
+            BackupCreateRequest(confirm=False, submission_id="11111111-1111-4111-8111-111111111111"),
             fake_request(),
             db=SimpleNamespace(),
             current_user=fake_user(),
@@ -46,38 +46,42 @@ def test_stage630_backup_create_success_audits_sanitized_result(monkeypatch):
     monkeypatch.setattr(settings, "build_migration_plan", lambda db: {"status": "current"})
     monkeypatch.setattr(
         settings,
-        "create_backup_before_upgrade",
+        "run_backup_create_operation",
         lambda *args, **kwargs: {
-            "backup_id": "backup-123",
-            "status": "verified",
-            "db_backend": "sqlite",
-            "source": "manual_admin",
-            "backup_file_label": "km-vms-db-backup.sqlite",
-            "metadata_file_label": "km-vms-db-backup.json",
-            "file_size": 4096,
-            "checksum_sha256": "a" * 64,
-            "restore_validation_status": "verified",
+            "operation_id": "backup-operation-123",
+            "submission_id": "11111111-1111-4111-8111-111111111111",
+            "kind": "create",
+            "artifact_id": "kmvms-db-20260729T010203Z-abcdef123456",
+            "state": "completed",
+            "phase": "completed",
+            "replayed": False,
+            "result": {
+                "status": "verified",
+                "file_size": 4096,
+                "integrity_status": "verified",
+                "restore_validation_status": "not_performed",
+            },
         },
     )
 
     result = system_backup_create(
-        BackupCreateRequest(source="manual_admin", confirm=True),
+        BackupCreateRequest(confirm=True, submission_id="11111111-1111-4111-8111-111111111111"),
         fake_request(),
         db=SimpleNamespace(),
         current_user=fake_user(),
     )
 
-    assert result["backup_id"] == "backup-123"
-    assert result["video_archive_files_included"] is False
+    assert result["state"] == "completed"
+    assert result["artifact_id"] == "kmvms-db-20260729T010203Z-abcdef123456"
     audit = events[-1]
     assert audit["event_type"] == "system.backup_create_completed"
-    assert audit["target_id"] == "backup-123"
+    assert audit["target_id"] == "kmvms-db-20260729T010203Z-abcdef123456"
     assert audit["metadata"] == {
-        "status": "verified",
-        "db_backend": "sqlite",
+        "operation_id": "backup-operation-123",
+        "state": "completed",
+        "phase": "completed",
+        "replayed": False,
         "source": "manual_admin",
-        "file_size": 4096,
-        "restore_validation_status": "verified",
         "video_archive_files_included": False,
     }
 
@@ -90,11 +94,11 @@ def test_stage630_backup_create_safety_block_is_audited(monkeypatch):
     def block_backup(*args, **kwargs):
         raise BackupSafetyBlocked("blocked", {"reason": "unsafe_root", "summary": "Unsafe backup root /secret/path"})
 
-    monkeypatch.setattr(settings, "create_backup_before_upgrade", block_backup)
+    monkeypatch.setattr(settings, "run_backup_create_operation", block_backup)
 
     with pytest.raises(HTTPException) as exc:
         system_backup_create(
-            BackupCreateRequest(source="manual_admin", confirm=True),
+            BackupCreateRequest(confirm=True, submission_id="11111111-1111-4111-8111-111111111111"),
             fake_request(),
             db=SimpleNamespace(),
             current_user=fake_user(),

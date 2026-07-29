@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -21,7 +21,10 @@ from app.services.restore_maintenance import (
     delete_backup_artifact,
     dry_run_restore_maintenance,
     inspect_restore_maintenance,
+    run_backup_delete_operation,
+    run_backup_validation_operation,
 )
+from app.services.backup_manager import build_backup_snapshot
 from app.services.upgrade_report import build_upgrade_report
 
 
@@ -34,7 +37,7 @@ overview_router = APIRouter(prefix="/system/maintenance", tags=["maintenance"])
 def _safe_restore_artifacts(payload: dict) -> list[dict]:
     items = payload.get("artifacts") if isinstance(payload.get("artifacts"), list) else []
     safe_items = []
-    for item in items[:20]:
+    for item in items:
         if not isinstance(item, dict):
             continue
         safe_items.append(
@@ -44,6 +47,13 @@ def _safe_restore_artifacts(payload: dict) -> list[dict]:
                 "artifact_schema_version": item.get("artifact_schema_version"),
                 "db_backend": item.get("db_backend"),
                 "file_size": item.get("file_size"),
+                "availability_status": item.get("availability_status"),
+                "integrity_status": item.get("integrity_status"),
+                "compatibility_status": item.get("compatibility_status"),
+                "restore_validation_status": item.get("restore_validation_status"),
+                "delete_status": item.get("delete_status"),
+                "checked_at": item.get("checked_at"),
+                "validated_at": item.get("validated_at"),
                 "validation_status": item.get("validation_status"),
                 "valid": bool(item.get("valid")),
                 "deletable": bool(item.get("deletable")),
@@ -119,6 +129,12 @@ def _safe_flow_summary(name: str, payload: dict) -> dict:
             "pending_count": payload.get("pending_count"),
             "artifact_count": payload.get("artifact_count"),
             "valid_artifact_count": payload.get("valid_artifact_count"),
+            "total_count": payload.get("total_count"),
+            "total_bytes": payload.get("total_bytes"),
+            "offset": payload.get("offset"),
+            "limit": payload.get("limit"),
+            "has_more": payload.get("has_more"),
+            "root_status": payload.get("root_status"),
             "current_product_restore_supported": payload.get("current_product_restore_supported"),
             "temporary_validation_restore_supported": payload.get("temporary_validation_restore_supported"),
             "current_version_label": payload.get("current_version"),
@@ -264,8 +280,13 @@ def maintenance_overview(
 ):
     adoption = inspect_db_adoption(db, include_backup_plan=False, actor=current_user)
     migrations = inspect_migration_maintenance(db, include_backup_plan=False, actor=current_user)
-    restore = inspect_restore_maintenance(actor=current_user)
-    report = build_upgrade_report(db)
+    backup_snapshot = build_backup_snapshot(
+        db_backend=str(db.get_bind().url.get_backend_name()).lower(),
+        offset=0,
+        limit=20,
+    )
+    restore = inspect_restore_maintenance(actor=current_user, backup_snapshot=backup_snapshot)
+    report = build_upgrade_report(db, backup_snapshot=backup_snapshot)
     warning_presentations = _safe_warning_presentations(report.get("warnings") or [])
     return {
         "status": "ok",
@@ -457,20 +478,29 @@ class RestoreApplyRequest(BaseModel):
 
     confirm: bool = False
     artifact_id: str
-    target_kind: str
+    submission_id: str = Field(min_length=36, max_length=36)
 
 
 class BackupArtifactDeleteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     confirm: bool = False
+    submission_id: str = Field(min_length=36, max_length=36)
 
 
 @restore_router.get("/status")
 def restore_status(
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=20, ge=1, le=50),
+    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_settings")),
 ):
-    return inspect_restore_maintenance(actor=current_user)
+    return inspect_restore_maintenance(
+        actor=current_user,
+        db_backend=str(db.get_bind().url.get_backend_name()).lower(),
+        offset=offset,
+        limit=limit,
+    )
 
 
 @restore_router.post("/dry-run")
@@ -490,11 +520,11 @@ def restore_apply(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     try:
-        result = apply_restore_maintenance(
+        result = run_backup_validation_operation(
             db,
             confirm=payload.confirm,
             artifact_id=payload.artifact_id,
-            target_kind=payload.target_kind,
+            submission_id=payload.submission_id,
             actor=current_user,
         )
     except RestoreMaintenanceBlocked as exc:
@@ -513,20 +543,40 @@ def restore_apply(
         )
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=exc.diagnostics)
 
+    audit_state = str(result.get("state") or "").strip()[:64] or None
+    audit_phase = str(result.get("phase") or "").strip()[:80] or None
+    audit_reason_code = str(result.get("reason_code") or "").strip()[:160] or None
+    if audit_state == "completed":
+        audit_event_type = "system.restore_apply_completed"
+        audit_severity = "info"
+        audit_message_ru = "Проверка резервной копии завершена."
+        audit_message_en = "Backup validation operation completed."
+    elif audit_state == "running" and audit_phase == "cleanup_retry":
+        audit_event_type = "system.restore_apply_cleanup_pending"
+        audit_severity = "info"
+        audit_message_ru = "Результат проверки резервной копии записан; очистка временной базы ожидается."
+        audit_message_en = "Backup validation result was recorded; temporary database cleanup is pending."
+    else:
+        audit_event_type = "system.restore_apply_failed"
+        audit_severity = "warning"
+        audit_message_ru = "Проверка резервной копии завершилась с ошибкой."
+        audit_message_en = "Backup validation operation failed."
+
     create_event(
         db=db,
         actor=current_user,
         category="system",
-        event_type="system.restore_apply_completed",
-        severity="info",
-        message_ru="Restore maintenance action completed.",
-        message_en="Restore maintenance action completed.",
+        event_type=audit_event_type,
+        severity=audit_severity,
+        message_ru=audit_message_ru,
+        message_en=audit_message_en,
         target_type="restore_rollback",
         metadata={
-            "status": result.get("status"),
-            "report_id": result.get("report_id"),
-            "target_kind": result.get("target_kind"),
-            "current_backup_status": result.get("current_backup_status"),
+            "operation_id": result.get("operation_id"),
+            "state": audit_state,
+            "phase": audit_phase,
+            "reason_code": audit_reason_code,
+            "replayed": bool(result.get("replayed")),
             "video_archive_files_restored": False,
             "migration_auto_apply": False,
         },
@@ -545,7 +595,12 @@ def restore_artifact_delete(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     try:
-        result = delete_backup_artifact(artifact_id=artifact_id, confirm=payload.confirm, actor=current_user)
+        result = run_backup_delete_operation(
+            submission_id=payload.submission_id,
+            artifact_id=artifact_id,
+            confirm=payload.confirm,
+            actor=current_user,
+        )
     except RestoreMaintenanceBlocked as exc:
         create_event(
             db=db,
@@ -567,16 +622,22 @@ def restore_artifact_delete(
         db=db,
         actor=current_user,
         category="system",
-        event_type="system.backup_artifact_delete_completed",
+        event_type=(
+            "system.backup_artifact_delete_completed"
+            if result.get("state") == "completed"
+            else "system.backup_artifact_delete_failed"
+        ),
         severity="warning",
-        message_ru="Backup artifact was deleted.",
-        message_en="Backup artifact was deleted.",
+        message_ru="Backup artifact delete operation completed.",
+        message_en="Backup artifact delete operation completed.",
         target_type="db_backup",
         target_id=result.get("artifact_id"),
         metadata={
-            "status": result.get("status"),
-            "deleted_count": result.get("deleted_count"),
-            "missing_count": result.get("missing_count"),
+            "operation_id": result.get("operation_id"),
+            "state": result.get("state"),
+            "phase": result.get("phase"),
+            "reason_code": result.get("reason_code"),
+            "replayed": bool(result.get("replayed")),
             "video_archive_files_deleted": False,
         },
         ip_address=request_ip(request),

@@ -148,8 +148,11 @@ def test_invalid_and_future_artifacts_are_blocked(tmp_path):
     invalid = root / "invalid.manifest.json"
     invalid.write_text("{not-json", encoding="utf-8")
 
-    status = inspect_restore_maintenance(backup_root=str(root))
-    assert any(item["artifact_id"] == invalid.name and item["valid"] is False for item in status["artifacts"])
+    status = inspect_restore_maintenance(backup_root=str(root), db_backend="sqlite")
+    assert any(
+        item["artifact_id"] == "invalid" and item["availability_status"] == "unsafe"
+        for item in status["artifacts"]
+    )
 
     manifest_path = Path(backup["manifest_path"])
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -165,7 +168,7 @@ def test_invalid_and_future_artifacts_are_blocked(tmp_path):
     )
 
     assert payload["status"] == "blocked"
-    assert payload["compatibility_status"] == "blocked"
+    assert payload["compatibility_status"] == "newer_than_supported"
     engine.dispose()
 
 
@@ -410,6 +413,10 @@ def test_restore_maintenance_api_permissions_and_public_payload_contract(client_
     assert client.get("/system/restore/status").status_code == 401
     assert client.get("/system/restore/status", headers=auth_headers(operator)).status_code == 403
     assert client.get("/system/restore/status", headers=auth_headers(owner)).status_code == 200
+    receipt_status_path = "/system/backup/operations/11111111-1111-4111-8111-111111111111"
+    assert client.get(receipt_status_path).status_code == 401
+    assert client.get(receipt_status_path, headers=auth_headers(operator)).status_code == 403
+    assert client.get(receipt_status_path, headers=auth_headers(owner)).status_code == 404
     assert client.post("/system/restore/dry-run", json={}, headers=auth_headers(owner)).status_code == 200
 
     for endpoint in ["/system/restore/dry-run", "/system/restore/apply"]:
@@ -433,12 +440,17 @@ def test_restore_maintenance_api_permissions_and_public_payload_contract(client_
 
     rejected = client.post(
         "/system/restore/apply",
-        json={"confirm": False, "artifact_id": "kmvms-db-test", "target_kind": TARGET_TEMPORARY_VALIDATION_DB},
+        json={
+            "confirm": False,
+            "artifact_id": "kmvms-db-20260729T010203Z-abcdef123456",
+            "submission_id": "11111111-1111-4111-8111-111111111111",
+        },
         headers=auth_headers(owner),
     )
     assert rejected.status_code == 409
 
     rows = {(item.method, item.path, item.decision) for item in ENDPOINT_PERMISSIONS}
     assert ("GET", "/system/restore/status", "manage_settings") in rows
+    assert ("GET", "/system/backup/operations/{submission_id}", "manage_settings") in rows
     assert ("POST", "/system/restore/dry-run", "manage_settings") in rows
     assert ("POST", "/system/restore/apply", "manage_settings") in rows

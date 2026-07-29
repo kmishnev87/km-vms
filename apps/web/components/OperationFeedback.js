@@ -67,6 +67,8 @@ export function OperationDialog({ dialog, onClose }) {
   if (!dialog) return null;
   const hasConfirm = typeof dialog.onConfirm === "function";
   const canClose = !dialog.busy && dialog.dismissible !== false;
+  const dialogActions = Array.isArray(dialog.actions) ? dialog.actions : [];
+  const showStandaloneClose = !hasConfirm && canClose && dialog.showFooterClose !== false;
   const titleId = `operation-dialog-title-${dialog.id || "current"}`;
   const descriptionId = `operation-dialog-description-${dialog.id || "current"}`;
   const presentationClass = dialog.presentation === "compact-confirmation"
@@ -147,6 +149,15 @@ export function OperationDialog({ dialog, onClose }) {
               ))}
             </dl>
           ) : null}
+          {Array.isArray(dialog.descriptions) && dialog.descriptions.length ? (
+            <div className="operationFeedbackDescriptions">
+              {dialog.descriptions.map((item) => (
+                <p key={`${item.label}-${item.value}`}>
+                  {item.label ? `${item.label} — ${item.value}` : item.value}
+                </p>
+              ))}
+            </div>
+          ) : null}
           {Array.isArray(dialog.items) && dialog.items.length ? (
             <ul className="operationFeedbackList">
               {dialog.items.map((item, index) => <li key={`${typeof item === "string" ? item : item?.label}-${index}`}>{typeof item === "string" ? item : item?.label}</li>)}
@@ -165,9 +176,9 @@ export function OperationDialog({ dialog, onClose }) {
           ) : null}
           {(dialog.detail || dialog.action) ? <div className="operationFeedbackDetail">{dialog.detail || dialog.action}</div> : null}
         </div>
-        {(hasConfirm || canClose || (dialog.actions || []).length) ? (
+        {(hasConfirm || dialogActions.length || showStandaloneClose) ? (
           <div className="operationFeedbackFooter">
-            {(dialog.actions || []).map((action) => (
+            {dialogActions.map((action) => (
               <button
                 className="button secondary small"
                 type="button"
@@ -199,7 +210,7 @@ export function OperationDialog({ dialog, onClose }) {
                 {dialog.confirmLabel}
               </button>
             ) : null}
-            {!hasConfirm && canClose ? (
+            {showStandaloneClose ? (
               <button ref={cancelRef} className="button secondary small" type="button" onClick={requestClose}>
                 {dialog.closeLabel || dialog.cancelLabel}
               </button>

@@ -35,6 +35,9 @@ for (const tone of ["success", "error", "warning", "info"]) {
 }
 assert.match(sharedCss, /\.operationFeedbackDialog-compactConfirmation\s*\{/);
 assert.match(responsiveCss, /\.operationFeedbackOverlay-compactConfirmation\s*\{[\s\S]*?align-items:\s*center;/);
+assert.match(feedback, /const showStandaloneClose = !hasConfirm && canClose && dialog\.showFooterClose !== false;/);
+assert.match(feedback, /Array\.isArray\(dialog\.descriptions\)/);
+assert.match(sharedCss, /\.operationFeedbackDescriptions\s*\{/);
 
 assert.doesNotMatch(settings, /settingsToast|toastTimerRef|settingsConfirmModal|settingsConfirmOverlay/);
 assert.doesNotMatch(settingsCss, /\.settingsToast|\.settingsConfirmModal|\.settingsConfirmOverlay/);

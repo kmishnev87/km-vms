@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { OperationToast } from "./OperationFeedback";
+import { OperationDialog, OperationToast } from "./OperationFeedback";
 import { apiFetch, apiFetchBlob, forbiddenMessage } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { useI18n } from "../lib/i18n";
@@ -224,11 +224,13 @@ export function DiagnosticsEntry() {
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [operationToast, setOperationToast] = useState(null);
+  const [archiveChoiceOpen, setArchiveChoiceOpen] = useState(false);
   const [bugText, setBugText] = useState("");
   const canRunDiagnostics = Boolean(currentUser?.permissions?.includes("run_diagnostics"));
 
   async function downloadArchive(mode) {
     if (busy) return;
+    setArchiveChoiceOpen(false);
     setBusy(`archive-${mode}`);
     setError("");
     try {
@@ -284,11 +286,8 @@ export function DiagnosticsEntry() {
       </div>
 
       <div className="settingsActions">
-        <button type="button" className="button secondary small" onClick={() => downloadArchive("normal")} disabled={Boolean(busy)}>
-          {busy === "archive-normal" ? t("diagnosticsEntry.running") : t("diagnosticsEntry.normalArchive")}
-        </button>
-        <button type="button" className="button secondary small" onClick={() => downloadArchive("extended")} disabled={Boolean(busy)}>
-          {busy === "archive-extended" ? t("diagnosticsEntry.running") : t("diagnosticsEntry.extendedArchive")}
+        <button type="button" className="button secondary small" onClick={() => setArchiveChoiceOpen(true)} disabled={Boolean(busy)}>
+          {busy.startsWith("archive-") ? t("diagnosticsEntry.running") : t("diagnosticsEntry.createArchive")}
         </button>
       </div>
 
@@ -308,6 +307,40 @@ export function DiagnosticsEntry() {
       </button>
       {error ? <div className="settingsJournalEmpty error">{error}</div> : null}
       <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
+      <OperationDialog
+        dialog={archiveChoiceOpen ? {
+          id: "diagnostics-entry-archive-choice",
+          title: t("diagnosticsEntry.archiveChoiceTitle"),
+          message: t("diagnosticsEntry.archiveChoiceMessage"),
+          descriptions: [
+            {
+              label: t("diagnosticsEntry.normalArchive"),
+              value: t("diagnosticsEntry.normalArchiveDescription"),
+            },
+            {
+              label: t("diagnosticsEntry.extendedArchive"),
+              value: t("diagnosticsEntry.extendedArchiveDescription"),
+            },
+          ],
+          busy: Boolean(busy),
+          dismissible: !busy,
+          closeLabel: t("common.close"),
+          showFooterClose: false,
+          actions: [
+            {
+              id: "diagnostics-normal",
+              label: t("diagnosticsEntry.normalArchive"),
+              onClick: () => downloadArchive("normal"),
+            },
+            {
+              id: "diagnostics-extended",
+              label: t("diagnosticsEntry.extendedArchive"),
+              onClick: () => downloadArchive("extended"),
+            },
+          ],
+        } : null}
+        onClose={() => setArchiveChoiceOpen(false)}
+      />
     </section>
   );
 }

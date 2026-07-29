@@ -3345,6 +3345,19 @@
   font-weight: 650;
 }
 
+.operationFeedbackDescriptions {
+  display: grid;
+  gap: 6px;
+}
+
+.operationFeedbackDescriptions p {
+  margin: 0;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.45;
+  font-weight: 400;
+}
+
 .operationFeedbackList {
   display: grid;
   gap: 6px;

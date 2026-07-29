@@ -18,6 +18,17 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.version import APP_BUILD_VERSION, APP_VERSION
+from app.services.backup_manager import (
+    BackupManagerBlocked,
+    artifact_version_evidence,
+    begin_backup_operation,
+    configured_backup_root,
+    current_validation_context,
+    new_backup_artifact_id,
+    safe_receipt,
+    update_backup_operation,
+    write_artifact_state,
+)
 from app.services.schema_versioning import schema_version_status
 
 
@@ -49,6 +60,7 @@ class BackupSafetyBlocked(RuntimeError):
 class BackupExecutionConfig:
     backup_root: Path | None = None
     source: str = "manual_admin"
+    backup_id: str | None = None
     allow_tmp_for_tests: bool = False
     pg_dump_path: str = "pg_dump"
     pg_restore_path: str = "pg_restore"
@@ -395,7 +407,12 @@ def create_backup_before_upgrade(
     root = _validate_backup_root(_backup_root(config), allow_tmp_for_tests=config.allow_tmp_for_tests)["path"]
     _ensure_backup_root(root)
     now = _utc_now(config)
-    backup_id = f"kmvms-db-{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:12]}"
+    backup_id = config.backup_id or f"kmvms-db-{now.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:12]}"
+    if not re.fullmatch(r"kmvms-db-\d{8}T\d{6}Z-[a-f0-9]{12}", backup_id):
+        raise BackupSafetyBlocked(
+            "backup_id_invalid",
+            {"status": BACKUP_STATUS_FAILED, "summary": "Internal backup artifact identity is invalid."},
+        )
     backend = plan["db_backend"]
     extension = ".dump" if backend == "postgresql" else ".sqlite3"
     tmp_path = root / f".{backup_id}{extension}.tmp"
@@ -468,39 +485,247 @@ def create_backup_before_upgrade(
         raise BackupSafetyBlocked("backup_failed", {"status": BACKUP_STATUS_FAILED, "summary": sanitize_error(exc)}) from exc
 
 
-def verify_backup_manifest(manifest_path: str | Path, *, max_age_minutes: int = DEFAULT_RECENCY_MINUTES) -> dict[str, Any]:
+def run_backup_create_operation(
+    db: Session,
+    *,
+    submission_id: str,
+    actor: Any,
+    backup_root: str | Path | None = None,
+    migration_plan_summary: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    root = configured_backup_root(backup_root)
+    planned_id = new_backup_artifact_id()
+    try:
+        receipt, replayed = begin_backup_operation(
+            submission_id=submission_id,
+            kind="create",
+            actor=actor,
+            planned_artifact_id=planned_id,
+            backup_root=root,
+        )
+    except BackupManagerBlocked as exc:
+        raise BackupSafetyBlocked(exc.code, exc.diagnostics) from exc
+    if replayed:
+        return safe_receipt(receipt, replayed=True)
+
+    receipt = update_backup_operation(
+        receipt,
+        state="running",
+        phase="creating_backup",
+        backup_root=root,
+    )
+    try:
+        result = create_backup_before_upgrade(
+            db,
+            config=BackupExecutionConfig(
+                backup_root=root if backup_root is not None else None,
+                source="manual_admin",
+                backup_id=planned_id,
+                allow_tmp_for_tests=backup_root is not None,
+            ),
+            migration_plan_summary=migration_plan_summary,
+        )
+        manifest_path = Path(result["manifest_path"])
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        evidence = artifact_version_evidence(
+            root,
+            planned_id,
+            manifest,
+            checksum_sha256=str(result.get("checksum_sha256") or ""),
+            context=current_validation_context(detect_db_backend(db)),
+        )
+        completed_at = datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+        public_result = {
+            "status": "verified",
+            "availability_status": "available",
+            "integrity_status": "verified",
+            "compatibility_status": "compatible",
+            "restore_validation_status": "not_performed",
+            "delete_status": "allowed",
+            "file_size": int(result.get("file_size") or 0),
+            "db_backend": result.get("db_backend"),
+            "checked_at": completed_at,
+            "video_archive_files_included": False,
+        }
+        write_artifact_state(
+            root,
+            planned_id,
+            {
+                "create_evidence": {
+                    "operation_id": receipt["operation_id"],
+                    "outcome": "completed",
+                    "completed_at": completed_at,
+                    "result": public_result,
+                },
+                "integrity": {
+                    "status": "verified",
+                    "checked_at": completed_at,
+                    "operation_id": receipt["operation_id"],
+                    "reason_code": None,
+                    "evidence": evidence,
+                },
+                "restore_validation": {
+                    "status": "not_performed",
+                    "validated_at": None,
+                    "operation_id": None,
+                    "reason_code": "not_performed",
+                    "evidence": None,
+                },
+                "delete_status": "allowed",
+            },
+        )
+        receipt = update_backup_operation(
+            receipt,
+            state="completed",
+            phase="completed",
+            result=public_result,
+            backup_root=root,
+        )
+        return safe_receipt(receipt)
+    except BackupSafetyBlocked as exc:
+        receipt = update_backup_operation(
+            receipt,
+            state="failed",
+            phase="failed",
+            retryable=True,
+            reason_code=exc.status,
+            result={"status": "failed"},
+            backup_root=root,
+        )
+        exc.diagnostics = {**exc.diagnostics, "receipt": safe_receipt(receipt)}
+        raise
+    except Exception as exc:
+        receipt = update_backup_operation(
+            receipt,
+            state="failed",
+            phase="failed",
+            retryable=True,
+            reason_code="backup_create_failed",
+            result={"status": "failed"},
+            backup_root=root,
+        )
+        raise BackupSafetyBlocked(
+            "backup_create_failed",
+            {
+                "status": "failed",
+                "summary": sanitize_error(exc),
+                "receipt": safe_receipt(receipt),
+            },
+        ) from exc
+
+
+def verify_backup_manifest(
+    manifest_path: str | Path,
+    *,
+    max_age_minutes: int | None = None,
+) -> dict[str, Any]:
     path = Path(manifest_path)
+    if path.is_symlink():
+        return {
+            "valid": False,
+            "status": BACKUP_STATUS_INVALID,
+            "availability_status": "unsafe",
+            "integrity_status": "failed",
+            "freshness_status": "not_evaluated",
+            "summary": "Backup manifest ownership evidence is unsafe.",
+        }
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
-        return {"valid": False, "status": BACKUP_STATUS_INVALID, "summary": sanitize_error(exc)}
+        return {
+            "valid": False,
+            "status": BACKUP_STATUS_INVALID,
+            "availability_status": "unsafe",
+            "integrity_status": "failed",
+            "freshness_status": "not_evaluated",
+            "summary": sanitize_error(exc),
+        }
     backup_path = path.with_name(Path(str(manifest.get("backup_file_label", ""))).name)
+    metadata_path = path.with_name(Path(str(manifest.get("metadata_file_label", ""))).name)
+    backup_id = str(manifest.get("backup_id") or "")
+    expected_backup_names = {f"{backup_id}.dump", f"{backup_id}.sqlite3"}
+    if (
+        not backup_id
+        or backup_path.name not in expected_backup_names
+        or metadata_path.name != f"{backup_id}.metadata.json"
+        or backup_path.is_symlink()
+        or metadata_path.is_symlink()
+        or backup_path.parent.resolve() != path.parent.resolve()
+        or metadata_path.parent.resolve() != path.parent.resolve()
+    ):
+        return {
+            "valid": False,
+            "status": BACKUP_STATUS_INVALID,
+            "availability_status": "unsafe",
+            "integrity_status": "failed",
+            "freshness_status": "not_evaluated",
+            "summary": "Backup artifact ownership evidence is unsafe.",
+        }
     if not backup_path.exists():
-        return {"valid": False, "status": BACKUP_STATUS_INVALID, "summary": "Backup artifact is missing."}
+        return {
+            "valid": False,
+            "status": BACKUP_STATUS_INVALID,
+            "availability_status": "missing",
+            "integrity_status": "failed",
+            "freshness_status": "not_evaluated",
+            "summary": "Backup artifact is missing.",
+        }
     size = backup_path.stat().st_size
     if size <= 0 or int(manifest.get("file_size") or 0) != size:
-        return {"valid": False, "status": BACKUP_STATUS_INVALID, "summary": "Backup size does not match manifest."}
-    if _sha256(backup_path) != manifest.get("checksum_sha256"):
-        return {"valid": False, "status": BACKUP_STATUS_INVALID, "summary": "Backup checksum does not match manifest."}
-    metadata_path = path.with_name(Path(str(manifest.get("metadata_file_label", ""))).name)
+        return {
+            "valid": False,
+            "status": BACKUP_STATUS_INVALID,
+            "availability_status": "incomplete",
+            "integrity_status": "failed",
+            "freshness_status": "not_evaluated",
+            "summary": "Backup size does not match manifest.",
+        }
+    observed_checksum = _sha256(backup_path)
+    if observed_checksum != manifest.get("checksum_sha256"):
+        return {
+            "valid": False,
+            "status": BACKUP_STATUS_INVALID,
+            "availability_status": "available",
+            "integrity_status": "failed",
+            "freshness_status": "not_evaluated",
+            "observed_checksum_sha256": observed_checksum,
+            "summary": "Backup checksum does not match manifest.",
+        }
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         _assert_secret_safe(metadata)
     except Exception as exc:
-        return {"valid": False, "status": BACKUP_STATUS_INVALID, "summary": sanitize_error(exc)}
-    if manifest.get("restore_validation_status") != RESTORE_VALIDATION_STATUS:
-        return {"valid": False, "status": BACKUP_STATUS_INVALID, "summary": "Unexpected restore validation status."}
-    created_at = datetime.fromisoformat(str(manifest["created_at"]).replace("Z", ""))
-    if created_at < datetime.utcnow() - timedelta(minutes=max_age_minutes):
-        return {"valid": False, "status": BACKUP_STATUS_INVALID, "summary": "Backup manifest is stale."}
+        return {
+            "valid": False,
+            "status": BACKUP_STATUS_INVALID,
+            "availability_status": "incomplete",
+            "integrity_status": "failed",
+            "freshness_status": "not_evaluated",
+            "summary": sanitize_error(exc),
+        }
+    freshness_status = "not_evaluated"
+    if max_age_minutes is not None:
+        try:
+            created_at = datetime.fromisoformat(str(manifest["created_at"]).replace("Z", ""))
+            freshness_status = (
+                "fresh"
+                if created_at >= datetime.utcnow() - timedelta(minutes=max(0, int(max_age_minutes)))
+                else "stale"
+            )
+        except Exception:
+            freshness_status = "unknown"
     return {
         "valid": True,
         "status": BACKUP_STATUS_VERIFIED,
+        "availability_status": "available",
+        "integrity_status": "verified",
+        "freshness_status": freshness_status,
         "backup_id": manifest.get("backup_id"),
         "db_backend": manifest.get("db_backend"),
         "source": manifest.get("source"),
         "file_size": size,
         "checksum_sha256": manifest.get("checksum_sha256"),
+        "observed_checksum_sha256": observed_checksum,
         "restore_validation_status": manifest.get("restore_validation_status"),
     }
 
@@ -525,6 +750,8 @@ def backup_precondition_status(
     if not manifest_path:
         return {"status": "blocked", "backup_required": True, "summary": "A recent verified backup manifest is required."}
     verification = verify_backup_manifest(manifest_path, max_age_minutes=max_age_minutes)
-    if not verification["valid"]:
+    if not verification["valid"] or verification.get("freshness_status") != "fresh":
+        if verification.get("freshness_status") == "stale":
+            verification = {**verification, "summary": "A recent verified backup manifest is required."}
         return {"status": "blocked", "backup_required": True, "verification": verification, "summary": verification["summary"]}
     return {"status": "satisfied", "backup_required": True, "verification": verification, "summary": "Backup precondition is satisfied."}

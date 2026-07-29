@@ -2,6 +2,7 @@ import json
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine
@@ -12,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS
 from app.db.session import Base
 from app.models.user import User
+from app.routers import maintenance as maintenance_router
 from app.services.backup_before_upgrade import BackupExecutionConfig, create_backup_before_upgrade
 from app.services.restore_maintenance import RestoreMaintenanceBlocked, delete_backup_artifact, inspect_restore_maintenance, list_restore_artifacts
 from app.services.schema_versioning import CURRENT_SCHEMA_VERSION
@@ -103,14 +105,89 @@ def test_backup_artifact_delete_rejects_path_like_and_tampered_labels(tmp_path):
     engine.dispose()
 
 
+def test_backup_artifact_delete_blocks_component_symlink_to_another_file_inside_root(tmp_path):
+    engine, db, backup = _backup(tmp_path)
+    root = tmp_path / "safe-db-backups"
+    manifest_path = Path(backup["manifest_path"])
+    metadata_path = Path(backup["metadata_path"])
+    dump_path = Path(backup["backup_file_path"])
+    foreign_target = root / "other-backup.dump"
+    foreign_target.write_bytes(b"foreign-backup")
+    dump_path.unlink()
+    dump_path.symlink_to(foreign_target.name)
+
+    with pytest.raises(RestoreMaintenanceBlocked) as blocked:
+        delete_backup_artifact(
+            artifact_id=backup["backup_id"],
+            confirm=True,
+            backup_root=str(root),
+        )
+
+    assert blocked.value.status == "artifact_unsafe"
+    assert dump_path.is_symlink()
+    assert foreign_target.read_bytes() == b"foreign-backup"
+    assert manifest_path.exists()
+    assert metadata_path.exists()
+    db.close()
+    engine.dispose()
+
+
+def test_backup_artifact_delete_blocks_component_symlink_outside_root(tmp_path):
+    engine, db, backup = _backup(tmp_path)
+    root = tmp_path / "safe-db-backups"
+    manifest_path = Path(backup["manifest_path"])
+    dump_path = Path(backup["backup_file_path"])
+    external_target = tmp_path / "external-backup.dump"
+    external_target.write_bytes(b"external-backup")
+    dump_path.unlink()
+    dump_path.symlink_to(external_target)
+
+    with pytest.raises(RestoreMaintenanceBlocked) as blocked:
+        delete_backup_artifact(
+            artifact_id=backup["backup_id"],
+            confirm=True,
+            backup_root=str(root),
+        )
+
+    assert blocked.value.status == "artifact_unsafe"
+    assert dump_path.is_symlink()
+    assert external_target.read_bytes() == b"external-backup"
+    assert manifest_path.exists()
+    db.close()
+    engine.dispose()
+
+
+def test_backup_artifact_delete_blocks_configured_root_symlink(tmp_path):
+    engine, db, backup = _backup(tmp_path)
+    root = tmp_path / "safe-db-backups"
+    root_alias = tmp_path / "backup-root-link"
+    root_alias.symlink_to(root, target_is_directory=True)
+
+    with pytest.raises(RestoreMaintenanceBlocked) as blocked:
+        delete_backup_artifact(
+            artifact_id=backup["backup_id"],
+            confirm=True,
+            backup_root=str(root_alias),
+        )
+
+    assert blocked.value.status == "artifact_unsafe"
+    assert root_alias.is_symlink()
+    assert Path(backup["manifest_path"]).exists()
+    assert Path(backup["backup_file_path"]).exists()
+    assert Path(backup["metadata_path"]).exists()
+    db.close()
+    engine.dispose()
+
+
 def test_backup_manager_status_is_sanitized_and_exposes_delete_capability(tmp_path):
     engine, db, backup = _backup(tmp_path)
-    payload = inspect_restore_maintenance(backup_root=str(tmp_path / "safe-db-backups"))
+    payload = inspect_restore_maintenance(backup_root=str(tmp_path / "safe-db-backups"), db_backend="sqlite")
     artifact = payload["artifacts"][0]
 
     assert artifact["artifact_id"] == backup["backup_id"]
-    assert artifact["valid"] is True
-    assert artifact["deletable"] is True
+    assert artifact["integrity_status"] == "not_checked"
+    assert artifact["compatibility_status"] == "compatible"
+    assert artifact["delete_status"] == "allowed"
     assert artifact["delete_supported"] is True
     assert "checksum_sha256" not in artifact
     assert "backup_file_label" not in artifact
@@ -149,9 +226,61 @@ def test_backup_artifact_listing_returns_newest_before_limit(tmp_path):
 
     assert [item["artifact_id"] for item in result] == list(reversed(expected_ids))
     assert len(result) == 20
-    assert all(item["validation_status"] == "invalid" for item in result)
+    assert all(item["integrity_status"] == "not_checked" for item in result)
+    assert all(item["availability_status"] == "missing" for item in result)
 
 
 def test_backup_delete_endpoint_is_registered_for_manage_settings():
     rows = {(item.method, item.path, item.decision) for item in ENDPOINT_PERMISSIONS}
     assert ("POST", "/system/restore/artifacts/{artifact_id}/delete", "manage_settings") in rows
+
+
+def test_backup_validation_cleanup_retry_is_audited_as_pending(monkeypatch):
+    events = []
+    result = {
+        "operation_id": "backup-validation-operation-123",
+        "submission_id": "11111111-1111-4111-8111-111111111111",
+        "state": "running",
+        "phase": "cleanup_retry",
+        "reason_code": "temporary_validation_cleanup_failed",
+        "replayed": False,
+    }
+    monkeypatch.setattr(
+        maintenance_router,
+        "run_backup_validation_operation",
+        lambda *args, **kwargs: result,
+    )
+    monkeypatch.setattr(
+        maintenance_router,
+        "create_event",
+        lambda **kwargs: events.append(kwargs),
+    )
+
+    response = maintenance_router.restore_apply(
+        maintenance_router.RestoreApplyRequest(
+            confirm=True,
+            artifact_id="kmvms-db-20260729T010203Z-abcdef123456",
+            submission_id="11111111-1111-4111-8111-111111111111",
+        ),
+        SimpleNamespace(
+            headers={"user-agent": "stage137101-test"},
+            client=SimpleNamespace(host="127.0.0.1"),
+        ),
+        db=SimpleNamespace(),
+        current_user=SimpleNamespace(id=1, username="owner"),
+    )
+
+    assert response == result
+    assert len(events) == 1
+    audit = events[0]
+    assert audit["event_type"] == "system.restore_apply_cleanup_pending"
+    assert audit["severity"] == "info"
+    assert audit["message_ru"] == "Результат проверки резервной копии записан; очистка временной базы ожидается."
+    assert audit["message_en"] == "Backup validation result was recorded; temporary database cleanup is pending."
+    assert audit["metadata"]["state"] == "running"
+    assert audit["metadata"]["phase"] == "cleanup_retry"
+    assert audit["metadata"]["reason_code"] == "temporary_validation_cleanup_failed"
+    assert audit["event_type"] not in {
+        "system.restore_apply_completed",
+        "system.restore_apply_failed",
+    }

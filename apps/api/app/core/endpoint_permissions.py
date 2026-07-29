@@ -73,6 +73,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("system", "GET", "/system/schema/plan", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only deterministic migration plan; no migration execution."),
     EndpointPermission("system", "GET", "/system/backup/plan", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only backup-before-upgrade plan; no backup files created."),
     EndpointPermission("system", "POST", "/system/backup/create", PERMISSION_MANAGE_SETTINGS, "require_permission", "Creates a sensitive DB backup artifact; no backup download endpoint."),
+    EndpointPermission("system", "GET", "/system/backup/operations/{submission_id}", PERMISSION_MANAGE_SETTINGS, "require_permission", "Reads one actor-bound backup-operation receipt; no artifact content or raw path."),
     EndpointPermission("system", "GET", "/system/db-adoption/status", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only DB adoption status; no mutation."),
     EndpointPermission("system", "POST", "/system/db-adoption/dry-run", PERMISSION_MANAGE_SETTINGS, "require_permission", "Read-only DB adoption dry-run report; no backup or metadata write."),
     EndpointPermission("system", "POST", "/system/db-adoption/apply", PERMISSION_MANAGE_SETTINGS, "require_permission", "Explicit DB adoption apply; requires backup first and writes schema metadata only."),

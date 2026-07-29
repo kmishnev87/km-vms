@@ -7,7 +7,7 @@ import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import URL, make_url
@@ -24,6 +24,24 @@ from app.services.backup_before_upgrade import (
     sanitize_error,
     verify_backup_manifest,
 )
+from app.services.backup_manager import (
+    BACKUP_ARTIFACT_ID_RE,
+    TEMPORARY_VALIDATION_DB_PREFIX,
+    BackupManagerBlocked,
+    artifact_state_path,
+    artifact_version_evidence,
+    begin_backup_operation,
+    build_backup_snapshot,
+    clear_backup_operation_disposable_target,
+    configured_backup_root,
+    current_validation_context,
+    defer_backup_operation_until_cleanup,
+    record_backup_operation_disposable_target,
+    safe_receipt,
+    update_backup_operation,
+    utc_iso as backup_operation_utc_iso,
+    write_artifact_state,
+)
 from app.services.restore_validation import RestoreValidationBlocked, RestoreValidationConfig, run_restore_validation
 from app.services.schema_migrations import build_migration_plan
 from app.services.schema_versioning import CURRENT_SCHEMA_VERSION, CURRENT_STATE_ID, schema_version_status
@@ -33,8 +51,6 @@ RESTORE_REPORT_VERSION = "stage13.restore_rollback.v1"
 TARGET_TEMPORARY_VALIDATION_DB = "temporary_validation_db"
 TARGET_CURRENT_PRODUCT_DB = "current_product_db"
 TARGET_KINDS = {TARGET_TEMPORARY_VALIDATION_DB, TARGET_CURRENT_PRODUCT_DB}
-TEMPORARY_VALIDATION_DB_PREFIX = "kmvms_stage5_stage13_restore_validation_"
-BACKUP_ARTIFACT_ID_RE = re.compile(r"^kmvms-db-\d{8}T\d{6}Z-[a-f0-9]{12}$")
 SENSITIVE_RE = re.compile(
     r"(password|passwd|secret|token|authorization|jwt|rtsp://|postgresql://|sqlite:///)[^,\s\"']*",
     re.IGNORECASE,
@@ -69,7 +85,7 @@ def _safe_jsonable(value: Any) -> Any:
 
 
 def _backup_root(backup_root: str | None = None) -> Path:
-    return Path(backup_root or os.getenv("KMVMS_DB_BACKUP_ROOT") or settings.kmvms_db_backup_root or DEFAULT_BACKUP_ROOT)
+    return configured_backup_root(backup_root)
 
 
 def _manifest_paths(root: Path) -> list[Path]:
@@ -130,17 +146,28 @@ def _newest_manifest_paths(root: Path, *, limit: int) -> list[Path]:
 
 
 def _manifest_for_artifact(artifact_id: str, *, backup_root: str | None = None) -> tuple[Path, dict[str, Any]]:
-    if not re.fullmatch(r"[A-Za-z0-9_.:-]{6,160}", artifact_id or ""):
-        raise RestoreMaintenanceBlocked("artifact_invalid", {"status": "blocked", "reason": "Restore artifact reference is invalid."})
+    safe_id = _validate_product_backup_artifact_id(artifact_id)
     root = _backup_root(backup_root)
-    for manifest_path in _manifest_paths(root):
-        try:
-            manifest = _read_json(manifest_path)
-        except Exception:
-            continue
-        if artifact_id in {_artifact_id(manifest, manifest_path), manifest_path.name}:
-            return manifest_path, manifest
-    raise RestoreMaintenanceBlocked("artifact_not_found", {"status": "blocked", "reason": "Restore artifact was not found."})
+    if root.is_symlink() or (root.exists() and not root.is_dir()):
+        raise RestoreMaintenanceBlocked(
+            "artifact_unsafe",
+            {"status": "blocked", "reason": "Configured backup root is unsafe."},
+        )
+    manifest_path = root / f"{safe_id}.manifest.json"
+    if not manifest_path.exists():
+        raise RestoreMaintenanceBlocked("artifact_not_found", {"status": "blocked", "reason": "Restore artifact was not found."})
+    if manifest_path.is_symlink():
+        raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Restore artifact ownership evidence is unsafe."})
+    try:
+        manifest = _read_json(manifest_path)
+    except Exception as exc:
+        raise RestoreMaintenanceBlocked(
+            "artifact_invalid",
+            {"status": "blocked", "reason": "Restore artifact manifest is invalid."},
+        ) from exc
+    if manifest.get("backup_id") != safe_id:
+        raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Restore artifact ownership evidence is incomplete."})
+    return manifest_path, manifest
 
 
 def _validate_product_backup_artifact_id(artifact_id: str) -> str:
@@ -153,47 +180,48 @@ def _validate_product_backup_artifact_id(artifact_id: str) -> str:
     return value
 
 
-def _inside_root(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-        return True
-    except Exception:
-        return False
-
-
 def _owned_backup_artifact_paths(artifact_id: str, *, backup_root: str | None = None) -> tuple[Path, dict[str, Any], list[Path], list[str]]:
     safe_id = _validate_product_backup_artifact_id(artifact_id)
-    root = _backup_root(backup_root).expanduser().resolve()
+    root = _backup_root(backup_root).expanduser()
+    if root.is_symlink() or (root.exists() and not root.is_dir()):
+        raise RestoreMaintenanceBlocked(
+            "artifact_unsafe",
+            {"status": "blocked", "reason": "Configured backup root is unsafe."},
+        )
+    canonical_root = root.resolve()
     manifest_path = root / f"{safe_id}.manifest.json"
     if not manifest_path.exists():
         raise RestoreMaintenanceBlocked("artifact_not_found", {"status": "blocked", "reason": "Backup artifact was not found."})
-    if manifest_path.is_symlink():
+    if manifest_path.is_symlink() or manifest_path.parent.resolve() != canonical_root:
         raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup manifest ownership evidence is unsafe."})
     manifest = _read_json(manifest_path)
     if manifest.get("backup_id") != safe_id:
         raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup artifact ownership evidence is incomplete."})
 
-    labels = [
-        f"{safe_id}.manifest.json",
-        Path(str(manifest.get("backup_file_label") or "")).name,
-        Path(str(manifest.get("metadata_file_label") or "")).name,
-    ]
-    if not labels[1] or not labels[2]:
+    dump_label = Path(str(manifest.get("backup_file_label") or "")).name
+    metadata_label = Path(str(manifest.get("metadata_file_label") or "")).name
+    if not dump_label or not metadata_label:
         raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup artifact ownership evidence is incomplete."})
-    if labels[1] not in {f"{safe_id}.dump", f"{safe_id}.sqlite3"} or labels[2] != f"{safe_id}.metadata.json":
+    if dump_label not in {f"{safe_id}.dump", f"{safe_id}.sqlite3"} or metadata_label != f"{safe_id}.metadata.json":
         raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup artifact file labels are not product-owned."})
+    labels = [
+        dump_label,
+        metadata_label,
+        f"{safe_id}.state.json",
+        f"{safe_id}.manifest.json",
+    ]
 
     paths: list[Path] = []
     missing: list[str] = []
     for label in labels:
-        candidate = (root / label).resolve()
-        if not _inside_root(candidate, root):
+        candidate = root / label
+        if candidate.parent.resolve() != canonical_root:
             raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup artifact is outside the configured backup root."})
         if candidate.is_symlink():
             raise RestoreMaintenanceBlocked("artifact_unsafe", {"status": "blocked", "reason": "Backup artifact ownership evidence is unsafe."})
         if candidate.exists():
             paths.append(candidate)
-        else:
+        elif label != f"{safe_id}.state.json":
             missing.append(label)
     return manifest_path, manifest, paths, missing
 
@@ -210,9 +238,16 @@ def _schema_version_from_manifest(manifest: dict[str, Any]) -> int | None:
         return None
 
 
-def _artifact_summary(manifest_path: Path, manifest: dict[str, Any], verification: dict[str, Any] | None = None) -> dict[str, Any]:
+def _artifact_summary(
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    verification: dict[str, Any] | None = None,
+    compatibility: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     artifact_id = _artifact_id(manifest, manifest_path)
     deletable = bool(BACKUP_ARTIFACT_ID_RE.fullmatch(artifact_id or ""))
+    verification = verification or {}
+    compatibility = compatibility or _compatibility(manifest)
     return {
         "artifact_id": artifact_id,
         "artifact_label": manifest_path.name,
@@ -220,32 +255,31 @@ def _artifact_summary(manifest_path: Path, manifest: dict[str, Any], verificatio
         "artifact_schema_version": _schema_version_from_manifest(manifest),
         "db_backend": _sanitize(manifest.get("db_backend"), 40),
         "file_size": manifest.get("file_size"),
-        "validation_status": (verification or {}).get("status"),
-        "valid": bool((verification or {}).get("valid")),
+        "availability_status": verification.get("availability_status") or "unsafe",
+        "integrity_status": verification.get("integrity_status") or "not_checked",
+        "compatibility_status": compatibility.get("compatibility_status") or compatibility.get("status") or "unknown",
+        "restore_validation_status": "not_performed",
+        "delete_status": "allowed" if deletable else "blocked",
+        "validation_status": verification.get("status"),
+        "valid": bool(verification.get("valid") and compatibility.get("compatibility_status") == "compatible"),
         "deletable": deletable,
         "delete_supported": deletable,
     }
 
 
-def list_restore_artifacts(*, backup_root: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
-    items: list[dict[str, Any]] = []
-    for manifest_path in _newest_manifest_paths(_backup_root(backup_root), limit=limit):
-        try:
-            manifest = _read_json(manifest_path)
-            verification = verify_backup_manifest(manifest_path)
-            items.append(_artifact_summary(manifest_path, manifest, verification))
-        except Exception:
-            items.append(
-                {
-                    "artifact_id": manifest_path.name,
-                    "artifact_label": manifest_path.name,
-                    "valid": False,
-                    "validation_status": "invalid",
-                    "deletable": False,
-                    "delete_supported": False,
-                }
-            )
-    return items
+def list_restore_artifacts(
+    *,
+    backup_root: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+    db_backend: str | None = None,
+) -> list[dict[str, Any]]:
+    return build_backup_snapshot(
+        backup_root=backup_root,
+        db_backend=db_backend,
+        offset=offset,
+        limit=limit,
+    )["items"]
 
 
 def delete_backup_artifact(
@@ -254,6 +288,7 @@ def delete_backup_artifact(
     confirm: bool,
     backup_root: str | None = None,
     actor: Any = None,
+    operation_id: str | None = None,
 ) -> dict[str, Any]:
     if not confirm:
         raise RestoreMaintenanceBlocked(
@@ -262,24 +297,102 @@ def delete_backup_artifact(
         )
     safe_id = _validate_product_backup_artifact_id(artifact_id)
     manifest_path, manifest, paths, missing = _owned_backup_artifact_paths(safe_id, backup_root=backup_root)
+    root = _backup_root(backup_root)
     deleted_labels: list[str] = []
     failed_labels: list[str] = []
-    for path in sorted(paths, key=lambda item: 0 if item == manifest_path else 1, reverse=True):
+    non_manifest_paths = [path for path in paths if path != manifest_path]
+    for path in non_manifest_paths:
         try:
             label = path.name
             path.unlink()
             deleted_labels.append(label)
         except Exception:
             failed_labels.append(path.name)
+            break
+    remaining_non_manifest = [
+        root / f"{safe_id}.dump",
+        root / f"{safe_id}.sqlite3",
+        root / f"{safe_id}.metadata.json",
+        artifact_state_path(root, safe_id),
+    ]
+    if not failed_labels and any(path.exists() for path in remaining_non_manifest):
+        failed_labels.append("remaining_product_component")
     if failed_labels:
+        partial_result = {
+            "status": "partial_retryable",
+            "delete_status": "partial_retryable",
+            "deleted_count": len(deleted_labels),
+            "failed_count": len(failed_labels),
+            "missing_count": len(missing),
+            "video_archive_files_deleted": False,
+        }
+        try:
+            write_artifact_state(
+                root,
+                safe_id,
+                {
+                    "delete_status": "partial_retryable",
+                    "last_delete_attempt": {
+                        "operation_id": operation_id,
+                        "outcome": "failed",
+                        "completed_at": backup_operation_utc_iso(),
+                        "result": partial_result,
+                    },
+                },
+            )
+        except Exception:
+            pass
         raise RestoreMaintenanceBlocked(
             "delete_failed",
             {
-                "status": "blocked",
+                "status": "partial_retryable",
                 "reason": "Backup artifact could not be fully deleted.",
                 "artifact_id": safe_id,
                 "deleted_count": len(deleted_labels),
                 "failed_count": len(failed_labels),
+                "missing_count": len(missing),
+                "delete_status": "partial_retryable",
+                "deleted": False,
+            },
+        )
+    try:
+        manifest_path.unlink()
+        deleted_labels.append(manifest_path.name)
+    except Exception:
+        partial_result = {
+            "status": "partial_retryable",
+            "delete_status": "partial_retryable",
+            "deleted_count": len(deleted_labels),
+            "failed_count": 1,
+            "missing_count": len(missing),
+            "video_archive_files_deleted": False,
+        }
+        try:
+            write_artifact_state(
+                root,
+                safe_id,
+                {
+                    "delete_status": "partial_retryable",
+                    "last_delete_attempt": {
+                        "operation_id": operation_id,
+                        "outcome": "failed",
+                        "completed_at": backup_operation_utc_iso(),
+                        "result": partial_result,
+                    },
+                },
+            )
+        except Exception:
+            pass
+        raise RestoreMaintenanceBlocked(
+            "delete_failed",
+            {
+                "status": "partial_retryable",
+                "reason": "Backup ownership manifest could not be deleted.",
+                "artifact_id": safe_id,
+                "deleted_count": len(deleted_labels),
+                "failed_count": 1,
+                "missing_count": len(missing),
+                "delete_status": "partial_retryable",
                 "deleted": False,
             },
         )
@@ -290,27 +403,49 @@ def delete_backup_artifact(
         "deleted_count": len(deleted_labels),
         "missing_count": len(missing),
         "db_backend": _sanitize(manifest.get("db_backend"), 40),
+        "delete_status": "allowed",
         "video_archive_files_deleted": False,
-        "actor": {
-            "user_id": getattr(actor, "id", None),
-            "role": _sanitize(getattr(actor, "role", None), 50) if getattr(actor, "role", None) else None,
-        },
     }
 
 
-def _compatibility(manifest: dict[str, Any]) -> dict[str, Any]:
+def _compatibility(manifest: dict[str, Any], *, current_backend: str | None = None) -> dict[str, Any]:
+    artifact_backend = str(manifest.get("db_backend") or "").lower()
+    normalized_current = str(current_backend or artifact_backend).lower()
+    if artifact_backend not in {"postgresql", "sqlite"} or normalized_current != artifact_backend:
+        return {
+            "status": "unsupported_backend",
+            "compatibility_status": "unsupported_backend",
+            "reason": "Backup artifact database backend is not supported by the current system.",
+            "artifact_schema_version": _schema_version_from_manifest(manifest),
+        }
     version = _schema_version_from_manifest(manifest)
     if version is None:
-        return {"status": "blocked", "reason": "Backup artifact has no schema version metadata.", "artifact_schema_version": None}
+        return {
+            "status": "unknown",
+            "compatibility_status": "unknown",
+            "reason": "Backup artifact has no schema version metadata.",
+            "artifact_schema_version": None,
+        }
     if version > CURRENT_SCHEMA_VERSION:
-        return {"status": "blocked", "reason": "Backup artifact schema version is newer than this app supports.", "artifact_schema_version": version}
+        return {
+            "status": "newer_than_supported",
+            "compatibility_status": "newer_than_supported",
+            "reason": "Backup artifact schema version is newer than this app supports.",
+            "artifact_schema_version": version,
+        }
     if version < CURRENT_SCHEMA_VERSION:
         return {
-            "status": "blocked",
+            "status": "migration_required",
+            "compatibility_status": "migration_required",
             "reason": "Backup artifact schema version is older; restore requires explicit Stage 2 migration apply after restore and is blocked here.",
             "artifact_schema_version": version,
         }
-    return {"status": "compatible", "reason": "Backup artifact schema version is compatible.", "artifact_schema_version": version}
+    return {
+        "status": "compatible",
+        "compatibility_status": "compatible",
+        "reason": "Backup artifact schema version is compatible.",
+        "artifact_schema_version": version,
+    }
 
 
 def _target_status(target_kind: str, *, target_database_url: str | None = None, current_db_url: URL | None = None) -> dict[str, Any]:
@@ -514,10 +649,12 @@ def _restore_artifact_to_target(
             ),
             source_database_url=source_database_url,
         )
+        validation = _safe_jsonable(result)
+        validation["passed"] = bool(result.get("backup_restore_validated"))
         return {
             "status": "restored" if result.get("backup_restore_validated") else "failed",
             "target_kind": target_kind,
-            "post_restore_validation": _safe_jsonable(result),
+            "post_restore_validation": validation,
             "video_archive_files_restored": False,
         }
     raise RestoreMaintenanceBlocked("unsupported_backup_backend", {"status": "blocked", "reason": "Unsupported backup artifact backend."})
@@ -610,17 +747,38 @@ def assert_restore_report_secret_safe(report: dict[str, Any]) -> None:
         raise RestoreMaintenanceBlocked("unsafe_report", {"status": "blocked", "reason": "Restore report contains sensitive-looking data."})
 
 
-def inspect_restore_maintenance(*, backup_root: str | None = None, actor: Any = None) -> dict[str, Any]:
-    artifacts = list_restore_artifacts(backup_root=backup_root)
-    valid = [item for item in artifacts if item.get("valid")]
-    status = "available" if valid else "no_artifacts"
-    reason = "Valid restore artifacts are available." if valid else "No valid restore artifacts are available in configured backup root."
+def inspect_restore_maintenance(
+    *,
+    backup_root: str | None = None,
+    actor: Any = None,
+    db_backend: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+    backup_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    snapshot = backup_snapshot or build_backup_snapshot(
+        backup_root=backup_root,
+        db_backend=db_backend,
+        offset=offset,
+        limit=limit,
+    )
+    artifacts = snapshot.get("items") if isinstance(snapshot.get("items"), list) else []
+    total_count = int(snapshot.get("total_count") or 0)
+    verified_count = int(snapshot.get("verified_compatible_count") or 0)
+    status = "available" if total_count else "no_artifacts"
+    reason = "Backup artifacts are available." if total_count else "No backup artifacts are available in configured backup root."
     report = _build_report(mode="status", status=status, reason=reason, artifact=None, target=None, compatibility=None, actor=actor)
     return {
         "status": status,
         "reason": reason,
-        "artifact_count": len(artifacts),
-        "valid_artifact_count": len(valid),
+        "root_status": snapshot.get("root_status"),
+        "artifact_count": total_count,
+        "total_count": total_count,
+        "total_bytes": int(snapshot.get("total_bytes") or 0),
+        "offset": int(snapshot.get("offset") or 0),
+        "limit": int(snapshot.get("limit") or limit),
+        "has_more": bool(snapshot.get("has_more")),
+        "valid_artifact_count": verified_count,
         "artifacts": artifacts,
         "can_restore": False,
         "temporary_validation_restore_supported": True,
@@ -643,19 +801,33 @@ def dry_run_restore_maintenance(
     backup_root: str | None = None,
     target_database_url: str | None = None,
     actor: Any = None,
+    verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not artifact_id:
-        status_payload = inspect_restore_maintenance(backup_root=backup_root, actor=actor)
+        status_payload = inspect_restore_maintenance(
+            backup_root=backup_root,
+            actor=actor,
+            db_backend=str(db.get_bind().url.get_backend_name()).lower(),
+        )
         status_payload["dry_run"] = True
         status_payload["mutates_database"] = False
         status_payload["creates_current_backup"] = False
         return status_payload
     manifest_path, manifest = _manifest_for_artifact(artifact_id, backup_root=backup_root)
-    verification = verify_backup_manifest(manifest_path)
-    artifact = _artifact_summary(manifest_path, manifest, verification)
-    compatibility = _compatibility(manifest)
+    verification = verification or verify_backup_manifest(manifest_path)
+    compatibility = _compatibility(
+        manifest,
+        current_backend=str(db.get_bind().url.get_backend_name()).lower(),
+    )
+    artifact = _artifact_summary(manifest_path, manifest, verification, compatibility)
     target = _target_status(target_kind, target_database_url=target_database_url, current_db_url=db.get_bind().url)
-    status = "valid" if verification.get("valid") and compatibility["status"] == "compatible" and target["status"] == "safe" else "blocked"
+    status = (
+        "valid"
+        if verification.get("integrity_status") == "verified"
+        and compatibility["compatibility_status"] == "compatible"
+        and target["status"] == "safe"
+        else "blocked"
+    )
     reason = "Restore dry-run validation passed." if status == "valid" else next(
         item.get("reason") for item in [compatibility, target, {"reason": verification.get("summary")}] if item.get("reason")
     )
@@ -667,6 +839,8 @@ def dry_run_restore_maintenance(
         "artifact_created_at": artifact["artifact_created_at"],
         "artifact_schema_version": artifact["artifact_schema_version"],
         "current_schema_version": schema_version_status(db).get("schema_version"),
+        "availability_status": verification.get("availability_status") or "unsafe",
+        "integrity_status": verification.get("integrity_status") or "failed",
         "target_kind": target_kind,
         "requires_current_backup": bool(target.get("requires_current_backup")),
         "temporary_validation_restore_supported": bool(target.get("temporary_validation_restore_supported", target_kind == TARGET_TEMPORARY_VALIDATION_DB and target.get("status") == "safe")),
@@ -676,7 +850,8 @@ def dry_run_restore_maintenance(
         "current_product_restore_reason": "current_product_restore_not_enabled",
         "requires_explicit_future_enablement": target_kind == TARGET_CURRENT_PRODUCT_DB,
         "current_backup_status": "not_created_for_dry_run",
-        "compatibility_status": compatibility["status"],
+        "compatibility_status": compatibility["compatibility_status"],
+        "restore_validation_status": "not_performed",
         "can_restore": status == "valid",
         "requires_confirmation": status == "valid",
         "dry_run": True,
@@ -698,6 +873,8 @@ def apply_restore_maintenance(
     target_database_url: str | None = None,
     actor: Any = None,
     allow_current_product_db_for_tests: bool = False,
+    preflight_result: dict[str, Any] | None = None,
+    on_disposable_target_created: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     if not confirm:
         raise RestoreMaintenanceBlocked("confirmation_required", {"status": "blocked", "reason": "Explicit confirm=true is required for restore apply."})
@@ -713,7 +890,7 @@ def apply_restore_maintenance(
                 "restore_executed": False,
             },
         )
-    dry = dry_run_restore_maintenance(
+    dry = preflight_result or dry_run_restore_maintenance(
         db,
         artifact_id=artifact_id,
         target_kind=target_kind,
@@ -756,6 +933,15 @@ def apply_restore_maintenance(
 
     if target_kind == TARGET_TEMPORARY_VALIDATION_DB and not target_database_url:
         disposable_target = _create_server_side_disposable_target(db.get_bind().url)
+        if on_disposable_target_created is not None:
+            try:
+                on_disposable_target_created(str(disposable_target["database_name"]))
+            except Exception:
+                _drop_server_side_disposable_target(
+                    db.get_bind().url,
+                    str(disposable_target["database_name"]),
+                )
+                raise
         restore_target_url = disposable_target["target_database_url"]
     else:
         restore_target_url = target_database_url or (db.get_bind().url.render_as_string(hide_password=False) if target_kind == TARGET_CURRENT_PRODUCT_DB else None)
@@ -822,3 +1008,398 @@ def apply_restore_maintenance(
         "report_id": report["report_id"],
         "report": report,
     }
+
+
+def _check_public_result(
+    *,
+    verification: dict[str, Any],
+    compatibility: dict[str, Any],
+    restore_validation_status: str,
+    status: str,
+    checked_at: str,
+    validated_at: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "status": status,
+        "availability_status": verification.get("availability_status") or "unsafe",
+        "integrity_status": verification.get("integrity_status") or "failed",
+        "compatibility_status": compatibility.get("compatibility_status") or "unknown",
+        "restore_validation_status": restore_validation_status,
+        "delete_status": "allowed",
+        "checked_at": checked_at,
+        "validated_at": validated_at,
+        "video_archive_files_restored": False,
+    }
+
+
+def run_backup_validation_operation(
+    db: Session,
+    *,
+    submission_id: str,
+    artifact_id: str,
+    confirm: bool,
+    actor: Any,
+    backup_root: str | None = None,
+) -> dict[str, Any]:
+    if not confirm:
+        raise RestoreMaintenanceBlocked(
+            "confirmation_required",
+            {"status": "blocked", "reason_code": "confirmation_required"},
+        )
+    root = _backup_root(backup_root)
+    try:
+        receipt, replayed = begin_backup_operation(
+            submission_id=submission_id,
+            kind="check",
+            actor=actor,
+            artifact_id=artifact_id,
+            backup_root=root,
+        )
+    except BackupManagerBlocked as exc:
+        raise RestoreMaintenanceBlocked(exc.code, exc.diagnostics) from exc
+    if replayed:
+        return safe_receipt(receipt, replayed=True)
+
+    receipt = update_backup_operation(
+        receipt,
+        state="running",
+        phase="integrity_preflight",
+        backup_root=root,
+    )
+    try:
+        manifest_path, manifest = _manifest_for_artifact(artifact_id, backup_root=str(root))
+        verification = verify_backup_manifest(manifest_path)
+        compatibility = _compatibility(
+            manifest,
+            current_backend=str(db.get_bind().url.get_backend_name()).lower(),
+        )
+        preflight = dry_run_restore_maintenance(
+            db,
+            artifact_id=artifact_id,
+            target_kind=TARGET_TEMPORARY_VALIDATION_DB,
+            backup_root=str(root),
+            actor=actor,
+            verification=verification,
+        )
+        checked_at = backup_operation_utc_iso()
+        evidence = artifact_version_evidence(
+            root,
+            artifact_id,
+            manifest,
+            checksum_sha256=verification.get("observed_checksum_sha256") or verification.get("checksum_sha256"),
+            context=current_validation_context(str(db.get_bind().url.get_backend_name()).lower()),
+        )
+        if preflight.get("status") != "valid":
+            result = _check_public_result(
+                verification=verification,
+                compatibility=compatibility,
+                restore_validation_status="not_performed",
+                status="check_failed",
+                checked_at=checked_at,
+            )
+            write_artifact_state(
+                root,
+                artifact_id,
+                {
+                    "integrity": {
+                        "status": verification.get("integrity_status") or "failed",
+                        "checked_at": checked_at,
+                        "operation_id": receipt["operation_id"],
+                        "reason_code": (
+                            "integrity_failed"
+                            if verification.get("integrity_status") != "verified"
+                            else compatibility.get("compatibility_status")
+                        ),
+                        "evidence": evidence,
+                    },
+                    "last_check": {
+                        "operation_id": receipt["operation_id"],
+                        "outcome": "failed",
+                        "completed_at": checked_at,
+                        "result": result,
+                    },
+                },
+            )
+            receipt = update_backup_operation(
+                receipt,
+                state="failed",
+                phase="preflight_failed",
+                retryable=True,
+                reason_code=(
+                    "integrity_failed"
+                    if verification.get("integrity_status") != "verified"
+                    else str(compatibility.get("compatibility_status") or "check_blocked")
+                ),
+                result=result,
+                backup_root=root,
+            )
+            return safe_receipt(receipt)
+
+        receipt = update_backup_operation(
+            receipt,
+            state="running",
+            phase="temporary_restore",
+            backup_root=root,
+        )
+
+        def record_disposable_target(database_name: str) -> None:
+            nonlocal receipt
+            receipt = record_backup_operation_disposable_target(
+                receipt,
+                database_name=database_name,
+                backup_root=root,
+            )
+
+        try:
+            applied = apply_restore_maintenance(
+                db,
+                confirm=True,
+                artifact_id=artifact_id,
+                target_kind=TARGET_TEMPORARY_VALIDATION_DB,
+                backup_root=str(root),
+                actor=actor,
+                preflight_result=preflight,
+                on_disposable_target_created=record_disposable_target,
+            )
+        except (RestoreMaintenanceBlocked, RestoreValidationBlocked) as exc:
+            reason_code = str(getattr(exc, "status", "temporary_restore_failed"))
+            failed_at = backup_operation_utc_iso()
+            result = _check_public_result(
+                verification=verification,
+                compatibility=compatibility,
+                restore_validation_status="failed",
+                status="check_failed",
+                checked_at=checked_at,
+                validated_at=failed_at,
+            )
+            write_artifact_state(
+                root,
+                artifact_id,
+                {
+                    "integrity": {
+                        "status": "verified",
+                        "checked_at": checked_at,
+                        "operation_id": receipt["operation_id"],
+                        "reason_code": None,
+                        "evidence": evidence,
+                    },
+                    "restore_validation": {
+                        "status": "failed",
+                        "validated_at": failed_at,
+                        "operation_id": receipt["operation_id"],
+                        "reason_code": reason_code,
+                        "evidence": evidence,
+                    },
+                    "last_check": {
+                        "operation_id": receipt["operation_id"],
+                        "outcome": "failed",
+                        "completed_at": failed_at,
+                        "result": result,
+                    },
+                },
+            )
+            recovery = receipt.get("recovery") if isinstance(receipt.get("recovery"), dict) else {}
+            if recovery.get("disposable_database_name"):
+                receipt = defer_backup_operation_until_cleanup(
+                    receipt,
+                    terminal_state="failed",
+                    terminal_phase="temporary_restore_failed",
+                    terminal_retryable=True,
+                    terminal_reason_code=reason_code,
+                    terminal_result=result,
+                    backup_root=root,
+                )
+            else:
+                receipt = update_backup_operation(
+                    receipt,
+                    state="failed",
+                    phase="temporary_restore_failed",
+                    retryable=True,
+                    reason_code=reason_code,
+                    result=result,
+                    backup_root=root,
+                )
+            return safe_receipt(receipt)
+
+        validated_at = backup_operation_utc_iso()
+        cleanup = applied.get("temporary_validation_cleanup")
+        recovery = receipt.get("recovery") if isinstance(receipt.get("recovery"), dict) else {}
+        has_disposable_target = bool(recovery.get("disposable_database_name"))
+        cleanup_passed = (
+            not has_disposable_target
+            or (isinstance(cleanup, dict) and cleanup.get("status") == "completed")
+        )
+        validation_passed = (
+            applied.get("status") == "restored"
+            and applied.get("post_restore_validation_status") is True
+        )
+        restore_status = "passed" if validation_passed else "failed"
+        result = _check_public_result(
+            verification=verification,
+            compatibility=compatibility,
+            restore_validation_status=restore_status,
+            status="validated" if validation_passed else "check_failed",
+            checked_at=checked_at,
+            validated_at=validated_at,
+        )
+        write_artifact_state(
+            root,
+            artifact_id,
+            {
+                "integrity": {
+                    "status": "verified",
+                    "checked_at": checked_at,
+                    "operation_id": receipt["operation_id"],
+                    "reason_code": None,
+                    "evidence": evidence,
+                },
+                "restore_validation": {
+                    "status": restore_status,
+                    "validated_at": validated_at,
+                    "operation_id": receipt["operation_id"],
+                    "reason_code": None if validation_passed else "post_restore_validation_failed",
+                    "evidence": evidence,
+                },
+                "last_check": {
+                    "operation_id": receipt["operation_id"],
+                    "outcome": "completed" if validation_passed else "failed",
+                    "completed_at": validated_at,
+                    "result": result,
+                },
+                "delete_status": "allowed",
+            },
+        )
+        if not cleanup_passed:
+            receipt = defer_backup_operation_until_cleanup(
+                receipt,
+                terminal_state="completed" if validation_passed else "failed",
+                terminal_phase="completed" if validation_passed else "post_restore_validation_failed",
+                terminal_retryable=not validation_passed,
+                terminal_reason_code=None if validation_passed else "post_restore_validation_failed",
+                terminal_result=result,
+                backup_root=root,
+            )
+            return safe_receipt(receipt)
+        if has_disposable_target:
+            receipt = clear_backup_operation_disposable_target(receipt, backup_root=root)
+        receipt = update_backup_operation(
+            receipt,
+            state="completed" if validation_passed else "failed",
+            phase="completed" if validation_passed else "post_restore_validation_failed",
+            retryable=not validation_passed,
+            reason_code=None if validation_passed else "post_restore_validation_failed",
+            result=result,
+            backup_root=root,
+        )
+        return safe_receipt(receipt)
+    except RestoreMaintenanceBlocked as exc:
+        receipt = update_backup_operation(
+            receipt,
+            state="failed",
+            phase="preflight_failed",
+            retryable=True,
+            reason_code=exc.status,
+            result={"status": "check_failed"},
+            backup_root=root,
+        )
+        return safe_receipt(receipt)
+    except Exception as exc:
+        failure_result = {"status": "check_failed", "restore_validation_status": "failed"}
+        recovery = receipt.get("recovery") if isinstance(receipt.get("recovery"), dict) else {}
+        if recovery.get("disposable_database_name"):
+            receipt = defer_backup_operation_until_cleanup(
+                receipt,
+                terminal_state="failed",
+                terminal_phase="failed",
+                terminal_retryable=True,
+                terminal_reason_code="backup_check_failed",
+                terminal_result=failure_result,
+                backup_root=root,
+            )
+        else:
+            receipt = update_backup_operation(
+                receipt,
+                state="failed",
+                phase="failed",
+                retryable=True,
+                reason_code="backup_check_failed",
+                result=failure_result,
+                backup_root=root,
+            )
+        raise RestoreMaintenanceBlocked(
+            "backup_check_failed",
+            {
+                "status": "failed",
+                "reason": _sanitize(exc),
+                "receipt": safe_receipt(receipt),
+            },
+        ) from exc
+
+
+def run_backup_delete_operation(
+    *,
+    submission_id: str,
+    artifact_id: str,
+    confirm: bool,
+    actor: Any,
+    backup_root: str | None = None,
+) -> dict[str, Any]:
+    if not confirm:
+        raise RestoreMaintenanceBlocked(
+            "confirmation_required",
+            {"status": "blocked", "reason_code": "confirmation_required"},
+        )
+    root = _backup_root(backup_root)
+    try:
+        receipt, replayed = begin_backup_operation(
+            submission_id=submission_id,
+            kind="delete",
+            actor=actor,
+            artifact_id=artifact_id,
+            backup_root=root,
+        )
+    except BackupManagerBlocked as exc:
+        raise RestoreMaintenanceBlocked(exc.code, exc.diagnostics) from exc
+    if replayed:
+        return safe_receipt(receipt, replayed=True)
+    receipt = update_backup_operation(
+        receipt,
+        state="running",
+        phase="deleting_components",
+        backup_root=root,
+    )
+    try:
+        result = delete_backup_artifact(
+            artifact_id=artifact_id,
+            confirm=True,
+            backup_root=str(root),
+            actor=actor,
+            operation_id=receipt["operation_id"],
+        )
+        receipt = update_backup_operation(
+            receipt,
+            state="completed",
+            phase="completed",
+            result=result,
+            backup_root=root,
+        )
+        return safe_receipt(receipt)
+    except RestoreMaintenanceBlocked as exc:
+        result = {
+            "status": exc.diagnostics.get("status") or "failed",
+            "delete_status": exc.diagnostics.get("delete_status") or "blocked",
+            "deleted_count": int(exc.diagnostics.get("deleted_count") or 0),
+            "failed_count": int(exc.diagnostics.get("failed_count") or 0),
+            "missing_count": int(exc.diagnostics.get("missing_count") or 0),
+            "video_archive_files_deleted": False,
+        }
+        receipt = update_backup_operation(
+            receipt,
+            state="failed",
+            phase="partial_retryable" if result["delete_status"] == "partial_retryable" else "failed",
+            retryable=True,
+            reason_code=exc.status,
+            result=result,
+            backup_root=root,
+        )
+        return safe_receipt(receipt)

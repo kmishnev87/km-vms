@@ -22,6 +22,7 @@ from app.services.backup_before_upgrade import (
     verify_backup_manifest,
 )
 from app.services.restore_validation import backup_restore_validated
+from app.services.backup_manager import build_backup_snapshot
 from app.services.schema_migrations import PRODUCTION_ADOPTION_DEFERRED, SchemaMigrationBlocked, build_migration_plan
 from app.services.schema_versioning import CURRENT_SCHEMA_VERSION, CURRENT_STATE_ID, schema_version_status
 from app.services.update_check import build_update_status
@@ -208,7 +209,11 @@ def _backup_root_evidence() -> dict[str, Any]:
     }
 
 
-def _backup_summary(backup_manifest_path: str | Path | None, restore_validation_manifest_path: str | Path | None) -> dict[str, Any]:
+def _backup_summary(
+    backup_manifest_path: str | Path | None,
+    restore_validation_manifest_path: str | Path | None,
+    backup_snapshot: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     root_evidence = _backup_root_evidence()
     base = {
         "status": "backup_status_source_unavailable",
@@ -237,6 +242,52 @@ def _backup_summary(backup_manifest_path: str | Path | None, restore_validation_
         "source_limitation": "Endpoint and diagnostic archive do not accept arbitrary backup/restore manifest paths. Without a connected safe product-owned source, status is unknown.",
         "root_evidence": root_evidence,
     }
+    if backup_snapshot is not None and not backup_manifest_path:
+        items = backup_snapshot.get("items") if isinstance(backup_snapshot.get("items"), list) else []
+        available_items = [item for item in items if item.get("availability_status") == "available"]
+        selected = available_items[0] if available_items else (items[0] if items else {})
+        integrity_status = str(selected.get("integrity_status") or "not_checked")
+        restore_status = str(selected.get("restore_validation_status") or "not_performed")
+        backup_available = int(backup_snapshot.get("available_count") or 0) > 0
+        root_evidence = {
+            **root_evidence,
+            "persistence_evidence_status": (
+                "configured_product_root_available"
+                if backup_snapshot.get("root_status") == "available"
+                else str(backup_snapshot.get("root_status") or "unavailable")
+            ),
+            "evidence_source": "configured_backup_snapshot",
+        }
+        base.update(
+            {
+                "status": "backup_available" if backup_available else "backup_not_available",
+                "status_semantics": "backup_available" if backup_available else "backup_not_available",
+                "backup_status_source": "configured_backup_snapshot",
+                "backup_available": backup_available,
+                "backup_id": selected.get("artifact_id"),
+                "created_at": selected.get("artifact_created_at"),
+                "db_backend": selected.get("db_backend") or "unknown",
+                "file_size": selected.get("file_size"),
+                "checksum_status": integrity_status,
+                "manifest_status": selected.get("availability_status") or backup_snapshot.get("root_status"),
+                "backup_precondition_status": {
+                    "status": "available_without_freshness_evaluation" if backup_available else "not_available",
+                    "backup_required": True,
+                    "source": "configured_backup_snapshot",
+                    "summary": "Backup availability is reported independently from operation-specific freshness.",
+                },
+                "restore_validation_status": restore_status,
+                "restore_validation_status_source": "artifact_terminal_evidence",
+                "restore_validation_semantics": restore_status,
+                "backup_restore_validated": restore_status == "passed",
+                "backup_path_label": "configured_backup_root/backup_artifact" if selected else "not_reported",
+                "source_limitation": None,
+                "root_evidence": root_evidence,
+                "total_count": int(backup_snapshot.get("total_count") or 0),
+                "total_bytes": int(backup_snapshot.get("total_bytes") or 0),
+            }
+        )
+        return base
     if not backup_manifest_path:
         return base
 
@@ -328,6 +379,7 @@ def build_upgrade_report(
     *,
     backup_manifest_path: str | Path | None = None,
     restore_validation_manifest_path: str | Path | None = None,
+    backup_snapshot: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     generated_at = _utc_iso()
     warnings: list[dict[str, Any]] = []
@@ -343,12 +395,22 @@ def build_upgrade_report(
         }
     adoption_status = inspect_db_adoption(db, include_backup_plan=False)
     migration_maintenance = inspect_migration_maintenance(db, include_backup_plan=False)
-    restore_maintenance = inspect_restore_maintenance()
+    effective_backup_snapshot = backup_snapshot
+    if effective_backup_snapshot is None and backup_manifest_path is None:
+        effective_backup_snapshot = build_backup_snapshot(
+            db_backend=str(db.get_bind().url.get_backend_name()).lower(),
+            offset=0,
+            limit=20,
+        )
+    restore_maintenance = inspect_restore_maintenance(
+        db_backend=str(db.get_bind().url.get_backend_name()).lower(),
+        backup_snapshot=effective_backup_snapshot,
+    )
     update_maintenance = inspect_update_maintenance(db)
     history = _history_summary(db)
     versions = _version_summary(db, schema_status, history, migration_plan)
     pending = _pending_summary(migration_plan)
-    backup = _backup_summary(backup_manifest_path, restore_validation_manifest_path)
+    backup = _backup_summary(backup_manifest_path, restore_validation_manifest_path, effective_backup_snapshot)
     production = _production_status(migration_plan)
 
     if versions["app_build_version_source"] == "development_fallback":
@@ -404,13 +466,13 @@ def build_upgrade_report(
                 },
             )
         )
-    elif not backup["backup_restore_validated"]:
+    elif backup["restore_validation_status"] in {"failed", "stale_evidence"}:
         warnings.append(
             _warning(
-                "restore_validation_missing_or_not_linked",
+                "restore_validation_failed_or_stale",
                 "medium",
-                "No linked restore-validation manifest proves this backup in the report context.",
-                stage_target="Stage 5.0",
+                "The latest backup restore-validation evidence failed or became stale.",
+                stage_target="Stage 13.7.10",
                 evidence={
                     "restore_validation_status_source": backup["restore_validation_status_source"],
                     "restore_validation_status": backup["restore_validation_status"],
@@ -472,9 +534,15 @@ def build_upgrade_report(
             "schema_version_state": "read_only",
             "schema_migration_history": "read_only",
             "migration_runner_plan": "read_only",
-            "backup_manifest": "optional_read_only" if backup_manifest_path else "not_provided",
+            "backup_manifest": (
+                "optional_read_only"
+                if backup_manifest_path
+                else "configured_backup_snapshot"
+                if effective_backup_snapshot is not None
+                else "not_provided"
+            ),
             "restore_validation_manifest": "optional_read_only" if restore_validation_manifest_path else "not_provided",
-            "backup_root_config": "process_config_read_only_no_probe",
+            "backup_root_config": "configured_backup_snapshot_read_only",
             "backup_status": backup["backup_status_source"],
             "restore_validation_status": backup["restore_validation_status_source"],
             "update_check": "cached_status_read_only_no_network",

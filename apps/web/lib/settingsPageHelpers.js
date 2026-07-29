@@ -37,6 +37,7 @@ export const UPDATE_APPLY_RUNNING_STATUSES = ["queued", "starting_helper", "pref
 export const UPDATE_APPLY_POLL_INTERVAL_MS = 5000;
 export const UPDATE_APPLY_MODAL_GRACE_MS = 10000;
 export const UPDATE_APPLY_PENDING_STORAGE_KEY = "km_vms_update_apply_pending_v1";
+export const BACKUP_OPERATION_PENDING_STORAGE_KEY = "km_vms_backup_operation_pending_v1";
 const UPDATE_APPLY_STALE_DEFAULT_SECONDS = 180;
 const UPDATE_APPLY_PENDING_SCHEMA = 1;
 const UPDATE_APPLY_PRESERVED_TERMINAL_STATUSES = new Set([
@@ -51,6 +52,11 @@ const UPDATE_APPLY_FULL_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
 const UPDATE_APPLY_SUBMISSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const UPDATE_APPLY_UNSAFE_DATA_FIELD = Symbol("update-apply-unsafe-data-field");
 const UPDATE_APPLY_PENDING_STORAGE_LIMIT = 2048;
+const BACKUP_OPERATION_PENDING_SCHEMA = 1;
+const BACKUP_OPERATION_PENDING_STORAGE_LIMIT = 1024;
+const BACKUP_OPERATION_PENDING_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const BACKUP_OPERATION_KINDS = new Set(["create", "check", "delete"]);
+const BACKUP_ARTIFACT_ID_PATTERN = /^kmvms-db-\d{8}T\d{6}Z-[a-f0-9]{12}$/;
 const AUDIT_LABELS = {
   category: {
     auth: { ru: "Авторизация", en: "Auth", "zh-CN": "授权" },
@@ -380,6 +386,50 @@ export function restoreUpdateApplyPending(rawValue, nowMs = Date.now()) {
   if (typeof rawValue !== "string" || rawValue.length > UPDATE_APPLY_PENDING_STORAGE_LIMIT) return null;
   try {
     return sanitizeUpdateApplyPending(JSON.parse(rawValue), nowMs);
+  } catch {
+    return null;
+  }
+}
+
+export function createBackupOperationPending(kindValue, artifactIdValue, submissionIdValue, createdAtMs) {
+  const kind = boundedContractText(kindValue, 12).toLowerCase();
+  const artifactId = boundedContractText(artifactIdValue, 80);
+  const submissionId = boundedContractText(submissionIdValue, 36).toLowerCase();
+  const created = boundedFiniteNumber(createdAtMs, 0, 0, Number.MAX_SAFE_INTEGER);
+  if (
+    !BACKUP_OPERATION_KINDS.has(kind)
+    || !UPDATE_APPLY_SUBMISSION_ID_PATTERN.test(submissionId)
+    || !created
+    || (kind === "create" ? Boolean(artifactId) : !BACKUP_ARTIFACT_ID_PATTERN.test(artifactId))
+  ) return null;
+  return {
+    schema: BACKUP_OPERATION_PENDING_SCHEMA,
+    submissionId,
+    kind,
+    artifactId: kind === "create" ? null : artifactId,
+    createdAtMs: created,
+  };
+}
+
+export function sanitizeBackupOperationPending(value, nowMs = Date.now()) {
+  if (!value || typeof value !== "object" || Number(value.schema) !== BACKUP_OPERATION_PENDING_SCHEMA) return null;
+  const record = createBackupOperationPending(
+    value.kind,
+    value.artifactId,
+    value.submissionId,
+    value.createdAtMs,
+  );
+  if (!record) return null;
+  const now = boundedFiniteNumber(nowMs, record.createdAtMs, 0, Number.MAX_SAFE_INTEGER);
+  if (record.createdAtMs > now + 60_000 || now - record.createdAtMs > BACKUP_OPERATION_PENDING_MAX_AGE_MS) return null;
+  return record;
+}
+
+export function restoreBackupOperationPending(rawValue, nowMs = Date.now()) {
+  if (rawValue === null || rawValue === undefined) return null;
+  if (typeof rawValue !== "string" || rawValue.length > BACKUP_OPERATION_PENDING_STORAGE_LIMIT) return null;
+  try {
+    return sanitizeBackupOperationPending(JSON.parse(rawValue), nowMs);
   } catch {
     return null;
   }
@@ -1003,6 +1053,7 @@ export function maintenanceReadinessRows(overview, t) {
     const presentation = maintenancePresentation(flow);
     const userStatus = presentation.user_status || "attention";
     const facts = Array.isArray(presentation.facts) ? presentation.facts : [];
+    const canApply = Boolean(key === "db_adoption" && presentation.can_apply && presentation.apply_supported);
     return {
       key,
       flow,
@@ -1014,7 +1065,9 @@ export function maintenanceReadinessRows(overview, t) {
       action: actions[presentation.operator_action_key] || actions.check_status || "",
       checkLabel: checkActions[key] || t.maintenanceDryRun,
       canCheck: Boolean(presentation.can_check),
-      showCheck: Boolean(presentation.can_check && userStatus !== "ok"),
+      showCheck: Boolean(presentation.can_check && userStatus !== "ok" && !canApply),
+      showApply: canApply,
+      applyLabel: t.maintenanceDbAdoptionApply || t.maintenanceApply || "",
       supportReportAvailable: Boolean(presentation.support_report_available),
       facts: facts
         .filter((item) => item && item.value !== null && item.value !== undefined)
@@ -1024,11 +1077,18 @@ export function maintenanceReadinessRows(overview, t) {
   });
 }
 
-function backupArtifactStatusLabel(artifact, t) {
-  const labels = t.maintenanceBackupStatuses || {};
-  if (artifact?.valid) return labels.valid || maintenanceStatusText("verified", t);
-  const status = artifact?.validation_status || "problem";
-  return labels[status] || labels.problem || maintenanceStatusText(status, t);
+function backupDimensionLabel(group, status, t) {
+  const labels = t[group] || {};
+  const key = String(status || "unknown").trim().toLowerCase();
+  return labels[key] || labels.unknown || maintenanceStatusText(key, t);
+}
+
+function backupDimensionTone(status) {
+  const key = String(status || "").trim().toLowerCase();
+  if (["available", "verified", "compatible", "passed", "allowed"].includes(key)) return "ok";
+  if (["not_checked", "not_performed", "unknown"].includes(key)) return "neutral";
+  if (["stale_evidence", "migration_required", "partial_retryable", "incomplete"].includes(key)) return "attention";
+  return "problem";
 }
 
 export function maintenanceBackupCheckResultText(status, t) {
@@ -1043,7 +1103,8 @@ export function maintenanceBackupCheckResultText(status, t) {
 
 export function maintenanceBackupOperationResultText(result, t) {
   const kind = String(result?.kind || "check").trim().toLowerCase();
-  const status = String(result?.status || "").trim().toLowerCase();
+  const operationResult = result?.result && typeof result.result === "object" ? result.result : {};
+  const status = String(operationResult.status || result?.status || result?.state || "").trim().toLowerCase();
   const operationLabels = t.maintenanceBackupOperationLabels || {};
   if (kind === "create") {
     const labels = t.maintenanceBackupCreateStatuses || {};
@@ -1067,7 +1128,39 @@ export function maintenanceBackupOperationResultText(result, t) {
       showReason: !deleted,
     };
   }
-  const checked = ["valid", "verified", "available"].includes(status);
+  const integrityStatus = String(operationResult.integrity_status || "").trim().toLowerCase();
+  const compatibilityStatus = String(operationResult.compatibility_status || "").trim().toLowerCase();
+  const validationStatus = String(operationResult.restore_validation_status || "").trim().toLowerCase();
+  const outcomeLabels = t.maintenanceBackupCheckOutcomes || {};
+  if (
+    integrityStatus === "verified" &&
+    compatibilityStatus === "migration_required" &&
+    ["", "not_performed", "not_performed_stage5_deferred"].includes(validationStatus)
+  ) {
+    return {
+      kind: "check",
+      label: operationLabels.check || t.maintenanceBackupCheck || "Check",
+      text: outcomeLabels.integrity_verified_migration_required || maintenanceBackupCheckResultText(status, t),
+      showReason: false,
+    };
+  }
+  if (integrityStatus === "failed") {
+    return {
+      kind: "check",
+      label: operationLabels.check || t.maintenanceBackupCheck || "Check",
+      text: outcomeLabels.integrity_failed || maintenanceBackupCheckResultText(status, t),
+      showReason: true,
+    };
+  }
+  if (validationStatus === "failed") {
+    return {
+      kind: "check",
+      label: operationLabels.check || t.maintenanceBackupCheck || "Check",
+      text: outcomeLabels.restore_failed || maintenanceBackupCheckResultText(status, t),
+      showReason: true,
+    };
+  }
+  const checked = ["valid", "verified", "available", "validated", "passed", "completed"].includes(status);
   return {
     kind: "check",
     label: operationLabels.check || t.maintenanceBackupCheck || "Check",
@@ -1076,56 +1169,100 @@ export function maintenanceBackupOperationResultText(result, t) {
   };
 }
 
-export function maintenanceBackupManagerModel(overview, t, lang = "ru") {
+export function maintenanceBackupManagerModel(overview, t, lang = "ru", backupStatus = null) {
   const restore = overview?.flows?.restore || {};
-  const details = restore?.details || {};
-  const artifacts = Array.isArray(details.artifacts) ? details.artifacts : [];
+  const overviewDetails = restore?.details || {};
+  const details = backupStatus && typeof backupStatus === "object"
+    ? { ...overviewDetails, ...backupStatus }
+    : overviewDetails;
+  const artifacts = Array.isArray(details.artifacts)
+    ? details.artifacts
+    : Array.isArray(details.items)
+      ? details.items
+      : [];
   const sortedArtifacts = [...artifacts].sort((left, right) => {
     const leftTime = new Date(left?.artifact_created_at || 0).getTime() || 0;
     const rightTime = new Date(right?.artifact_created_at || 0).getTime() || 0;
     return rightTime - leftTime;
   });
-  const validCount = sortedArtifacts.filter((item) => item?.valid).length;
-  const problemCount = Math.max(0, sortedArtifacts.length - validCount);
+  const totalCount = Number(details.total_count ?? details.artifact_count ?? sortedArtifacts.length) || 0;
+  const totalBytes = Number(details.total_bytes || 0) || 0;
+  const offset = Math.max(0, Number(details.offset || 0) || 0);
+  const limit = Math.max(1, Number(details.limit || sortedArtifacts.length || 20) || 20);
+  const validCount = Number(details.valid_artifact_count || 0) || 0;
   const latest = sortedArtifacts[0] || null;
   const productionRestoreSupported = Boolean(details.current_product_restore_supported);
   const temporaryValidationSupported = Boolean(details.temporary_validation_restore_supported);
-  const copyWord = sortedArtifacts.length === 1 ? t.maintenanceBackupCopyOne : t.maintenanceBackupCopyMany;
+  const copyWord = totalCount === 1 ? t.maintenanceBackupCopyOne : t.maintenanceBackupCopyMany;
   const renderedCopyWord = String(copyWord || "").includes("{count}")
-    ? String(copyWord || "").replace("{count}", String(sortedArtifacts.length))
-    : `${sortedArtifacts.length} ${copyWord || ""}`.trim();
-  return {
-    total: sortedArtifacts.length,
-    valid: validCount,
-    problem: problemCount,
-    totalCount: sortedArtifacts.length,
-    validCount,
-    problemCount,
-    countText: sortedArtifacts.length ? renderedCopyWord : t.maintenanceBackupNoCopies,
-    latest,
-    latestCreatedAt: latest?.artifact_created_at ? formatAuditTimestamp(latest.artifact_created_at, lang) : "-",
-    latestStatus: latest ? backupArtifactStatusLabel(latest, t) : t.maintenanceBackupNoCopies,
-    statusText: sortedArtifacts.length
-      ? (t.maintenanceBackupStatusReady || "").replace("{count}", String(sortedArtifacts.length)).replace("{copy}", copyWord)
-      : t.maintenanceBackupStatusEmpty,
-    canCheck: Boolean(validCount && temporaryValidationSupported),
-    canDelete: sortedArtifacts.some((item) => item?.deletable),
-    restoreSupported: productionRestoreSupported,
-    restoreText: productionRestoreSupported ? t.maintenanceBackupRestoreAvailable : t.maintenanceBackupRestoreUnavailable,
-    restoreReason: productionRestoreSupported ? "" : t.maintenanceBackupRestoreUnavailableReason,
-    artifacts: sortedArtifacts.slice(0, 6).map((item) => ({
-      id: item.artifact_id,
+    ? String(copyWord || "").replace("{count}", String(totalCount))
+    : `${totalCount} ${copyWord || ""}`.trim();
+  const modeledArtifacts = sortedArtifacts.map((item) => {
+    const artifactId = String(item.artifact_id || "");
+    const productOwnedIdentity = BACKUP_ARTIFACT_ID_PATTERN.test(artifactId);
+    const availability = String(item.availability_status || "unsafe");
+    const integrity = String(item.integrity_status || "not_checked");
+    const compatibility = String(item.compatibility_status || "unknown");
+    const validation = String(item.restore_validation_status || "not_performed");
+    const deleteStatus = String(item.delete_status || "blocked");
+    return {
+      id: artifactId,
       createdAt: item.artifact_created_at ? formatAuditTimestamp(item.artifact_created_at, lang) : "-",
       size: formatFileSize(item.file_size),
-      status: backupArtifactStatusLabel(item, t),
-      valid: Boolean(item.valid),
-      deletable: Boolean(item.deletable),
-      canDelete: Boolean(item.deletable),
-      canCheck: Boolean(item.valid && temporaryValidationSupported),
+      availability,
+      availabilityLabel: backupDimensionLabel("maintenanceBackupAvailabilityStatuses", availability, t),
+      availabilityTone: backupDimensionTone(availability),
+      integrity,
+      integrityLabel: backupDimensionLabel("maintenanceBackupIntegrityStatuses", integrity, t),
+      integrityTone: backupDimensionTone(integrity),
+      compatibility,
+      compatibilityLabel: backupDimensionLabel("maintenanceBackupCompatibilityStatuses", compatibility, t),
+      compatibilityTone: backupDimensionTone(compatibility),
+      validation,
+      validationLabel: backupDimensionLabel("maintenanceBackupValidationStatuses", validation, t),
+      validationTone: backupDimensionTone(validation),
+      deleteStatus,
+      deletable: Boolean(productOwnedIdentity && item.delete_supported && ["allowed", "partial_retryable"].includes(deleteStatus)),
+      canDelete: Boolean(productOwnedIdentity && item.delete_supported && ["allowed", "partial_retryable"].includes(deleteStatus)),
+      canCheck: Boolean(productOwnedIdentity && temporaryValidationSupported),
       schema: item.artifact_schema_version ?? "-",
       backend: item.db_backend || "-",
       sizeText: formatFileSize(item.file_size),
-    })),
+      checkedAt: item.checked_at ? formatAuditTimestamp(item.checked_at, lang) : "",
+      validatedAt: item.validated_at ? formatAuditTimestamp(item.validated_at, lang) : "",
+      hasProblem: [availability, integrity, compatibility, validation].some((status) => backupDimensionTone(status) === "problem"),
+    };
+  });
+  return {
+    total: totalCount,
+    valid: validCount,
+    problem: 0,
+    totalCount,
+    totalBytes,
+    totalBytesText: formatFileSize(totalBytes),
+    validCount,
+    problemCount: 0,
+    countText: totalCount ? renderedCopyWord : t.maintenanceBackupNoCopies,
+    latest,
+    latestCreatedAt: latest?.artifact_created_at ? formatAuditTimestamp(latest.artifact_created_at, lang) : "-",
+    latestStatus: latest
+      ? backupDimensionLabel("maintenanceBackupIntegrityStatuses", latest.integrity_status || "not_checked", t)
+      : t.maintenanceBackupNoCopies,
+    statusText: totalCount
+      ? (t.maintenanceBackupStatusReady || "").replace("{count}", String(totalCount)).replace("{copy}", copyWord)
+      : t.maintenanceBackupStatusEmpty,
+    canCheck: Boolean(totalCount && temporaryValidationSupported),
+    canDelete: modeledArtifacts.some((item) => item.canDelete),
+    restoreSupported: productionRestoreSupported,
+    restoreText: productionRestoreSupported ? t.maintenanceBackupRestoreAvailable : t.maintenanceBackupRestoreUnavailable,
+    restoreReason: productionRestoreSupported ? "" : t.maintenanceBackupRestoreUnavailableReason,
+    offset,
+    limit,
+    hasMore: Boolean(details.has_more),
+    hasPrevious: offset > 0,
+    pageStart: totalCount ? offset + 1 : 0,
+    pageEnd: Math.min(totalCount, offset + modeledArtifacts.length),
+    artifacts: modeledArtifacts,
   };
 }
 

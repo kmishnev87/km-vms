@@ -3,24 +3,70 @@ import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  BACKUP_OPERATION_PENDING_STORAGE_KEY,
+  createBackupOperationPending,
   maintenanceBackupCheckResultText,
   maintenanceBackupOperationResultText,
   maintenanceBackupManagerModel,
   maintenanceWarningModel,
+  restoreBackupOperationPending,
+  sanitizeBackupOperationPending,
 } from "../lib/settingsPageHelpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "utf8");
+const settingsCss = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
 
 assert.equal(settingsPage.includes("settingsMaintenanceBackupManager"), true);
-assert.equal(settingsPage.includes("settingsMaintenanceBackupCreate"), false);
+assert.equal(settingsPage.includes('className="settingsMaintenanceBackupCreate"'), false);
 assert.equal(settingsPage.includes("maintenanceConfirm"), true);
 assert.equal(settingsPage.includes("/system/restore/artifacts/${encodeURIComponent(artifact.id)}/delete"), true);
-assert.equal(settingsPage.includes("/system/restore/apply"), false);
+assert.equal(settingsPage.includes("/system/restore/apply"), true);
+assert.equal(settingsPage.includes("/system/restore/dry-run"), false);
+assert.equal(settingsPage.includes("/system/backup/operations/${encodeURIComponent(pending.submissionId)}"), true);
+assert.equal(settingsPage.includes("BACKUP_OPERATION_PENDING_STORAGE_KEY"), true);
+assert.equal(BACKUP_OPERATION_PENDING_STORAGE_KEY, "km_vms_backup_operation_pending_v1");
 assert.equal(settingsPage.includes("window.confirm(t.maintenanceBackupCreateConfirm)"), false);
 assert.equal(settingsPage.includes("window.confirm(maintenanceBackupDeleteConfirm)"), false);
 assert.equal(settingsPage.includes("maintenanceWarningsOpen"), true);
+assert.equal(settingsPage.includes("const MAINTENANCE_BACKUP_PAGE_SIZE = 5;"), true);
+assert.equal(settingsPage.includes('className="storageOpsCheckIcon">✓</span>'), true);
+assert.equal(settingsPage.includes('className="recordingsUiIcon recordingsTrashIcon recordingsRowSvgIcon storageOpsTrashIcon"'), true);
+assert.equal(settingsPage.includes('className="settingsMaintenanceMiniButton danger"'), true);
+assert.equal(settingsPage.includes("<strong>{artifact.createdAt}</strong>"), false);
+assert.equal(settingsPage.includes('className="settingsMaintenanceBackupCreatedAt"'), true);
+assert.equal(settingsPage.includes('className="settingsMaintenanceBackupMeta"'), true);
+assert.equal(settingsPage.includes('className="settingsMaintenanceBackupDetailRow"'), true);
+assert.equal(settingsPage.includes('className="settingsMaintenanceIconAction"'), true);
+assert.equal(settingsPage.includes('aria-hidden="true">←</span>'), true);
+assert.equal(settingsPage.includes('aria-hidden="true">→</span>'), true);
+assert.match(settingsCss, /\.settingsMaintenanceBackupItemHead\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*baseline;/);
+assert.match(settingsCss, /\.settingsMaintenanceBackupDetailRow\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;[\s\S]*?align-items:\s*center;/);
+const pendingCommitBlock = settingsPage.slice(
+  settingsPage.indexOf("function commitBackupOperationPending"),
+  settingsPage.indexOf("function backupOperationFallback"),
+);
+assert.equal(pendingCommitBlock.includes("if (safeRecord) return null;"), true);
+assert.equal(
+  pendingCommitBlock.indexOf("window.sessionStorage.setItem") < pendingCommitBlock.indexOf("maintenanceBackupPendingRef.current"),
+  true,
+);
+const operationBlock = settingsPage.slice(
+  settingsPage.indexOf("async function performMaintenanceBackupOperation"),
+  settingsPage.indexOf("async function runUpdateCheck"),
+);
+assert.notEqual(operationBlock.indexOf("commitBackupOperationPending(pending)"), -1);
+assert.notEqual(operationBlock.indexOf("apiFetch(endpoint"), -1);
+assert.equal(
+  operationBlock.indexOf("commitBackupOperationPending(pending)") < operationBlock.indexOf("apiFetch(endpoint"),
+  true,
+);
+const overviewLoadBlock = settingsPage.slice(
+  settingsPage.indexOf("async function loadMaintenanceOverview"),
+  settingsPage.indexOf("async function loadMaintenanceBackupPage"),
+);
+assert.equal(overviewLoadBlock.includes("setMaintenanceBackupResult(null)"), false);
 
 const t = {
   maintenanceBackupNoCopies: "No backups",
@@ -31,6 +77,34 @@ const t = {
   maintenanceBackupRestoreAvailable: "Restore is available",
   maintenanceBackupRestoreUnavailable: "Restore is unavailable",
   maintenanceBackupRestoreUnavailableReason: "Only safe checks are available.",
+  maintenanceBackupAvailabilityStatuses: {
+    available: "Available",
+    incomplete: "Incomplete",
+    missing: "Missing",
+    unsafe: "Unsafe",
+    unknown: "Unknown",
+  },
+  maintenanceBackupIntegrityStatuses: {
+    not_checked: "Not checked",
+    verified: "Verified",
+    failed: "Failed",
+    stale_evidence: "Needs recheck",
+    unknown: "Unknown",
+  },
+  maintenanceBackupCompatibilityStatuses: {
+    compatible: "Compatible",
+    migration_required: "Migration required",
+    newer_than_supported: "Newer than supported",
+    unsupported_backend: "Unsupported backend",
+    unknown: "Unknown",
+  },
+  maintenanceBackupValidationStatuses: {
+    not_performed: "Not performed",
+    passed: "Passed",
+    failed: "Failed",
+    stale_evidence: "Needs recheck",
+    unknown: "Unknown",
+  },
   maintenanceBackupStatuses: {
     verified: "Ready",
     valid: "Ready",
@@ -50,6 +124,11 @@ const t = {
     invalid: "Backup is damaged or incomplete",
     check_failed: "Check failed",
     fallback: "Check status received",
+  },
+  maintenanceBackupCheckOutcomes: {
+    integrity_verified_migration_required: "Integrity is verified. Trial restore was not run because this backup requires a compatible migration.",
+    integrity_failed: "Backup integrity could not be verified: the backup is damaged or incomplete.",
+    restore_failed: "Backup integrity is verified, but the trial restore failed.",
   },
   maintenanceBackupOperationLabels: {
     check: "Check",
@@ -86,49 +165,96 @@ const t = {
   },
 };
 
-const model = maintenanceBackupManagerModel({
+const overview = {
   flows: {
     restore: {
       status: "available",
       details: {
-        valid_artifact_count: 1,
-        artifact_count: 2,
         current_product_restore_supported: false,
-        artifacts: [
-          {
-            artifact_id: "kmvms-db-20260704T010203Z-abcdef123456",
-            artifact_created_at: "2026-07-04T01:02:03Z",
-            artifact_schema_version: 7,
-            db_backend: "sqlite",
-            file_size: 4096,
-            validation_status: "verified",
-            valid: true,
-            deletable: true,
-            delete_supported: true,
-          },
-          {
-            artifact_id: "broken.manifest.json",
-            artifact_created_at: "",
-            validation_status: "invalid",
-            valid: false,
-            deletable: false,
-            delete_supported: false,
-          },
-        ],
+        temporary_validation_restore_supported: true,
       },
     },
   },
-}, t, "en");
+};
+const backupStatus = {
+  total_count: 25,
+  total_bytes: 8192,
+  valid_artifact_count: 7,
+  offset: 10,
+  limit: 10,
+  has_more: true,
+  current_product_restore_supported: false,
+  temporary_validation_restore_supported: true,
+  artifacts: [
+    {
+      artifact_id: "kmvms-db-20260704T010203Z-abcdef123456",
+      artifact_created_at: "2026-07-04T01:02:03Z",
+      artifact_schema_version: 7,
+      db_backend: "sqlite",
+      file_size: 4096,
+      availability_status: "available",
+      integrity_status: "stale_evidence",
+      compatibility_status: "migration_required",
+      restore_validation_status: "not_performed",
+      delete_status: "allowed",
+      checked_at: "2026-07-04T02:02:03Z",
+      delete_supported: true,
+    },
+    {
+      artifact_id: "kmvms-db-20260703T010203Z-fedcba654321",
+      artifact_created_at: "2026-07-03T01:02:03Z",
+      artifact_schema_version: 7,
+      db_backend: "sqlite",
+      file_size: 4096,
+      availability_status: "incomplete",
+      integrity_status: "failed",
+      compatibility_status: "unknown",
+      restore_validation_status: "failed",
+      delete_status: "blocked",
+      validated_at: "2026-07-03T02:02:03Z",
+      delete_supported: false,
+    },
+  ],
+};
+const model = maintenanceBackupManagerModel(overview, t, "en", backupStatus);
 
-assert.equal(model.total, 2);
-assert.equal(model.valid, 1);
-assert.equal(model.problem, 1);
-assert.equal(model.countText, "2 backups");
-assert.equal(model.statusText, "Backups: 2");
+assert.equal(model.total, 25);
+assert.equal(model.valid, 7);
+assert.equal(model.countText, "25 backups");
+assert.equal(model.statusText, "Backups: 25");
+assert.equal(model.totalBytesText, "8.0 KB");
 assert.equal(model.restoreSupported, false);
 assert.equal(model.artifacts[0].canDelete, true);
 assert.equal(model.artifacts[1].canDelete, false);
+assert.equal(model.artifacts[0].canCheck, true);
+assert.equal(model.artifacts[1].canCheck, true);
+assert.equal(model.artifacts[0].integrity, "stale_evidence");
+assert.equal(model.artifacts[0].integrityTone, "attention");
+assert.equal(model.artifacts[0].hasProblem, false);
+assert.equal(model.artifacts[1].hasProblem, true);
+assert.notEqual(model.artifacts[0].checkedAt, "");
+assert.notEqual(model.artifacts[1].validatedAt, "");
+assert.equal(model.offset, 10);
+assert.equal(model.limit, 10);
+assert.equal(model.pageStart, 11);
+assert.equal(model.pageEnd, 12);
+assert.equal(model.hasPrevious, true);
+assert.equal(model.hasMore, true);
+assert.equal(model.artifacts.length, 2);
 assert.equal(model.artifacts[0].sizeText, "4.0 KB");
+const unownedProblem = maintenanceBackupManagerModel(overview, t, "en", {
+  total_count: 1,
+  temporary_validation_restore_supported: true,
+  artifacts: [{
+    artifact_id: "broken.manifest",
+    availability_status: "unsafe",
+    integrity_status: "failed",
+    delete_status: "allowed",
+    delete_supported: true,
+  }],
+});
+assert.equal(unownedProblem.artifacts[0].canCheck, false);
+assert.equal(unownedProblem.artifacts[0].canDelete, false);
 assert.doesNotMatch(model.countText, /\d+\/\d+/);
 assert.doesNotMatch(model.statusText, /\d+\/\d+/);
 assert.equal(maintenanceBackupCheckResultText("valid", t), "Check passed");
@@ -154,6 +280,83 @@ assert.deepEqual(maintenanceBackupOperationResultText({ kind: "delete", status: 
   text: "Backup was deleted with missing files",
   showReason: false,
 });
+assert.deepEqual(maintenanceBackupOperationResultText({
+  kind: "check",
+  state: "completed",
+  result: { status: "validated" },
+}, t), {
+  kind: "check",
+  label: "Check",
+  text: "Check status received",
+  showReason: false,
+});
+assert.deepEqual(maintenanceBackupOperationResultText({
+  kind: "check",
+  state: "failed",
+  phase: "preflight_failed",
+  reason: "migration_required",
+  result: {
+    status: "check_failed",
+    integrity_status: "verified",
+    compatibility_status: "migration_required",
+    restore_validation_status: "not_performed",
+  },
+}, t), {
+  kind: "check",
+  label: "Check",
+  text: "Integrity is verified. Trial restore was not run because this backup requires a compatible migration.",
+  showReason: false,
+});
+assert.deepEqual(maintenanceBackupOperationResultText({
+  kind: "check",
+  state: "failed",
+  result: {
+    status: "check_failed",
+    integrity_status: "failed",
+    compatibility_status: "unknown",
+    restore_validation_status: "not_performed",
+  },
+}, t), {
+  kind: "check",
+  label: "Check",
+  text: "Backup integrity could not be verified: the backup is damaged or incomplete.",
+  showReason: true,
+});
+assert.deepEqual(maintenanceBackupOperationResultText({
+  kind: "check",
+  state: "failed",
+  result: {
+    status: "check_failed",
+    integrity_status: "verified",
+    compatibility_status: "compatible",
+    restore_validation_status: "failed",
+  },
+}, t), {
+  kind: "check",
+  label: "Check",
+  text: "Backup integrity is verified, but the trial restore failed.",
+  showReason: true,
+});
+
+const nowMs = 2_000_000_000_000;
+const submissionId = "123e4567-e89b-42d3-a456-426614174000";
+const artifactId = "kmvms-db-20260704T010203Z-abcdef123456";
+const pending = createBackupOperationPending("check", artifactId, submissionId, nowMs - 1000);
+assert.deepEqual(pending, {
+  schema: 1,
+  submissionId,
+  kind: "check",
+  artifactId,
+  createdAtMs: nowMs - 1000,
+});
+assert.deepEqual(sanitizeBackupOperationPending(pending, nowMs), pending);
+assert.deepEqual(restoreBackupOperationPending(JSON.stringify(pending), nowMs), pending);
+assert.equal(createBackupOperationPending("create", "", submissionId, nowMs)?.artifactId, null);
+assert.equal(createBackupOperationPending("delete", "../foreign", submissionId, nowMs), null);
+assert.equal(restoreBackupOperationPending("{broken", nowMs), null);
+assert.equal(restoreBackupOperationPending("x".repeat(1025), nowMs), null);
+assert.equal(restoreBackupOperationPending(JSON.stringify({ ...pending, schema: 2 }), nowMs), null);
+assert.equal(restoreBackupOperationPending(JSON.stringify(pending), nowMs + (25 * 60 * 60 * 1000)), null);
 
 const warnings = maintenanceWarningModel({
   upgrade_report: {

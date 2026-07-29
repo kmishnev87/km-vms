@@ -17,7 +17,7 @@ assert.equal(settingsPage.includes("settingsMaintenanceModalHeader"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceBackupCreate"), false);
 assert.equal(settingsPage.includes("maintenanceBackupScope"), true);
 assert.equal(settingsPage.includes("maintenanceReadinessRows(maintenanceOverview, t)"), true);
-assert.equal(settingsPage.includes("maintenanceBackupManagerModel(maintenanceOverview, t, lang)"), true);
+assert.equal(settingsPage.includes("maintenanceBackupManagerModel(maintenanceOverview, t, lang, maintenanceBackupStatus)"), true);
 assert.equal(settingsPage.includes("maintenanceFlowRows(maintenanceOverview).map"), false);
 assert.equal(settingsPage.includes("maintenanceDetailRows(flow, t)"), false);
 
@@ -48,7 +48,8 @@ for (const key of [
 assert.equal(settingsHelpers.includes("export function maintenanceReadinessRows"), true);
 assert.equal(settingsHelpers.includes("maintenanceOperatorSummaries"), true);
 assert.equal(settingsHelpers.includes("maintenanceFactLabels"), true);
-assert.equal(settingsHelpers.includes("showCheck: Boolean(presentation.can_check && userStatus !== \"ok\")"), true);
+assert.equal(settingsHelpers.includes("showCheck: Boolean(presentation.can_check && userStatus !== \"ok\" && !canApply)"), true);
+assert.equal(settingsHelpers.includes("showApply: canApply"), true);
 
 assert.equal(css.includes(".settingsMaintenanceReadiness"), true);
 assert.equal(css.includes(".settingsMaintenanceReadinessItem"), true);
