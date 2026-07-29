@@ -28,6 +28,9 @@ def configure_control(tmp_path: Path) -> Path:
     helper.STATUS_FILE = control / "update-status.json"
     helper.PROGRESS_FILE = control / "update-progress.json"
     helper.APPLY_HISTORY_FILE = control / "update-apply-history.json"
+    helper.ACTIVATION_JOURNAL_FILE = (
+        control / "activation-journal.json"
+    )
     helper.ADMISSION_LOCK_FILE = control / "update-admission.lock"
     helper.HELPER_LEASE_FILE = control / "update-helper-claim.lock"
     control.mkdir(parents=True)
@@ -122,6 +125,46 @@ def test_claimed_request_after_helper_restart_becomes_truthful_failure(tmp_path:
     assert terminal["state"] == "terminal"
     assert terminal["terminal"]["error_category"] == "helper_restart_interrupted"
     assert status["status"] == "failed"
+
+
+def test_claimed_request_with_matching_activation_resumes_instead_of_failing(
+    tmp_path: Path,
+) -> None:
+    configure_control(tmp_path)
+    helper.write_json(helper.REQUEST_FILE, current_request(state="claimed"))
+    helper.write_json(
+        helper.ACTIVATION_JOURNAL_FILE,
+        {
+            "schema_version": 1,
+            "document_type": "release_slot_activation",
+            "request_id": REQUEST_ID,
+            "phase": "verifying_target",
+            "previous": {
+                "slot_id": "adopted-" + ("1" * 64),
+                "version": "0.8.2",
+                "commit": "2" * 40,
+            },
+            "target": {
+                "slot_id": "release-" + TARGET_COMMIT,
+                "version": "9.9.9",
+                "commit": TARGET_COMMIT,
+            },
+            "failure_category": None,
+            "rollback_trigger": None,
+            "pointer_slot_id": "release-" + TARGET_COMMIT,
+            "target_verified": False,
+            "previous_verified": False,
+        },
+    )
+
+    claimed = helper.claim_current_request()
+
+    assert claimed is not None
+    assert claimed.pop("_resume_activation") is True
+    assert claimed["state"] == "claimed"
+    on_disk = json.loads(helper.REQUEST_FILE.read_text(encoding="utf-8"))
+    assert on_disk["state"] == "claimed"
+    assert not helper.STATUS_FILE.exists()
 
 
 def test_terminal_schema_retry_is_not_executed_again(tmp_path: Path) -> None:

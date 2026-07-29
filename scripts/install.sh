@@ -830,16 +830,32 @@ write_env
 write_metadata
 write_source_provenance
 write_release_identity
+[ -f "$APP_DIR/scripts/km-vms-release-slots.py" ] &&
+  [ ! -L "$APP_DIR/scripts/km-vms-release-slots.py" ] ||
+  fail "Project acquisition is incomplete: scripts/km-vms-release-slots.py is missing."
+for slot_dir in \
+  "$APP_DIR/data/update-runtime" \
+  "$APP_DIR/data/update-runtime/slots" \
+  "$APP_DIR/data/update-runtime/staging"; do
+  if [ -e "$slot_dir" ] || [ -L "$slot_dir" ]; then
+    [ -d "$slot_dir" ] && [ ! -L "$slot_dir" ] ||
+      fail "Release-slot layout contains an unsafe path: $slot_dir"
+  else
+    mkdir "$slot_dir" ||
+      fail "Cannot prepare the stable release-slot layout."
+  fi
+done
 sh "$APP_DIR/scripts/km-vms-storage-discovery.sh" --app-dir "$APP_DIR" >/dev/null
+PRODUCT_SOURCE=$(km_vms_resolve_product_source "$APP_DIR")
 
 (
   cd "$APP_DIR"
-  compose_cmd --env-file "$APP_DIR/.env" config >/dev/null
+  km_vms_compose_for_source "$APP_DIR" "$PRODUCT_SOURCE" config >/dev/null
 )
 
 (
   cd "$APP_DIR"
-  compose_cmd --env-file "$APP_DIR/.env" up -d --build
+  km_vms_compose_for_source "$APP_DIR" "$PRODUCT_SOURCE" up -d --build
 )
 
 info "KM VMS setup mode is starting."

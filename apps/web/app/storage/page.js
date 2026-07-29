@@ -1231,17 +1231,32 @@ function StorageOperationsPageContent() {
     const recoveryRequired = activationModel.recoveryRequired;
     const completed = activationModel.status === "completed";
     const running = ["queued", "running"].includes(activationModel.status);
+    if (completed) {
+      setDismissedActivationOperationId(operationId);
+      try {
+        window.sessionStorage.setItem(ACTIVATION_ACK_KEY, operationId);
+      } catch (_) {}
+      setArchiveRootDialog((current) => current?.activationOperationId === operationId ? null : current);
+      setOperationToast({
+        id: `activation-completed-${operationId}`,
+        title: copy.activationCompletedTitle,
+        message: copy.activationCompletedMessage,
+        tone: "success",
+      });
+      return;
+    }
     setArchiveRootDialog({
       id: `activation-${operationId}`,
       activationOperationId: operationId,
-      title: completed ? copy.activationCompletedTitle : copy.activationProgressTitle,
-      message: completed ? copy.activationCompletedMessage : activationProgressStatusText(archiveRootActivation, copy),
+      presentation: recoveryRequired ? "compact-confirmation" : undefined,
+      title: copy.activationProgressTitle,
+      message: activationProgressStatusText(archiveRootActivation, copy),
       items: activationProgressItems(archiveRootActivation, copy),
-      action: completed ? "" : (archiveRootActivationReason || copy.activationProgressHint),
+      action: archiveRootActivationReason || copy.activationProgressHint,
       confirmLabel: recoveryRequired ? copy.activationRetryRecovery : undefined,
       cancelLabel: copy.close,
       closeLabel: copy.close,
-      tone: completed ? "success" : activationProgressTone(archiveRootActivation),
+      tone: activationProgressTone(archiveRootActivation),
       busy: running,
       dismissible: !running,
       onConfirm: recoveryRequired
@@ -1258,19 +1273,6 @@ function StorageOperationsPageContent() {
     dismissedActivationOperationId,
     trackedActivationOperationId,
   ]);
-
-  useEffect(() => {
-    const operationId = archiveRootDialog?.activationOperationId;
-    if (!operationId || activationModel.status !== "completed") return undefined;
-    const timer = window.setTimeout(() => {
-      setDismissedActivationOperationId(operationId);
-      try {
-        window.sessionStorage.setItem(ACTIVATION_ACK_KEY, operationId);
-      } catch (_) {}
-      setArchiveRootDialog((current) => current?.activationOperationId === operationId ? null : current);
-    }, 2500);
-    return () => window.clearTimeout(timer);
-  }, [activationModel.status, archiveRootDialog?.activationOperationId]);
 
   useEffect(() => {
     const scanId = integrityScan?.scan_id;
@@ -1336,6 +1338,7 @@ function StorageOperationsPageContent() {
       }
       setArchiveRootDialog({
         id: "auto-free-confirm",
+        presentation: "compact-confirmation",
         title: copy.autoFreeConfirmTitle,
         message: copy.autoFreeConfirmMessage,
         items: [
@@ -1467,6 +1470,7 @@ function StorageOperationsPageContent() {
       return;
     }
     setArchiveRootDialog({
+      presentation: "compact-confirmation",
       title: copy.switchArchiveRootTitle,
       message: copy.switchConfirm,
       action: archiveRootPath(root, archivePathText),
@@ -1623,6 +1627,7 @@ function StorageOperationsPageContent() {
       ? copy.archiveRootDeleteNonEmptyConfirm.replace("{count}", String(count)).replace("{size}", formatBytes(size))
       : copy.archiveRootDeleteEmptyConfirm;
     setArchiveRootDialog({
+      presentation: "compact-confirmation",
       title: copy.archiveRootDeleteTitle,
       message,
       action: archiveRootPath(root, archivePathText),
@@ -1681,6 +1686,7 @@ function StorageOperationsPageContent() {
               : copy.archiveRootCleanupNoRetryAction;
         setArchiveRootDialog({
           id: `root-delete-partial-${detail.operation_id || Date.now()}`,
+          presentation: capability.canRetryNow ? "compact-confirmation" : undefined,
           title: copy.archiveRootDeletePartialTitle,
           message: copy.archiveRootDeletePartialMessage
             .replace("{deleted}", String(detail.segments_deleted || 0))

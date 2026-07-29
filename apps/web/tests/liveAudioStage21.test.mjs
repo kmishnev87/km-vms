@@ -32,7 +32,8 @@ for (const text of [
 assert.equal(livePage.includes('data-live-audio-button="true"'), true);
 assert.equal(livePage.includes("disabled={audioState.disabled}"), true, "no-audio/config-disabled tiles must not enable false sound");
 assert.equal(livePage.includes("onAudioPlaybackBlocked"), true, "browser autoplay rejection must be handled");
-assert.equal(livePage.includes("setError(TEXT.audioBlocked)"), true);
+assert.equal(livePage.includes("live-audio-blocked-"), true);
+assert.equal(livePage.includes("setError(TEXT.audioBlocked)"), false);
 assert.equal(livePage.includes("addAllCameras"), true);
 assert.equal(livePage.includes("layoutTiles([...active, ...additions]"), true, "Add All behavior remains present");
 assert.equal(livePage.includes("setActiveAudioTileId(\"\")"), true, "active audio can be turned off");

@@ -24,6 +24,7 @@ REQUEST_FILE = CONTROL_DIR / "update-request.json"
 STATUS_FILE = CONTROL_DIR / "update-status.json"
 PROGRESS_FILE = CONTROL_DIR / "update-progress.json"
 APPLY_HISTORY_FILE = CONTROL_DIR / "update-apply-history.json"
+ACTIVATION_JOURNAL_FILE = CONTROL_DIR / "activation-journal.json"
 ADMISSION_LOCK_FILE = CONTROL_DIR / "update-admission.lock"
 HELPER_LEASE_FILE = CONTROL_DIR / "update-helper-claim.lock"
 
@@ -32,7 +33,13 @@ MAX_CONTROL_BYTES = 64 * 1024
 REQUEST_SCHEMA_VERSION = 3
 REQUEST_DOCUMENT_TYPE = "update_apply_request"
 REQUEST_STATES = {"admitted", "claimed", "terminal"}
-TERMINAL = {"completed", "failed", "cancelled", "blocked"}
+TERMINAL = {
+    "completed",
+    "failed",
+    "failed_rolled_back",
+    "cancelled",
+    "blocked",
+}
 RUNNING = {
     "starting_helper",
     "preflight",
@@ -47,6 +54,11 @@ RUNNING = {
     "restarting",
     "health_check",
     "commit_verification",
+    "preparing",
+    "staging",
+    "activating",
+    "reconnecting",
+    "rolling_back",
 }
 MACRO_STEPS = [
     "request",
@@ -69,6 +81,9 @@ MIGRATION_ATTEMPT_RE = re.compile(
     re.IGNORECASE,
 )
 MACHINE_CODE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+SLOT_ID_RE = re.compile(
+    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64})$"
+)
 VERSION_TEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GIT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,119}$")
@@ -221,6 +236,126 @@ def read_json(path: Path) -> dict[str, Any] | None:
             "Update control payload contains sensitive content.",
         )
     return payload
+
+
+def activation_journal(
+    request_id: str | None = None,
+) -> dict[str, Any] | None:
+    payload = read_json(ACTIVATION_JOURNAL_FILE)
+    if payload is None:
+        return None
+    previous = payload.get("previous")
+    target = payload.get("target")
+    phase = payload.get("phase")
+    observed_request = str(payload.get("request_id") or "").lower()
+    failure_category = payload.get("failure_category")
+    rollback_trigger = payload.get("rollback_trigger")
+    pointer_slot_id = payload.get("pointer_slot_id")
+    target_verified = payload.get("target_verified")
+    previous_verified = payload.get("previous_verified")
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("document_type") != "release_slot_activation"
+        or not REQUEST_ID_RE.fullmatch(observed_request)
+        or phase
+        not in {
+            "target_prepared",
+            "quiescing",
+            "schema_preparing",
+            "activating",
+            "verifying_target",
+            "committing_target",
+            "rolling_back",
+            "completed",
+            "failed_rolled_back",
+            "blocked",
+        }
+        or not isinstance(previous, dict)
+        or not isinstance(target, dict)
+        or not SLOT_ID_RE.fullmatch(
+            str(previous.get("slot_id") or "")
+        )
+        or not COMMIT_SHA_RE.fullmatch(
+            str(previous.get("commit") or "")
+        )
+        or not VERSION_TEXT_RE.fullmatch(
+            str(previous.get("version") or "")
+        )
+        or not SLOT_ID_RE.fullmatch(
+            str(target.get("slot_id") or "")
+        )
+        or not COMMIT_SHA_RE.fullmatch(
+            str(target.get("commit") or "")
+        )
+        or not VERSION_TEXT_RE.fullmatch(
+            str(target.get("version") or "")
+        )
+        or pointer_slot_id
+        not in {
+            None,
+            str(previous.get("slot_id") or ""),
+            str(target.get("slot_id") or ""),
+        }
+        or not isinstance(target_verified, bool)
+        or not isinstance(previous_verified, bool)
+        or (
+            failure_category is not None
+            and (
+                not isinstance(failure_category, str)
+                or not MACHINE_CODE_RE.fullmatch(failure_category)
+            )
+        )
+        or (
+            rollback_trigger is not None
+            and (
+                not isinstance(rollback_trigger, str)
+                or not MACHINE_CODE_RE.fullmatch(rollback_trigger)
+            )
+        )
+    ):
+        raise HelperError(
+            "activation_journal_invalid",
+            "Release activation state is invalid.",
+        )
+    if phase == "completed" and (
+        pointer_slot_id != target["slot_id"]
+        or target_verified is not True
+        or failure_category is not None
+        or rollback_trigger is not None
+    ):
+        raise HelperError(
+            "activation_journal_invalid",
+            "Completed release activation evidence is contradictory.",
+        )
+    if phase == "failed_rolled_back" and (
+        pointer_slot_id != previous["slot_id"]
+        or previous_verified is not True
+        or failure_category is None
+        or rollback_trigger is None
+    ):
+        raise HelperError(
+            "activation_journal_invalid",
+            "Rollback evidence is contradictory.",
+        )
+    if phase == "blocked" and failure_category is None:
+        raise HelperError(
+            "activation_journal_invalid",
+            "Blocked activation lacks a failure category.",
+        )
+    if request_id is not None and observed_request != request_id.lower():
+        return None
+    return {
+        "request_id": observed_request,
+        "phase": phase,
+        "previous_slot": previous["slot_id"],
+        "previous_version": str(previous["version"]),
+        "previous_commit": str(previous["commit"]).lower(),
+        "target_slot": target["slot_id"],
+        "target_version": str(target["version"]),
+        "target_commit": str(target["commit"]).lower(),
+        "failure_category": failure_category,
+        "rollback_trigger": rollback_trigger,
+    }
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -516,11 +651,30 @@ def error_payload(category: str) -> dict[str, str]:
         "apply_timeout": "Update execution timed out.",
         "apply_failed": "Update apply failed.",
         "helper_exception": "Unexpected update helper failure.",
+        "schema_previous_runtime_incompatible": "The previous release cannot safely run after the planned database migration.",
+        "schema_migration_interrupted": "Database migration completion could not be proven after restart.",
+        "target_health_failed": "The target release failed its runtime health check.",
+        "target_identity_mismatch": "The target release identity did not match the trusted release.",
+        "helper_handoff_failed": "The target update helper could not be handed off safely.",
+        "rollback_verification_failed": "The previous release could not be verified after rollback.",
+        "previous_recovery_failed": "The previous release could not be restored after a pre-activation failure.",
+        "activation_pointer_conflict": "Release activation state is contradictory.",
+        "activation_journal_invalid": "Release activation state is unavailable or invalid.",
     }
+    operator_action = (
+        "The previous release was restored. Review the target failure before retrying."
+        if category
+        in {
+            "target_health_failed",
+            "target_identity_mismatch",
+            "helper_handoff_failed",
+        }
+        else "Review update status and retry only after the cause is resolved."
+    )
     return {
         "category": category,
         "message": messages.get(category, "Update apply failed."),
-        "operator_action": "Review update status and retry only after the cause is resolved.",
+        "operator_action": operator_action,
     }
 
 
@@ -541,9 +695,12 @@ def macro_step(value: str) -> str:
         "compose_config",
         "rebuilding",
         "restarting",
+        "preparing",
+        "staging",
+        "activating",
     }:
         return "applying"
-    if value == "health_check":
+    if value in {"health_check", "reconnecting", "rolling_back"}:
         return "health_check"
     if value in {"commit_verification", "completed"}:
         return "commit_verification"
@@ -605,7 +762,7 @@ def base_status(
         "commit_verified": False,
         "steps": steps,
         "can_cancel": False,
-        "rollback_supported": False,
+        "rollback_supported": True,
         "side_effects": {
             "api_docker_socket": False,
             "api_shell_execution": False,
@@ -628,11 +785,18 @@ def read_progress(request_id: str | None = None) -> dict[str, Any] | None:
         return None
     current_step = safe_text(payload.get("current_step"), 80)
     phase = safe_text(payload.get("phase"), 80)
+    status = safe_text(payload.get("status"), 40)
     if current_step and not MACHINE_CODE_RE.fullmatch(current_step):
         current_step = None
     if phase and not MACHINE_CODE_RE.fullmatch(phase):
         phase = None
-    return {"current_step": current_step, "phase": phase}
+    if status not in RUNNING:
+        status = None
+    return {
+        "current_step": current_step,
+        "phase": phase,
+        "status": status,
+    }
 
 
 def append_last_history(status_payload: dict[str, Any]) -> None:
@@ -727,6 +891,10 @@ def claim_current_request() -> dict[str, Any] | None:
             if current["state"] == "terminal":
                 return None
             if current["state"] == "claimed":
+                journal = activation_journal(current["request_id"])
+                if journal:
+                    current["_resume_activation"] = True
+                    return current
                 failed = base_status(
                     current,
                     "failed",
@@ -810,6 +978,61 @@ def compose_app_dir() -> Path:
             "KM_VMS_UPDATE_HOST_APP_DIR is unavailable.",
         )
     return HOST_APP_DIR
+
+
+def resolve_update_source_dir(app_dir: Path) -> Path:
+    common = app_dir / "scripts" / "km-vms-compose-common.sh"
+    if not common.is_file() or common.is_symlink():
+        raise HelperError(
+            "helper_active_source_resolver_missing",
+            "Active release source resolver is unavailable.",
+        )
+    try:
+        resolved = subprocess.run(
+            [
+                "sh",
+                "-c",
+                '. "$1"; km_vms_resolve_product_source "$2"',
+                "km-vms-active-source-resolver",
+                str(common),
+                str(app_dir),
+            ],
+            cwd=app_dir,
+            env=os.environ.copy(),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HelperError(
+            "helper_active_source_resolver_failed",
+            "Active release source could not be resolved.",
+        ) from exc
+    source_text = resolved.stdout.strip()
+    if (
+        resolved.returncode != 0
+        or not source_text
+        or "\n" in source_text
+        or "\r" in source_text
+    ):
+        raise HelperError(
+            "helper_active_source_resolver_failed",
+            "Active release source could not be resolved.",
+        )
+    source_dir = Path(source_text)
+    update_script = source_dir / "scripts" / "update.sh"
+    if (
+        not source_dir.is_absolute()
+        or not update_script.is_file()
+        or update_script.is_symlink()
+    ):
+        raise HelperError(
+            "helper_active_source_invalid",
+            "Active release source is incomplete or unsafe.",
+        )
+    return source_dir
 
 
 def update_child_env(request: dict[str, Any]) -> dict[str, str]:
@@ -901,29 +1124,43 @@ def classify_apply_failure(update_dir: Path, stderr: str) -> HelperError:
 def verify_installed_commit(
     update_dir: Path,
     expected_commit: str,
+    *,
+    identity_dir: Path | None = None,
+    slot_verified: bool = False,
 ) -> tuple[str, str, dict[str, Any]]:
     update_metadata = read_json(update_dir / ".km-vms-update.json")
-    if not update_metadata:
+    if not update_metadata and not slot_verified:
         raise HelperError(
             "commit_missing",
             "Update metadata is missing.",
             phase="commit_verification",
         )
-    if update_metadata.get("status") != "success":
+    if (
+        update_metadata
+        and not slot_verified
+        and update_metadata.get("status") != "success"
+    ):
         raise HelperError(
             "metadata_invalid",
             "Update metadata did not record success.",
             phase="commit_verification",
         )
-    installed_commit = safe_text(update_metadata.get("commit_sha"), 40)
-    if installed_commit != expected_commit:
+    installed_commit = (
+        expected_commit
+        if slot_verified
+        else safe_text(update_metadata.get("commit_sha"), 40)
+        if update_metadata
+        else None
+    )
+    if installed_commit and installed_commit != expected_commit:
         raise HelperError(
             "commit_mismatch",
             "Installed commit does not match the trusted target.",
             phase="commit_verification",
             diagnostics={"installed_commit": installed_commit or "missing"},
         )
-    source_metadata = read_json(update_dir / ".km-vms-source.json")
+    identity_root = identity_dir or update_dir
+    source_metadata = read_json(identity_root / ".km-vms-source.json")
     if source_metadata:
         source_commit = safe_text(source_metadata.get("commit_sha"), 40)
         if source_commit and source_commit != expected_commit:
@@ -933,7 +1170,7 @@ def verify_installed_commit(
                 phase="commit_verification",
                 diagnostics={"installed_commit": source_commit},
             )
-    release_metadata = read_json(update_dir / ".km-vms-release.json")
+    release_metadata = read_json(identity_root / ".km-vms-release.json")
     if not release_metadata:
         raise HelperError(
             "commit_missing",
@@ -949,19 +1186,31 @@ def verify_installed_commit(
         )
     validation = (
         update_metadata.get("validation_summary")
-        if isinstance(update_metadata.get("validation_summary"), dict)
+        if update_metadata
+        and isinstance(update_metadata.get("validation_summary"), dict)
         else {}
     )
-    host_status = safe_text(
-        validation.get("release_identity_host_metadata_status"),
-        40,
-    ) or safe_text(release_metadata.get("metadata_status"), 40)
-    api_status = safe_text(
-        validation.get("release_identity_api_metadata_status"),
-        40,
+    host_status = (
+        safe_text(release_metadata.get("metadata_status"), 40)
+        if slot_verified
+        else safe_text(
+            validation.get("release_identity_host_metadata_status"),
+            40,
+        )
+        or safe_text(release_metadata.get("metadata_status"), 40)
     )
-    api_visible = validation.get("release_identity_api_visible") is True
-    commit_verified = (
+    api_status = (
+        "complete"
+        if slot_verified
+        else safe_text(
+            validation.get("release_identity_api_metadata_status"),
+            40,
+        )
+    )
+    api_visible = slot_verified or (
+        validation.get("release_identity_api_visible") is True
+    )
+    commit_verified = slot_verified or (
         validation.get("release_identity_commit_verified") is True
     )
     if (
@@ -983,13 +1232,192 @@ def verify_installed_commit(
     }
 
 
+def publish_activation_outcome(
+    request: dict[str, Any],
+    journal: dict[str, Any],
+    update_dir: Path,
+) -> bool:
+    source = request["source"]
+    expected_commit = str(source["commit"]).lower()
+    if (
+        journal["request_id"] != request["request_id"]
+        or journal["target_commit"] != expected_commit
+        or journal["target_version"] != source["version"]
+    ):
+        raise HelperError(
+            "activation_journal_invalid",
+            "Release activation does not match the admitted target.",
+        )
+    phase = journal["phase"]
+    if phase == "completed":
+        active_source = resolve_update_source_dir(update_dir)
+        expected_source = (
+            update_dir
+            / "data/update-runtime/slots"
+            / journal["target_slot"]
+            / "source"
+        ).resolve()
+        if active_source.resolve() != expected_source:
+            raise HelperError(
+                "activation_pointer_conflict",
+                "Completed activation does not resolve to its target.",
+            )
+        installed, expected, release_identity = (
+            verify_installed_commit(
+                update_dir,
+                expected_commit,
+                identity_dir=active_source,
+                slot_verified=True,
+            )
+        )
+        completed = base_status(
+            request,
+            "completed",
+            "completed",
+            steps_for("completed"),
+        )
+        completed["commit_verified"] = True
+        completed["installed_commit"] = installed
+        completed["expected_commit"] = expected
+        completed["release_identity"] = release_identity
+        completed["rollback"] = {
+            "status": "not_needed",
+            "trigger": None,
+            "restored_version": None,
+        }
+        completed["finished_at"] = completed["updated_at"]
+        publish_terminal(request, completed)
+        return True
+    if phase == "failed_rolled_back":
+        category = str(
+            journal.get("rollback_trigger")
+            or journal.get("failure_category")
+            or "target_health_failed"
+        )
+        rolled_back = base_status(
+            request,
+            "failed_rolled_back",
+            "failed_rolled_back",
+            steps_for("rolling_back", failed=True),
+            error_payload(category),
+        )
+        rolled_back["installed_commit"] = journal[
+            "previous_commit"
+        ]
+        rolled_back["rollback"] = {
+            "status": "completed",
+            "trigger": category,
+            "restored_version": journal["previous_version"],
+        }
+        rolled_back["finished_at"] = rolled_back["updated_at"]
+        publish_terminal(request, rolled_back)
+        return True
+    if phase == "blocked":
+        category = str(
+            journal.get("failure_category")
+            or "activation_journal_invalid"
+        )
+        blocked = base_status(
+            request,
+            "blocked",
+            "blocked",
+            steps_for("applying", failed=True),
+            error_payload(category),
+        )
+        blocked["rollback"] = {
+            "status": (
+                "failed"
+                if category
+                in {
+                    "rollback_verification_failed",
+                    "previous_recovery_failed",
+                }
+                else "not_started"
+            ),
+            "trigger": journal.get("rollback_trigger"),
+            "restored_version": None,
+        }
+        blocked["finished_at"] = blocked["updated_at"]
+        publish_terminal(request, blocked)
+        return True
+    return False
+
+
+def resume_activation(
+    request: dict[str, Any],
+    update_dir: Path,
+) -> int:
+    journal = activation_journal(request["request_id"])
+    if journal is None:
+        raise HelperError(
+            "activation_journal_invalid",
+            "Unfinished activation journal is missing.",
+        )
+    target_source = (
+        update_dir
+        / "data/update-runtime/slots"
+        / journal["target_slot"]
+        / "source"
+    )
+    bridge = target_source / "scripts/km-vms-update-helper-bridge.py"
+    if bridge.is_symlink() or not bridge.is_file():
+        raise HelperError(
+            "activation_journal_invalid",
+            "Trusted activation bridge is unavailable.",
+        )
+    if journal["phase"] not in {
+        "completed",
+        "failed_rolled_back",
+        "blocked",
+    }:
+        command = [
+            "python3",
+            str(bridge),
+            "resume-activation",
+            "--app-dir",
+            str(update_dir),
+            "--project-name",
+            os.getenv("KM_VMS_PROJECT_NAME", "tnas-vms"),
+            "--request-id",
+            request["request_id"],
+        ]
+        result = subprocess.run(
+            command,
+            cwd=update_dir,
+            env=update_child_env(request),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=4200,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise HelperError(
+                "activation_journal_invalid",
+                "Release activation could not converge after restart.",
+            )
+        journal = activation_journal(request["request_id"])
+        if journal is None:
+            raise HelperError(
+                "activation_journal_invalid",
+                "Release activation result is unavailable.",
+            )
+    if not publish_activation_outcome(request, journal, update_dir):
+        raise HelperError(
+            "activation_journal_invalid",
+            "Release activation did not reach a terminal state.",
+        )
+    return 0
+
+
 def run_update(request: dict[str, Any]) -> int:
     source = request["source"]
     update_dir = compose_app_dir()
+    update_source_dir = resolve_update_source_dir(update_dir)
     expected_commit = str(source["commit"])
     command = [
         "sh",
-        "scripts/update.sh",
+        str(update_source_dir / "scripts" / "update.sh"),
         "--github-repo",
         source["repo"],
         "--branch",
@@ -1044,6 +1472,18 @@ def run_update(request: dict[str, Any]) -> int:
         default_step="acquire_source",
         status_value="applying",
     )
+    journal = activation_journal(request["request_id"])
+    if journal:
+        if publish_activation_outcome(
+            request,
+            journal,
+            update_dir,
+        ):
+            return 0
+        raise HelperError(
+            "activation_journal_invalid",
+            "Release activation did not reach terminal state.",
+        )
     if applied.returncode != 0:
         raise classify_apply_failure(update_dir, applied.stderr.strip())
     write_json(
@@ -1141,7 +1581,11 @@ def run_child_with_progress(
                 last_step = step
                 status_payload = base_status(
                     request,
-                    status_value,
+                    (
+                        progress.get("status")
+                        if progress and progress.get("status")
+                        else status_value
+                    ),
                     phase,
                     steps_for(step),
                 )
@@ -1194,7 +1638,10 @@ def main() -> int:
             try:
                 request = claim_current_request()
                 if request:
-                    run_update(request)
+                    if request.pop("_resume_activation", False):
+                        resume_activation(request, compose_app_dir())
+                    else:
+                        run_update(request)
             except HelperError as exc:
                 if request:
                     failed = base_status(

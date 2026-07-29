@@ -141,3 +141,89 @@ km_vms_compose_version() {
     "$COMPOSE_BIN" version 2>/dev/null | head -n 1
   fi
 }
+
+km_vms_resolve_product_source() {
+  stable_app_dir="$1"
+  [ -n "$stable_app_dir" ] ||
+    km_vms_compose_fail "Stable KM VMS app directory is required."
+  case "$stable_app_dir" in
+    /*) ;;
+    *) km_vms_compose_fail "Stable KM VMS app directory must be absolute." ;;
+  esac
+  active_pointer="$stable_app_dir/data/update-runtime/active"
+  if [ ! -e "$active_pointer" ] && [ ! -L "$active_pointer" ]; then
+    printf '%s\n' "$stable_app_dir"
+    return 0
+  fi
+  [ -L "$active_pointer" ] ||
+    km_vms_compose_fail "Active KM VMS release pointer is not a symlink."
+  km_vms_command_exists readlink ||
+    km_vms_compose_fail "readlink is required to resolve the active KM VMS release slot."
+  pointer_target=$(readlink "$active_pointer") ||
+    km_vms_compose_fail "Active KM VMS release pointer cannot be read."
+  printf '%s\n' "$pointer_target" |
+    grep -Eq '^slots/(release-[0-9a-f]{40}|adopted-[0-9a-f]{64})/source$' ||
+    km_vms_compose_fail "Active KM VMS release pointer is outside its bounded slot layout."
+  slot_id=$(printf '%s\n' "$pointer_target" | cut -d/ -f2)
+  slot_root="$stable_app_dir/data/update-runtime/slots/$slot_id"
+  resolved="$slot_root/source"
+  [ -d "$slot_root" ] && [ ! -L "$slot_root" ] &&
+    [ -d "$resolved" ] && [ ! -L "$resolved" ] &&
+    [ -f "$slot_root/slot-manifest.json" ] &&
+    [ ! -L "$slot_root/slot-manifest.json" ] ||
+    km_vms_compose_fail "Resolved KM VMS release slot is incomplete or unsafe."
+  [ -f "$resolved/docker-compose.yml" ] ||
+    km_vms_compose_fail "Resolved KM VMS release source is incomplete."
+  printf '%s\n' "$resolved"
+}
+
+km_vms_compose_for_source() {
+  stable_app_dir="$1"
+  source_dir="$2"
+  shift 2
+  [ -f "$stable_app_dir/.env" ] ||
+    km_vms_compose_fail "Stable KM VMS .env is unavailable."
+  [ -f "$source_dir/docker-compose.yml" ] ||
+    km_vms_compose_fail "KM VMS product source has no docker-compose.yml."
+  archive_override="$stable_app_dir/data/install-control/docker-compose.archive-roots.yml"
+  slot_runtime_override=""
+  case "$source_dir" in
+    "$stable_app_dir"/data/update-runtime/slots/*/source)
+      possible_runtime_override="$(dirname "$source_dir")/docker-compose.runtime-override.yml"
+      if [ -e "$possible_runtime_override" ] || [ -L "$possible_runtime_override" ]; then
+        [ -f "$possible_runtime_override" ] && [ ! -L "$possible_runtime_override" ] ||
+          km_vms_compose_fail "Release-slot runtime Compose override is unsafe."
+        slot_runtime_override="$possible_runtime_override"
+      fi
+      ;;
+  esac
+  if [ -n "$slot_runtime_override" ] && [ -f "$archive_override" ]; then
+    km_vms_compose_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      -f "$slot_runtime_override" \
+      -f "$archive_override" \
+      "$@"
+  elif [ -n "$slot_runtime_override" ]; then
+    km_vms_compose_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      -f "$slot_runtime_override" \
+      "$@"
+  elif [ -f "$archive_override" ]; then
+    km_vms_compose_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      -f "$archive_override" \
+      "$@"
+  else
+    km_vms_compose_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      "$@"
+  fi
+}

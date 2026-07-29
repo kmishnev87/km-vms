@@ -551,9 +551,8 @@ export default function RecordingsPage() {
   const [sortDir, setSortDir] = useState("desc");
   const [currentPage, setCurrentPage] = useState(1);
   const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [deleteDialog, setDeleteDialog] = useState(null);
-  const [deleteToast, setDeleteToast] = useState(null);
+  const [operationToast, setOperationToast] = useState(null);
   const [busy, setBusy] = useState(false);
   const [dangerMenuOpen, setDangerMenuOpen] = useState(false);
   const [recorderStatus, setRecorderStatus] = useState(null);
@@ -637,7 +636,6 @@ export default function RecordingsPage() {
   async function initialLoad() {
     try {
       setError("");
-      setNotice("");
       await Promise.all([loadCameras(), loadRecorderStatus()]);
     } catch (err) {
       setError(normalizeRecordingError(err.message));
@@ -676,7 +674,6 @@ export default function RecordingsPage() {
   async function refresh() {
     try {
       setError("");
-      setNotice("");
       const [cameraOptions] = await Promise.all([loadCameras(), loadRecorderStatus()]);
       const effectiveCamera = resolveEffectiveRecordingCamera(selectedCamera, cameraOptions);
       const effectivePage = effectiveCamera === selectedCamera ? currentPage : 1;
@@ -831,7 +828,6 @@ export default function RecordingsPage() {
     if (!isRecordingAvailable(item)) return;
     try {
       setError("");
-      setNotice("");
       const mediaToken = await issueRecordingMediaToken(recordingIdentityPayload(item), "download");
       const url = `/api/recordings/download?${recordingIdentityQuery(item)}&media_token=${encodeURIComponent(mediaToken)}`;
       const a = document.createElement("a");
@@ -853,7 +849,6 @@ export default function RecordingsPage() {
     if (!canExport) return;
     const { startTs, endTs } = defaultClipRange(selectedDate, exportLimits);
     setError("");
-    setNotice("");
     setLastExportId("");
     setExportStatus("");
     setExportModal({
@@ -894,7 +889,6 @@ export default function RecordingsPage() {
     }
     try {
       setError("");
-      setNotice("");
       setExportBusy(true);
       setLastExportId("");
       const payload = buildArchiveExportPayload({
@@ -912,8 +906,12 @@ export default function RecordingsPage() {
       });
       if (result?.job?.id) setLastExportId(result.job.id);
       saveBlobDownload(result.clip.blob, result.clip.filename || "km-vms-clip.mkv");
-      setNotice(t.exportReady);
       setExportStatus(t.exportReady);
+      setOperationToast({
+        id: `recordings-clip-${result?.job?.id || Date.now()}`,
+        title: t.exportReady,
+        tone: "success",
+      });
     } catch (err) {
       const message = normalizeArchiveExportError(err.message);
       setError(message);
@@ -940,7 +938,6 @@ export default function RecordingsPage() {
     if (!isRecordingAvailable(item)) return;
     try {
       setError("");
-      setNotice("");
       const url = await buildRecordingStreamUrl(item);
       setViewerTitle(item.filename);
       setViewerUrl(url);
@@ -1088,7 +1085,7 @@ export default function RecordingsPage() {
     const completed = result?.ok === true && result?.status === "completed";
     if (completed) {
       setDeleteDialog(null);
-      setDeleteToast({
+      setOperationToast({
         id: `recording-delete-${result.operation_id || Date.now()}`,
         title: t.deletionCompletedTitle,
         message: t.deletionCompletedMessage
@@ -1175,6 +1172,7 @@ export default function RecordingsPage() {
     setDeleteDialog({
       id: `recording-single-confirm-${operationId}`,
       title: t.deleteOneTitle,
+      presentation: "compact-confirmation",
       message: t.deleteOneMessage.replace("{name}", item.filename || t.file),
       summary: [{ label: t.size, value: formatSizeBytes(item.size_bytes || item.size || 0) }],
       confirmLabel: t.remove,
@@ -1199,6 +1197,7 @@ export default function RecordingsPage() {
     setDeleteDialog({
       id: `recording-selected-confirm-${operationId}`,
       title: t.deleteSelectedTitle,
+      presentation: "compact-confirmation",
       message: t.deleteSelectedMessage.replace("{count}", String(selectedItems.length)),
       summary: [{ label: t.selected, value: String(selectedItems.length) }],
       confirmLabel: t.remove,
@@ -1245,6 +1244,7 @@ export default function RecordingsPage() {
         id: `recording-plan-confirm-${plan.plan_id}`,
         readyPlanId: plan.plan_id,
         title,
+        presentation: "compact-confirmation",
         message,
         summary: [
           { label: t.plannedCount, value: String(plan.planned_count || 0) },
@@ -1314,12 +1314,6 @@ export default function RecordingsPage() {
           {error}
         </div>
       ) : null}
-      {notice ? (
-        <div className="badge ok recordingsErrorBadge">
-          {notice}
-        </div>
-      ) : null}
-
       <div className="card recordingsFilterCard">
         <div className="recordingsFilterBar">
           <div className="recordingsFilterGroup">
@@ -1765,7 +1759,7 @@ export default function RecordingsPage() {
         </div>
       ) : null}
       <OperationDialog dialog={deleteDialog} onClose={closeDeleteDialog} />
-      <OperationToast toast={deleteToast} onClose={() => setDeleteToast(null)} />
+      <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
       </div>
     </Layout>
   );

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { OperationToast } from "./OperationFeedback";
 import { apiFetch, apiFetchBlob, forbiddenMessage } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { useI18n } from "../lib/i18n";
@@ -221,20 +222,25 @@ export function DiagnosticsEntry() {
   const { currentUser, loading } = useCurrentUser();
   const { locale, t } = useI18n();
   const [busy, setBusy] = useState("");
-  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [operationToast, setOperationToast] = useState(null);
   const [bugText, setBugText] = useState("");
   const canRunDiagnostics = Boolean(currentUser?.permissions?.includes("run_diagnostics"));
 
   async function downloadArchive(mode) {
     if (busy) return;
     setBusy(`archive-${mode}`);
-    setMessage("");
+    setError("");
     try {
       const { blob, filename } = await apiFetchBlob(`/settings/logs/archive?mode=${encodeURIComponent(mode)}`);
       downloadBlob(blob, filename || `km-vms-logs-${mode}.zip`);
-      setMessage(t("diagnosticsEntry.archiveReady"));
+      setOperationToast({
+        id: `diagnostics-archive-${mode}-${Date.now()}`,
+        title: t("diagnosticsEntry.archiveReady"),
+        tone: "success",
+      });
     } catch (err) {
-      setMessage(String(err?.message || t("diagnosticsEntry.failed")));
+      setError(String(err?.message || t("diagnosticsEntry.failed")));
     } finally {
       setBusy("");
     }
@@ -243,7 +249,7 @@ export function DiagnosticsEntry() {
   async function createBugReport() {
     if (busy || !bugText.trim()) return;
     setBusy("bug-report");
-    setMessage("");
+    setError("");
     try {
       const { blob, filename } = await apiFetchBlob("/settings/bug-report", {
         method: "POST",
@@ -251,9 +257,13 @@ export function DiagnosticsEntry() {
         body: JSON.stringify({ text: bugText.trim(), include_logs: false }),
       });
       downloadBlob(blob, filename || "km-vms-bug-report.zip");
-      setMessage(t("diagnosticsEntry.bugReportReady"));
+      setOperationToast({
+        id: `diagnostics-bug-report-${Date.now()}`,
+        title: t("diagnosticsEntry.bugReportReady"),
+        tone: "success",
+      });
     } catch (err) {
-      setMessage(String(err?.message || t("diagnosticsEntry.failed")));
+      setError(String(err?.message || t("diagnosticsEntry.failed")));
     } finally {
       setBusy("");
     }
@@ -296,7 +306,8 @@ export function DiagnosticsEntry() {
       <button type="button" className="button small settingsSecurityModalButton" onClick={createBugReport} disabled={Boolean(busy) || !bugText.trim()}>
         {busy === "bug-report" ? t("diagnosticsEntry.running") : t("diagnosticsEntry.createBugReport")}
       </button>
-      {message ? <div className="settingsJournalEmpty">{message}</div> : null}
+      {error ? <div className="settingsJournalEmpty error">{error}</div> : null}
+      <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
     </section>
   );
 }

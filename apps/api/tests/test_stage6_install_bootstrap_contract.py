@@ -101,14 +101,54 @@ def test_setup_activation_helper_is_bounded_runtime_storage_helper():
     assert "/var/run/docker.sock:/var/run/docker.sock" not in api_section
     assert "restart: unless-stopped" in helper_section
     assert "/var/run/docker.sock:/var/run/docker.sock" in helper_section
+    assert (
+        "data/update-runtime/active/scripts/"
+        "km-vms-setup-activation-helper.sh"
+        in helper_section
+    )
+    assert (
+        "scripts/km-vms-setup-activation-helper.sh"
+        in helper_section
+    )
+    assert "SOURCE_CONTAINER_DIR" in helper
+    assert (
+        'sh "$SOURCE_CONTAINER_DIR/scripts/'
+        'km-vms-storage-discovery.sh"'
+        in helper
+    )
+    assert (
+        'sh "$SOURCE_CONTAINER_DIR/scripts/'
+        'km-vms-storage-root-cleanup.sh"'
+        in helper
+    )
+    assert (
+        'sh "$SOURCE_CONTAINER_DIR/scripts/'
+        'km-vms-storage-candidate-validate.sh"'
+        in helper
+    )
+    assert (
+        'sh "$SOURCE_CONTAINER_DIR/scripts/'
+        'km-vms-storage-apply.sh"'
+        in helper
+    )
+    assert (
+        'sh "$SOURCE_DIR/scripts/km-vms-restart.sh"'
+        in helper
+    )
+    assert "sh /host-app/scripts/km-vms-" not in helper
     assert "/var/run/docker.sock:/var/run/docker.sock" in update_helper_section
     assert "ports:" not in update_helper_section
     assert "km-vms-update-helper.py" in update_helper_section
     assert "working_dir: /host-app" in update_helper_section
     assert "KM_VMS_UPDATE_APP_DIR: /host-app" in update_helper_section
     assert "KM_VMS_UPDATE_HOST_APP_DIR" in update_helper_section
-    assert "- ./:/host-app" in update_helper_section
-    assert "- ./:${KM_VMS_HOST_APP_DIR:-/host-app}" in update_helper_section
+    assert "- ${KM_VMS_HOST_APP_DIR:-.}:/host-app" in update_helper_section
+    assert (
+        "- ${KM_VMS_HOST_APP_DIR:-.}:${KM_VMS_HOST_APP_DIR:-/host-app}"
+        in update_helper_section
+    )
+    assert "python3 is required for the release-slot layout foundation" not in script
+    assert '"$APP_DIR/data/update-runtime/slots"' in script
     assert "read_control_value" in helper
     assert "read_control_value" in storage_apply
     assert "read_control_value" in restart

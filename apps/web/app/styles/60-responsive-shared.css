@@ -847,6 +847,10 @@
     padding: 10px;
   }
 
+  .operationFeedbackOverlay-compactConfirmation {
+    align-items: center;
+  }
+
   .operationFeedbackDialog {
     max-height: calc(100vh - 20px);
   }

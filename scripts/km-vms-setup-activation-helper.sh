@@ -1,7 +1,19 @@
 #!/usr/bin/env sh
 set -eu
 
-APP_DIR="${KM_VMS_SETUP_APP_DIR:-/host-app}"
+APP_DIR=$(CDPATH= cd -- "${KM_VMS_SETUP_APP_DIR:-/host-app}" && pwd -P)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+SOURCE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
+case "$SOURCE_DIR" in
+  "$APP_DIR") SOURCE_CONTAINER_DIR="/host-app" ;;
+  "$APP_DIR"/*)
+    SOURCE_CONTAINER_DIR="/host-app/${SOURCE_DIR#"$APP_DIR"/}"
+    ;;
+  *)
+    printf '%s\n' "setup helper source escaped stable APP_DIR" >&2
+    exit 1
+    ;;
+esac
 CONTROL_DIR="$APP_DIR/data/install-control"
 REQUEST_FILE="$CONTROL_DIR/storage-activation-request.json"
 REQUEST_CONTROL_FILE="$CONTROL_DIR/storage-activation-request.control"
@@ -373,7 +385,7 @@ process_root_cleanup_request() {
     -v "$APP_DIR:/host-app" \
     -v "/:/host:ro,rslave" \
     docker:27-cli \
-    sh /host-app/scripts/km-vms-storage-discovery.sh --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
+    sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-discovery.sh" --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
     write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" partial partial_cleanup storage_discovery_refresh_failed "$cleanup_marker_removed" false "" true
     write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" partial
     return 0
@@ -394,7 +406,7 @@ process_root_cleanup_request() {
     -v "$APP_DIR:/host-app:ro" \
     -v "$cleanup_mount:/selected-root" \
     docker:27-cli \
-    sh /host-app/scripts/km-vms-storage-root-cleanup.sh \
+    sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-root-cleanup.sh" \
       --folder-name "$cleanup_folder" \
       --expected-host-path "$cleanup_host_path" \
       --operation-id "$cleanup_operation_id" \
@@ -440,7 +452,7 @@ process_discovery_request() {
     -v "$APP_DIR:/host-app" \
     -v "/:/host:ro,rslave" \
     docker:27-cli \
-    sh /host-app/scripts/km-vms-storage-discovery.sh --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
+    sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-discovery.sh" --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
     write_discovery_result "$discovery_request_id" "failed" "storage_discovery_refresh_failed" "$discovery_candidate_id" "" "" "" "$discovery_folder" false
     write_discovery_request_status "$discovery_request_id" "$discovery_mode" "$discovery_candidate_id" "$discovery_expected_snapshot" "$discovery_expected_identity" "$discovery_folder" "failed"
     return 0
@@ -492,7 +504,7 @@ process_discovery_request() {
     -v "$APP_DIR:/host-app:ro" \
     -v "$discovery_mount:/selected-root" \
     docker:27-cli \
-    sh /host-app/scripts/km-vms-storage-candidate-validate.sh --folder-name "$discovery_folder" >"$DISCOVERY_VALIDATION_OUT" 2>"$DISCOVERY_VALIDATION_ERR"; then
+    sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-candidate-validate.sh" --folder-name "$discovery_folder" >"$DISCOVERY_VALIDATION_OUT" 2>"$DISCOVERY_VALIDATION_ERR"; then
     discovery_error=$(read_control_value "$DISCOVERY_VALIDATION_OUT" error || true)
     write_discovery_result "$discovery_request_id" "failed" "${discovery_error:-storage_candidate_revalidation_failed}" "$discovery_candidate_id" "$discovery_snapshot_id" "$discovery_identity" "$discovery_mount" "$discovery_folder" false
     write_discovery_request_status "$discovery_request_id" "$discovery_mode" "$discovery_candidate_id" "$discovery_expected_snapshot" "$discovery_expected_identity" "$discovery_folder" "failed"
@@ -552,7 +564,7 @@ while :; do
       -v "$APP_DIR:/host-app" \
       -v "/:/host:ro,rslave" \
       docker:27-cli \
-      sh /host-app/scripts/km-vms-storage-discovery.sh --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
+      sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-discovery.sh" --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
       fail_status "storage candidate refresh failed before activation" "$selected_path" "$request_id" "$operation_id"
       write_request_control "$request_id" "$selected_path" "failed" "$operation_id"
       sleep 2
@@ -575,7 +587,7 @@ while :; do
     -v "$APP_DIR:/host-app:ro" \
     -v "$selected_mount:/selected-root" \
     docker:27-cli \
-    sh /host-app/scripts/km-vms-storage-candidate-validate.sh --folder-name "$folder_name" >"$DISCOVERY_VALIDATION_OUT" 2>"$DISCOVERY_VALIDATION_ERR"; then
+    sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-candidate-validate.sh" --folder-name "$folder_name" >"$DISCOVERY_VALIDATION_OUT" 2>"$DISCOVERY_VALIDATION_ERR"; then
     validation_error=$(read_control_value "$DISCOVERY_VALIDATION_OUT" error || true)
     fail_status "${validation_error:-storage candidate revalidation failed before activation}" "$selected_path" "$request_id" "$operation_id"
     write_request_control "$request_id" "$selected_path" "failed" "$operation_id"
@@ -607,7 +619,7 @@ while :; do
     -e KM_VMS_SELECTED_MOUNT_CONTAINER=/selected-root \
     -e "KM_VMS_SELECTED_PATH_CONTAINER=/selected-root/$folder_name" \
     docker:27-cli \
-    sh /host-app/scripts/km-vms-storage-apply.sh --app-dir /host-app >"$APPLY_OUT" 2>"$APPLY_ERR"; then
+    sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-apply.sh" --app-dir /host-app >"$APPLY_OUT" 2>"$APPLY_ERR"; then
     configuration_consistent=false
     restore_env_backup && configuration_consistent=true
     fail_status "$(cat "$APPLY_ERR" 2>/dev/null || printf 'storage apply failed')" "$selected_path" "$request_id" "$operation_id" "$configuration_consistent"
@@ -628,7 +640,7 @@ while :; do
     continue
   fi
 
-  if ! sh "$APP_DIR/scripts/km-vms-restart.sh" --app-dir "$APP_DIR" --verify-storage-selection >"$RESTART_OUT" 2>"$RESTART_ERR"; then
+  if ! sh "$SOURCE_DIR/scripts/km-vms-restart.sh" --app-dir "$APP_DIR" --verify-storage-selection >"$RESTART_OUT" 2>"$RESTART_ERR"; then
     configuration_consistent=false
     restore_env_backup && configuration_consistent=true
     fail_status "$(cat "$RESTART_ERR" 2>/dev/null || printf 'storage restart failed')" "$selected_path" "$request_id" "$operation_id" "$configuration_consistent"

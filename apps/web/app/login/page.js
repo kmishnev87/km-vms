@@ -2,11 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { OperationToast } from "../../components/OperationFeedback";
 import { saveAuthToken } from "../../lib/api";
 import { loadCurrentUser } from "../../lib/currentUser";
 import { useLocaleText } from "../../lib/i18n";
 
 const LAST_USERNAME_KEY = "km_vms_last_username";
+const CREDENTIALS_CHANGED_NOTICE_KEY = "km_vms_credentials_changed_notice";
 
 function loadLastUsername() {
   if (typeof window === "undefined") return "";
@@ -25,11 +27,22 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [staySignedIn, setStaySignedIn] = useState(false);
   const [error, setError] = useState("");
+  const [operationToast, setOperationToast] = useState(null);
   const [busy, setBusy] = useState(false);
   const text = useLocaleText("login");
 
   useEffect(() => {
     setUsername(loadLastUsername());
+    try {
+      if (window.sessionStorage.getItem(CREDENTIALS_CHANGED_NOTICE_KEY) === "credentials_changed") {
+        window.sessionStorage.removeItem(CREDENTIALS_CHANGED_NOTICE_KEY);
+        setOperationToast({
+          id: "credentials-changed",
+          title: text.credentialsChanged,
+          tone: "info",
+        });
+      }
+    } catch (_) {}
     fetch("/api/system/status")
       .then((response) => response.ok ? response.json() : null)
       .then((status) => {
@@ -108,6 +121,7 @@ export default function LoginPage() {
           {busy ? text.busy : text.submit}
         </button>
       </form>
+      <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
     </div>
   );
 }

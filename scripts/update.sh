@@ -43,6 +43,11 @@ SCHEMA_CANDIDATE_OVERRIDE=""
 SCHEMA_MIGRATION_REQUIRED=0
 SCHEMA_WRITERS_STOPPED=0
 SCHEMA_MUTATION_STARTED=0
+PRODUCT_SOURCE_DIR=""
+SLOT_AWARE_ACTIVATION=1
+SLOT_ACTIVATION_RESULT=""
+PREVIOUS_SLOT_ID=""
+TARGET_SLOT_ID=""
 
 usage() {
   cat <<'EOF'
@@ -167,10 +172,10 @@ write_update_metadata() {
       printf '  "error_message": null,\n'
     fi
     printf '  "rollback": {\n'
-    printf '    "implemented": false,\n'
-    printf '    "before_overlay": "no app source changes are made before the overlay phase",\n'
-    printf '    "after_overlay": "app source may be partially updated if failure occurs after copying files",\n'
-    printf '    "operator_guidance": "rerun the same update after fixing the failed phase or restore from an external backup if the app does not recover"\n'
+    printf '    "implemented": true,\n'
+    printf '    "before_activation": "the active source remains unchanged while the trusted target is prepared",\n'
+    printf '    "after_activation": "failed target health or identity restores the exact captured previous release",\n'
+    printf '    "operator_guidance": "review the bounded activation result before retrying"\n'
     printf '  }\n'
     printf '}\n'
   } > "$metadata"
@@ -211,12 +216,8 @@ fail() {
 }
 
 compose_with_archive_roots() {
-  archive_roots_compose="$APP_DIR/data/install-control/docker-compose.archive-roots.yml"
-  if [ -f "$archive_roots_compose" ]; then
-    compose_cmd --env-file "$APP_DIR/.env" -f "$APP_DIR/docker-compose.yml" -f "$archive_roots_compose" "$@"
-  else
-    compose_cmd --env-file "$APP_DIR/.env" "$@"
-  fi
+  source_dir="${PRODUCT_SOURCE_DIR:-$APP_DIR}"
+  km_vms_compose_for_source "$APP_DIR" "$source_dir" "$@"
 }
 
 archive_roots_compose_file() {
@@ -375,6 +376,22 @@ load_compose_common() {
   # shellcheck disable=SC1090
   . "$APP_DIR/scripts/km-vms-compose-common.sh"
   km_vms_detect_compose "$DOCKER_COMPOSE_BIN" || fail "Docker Compose was not found. Checked KM_VMS_DOCKER_COMPOSE, PATH docker compose/docker-compose, and known NAS vendor paths."
+  case "$COMPOSE_BIN" in
+    */*)
+      compose_bin_dir=$(dirname "$COMPOSE_BIN")
+      if [ -x "$compose_bin_dir/docker" ]; then
+        PATH="$compose_bin_dir:$PATH"
+        export PATH
+      fi
+      ;;
+  esac
+  if [ "$DRY_RUN" != "1" ]; then
+    command_exists docker ||
+      fail "Docker CLI was not found next to Docker Compose or in PATH."
+  fi
+  KM_VMS_DOCKER_COMPOSE="$COMPOSE_BIN"
+  KM_VMS_DOCKER_COMPOSE_KIND="$COMPOSE_KIND"
+  export KM_VMS_DOCKER_COMPOSE KM_VMS_DOCKER_COMPOSE_KIND
 }
 
 compose_cmd() {
@@ -582,6 +599,7 @@ validate_source_tree() {
   [ -f "$source/scripts/km-vms-compose-common.sh" ] || fail "Source tree is missing scripts/km-vms-compose-common.sh."
   [ -f "$source/scripts/km-vms-permission-gate.sh" ] || fail "Source tree is missing scripts/km-vms-permission-gate.sh."
   [ -f "$source/scripts/km-vms-update-helper-bridge.py" ] || fail "Source tree is missing scripts/km-vms-update-helper-bridge.py."
+  [ -f "$source/scripts/km-vms-release-slots.py" ] || fail "Source tree is missing scripts/km-vms-release-slots.py."
   [ -f "$source/docs/INSTALL.md" ] || fail "Source tree is missing docs/INSTALL.md."
   [ -f "$source/release/km-vms-release.json" ] || fail "Source tree is missing release/km-vms-release.json."
   [ -f "$source/release/km-vms-update-lineage.json" ] || fail "Source tree is missing release/km-vms-update-lineage.json."
@@ -676,7 +694,7 @@ copy_allowed_path() {
         cp "$TMP_ROOT/update.sh.preserved" "$APP_DIR/scripts/update.sh" || fail "Failed to restore preserved update.sh."
       fi
       ;;
-    docker-compose.yml|docker-compose.pytest.yml|.dockerignore|.gitignore|.env.example)
+    docker-compose.yml|docker-compose.pytest.yml|.dockerignore|.gitignore|.gitattributes|.env.example)
       cp "$source/$relative" "$APP_DIR/$relative" || fail "Failed to overlay $relative."
       ;;
     *)
@@ -694,7 +712,7 @@ overlay_source() {
   PHASE="overlay"
   write_helper_progress "running" "Applying product source overlay."
   OVERLAY_STARTED=1
-  for relative in apps deploy docs release scripts docker-compose.yml docker-compose.pytest.yml .dockerignore .gitignore .env.example; do
+  for relative in apps deploy docs release scripts docker-compose.yml docker-compose.pytest.yml .dockerignore .gitignore .gitattributes .env.example; do
     copy_allowed_path "$relative"
   done
 }
@@ -788,41 +806,142 @@ preflight_target_permission_policy() {
 }
 
 prepare_schema_handoff() {
-  [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] || return 0
   PHASE="schema_preflight"
   request_id="${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}"
   printf '%s' "$request_id" |
     grep -Eq '^(update|stage609)-[0-9a-fA-F]{32}$' ||
     fail "A canonical request id is required for schema handoff."
+  handoff_output="$TMP_ROOT/slot-handoff.out"
+  if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then
+    python3 "$TMP_ROOT/source/scripts/km-vms-update-helper-bridge.py" \
+      handoff \
+      --app-dir "$APP_DIR" \
+      --target-source-dir "$TMP_ROOT/source" \
+      --request-id "$request_id" \
+      --project-name "$PROJECT_NAME" >"$handoff_output" ||
+      fail "Cannot prepare the pre-overlay schema handoff."
+  else
+    version=$(staged_release_descriptor_value version)
+    [ -n "$version" ] || fail "Trusted target version is unavailable."
+    python3 "$TMP_ROOT/source/scripts/km-vms-update-helper-bridge.py" \
+      handoff \
+      --app-dir "$APP_DIR" \
+      --target-source-dir "$TMP_ROOT/source" \
+      --request-id "$request_id" \
+      --project-name "$PROJECT_NAME" \
+      --terminal \
+      --trusted-commit "$SOURCE_COMMIT_SHA" \
+      --declared-version "$version" >"$handoff_output" ||
+      fail "Cannot prepare the terminal release-slot handoff."
+  fi
+  PREVIOUS_SLOT_ID=$(
+    sed -n 's/^previous_slot=//p' "$handoff_output" | tail -n 1
+  )
+  printf '%s' "$PREVIOUS_SLOT_ID" |
+    grep -Eq '^(release-[0-9a-f]{40}|adopted-[0-9a-f]{64})$' ||
+    fail "Schema handoff returned no exact previous release slot."
+}
+
+prepare_trusted_target_slot() {
+  PHASE="schema_preflight"
+  write_helper_progress "staging" "Preparing the trusted target release outside the active source."
+  request_id="${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}"
+  version=$(staged_release_descriptor_value version)
+  [ -n "$version" ] || fail "Trusted target version is unavailable."
+  target_output="$TMP_ROOT/slot-target.out"
   python3 "$TMP_ROOT/source/scripts/km-vms-update-helper-bridge.py" \
-    handoff \
+    prepare-target \
     --app-dir "$APP_DIR" \
     --target-source-dir "$TMP_ROOT/source" \
-    --request-id "$request_id" >/dev/null ||
-    fail "Cannot prepare the pre-overlay schema handoff."
+    --request-id "$request_id" \
+    --trusted-commit "$SOURCE_COMMIT_SHA" \
+    --declared-version "$version" \
+    --project-name "$PROJECT_NAME" >"$target_output" ||
+    fail "Trusted target release could not be prepared before activation."
+  TARGET_SLOT_ID=$(
+    sed -n 's/^target_slot=//p' "$target_output" | tail -n 1
+  )
+  [ "$TARGET_SLOT_ID" = "release-$SOURCE_COMMIT_SHA" ] ||
+    fail "Prepared target slot does not match the trusted commit."
+}
+
+activate_trusted_target_slot() {
+  PHASE="activation"
+  write_helper_progress "activating" "Activating the prepared target release."
+  request_id="${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}"
+  version=$(staged_release_descriptor_value version)
+  activation_output="$TMP_ROOT/slot-activation.out"
+  if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then
+    python3 "$TMP_ROOT/source/scripts/km-vms-update-helper-bridge.py" \
+      activate-target \
+      --app-dir "$APP_DIR" \
+      --project-name "$PROJECT_NAME" \
+      --request-id "$request_id" \
+      --previous-slot "$PREVIOUS_SLOT_ID" \
+      --target-slot "$TARGET_SLOT_ID" \
+      --target-commit "$SOURCE_COMMIT_SHA" \
+      --target-version "$version" >"$activation_output" ||
+      fail "Release-slot activation could not converge safely."
+  else
+    python3 "$TMP_ROOT/source/scripts/km-vms-update-helper-bridge.py" \
+      activate-target \
+      --app-dir "$APP_DIR" \
+      --project-name "$PROJECT_NAME" \
+      --request-id "$request_id" \
+      --previous-slot "$PREVIOUS_SLOT_ID" \
+      --target-slot "$TARGET_SLOT_ID" \
+      --target-commit "$SOURCE_COMMIT_SHA" \
+      --target-version "$version" \
+      --terminal >"$activation_output" ||
+      fail "Terminal release-slot activation could not converge safely."
+  fi
+  SLOT_ACTIVATION_RESULT=$(
+    python3 -c \
+      'import json,sys; print(json.loads(sys.stdin.read().splitlines()[-1])["activation"])' \
+      <"$activation_output" 2>/dev/null || true
+  )
+  case "$SLOT_ACTIVATION_RESULT" in
+    completed)
+      SLOT_AWARE_ACTIVATION=1
+      ;;
+    failed_rolled_back)
+      SLOT_AWARE_ACTIVATION=1
+      fail "Target activation failed and the exact previous release was restored."
+      ;;
+    blocked)
+      SLOT_AWARE_ACTIVATION=1
+      fail "Target activation stopped because safe convergence could not be proven."
+      ;;
+    *)
+      fail "Release-slot activation returned invalid terminal evidence."
+      ;;
+  esac
+}
+
+ensure_activation_request_id() {
+  request_id="${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}"
+  if printf '%s' "$request_id" |
+    grep -Eq '^(update|stage609)-[0-9a-fA-F]{32}$'; then
+    return 0
+  fi
+  [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" != "1" ] ||
+    fail "The update helper did not provide a canonical request id."
+  request_id=$(
+    python3 -c 'import uuid; print("update-" + uuid.uuid4().hex)'
+  ) || fail "Cannot create a terminal update request id."
+  printf '%s' "$request_id" |
+    grep -Eq '^update-[0-9a-f]{32}$' ||
+    fail "Cannot create a canonical terminal update request id."
+  KM_VMS_UPDATE_CONTROL_REQUEST_ID="$request_id"
+  export KM_VMS_UPDATE_CONTROL_REQUEST_ID
 }
 
 staged_compose_with_archive_roots() {
-  staged_compose="$TMP_ROOT/source/docker-compose.yml"
-  archive_override="$(archive_roots_compose_file)"
   if [ -n "$PROJECT_NAME" ]; then
-    if [ -f "$archive_override" ]; then
-      compose_cmd --env-file "$APP_DIR/.env" \
-        -p "$PROJECT_NAME" \
-        -f "$staged_compose" \
-        -f "$archive_override" "$@"
-    else
-      compose_cmd --env-file "$APP_DIR/.env" \
-        -p "$PROJECT_NAME" \
-        -f "$staged_compose" "$@"
-    fi
-  elif [ -f "$archive_override" ]; then
-    compose_cmd --env-file "$APP_DIR/.env" \
-      -f "$staged_compose" \
-      -f "$archive_override" "$@"
+    km_vms_compose_for_source "$APP_DIR" "$TMP_ROOT/source" \
+      -p "$PROJECT_NAME" "$@"
   else
-    compose_cmd --env-file "$APP_DIR/.env" \
-      -f "$staged_compose" "$@"
+    km_vms_compose_for_source "$APP_DIR" "$TMP_ROOT/source" "$@"
   fi
 }
 
@@ -976,29 +1095,12 @@ prepare_schema_candidate_image() {
 }
 
 schema_candidate_compose() {
-  staged_compose="$TMP_ROOT/source/docker-compose.yml"
-  archive_override="$(archive_roots_compose_file)"
   if [ -n "$PROJECT_NAME" ]; then
-    if [ -f "$archive_override" ]; then
-      compose_cmd --env-file "$APP_DIR/.env" \
-        -p "$PROJECT_NAME" \
-        -f "$staged_compose" \
-        -f "$SCHEMA_CANDIDATE_OVERRIDE" \
-        -f "$archive_override" "$@"
-    else
-      compose_cmd --env-file "$APP_DIR/.env" \
-        -p "$PROJECT_NAME" \
-        -f "$staged_compose" \
-        -f "$SCHEMA_CANDIDATE_OVERRIDE" "$@"
-    fi
-  elif [ -f "$archive_override" ]; then
-    compose_cmd --env-file "$APP_DIR/.env" \
-      -f "$staged_compose" \
-      -f "$SCHEMA_CANDIDATE_OVERRIDE" \
-      -f "$archive_override" "$@"
+    km_vms_compose_for_source "$APP_DIR" "$TMP_ROOT/source" \
+      -p "$PROJECT_NAME" \
+      -f "$SCHEMA_CANDIDATE_OVERRIDE" "$@"
   else
-    compose_cmd --env-file "$APP_DIR/.env" \
-      -f "$staged_compose" \
+    km_vms_compose_for_source "$APP_DIR" "$TMP_ROOT/source" \
       -f "$SCHEMA_CANDIDATE_OVERRIDE" "$@"
   fi
 }
@@ -1386,9 +1488,10 @@ print_plan() {
     info "GitHub token mode: public/no token"
   fi
   info "Compose: ${COMPOSE_KIND:-unknown} via ${COMPOSE_BIN:-unknown}"
-  info "Would update: apps deploy docs release scripts docker-compose.yml docker-compose.pytest.yml .dockerignore .gitignore .env.example"
+  info "Would prepare: one immutable trusted target release outside the active source"
   info "Would preserve: $PRESERVED_PATHS"
-  info "Rollback: not implemented in Stage 6.0.7; failures after overlay may leave source partially updated."
+  info "Activation: one atomic active-slot switch after target build and schema gate"
+  info "Rollback: exact captured previous runtime on target health or identity failure"
 }
 
 PHASE="init"
@@ -1400,6 +1503,7 @@ if [ "$DRY_RUN" != "1" ]; then
   acquire_lock
 fi
 load_compose_common
+PRODUCT_SOURCE_DIR=$(km_vms_resolve_product_source "$APP_DIR")
 acquire_source
 validate_source_tree
 preflight_preservation
@@ -1412,36 +1516,27 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 confirm "Apply KM VMS update now?"
+ensure_activation_request_id
 preflight_permission_policy
 preflight_target_permission_policy
 prepare_schema_handoff
 normalize_legacy_schema_override_service
 staged_compose_config
-prepare_schema_candidate_image
-run_schema_preflight
-stop_schema_writers
-run_schema_migration
-overlay_source
-apply_permission_policy
-write_release_identity "precompose"
-compose_config
-prepare_update_helper_image
-rebuild_recreate
-health_check
-if apply_generated_archive_roots_compose_if_needed "$ARCHIVE_ROOTS_COMPOSE_WAS_PRESENT"; then
-  health_check
-fi
-write_source_provenance
-write_release_identity
-verify_api_visible_release_identity
+prepare_trusted_target_slot
+activate_trusted_target_slot
+PRODUCT_SOURCE_DIR=$(km_vms_resolve_product_source "$APP_DIR")
+UPDATED_PATHS="data/update-runtime/slots/$TARGET_SLOT_ID data/update-runtime/active"
+RELEASE_IDENTITY_HOST_STATUS="complete"
+RELEASE_IDENTITY_API_STATUS="complete"
+RELEASE_IDENTITY_API_VISIBLE=1
+RELEASE_IDENTITY_COMMIT_VERIFIED=1
 postflight_preservation
-schedule_update_helper_recreate
 PHASE="metadata_write"
 write_helper_progress "running" "Writing successful update metadata."
 write_update_metadata "success" ""
 PHASE="cleanup"
 write_helper_progress "completed" "Update completed."
-info "KM VMS update completed."
-info "Updated paths: $UPDATED_PATHS"
+info "KM VMS staged activation completed."
+info "Active target slot: $TARGET_SLOT_ID"
 info "Preserved paths: $PRESERVED_PATHS"
 info "Update metadata: $APP_DIR/.km-vms-update.json"

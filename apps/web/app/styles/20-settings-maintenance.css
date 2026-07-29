@@ -268,60 +268,6 @@
   max-width: var(--settings-control-width);
 }
 
-.settingsToast {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 9500;
-  width: auto;
-  max-width: min(320px, calc(100vw - 32px));
-  border: 1px solid #bfdbfe;
-  border-radius: 12px;
-  background: #eff6ff;
-  color: #1e3a8a;
-  padding: 10px 12px;
-  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.14);
-  font-size: 13px;
-  line-height: 1.35;
-  text-align: center;
-  display: grid;
-  gap: 2px;
-}
-
-.settingsToast strong {
-  font-size: 13px;
-}
-
-.settingsToast span {
-  font-size: 12px;
-  color: inherit;
-}
-
-.settingsToast.error {
-  border-color: #fecaca;
-  background: #fef2f2;
-  color: #991b1b;
-}
-
-.settingsToast.success {
-  border-color: #bbf7d0;
-  background: #f0fdf4;
-  color: #14532d;
-}
-
-.settingsToast.warning {
-  border-color: #fde68a;
-  background: #fffbeb;
-  color: #92400e;
-}
-
-.settingsToast.info {
-  border-color: #bfdbfe;
-  background: #eff6ff;
-  color: #1e3a8a;
-}
-
 .settingsHardwareOptions {
   position: relative;
   display: grid;
@@ -757,68 +703,8 @@
   background: rgba(15, 23, 42, 0.38);
 }
 
-.settingsConfirmOverlay {
-  z-index: 8600;
-}
-
 .operationFeedbackOverlay.settingsUpdateApplyDialogOverlay {
   z-index: 9600;
-}
-
-.settingsConfirmModal {
-  width: min(420px, calc(100vw - 32px));
-  border: 1px solid #dbe3ef;
-  border-radius: 18px;
-  background: #ffffff;
-  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
-  padding: 22px 24px 20px;
-  position: relative;
-  text-align: center;
-}
-
-.settingsConfirmModal p {
-  margin: 8px 0 22px;
-  color: #475569;
-  line-height: 1.45;
-  font-size: 18px;
-  font-weight: 800;
-  overflow-wrap: anywhere;
-}
-
-.settingsConfirmModal p span,
-.settingsConfirmModal p strong {
-  display: block;
-}
-
-.settingsConfirmModal p strong {
-  margin-top: 4px;
-  color: #0f172a;
-}
-
-.settingsConfirmClose {
-  position: absolute;
-  right: 14px;
-  top: 14px;
-}
-
-.settingsConfirmModal .settingsModalActions {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr auto 1fr;
-  gap: 0;
-  align-items: center;
-}
-
-.settingsConfirmModal .settingsModalActions .button {
-  min-width: 104px;
-  justify-content: center;
-}
-
-.settingsConfirmModal .settingsModalActions .button:first-child {
-  grid-column: 2;
-}
-
-.settingsConfirmModal .settingsModalActions .button:last-child {
-  grid-column: 4;
 }
 
 .dangerButton {

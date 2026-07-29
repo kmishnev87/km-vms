@@ -23,7 +23,7 @@ assert.match(recordingsPage, /recordingIdentityQuery\(item\).*operation_id=/s);
 assert.match(recordingsPage, /result\?\.ok === true && result\?\.status === "completed"/);
 assert.match(recordingsPage, /result\?\.skipped_reason_counts|skipped_reason_counts/);
 assert.match(recordingsPage, /<OperationDialog dialog=\{deleteDialog\}/);
-assert.match(recordingsPage, /<OperationToast toast=\{deleteToast\}/);
+assert.match(recordingsPage, /<OperationToast toast=\{operationToast\}/);
 
 for (const contract of [
   /role="dialog"/,
@@ -46,7 +46,8 @@ assert.doesNotMatch(storagePage, /showArchiveRootActivation|setArchiveRootMessag
 assert.match(storagePage, /ACTIVATION_ACK_KEY/);
 assert.match(storagePage, /activationOperationId/);
 assert.match(storagePage, /window\.sessionStorage\.setItem\(ACTIVATION_ACK_KEY/);
-assert.match(storagePage, /window\.setTimeout\([\s\S]*?setArchiveRootDialog\(null\)/);
+assert.match(storagePage, /setOperationToast\(\{[\s\S]*?id:\s*`activation-completed-\$\{operationId\}`/);
+assert.doesNotMatch(storagePage, /const operationId = archiveRootDialog\?\.activationOperationId/);
 assert.match(storagePage, /<OperationDialog dialog=\{archiveRootDialog\}/);
 assert.match(storagePage, /<OperationToast toast=\{operationToast\}/);
 assert.match(storagePage, /rootAddedTitle/);

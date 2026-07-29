@@ -33,8 +33,25 @@ from app.services.schema_update_control import (
 
 MUTATION_STATE_PATH = CONTROL_ROOT / "schema-mutation-state.json"
 
+PREVIOUS_RUNTIME_COMPATIBLE_MIGRATION_IDS = frozenset(
+    {
+        "stage13_5_4_10_1_storage_operations_foundation_v2",
+        "stage13_5_4_10_1_1_operation_lineage_v3",
+        "stage13_5_4_10_2_retention_disk_protection_v4",
+        "stage13_5_4_10_3_archive_integrity_v5",
+        "stage13_5_4_10_4_archive_migration_v6",
+        "stage13_5_4_10_5_2_2_integrity_item_state_width_v7",
+        "stage660128_remediation_safe_schema_v6_to_v7",
+        "stage660128_universal_skipped_release_schema_v8",
+    }
+)
+
 
 def _migration_summary(pending: list[Any]) -> dict[str, Any]:
+    migration_ids = [migration.migration_id for migration in pending]
+    incompatible = sorted(
+        set(migration_ids) - PREVIOUS_RUNTIME_COMPATIBLE_MIGRATION_IDS
+    )
     return {
         "source_schema_version": (
             pending[0].from_version
@@ -44,7 +61,15 @@ def _migration_summary(pending: list[Any]) -> dict[str, Any]:
         "target_schema_version": TARGET_SCHEMA_VERSION,
         "migration_required": bool(pending),
         "migration_count": len(pending),
-        "migration_ids": [migration.migration_id for migration in pending],
+        "migration_ids": migration_ids,
+        "previous_runtime_compatibility": {
+            "status": "compatible" if not incompatible else "blocked",
+            "evidence_model": "explicit_migration_allowlist_v1",
+            "compatible_migration_ids": sorted(
+                set(migration_ids) - set(incompatible)
+            ),
+            "unsupported_migration_ids": incompatible,
+        },
     }
 
 
@@ -151,6 +176,15 @@ def run_update_preflight() -> None:
     print(
         "schema_target_version="
         + str(summary["target_schema_version"])
+    )
+    print(
+        "schema_previous_runtime_compatible="
+        + (
+            "true"
+            if summary["previous_runtime_compatibility"]["status"]
+            == "compatible"
+            else "false"
+        )
     )
     print(
         "schema_preflight="

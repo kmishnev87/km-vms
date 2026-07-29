@@ -328,6 +328,43 @@ def test_pre_overlay_handoff_uses_staged_target_descriptor(
     assert request["request_id"] == request_id
 
 
+def test_terminal_handoff_writes_bounded_schema_request_without_api_admission(
+    tmp_path: Path,
+) -> None:
+    request_id = "update-" + ("d" * 32)
+    _fixture(tmp_path, request_id)
+    (tmp_path / "data/update-control/update-request.json").unlink()
+    terminal_request = {
+        "schema_version": 1,
+        "request_id": request_id,
+        "requested_at": "2026-07-28T00:00:00Z",
+        "intent": "apply_update",
+        "confirmed": True,
+        "source": {
+            "version": "0.7.25",
+            "commit": TARGET_COMMIT,
+        },
+    }
+
+    identity = bridge.capture_installed_source_identity(
+        tmp_path,
+        request_id=request_id,
+        request_override=terminal_request,
+    )
+
+    written = json.loads(
+        (
+            tmp_path
+            / "data/update-control/schema-update-request.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert identity["installed_version"] == "0.7.18"
+    assert written == terminal_request
+    assert not (
+        tmp_path / "data/update-control/update-request.json"
+    ).exists()
+
+
 def test_bridge_prefers_candidate_lineage_over_stale_installed_cwd(
     tmp_path: Path,
 ) -> None:
@@ -460,3 +497,120 @@ def test_archive_override_moves_recovery_mount_to_single_schema_runner(
     assert "  schema-update:" in normalized
     assert "  operation-recovery:" not in normalized
     assert bridge.normalize_archive_roots_override(tmp_path) is False
+
+
+def test_slot_compose_uses_stable_env_exact_source_and_both_overrides(
+    tmp_path: Path,
+) -> None:
+    app = tmp_path / "app"
+    # Use a normal bounded source path; the exact slot ID is validated by the
+    # slot owner, while compose_base only assembles already-resolved paths.
+    source = (
+        app
+        / "data/update-runtime/slots"
+        / ("release-" + ("a" * 40))
+        / "source"
+    )
+    source.mkdir(parents=True)
+    (app / ".env").write_text("COMPOSE_PROJECT_NAME=fixture\n", encoding="utf-8")
+    (source / "docker-compose.yml").write_text(
+        "services: {}\n",
+        encoding="utf-8",
+    )
+    runtime_override = source.parent / "docker-compose.runtime-override.yml"
+    runtime_override.write_text("services: {}\n", encoding="utf-8")
+    archive_override = (
+        app / "data/install-control/docker-compose.archive-roots.yml"
+    )
+    archive_override.parent.mkdir(parents=True)
+    archive_override.write_text("services: {}\n", encoding="utf-8")
+
+    command = bridge.compose_base(
+        app,
+        "fixture",
+        source_dir=source,
+    )
+
+    assert command[:4] == [
+        "docker",
+        "compose",
+        "--env-file",
+        str(app / ".env"),
+    ]
+    assert command[command.index("--project-directory") + 1] == str(source)
+    assert command.index(str(runtime_override)) < command.index(
+        str(archive_override)
+    )
+
+
+def test_slot_image_alias_is_exact_and_conflict_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slot_id = "adopted-" + ("b" * 64)
+    image_id = "sha256:" + ("c" * 64)
+    immutable_ref = f"km-vms-fixture-slot-api:{slot_id}"
+    aliases: dict[str, str] = {}
+
+    def fake_run(args, **kwargs):
+        command = list(args)
+        if command[:3] == ["docker", "image", "inspect"]:
+            ref = command[-1]
+            if ref in aliases:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout=aliases[ref] + "\n",
+                    stderr="",
+                )
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="",
+                stderr="missing",
+            )
+        if command[:3] == ["docker", "image", "tag"]:
+            aliases[command[-1]] = command[-2]
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="",
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    monkeypatch.setattr(bridge, "run_command", fake_run)
+    evidence = bridge.preserve_slot_images(
+        {
+            "schema_version": 1,
+            "services": {
+                "api": {
+                    "image_id": image_id,
+                    "source_image_ref": "fixture-api:latest",
+                }
+            },
+        },
+        project_name="fixture",
+        slot_id=slot_id,
+    )
+    assert aliases[immutable_ref] == image_id
+    assert (
+        evidence["services"]["api"]["immutable_image_ref"]
+        == immutable_ref
+    )
+
+    aliases[immutable_ref] = "sha256:" + ("d" * 64)
+    with pytest.raises(bridge.BridgeError) as captured:
+        bridge.preserve_slot_images(
+            {
+                "schema_version": 1,
+                "services": {
+                    "api": {
+                        "image_id": image_id,
+                        "source_image_ref": "fixture-api:latest",
+                    }
+                },
+            },
+            project_name="fixture",
+            slot_id=slot_id,
+        )
+    assert captured.value.code == "slot_image_alias_conflict"

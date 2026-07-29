@@ -8,11 +8,13 @@ const pageSource = fs.readFileSync(resolve(__dirname, "../app/settings/page.js")
 const cssSource = fs.readFileSync(resolve(__dirname, "../app/styles/20-settings-maintenance.css"), "utf8");
 const operationFeedbackSource = fs.readFileSync(resolve(__dirname, "../components/OperationFeedback.js"), "utf8");
 
-const dialogStart = pageSource.indexOf("<OperationDialog");
+const updateDialogMarker = pageSource.indexOf('id: "update-apply-confirm"');
+const dialogStart = pageSource.lastIndexOf("<OperationDialog", updateDialogMarker);
 const dialogEnd = pageSource.indexOf("/>", dialogStart) + 2;
-assert.ok(dialogStart >= 0 && dialogEnd > dialogStart);
+assert.ok(updateDialogMarker >= 0 && dialogStart >= 0 && dialogEnd > dialogStart);
 const dialogSource = pageSource.slice(dialogStart, dialogEnd);
 
+assert.equal(dialogSource.includes('presentation: "compact-confirmation"'), true);
 assert.equal(dialogSource.includes('overlayClassName: "settingsUpdateApplyDialogOverlay"'), true);
 assert.equal(dialogSource.includes("updateApplyModalTitle"), true);
 assert.equal(dialogSource.includes("updateApplyConfirm"), true);

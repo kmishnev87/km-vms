@@ -84,7 +84,7 @@ for (const dynamicSelector of [
   "recordingsSortButton.active",
   "storageOpsBadge.ok",
   "systemStatusIncident.severity-error",
-  "settingsToast.success",
+  "operationFeedbackToast-success",
 ]) {
   const className = dynamicSelector.split(".").join(" ");
   assert.equal(

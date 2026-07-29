@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.2",
-  "tag": "v0.8.2",
-  "title": "KM VMS 0.8.2 — Candidate Lineage Handoff Fix",
-  "summary": "Uses the downloaded target release lineage during legacy bridge preflight, preventing a valid skipped-release update from being rejected by the older installed lineage.",
+  "version": "0.8.3",
+  "tag": "v0.8.3",
+  "title": "KM VMS 0.8.3 — Unified UI Feedback and Atomic Update Rollback Safety",
+  "summary": "Unifies compact confirmations and transient feedback across the UI, and adds atomic staged release activation with restart-safe convergence, exact automatic rollback and bounded cleanup.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.2",
+  "source_ref": "v0.8.3",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,10 +16,15 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Resolves the bridge lineage from the downloaded target source before falling back to the installed working directory.",
-    "Prevents stale installed lineage from falsely rejecting a valid source version already supported by the target release.",
-    "Preserves the existing fallback for environments where the bridge has no adjacent candidate lineage file.",
-    "Adds a subprocess regression test with deliberately stale installed lineage and current candidate lineage.",
-    "Does not change database schema, stored data, service topology, permissions or the planned Stage 6.6.1 rollback architecture."
+    "Unifies compact application confirmations across affected operator actions without duplicating technical detail.",
+    "Standardizes transient operation feedback to one centered presentation, severity style and 2.5-second timeout.",
+    "Prepares the exact trusted target source and immutable images outside the active runtime before activation.",
+    "Activates a release through one atomic slot pointer and verifies target health and release identity.",
+    "Automatically restores the exact previous runtime when target health or identity verification fails.",
+    "Converges restart or interruption from one durable activation journal without replaying completed schema mutation.",
+    "Recovers safely from pointer-switch exceptions before or after the actual atomic replacement.",
+    "Cleans only old unprotected product slots, release image references and exact terminal-request staging.",
+    "Runs setup-helper and nested storage or restart scripts from the selected active release with stable-root bootstrap fallback.",
+    "Preserves shared .env, PostgreSQL, Redis, recordings, data and archive-root mounts outside release slots."
   ]
 }

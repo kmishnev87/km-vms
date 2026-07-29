@@ -3239,6 +3239,10 @@
   background: rgba(15, 23, 42, 0.42);
 }
 
+.operationFeedbackOverlay-compactConfirmation {
+  z-index: 9000;
+}
+
 .operationFeedbackDialog {
   width: min(560px, 100%);
   max-height: min(760px, calc(100vh - 40px));
@@ -3250,8 +3254,17 @@
   box-shadow: 0 22px 64px rgba(15, 23, 42, 0.24);
 }
 
+.operationFeedbackDialog-compactConfirmation {
+  width: min(440px, 100%);
+  max-height: min(640px, calc(100vh - 40px));
+}
+
 .operationFeedbackDialog-success {
   border-top-color: #16a34a;
+}
+
+.operationFeedbackDialog-info {
+  border-top-color: #2563eb;
 }
 
 .operationFeedbackDialog-error {
@@ -3278,8 +3291,7 @@
   line-height: 1.3;
 }
 
-.operationFeedbackClose,
-.operationFeedbackToast button {
+.operationFeedbackClose {
   display: inline-grid;
   place-items: center;
   width: 32px;
@@ -3399,26 +3411,24 @@
 
 .operationFeedbackToastRegion {
   position: fixed;
-  z-index: 1400;
-  top: 22px;
+  z-index: 10000;
+  top: 50%;
   left: 50%;
   width: min(520px, calc(100vw - 28px));
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   pointer-events: none;
 }
 
 .operationFeedbackToast {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  display: grid;
+  gap: 2px;
   padding: 12px 14px;
-  border: 1px solid #86efac;
+  border: 1px solid #93c5fd;
   border-radius: 8px;
-  background: #f0fdf4;
-  color: #166534;
+  background: #eff6ff;
+  color: #1e3a8a;
   box-shadow: 0 14px 38px rgba(15, 23, 42, 0.18);
-  pointer-events: auto;
+  text-align: center;
 }
 
 .operationFeedbackToast > div {
@@ -3430,10 +3440,28 @@
   font-size: 12px;
 }
 
-.operationFeedbackToast button {
-  flex: 0 0 auto;
-  background: transparent;
-  color: inherit;
+.operationFeedbackToast-success {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.operationFeedbackToast-error {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.operationFeedbackToast-warning {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.operationFeedbackToast-info {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1e3a8a;
 }
 
 /* Stage 13.5 / 4.10.4 durable archive-migration flow. */

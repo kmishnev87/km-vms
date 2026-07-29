@@ -43,7 +43,13 @@ AUDIT_TARGET_TYPE = "update_apply"
 
 ACTIVE_REQUEST_STATES = {"admitted", "claimed"}
 REQUEST_STATES = ACTIVE_REQUEST_STATES | {"terminal"}
-TERMINAL_STATUSES = {"completed", "failed", "cancelled", "blocked"}
+TERMINAL_STATUSES = {
+    "completed",
+    "failed",
+    "failed_rolled_back",
+    "cancelled",
+    "blocked",
+}
 RUNNING_STATUSES = {
     "queued",
     "starting_helper",
@@ -59,6 +65,11 @@ RUNNING_STATUSES = {
     "restarting",
     "health_check",
     "commit_verification",
+    "preparing",
+    "staging",
+    "activating",
+    "reconnecting",
+    "rolling_back",
 }
 FORBIDDEN_REQUEST_FIELDS = {
     "url",
@@ -86,6 +97,9 @@ VERSION_TEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GIT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,119}$")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+SLOT_ID_RE = re.compile(
+    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64})$"
+)
 REQUEST_ID_RE = re.compile(r"^update-[0-9a-f]{32}$", re.IGNORECASE)
 LEGACY_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,79}$")
 SUBMISSION_ID_RE = re.compile(
@@ -200,6 +214,10 @@ def _status_path() -> Path:
     return _control_root() / "update-status.json"
 
 
+def _activation_journal_path() -> Path:
+    return _control_root() / "activation-journal.json"
+
+
 def _apply_history_path() -> Path:
     return _control_root() / "update-apply-history.json"
 
@@ -292,6 +310,15 @@ def _public_error_for_category(category: str) -> dict[str, str]:
         "apply_timeout": "Update execution exceeded the bounded timeout.",
         "apply_failed": "Update apply failed.",
         "helper_exception": "Unexpected update helper failure.",
+        "schema_previous_runtime_incompatible": "The planned database change is not compatible with automatic rollback.",
+        "schema_migration_interrupted": "Database migration completion could not be proven after restart.",
+        "target_health_failed": "The target release failed its runtime health check.",
+        "target_identity_mismatch": "The running target did not match the trusted release.",
+        "helper_handoff_failed": "The target update helper could not be handed off safely.",
+        "rollback_verification_failed": "The previous release could not be verified after rollback.",
+        "previous_recovery_failed": "The previous release could not be restored after a pre-activation failure.",
+        "activation_pointer_conflict": "Release activation state is contradictory.",
+        "activation_journal_invalid": "Release activation state is unavailable or invalid.",
     }
     actions = {
         "cancelled_before_start": "No update was applied.",
@@ -307,6 +334,12 @@ def _public_error_for_category(category: str) -> dict[str, str]:
         "commit_missing": "Verify installed release identity before retrying.",
         "metadata_invalid": "Repair installed release identity before retrying.",
         "apply_timeout": "Refresh status before deciding whether to retry.",
+        "target_health_failed": "The previous release was restored. Review target health before retrying.",
+        "target_identity_mismatch": "The previous release was restored. Verify the trusted target before retrying.",
+        "helper_handoff_failed": "The previous release was restored. Review helper status before retrying.",
+        "rollback_verification_failed": "Do not retry until the current runtime is verified manually.",
+        "previous_recovery_failed": "Do not retry until the current runtime is verified manually.",
+        "schema_previous_runtime_incompatible": "Use a release with an explicitly compatible migration path.",
     }
     return {
         "category": category,
@@ -315,6 +348,26 @@ def _public_error_for_category(category: str) -> dict[str, str]:
             category,
             "Review update status and retry only after the cause is resolved.",
         ),
+    }
+
+
+def _safe_rollback(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    status = _safe_machine_code(value.get("status"), max_length=40)
+    trigger = _safe_machine_code(value.get("trigger"), max_length=80)
+    restored_version = _safe_string(
+        value.get("restored_version"),
+        max_length=80,
+    )
+    if status not in {"not_needed", "not_started", "completed", "failed"}:
+        return None
+    if restored_version and not VERSION_TEXT_RE.fullmatch(restored_version):
+        restored_version = None
+    return {
+        "status": status,
+        "trigger": trigger,
+        "restored_version": restored_version,
     }
 
 
@@ -816,7 +869,8 @@ def _base_status(
         "apply_candidate": None,
         "steps": [],
         "can_cancel": status_value == "queued",
-        "rollback_supported": False,
+        "rollback_supported": True,
+        "rollback": None,
         "side_effects": {
             "api_docker_socket": False,
             "api_shell_execution": False,
@@ -859,6 +913,11 @@ def _macro_steps(current: str, *, failed: bool = False) -> list[dict[str, str]]:
         "compose_config": "applying",
         "rebuilding": "applying",
         "restarting": "applying",
+        "preparing": "applying",
+        "staging": "applying",
+        "activating": "applying",
+        "reconnecting": "health_check",
+        "rolling_back": "health_check",
         "completed": "commit_verification",
     }
     active = aliases.get(current, current)
@@ -1113,6 +1172,7 @@ def _sanitize_status_payload() -> tuple[dict[str, Any], str]:
                 else None
             ),
             "commit_verified": payload.get("commit_verified") is True,
+            "rollback": _safe_rollback(payload.get("rollback")),
             "apply_history": history,
             "last_apply_summary": history["last"],
         }
@@ -1224,10 +1284,198 @@ def _mark_terminal_unlocked(
     return _write_current_request(updated)
 
 
+def _activation_projection(
+    request: dict[str, Any],
+) -> dict[str, Any] | None:
+    payload, state = _read_json(_activation_journal_path())
+    if state != "valid" or not payload:
+        return None
+    previous = payload.get("previous")
+    target = payload.get("target")
+    request_id = _safe_string(payload.get("request_id"), max_length=80)
+    phase = _safe_machine_code(payload.get("phase"), max_length=80)
+    failure = _safe_machine_code(
+        payload.get("failure_category"),
+        max_length=80,
+    )
+    trigger = _safe_machine_code(
+        payload.get("rollback_trigger"),
+        max_length=80,
+    )
+    pointer_slot_id = _safe_string(
+        payload.get("pointer_slot_id"),
+        max_length=80,
+    )
+    target_verified = payload.get("target_verified")
+    previous_verified = payload.get("previous_verified")
+    if (
+        payload.get("schema_version") != 1
+        or payload.get("document_type") != "release_slot_activation"
+        or request_id != request["request_id"]
+        or phase
+        not in {
+            "target_prepared",
+            "quiescing",
+            "schema_preparing",
+            "activating",
+            "verifying_target",
+            "committing_target",
+            "rolling_back",
+            "completed",
+            "failed_rolled_back",
+            "blocked",
+        }
+        or not isinstance(previous, dict)
+        or not isinstance(target, dict)
+        or not SLOT_ID_RE.fullmatch(
+            str(previous.get("slot_id") or "")
+        )
+        or not SLOT_ID_RE.fullmatch(str(target.get("slot_id") or ""))
+        or str(target.get("commit") or "").lower()
+        != request["source"]["commit"]
+        or str(target.get("version") or "")
+        != request["source"]["version"]
+        or pointer_slot_id
+        not in {
+            None,
+            str(previous.get("slot_id") or ""),
+            str(target.get("slot_id") or ""),
+        }
+        or not isinstance(target_verified, bool)
+        or not isinstance(previous_verified, bool)
+    ):
+        return None
+    if phase == "completed" and (
+        pointer_slot_id != target["slot_id"]
+        or target_verified is not True
+        or failure is not None
+        or trigger is not None
+    ):
+        return None
+    if phase == "failed_rolled_back" and (
+        pointer_slot_id != previous["slot_id"]
+        or previous_verified is not True
+        or failure is None
+        or trigger is None
+    ):
+        return None
+    if phase == "blocked" and failure is None:
+        return None
+    previous_version = _safe_string(
+        previous.get("version"),
+        max_length=80,
+    )
+    if previous_version and not VERSION_TEXT_RE.fullmatch(previous_version):
+        previous_version = None
+    status_by_phase = {
+        "target_prepared": "preparing",
+        "quiescing": "preparing",
+        "schema_preparing": "preparing",
+        "activating": "activating",
+        "verifying_target": "reconnecting",
+        "committing_target": "applying",
+        "rolling_back": "rolling_back",
+        "completed": "completed",
+        "failed_rolled_back": "failed_rolled_back",
+        "blocked": "blocked",
+    }
+    return {
+        "phase": phase,
+        "status": status_by_phase[phase],
+        "updated_at": _safe_timestamp(payload.get("updated_at")) or _iso(),
+        "failure_category": failure,
+        "rollback_trigger": trigger,
+        "previous_version": previous_version,
+    }
+
+
+def _status_from_activation_projection(
+    request: dict[str, Any],
+    projection: dict[str, Any],
+) -> dict[str, Any]:
+    status_value = projection["status"]
+    phase = projection["phase"]
+    failed = status_value in {"failed_rolled_back", "blocked"}
+    request_terminal = request.get("state") == "terminal"
+    status = _base_status(
+        status_value,
+        phase,
+        request_id=request["request_id"],
+        submission_id=request["submission_id"],
+    )
+    status.update(
+        {
+            "target_version": request["source"]["version"],
+            "started_at": request["requested_at"],
+            "updated_at": projection["updated_at"],
+            "source": _safe_public_source(
+                {**request["source"], "kind": "github-tarball"}
+            ),
+            "apply_candidate": _safe_public_candidate(
+                request["apply_candidate"]
+            ),
+            "expected_commit": request["source"]["commit"],
+            "steps": _macro_steps(phase, failed=failed),
+            "admission": _admission_payload(
+                "inactive" if request_terminal else "active",
+                "terminal" if request_terminal else "claimed",
+                request,
+            ),
+        }
+    )
+    if status_value == "completed":
+        status["phase"] = "completed"
+        status["current_step"] = "commit_verification"
+        status["steps"] = _macro_steps("completed")
+        status["installed_commit"] = request["source"]["commit"]
+        status["commit_verified"] = True
+        status["rollback"] = {
+            "status": "not_needed",
+            "trigger": None,
+            "restored_version": None,
+        }
+        status["finished_at"] = projection["updated_at"]
+    elif status_value == "failed_rolled_back":
+        category = (
+            projection["rollback_trigger"]
+            or projection["failure_category"]
+            or "target_health_failed"
+        )
+        status["error"] = _public_error_for_category(category)
+        status["rollback"] = {
+            "status": "completed",
+            "trigger": category,
+            "restored_version": projection["previous_version"],
+        }
+        status["finished_at"] = projection["updated_at"]
+    elif status_value == "blocked":
+        category = (
+            projection["failure_category"]
+            or "activation_journal_invalid"
+        )
+        status["error"] = _public_error_for_category(category)
+        status["rollback"] = {
+            "status": (
+                "failed"
+                if category
+                in {
+                    "rollback_verification_failed",
+                    "previous_recovery_failed",
+                }
+                else "not_started"
+            ),
+            "trigger": projection["rollback_trigger"],
+            "restored_version": None,
+        }
+        status["finished_at"] = projection["updated_at"]
+    return status
+
+
 def _reconcile_current_unlocked(request: dict[str, Any]) -> dict[str, Any]:
     if request["state"] == "terminal":
         return request
     lease_active = _helper_lease_active()
+    activation = _activation_projection(request)
     status, _ = _sanitize_status_payload()
     if (
         status.get("status") in TERMINAL_STATUSES
@@ -1244,6 +1492,8 @@ def _reconcile_current_unlocked(request: dict[str, Any]) -> dict[str, Any]:
             error_category,
             status_payload=status,
         )
+    if request["state"] == "claimed" and not lease_active and activation:
+        return request
     if request["state"] == "claimed" and not lease_active:
         return _mark_terminal_unlocked(
             request,
@@ -1271,6 +1521,12 @@ def _status_for_current_unlocked(request: dict[str, Any]) -> dict[str, Any]:
         return _queued_status(request)
     raw_status, _ = _sanitize_status_payload()
     if request["state"] == "claimed":
+        activation = _activation_projection(request)
+        if activation and not _helper_lease_active():
+            return _status_from_activation_projection(
+                request,
+                activation,
+            )
         if _status_matches_request(raw_status, request):
             raw_status["admission"] = _admission_payload(
                 "active",
@@ -1305,6 +1561,16 @@ def _status_for_current_unlocked(request: dict[str, Any]) -> dict[str, Any]:
         )
         return status
     terminal = request["terminal"]
+    activation = _activation_projection(request)
+    if activation and activation["status"] in {
+        "completed",
+        "failed_rolled_back",
+        "blocked",
+    }:
+        return _status_from_activation_projection(
+            request,
+            activation,
+        )
     if (
         raw_status.get("status") in TERMINAL_STATUSES
         and _status_matches_request(raw_status, request)

@@ -90,11 +90,7 @@ compose_cmd() {
 }
 
 compose_with_archive_roots() {
-  if [ -f "$ARCHIVE_ROOTS_COMPOSE_FILE" ]; then
-    compose_cmd --env-file "$ENV_FILE" -f "$APP_DIR/docker-compose.yml" -f "$ARCHIVE_ROOTS_COMPOSE_FILE" "$@"
-  else
-    compose_cmd --env-file "$ENV_FILE" -f "$APP_DIR/docker-compose.yml" "$@"
-  fi
+  km_vms_compose_for_source "$APP_DIR" "$SOURCE_DIR" "$@"
 }
 
 archive_roots_compose_present() {
@@ -235,9 +231,8 @@ done
 
 [ -n "$APP_DIR" ] || fail "--app-dir or KM_VMS_APP_DIR is required."
 APP_DIR=$(normalize_path "$APP_DIR")
-[ -f "$APP_DIR/docker-compose.yml" ] || fail "docker-compose.yml not found in app dir: $APP_DIR"
 [ -f "$APP_DIR/.env" ] || fail ".env not found in app dir: $APP_DIR"
-ENV_FILE="$APP_DIR/.env"
+SOURCE_DIR=$(km_vms_resolve_product_source "$APP_DIR")
 SELECTION_FILE="$APP_DIR/data/install-control/storage-selection.json"
 SELECTION_CONTROL_FILE="$APP_DIR/data/install-control/storage-selection.control"
 STATUS_FILE="$APP_DIR/data/install-control/storage-apply-status.json"

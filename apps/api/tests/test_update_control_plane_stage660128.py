@@ -255,8 +255,17 @@ def test_compose_preserves_read_only_status_and_mutation_boundary() -> None:
     ]
 
     assert "update-status-controller" not in compose
-    assert "./data/update-public:/update-public:ro" in reader
-    assert "./data/update-control" not in reader
+    assert (
+        "${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-public:/update-public:ro"
+        in reader
+    )
+    assert "/data/update-control" not in reader
     assert "KMVMS_CONTROL_ROLE: controller-retry" in controller_retry
-    assert "./data/update-control:/update-control\n" in controller_retry
-    assert "./data/update-public:/update-public\n" in controller_retry
+    assert (
+        "${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-control:/update-control"
+        in controller_retry
+    )
+    assert (
+        "${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-public:/update-public"
+        in controller_retry
+    )

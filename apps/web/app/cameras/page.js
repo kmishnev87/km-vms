@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
+import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
 import { apiFetch } from "../../lib/api";
 import { useCurrentUser } from "../../lib/currentUser";
 import {
@@ -471,7 +472,7 @@ export default function CamerasPage() {
   const [editingCameraId, setEditingCameraId] = useState(null);
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState("");
-  const [deleteNotice, setDeleteNotice] = useState("");
+  const [deleteWarning, setDeleteWarning] = useState("");
   const [busy, setBusy] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
@@ -484,8 +485,7 @@ export default function CamerasPage() {
   const [onvifConfig, setOnvifConfig] = useState(initialOnvifConfig);
   const [selectedOnvifProfileToken, setSelectedOnvifProfileToken] = useState("");
   const [onvifStatus, setOnvifStatus] = useState("");
-  const [profileToast, setProfileToast] = useState(null);
-  const profileToastTimerRef = useRef(null);
+  const [operationToast, setOperationToast] = useState(null);
 
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [cameraToDelete, setCameraToDelete] = useState(null);
@@ -536,7 +536,6 @@ export default function CamerasPage() {
     return () => {
       clearInterval(timer);
       clearInterval(secondaryTimer);
-      window.clearTimeout(profileToastTimerRef.current);
     };
   }, []);
 
@@ -551,9 +550,12 @@ export default function CamerasPage() {
   }, [currentUser?.id, currentUser?.username, viewMode]);
 
   function showProfileToast(title, text) {
-    setProfileToast({ title, text, variant: "success" });
-    window.clearTimeout(profileToastTimerRef.current);
-    profileToastTimerRef.current = window.setTimeout(() => setProfileToast(null), 2200);
+    setOperationToast({
+      id: `camera-profile-${Date.now()}`,
+      title,
+      message: text,
+      tone: "success",
+    });
   }
 
   function patch(key, value) {
@@ -1015,7 +1017,7 @@ export default function CamerasPage() {
   }
 
   async function confirmDeleteCamera() {
-    if (!cameraToDelete) return;
+    if (!cameraToDelete || busy) return;
 
     setError("");
     setBusy(true);
@@ -1024,8 +1026,28 @@ export default function CamerasPage() {
         `/cameras/${cameraToDelete.id}?delete_files=${deleteFiles ? "true" : "false"}&operation_id=${encodeURIComponent(newCameraDeleteOperationId())}`,
         { method: "DELETE" }
       );
+      if (!result?.camera_removed) {
+        closeDeleteModal();
+        setError(copy.actionFailed);
+        return;
+      }
+      const cleanupMessage = archiveCleanupMessage(result, copy) || copy.cameraDeleted;
+      const cleanupPartial = deleteFiles && (
+        result?.status === "deleted_archive_cleanup_partial"
+        || cleanupMessage !== copy.cameraDeleted
+      );
       closeDeleteModal();
-      setDeleteNotice(archiveCleanupMessage(result, copy) || copy.cameraDeleted);
+      if (cleanupPartial) {
+        setDeleteWarning(cleanupMessage);
+      } else {
+        setDeleteWarning("");
+        setOperationToast({
+          id: `camera-delete-${Date.now()}`,
+          title: copy.cameraDeleted,
+          message: cleanupMessage === copy.cameraDeleted ? "" : cleanupMessage,
+          tone: "success",
+        });
+      }
       await load();
     } catch (err) {
       setError(normalizeCameraError(err.message, copy));
@@ -1123,7 +1145,7 @@ export default function CamerasPage() {
       <OperatorProblemBanners domains={["cameras", "recorder"]} className="pageWarnings" limit={4} />
 
       {error && !showEditor ? <div className="badge err" style={{ marginBottom: 14 }}>{error}</div> : null}
-      {deleteNotice && !showEditor ? <div className="badge ok" style={{ marginBottom: 14 }}>{deleteNotice}</div> : null}
+      {deleteWarning && !showEditor ? <div className="badge warn" style={{ marginBottom: 14 }}>{deleteWarning}</div> : null}
 
       <div className={viewMode === "cards" ? "cameraTileGrid" : "cameraCards"}>
         {camerasFirstLoading ? (
@@ -1257,13 +1279,6 @@ export default function CamerasPage() {
               </div>
               <button className="iconCloseButton" onClick={() => setShowEditor(false)} aria-label={copy.close}>×</button>
             </div>
-
-            {profileToast ? (
-              <div className={`cameraProfileToast ${profileToast.variant || "info"}`}>
-                <strong>{profileToast.title}</strong>
-                {profileToast.text ? <span>{profileToast.text}</span> : null}
-              </div>
-            ) : null}
 
             {error ? <div className="cameraModalError">{error}</div> : null}
 
@@ -1574,35 +1589,33 @@ export default function CamerasPage() {
         </div>
       ) : null}
 
-      {deleteModalOpen ? (
-        <div className="modalBackdrop">
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 560 }}>
-            <div className="modalHeader">
-              <h2 style={{ margin: 0 }}>{copy.deleteTitle}</h2>
-              <button className="iconCloseButton" onClick={closeDeleteModal} aria-label={copy.close}>×</button>
-            </div>
-            <p style={{ color: "#475569", marginBottom: 16 }}>
-              {copy.cameraLabel}: <strong>{cameraToDelete?.name}</strong>
-            </p>
-
-            <label style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-              <input type="checkbox" checked={deleteFiles} onChange={(e) => setDeleteFiles(e.target.checked)} />
-              <span>{copy.deleteRecordsFolder}</span>
-            </label>
-
-            <div className="badge warn" style={{ marginBottom: 18 }}>
-              {copy.deleteHint}
-            </div>
-
-            <div className="actions">
-              <button className="button secondary" onClick={closeDeleteModal}>{copy.cancel}</button>
-              <button className="button secondary" onClick={confirmDeleteCamera} disabled={busy}>
-                {busy ? copy.deleting : copy.delete}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <OperationDialog
+        dialog={deleteModalOpen ? {
+          id: `camera-delete-${cameraToDelete?.id || "current"}`,
+          presentation: "compact-confirmation",
+          title: copy.deleteTitle,
+          message: `${copy.cameraLabel}: ${cameraToDelete?.name || ""}`,
+          content: (
+            <>
+              <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <input type="checkbox" checked={deleteFiles} onChange={(e) => setDeleteFiles(e.target.checked)} disabled={busy} />
+                <span>{copy.deleteRecordsFolder}</span>
+              </label>
+              <div className="badge warn">{copy.deleteHint}</div>
+            </>
+          ),
+          busy,
+          dismissible: !busy,
+          cancelLabel: copy.cancel,
+          closeLabel: copy.close,
+          confirmLabel: busy ? copy.deleting : copy.delete,
+          confirmTone: "danger",
+          tone: "error",
+          onConfirm: confirmDeleteCamera,
+        } : null}
+        onClose={closeDeleteModal}
+      />
+      <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
       </div>
     </Layout>
   );

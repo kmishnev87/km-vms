@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
+import { OperationToast } from "../../components/OperationFeedback";
 import TilePlayer from "../../components/TilePlayer";
 import { apiFetch } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
@@ -244,6 +245,7 @@ export default function LivePage() {
   const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
   const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
   const [error, setError] = useState("");
+  const [operationToast, setOperationToast] = useState(null);
   const [dragState, setDragState] = useState(null);
   const [resizeState, setResizeState] = useState(null);
   const [draggedSidebarCameraId, setDraggedSidebarCameraId] = useState("");
@@ -404,7 +406,11 @@ export default function LivePage() {
     setTiles((prev) => {
       const active = activeLayoutTiles(prev);
       if (active.some((tile) => String(tile.cameraId || "") === normalizedCameraId)) {
-        setError(TEXT.duplicate);
+        setOperationToast({
+          id: `live-duplicate-${Date.now()}`,
+          title: TEXT.duplicate,
+          tone: "info",
+        });
         return prev;
       }
       setError("");
@@ -921,6 +927,7 @@ export default function LivePage() {
         data-live-sidebar-collapsed={isSidebarCollapsed ? "true" : "false"}
         data-live-sidebar-order={orderedCameras.map((camera) => String(camera.id)).join(",")}
       >
+        <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
         {isSystemFullscreen ? (
           <button
             type="button"
@@ -1189,7 +1196,11 @@ export default function LivePage() {
                       onAudioStatusChange={(fact) => handleAudioStatusChange(tile.id, fact)}
                       onAudioPlaybackBlocked={() => {
                         setActiveAudioTileId((current) => (current === tile.id ? "" : current));
-                        setError(TEXT.audioBlocked);
+                        setOperationToast({
+                          id: `live-audio-blocked-${Date.now()}`,
+                          title: TEXT.audioBlocked,
+                          tone: "warning",
+                        });
                       }}
                     />
                   ) : (

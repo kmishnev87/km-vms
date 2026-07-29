@@ -69,6 +69,9 @@ export function OperationDialog({ dialog, onClose }) {
   const canClose = !dialog.busy && dialog.dismissible !== false;
   const titleId = `operation-dialog-title-${dialog.id || "current"}`;
   const descriptionId = `operation-dialog-description-${dialog.id || "current"}`;
+  const presentationClass = dialog.presentation === "compact-confirmation"
+    ? "operationFeedbackDialog-compactConfirmation"
+    : "";
 
   function requestClose() {
     if (canClose) onClose?.();
@@ -101,10 +104,13 @@ export function OperationDialog({ dialog, onClose }) {
   }
 
   return (
-    <div className={`operationFeedbackOverlay ${dialog.overlayClassName || ""}`.trim()} role="presentation">
+    <div
+      className={`operationFeedbackOverlay ${presentationClass ? "operationFeedbackOverlay-compactConfirmation" : ""} ${dialog.overlayClassName || ""}`.trim()}
+      role="presentation"
+    >
       <div
         ref={containerRef}
-        className={`operationFeedbackDialog operationFeedbackDialog-${dialog.tone || "warning"} ${dialog.className || ""}`.trim()}
+        className={`operationFeedbackDialog operationFeedbackDialog-${dialog.tone || "warning"} ${presentationClass} ${dialog.className || ""}`.trim()}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
@@ -210,21 +216,20 @@ export function OperationToast({ toast, onClose }) {
   onCloseRef.current = onClose;
   useEffect(() => {
     if (!toast) return undefined;
-    const timeout = Number(toast.autoDismissMs ?? 2500);
-    if (!Number.isFinite(timeout) || timeout <= 0) return undefined;
-    const timer = window.setTimeout(() => onCloseRef.current?.(), timeout);
+    const timer = window.setTimeout(() => onCloseRef.current?.(), 2500);
     return () => window.clearTimeout(timer);
-  }, [toast?.id, toast?.autoDismissMs]);
+  }, [toast]);
 
   if (!toast) return null;
+  const tone = ["success", "error", "warning", "info"].includes(toast.tone) ? toast.tone : "info";
+  const role = tone === "error" ? "alert" : "status";
   return (
     <div className="operationFeedbackToastRegion" aria-live="polite" aria-atomic="true">
-      <div className={`operationFeedbackToast operationFeedbackToast-${toast.tone || "success"}`} role="status">
+      <div className={`operationFeedbackToast operationFeedbackToast-${tone}`} role={role}>
         <div>
           <strong>{toast.title}</strong>
           {toast.message ? <span>{toast.message}</span> : null}
         </div>
-        <button type="button" onClick={onClose} aria-label={toast.closeLabel || "Close"}>×</button>
       </div>
     </div>
   );

@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
+import importlib.util
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -33,6 +36,10 @@ HELPER_IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,200}:[A-Za-z0-9_][A-Za-z0
 IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{12,64}$")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
+SLOT_ID_RE = re.compile(
+    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64})$",
+    re.IGNORECASE,
+)
 ARCHIVE_RUNTIME_TARGET_RE = re.compile(
     r"^/storage/archive-roots/[A-Za-z0-9_.-]{1,180}$"
 )
@@ -41,6 +48,41 @@ SUBMISSION_ID_RE = re.compile(
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
+
+LEGACY_REQUIRED_IMAGE_SERVICES = (
+    "api",
+    "recorder",
+    "web",
+    "nginx",
+    "update-helper",
+)
+OPTIONAL_PERSISTENT_IMAGE_SERVICES = (
+    "update-status-reader",
+    "update-retry-admission",
+)
+TARGET_BUILD_SERVICES = (
+    "schema-update",
+    "api",
+    "recorder",
+    "web",
+    "update-helper",
+    "update-status-reader",
+)
+TARGET_EVIDENCE_SERVICES = (
+    *LEGACY_REQUIRED_IMAGE_SERVICES,
+    *OPTIONAL_PERSISTENT_IMAGE_SERVICES,
+    "schema-update",
+)
+ACTIVATION_RUNTIME_SERVICES = (
+    "update-status-reader",
+    "update-retry-admission",
+    "api",
+    "recorder",
+    "web",
+    "nginx",
+    "setup-helper",
+)
+CORE_RUNTIME_SERVICES = ("api", "recorder", "web", "nginx")
 
 LEGACY_HISTORICAL_REQUEST_FIELDS = {
     "schema_version",
@@ -210,8 +252,19 @@ ACTIVE_STATUSES = {
     "restarting",
     "health_check",
     "commit_verification",
+    "preparing",
+    "staging",
+    "activating",
+    "reconnecting",
+    "rolling_back",
 }
-TERMINAL_STATUSES = {"completed", "failed", "cancelled", "blocked"}
+TERMINAL_STATUSES = {
+    "completed",
+    "failed",
+    "failed_rolled_back",
+    "cancelled",
+    "blocked",
+}
 INACTIVE_STATUSES = {"idle", "unknown"}
 KNOWN_STATUSES = ACTIVE_STATUSES | TERMINAL_STATUSES | INACTIVE_STATUSES
 RECEIPT_STATUSES = {"waiting_for_terminal", "recreating", "completed", "failed"}
@@ -599,24 +652,60 @@ def capture_installed_source_identity(
     *,
     request_id: str,
     target_source_dir: Path | None = None,
-) -> None:
+    installed_source_dir: Path | None = None,
+    request_override: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     control_dir = app_dir / "data/update-control"
-    authority = read_json_object(
-        control_dir / "update-request.json",
-        max_bytes=MAX_LEGACY_ADMISSION_BYTES,
+    installed_root = installed_source_dir or app_dir
+    source_identity = read_json_object(
+        installed_root / ".km-vms-source.json"
     )
-    source_identity = read_json_object(app_dir / ".km-vms-source.json")
     release_root = target_source_dir or app_dir
     release_identity = read_json_object(
         release_root / "release/km-vms-release.json"
     )
-    assert authority is not None
     assert source_identity is not None
     assert release_identity is not None
-    request = extract_active_request(
-        authority,
-        request_id=request_id,
-    )
+    if request_override is None:
+        authority = read_json_object(
+            control_dir / "update-request.json",
+            max_bytes=MAX_LEGACY_ADMISSION_BYTES,
+        )
+        assert authority is not None
+        request = extract_active_request(
+            authority,
+            request_id=request_id,
+        )
+    else:
+        source_override = request_override.get("source")
+        if (
+            set(request_override)
+            != {
+                "schema_version",
+                "request_id",
+                "requested_at",
+                "intent",
+                "confirmed",
+                "source",
+            }
+            or request_override.get("schema_version") != 1
+            or request_override.get("request_id") != request_id
+            or request_override.get("intent") != "apply_update"
+            or request_override.get("confirmed") is not True
+            or type(request_override.get("requested_at")) is not str
+            or not request_override["requested_at"]
+            or type(source_override) is not dict
+            or set(source_override) != {"version", "commit"}
+            or type(source_override.get("version")) is not str
+            or not source_override["version"]
+            or type(source_override.get("commit")) is not str
+            or not COMMIT_SHA_RE.fullmatch(source_override["commit"])
+        ):
+            raise BridgeError(
+                "terminal_request_invalid",
+                "Terminal update activation request is invalid.",
+            )
+        request = json.loads(json.dumps(request_override))
     source = request.get("source")
     target_commit = (
         str(source.get("commit") or "").lower()
@@ -631,8 +720,11 @@ def capture_installed_source_identity(
     target_repo = (
         str(source.get("repo") or "").lower()
         if isinstance(source, dict)
+        and request_override is None
         else ""
     )
+    if request_override is not None:
+        target_repo = "kmishnev87/km-vms"
     release_commit_value = release_identity.get("commit_sha")
     release_commit = (
         str(release_commit_value).lower()
@@ -767,15 +859,2597 @@ def capture_installed_source_identity(
             atomic_write_json(request_path, request)
     else:
         atomic_write_json(request_path, request)
+    return identity
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+    except OSError as exc:
+        raise BridgeError(
+            "slot_evidence_unavailable",
+            "Pre-update release-slot evidence could not be read.",
+        ) from exc
+    return digest.hexdigest()
+
+
+def load_slot_engine(source_dir: Path):
+    module_path = source_dir / "scripts/km-vms-release-slots.py"
+    if module_path.is_symlink() or not module_path.is_file():
+        raise BridgeError(
+            "slot_engine_missing",
+            "Release-slot activation engine is unavailable.",
+        )
+    spec = importlib.util.spec_from_file_location(
+        "km_vms_release_slots_runtime",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        raise BridgeError(
+            "slot_engine_missing",
+            "Release-slot activation engine could not be loaded.",
+        )
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise BridgeError(
+            "slot_engine_invalid",
+            "Release-slot activation engine is invalid.",
+        ) from exc
+    return module
+
+
+def _parse_command_json(
+    result: subprocess.CompletedProcess[str],
+    *,
+    error_code: str,
+    error_message: str,
+) -> dict[str, Any]:
+    try:
+        payload = json.loads(result.stdout)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise BridgeError(error_code, error_message) from exc
+    if type(payload) is not dict:
+        raise BridgeError(error_code, error_message)
+    return payload
+
+
+def _compose_container_id(
+    compose: Sequence[str],
+    service: str,
+    *,
+    env: dict[str, str] | None = None,
+) -> str:
+    result = run_command(
+        [*compose, "ps", "-q", service],
+        timeout=30,
+        error_code="slot_image_evidence_missing",
+        error_message="A required pre-update service has no exact running container.",
+        env=env,
+    )
+    container_id = result.stdout.strip().lower()
+    if not CONTAINER_ID_RE.fullmatch(container_id):
+        raise BridgeError(
+            "slot_image_evidence_missing",
+            "A required pre-update service has no exact running container.",
+        )
+    return container_id
+
+
+def _compose_services(
+    compose: Sequence[str],
+    *,
+    env: dict[str, str] | None = None,
+) -> list[str]:
+    result = run_command(
+        [*compose, "config", "--services"],
+        timeout=60,
+        error_code="slot_compose_evidence_failed",
+        error_message="Compose service inventory could not be captured.",
+        env=env,
+    )
+    services = sorted(
+        {
+            line.strip()
+            for line in result.stdout.splitlines()
+            if line.strip()
+        }
+    )
+    if (
+        not services
+        or len(services) > 64
+        or any(not re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", item) for item in services)
+    ):
+        raise BridgeError(
+            "slot_compose_evidence_failed",
+            "Compose service inventory is invalid.",
+        )
+    return services
+
+
+def _normalized_compose_digest(
+    rendered: str,
+    *,
+    app_dir: Path,
+    source_dir: Path,
+) -> str:
+    normalized = rendered.replace("\r\n", "\n")
+    source_text = str(source_dir.resolve())
+    app_text = str(app_dir.resolve())
+    if source_text == app_text:
+        replacements = [
+            (source_text, "${KM_VMS_STABLE_LEGACY_SOURCE}"),
+        ]
+    else:
+        replacements = sorted(
+            [
+                (source_text, "${KM_VMS_PRODUCT_SOURCE}"),
+                (app_text, "${KM_VMS_STABLE_APP_DIR}"),
+            ],
+            key=lambda item: len(item[0]),
+            reverse=True,
+        )
+    for observed, token in replacements:
+        normalized = normalized.replace(observed, token)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
+def _archive_override_evidence(app_dir: Path) -> tuple[bool, str | None]:
+    archive_override = (
+        app_dir / "data/install-control/docker-compose.archive-roots.yml"
+    )
+    if archive_override.is_symlink():
+        raise BridgeError(
+            "archive_roots_override_invalid",
+            "Generated archive-roots Compose override is unsafe.",
+        )
+    attached = archive_override.is_file()
+    return attached, _sha256_file(archive_override) if attached else None
+
+
+def capture_pre_update_slot_evidence(
+    app_dir: Path,
+    *,
+    project_name: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    ensure_docker_runtime()
+    compose = compose_base(
+        app_dir,
+        project_name,
+        source_dir=app_dir,
+        include_archive_override=True,
+    )
+    config = run_command(
+        [*compose, "config"],
+        timeout=60,
+        error_code="slot_compose_evidence_failed",
+        error_message="Current Compose plan could not be captured before target build.",
+    )
+    services = _compose_services(compose)
+    if not set(LEGACY_REQUIRED_IMAGE_SERVICES).issubset(services):
+        raise BridgeError(
+            "slot_compose_evidence_failed",
+            "Current Compose plan lacks a required rollback service.",
+        )
+    archive_attached, archive_digest = _archive_override_evidence(app_dir)
+    current_plan_digest = _normalized_compose_digest(
+        config.stdout,
+        app_dir=app_dir,
+        source_dir=app_dir,
+    )
+    compose_evidence = {
+        "schema_version": 1,
+        "project_name": project_name,
+        "project_directory": "source",
+        "captured_plan_sha256": current_plan_digest,
+        "slot_plan_sha256": current_plan_digest,
+        "archive_override_attached": archive_attached,
+        "archive_override_sha256": archive_digest,
+        "runtime_override_sha256": None,
+        "shared_root_contract": "stable_app_dir_v1",
+        "services": services,
+    }
+
+    image_services: dict[str, Any] = {}
+    evidence_services = [
+        *LEGACY_REQUIRED_IMAGE_SERVICES,
+        *(
+            service
+            for service in OPTIONAL_PERSISTENT_IMAGE_SERVICES
+            if service in services
+        ),
+    ]
+    for service in evidence_services:
+        container_id = _compose_container_id(compose, service)
+        inspected = run_command(
+            ["docker", "inspect", container_id],
+            timeout=30,
+            error_code="slot_image_evidence_failed",
+            error_message="A required pre-update service image could not be inspected.",
+        )
+        try:
+            rows = json.loads(inspected.stdout)
+            row = rows[0]
+            image_id = str(row["Image"]).lower()
+            image_ref = str(row["Config"]["Image"])
+            state = row["State"]
+        except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+            raise BridgeError(
+                "slot_image_evidence_failed",
+                "A required pre-update service image returned invalid evidence.",
+            ) from exc
+        if not IMAGE_ID_RE.fullmatch(image_id) or not image_ref:
+            raise BridgeError(
+                "slot_image_evidence_failed",
+                "A required pre-update service image is not exact.",
+            )
+        if state.get("Running") is not True:
+            raise BridgeError(
+                "slot_current_runtime_unhealthy",
+                "Current core services must be running before legacy adoption.",
+            )
+        if service == "api":
+            health = state.get("Health")
+            if type(health) is not dict or health.get("Status") != "healthy":
+                raise BridgeError(
+                    "slot_current_runtime_unhealthy",
+                    "Current API must be healthy before legacy adoption.",
+                )
+        image_services[service] = {
+            "image_id": image_id,
+            "source_image_ref": image_ref,
+        }
+
+    identity_digest = run_command(
+        [
+            *compose,
+            "exec",
+            "-T",
+            "api",
+            "python3",
+            "-c",
+            (
+                "import hashlib;"
+                "from pathlib import Path;"
+                "print(hashlib.sha256("
+                "Path('/app/.km-vms-release.json').read_bytes()"
+                ").hexdigest())"
+            ),
+        ],
+        timeout=30,
+        error_code="slot_api_identity_unavailable",
+        error_message="API-visible pre-update release identity could not be captured.",
+    ).stdout.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", identity_digest):
+        raise BridgeError(
+            "slot_api_identity_unavailable",
+            "API-visible pre-update release identity is invalid.",
+        )
+    host_identity = app_dir / ".km-vms-release.json"
+    if (
+        host_identity.is_symlink()
+        or not host_identity.is_file()
+        or _sha256_file(host_identity) != identity_digest
+    ):
+        raise BridgeError(
+            "slot_api_identity_mismatch",
+            "Host and API-visible pre-update release identities differ.",
+        )
+    image_evidence = {
+        "schema_version": 1,
+        "services": image_services,
+    }
+    health_evidence = {
+        "schema_version": 1,
+        "status": "healthy",
+        "api_visible_identity_sha256": identity_digest,
+        "core_services": ["api", "nginx", "recorder", "web"],
+    }
+    return compose_evidence, image_evidence, health_evidence
+
+
+def preserve_slot_images(
+    image_evidence: dict[str, Any],
+    *,
+    project_name: str,
+    slot_id: str,
+) -> dict[str, Any]:
+    services = image_evidence.get("services")
+    if (
+        image_evidence.get("schema_version") != 1
+        or type(services) is not dict
+        or not services
+        or not re.fullmatch(
+            r"(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64})",
+            slot_id,
+        )
+    ):
+        raise BridgeError(
+            "slot_image_evidence_failed",
+            "Immutable image alias input is invalid.",
+        )
+    result: dict[str, Any] = {"schema_version": 1, "services": {}}
+    for service, item in sorted(services.items()):
+        image_id = str(item.get("image_id") or "").lower()
+        source_ref = str(item.get("source_image_ref") or "")
+        if (
+            not re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", str(service))
+            or not IMAGE_ID_RE.fullmatch(image_id)
+            or not source_ref
+        ):
+            raise BridgeError(
+                "slot_image_evidence_failed",
+                "Immutable image alias input is invalid.",
+            )
+        immutable_ref = (
+            f"km-vms-{project_name}-slot-{service}:{slot_id}"
+        )
+        existing = run_command(
+            [
+                "docker",
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                immutable_ref,
+            ],
+            timeout=30,
+            error_code="slot_image_alias_failed",
+            error_message="Immutable release-slot image alias could not be inspected.",
+            check=False,
+        )
+        if existing.returncode == 0:
+            if existing.stdout.strip().lower() != image_id:
+                raise BridgeError(
+                    "slot_image_alias_conflict",
+                    "An immutable release-slot image alias already points elsewhere.",
+                )
+        else:
+            run_command(
+                ["docker", "image", "tag", image_id, immutable_ref],
+                timeout=30,
+                error_code="slot_image_alias_failed",
+                error_message="Exact pre-update image could not be preserved.",
+            )
+        verified = run_command(
+            [
+                "docker",
+                "image",
+                "inspect",
+                "--format",
+                "{{.Id}}",
+                immutable_ref,
+            ],
+            timeout=30,
+            error_code="slot_image_alias_failed",
+            error_message="Immutable release-slot image alias could not be verified.",
+        ).stdout.strip().lower()
+        if verified != image_id:
+            raise BridgeError(
+                "slot_image_alias_failed",
+                "Immutable release-slot image alias changed during verification.",
+            )
+        result["services"][service] = {
+            "image_id": image_id,
+            "source_image_ref": source_ref,
+            "immutable_image_ref": immutable_ref,
+        }
+    return result
+
+
+def prepare_legacy_adopted_slot(
+    *,
+    app_dir: Path,
+    target_source_dir: Path,
+    request_id: str,
+    installed_identity: dict[str, Any],
+) -> str:
+    slot_tool = target_source_dir / "scripts/km-vms-release-slots.py"
+    if slot_tool.is_symlink() or not slot_tool.is_file():
+        raise BridgeError(
+            "slot_engine_missing",
+            "Trusted target release has no release-slot engine.",
+        )
+    project_name = require_project_name(
+        os.getenv("KM_VMS_PROJECT_NAME", "").strip()
+    )
+    compose_evidence, captured_images, health_evidence = (
+        capture_pre_update_slot_evidence(
+            app_dir,
+            project_name=project_name,
+        )
+    )
+    inspect_result = run_command(
+        [
+            "python3",
+            str(slot_tool),
+            "inspect",
+            "--app-dir",
+            str(app_dir),
+        ],
+        timeout=30,
+        error_code="slot_layout_prepare_failed",
+        error_message="Stable release-slot layout could not be prepared.",
+    )
+    inspect_payload = _parse_command_json(
+        inspect_result,
+        error_code="slot_layout_prepare_failed",
+        error_message="Stable release-slot layout returned invalid evidence.",
+    )
+    if inspect_payload.get("activation_cli_enabled") is not True:
+        raise BridgeError(
+            "slot_activation_unavailable",
+            "Trusted target release does not provide the Stage C activation engine.",
+        )
+
+    evidence_root = app_dir / "data/update-runtime/staging"
+    with tempfile.TemporaryDirectory(
+        prefix=".legacy-evidence-",
+        dir=evidence_root,
+    ) as temporary:
+        temporary_root = Path(temporary)
+        services_path = temporary_root / "services.json"
+        compose_path = temporary_root / "compose.json"
+        image_path = temporary_root / "images.json"
+        health_path = temporary_root / "health.json"
+        atomic_write_json(
+            services_path,
+            {"services": compose_evidence["services"]},
+        )
+        stage_result = run_command(
+            [
+                "python3",
+                str(slot_tool),
+                "stage-adopted",
+                "--app-dir",
+                str(app_dir),
+                "--request-id",
+                request_id,
+                "--declared-version",
+                str(installed_identity["installed_version"]),
+                "--declared-commit",
+                str(installed_identity["installed_commit"]),
+            ],
+            timeout=300,
+            error_code="slot_adoption_snapshot_failed",
+            error_message="Exact pre-update source snapshot could not be materialized.",
+        )
+        stage_payload = _parse_command_json(
+            stage_result,
+            error_code="slot_adoption_snapshot_failed",
+            error_message="Pre-update source snapshot returned invalid evidence.",
+        )
+        slot_id = str(stage_payload.get("slot_id") or "")
+        if not re.fullmatch(r"adopted-[0-9a-f]{64}", slot_id):
+            raise BridgeError(
+                "slot_adoption_snapshot_failed",
+                "Pre-update source snapshot has an invalid adopted slot identity.",
+            )
+        source_path = Path(str(stage_payload.get("source_path") or ""))
+        if not source_path.is_absolute() or not source_path.is_dir():
+            raise BridgeError(
+                "slot_adoption_snapshot_failed",
+                "Pre-update source snapshot path is invalid.",
+            )
+
+        if stage_payload.get("status") == "staged":
+            runtime_result = run_command(
+                [
+                    "python3",
+                    str(slot_tool),
+                    "prepare-adopted-runtime",
+                    "--app-dir",
+                    str(app_dir),
+                    "--request-id",
+                    request_id,
+                    "--services-file",
+                    str(services_path),
+                ],
+                timeout=30,
+                error_code="slot_runtime_override_failed",
+                error_message="Stable-root runtime override could not be prepared.",
+            )
+            runtime_payload = _parse_command_json(
+                runtime_result,
+                error_code="slot_runtime_override_failed",
+                error_message="Stable-root runtime override returned invalid evidence.",
+            )
+            runtime_override = Path(
+                str(runtime_payload.get("override_path") or "")
+            )
+            runtime_digest = str(runtime_payload.get("sha256") or "")
+        elif stage_payload.get("status") == "reused":
+            manifest = stage_payload.get("manifest")
+            if type(manifest) is not dict:
+                raise BridgeError(
+                    "slot_adoption_snapshot_failed",
+                    "Reused adopted slot returned no immutable manifest.",
+                )
+            runtime_override = (
+                app_dir
+                / "data/update-runtime/slots"
+                / slot_id
+                / "docker-compose.runtime-override.yml"
+            )
+            runtime_digest = str(
+                manifest.get("compose_evidence", {}).get(
+                    "runtime_override_sha256"
+                )
+                or ""
+            )
+        else:
+            raise BridgeError(
+                "slot_adoption_snapshot_failed",
+                "Pre-update source snapshot did not reach a reusable state.",
+            )
+        if (
+            not runtime_override.is_absolute()
+            or runtime_override.is_symlink()
+            or not runtime_override.is_file()
+            or _sha256_file(runtime_override) != runtime_digest
+        ):
+            raise BridgeError(
+                "slot_runtime_override_failed",
+                "Stable-root runtime override evidence is contradictory.",
+            )
+
+        slot_compose = compose_base(
+            app_dir,
+            project_name,
+            source_dir=source_path,
+            runtime_override=runtime_override,
+            include_archive_override=True,
+        )
+        slot_config = run_command(
+            [*slot_compose, "config"],
+            timeout=60,
+            error_code="slot_compose_evidence_failed",
+            error_message="Adopted slot Compose plan could not be validated.",
+        )
+        if _compose_services(slot_compose) != compose_evidence["services"]:
+            raise BridgeError(
+                "slot_compose_evidence_failed",
+                "Adopted slot changed the current Compose service set.",
+            )
+        compose_evidence["slot_plan_sha256"] = _normalized_compose_digest(
+            slot_config.stdout,
+            app_dir=app_dir,
+            source_dir=source_path,
+        )
+        compose_evidence["runtime_override_sha256"] = runtime_digest
+        image_evidence = preserve_slot_images(
+            captured_images,
+            project_name=project_name,
+            slot_id=slot_id,
+        )
+
+        if stage_payload.get("status") == "reused":
+            if (
+                manifest.get("compose_evidence") != compose_evidence
+                or manifest.get("image_evidence") != image_evidence
+                or manifest.get("pre_update_health") != health_evidence
+                or manifest.get("declared_identity")
+                != {
+                    "version": str(installed_identity["installed_version"]),
+                    "commit": str(installed_identity["installed_commit"]),
+                }
+            ):
+                raise BridgeError(
+                    "slot_adoption_conflict",
+                    "Existing adopted slot no longer matches the running legacy source.",
+                )
+            return slot_id
+
+        atomic_write_json(compose_path, compose_evidence)
+        atomic_write_json(image_path, image_evidence)
+        atomic_write_json(health_path, health_evidence)
+        finalize_result = run_command(
+            [
+                "python3",
+                str(slot_tool),
+                "finalize",
+                "--app-dir",
+                str(app_dir),
+                "--request-id",
+                request_id,
+                "--compose-evidence-file",
+                str(compose_path),
+                "--image-evidence-file",
+                str(image_path),
+                "--health-evidence-file",
+                str(health_path),
+            ],
+            timeout=300,
+            error_code="slot_adoption_finalize_failed",
+            error_message="Exact pre-update release slot could not be finalized.",
+        )
+        finalized = _parse_command_json(
+            finalize_result,
+            error_code="slot_adoption_finalize_failed",
+            error_message="Final pre-update release slot returned invalid evidence.",
+        )
+    if (
+        finalized.get("slot_id") != slot_id
+        or finalized.get("status") not in {"published", "reused"}
+    ):
+        raise BridgeError(
+            "slot_adoption_finalize_failed",
+            "Final pre-update release slot evidence is contradictory.",
+        )
+    return slot_id
+
+
+def _compose_image_refs(
+    compose: Sequence[str],
+    *,
+    env: dict[str, str],
+) -> dict[str, str]:
+    result = run_command(
+        [*compose, "config", "--format", "json"],
+        timeout=60,
+        error_code="slot_compose_evidence_failed",
+        error_message="Target Compose image plan could not be resolved.",
+        env=env,
+    )
+    try:
+        payload = json.loads(result.stdout)
+        services = payload["services"]
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise BridgeError(
+            "slot_compose_evidence_failed",
+            "Target Compose image plan is invalid.",
+        ) from exc
+    if type(services) is not dict:
+        raise BridgeError(
+            "slot_compose_evidence_failed",
+            "Target Compose image plan is invalid.",
+        )
+    refs: dict[str, str] = {}
+    for service, item in services.items():
+        if (
+            type(service) is not str
+            or type(item) is not dict
+            or type(item.get("image")) is not str
+            or not item["image"]
+        ):
+            raise BridgeError(
+                "slot_compose_evidence_failed",
+                "Target Compose image plan is incomplete.",
+            )
+        refs[service] = item["image"]
+    return refs
+
+
+def _image_id_for_ref(image_ref: str) -> str:
+    result = run_command(
+        [
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{.Id}}",
+            image_ref,
+        ],
+        timeout=30,
+        error_code="slot_image_evidence_missing",
+        error_message="A prepared target image is unavailable.",
+    )
+    image_id = result.stdout.strip().lower()
+    if not IMAGE_ID_RE.fullmatch(image_id):
+        raise BridgeError(
+            "slot_image_evidence_failed",
+            "A prepared target image has invalid identity evidence.",
+        )
+    return image_id
+
+
+def verify_immutable_images(image_evidence: dict[str, Any]) -> None:
+    services = image_evidence.get("services")
+    if type(services) is not dict or not services:
+        raise BridgeError(
+            "slot_image_evidence_failed",
+            "Immutable image evidence is unavailable.",
+        )
+    for item in services.values():
+        if type(item) is not dict:
+            raise BridgeError(
+                "slot_image_evidence_failed",
+                "Immutable image evidence is invalid.",
+            )
+        expected = str(item.get("image_id") or "").lower()
+        immutable_ref = str(item.get("immutable_image_ref") or "")
+        if (
+            not IMAGE_ID_RE.fullmatch(expected)
+            or not immutable_ref
+            or _image_id_for_ref(immutable_ref) != expected
+        ):
+            raise BridgeError(
+                "slot_image_evidence_missing",
+                "An immutable release-slot image is no longer available.",
+            )
+
+
+def bridge_source_root() -> Path:
+    root = Path(__file__).resolve().parent.parent
+    if not (root / "docker-compose.yml").is_file():
+        raise BridgeError(
+            "bridge_source_invalid",
+            "Update bridge product source is unavailable.",
+        )
+    return root
+
+
+def slot_record(
+    app_dir: Path,
+    slot_id: str,
+    *,
+    engine: Any,
+) -> tuple[Path, Path, dict[str, Any]]:
+    slot_root = app_dir / "data/update-runtime/slots" / slot_id
+    try:
+        manifest = engine.validate_slot(
+            slot_root,
+            expected_slot_id=slot_id,
+        )
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "slot_manifest_invalid"),
+            "Immutable release slot is unavailable or invalid.",
+        ) from exc
+    source_dir = slot_root / "source"
+    return slot_root, source_dir, manifest
+
+
+def slot_environment(project_name: str, slot_id: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["COMPOSE_PROJECT_NAME"] = project_name
+    env["KM_VMS_RELEASE_IMAGE_TAG"] = slot_id
+    return env
+
+
+def write_slot_image_override(
+    destination: Path,
+    manifest: dict[str, Any],
+    *,
+    service_images: dict[str, str] | None = None,
+) -> Path:
+    services = manifest.get("image_evidence", {}).get("services")
+    if type(services) is not dict or not services:
+        raise BridgeError(
+            "slot_image_evidence_failed",
+            "Immutable release-slot image evidence is unavailable.",
+        )
+    selected = {
+        service: str(item.get("immutable_image_ref") or "")
+        for service, item in services.items()
+        if type(item) is dict
+    }
+    if service_images:
+        selected.update(service_images)
+    compose_services = set(
+        manifest.get("compose_evidence", {}).get("services") or []
+    )
+    selected = {
+        service: image
+        for service, image in selected.items()
+        if service in compose_services
+    }
+    if (
+        not selected
+        or any(
+            not re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", service)
+            or not image
+            or any(char in image for char in "\r\n\x00")
+            for service, image in selected.items()
+        )
+    ):
+        raise BridgeError(
+            "slot_image_evidence_failed",
+            "Immutable release-slot image override is invalid.",
+        )
+    lines = [
+        "# Generated transiently from immutable slot evidence.",
+        "services:",
+    ]
+    for service, image in sorted(selected.items()):
+        lines.extend(
+            (
+                f"  {service}:",
+                f"    image: {json.dumps(image, ensure_ascii=True)}",
+            )
+        )
+    atomic_write_text(destination, "\n".join(lines) + "\n")
+    return destination
+
+
+def slot_compose(
+    app_dir: Path,
+    project_name: str,
+    slot_id: str,
+    *,
+    engine: Any,
+    override_root: Path,
+    with_image_override: bool,
+) -> tuple[list[str], dict[str, str], Path, dict[str, Any]]:
+    _slot_root, source_dir, manifest = slot_record(
+        app_dir,
+        slot_id,
+        engine=engine,
+    )
+    image_override = None
+    if with_image_override:
+        verify_immutable_images(manifest["image_evidence"])
+        image_override = write_slot_image_override(
+            override_root / f"{slot_id}-images.yml",
+            manifest,
+        )
+    env = slot_environment(project_name, slot_id)
+    compose = compose_base(
+        app_dir,
+        project_name,
+        source_dir=source_dir,
+        image_override=image_override,
+        include_archive_override=True,
+    )
+    return compose, env, source_dir, manifest
+
+
+def _inspect_running_service(
+    compose: Sequence[str],
+    service: str,
+    *,
+    env: dict[str, str],
+) -> tuple[str, dict[str, Any]]:
+    container_id = _compose_container_id(
+        compose,
+        service,
+        env=env,
+    )
+    inspected = run_command(
+        ["docker", "inspect", container_id],
+        timeout=30,
+        error_code="slot_runtime_evidence_failed",
+        error_message="Release-slot runtime evidence is unavailable.",
+    )
+    try:
+        row = json.loads(inspected.stdout)[0]
+        image_id = str(row["Image"]).lower()
+        state = row["State"]
+    except (KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise BridgeError(
+            "slot_runtime_evidence_failed",
+            "Release-slot runtime evidence is invalid.",
+        ) from exc
+    if (
+        not IMAGE_ID_RE.fullmatch(image_id)
+        or type(state) is not dict
+        or state.get("Running") is not True
+    ):
+        raise BridgeError(
+            "slot_runtime_unhealthy",
+            "A core release-slot service is not running.",
+        )
+    if service == "api":
+        health = state.get("Health")
+        if type(health) is not dict or health.get("Status") != "healthy":
+            raise BridgeError(
+                "slot_runtime_unhealthy",
+                "Release-slot API did not become healthy.",
+            )
+    return image_id, state
+
+
+def _api_visible_identity_digest(
+    compose: Sequence[str],
+    *,
+    env: dict[str, str],
+) -> str:
+    result = run_command(
+        [
+            *compose,
+            "exec",
+            "-T",
+            "api",
+            "python3",
+            "-c",
+            (
+                "import hashlib;"
+                "from pathlib import Path;"
+                "print(hashlib.sha256("
+                "Path('/app/.km-vms-release.json').read_bytes()"
+                ").hexdigest())"
+            ),
+        ],
+        timeout=30,
+        error_code="slot_api_identity_unavailable",
+        error_message="API-visible release identity is unavailable.",
+        env=env,
+    )
+    digest = result.stdout.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise BridgeError(
+            "slot_api_identity_unavailable",
+            "API-visible release identity is invalid.",
+        )
+    return digest
+
+
+def _api_visible_release_identity(
+    compose: Sequence[str],
+    *,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    result = run_command(
+        [
+            *compose,
+            "exec",
+            "-T",
+            "api",
+            "python3",
+            "-c",
+            (
+                "import json;"
+                "from app.services.update_check import "
+                "read_installed_update_state;"
+                "s=read_installed_update_state();"
+                "print(json.dumps({"
+                "'version':s.installed_version,"
+                "'commit':s.installed_commit,"
+                "'metadata_status':s.release_metadata_status,"
+                "'identity_validity':s.identity_validity"
+                "},sort_keys=True,separators=(',',':')))"
+            ),
+        ],
+        timeout=30,
+        error_code="slot_api_identity_unavailable",
+        error_message="API-visible release identity is unavailable.",
+        env=env,
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise BridgeError(
+            "slot_api_identity_unavailable",
+            "API-visible release identity is invalid.",
+        ) from exc
+    if (
+        type(payload) is not dict
+        or set(payload)
+        != {
+            "version",
+            "commit",
+            "metadata_status",
+            "identity_validity",
+        }
+    ):
+        raise BridgeError(
+            "slot_api_identity_unavailable",
+            "API-visible release identity is invalid.",
+        )
+    return payload
+
+
+def capture_slot_runtime_binding(
+    app_dir: Path,
+    project_name: str,
+    slot_id: str,
+    *,
+    engine: Any,
+    require_http: bool,
+    require_helper_image: bool = False,
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(
+        prefix="km-vms-slot-capture-",
+    ) as temporary:
+        temporary_root = Path(temporary)
+        compose, env, source_dir, manifest = slot_compose(
+            app_dir,
+            project_name,
+            slot_id,
+            engine=engine,
+            override_root=temporary_root,
+            with_image_override=False,
+        )
+        config = run_command(
+            [*compose, "config"],
+            timeout=60,
+            error_code="slot_compose_evidence_failed",
+            error_message="Release-slot Compose plan is unavailable.",
+            env=env,
+        )
+        plan_digest = _normalized_compose_digest(
+            config.stdout,
+            app_dir=app_dir,
+            source_dir=source_dir,
+        )
+        _archive_attached, archive_digest = _archive_override_evidence(
+            app_dir
+        )
+        try:
+            binding = engine.build_activation_slot_binding(
+                app_dir,
+                slot_id,
+                compose_plan_sha256=plan_digest,
+                archive_override_sha256=archive_digest,
+            )
+            # ``None`` is real current evidence (no generated override), not
+            # a request to reuse the digest captured in the immutable slot.
+            binding["archive_override_sha256"] = archive_digest
+            binding = engine.validate_activation_slot_binding(binding)
+        except Exception as exc:
+            raise BridgeError(
+                getattr(
+                    exc,
+                    "code",
+                    "activation_slot_binding_invalid",
+                ),
+                "Release-slot activation binding is invalid.",
+            ) from exc
+        image_services = manifest["image_evidence"]["services"]
+        required = list(CORE_RUNTIME_SERVICES)
+        if require_helper_image:
+            required.append("update-helper")
+        required.extend(
+            service
+            for service in OPTIONAL_PERSISTENT_IMAGE_SERVICES
+            if service in image_services
+        )
+        for service in required:
+            expected = image_services.get(service, {}).get("image_id")
+            image_id, _state = _inspect_running_service(
+                compose,
+                service,
+                env=env,
+            )
+            if image_id != expected:
+                raise BridgeError(
+                    "slot_runtime_image_mismatch",
+                    "A running service does not use its immutable slot image.",
+                )
+        identity_path = source_dir / ".km-vms-release.json"
+        identity = read_json_object(identity_path)
+        assert identity is not None
+        api_identity = _api_visible_release_identity(
+            compose,
+            env=env,
+        )
+        if (
+            identity.get("metadata_status") != "complete"
+            or str(identity.get("version") or "")
+            != binding["version"]
+            or str(identity.get("commit_sha") or "").lower()
+            != binding["commit"]
+            or _sha256_file(identity_path)
+            != binding["api_identity_sha256"]
+            or _api_visible_identity_digest(compose, env=env)
+            != binding["api_identity_sha256"]
+            or api_identity
+            != {
+                "version": binding["version"],
+                "commit": binding["commit"],
+                "metadata_status": "complete",
+                "identity_validity": "valid",
+            }
+        ):
+            raise BridgeError(
+                "slot_runtime_identity_mismatch",
+                "Release-slot identity does not match API-visible identity.",
+            )
+        if require_http:
+            for url in (
+                "http://api:8000/health",
+                "http://nginx/api/health",
+                "http://web:3000/",
+            ):
+                result = run_command(
+                    [
+                        "curl",
+                        "-fsSL",
+                        "--max-time",
+                        "5",
+                        url,
+                    ],
+                    timeout=10,
+                    error_code="slot_runtime_unhealthy",
+                    error_message="Release-slot HTTP readiness failed.",
+                    check=False,
+                )
+                if result.returncode != 0:
+                    raise BridgeError(
+                        "slot_runtime_unhealthy",
+                        "Release-slot HTTP readiness failed.",
+                    )
+        return binding
+
+
+def verify_slot_runtime(
+    app_dir: Path,
+    project_name: str,
+    binding: dict[str, Any],
+    *,
+    engine: Any,
+    timeout_seconds: int = 180,
+    require_helper_image: bool = False,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: BridgeError | None = None
+    while time.monotonic() < deadline:
+        try:
+            observed = capture_slot_runtime_binding(
+                app_dir,
+                project_name,
+                str(binding["slot_id"]),
+                engine=engine,
+                require_http=True,
+                require_helper_image=require_helper_image,
+            )
+            if observed != binding:
+                raise BridgeError(
+                    "slot_runtime_evidence_mismatch",
+                    "Release-slot runtime no longer matches activation evidence.",
+                )
+            return
+        except BridgeError as exc:
+            last_error = exc
+            time.sleep(2)
+    if last_error is not None:
+        raise last_error
+    raise BridgeError(
+        "slot_runtime_unhealthy",
+        "Release-slot runtime verification timed out.",
+    )
+
+
+def reconcile_slot_runtime(
+    app_dir: Path,
+    project_name: str,
+    slot_id: str,
+    *,
+    engine: Any,
+) -> None:
+    with tempfile.TemporaryDirectory(
+        prefix="km-vms-slot-reconcile-",
+    ) as temporary:
+        compose, env, _source, manifest = slot_compose(
+            app_dir,
+            project_name,
+            slot_id,
+            engine=engine,
+            override_root=Path(temporary),
+            with_image_override=True,
+        )
+        services = [
+            service
+            for service in ACTIVATION_RUNTIME_SERVICES
+            if service in manifest["compose_evidence"]["services"]
+        ]
+        run_command(
+            [
+                *compose,
+                "up",
+                "-d",
+                "--no-build",
+                "--no-deps",
+                "--force-recreate",
+                *services,
+            ],
+            timeout=600,
+            error_code="slot_runtime_start_failed",
+            error_message="Release-slot core services could not be started.",
+            env=env,
+        )
+
+
+def stop_slot_schema_writers(
+    app_dir: Path,
+    project_name: str,
+    slot_id: str,
+    *,
+    engine: Any,
+) -> None:
+    with tempfile.TemporaryDirectory(
+        prefix="km-vms-slot-quiesce-",
+    ) as temporary:
+        compose, env, _source, _manifest = slot_compose(
+            app_dir,
+            project_name,
+            slot_id,
+            engine=engine,
+            override_root=Path(temporary),
+            with_image_override=True,
+        )
+        run_command(
+            [*compose, "stop", "api", "recorder"],
+            timeout=180,
+            error_code="slot_quiesce_failed",
+            error_message="Database writers could not be paused for migration.",
+            env=env,
+        )
+
+
+def write_activation_progress(
+    request_id: str,
+    *,
+    status: str,
+    phase: str,
+    current_step: str,
+) -> None:
+    path_text = str(os.getenv("KM_VMS_UPDATE_PROGRESS_FILE") or "")
+    if not path_text:
+        return
+    path = Path(path_text)
+    if not path.is_absolute():
+        return
+    atomic_write_json(
+        path,
+        {
+            "schema_version": 1,
+            "status": status,
+            "phase": phase,
+            "current_step": current_step,
+            "updated_at": utcnow(),
+            "request_id": request_id,
+            "message": "",
+        },
+    )
+
+
+def run_target_schema_preflight(
+    app_dir: Path,
+    project_name: str,
+    target_slot_id: str,
+    *,
+    engine: Any,
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(
+        prefix="km-vms-slot-schema-preflight-",
+    ) as temporary:
+        compose, env, _source, _manifest = slot_compose(
+            app_dir,
+            project_name,
+            target_slot_id,
+            engine=engine,
+            override_root=Path(temporary),
+            with_image_override=True,
+        )
+        result = run_command(
+            [
+                *compose,
+                "run",
+                "--rm",
+                "--no-deps",
+                "schema-update",
+                "python3",
+                "-m",
+                "app.services.schema_update_pipeline",
+                "--preflight",
+            ],
+            timeout=900,
+            error_code="schema_preflight_failed",
+            error_message="Target schema preflight failed before activation.",
+            env=env,
+        )
+    values: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key in {
+            "schema_migration_required",
+            "schema_source_version",
+            "schema_target_version",
+            "schema_previous_runtime_compatible",
+            "schema_preflight",
+        }:
+            values[key] = value
+    try:
+        summary = json.loads(values["schema_preflight"])
+        source_version = int(values["schema_source_version"])
+        target_version = int(values["schema_target_version"])
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise BridgeError(
+            "schema_preflight_evidence_invalid",
+            "Target schema preflight returned invalid evidence.",
+        ) from exc
+    migration_required = values.get("schema_migration_required") == "true"
+    compatible = (
+        values.get("schema_previous_runtime_compatible") == "true"
+    )
+    compatibility = (
+        summary.get("previous_runtime_compatibility")
+        if type(summary) is dict
+        else None
+    )
+    if (
+        type(summary) is not dict
+        or type(compatibility) is not dict
+        or compatibility.get("status")
+        != ("compatible" if compatible else "blocked")
+        or bool(summary.get("migration_required"))
+        is not migration_required
+        or summary.get("source_schema_version") != source_version
+        or summary.get("target_schema_version") != target_version
+        or source_version > target_version
+    ):
+        raise BridgeError(
+            "schema_preflight_evidence_invalid",
+            "Target schema preflight returned contradictory evidence.",
+        )
+    if not compatible:
+        raise BridgeError(
+            "schema_previous_runtime_incompatible",
+            "Automatic application rollback is not compatible with the planned schema path.",
+        )
+    compatibility_sha256 = hashlib.sha256(
+        json.dumps(
+            summary,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "migration_required": migration_required,
+        "source_schema_version": source_version,
+        "target_schema_version": target_version,
+        "compatibility_sha256": compatibility_sha256,
+    }
+
+
+def run_target_schema_migration(
+    app_dir: Path,
+    project_name: str,
+    target_slot_id: str,
+    *,
+    engine: Any,
+) -> None:
+    with tempfile.TemporaryDirectory(
+        prefix="km-vms-slot-schema-migrate-",
+    ) as temporary:
+        compose, env, _source, _manifest = slot_compose(
+            app_dir,
+            project_name,
+            target_slot_id,
+            engine=engine,
+            override_root=Path(temporary),
+            with_image_override=True,
+        )
+        run_command(
+            [
+                *compose,
+                "run",
+                "--rm",
+                "--no-deps",
+                "schema-update",
+                "python3",
+                "-m",
+                "app.services.schema_update_pipeline",
+                "--migrate",
+            ],
+            timeout=3600,
+            error_code="schema_update_failed",
+            error_message="Target database migration did not complete.",
+            env=env,
+        )
+
+
+def schema_mutation_completed(
+    app_dir: Path,
+    *,
+    request_id: str,
+    target_commit: str,
+) -> bool:
+    payload = read_json_object(
+        app_dir / "data/update-control/schema-mutation-state.json",
+        missing_ok=True,
+    )
+    if payload is None:
+        return False
+    return bool(
+        payload.get("schema_version") == 1
+        and payload.get("request_id") == request_id
+        and str(payload.get("target_commit") or "").lower()
+        == target_commit
+        and payload.get("mutation_started") is True
+        and payload.get("state") == "completed"
+    )
+
+
+def _observed_slot_id(engine: Any, app_dir: Path) -> str | None:
+    try:
+        active = engine.read_active_slot(app_dir)
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "active_pointer_invalid"),
+            "Active release pointer is invalid.",
+        ) from exc
+    return active[0] if active is not None else None
+
+
+def transition_journal(
+    engine: Any,
+    app_dir: Path,
+    request_id: str,
+    phase: str,
+    **updates: Any,
+) -> dict[str, Any]:
+    updates.setdefault("record_pointer", True)
+    updates.setdefault(
+        "pointer_slot_id",
+        _observed_slot_id(engine, app_dir),
+    )
+    try:
+        return engine.transition_activation_journal(
+            app_dir,
+            request_id=request_id,
+            phase=phase,
+            **updates,
+        )
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "activation_journal_invalid"),
+            "Activation journal transition failed.",
+        ) from exc
+
+
+def block_activation(
+    engine: Any,
+    app_dir: Path,
+    request_id: str,
+    category: str,
+    *,
+    rollback_trigger: str | None = None,
+) -> dict[str, Any]:
+    return transition_journal(
+        engine,
+        app_dir,
+        request_id,
+        "blocked",
+        failure_category=category,
+        rollback_trigger=rollback_trigger,
+    )
+
+
+def rollback_activation(
+    engine: Any,
+    app_dir: Path,
+    project_name: str,
+    journal: dict[str, Any],
+    *,
+    trigger: str,
+) -> dict[str, Any]:
+    request_id = journal["request_id"]
+    previous = journal["previous"]
+    target = journal["target"]
+    observed = _observed_slot_id(engine, app_dir)
+    if observed not in {target["slot_id"], previous["slot_id"]}:
+        return block_activation(
+            engine,
+            app_dir,
+            request_id,
+            "rollback_pointer_conflict",
+            rollback_trigger=trigger,
+        )
+    transition_journal(
+        engine,
+        app_dir,
+        request_id,
+        "rolling_back",
+        rollback_trigger=trigger,
+    )
+    write_activation_progress(
+        request_id,
+        status="rolling_back",
+        phase="rolling_back",
+        current_step="health_check",
+    )
+    try:
+        if observed != previous["slot_id"]:
+            engine.atomic_switch_pointer(
+                app_dir,
+                previous["slot_id"],
+            )
+        transition_journal(
+            engine,
+            app_dir,
+            request_id,
+            "rolling_back",
+            rollback_trigger=trigger,
+        )
+        reconcile_slot_runtime(
+            app_dir,
+            project_name,
+            previous["slot_id"],
+            engine=engine,
+        )
+        verify_slot_runtime(
+            app_dir,
+            project_name,
+            previous,
+            engine=engine,
+            require_helper_image=True,
+        )
+        terminal = transition_journal(
+            engine,
+            app_dir,
+            request_id,
+            "failed_rolled_back",
+            previous_verified=True,
+            rollback_trigger=trigger,
+            failure_category=trigger,
+        )
+        attempt_terminal_release_cleanup(
+            engine,
+            app_dir,
+            project_name,
+            terminal,
+        )
+        return terminal
+    except Exception:
+        return block_activation(
+            engine,
+            app_dir,
+            request_id,
+            "rollback_verification_failed",
+            rollback_trigger=trigger,
+        )
+
+
+def block_after_restoring_previous(
+    engine: Any,
+    app_dir: Path,
+    project_name: str,
+    journal: dict[str, Any],
+    category: str,
+) -> dict[str, Any]:
+    try:
+        if _observed_slot_id(engine, app_dir) not in {
+            None,
+            journal["previous"]["slot_id"],
+        }:
+            return block_activation(
+                engine,
+                app_dir,
+                journal["request_id"],
+                "activation_pointer_conflict",
+            )
+        reconcile_slot_runtime(
+            app_dir,
+            project_name,
+            journal["previous"]["slot_id"],
+            engine=engine,
+        )
+        verify_slot_runtime(
+            app_dir,
+            project_name,
+            journal["previous"],
+            engine=engine,
+            require_helper_image=True,
+        )
+    except Exception:
+        return block_activation(
+            engine,
+            app_dir,
+            journal["request_id"],
+            "previous_recovery_failed",
+        )
+    return block_activation(
+        engine,
+        app_dir,
+        journal["request_id"],
+        category,
+    )
+
+
+def cleanup_unprotected_slot_images(
+    project_name: str,
+    protected_slot_ids: set[str],
+) -> list[str]:
+    project_name = require_project_name(project_name)
+    protected = {
+        slot_id.lower()
+        for slot_id in protected_slot_ids
+        if SLOT_ID_RE.fullmatch(str(slot_id))
+    }
+    if len(protected) != len(protected_slot_ids):
+        raise BridgeError(
+            "slot_cleanup_evidence_invalid",
+            "Protected release-slot cleanup evidence is invalid.",
+        )
+    listed = run_command(
+        [
+            "docker",
+            "image",
+            "ls",
+            "--format",
+            "{{.Repository}}:{{.Tag}}",
+        ],
+        timeout=60,
+        error_code="slot_image_cleanup_failed",
+        error_message="Product-owned release-slot image aliases could not be listed.",
+    )
+    alias_repository_prefix = f"km-vms-{project_name}-slot-"
+    release_repositories = {
+        f"{project_name}-api",
+        f"{project_name}-recorder",
+        f"{project_name}-web",
+        f"km-vms-{project_name}-update-control",
+        f"km-vms-{project_name}-update-helper",
+    }
+    candidates: set[str] = set()
+    for raw_ref in listed.stdout.splitlines():
+        image_ref = raw_ref.strip()
+        repository, separator, tag = image_ref.rpartition(":")
+        if (
+            separator != ":"
+            or not SLOT_ID_RE.fullmatch(tag)
+        ):
+            continue
+        product_owned = repository in release_repositories
+        if repository.startswith(alias_repository_prefix):
+            service = repository[len(alias_repository_prefix) :]
+            product_owned = bool(
+                re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", service)
+            )
+        if not product_owned:
+            continue
+        if tag.lower() not in protected:
+            candidates.add(image_ref)
+
+    removed: list[str] = []
+    failed: list[str] = []
+    for image_ref in sorted(candidates):
+        result = run_command(
+            ["docker", "image", "rm", image_ref],
+            timeout=60,
+            error_code="slot_image_cleanup_failed",
+            error_message="A product-owned release-slot image alias could not be removed.",
+            check=False,
+        )
+        if result.returncode == 0:
+            removed.append(image_ref)
+        else:
+            failed.append(image_ref)
+    if failed:
+        raise BridgeError(
+            "slot_image_cleanup_failed",
+            "One or more product-owned release-slot image aliases could not be removed.",
+        )
+    return removed
+
+
+def cleanup_terminal_release_artifacts(
+    engine: Any,
+    app_dir: Path,
+    project_name: str,
+    journal: dict[str, Any],
+) -> dict[str, Any]:
+    if journal.get("phase") not in {
+        "completed",
+        "failed_rolled_back",
+    }:
+        raise BridgeError(
+            "slot_cleanup_terminal_evidence_required",
+            "Release-slot cleanup requires a verified terminal activation.",
+        )
+    removed_slots = engine.cleanup_unprotected_slots(
+        app_dir,
+        retain_slot_ids=set(),
+        maximum_unprotected=0,
+        terminal_evidence=True,
+    )
+    protected = engine.protected_slot_ids(app_dir)
+    removed_images = cleanup_unprotected_slot_images(
+        project_name,
+        protected,
+    )
+    staging_removed = engine.cleanup_request_staging(
+        app_dir,
+        request_id=journal["request_id"],
+        terminal_evidence=True,
+    )
+    return {
+        "removed_slots": removed_slots,
+        "removed_image_refs": removed_images,
+        "request_staging_removed": staging_removed,
+    }
+
+
+def attempt_terminal_release_cleanup(
+    engine: Any,
+    app_dir: Path,
+    project_name: str,
+    journal: dict[str, Any],
+) -> None:
+    try:
+        cleanup_terminal_release_artifacts(
+            engine,
+            app_dir,
+            project_name,
+            journal,
+        )
+    except Exception as exc:
+        print(
+            "WARNING [terminal_release_cleanup_deferred]: "
+            f"{exc}",
+            file=sys.stderr,
+        )
+
+
+def schedule_target_helper_handoff(
+    engine: Any,
+    app_dir: Path,
+    project_name: str,
+    request_id: str,
+    target_slot_id: str,
+) -> None:
+    _root, source_dir, manifest = slot_record(
+        app_dir,
+        target_slot_id,
+        engine=engine,
+    )
+    helper = manifest["image_evidence"]["services"].get(
+        "update-helper"
+    )
+    if type(helper) is not dict:
+        raise BridgeError(
+            "helper_handoff_evidence_missing",
+            "Prepared target helper evidence is unavailable.",
+        )
+    helper_image = str(helper.get("immutable_image_ref") or "")
+    expected_image_id = str(helper.get("image_id") or "").lower()
+    if (
+        not helper_image
+        or not IMAGE_ID_RE.fullmatch(expected_image_id)
+    ):
+        raise BridgeError(
+            "helper_handoff_evidence_missing",
+            "Prepared target helper evidence is invalid.",
+        )
+    bridge_script = (
+        source_dir / "scripts/km-vms-update-helper-bridge.py"
+    )
+    schedule_refresh(
+        app_dir=app_dir,
+        project_name=project_name,
+        helper_image=helper_image,
+        request_id=request_id,
+        expected_image_id=expected_image_id,
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+        bridge_script=bridge_script,
+        target_slot=target_slot_id,
+    )
+
+
+def converge_activation(
+    engine: Any,
+    app_dir: Path,
+    project_name: str,
+    request_id: str,
+    *,
+    terminal_owner: bool = False,
+) -> dict[str, Any]:
+    for _iteration in range(16):
+        try:
+            journal = engine.read_activation_journal(app_dir)
+        except Exception as exc:
+            raise BridgeError(
+                getattr(exc, "code", "activation_journal_invalid"),
+                "Activation journal is unavailable or invalid.",
+            ) from exc
+        if journal["request_id"] != request_id:
+            raise BridgeError(
+                "activation_request_conflict",
+                "Activation journal belongs to another request.",
+            )
+        phase = journal["phase"]
+        if phase in {"completed", "failed_rolled_back", "blocked"}:
+            return journal
+        previous = journal["previous"]
+        target = journal["target"]
+        schema = journal["schema"]
+        observed = _observed_slot_id(engine, app_dir)
+
+        if phase == "target_prepared":
+            if observed not in {None, previous["slot_id"]}:
+                return block_activation(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "activation_pointer_conflict",
+                )
+            if schema["migration_required"]:
+                transition_journal(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "quiescing",
+                )
+            else:
+                transition_journal(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "activating",
+                )
+            continue
+
+        if phase == "quiescing":
+            if not schema["migration_required"]:
+                return block_activation(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "schema_journal_conflict",
+                )
+            try:
+                stop_slot_schema_writers(
+                    app_dir,
+                    project_name,
+                    previous["slot_id"],
+                    engine=engine,
+                )
+                transition_journal(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "schema_preparing",
+                    migration_invoked=True,
+                )
+            except BridgeError:
+                return block_after_restoring_previous(
+                    engine,
+                    app_dir,
+                    project_name,
+                    journal,
+                    "slot_quiesce_failed",
+                )
+            try:
+                run_target_schema_migration(
+                    app_dir,
+                    project_name,
+                    target["slot_id"],
+                    engine=engine,
+                )
+            except BridgeError:
+                if not schema_mutation_completed(
+                    app_dir,
+                    request_id=request_id,
+                    target_commit=target["commit"],
+                ):
+                    return block_after_restoring_previous(
+                        engine,
+                        app_dir,
+                        project_name,
+                        journal,
+                        "schema_update_failed",
+                    )
+            if not schema_mutation_completed(
+                app_dir,
+                request_id=request_id,
+                target_commit=target["commit"],
+            ):
+                return block_after_restoring_previous(
+                    engine,
+                    app_dir,
+                    project_name,
+                    journal,
+                    "schema_evidence_missing",
+                )
+            transition_journal(
+                engine,
+                app_dir,
+                request_id,
+                "schema_preparing",
+                migration_invoked=True,
+                migration_completed=True,
+            )
+            continue
+
+        if phase == "schema_preparing":
+            if not schema["migration_required"]:
+                return block_activation(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "schema_journal_conflict",
+                )
+            if schema["migration_completed"] or schema_mutation_completed(
+                app_dir,
+                request_id=request_id,
+                target_commit=target["commit"],
+            ):
+                transition_journal(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "schema_preparing",
+                    migration_invoked=True,
+                    migration_completed=True,
+                )
+                transition_journal(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "activating",
+                )
+                continue
+            return block_after_restoring_previous(
+                engine,
+                app_dir,
+                project_name,
+                journal,
+                (
+                    "schema_migration_interrupted"
+                    if schema["migration_invoked"]
+                    else "schema_journal_conflict"
+                ),
+            )
+
+        if phase == "activating":
+            if schema["migration_required"] and not schema[
+                "migration_completed"
+            ]:
+                return block_activation(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "schema_evidence_missing",
+                )
+            if observed not in {
+                None,
+                previous["slot_id"],
+                target["slot_id"],
+            }:
+                return block_activation(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "activation_pointer_conflict",
+                )
+            write_activation_progress(
+                request_id,
+                status="activating",
+                phase="activating",
+                current_step="applying",
+            )
+            if observed != target["slot_id"]:
+                try:
+                    engine.atomic_switch_pointer(
+                        app_dir,
+                        target["slot_id"],
+                    )
+                except Exception:
+                    try:
+                        observed_after_switch = _observed_slot_id(
+                            engine,
+                            app_dir,
+                        )
+                    except BridgeError:
+                        return block_activation(
+                            engine,
+                            app_dir,
+                            request_id,
+                            "active_pointer_switch_failed",
+                        )
+                    if observed_after_switch == target["slot_id"]:
+                        transition_journal(
+                            engine,
+                            app_dir,
+                            request_id,
+                            "verifying_target",
+                        )
+                        continue
+                    if observed_after_switch in {
+                        None,
+                        previous["slot_id"],
+                    }:
+                        return block_after_restoring_previous(
+                            engine,
+                            app_dir,
+                            project_name,
+                            journal,
+                            "active_pointer_switch_failed",
+                        )
+                    return block_activation(
+                        engine,
+                        app_dir,
+                        request_id,
+                        "activation_pointer_conflict",
+                    )
+            transition_journal(
+                engine,
+                app_dir,
+                request_id,
+                "verifying_target",
+            )
+            continue
+
+        if phase == "verifying_target":
+            if observed != target["slot_id"]:
+                return block_activation(
+                    engine,
+                    app_dir,
+                    request_id,
+                    "target_pointer_mismatch",
+                )
+            write_activation_progress(
+                request_id,
+                status="reconnecting",
+                phase="verifying_target",
+                current_step="health_check",
+            )
+            try:
+                reconcile_slot_runtime(
+                    app_dir,
+                    project_name,
+                    target["slot_id"],
+                    engine=engine,
+                )
+                verify_slot_runtime(
+                    app_dir,
+                    project_name,
+                    target,
+                    engine=engine,
+                )
+            except BridgeError as exc:
+                trigger = (
+                    "target_identity_mismatch"
+                    if "identity" in exc.code
+                    or "evidence_mismatch" in exc.code
+                    else "target_health_failed"
+                )
+                return rollback_activation(
+                    engine,
+                    app_dir,
+                    project_name,
+                    journal,
+                    trigger=trigger,
+                )
+            transition_journal(
+                engine,
+                app_dir,
+                request_id,
+                "committing_target",
+                target_verified=True,
+            )
+            continue
+
+        if phase == "committing_target":
+            try:
+                verify_slot_runtime(
+                    app_dir,
+                    project_name,
+                    target,
+                    engine=engine,
+                )
+            except BridgeError as exc:
+                trigger = (
+                    "target_identity_mismatch"
+                    if "identity" in exc.code
+                    or "evidence_mismatch" in exc.code
+                    else "target_health_failed"
+                )
+                return rollback_activation(
+                    engine,
+                    app_dir,
+                    project_name,
+                    journal,
+                    trigger=trigger,
+                )
+            write_activation_progress(
+                request_id,
+                status="applying",
+                phase="committing_target",
+                current_step="commit_verification",
+            )
+            completed = transition_journal(
+                engine,
+                app_dir,
+                request_id,
+                "completed",
+                target_verified=True,
+            )
+            try:
+                if terminal_owner:
+                    _root, _source, manifest = slot_record(
+                        app_dir,
+                        target["slot_id"],
+                        engine=engine,
+                    )
+                    helper = manifest["image_evidence"]["services"].get(
+                        "update-helper"
+                    )
+                    if type(helper) is not dict:
+                        raise BridgeError(
+                            "helper_handoff_evidence_missing",
+                            "Prepared target helper evidence is unavailable.",
+                        )
+                    helper_image = str(
+                        helper.get("immutable_image_ref") or ""
+                    )
+                    helper_image_id = str(
+                        helper.get("image_id") or ""
+                    ).lower()
+                    if (
+                        not helper_image
+                        or not IMAGE_ID_RE.fullmatch(helper_image_id)
+                    ):
+                        raise BridgeError(
+                            "helper_handoff_evidence_missing",
+                            "Prepared target helper evidence is invalid.",
+                        )
+                    recreate_and_verify_helper(
+                        app_dir=app_dir,
+                        project_name=project_name,
+                        helper_image=helper_image,
+                        expected_image_id=helper_image_id,
+                        target_slot=target["slot_id"],
+                        engine=engine,
+                    )
+                else:
+                    schedule_target_helper_handoff(
+                        engine,
+                        app_dir,
+                        project_name,
+                        request_id,
+                        target["slot_id"],
+                    )
+            except BridgeError as exc:
+                # The target release is already healthy and committed. A
+                # post-terminal helper-image refresh is retryable operational
+                # work, not a reason to roll back a verified product runtime.
+                print(
+                    "WARNING [helper_handoff_deferred]: "
+                    f"{exc}",
+                    file=sys.stderr,
+                )
+            attempt_terminal_release_cleanup(
+                engine,
+                app_dir,
+                project_name,
+                completed,
+            )
+            return completed
+
+        if phase == "rolling_back":
+            trigger = str(
+                journal.get("rollback_trigger")
+                or "target_health_failed"
+            )
+            return rollback_activation(
+                engine,
+                app_dir,
+                project_name,
+                journal,
+                trigger=trigger,
+            )
+
+        return block_activation(
+            engine,
+            app_dir,
+            request_id,
+            "activation_phase_invalid",
+        )
+    return block_activation(
+        engine,
+        app_dir,
+        request_id,
+        "activation_retry_exhausted",
+    )
+
+
+def activate_or_resume(args: argparse.Namespace) -> int:
+    app_dir = require_app_dir(args.app_dir)
+    project_name = require_project_name(args.project_name)
+    request_id = require_request_id(args.request_id)
+    engine = load_slot_engine(bridge_source_root())
+    try:
+        journal = engine.read_activation_journal(
+            app_dir,
+            missing_ok=True,
+        )
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "activation_journal_invalid"),
+            "Activation journal is unavailable or invalid.",
+        ) from exc
+    supplied_previous = str(getattr(args, "previous_slot", None) or "")
+    supplied_target = str(getattr(args, "target_slot", None) or "")
+    starting_new = journal is None or (
+        journal["phase"] in {"completed", "failed_rolled_back", "blocked"}
+        and journal["request_id"] != request_id
+    )
+    if starting_new:
+        previous_slot_id = supplied_previous
+        target_slot_id = supplied_target
+        if not previous_slot_id or not target_slot_id:
+            raise BridgeError(
+                "activation_slots_missing",
+                "Prepared previous and target slots are required.",
+            )
+        schema = run_target_schema_preflight(
+            app_dir,
+            project_name,
+            target_slot_id,
+            engine=engine,
+        )
+        write_activation_progress(
+            request_id,
+            status="preparing",
+            phase="target_prepared",
+            current_step="preflight",
+        )
+        previous = capture_slot_runtime_binding(
+            app_dir,
+            project_name,
+            previous_slot_id,
+            engine=engine,
+            require_http=True,
+            require_helper_image=True,
+        )
+        try:
+            target = engine.build_activation_slot_binding(
+                app_dir,
+                target_slot_id,
+            )
+            expected_commit = str(
+                getattr(args, "target_commit", None) or ""
+            ).lower()
+            expected_version = str(
+                getattr(args, "target_version", None) or ""
+            )
+            if (
+                not COMMIT_SHA_RE.fullmatch(expected_commit)
+                or target["commit"] != expected_commit
+                or not expected_version
+                or target["version"] != expected_version
+            ):
+                raise BridgeError(
+                    "activation_target_identity_mismatch",
+                    "Prepared target does not match the admitted release.",
+                )
+            journal = engine.initialize_activation_journal(
+                app_dir,
+                request_id=request_id,
+                previous=previous,
+                target=target,
+                compatibility_sha256=schema[
+                    "compatibility_sha256"
+                ],
+                source_schema_version=schema[
+                    "source_schema_version"
+                ],
+                target_schema_version=schema[
+                    "target_schema_version"
+                ],
+                migration_required=schema["migration_required"],
+            )
+        except Exception as exc:
+            raise BridgeError(
+                getattr(exc, "code", "activation_journal_invalid"),
+                "Prepared activation could not be journaled safely.",
+            ) from exc
+    elif journal["request_id"] != request_id:
+        raise BridgeError(
+            "activation_request_conflict",
+            "Activation journal belongs to another request.",
+        )
+    elif supplied_previous or supplied_target:
+        if (
+            supplied_previous != journal["previous"]["slot_id"]
+            or supplied_target != journal["target"]["slot_id"]
+            or str(getattr(args, "target_commit", None) or "").lower()
+            != journal["target"]["commit"]
+            or str(getattr(args, "target_version", None) or "")
+            != journal["target"]["version"]
+        ):
+            raise BridgeError(
+                "activation_journal_conflict",
+                "Activation resume arguments contradict its journal.",
+            )
+    result = converge_activation(
+        engine,
+        app_dir,
+        project_name,
+        request_id,
+        terminal_owner=bool(getattr(args, "terminal", False)),
+    )
+    print(
+        json.dumps(
+            {
+                "activation": result["phase"],
+                "request_id": request_id,
+                "previous_slot": result["previous"]["slot_id"],
+                "target_slot": result["target"]["slot_id"],
+                "failure_category": result["failure_category"],
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    )
+    return 0
+
+
+def prepare_trusted_target_slot(args: argparse.Namespace) -> int:
+    """Build and finalize a trusted target without changing the active pointer."""
+
+    app_dir = require_app_dir(args.app_dir)
+    source_input = Path(args.target_source_dir)
+    try:
+        source_input.lstat()
+        target_source_dir = source_input.resolve(strict=True)
+    except OSError as exc:
+        raise BridgeError(
+            "target_source_invalid",
+            "The staged target source is unavailable.",
+        ) from exc
+    if source_input.is_symlink() or not target_source_dir.is_dir():
+        raise BridgeError(
+            "target_source_invalid",
+            "The staged target source is unsafe.",
+        )
+    request_id = require_request_id(args.request_id)
+    trusted_commit = str(args.trusted_commit or "").lower()
+    declared_version = str(args.declared_version or "")
+    project_name = require_project_name(args.project_name)
+    if not COMMIT_SHA_RE.fullmatch(trusted_commit):
+        raise BridgeError(
+            "target_commit_invalid",
+            "Trusted target commit must be exact 40-hex.",
+        )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,79}", declared_version):
+        raise BridgeError(
+            "target_version_invalid",
+            "Trusted target version is invalid.",
+        )
+    slot_tool = target_source_dir / "scripts/km-vms-release-slots.py"
+    if slot_tool.is_symlink() or not slot_tool.is_file():
+        raise BridgeError(
+            "slot_engine_missing",
+            "Trusted target release has no release-slot engine.",
+        )
+    inspect_payload = _parse_command_json(
+        run_command(
+            [
+                "python3",
+                str(slot_tool),
+                "inspect",
+                "--app-dir",
+                str(app_dir),
+            ],
+            timeout=30,
+            error_code="slot_layout_prepare_failed",
+            error_message="Stable release-slot layout could not be prepared.",
+        ),
+        error_code="slot_layout_prepare_failed",
+        error_message="Stable release-slot layout returned invalid evidence.",
+    )
+    if inspect_payload.get("activation_cli_enabled") is not True:
+        raise BridgeError(
+            "slot_activation_unavailable",
+            "Trusted target release does not provide the Stage C activation engine.",
+        )
+    stage_payload = _parse_command_json(
+        run_command(
+            [
+                "python3",
+                str(slot_tool),
+                "stage-target",
+                "--app-dir",
+                str(app_dir),
+                "--source-dir",
+                str(target_source_dir),
+                "--request-id",
+                request_id,
+                "--trusted-commit",
+                trusted_commit,
+                "--declared-version",
+                declared_version,
+            ],
+            timeout=300,
+            error_code="slot_target_stage_failed",
+            error_message="Trusted target source could not be materialized.",
+        ),
+        error_code="slot_target_stage_failed",
+        error_message="Trusted target source returned invalid staging evidence.",
+    )
+    slot_id = str(stage_payload.get("slot_id") or "")
+    if slot_id != f"release-{trusted_commit}":
+        raise BridgeError(
+            "slot_target_stage_failed",
+            "Trusted target slot identity is contradictory.",
+        )
+    if stage_payload.get("status") == "reused":
+        manifest = stage_payload.get("manifest")
+        if type(manifest) is not dict:
+            raise BridgeError(
+                "slot_target_stage_failed",
+                "Reused target slot returned no immutable manifest.",
+            )
+        verify_immutable_images(manifest.get("image_evidence", {}))
+        print("target_slot_prepare=REUSED")
+        print(f"target_slot={slot_id}")
+        print("activation_enabled=true")
+        return 0
+    if stage_payload.get("status") != "staged":
+        raise BridgeError(
+            "slot_target_stage_failed",
+            "Trusted target did not reach a staged state.",
+        )
+    staged_source = Path(str(stage_payload.get("source_path") or ""))
+    if not staged_source.is_absolute() or not staged_source.is_dir():
+        raise BridgeError(
+            "slot_target_stage_failed",
+            "Trusted target staged source path is invalid.",
+        )
+
+    target_env = os.environ.copy()
+    target_env["COMPOSE_PROJECT_NAME"] = project_name
+    target_env["KM_VMS_RELEASE_IMAGE_TAG"] = slot_id
+    compose = compose_base(
+        app_dir,
+        project_name,
+        source_dir=staged_source,
+        include_archive_override=True,
+    )
+    config = run_command(
+        [*compose, "config"],
+        timeout=60,
+        error_code="slot_compose_evidence_failed",
+        error_message="Trusted target Compose plan could not be validated.",
+        env=target_env,
+    )
+    services = _compose_services(compose, env=target_env)
+    if not set(TARGET_EVIDENCE_SERVICES).issubset(services):
+        raise BridgeError(
+            "slot_compose_evidence_failed",
+            "Trusted target Compose plan lacks a required service.",
+        )
+    image_refs = _compose_image_refs(compose, env=target_env)
+    run_command(
+        [*compose, "build", *TARGET_BUILD_SERVICES],
+        timeout=3600,
+        error_code="slot_target_build_failed",
+        error_message="Trusted target images could not be built before activation.",
+        env=target_env,
+    )
+    nginx_ref = image_refs.get("nginx")
+    if not nginx_ref:
+        raise BridgeError(
+            "slot_image_evidence_missing",
+            "Trusted target Nginx image plan is incomplete.",
+        )
+    nginx_present = run_command(
+        [
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{.Id}}",
+            nginx_ref,
+        ],
+        timeout=30,
+        error_code="slot_target_pull_failed",
+        error_message="Trusted target Nginx image could not be inspected.",
+        check=False,
+    )
+    if nginx_present.returncode != 0:
+        run_command(
+            [*compose, "pull", "nginx"],
+            timeout=600,
+            error_code="slot_target_pull_failed",
+            error_message="Trusted target Nginx image could not be prepared.",
+            env=target_env,
+        )
+    raw_images: dict[str, Any] = {"schema_version": 1, "services": {}}
+    for service in TARGET_EVIDENCE_SERVICES:
+        image_ref = image_refs.get(service)
+        if not image_ref:
+            raise BridgeError(
+                "slot_image_evidence_missing",
+                "Trusted target image plan is incomplete.",
+            )
+        if service != "nginx" and not image_ref.endswith(f":{slot_id}"):
+            raise BridgeError(
+                "slot_image_evidence_failed",
+                "A target-built image used a mutable tag.",
+            )
+        raw_images["services"][service] = {
+            "image_id": _image_id_for_ref(image_ref),
+            "source_image_ref": image_ref,
+        }
+    image_evidence = preserve_slot_images(
+        raw_images,
+        project_name=project_name,
+        slot_id=slot_id,
+    )
+    archive_attached, archive_digest = _archive_override_evidence(app_dir)
+    plan_digest = _normalized_compose_digest(
+        config.stdout,
+        app_dir=app_dir,
+        source_dir=staged_source,
+    )
+    compose_evidence = {
+        "schema_version": 1,
+        "project_name": project_name,
+        "project_directory": "source",
+        "captured_plan_sha256": plan_digest,
+        "slot_plan_sha256": plan_digest,
+        "archive_override_attached": archive_attached,
+        "archive_override_sha256": archive_digest,
+        "runtime_override_sha256": None,
+        "shared_root_contract": "stable_app_dir_v1",
+        "services": services,
+    }
+    evidence_root = app_dir / "data/update-runtime/staging"
+    with tempfile.TemporaryDirectory(
+        prefix=".target-evidence-",
+        dir=evidence_root,
+    ) as temporary:
+        temporary_root = Path(temporary)
+        compose_path = temporary_root / "compose.json"
+        image_path = temporary_root / "images.json"
+        atomic_write_json(compose_path, compose_evidence)
+        atomic_write_json(image_path, image_evidence)
+        finalized = _parse_command_json(
+            run_command(
+                [
+                    "python3",
+                    str(slot_tool),
+                    "finalize",
+                    "--app-dir",
+                    str(app_dir),
+                    "--request-id",
+                    request_id,
+                    "--compose-evidence-file",
+                    str(compose_path),
+                    "--image-evidence-file",
+                    str(image_path),
+                ],
+                timeout=300,
+                error_code="slot_target_finalize_failed",
+                error_message="Trusted target slot could not be finalized.",
+            ),
+            error_code="slot_target_finalize_failed",
+            error_message="Trusted target slot returned invalid final evidence.",
+        )
+    if (
+        finalized.get("slot_id") != slot_id
+        or finalized.get("status") not in {"published", "reused"}
+    ):
+        raise BridgeError(
+            "slot_target_finalize_failed",
+            "Trusted target final evidence is contradictory.",
+        )
+    print("target_slot_prepare=PASS")
+    print(f"target_slot={slot_id}")
+    print("activation_enabled=true")
+    return 0
 
 
 def handoff(args: argparse.Namespace) -> int:
-    """Normalize one legacy/current request before any source overlay."""
+    """Bind one admitted request to its exact current release."""
 
     app_dir = require_app_dir(args.app_dir)
-    target_source_dir = Path(args.target_source_dir).resolve()
+    target_source_input = Path(args.target_source_dir)
+    try:
+        target_source_input.lstat()
+        target_source_dir = target_source_input.resolve(strict=True)
+    except OSError as exc:
+        raise BridgeError(
+            "target_source_invalid",
+            "The staged target source is unavailable or incomplete.",
+        ) from exc
     if (
-        not target_source_dir.is_dir()
+        target_source_input.is_symlink()
+        or not target_source_dir.is_dir()
         or target_source_dir.is_symlink()
         or not (
             target_source_dir / "release/km-vms-release.json"
@@ -786,18 +3460,96 @@ def handoff(args: argparse.Namespace) -> int:
             "The staged target source is unavailable or incomplete.",
         )
     request_id = require_request_id(args.request_id)
-    capture_installed_source_identity(
-        app_dir,
-        request_id=request_id,
-        target_source_dir=target_source_dir,
-    )
     archive_override_changed = normalize_archive_roots_override(app_dir)
+    engine = load_slot_engine(target_source_dir)
+    try:
+        active = engine.read_active_slot(app_dir)
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "active_pointer_invalid"),
+            "Active release pointer is invalid.",
+        ) from exc
+    terminal_request: dict[str, Any] | None = None
+    if bool(getattr(args, "terminal", False)):
+        trusted_commit = str(
+            getattr(args, "trusted_commit", None) or ""
+        ).lower()
+        declared_version = str(
+            getattr(args, "declared_version", None) or ""
+        )
+        if (
+            not COMMIT_SHA_RE.fullmatch(trusted_commit)
+            or not re.fullmatch(
+                r"[A-Za-z0-9][A-Za-z0-9._+-]{0,79}",
+                declared_version,
+            )
+        ):
+            raise BridgeError(
+                "terminal_request_invalid",
+                "Terminal update target identity is invalid.",
+            )
+        terminal_request = {
+            "schema_version": 1,
+            "request_id": request_id,
+            "requested_at": utcnow(),
+            "intent": "apply_update",
+            "confirmed": True,
+            "source": {
+                "version": declared_version,
+                "commit": trusted_commit,
+            },
+        }
+    if active is not None:
+        previous_slot_id, active_source = active
+        installed_identity = capture_installed_source_identity(
+            app_dir,
+            request_id=request_id,
+            target_source_dir=target_source_dir,
+            installed_source_dir=active_source,
+            request_override=terminal_request,
+        )
+        project_name = require_project_name(
+            str(getattr(args, "project_name", None) or "").strip()
+            or os.getenv("KM_VMS_PROJECT_NAME", "").strip()
+        )
+        capture_slot_runtime_binding(
+            app_dir,
+            project_name,
+            previous_slot_id,
+            engine=engine,
+            require_http=True,
+            require_helper_image=True,
+        )
+        slot_result = previous_slot_id
+        handoff_kind = "active_slot"
+    else:
+        installed_identity = capture_installed_source_identity(
+            app_dir,
+            request_id=request_id,
+            target_source_dir=target_source_dir,
+            request_override=terminal_request,
+        )
+        slot_result = prepare_legacy_adopted_slot(
+            app_dir=app_dir,
+            target_source_dir=target_source_dir,
+            request_id=request_id,
+            installed_identity=installed_identity,
+        )
+        handoff_kind = "legacy_adoption"
     print("schema_handoff=PASS")
     print(f"schema_handoff_request_id={request_id}")
     print(
         "archive_roots_override="
         + ("normalized" if archive_override_changed else "unchanged")
     )
+    print(f"handoff_kind={handoff_kind}")
+    print(
+        "activation_owner="
+        + ("terminal_lock" if terminal_request is not None else "update_helper")
+    )
+    print(f"previous_slot={slot_result}")
+    if handoff_kind == "legacy_adoption":
+        print(f"adopted_slot={slot_result}")
     return 0
 
 
@@ -918,6 +3670,7 @@ def run_command(
     error_code: str,
     error_message: str,
     check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
@@ -927,12 +3680,35 @@ def run_command(
             stderr=subprocess.PIPE,
             timeout=timeout,
             check=False,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise BridgeError(error_code, error_message) from exc
     if check and result.returncode != 0:
         raise BridgeError(error_code, error_message)
     return result
+
+
+def docker_compose_command() -> list[str]:
+    configured = str(os.getenv("KM_VMS_DOCKER_COMPOSE") or "").strip()
+    kind = str(
+        os.getenv("KM_VMS_DOCKER_COMPOSE_KIND") or ""
+    ).strip()
+    if not configured:
+        return ["docker", "compose"]
+    if (
+        any(char.isspace() or char in "\r\n\x00" for char in configured)
+        or kind not in {"plugin", "standalone"}
+    ):
+        raise BridgeError(
+            "compose_unavailable",
+            "Docker Compose command binding is invalid.",
+        )
+    return (
+        [configured, "compose"]
+        if kind == "plugin"
+        else [configured]
+    )
 
 
 def ensure_docker_runtime() -> None:
@@ -943,7 +3719,7 @@ def ensure_docker_runtime() -> None:
         error_message="Docker daemon is unavailable to the update-helper bridge.",
     )
     run_command(
-        ["docker", "compose", "version"],
+        [*docker_compose_command(), "version"],
         timeout=20,
         error_code="compose_unavailable",
         error_message="Docker Compose is unavailable to the update-helper bridge.",
@@ -1054,6 +3830,8 @@ def schedule_refresh(
     request_id: str,
     expected_image_id: str,
     timeout_seconds: int,
+    bridge_script: Path | None = None,
+    target_slot: str | None = None,
 ) -> str:
     coordinator_name = f"km-vms-helper-refresh-{request_id.removeprefix('update-').lower()}"
     existing_image_id = inspected_container_image(coordinator_name)
@@ -1062,7 +3840,19 @@ def schedule_refresh(
             raise BridgeError("coordinator_image_mismatch", "Existing helper refresh coordinator uses another image.")
         return "already_scheduled"
 
-    script_path = app_dir / "scripts/km-vms-update-helper-bridge.py"
+    script_path = bridge_script or (
+        app_dir / "scripts/km-vms-update-helper-bridge.py"
+    )
+    if (
+        not script_path.is_absolute()
+        or script_path.is_symlink()
+        or not script_path.is_file()
+        or not script_path.resolve().is_relative_to(app_dir.resolve())
+    ):
+        raise BridgeError(
+            "coordinator_bridge_invalid",
+            "Helper refresh bridge is unavailable or unsafe.",
+        )
     command = [
         "docker",
         "run",
@@ -1094,6 +3884,8 @@ def schedule_refresh(
         "--timeout-seconds",
         str(timeout_seconds),
     ]
+    if target_slot is not None:
+        command.extend(["--target-slot", target_slot])
     result = run_command(
         command,
         timeout=60,
@@ -1246,17 +4038,73 @@ def release_helper_transition_lease(stream: Any) -> None:
         stream.close()
 
 
-def compose_base(app_dir: Path, project_name: str) -> list[str]:
-    return [
-        "docker",
-        "compose",
+def compose_base(
+    app_dir: Path,
+    project_name: str,
+    *,
+    source_dir: Path | None = None,
+    runtime_override: Path | None = None,
+    image_override: Path | None = None,
+    include_archive_override: bool = True,
+) -> list[str]:
+    source = source_dir or app_dir
+    if source.is_symlink() or not (source / "docker-compose.yml").is_file():
+        raise BridgeError(
+            "slot_compose_evidence_failed",
+            "Compose product source is unavailable or unsafe.",
+        )
+    command = [
+        *docker_compose_command(),
         "--env-file",
         str(app_dir / ".env"),
+        "--project-directory",
+        str(source),
         "-f",
-        str(app_dir / "docker-compose.yml"),
+        str(source / "docker-compose.yml"),
         "-p",
         project_name,
     ]
+    if runtime_override is None:
+        possible = source.parent / "docker-compose.runtime-override.yml"
+        if (
+            source.name == "source"
+            and possible.is_file()
+            and not possible.is_symlink()
+        ):
+            runtime_override = possible
+    if runtime_override is not None:
+        if (
+            not runtime_override.is_absolute()
+            or runtime_override.is_symlink()
+            or not runtime_override.is_file()
+        ):
+            raise BridgeError(
+                "slot_runtime_override_failed",
+                "Release-slot runtime Compose override is unavailable or unsafe.",
+            )
+        command.extend(["-f", str(runtime_override)])
+    if image_override is not None:
+        if (
+            not image_override.is_absolute()
+            or image_override.is_symlink()
+            or not image_override.is_file()
+        ):
+            raise BridgeError(
+                "slot_image_override_failed",
+                "Release-slot image override is unavailable or unsafe.",
+            )
+        command.extend(["-f", str(image_override)])
+    archive_override = (
+        app_dir / "data/install-control/docker-compose.archive-roots.yml"
+    )
+    if include_archive_override and archive_override.is_file():
+        if archive_override.is_symlink():
+            raise BridgeError(
+                "archive_roots_override_invalid",
+                "Generated archive-roots Compose override is unsafe.",
+            )
+        command.extend(["-f", str(archive_override)])
+    return command
 
 
 def recreate_and_verify_helper(
@@ -1265,22 +4113,73 @@ def recreate_and_verify_helper(
     project_name: str,
     helper_image: str,
     expected_image_id: str,
+    target_slot: str | None = None,
+    engine: Any | None = None,
 ) -> str:
-    if docker_image_id(helper_image) != expected_image_id:
-        raise BridgeError("prepared_image_changed", "The prepared update-helper image changed before activation.")
-    compose = compose_base(app_dir, project_name)
-    run_command(
-        [*compose, "up", "-d", "--no-deps", "--force-recreate", "update-helper"],
-        timeout=300,
-        error_code="helper_recreate_failed",
-        error_message="Docker Compose could not recreate update-helper.",
-    )
-    result = run_command(
-        [*compose, "ps", "-q", "update-helper"],
-        timeout=30,
-        error_code="helper_identity_missing",
-        error_message="Recreated update-helper container identity is unavailable.",
-    )
+    environment: dict[str, str] | None = None
+    temporary: tempfile.TemporaryDirectory[str] | None = None
+    try:
+        if target_slot is None:
+            if docker_image_id(helper_image) != expected_image_id:
+                raise BridgeError(
+                    "prepared_image_changed",
+                    "The prepared update-helper image changed before activation.",
+                )
+            compose = compose_base(app_dir, project_name)
+        else:
+            if engine is None:
+                raise BridgeError(
+                    "slot_engine_missing",
+                    "Release-slot engine is unavailable.",
+                )
+            temporary = tempfile.TemporaryDirectory(
+                prefix="km-vms-helper-refresh-"
+            )
+            compose, environment, _source, manifest = slot_compose(
+                app_dir,
+                project_name,
+                target_slot,
+                engine=engine,
+                override_root=Path(temporary.name),
+                with_image_override=True,
+            )
+            helper = manifest["image_evidence"]["services"].get(
+                "update-helper"
+            )
+            if (
+                type(helper) is not dict
+                or helper.get("image_id") != expected_image_id
+                or helper.get("immutable_image_ref") != helper_image
+            ):
+                raise BridgeError(
+                    "prepared_image_changed",
+                    "Prepared target helper evidence changed before handoff.",
+                )
+        run_command(
+            [
+                *compose,
+                "up",
+                "-d",
+                "--no-build",
+                "--no-deps",
+                "--force-recreate",
+                "update-helper",
+            ],
+            timeout=300,
+            error_code="helper_recreate_failed",
+            error_message="Docker Compose could not recreate update-helper.",
+            env=environment,
+        )
+        result = run_command(
+            [*compose, "ps", "-q", "update-helper"],
+            timeout=30,
+            error_code="helper_identity_missing",
+            error_message="Recreated update-helper container identity is unavailable.",
+            env=environment,
+        )
+    finally:
+        if temporary is not None:
+            temporary.cleanup()
     container_id = result.stdout.strip().lower()
     if not CONTAINER_ID_RE.fullmatch(container_id):
         raise BridgeError("helper_identity_missing", "Recreated update-helper container identity is unavailable.")
@@ -1320,6 +4219,29 @@ def refresh(args: argparse.Namespace) -> int:
     request_id = require_request_id(args.request_id)
     expected_image_id = require_image_id(args.expected_image_id)
     timeout_seconds = require_timeout(args.timeout_seconds)
+    target_slot = str(getattr(args, "target_slot", None) or "") or None
+    engine = load_slot_engine(bridge_source_root()) if target_slot else None
+    if target_slot is not None:
+        try:
+            target_slot = engine.require_slot_id(target_slot, target=True)
+            journal = engine.read_activation_journal(app_dir)
+            active = engine.read_active_slot(app_dir)
+        except Exception as exc:
+            raise BridgeError(
+                getattr(exc, "code", "activation_journal_invalid"),
+                "Target helper handoff evidence is invalid.",
+            ) from exc
+        if (
+            journal["request_id"] != request_id
+            or journal["phase"] != "completed"
+            or journal["target"]["slot_id"] != target_slot
+            or active is None
+            or active[0] != target_slot
+        ):
+            raise BridgeError(
+                "helper_handoff_conflict",
+                "Target helper handoff does not match completed activation.",
+            )
     control_dir = app_dir / "data/update-control"
     receipt_file = control_dir / "update-helper-refresh.json"
     write_receipt(
@@ -1352,6 +4274,8 @@ def refresh(args: argparse.Namespace) -> int:
             project_name=project_name,
             helper_image=helper_image,
             expected_image_id=expected_image_id,
+            target_slot=target_slot,
+            engine=engine,
         )
         write_receipt(
             receipt_file,
@@ -1404,7 +4328,53 @@ def build_parser() -> argparse.ArgumentParser:
     handoff_parser.add_argument("--app-dir", required=True)
     handoff_parser.add_argument("--target-source-dir", required=True)
     handoff_parser.add_argument("--request-id", required=True)
+    handoff_parser.add_argument("--project-name")
+    handoff_parser.add_argument("--terminal", action="store_true")
+    handoff_parser.add_argument("--trusted-commit")
+    handoff_parser.add_argument("--declared-version")
     handoff_parser.set_defaults(handler=handoff)
+
+    target_parser = subparsers.add_parser(
+        "prepare-target",
+        help="prepare immutable target slot without activation",
+    )
+    target_parser.add_argument("--app-dir", required=True)
+    target_parser.add_argument("--target-source-dir", required=True)
+    target_parser.add_argument("--request-id", required=True)
+    target_parser.add_argument("--trusted-commit", required=True)
+    target_parser.add_argument("--declared-version", required=True)
+    target_parser.add_argument("--project-name", required=True)
+    target_parser.set_defaults(handler=prepare_trusted_target_slot)
+
+    activate_parser = subparsers.add_parser(
+        "activate-target",
+        help="activate one prepared trusted target with automatic rollback",
+    )
+    activate_parser.add_argument("--app-dir", required=True)
+    activate_parser.add_argument("--project-name", required=True)
+    activate_parser.add_argument("--request-id", required=True)
+    activate_parser.add_argument("--previous-slot", required=True)
+    activate_parser.add_argument("--target-slot", required=True)
+    activate_parser.add_argument("--target-commit", required=True)
+    activate_parser.add_argument("--target-version", required=True)
+    activate_parser.add_argument("--terminal", action="store_true")
+    activate_parser.set_defaults(handler=activate_or_resume)
+
+    resume_parser = subparsers.add_parser(
+        "resume-activation",
+        help="resume one unfinished journaled activation",
+    )
+    resume_parser.add_argument("--app-dir", required=True)
+    resume_parser.add_argument("--project-name", required=True)
+    resume_parser.add_argument("--request-id", required=True)
+    resume_parser.add_argument("--terminal", action="store_true")
+    resume_parser.set_defaults(
+        handler=activate_or_resume,
+        previous_slot=None,
+        target_slot=None,
+        target_commit=None,
+        target_version=None,
+    )
 
     refresh_parser = subparsers.add_parser("refresh", help="wait for completion and recreate update-helper")
     refresh_parser.add_argument("--app-dir", required=True)
@@ -1412,6 +4382,7 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_parser.add_argument("--helper-image", required=True)
     refresh_parser.add_argument("--request-id", required=True)
     refresh_parser.add_argument("--expected-image-id", required=True)
+    refresh_parser.add_argument("--target-slot")
     refresh_parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     refresh_parser.set_defaults(handler=refresh)
     return parser

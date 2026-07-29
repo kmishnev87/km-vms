@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import ArchiveTilePlayer from "../../components/ArchiveTilePlayer";
 import ChronologyTimeline from "../../components/ChronologyTimeline";
+import { OperationToast } from "../../components/OperationFeedback";
 import { apiFetch } from "../../lib/api";
 import {
   buildArchiveExportPayload,
@@ -359,6 +360,7 @@ export default function ChronologyPage() {
   const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
   const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
   const [error, setError] = useState("");
+  const [operationToast, setOperationToast] = useState(null);
   const [dragState, setDragState] = useState(null);
   const [resizeState, setResizeState] = useState(null);
   const [draggedSidebarCameraId, setDraggedSidebarCameraId] = useState("");
@@ -836,7 +838,11 @@ export default function ChronologyPage() {
     setTiles((prev) => {
       const active = activeLayoutTiles(prev);
       if (active.some((tile) => String(tile.cameraId || "") === normalizedCameraId)) {
-        setError(TEXT.duplicate);
+        setOperationToast({
+          id: `chronology-duplicate-${Date.now()}`,
+          title: TEXT.duplicate,
+          tone: "info",
+        });
         return prev;
       }
       setError("");
@@ -1428,6 +1434,11 @@ export default function ChronologyPage() {
       if (result?.job?.id) setLastExportId(result.job.id);
       saveBlobDownload(result.clip.blob, result.clip.filename || "km-vms-clip.mkv");
       setExportStatus(TEXT.exportReady);
+      setOperationToast({
+        id: `chronology-clip-${result?.job?.id || Date.now()}`,
+        title: TEXT.exportReady,
+        tone: "success",
+      });
     } catch (err) {
       const message = normalizeArchiveExportError(err.message);
       setError(message);
@@ -1464,7 +1475,7 @@ export default function ChronologyPage() {
     return formatProductTimestampParam(timelineTs || currentTs || new Date(normalizeTargetTs()));
   }
 
-  async function startQuickDownloadForCamera(cameraId) {
+  async function startQuickDownloadForCamera(cameraId, { notify = true } = {}) {
     setDownloadChooserOpen(false);
     try {
       setError("");
@@ -1473,7 +1484,14 @@ export default function ChronologyPage() {
       await startChronologyCurrentRecordingDownload(cameraId, timestamp);
       const name = quickDownloadCameraNames[cameraId] || selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
       setDownloadResults((prev) => [...prev, { cameraId, name, status: TEXT.downloadStartedShort }].slice(-12));
-      setExportStatus(`${TEXT.quickDownloadReady} ${name}`);
+      if (notify) {
+        setOperationToast({
+          id: `chronology-download-${cameraId}-${Date.now()}`,
+          title: TEXT.quickDownloadReady,
+          message: name,
+          tone: "success",
+        });
+      }
     } catch (err) {
       const message = normalizeChronologyDownloadError(err.message);
       const name = quickDownloadCameraNames[cameraId] || selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
@@ -1489,7 +1507,7 @@ export default function ChronologyPage() {
     setDownloadChooserOpen(false);
     setDownloadResults([]);
     for (const cameraId of quickDownloadCameraIds) {
-      await startQuickDownloadForCamera(cameraId);
+      await startQuickDownloadForCamera(cameraId, { notify: false });
       await new Promise((resolve) => setTimeout(resolve, 600));
     }
   }
@@ -1848,6 +1866,7 @@ export default function ChronologyPage() {
         data-chronology-sidebar-collapsed={isSidebarCollapsed ? "true" : "false"}
         data-chronology-timeline-collapsed={isTimelineCollapsed ? "true" : "false"}
       >
+        <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
         {isSystemFullscreen ? (
           <button
             type="button"

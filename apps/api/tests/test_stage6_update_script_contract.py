@@ -20,6 +20,7 @@ PERMISSION_EXECUTABLE_FIXTURE_FILES = (
     "scripts/km-vms-adopt-release-identity.sh",
     "scripts/km-vms-compose-common.sh",
     "scripts/km-vms-permission-gate.sh",
+    "scripts/km-vms-release-slots.py",
     "scripts/km-vms-publish-github-release.sh",
     "scripts/km-vms-release-cycle.sh",
     "scripts/km-vms-restart.sh",
@@ -95,7 +96,13 @@ def _write_update_shell_fixture(tmp_path: Path, *, compose_function: str, commit
         (root / ".env.example").write_text("TZ=UTC\n", encoding="utf-8")
         (root / "deploy/nginx/default.conf").write_text("# nginx\n", encoding="utf-8")
         (root / "scripts/install.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
-        (root / "scripts/km-vms-compose-common.sh").write_text(compose_function + "\n", encoding="utf-8")
+        (root / "scripts/km-vms-compose-common.sh").write_text(
+            compose_function
+            + "\n"
+            + "km_vms_resolve_product_source() { printf '%s\\n' \"$1\"; }\n"
+            + "km_vms_compose_for_source() { shift 2; km_vms_compose_cmd \"$@\"; }\n",
+            encoding="utf-8",
+        )
         (root / "docs/INSTALL.md").write_text("# install\n", encoding="utf-8")
         (root / "release/km-vms-release.json").write_text('{"schema_version":1,"version":"0.7.1"}\n', encoding="utf-8")
         (root / "release/km-vms-update-lineage.json").write_text(
@@ -170,6 +177,8 @@ def test_update_script_reuses_compose_helper_and_github_tarball_without_git_requ
 
     assert ". \"$APP_DIR/scripts/km-vms-compose-common.sh\"" in script
     assert "km_vms_detect_compose" in script
+    assert 'if [ -x "$compose_bin_dir/docker" ]; then' in script
+    assert 'PATH="$compose_bin_dir:$PATH"' in script
     assert "https://api.github.com/repos/$GITHUB_REPO/tarball/$BRANCH" in script
     assert "git clone" not in script
     assert "command_exists git" not in script
@@ -224,6 +233,56 @@ def test_update_helper_requires_mounted_host_app_dir_for_compose(tmp_path):
     (app_dir / "scripts" / "update.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
     helper.HOST_APP_DIR = app_dir
     assert helper.compose_app_dir() == app_dir
+
+
+def test_update_helper_resolves_update_script_from_canonical_active_source(tmp_path):
+    helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
+    spec = importlib.util.spec_from_file_location(
+        "km_vms_update_helper_active_source_contract",
+        helper_path,
+    )
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    app_dir = tmp_path / "app"
+    scripts_dir = app_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "km-vms-compose-common.sh").write_text(
+        read("scripts/km-vms-compose-common.sh"),
+        encoding="utf-8",
+    )
+    (scripts_dir / "update.sh").write_text(
+        "#!/usr/bin/env sh\n",
+        encoding="utf-8",
+    )
+    (app_dir / "docker-compose.yml").write_text(
+        "services: {}\n",
+        encoding="utf-8",
+    )
+
+    assert helper.resolve_update_source_dir(app_dir) == app_dir
+
+    slot_id = f"release-{'a' * 40}"
+    slot_root = app_dir / "data" / "update-runtime" / "slots" / slot_id
+    source_dir = slot_root / "source"
+    (source_dir / "scripts").mkdir(parents=True)
+    (source_dir / "scripts" / "update.sh").write_text(
+        "#!/usr/bin/env sh\n",
+        encoding="utf-8",
+    )
+    (source_dir / "docker-compose.yml").write_text(
+        "services: {}\n",
+        encoding="utf-8",
+    )
+    (slot_root / "slot-manifest.json").write_text(
+        "{}\n",
+        encoding="utf-8",
+    )
+    active = app_dir / "data" / "update-runtime" / "active"
+    active.symlink_to(f"slots/{slot_id}/source")
+
+    assert helper.resolve_update_source_dir(app_dir) == source_dir
 
 
 def test_update_helper_classifies_health_check_failure_from_metadata(tmp_path):
@@ -287,6 +346,24 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
     (app_dir / "scripts" / "update.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
     helper.HOST_APP_DIR = app_dir
     helper.STATUS_FILE = control_dir / "update-status.json"
+    active_source_dir = (
+        app_dir
+        / "data"
+        / "update-runtime"
+        / "slots"
+        / f"release-{'d' * 40}"
+        / "source"
+    )
+    (active_source_dir / "scripts").mkdir(parents=True)
+    (active_source_dir / "scripts" / "update.sh").write_text(
+        "#!/usr/bin/env sh\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        helper,
+        "resolve_update_source_dir",
+        lambda stable_app_dir: active_source_dir,
+    )
 
     expected = "d" * 40
     commands = []
@@ -337,7 +414,14 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
 
     assert helper.run_update(request) == 0
     assert published and published[0][1]["status"] == "completed"
-    assert commands[0][:6] == ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", expected]
+    assert commands[0][:6] == [
+        "sh",
+        str(active_source_dir / "scripts" / "update.sh"),
+        "--github-repo",
+        "owner/repo",
+        "--branch",
+        expected,
+    ]
     assert "main" not in commands[0]
     status = published[0][1]
     assert status["status"] == "completed"
@@ -367,6 +451,11 @@ def test_update_helper_uses_container_compose_override_not_host_only_path(tmp_pa
     helper.HOST_APP_DIR = app_dir
     helper.STATUS_FILE = control_dir / "update-status.json"
     helper.PROGRESS_FILE = control_dir / "update-progress.json"
+    monkeypatch.setattr(
+        helper,
+        "resolve_update_source_dir",
+        lambda stable_app_dir: stable_app_dir,
+    )
 
     expected = "e" * 40
     seen_compose_values = []
@@ -467,8 +556,8 @@ def test_update_script_forbids_destructive_runtime_data_and_docker_actions():
     assert 'up -d --build postgres redis api recorder web nginx' in script
     assert "health_attempts=60" in script
     assert 'health_targets="http://nginx/api/health http://api:8000/health"' in script
-    assert "no app source changes are made before the overlay phase" in script
-    assert "partially updated" in script
+    assert "the active source remains unchanged" in script
+    assert "restores the exact captured previous release" in script
 
 
 def test_update_overlay_allowlist_and_recursive_denylist_are_present():
@@ -484,6 +573,7 @@ def test_update_overlay_allowlist_and_recursive_denylist_are_present():
         "docker-compose.pytest.yml",
         ".dockerignore",
         ".gitignore",
+        ".gitattributes",
         ".env.example",
     ):
         assert allowed in script
@@ -558,6 +648,7 @@ def test_update_script_validates_source_app_paths_and_rejects_traversal_and_syml
         "Source tree is missing scripts/km-vms-compose-common.sh",
         "Source tree is missing scripts/km-vms-permission-gate.sh",
         "Source tree is missing scripts/km-vms-update-helper-bridge.py",
+        "Source tree is missing scripts/km-vms-release-slots.py",
         "Source tree is missing docs/INSTALL.md",
         "Source tree is missing release/km-vms-release.json",
         "Source tree includes scripts/update.sh",
@@ -593,7 +684,7 @@ def test_update_script_locking_preservation_dry_run_and_metadata_contracts():
         "updated_paths_summary",
         "preserved_paths_summary",
         "error_message",
-        '"implemented": false',
+        '"implemented": true',
     ):
         assert required in script
 
@@ -605,21 +696,21 @@ def test_update_script_locking_preservation_dry_run_and_metadata_contracts():
     permission_preflight_i = main.index(
         "\npreflight_permission_policy\n"
     )
-    schema_preflight_i = main.index("\nrun_schema_preflight\n")
-    overlay_i = main.index("\noverlay_source\n")
-    precompose_identity_i = main.index(
-        '\nwrite_release_identity "precompose"\n'
-    )
-    compose_config_i = main.index("\ncompose_config\n")
-    final_identity_i = main.index("\nwrite_release_identity\n")
+    handoff_i = main.index("\nprepare_schema_handoff\n")
+    target_i = main.index("\nprepare_trusted_target_slot\n")
+    activation_i = main.index("\nactivate_trusted_target_slot\n")
+    postflight_i = main.index("\npostflight_preservation\n")
     assert (
         permission_preflight_i
-        < schema_preflight_i
-        < overlay_i
-        < precompose_identity_i
-        < compose_config_i
-        < final_identity_i
+        < handoff_i
+        < target_i
+        < activation_i
+        < postflight_i
     )
+    assert "overlay_source\n" not in main
+    assert "rebuild_recreate\n" not in main
+    assert "prepare_schema_candidate_image\n" not in main
+    assert "run_schema_migration\n" not in main
     assert "Release identity path is a directory and cannot be mounted by Docker Compose" in script
 
 
@@ -645,9 +736,11 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
             (root / "scripts/install.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
             (root / "scripts/km-vms-compose-common.sh").write_text(
                 "\n".join(
-                        [
-                            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
-                            "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; if [ \"$1\" = \"exec\" ]; then echo complete; return 0; fi; :; }",
+                            [
+                                "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
+                                "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; if [ \"$1\" = \"exec\" ]; then echo complete; return 0; fi; :; }",
+                                "km_vms_resolve_product_source() { printf '%s\\n' \"$1\"; }",
+                                "km_vms_compose_for_source() { shift 2; km_vms_compose_cmd \"$@\"; }",
                         ]
                     )
                 + "\n",
@@ -694,7 +787,7 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
         assert not (app / ".km-vms-source.json").exists()
 
 
-def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_source_file():
+def test_update_dry_run_never_copies_acquired_source_into_stable_app():
     script = read("scripts/update.sh")
     with tempfile.TemporaryDirectory(prefix="kmvms_update_overlay_fixture_") as tmp:
         app = Path(tmp) / "app"
@@ -720,9 +813,11 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
             (root / "scripts/install.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
             (root / "scripts/km-vms-compose-common.sh").write_text(
                 "\n".join(
-                        [
-                            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
-                            "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; if [ \"$1\" = \"exec\" ]; then echo complete; return 0; fi; :; }",
+                            [
+                                "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
+                                "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; if [ \"$1\" = \"exec\" ]; then echo complete; return 0; fi; :; }",
+                                "km_vms_resolve_product_source() { printf '%s\\n' \"$1\"; }",
+                                "km_vms_compose_for_source() { shift 2; km_vms_compose_cmd \"$@\"; }",
                         ]
                     )
                 + "\n",
@@ -792,7 +887,7 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
         os.chmod(bin_dir / "curl", 0o755)
 
         result = subprocess.run(
-            ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", "main", "--yes"],
+            ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", "main", "--dry-run"],
             cwd=app,
             env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
             text=True,
@@ -801,21 +896,17 @@ def test_update_apply_overlay_blocks_secret_artifacts_but_copies_legitimate_sour
             check=True,
         )
 
-        assert "KM VMS update completed" in result.stdout
+        assert "Dry-run complete" in result.stdout
         for relative in dangerous_files:
             assert not (app / relative).exists(), relative
-        assert (app / "apps/api/stage607_legitimate_source.py").exists()
-        assert (app / "apps/api/token_serializer.py").exists()
-        assert (app / "apps/api/secret_policy.py").exists()
+        assert not (app / "apps/api/stage607_legitimate_source.py").exists()
+        assert not (app / "apps/api/token_serializer.py").exists()
+        assert not (app / "apps/api/secret_policy.py").exists()
         for relative in product_assets:
-            assert (app / relative).exists(), relative
+            assert not (app / relative).exists(), relative
         assert (app / ".env").read_text(encoding="utf-8").startswith("HTTP_PORT=18182")
         assert (app / "data/sentinel.txt").read_text(encoding="utf-8") == "keep\n"
-        assert (app / ".km-vms-release.json").is_file()
-        assert json.loads((app / ".km-vms-release.json").read_text(encoding="utf-8"))["metadata_status"] in {"complete", "partial"}
-        update_metadata = json.loads((app / ".km-vms-update.json").read_text(encoding="utf-8"))
-        assert update_metadata["validation_summary"]["release_identity_api_visible"] is True
-        assert update_metadata["validation_summary"]["release_identity_commit_verified"] is True
+        assert not (app / ".km-vms-update.json").exists()
 
 
 def test_update_script_final_identity_preserves_bind_mount_inode_and_verifies_api_visibility():
@@ -830,118 +921,47 @@ def test_update_script_final_identity_preserves_bind_mount_inode_and_verifies_ap
     assert "release_identity_commit_verified" in script
 
 
-def test_update_script_recreates_api_until_api_visible_identity_is_complete(tmp_path):
-    expected = "b" * 40
-    compose_function = "\n".join(
-        [
-            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
-            "km_vms_compose_cmd() {",
-            "  if [ \"$1\" = \"--env-file\" ]; then shift 2; fi",
-            "  if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi",
-            "  if [ \"$1\" = \"up\" ]; then case \"$*\" in *'--force-recreate api'*) touch data/api-recreated ;; esac; return 0; fi",
-            "  if [ \"$1\" = \"exec\" ]; then",
-            "    if [ -f data/api-recreated ]; then echo 'complete " + expected + "'; return 0; fi",
-            "    return 11",
-            "  fi",
-            "  :",
-            "}",
-        ]
-    )
-    app, _source, bin_dir = _write_update_shell_fixture(tmp_path, compose_function=compose_function, commit=expected)
+def test_update_slot_runtime_verifies_api_identity_before_commit():
+    bridge = read("scripts/km-vms-update-helper-bridge.py")
 
-    result = subprocess.run(
-        ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", "main", "--yes"],
-        cwd=app,
-        env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    )
-    metadata = json.loads((app / ".km-vms-update.json").read_text(encoding="utf-8"))
-
-    assert "API-visible release identity is stale or incomplete" in result.stdout
-    assert (app / "data/api-recreated").is_file()
-    assert metadata["status"] == "success"
-    assert metadata["validation_summary"]["release_identity_api_metadata_status"] == "complete"
-    assert metadata["validation_summary"]["release_identity_api_visible"] is True
-    assert metadata["validation_summary"]["release_identity_commit_verified"] is True
+    verify_block = bridge[
+        bridge.index("def capture_slot_runtime_binding") :
+        bridge.index("def verify_slot_runtime")
+    ]
+    commit_block = bridge[
+        bridge.index('        if phase == "committing_target":') :
+        bridge.index('        if phase == "rolling_back":')
+    ]
+    assert "_api_visible_release_identity(" in verify_block
+    assert "_api_visible_identity_digest(" in verify_block
+    assert '"metadata_status": "complete"' in verify_block
+    assert '"identity_validity": "valid"' in verify_block
+    assert "verify_slot_runtime(" in commit_block
+    assert '"completed"' in commit_block
 
 
-def test_update_script_remediates_api_visible_stale_precompose_identity(tmp_path):
-    expected = "b" * 40
-    compose_function = "\n".join(
-        [
-            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
-            "km_vms_compose_cmd() {",
-            "  if [ \"$1\" = \"--env-file\" ]; then shift 2; fi",
-            "  if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi",
-            "  if [ \"$1\" = \"up\" ]; then case \"$*\" in *'--force-recreate api'*) touch data/api-recreated-after-precompose ;; esac; return 0; fi",
-            "  if [ \"$1\" = \"exec\" ]; then",
-            "    if [ -f data/api-recreated-after-precompose ]; then echo 'complete " + expected + "'; return 0; fi",
-            "    echo 'metadata_status=precompose' >&2; return 11",
-            "  fi",
-            "  :",
-            "}",
-        ]
-    )
-    app, _source, bin_dir = _write_update_shell_fixture(tmp_path, compose_function=compose_function, commit=expected)
+def test_update_slot_identity_failure_uses_rollback_path():
+    bridge = read("scripts/km-vms-update-helper-bridge.py")
+    verifying = bridge[
+        bridge.index('        if phase == "verifying_target":') :
+        bridge.index('        if phase == "committing_target":')
+    ]
 
-    result = subprocess.run(
-        ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", "main", "--yes"],
-        cwd=app,
-        env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    )
-    metadata = json.loads((app / ".km-vms-update.json").read_text(encoding="utf-8"))
-
-    assert "API-visible release identity is stale or incomplete" in result.stdout
-    assert (app / "data/api-recreated-after-precompose").is_file()
-    assert json.loads((app / ".km-vms-release.json").read_text(encoding="utf-8"))["metadata_status"] == "complete"
-    assert metadata["status"] == "success"
-    assert metadata["validation_summary"]["release_identity_host_metadata_status"] == "complete"
-    assert metadata["validation_summary"]["release_identity_api_metadata_status"] == "complete"
-    assert metadata["validation_summary"]["release_identity_api_visible"] is True
-    assert metadata["validation_summary"]["release_identity_commit_verified"] is True
+    assert '"target_identity_mismatch"' in verifying
+    assert "rollback_activation(" in verifying
+    assert "target_health_failed" in verifying
 
 
-def test_update_script_rejects_api_visible_complete_with_wrong_commit_stdout(tmp_path):
-    expected = "b" * 40
-    wrong = "a" * 40
-    compose_function = "\n".join(
-        [
-            "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
-            "km_vms_compose_cmd() {",
-            "  if [ \"$1\" = \"--env-file\" ]; then shift 2; fi",
-            "  if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi",
-            "  if [ \"$1\" = \"up\" ]; then touch data/api-recreate-attempted; return 0; fi",
-            "  if [ \"$1\" = \"exec\" ]; then echo 'complete " + wrong + "'; return 12; fi",
-            "  :",
-            "}",
-        ]
-    )
-    app, _source, bin_dir = _write_update_shell_fixture(tmp_path, compose_function=compose_function, commit=expected)
+def test_update_slot_identity_comparison_requires_exact_commit_and_version():
+    bridge = read("scripts/km-vms-update-helper-bridge.py")
+    identity = bridge[
+        bridge.index("def capture_slot_runtime_binding") :
+        bridge.index("def verify_slot_runtime")
+    ]
 
-    result = subprocess.run(
-        ["sh", "scripts/update.sh", "--github-repo", "owner/repo", "--branch", "main", "--yes"],
-        cwd=app,
-        env={**os.environ, "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"]},
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    metadata = json.loads((app / ".km-vms-update.json").read_text(encoding="utf-8"))
-
-    assert result.returncode != 0
-    assert "API-visible release identity is not complete" in result.stderr
-    assert (app / "data/api-recreate-attempted").is_file()
-    assert metadata["status"] == "failed"
-    assert metadata["validation_summary"]["release_identity_api_metadata_status"] == ""
-    assert metadata["validation_summary"]["release_identity_api_visible"] is False
-    assert metadata["validation_summary"]["release_identity_commit_verified"] is False
+    assert '"version": binding["version"]' in identity
+    assert '"commit": binding["commit"]' in identity
+    assert "slot_runtime_identity_mismatch" in identity
 
 
 def test_update_helper_requires_complete_host_and_api_visible_identity():
@@ -996,72 +1016,60 @@ def test_update_permission_bridge_separates_existing_and_target_gates_without_st
 
     main = script[script.index('confirm "Apply KM VMS update now?"') :]
     preflight_i = main.index("\npreflight_permission_policy\n")
-    schema_preflight_i = main.index("\nrun_schema_preflight\n")
-    overlay_i = main.index("\noverlay_source\n")
-    target_gate_i = main.index("\napply_permission_policy\n")
-    compose_i = main.index("\ncompose_config\n")
-    helper_image_i = main.index("\nprepare_update_helper_image\n")
-    rebuild_i = main.index("\nrebuild_recreate\n")
-    refresh_i = main.index("\nschedule_update_helper_recreate\n")
+    handoff_i = main.index("\nprepare_schema_handoff\n")
+    target_i = main.index("\nprepare_trusted_target_slot\n")
+    activation_i = main.index("\nactivate_trusted_target_slot\n")
     success_metadata_i = main.index(
         '\nwrite_update_metadata "success" ""\n'
     )
     assert (
         preflight_i
-        < schema_preflight_i
-        < overlay_i
-        < target_gate_i
-        < compose_i
-        < helper_image_i
-        < rebuild_i
-        < refresh_i
+        < handoff_i
+        < target_i
+        < activation_i
         < success_metadata_i
     )
 
 
-def test_schema_preflight_precedes_writer_stop_and_source_overlay():
+def test_current_update_path_uses_target_prepare_before_atomic_activation():
     script = read("scripts/update.sh")
     main = script[script.index('confirm "Apply KM VMS update now?"') :]
 
     handoff_i = main.index("prepare_schema_handoff\n")
     staged_compose_i = main.index("staged_compose_config\n")
-    candidate_i = main.index("prepare_schema_candidate_image\n")
-    preflight_i = main.index("run_schema_preflight\n")
-    stop_i = main.index("stop_schema_writers\n")
-    migrate_i = main.index("run_schema_migration\n")
-    overlay_i = main.index("overlay_source\n")
+    target_i = main.index("prepare_trusted_target_slot\n")
+    activation_i = main.index("activate_trusted_target_slot\n")
     assert (
         handoff_i
         < staged_compose_i
-        < candidate_i
-        < preflight_i
-        < stop_i
-        < migrate_i
-        < overlay_i
+        < target_i
+        < activation_i
     )
 
-    assert '[ "$SCHEMA_MIGRATION_REQUIRED" = "1" ] || return 0' in script
-    assert "compose_with_archive_roots stop api recorder" in script
-    assert "schema_update_pipeline --preflight" in script
-    assert "schema_update_pipeline --migrate" in script
-    assert '"mutation_started": true' in script
-    assert (
-        'SCHEMA_WRITERS_STOPPED" = "1" ] && '
-        '[ "$SCHEMA_MUTATION_STARTED" != "1" ]'
-        in script
-    )
-    assert "compose_with_archive_roots up -d api recorder" in script
+    for obsolete_call in (
+        "prepare_schema_candidate_image\n",
+        "run_schema_preflight\n",
+        "stop_schema_writers\n",
+        "run_schema_migration\n",
+        "overlay_source\n",
+        "rebuild_recreate\n",
+    ):
+        assert obsolete_call not in main
+    assert "--terminal" in script
+    assert "ensure_activation_request_id" in main
     assert "docker image rm -f \"$SCHEMA_CANDIDATE_IMAGE\"" in script
 
 
 def test_schema_candidate_preserves_backup_and_multi_root_mount_contract():
     script = read("scripts/update.sh")
     compose = read("docker-compose.yml")
+    compose_common = read("scripts/km-vms-compose-common.sh")
 
     assert "KMVMS_HOST_DB_BACKUP_ROOT" in script
     assert "KMVMS_DB_BACKUP_ROOT" in script
     assert "archive_roots_compose_file" in script
-    assert '-f "$archive_override"' in script
+    assert "km_vms_compose_for_source" in script
+    assert '-f "$archive_override"' in compose_common
     schema_service = compose.split("  schema-update:", 1)[1].split(
         "\n  api:",
         1,
@@ -1080,12 +1088,14 @@ def test_permission_gate_existing_contract_does_not_require_target_only_files():
     assert "TARGET_ONLY_PRIVILEGED_FILES=" in gate
     assert "scripts/km-vms-permission-gate.sh" in gate
     assert "scripts/km-vms-update-helper-bridge.py" in gate
+    assert "scripts/km-vms-release-slots.py" in gate
     assert 'if [ "$CONTRACT" = "existing" ]' in gate
     assert "permission_contract=%s" in gate
 
 
 def test_update_helper_bridge_uses_bounded_json_and_exact_target_image_activation():
     bridge = read("scripts/km-vms-update-helper-bridge.py")
+    compose = read("docker-compose.yml")
 
     assert "MAX_CONTROL_BYTES = 64 * 1024" in bridge
     assert "path.stat().st_size > MAX_CONTROL_BYTES" in bridge
@@ -1095,7 +1105,9 @@ def test_update_helper_bridge_uses_bounded_json_and_exact_target_image_activatio
     assert 'payload.get("status") != "completed"' in bridge
     assert 'payload.get("commit_verified") is not True' in bridge
     assert "expected_commit.lower() != installed_commit.lower()" in bridge
-    assert '"--force-recreate", "update-helper"' in bridge
+    assert '"--force-recreate",' in bridge
+    assert '"update-helper",' in bridge
+    assert '"--no-build",' in bridge
     assert "getfacl --version" not in bridge
     assert "DEFAULT_TIMEOUT_SECONDS = 7800" in bridge
     assert "docker:27-cli" not in bridge
@@ -1108,6 +1120,14 @@ def test_update_helper_bridge_uses_bounded_json_and_exact_target_image_activatio
     assert gate_call < image_call < receipt_call < schedule_call
     assert 'check=False,' in bridge[bridge.index("def run_target_permission_gate"):schedule_call]
     assert '"permission_gate=PASS"' in bridge
+    assert (
+        "/host-app/data/update-runtime/active/scripts/"
+        "km-vms-update-helper.py"
+    ) in compose
+    assert (
+        "/data/update-runtime/active/scripts/"
+        "km-vms-update-helper-bridge.py"
+    ) in compose
 
 
 def test_rebuild_resets_one_shots_and_does_not_retry_terminal_schema_failure():

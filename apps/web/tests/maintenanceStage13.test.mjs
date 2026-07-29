@@ -47,7 +47,7 @@ assert.equal(settingsHelpers.includes("/system/update/check"), false);
 assert.equal(settingsPage.includes("/system/update/apply"), true);
 assert.equal(settingsPage.includes("/system/update/apply/status"), true);
 assert.equal(settingsPage.includes("window.confirm"), false);
-assert.equal(settingsPage.includes('import { OperationDialog } from "../../components/OperationFeedback"'), true);
+assert.match(settingsPage, /import \{[^}]*OperationDialog[^}]*OperationToast[^}]*\} from "\.\.\/\.\.\/components\/OperationFeedback"/);
 assert.equal(settingsPage.includes("<OperationDialog"), true);
 assert.equal(settingsPage.includes("expected_manifest_version"), true);
 assert.equal(settingsPage.includes("expected_manifest_commit"), true);

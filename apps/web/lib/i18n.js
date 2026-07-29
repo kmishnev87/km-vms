@@ -144,6 +144,7 @@ export const DICTIONARIES = {
       busy: "Входим...",
       noToken: "Сервер не вернул access_token",
       error: "Ошибка входа",
+      credentialsChanged: "Данные входа изменены. Войдите заново.",
     },
     dashboard: {
       subtitle: "Рабочий стол системы видеонаблюдения",
@@ -1306,6 +1307,7 @@ export const DICTIONARIES = {
       busy: "Signing in...",
       noToken: "Server did not return access_token",
       error: "Sign-in failed",
+      credentialsChanged: "Login credentials changed. Please sign in again.",
     },
     dashboard: {
       subtitle: "Video surveillance workspace",
@@ -2468,6 +2470,7 @@ export const DICTIONARIES = {
       busy: "正在登录...",
       noToken: "服务器未返回 access_token",
       error: "登录失败",
+      credentialsChanged: "登录信息已更改。请重新登录。",
     },
     dashboard: {
       subtitle: "视频监控工作台",

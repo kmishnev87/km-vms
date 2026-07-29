@@ -33,7 +33,7 @@ export const HARDWARE_OPTIONS = ["auto", "qsv", "amf", "nvenc", "cpu", "vaapi"];
 export const AUDIT_CATEGORIES = ["auth", "users", "settings", "cameras", "live", "records", "chronology", "security", "diagnostics", "system", "recorder", "storage", "retention", "reconciliation"];
 export const AUDIT_SEVERITIES = ["info", "warning", "error", "security"];
 export const AUDIT_LIMIT = 50;
-export const UPDATE_APPLY_RUNNING_STATUSES = ["queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification"];
+export const UPDATE_APPLY_RUNNING_STATUSES = ["queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification", "preparing", "staging", "activating", "reconnecting", "rolling_back"];
 export const UPDATE_APPLY_POLL_INTERVAL_MS = 5000;
 export const UPDATE_APPLY_MODAL_GRACE_MS = 10000;
 export const UPDATE_APPLY_PENDING_STORAGE_KEY = "km_vms_update_apply_pending_v1";
@@ -41,6 +41,7 @@ const UPDATE_APPLY_STALE_DEFAULT_SECONDS = 180;
 const UPDATE_APPLY_PENDING_SCHEMA = 1;
 const UPDATE_APPLY_PRESERVED_TERMINAL_STATUSES = new Set([
   "failed",
+  "failed_rolled_back",
   "blocked",
   "stalled",
   "cancelled",
@@ -210,8 +211,8 @@ export function maintenanceStatusText(status, t) {
 
 export function maintenanceStatusClass(status) {
   if (["ok", "current", "available", "adopted", "already_adopted", "complete", "completed", "valid", "verified", "drift_known_safe", "draft_known_safe", "update_available"].includes(status)) return "ok";
-  if (["blocked", "no_artifacts", "not_configured", "failed", "cancelled", "stalled"].includes(status)) return "blocked";
-  if (["adoptable", "action_available", "attention", "limited", "unavailable", "queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification", "reconnecting", "checking"].includes(status)) return "warning";
+  if (["blocked", "no_artifacts", "not_configured", "failed", "failed_rolled_back", "cancelled", "stalled"].includes(status)) return "blocked";
+  if (["adoptable", "action_available", "attention", "limited", "unavailable", "queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification", "preparing", "staging", "activating", "reconnecting", "rolling_back", "checking"].includes(status)) return "warning";
   return "neutral";
 }
 
@@ -609,6 +610,7 @@ function defaultUpdateApplyTimeline(t) {
 
 const UPDATE_APPLY_ATTENTION_STATES = new Set([
   "failed",
+  "failed_rolled_back",
   "check_failed",
   "stalled",
   "reconnecting",
@@ -738,6 +740,7 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const terminalTimelineTruth = liveStepsAvailable && [
     "completed",
     "failed",
+    "failed_rolled_back",
     "blocked",
     "cancelled",
     "canceled",
@@ -789,6 +792,7 @@ export function updateApplyRecoveryText(status, applyStatus, t) {
   if (effective === "completed" && applyStatus?.commit_verified) return t.updateApplyRecoveryCompleted;
   if (effective === "completed" && applyStatus?.expected_commit && applyStatus?.commit_verified === false) return t.updateApplyRecoveryCommitMismatch;
   if (effective === "failed") return t.updateApplyRecoveryFailed;
+  if (effective === "failed_rolled_back") return t.updateApplyRecoveryRolledBack || t.updateApplyRecoveryFailed;
   if (effective === "check_failed") return t.updateApplyRecoveryCheckFailed || t.updateApplyRecoveryFailed;
   if (["update_check_required", "trusted_snapshot_stale", "trusted_snapshot_invalidated", "manifest_version_changed", "manifest_commit_changed"].includes(effective)) {
     return t.updateApplyRecoveryRefreshRequired || t.updateApplyRecoveryCheckFailed || t.updateApplyRecoveryBlocked;
@@ -810,7 +814,7 @@ export function updateApplyStepRows(applyStatus, t) {
   const stageFor = (name) => {
     if (name === "queued" || name === "request" || name === "starting_helper") return "request";
     if (name === "preflight") return "preflight";
-    if (name === "health_check") return "health_check";
+    if (["health_check", "reconnecting", "rolling_back"].includes(name)) return "health_check";
     if (name === "commit_verification" || name === "completed") return "commit_verification";
     if ([
       "acquire_source",
@@ -822,6 +826,9 @@ export function updateApplyStepRows(applyStatus, t) {
       "compose_config",
       "rebuilding",
       "restarting",
+      "preparing",
+      "staging",
+      "activating",
     ].includes(name)) return "applying";
     return "";
   };

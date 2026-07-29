@@ -10,6 +10,7 @@ import {
   sanitizeUpdateApplyPending,
   updateApplyCandidateSnapshot,
   updateApplyErrorMessages,
+  updateApplyIsRunning,
   updateApplyOperatorModel,
   updateApplyReconnectTiming,
   updateApplyTransportPhase,
@@ -52,6 +53,7 @@ const t = {
   updateApplyRecoveryUnknown: "Unknown recovery",
   updateApplyRecoveryIdentity: "Identity recovery",
   updateApplyRecoveryFailed: "Failed recovery",
+  updateApplyRecoveryRolledBack: "Previous release restored",
   updateApplyRecoveryBlocked: "Blocked recovery",
   updateApplyRecoveryAvailable: "Available recovery",
   updateApplyRecoveryCurrent: "Current recovery",
@@ -120,6 +122,25 @@ const failedApply = updateApplyOperatorModel(
 );
 assert.equal(failedApply.severity, "blocked");
 assert.equal(failedApply.status, "failed");
+
+assert.equal(updateApplyIsRunning("rolling_back"), true);
+const rolledBackApply = updateApplyOperatorModel(
+  updateState("identity_incomplete", "precompose"),
+  {
+    ...runningApply,
+    status: "failed_rolled_back",
+    rollback: {
+      status: "completed",
+      trigger: "target_health_failed",
+      restored_version: "0.8.2",
+    },
+  },
+  t,
+  "en",
+);
+assert.equal(rolledBackApply.severity, "blocked");
+assert.equal(rolledBackApply.status, "failed_rolled_back");
+assert.equal(rolledBackApply.summary, "Previous release restored");
 
 const maintenanceMessages = {
   maintenanceMessageLabels: {},
@@ -304,7 +325,7 @@ assert.equal(pageSource.includes("/system/update/apply/reconciliation/"), false)
 assert.equal((pageSource.match(/apiFetch\("\/system\/update\/apply"/g) || []).length, 1);
 assert.equal(pageSource.includes("settingsUpdateApplySupport"), false);
 assert.equal(pageSource.includes('inert={updateApplyDialog ? true : undefined}'), true);
-assert.equal(pageSource.includes('import { OperationDialog } from "../../components/OperationFeedback"'), true);
+assert.match(pageSource, /import \{[^}]*OperationDialog[^}]*OperationToast[^}]*\} from "\.\.\/\.\.\/components\/OperationFeedback"/);
 assert.equal(pageSource.includes("<OperationDialog"), true);
 assert.equal(pageSource.includes("updateApplyDialogElementRef"), false);
 assert.equal(cssSource.includes(".settingsUpdateApplyDialogOverlay"), true);

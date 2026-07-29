@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
-import { OperationDialog } from "../../components/OperationFeedback";
+import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
 import { apiFetch, apiFetchBlob, clearAuthToken, forbiddenMessage } from "../../lib/api";
 import { LanguageSelect, normalizeLocale, persistLocale, translateText } from "../../lib/i18n";
 
@@ -61,6 +61,8 @@ import {
 } from "../../lib/settingsPageHelpers";
 
 configureSettingsPageHelpers({ normalizeLocale, translateText });
+
+const CREDENTIALS_CHANGED_NOTICE_KEY = "km_vms_credentials_changed_notice";
 
 let settingsBodyScrollLockCount = 0;
 let settingsBodyPreviousOverflow = "";
@@ -328,6 +330,7 @@ const TEXT = {
     updateApplyRecoveryCompleted: "Обновление завершено, установленный commit подтверждён.",
     updateApplyRecoveryCurrent: "Установленная версия соответствует trusted release.",
     updateApplyRecoveryFailed: "Обновление завершилось ошибкой. Проверьте статус обновления и повторите после устранения причины.",
+    updateApplyRecoveryRolledBack: "Новая версия не прошла проверку. Приложение автоматически вернуло предыдущую рабочую версию; устраните причину перед повтором.",
     updateApplyRecoveryCheckFailed: "Проверка обновления не завершилась. Повторите проверку или скачайте отчёт для поддержки.",
     updateApplyRecoveryLiveCheckFailedWithSnapshot: "Последняя live-проверка не завершилась, но свежая trusted-проверка ещё доступна для безопасного применения.",
     updateApplyRecoveryRefreshRequired: "Release изменился или проверка устарела. Запустите «Проверить обновление» ещё раз.",
@@ -505,7 +508,12 @@ const TEXT = {
       preflight: "Предпроверка",
       queued: "В очереди",
       rebuilding: "Пересборка",
+      preparing: "Подготовка",
+      staging: "Подготовка версии",
+      activating: "Активация",
       reconnecting: "Переподключение",
+      rolling_back: "Возврат предыдущей версии",
+      failed_rolled_back: "Предыдущая версия восстановлена",
       restarting: "Перезапуск",
       running: "Выполняется",
       pending: "Ожидает",
@@ -852,6 +860,7 @@ const TEXT = {
     updateApplyRecoveryCompleted: "Update completed and the installed commit is verified.",
     updateApplyRecoveryCurrent: "Installed version matches the trusted release.",
     updateApplyRecoveryFailed: "Update failed. Review the update status and retry after fixing the cause.",
+    updateApplyRecoveryRolledBack: "The target release failed verification. KM VMS restored the previous working release; resolve the cause before retrying.",
     updateApplyRecoveryCheckFailed: "Update check did not complete. Run the check again or download the report for support.",
     updateApplyRecoveryLiveCheckFailedWithSnapshot: "The latest live check failed, but a fresh trusted check is still available for safe apply.",
     updateApplyRecoveryRefreshRequired: "The release changed or the check is too old. Run Check update again.",
@@ -1029,7 +1038,12 @@ const TEXT = {
       preflight: "Preflight",
       queued: "Queued",
       rebuilding: "Rebuilding",
+      preparing: "Preparing",
+      staging: "Staging release",
+      activating: "Activating",
       reconnecting: "Reconnecting",
+      rolling_back: "Restoring previous release",
+      failed_rolled_back: "Previous release restored",
       restarting: "Restarting",
       running: "Running",
       pending: "Pending",
@@ -1347,6 +1361,7 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyRecoveryCompleted: "更新已完成，已安装 commit 已验证。",
   updateApplyRecoveryCurrent: "已安装版本与受信任版本一致。",
   updateApplyRecoveryFailed: "更新失败。请查看更新状态，并在修复原因后重试。",
+  updateApplyRecoveryRolledBack: "目标版本未通过验证。KM VMS 已恢复到之前可用的版本；请在重试前解决原因。",
   updateApplyRecoveryCheckFailed: "更新检查未完成。请重新检查，或下载报告并发送给支持人员。",
   updateApplyRecoveryLiveCheckFailedWithSnapshot: "最新实时检查失败，但仍有新鲜的可信检查可用于安全应用。",
   updateApplyRecoveryRefreshRequired: "版本已变化或检查已过期。请重新运行检查更新。",
@@ -1524,7 +1539,12 @@ const ZH_TEXT_OVERRIDES = {
     preflight: "预检查",
     queued: "排队中",
     rebuilding: "重建中",
+    preparing: "准备中",
+    staging: "准备版本",
+    activating: "激活中",
     reconnecting: "重新连接",
+    rolling_back: "恢复之前版本",
+    failed_rolled_back: "已恢复之前版本",
     restarting: "重启中",
     running: "进行中",
     pending: "等待中",
@@ -1664,7 +1684,6 @@ export default function SettingsPage() {
   const [auditError, setAuditError] = useState("");
   const [bugReportText, setBugReportText] = useState("");
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
-  const toastTimerRef = useRef(null);
   const updatePollInFlightRef = useRef(false);
   const updateApplyPendingRef = useRef(null);
   const updateApplyDialogRef = useRef(null);
@@ -1711,7 +1730,6 @@ export default function SettingsPage() {
     }
     window.addEventListener("km-vms-language", onLanguage);
     return () => {
-      window.clearTimeout(toastTimerRef.current);
       window.removeEventListener("km-vms-language", onLanguage);
     };
   }, []);
@@ -1785,9 +1803,11 @@ export default function SettingsPage() {
   }, [maintenanceModalOpen]);
 
   function showToast(nextToast) {
-    setToast(nextToast);
-    window.clearTimeout(toastTimerRef.current);
-    toastTimerRef.current = window.setTimeout(() => setToast(null), 2600);
+    setToast({
+      ...nextToast,
+      tone: nextToast?.tone || nextToast?.variant || "info",
+      message: nextToast?.message ?? nextToast?.text ?? "",
+    });
   }
 
   async function load() {
@@ -2435,7 +2455,9 @@ export default function SettingsPage() {
         });
         if (changesOwnCredentials) {
           setUserModal(null);
-          showToast({ variant: "success", title: t.credentialsChanged });
+          try {
+            window.sessionStorage.setItem(CREDENTIALS_CHANGED_NOTICE_KEY, "credentials_changed");
+          } catch (_) {}
           clearAuthToken();
           router.replace("/login");
           return;
@@ -2526,19 +2548,10 @@ export default function SettingsPage() {
     }
   }
 
-  async function submitBugReport() {
-    showToast({ variant: "info", title: t.bugReport, text: t.reportSendingPending });
-  }
-
   return (
     <Layout>
       <div className="settingsPage">
-        {toast && !updateApplyDialog ? (
-          <div className={`settingsToast ${toast.variant || "info"}`}>
-            <strong>{toast.title}</strong>
-            {toast.text ? <span>{toast.text}</span> : null}
-          </div>
-        ) : null}
+        <OperationToast toast={toast} onClose={() => setToast(null)} />
 
         <div className="settingsWorkspace">
           <div className="pageHeader settingsHeader">
@@ -2766,41 +2779,45 @@ export default function SettingsPage() {
           </div>
         ) : null}
 
-        {userDeleteTarget ? (
-          <div className="settingsModalOverlay settingsConfirmOverlay" role="presentation">
-            <div className="settingsConfirmModal" role="dialog" aria-modal="true" aria-label={lang === "en" ? "Delete user" : "Удалить пользователя"}>
-              <button type="button" className="settingsModalClose settingsConfirmClose" onClick={() => setUserDeleteTarget(null)} aria-label={t.close}>×</button>
-              <p>
-                <span>{lang === "en" ? "Delete user" : "Удалить пользователя"}</span>
-                <strong>{userDeleteTarget.username}?</strong>
-              </p>
-              <div className="settingsModalActions">
-                <button type="button" className="button secondary small" onClick={() => setUserDeleteTarget(null)} disabled={userBusy}>{t.cancel}</button>
-                <button type="button" className="button small dangerButton" onClick={() => deleteUser(userDeleteTarget)} disabled={userBusy}>
-                  {userBusy ? (lang === "en" ? "Deleting..." : "Удаляем...") : (lang === "en" ? "Delete" : "Удалить")}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
+        <OperationDialog
+          dialog={userDeleteTarget ? {
+            id: `user-delete-${userDeleteTarget.id}`,
+            presentation: "compact-confirmation",
+            title: lang === "en" ? "Delete user" : "Удалить пользователя",
+            message: `${userDeleteTarget.username}?`,
+            busy: userBusy,
+            dismissible: !userBusy,
+            cancelLabel: t.cancel,
+            closeLabel: t.close,
+            confirmLabel: userBusy
+              ? (lang === "en" ? "Deleting..." : "Удаляем...")
+              : (lang === "en" ? "Delete" : "Удалить"),
+            confirmTone: "danger",
+            tone: "error",
+            onConfirm: () => deleteUser(userDeleteTarget),
+          } : null}
+          onClose={() => setUserDeleteTarget(null)}
+        />
 
-        {maintenanceConfirm ? (
-          <div className="settingsModalOverlay settingsConfirmOverlay" role="presentation">
-            <div className="settingsConfirmModal settingsMaintenanceConfirmModal" role="dialog" aria-modal="true" aria-label={maintenanceConfirm.title}>
-              <button type="button" className="settingsModalClose settingsConfirmClose" onClick={() => setMaintenanceConfirm(null)} aria-label={t.close}>×</button>
-              <p>
-                <span>{maintenanceConfirm.title}</span>
-                <strong>{maintenanceConfirm.text}</strong>
-              </p>
-              <div className="settingsModalActions">
-                <button type="button" className="button secondary small" onClick={() => setMaintenanceConfirm(null)} disabled={Boolean(maintenanceBusy)}>{t.cancel}</button>
-                <button type="button" className={`button small ${maintenanceConfirm.danger ? "dangerButton" : ""}`} onClick={maintenanceConfirm.onConfirm} disabled={Boolean(maintenanceBusy)}>
-                  {maintenanceBusy === "backup-delete" ? t.maintenanceBackupDeleting : maintenanceConfirm.confirmLabel}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
+        <OperationDialog
+          dialog={maintenanceConfirm ? {
+            id: "maintenance-confirm",
+            presentation: "compact-confirmation",
+            title: maintenanceConfirm.title,
+            message: maintenanceConfirm.text,
+            busy: Boolean(maintenanceBusy),
+            dismissible: !maintenanceBusy,
+            cancelLabel: t.cancel,
+            closeLabel: t.close,
+            confirmLabel: maintenanceBusy === "backup-delete"
+              ? t.maintenanceBackupDeleting
+              : maintenanceConfirm.confirmLabel,
+            confirmTone: maintenanceConfirm.danger ? "danger" : undefined,
+            tone: maintenanceConfirm.danger ? "error" : "warning",
+            onConfirm: maintenanceConfirm.onConfirm,
+          } : null}
+          onClose={() => setMaintenanceConfirm(null)}
+        />
 
         {userModal ? (
           <div className="settingsModalOverlay" role="presentation">
@@ -3149,6 +3166,7 @@ export default function SettingsPage() {
         <OperationDialog
           dialog={updateApplyDialog ? {
             id: "update-apply-confirm",
+            presentation: "compact-confirmation",
             title: t.updateApplyModalTitle,
             message: t.updateApplyConfirm,
             overlayClassName: "settingsUpdateApplyDialogOverlay",
@@ -3286,8 +3304,8 @@ export default function SettingsPage() {
                 <div className="settingsSecurityNote">{t.reportSendingPending}</div>
                 <button
                   className="button small settingsSecurityModalButton"
-                  onClick={submitBugReport}
-                  disabled={securityBusy || !diagnosticArchive || !bugReportText.trim()}
+                  disabled
+                  title={t.reportSendingPending}
                 >
                   {t.sendBugReport}
                 </button>
