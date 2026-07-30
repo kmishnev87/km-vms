@@ -1325,7 +1325,7 @@ function StorageOperationsPageContent() {
       });
       return;
     }
-    if (nextEnabled && autoFreeAcknowledgementRequired) {
+    if (nextEnabled) {
       if (!autoFreeTermsVersion) {
         setArchiveRootDialog({
           id: "auto-free-terms-unavailable",
@@ -1397,6 +1397,7 @@ function StorageOperationsPageContent() {
         tone: "success",
       });
     } catch (err) {
+      await loadStatus({ silent: true });
       setArchiveRootDialog({
         id: `auto-free-error-${Date.now()}`,
         title: copy.autoFreeChangeFailed,
@@ -2102,8 +2103,27 @@ function StorageOperationsPageContent() {
             { label: copy.archiveManagementLastApplication, value: lastResultText(retentionManagement.last), tone: retentionManagement.status === "needs_attention" ? "warning" : "" },
           ],
           action: manageCamerasPermission.allowed
-            ? <a className="button secondary small" href="/cameras">{copy.configureCameras}</a>
-            : <button className="button secondary small" type="button" disabled title={manageCamerasPermission.reason}>{copy.configureCameras}</button>,
+            ? (
+              <a
+                className="button secondary small appIllustratedAction"
+                href="/cameras"
+                title={copy.configureCameras}
+                aria-label={copy.configureCameras}
+              >
+                <img src="/assets/icons/ui/camera.png" alt="" aria-hidden="true" />
+              </a>
+            )
+            : (
+              <button
+                className="button secondary small appIllustratedAction"
+                type="button"
+                disabled
+                title={manageCamerasPermission.reason}
+                aria-label={copy.configureCameras}
+              >
+                <img src="/assets/icons/ui/camera.png" alt="" aria-hidden="true" />
+              </button>
+            ),
         },
         {
           id: "auto-free",
@@ -2148,13 +2168,18 @@ function StorageOperationsPageContent() {
           ],
           action: (
             <button
-              className="button secondary small"
+              className="button secondary small appIllustratedAction"
               type="button"
-              title={!diagnosticsPermission.allowed ? diagnosticsPermission.reason : copy.integrityOpenCheck}
+              title={!diagnosticsPermission.allowed
+                ? diagnosticsPermission.reason
+                : ["not_run", "stale"].includes(integrityManagement.status)
+                  ? copy.integrityCheckArchive
+                  : copy.integrityOpenCheck}
+              aria-label={["not_run", "stale"].includes(integrityManagement.status) ? copy.integrityCheckArchive : copy.integrityOpenCheck}
               onClick={() => openIntegrityDialog()}
               disabled={!!rootAction || !diagnosticsPermission.allowed}
             >
-              {["not_run", "stale"].includes(integrityManagement.status) ? copy.integrityCheckArchive : copy.integrityOpenCheck}
+              <img src="/assets/icons/ui/open.png" alt="" aria-hidden="true" />
             </button>
           ),
         },
@@ -2176,16 +2201,31 @@ function StorageOperationsPageContent() {
             },
           ],
           action: migrationManagement.status === "needs_target"
-            ? <button className="button secondary small" type="button" onClick={openArchiveRootSetup}>{copy.archiveManagementAddLocation}</button>
+            ? (
+              <button
+                className="button secondary small appIllustratedAction"
+                type="button"
+                onClick={openArchiveRootSetup}
+                title={copy.archiveManagementAddLocation}
+                aria-label={copy.archiveManagementAddLocation}
+              >
+                <img src="/assets/icons/ui/add-storage-location.png" alt="" aria-hidden="true" />
+              </button>
+            )
             : (
               <button
-                className="button secondary small"
+                className="button secondary small appIllustratedAction"
                 type="button"
-                title={!manageSettingsPermission.allowed ? manageSettingsPermission.reason : copy.migrationOpen}
+                title={!manageSettingsPermission.allowed
+                  ? manageSettingsPermission.reason
+                  : migrationScenario.active || migrationScenario.terminal
+                    ? copy.archiveManagementContinue
+                    : copy.migrationOpen}
+                aria-label={migrationScenario.active || migrationScenario.terminal ? copy.archiveManagementContinue : copy.migrationOpen}
                 onClick={openMigrationDialog}
                 disabled={!!rootAction || !manageSettingsPermission.allowed}
               >
-                {migrationScenario.active || migrationScenario.terminal ? copy.archiveManagementContinue : copy.migrationOpen}
+                <img src="/assets/icons/ui/open.png" alt="" aria-hidden="true" />
               </button>
             ),
         },
@@ -2442,12 +2482,30 @@ function StorageOperationsPageContent() {
                         <span>{copy.storageFolder}</span>
                         <input className="input" value={archiveRootFolderName} onChange={(event) => setArchiveRootFolderName(event.target.value)} placeholder="KM-VMS-Recordings" />
                       </label>
-                      <button className="button small storageOpsRootAddButton" type="button" onClick={addRoot} disabled={!!rootAction || !archiveRootSelectionReady || !manageSettingsPermission.allowed}>{rootAction === "add" ? copy.adding : copy.add}</button>
+                      <button
+                        className="button small appIllustratedAction storageOpsRootAddButton"
+                        type="button"
+                        onClick={addRoot}
+                        disabled={!!rootAction || !archiveRootSelectionReady || !manageSettingsPermission.allowed}
+                        title={rootAction === "add" ? copy.adding : copy.add}
+                        aria-label={rootAction === "add" ? copy.adding : copy.add}
+                        aria-busy={rootAction === "add" ? "true" : undefined}
+                      >
+                        <img src="/assets/icons/ui/add-storage-location.png" alt="" aria-hidden="true" />
+                      </button>
                     </div>
                     <div className="storageOpsDiscoveryFeedback">
                       {archiveRootDiscoveryHeader.needsRefresh ? (
-                        <button className="button secondary small" type="button" onClick={loadArchiveRootDiscovery} disabled={!!rootAction}>
-                          {copy.refreshDiscovery}
+                        <button
+                          className={`button secondary small appIllustratedAction ${archiveRootDiscoveryModel.refreshing ? "isRefreshing" : ""}`}
+                          type="button"
+                          onClick={loadArchiveRootDiscovery}
+                          disabled={!!rootAction || archiveRootDiscoveryModel.refreshing}
+                          title={archiveRootDiscoveryModel.refreshing ? copy.refreshing : copy.refreshDiscovery}
+                          aria-label={archiveRootDiscoveryModel.refreshing ? copy.refreshing : copy.refreshDiscovery}
+                          aria-busy={archiveRootDiscoveryModel.refreshing ? "true" : undefined}
+                        >
+                          <span className="appIllustratedActionGlyph" aria-hidden="true">↻</span>
                         </button>
                       ) : null}
                     </div>

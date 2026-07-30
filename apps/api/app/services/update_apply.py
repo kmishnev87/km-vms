@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -20,6 +19,12 @@ from app.models.audit_event import AuditEvent
 from app.models.schema_migration_control import (
     SchemaMigrationAttempt,
     SchemaMigrationControl,
+)
+from app.services.maintenance_admission import (
+    MaintenanceAdmissionBlocked,
+    assert_no_maintenance_conflicts,
+    maintenance_admission_guard,
+    maintenance_admission_lock_path,
 )
 from app.services.update_check import (
     get_trusted_apply_snapshot,
@@ -163,9 +168,6 @@ APPLY_FRESHNESS_KEYS = {
 }
 TERMINAL_SUMMARY_KEYS = {"status", "finished_at", "error_category"}
 
-_ADMISSION_THREAD_LOCK = threading.RLock()
-
-
 class UpdateApplyBlocked(RuntimeError):
     def __init__(
         self,
@@ -223,7 +225,7 @@ def _apply_history_path() -> Path:
 
 
 def _admission_lock_path() -> Path:
-    return _control_root() / "update-admission.lock"
+    return maintenance_admission_lock_path()
 
 
 def _helper_lease_path() -> Path:
@@ -232,15 +234,8 @@ def _helper_lease_path() -> Path:
 
 @contextmanager
 def _admission_guard():
-    root = _control_root()
-    root.mkdir(parents=True, exist_ok=True)
-    with _ADMISSION_THREAD_LOCK:
-        with _admission_lock_path().open("a+", encoding="utf-8") as lock_file:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    with maintenance_admission_guard():
+        yield
 
 
 def _safe_string(value: Any, *, max_length: int = 300) -> str | None:
@@ -2094,6 +2089,13 @@ def request_update_apply(
         schema_blocker = _schema_admission_blocker(db)
         if schema_blocker:
             raise UpdateApplyBlocked(*schema_blocker)
+        try:
+            assert_no_maintenance_conflicts("update", db=db)
+        except MaintenanceAdmissionBlocked as exc:
+            raise UpdateApplyBlocked(
+                exc.code,
+                "Another maintenance operation is active or its state is unavailable.",
+            ) from exc
         _ensure_audit(db, candidate_request)
         written = _write_current_request(candidate_request)
         return _canonical_apply_response(written, replayed=False)

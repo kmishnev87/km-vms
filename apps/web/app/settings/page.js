@@ -69,6 +69,8 @@ configureSettingsPageHelpers({ normalizeLocale, translateText });
 const CREDENTIALS_CHANGED_NOTICE_KEY = "km_vms_credentials_changed_notice";
 const MAINTENANCE_BACKUP_PAGE_SIZE = 5;
 const MAINTENANCE_BACKUP_POLL_INTERVAL_MS = 3000;
+const CURRENT_RESTORE_PENDING_STORAGE_KEY = "km_vms_current_restore_pending_v1";
+const CURRENT_RESTORE_CONFIRMATION_PHRASE = "RESTORE KM VMS";
 
 let settingsBodyScrollLockCount = 0;
 let settingsBodyPreviousOverflow = "";
@@ -214,6 +216,87 @@ const TEXT = {
     maintenanceBackupRestoreAvailable: "Восстановление доступно",
     maintenanceBackupRestoreUnavailable: "Восстановление в рабочую базу пока недоступно",
     maintenanceBackupRestoreUnavailableReason: "Сейчас доступна безопасная проверка копии во временной базе. Восстановление рабочей базы будет отдельным защищённым сценарием.",
+    maintenanceCurrentRestoreAction: "Восстановить рабочую базу",
+    maintenanceCurrentRestoreTitle: "Восстановление рабочей базы данных",
+    maintenanceCurrentRestoreIntro: "Выбрана копия от {date}. Перед запуском система ещё раз проверит именно эту копию.",
+    maintenanceCurrentRestoreChanges: "Пользователи, камеры, настройки и служебные метаданные вернутся к состоянию этой копии.",
+    maintenanceCurrentRestoreVideoSafe: "Видеоархив и файлы записей не восстанавливаются и не удаляются.",
+    maintenanceCurrentRestoreBackupFirst: "Перед заменой базы будет создана и проверена резервная копия текущего состояния.",
+    maintenanceCurrentRestoreInterruption: "Во время операции API и запись камер будут кратковременно остановлены.",
+    maintenanceCurrentRestoreActor: "Текущий администратор должен существовать и быть активным в выбранной копии.",
+    maintenanceCurrentRestorePhraseLabel: "Для подтверждения введите RESTORE KM VMS",
+    maintenanceCurrentRestoreConfirm: "Восстановить",
+    maintenanceCurrentRestorePreflight: "Проверяем копию и условия восстановления...",
+    maintenanceCurrentRestoreBlocked: "Эта копия сейчас не готова к восстановлению.",
+    maintenanceCurrentRestoreReconnect: "Сервисы перезапускаются. Статус будет проверен автоматически.",
+    maintenanceCurrentRestoreCompleted: "Рабочая база восстановлена. При необходимости войдите в систему снова.",
+    maintenanceCurrentRestoreRolledBack: "Восстановление не завершилось; исходная рабочая база автоматически возвращена из предохранительной копии.",
+    maintenanceCurrentRestoreRecoveryRequired: "Автоматическое возвращение базы не подтверждено. Не запускайте операцию повторно и обратитесь в поддержку.",
+    maintenanceCurrentRestoreClose: "Закрыть",
+    maintenanceCurrentRestoreCancel: "Отмена",
+    maintenanceCurrentRestoreTerminalPhase: "Результат",
+    maintenanceCurrentRestoreStatusLabel: "Текущий этап",
+    maintenanceCurrentRestorePhraseMismatch: "Введите фразу подтверждения точно как указано.",
+    maintenanceCurrentRestoreRequestRejected: "Запуск восстановления отклонён.",
+    maintenanceCurrentRestorePhases: {
+      preflight: "Проверка условий",
+      pre_restore_backup: "Подготовка резервной копии текущей базы",
+      writers_paused: "Службы записи остановлены",
+      restore_running: "Восстановление базы",
+      services_starting: "Запуск служб",
+      post_restore_check: "Итоговая проверка",
+      completed: "Завершено",
+      blocked: "Операция заблокирована",
+      failed_rolled_back: "Исходная база возвращена",
+      failed_recovery_required: "Требуется восстановление с поддержкой",
+    },
+    maintenanceCurrentRestoreReasons: {
+      artifact_invalid: "Некорректная копия.",
+      artifact_unavailable: "Файлы копии недоступны.",
+      artifact_integrity_not_verified: "Сначала проверьте целостность копии.",
+      migration_required: "Схема этой копии требует миграции и здесь не восстанавливается.",
+      newer_than_supported: "Схема копии новее текущей версии приложения.",
+      restore_not_supported: "Восстановление рабочей базы сейчас недоступно.",
+      initiating_actor_missing_or_inactive_in_backup: "Текущий администратор отсутствует или неактивен в этой копии.",
+      insufficient_space_for_pre_restore_backup: "Недостаточно места для предохранительной копии текущей базы.",
+      backup_root_not_persistent: "Каталог резервных копий не подтверждён как постоянный.",
+      update_operation_active: "Сначала дождитесь завершения обновления.",
+      backup_operation_active: "Сначала дождитесь завершения операции с резервной копией.",
+      schema_operation_active: "Сначала дождитесь завершения изменения схемы.",
+      restore_helper_unavailable: "Служба восстановления пока недоступна.",
+      restore_status_reader_unavailable: "Служба безопасного статуса восстановления пока недоступна.",
+      postgresql_required: "Восстановление рабочей базы поддерживается только для PostgreSQL.",
+      schema_migration_required: "Текущая схема базы требует миграции.",
+      schema_newer_than_supported: "Текущая схема базы новее этой версии приложения.",
+      artifact_backend_unsupported: "Копия создана для неподдерживаемого типа базы.",
+      artifact_schema_migration_required: "Схема копии требует миграции.",
+      artifact_schema_newer: "Схема копии новее этой версии приложения.",
+      artifact_integrity_evidence_stale: "Копия изменилась после проверки целостности.",
+      temporary_restore_validation_required: "Сначала выполните пробное восстановление этой копии.",
+      temporary_restore_validation_failed: "Пробное восстановление этой копии не прошло.",
+      restore_operation_active: "Другое восстановление уже выполняется.",
+      submission_binding_conflict: "Этот идентификатор запуска уже связан с другой операцией.",
+      artifact_evidence_changed: "Копия изменилась после предварительной проверки.",
+      confirmation_required: "Требуется явное подтверждение восстановления.",
+      confirmation_phrase_invalid: "Фраза подтверждения введена неверно.",
+      audit_unavailable: "Не удалось надёжно записать событие аудита. Восстановление не запущено.",
+      current_actor_access_changed: "Доступ текущего администратора изменился. Повторите предварительную проверку.",
+      artifact_fingerprint_changed: "Копия изменилась после принятия операции.",
+      current_schema_not_exact: "Текущая схема базы больше не соответствует поддерживаемой версии.",
+      pre_restore_backup_verification_failed: "Не удалось создать и проверить предохранительную копию текущей базы.",
+      restore_writer_isolation_failed: "Не удалось безопасно остановить службы, записывающие данные.",
+      pg_restore_failed: "Восстановление базы завершилось с ошибкой.",
+      restore_api_health_failed: "После восстановления API не прошёл проверку здоровья.",
+      restore_recorder_start_failed: "После проверки базы не удалось запустить запись.",
+      automatic_rollback_failed: "Автоматический возврат исходной базы не завершился. Обратитесь в поддержку.",
+      restore_interrupted_before_mutation: "Операция прервалась до изменения рабочей базы.",
+      restore_interrupted_after_mutation: "Операция прервалась после начала изменения; выполнен автоматический возврат.",
+      restore_helper_exception: "Служба восстановления завершила операцию с внутренней ошибкой.",
+      post_restore_actor_access_invalid: "В восстановленной базе не подтверждён доступ администратора.",
+      post_restore_schema_invalid: "Восстановленная база имеет неподдерживаемую схему.",
+      post_restore_metadata_invalid: "Проверка основных данных восстановленной базы не пройдена.",
+      post_restore_tables_missing: "В восстановленной базе отсутствуют обязательные таблицы.",
+    },
     maintenanceBackupStatusEmpty: "Резервных копий пока нет.",
     maintenanceBackupStatusReady: "Резервных копий: {count}",
     maintenanceBackupCopyOne: "копия",
@@ -801,6 +884,87 @@ const TEXT = {
     maintenanceBackupRestoreAvailable: "Restore is available",
     maintenanceBackupRestoreUnavailable: "Restore to the working database is not available yet",
     maintenanceBackupRestoreUnavailableReason: "A safe check in a temporary database is available now. Working database restore will be a separate protected flow.",
+    maintenanceCurrentRestoreAction: "Restore current database",
+    maintenanceCurrentRestoreTitle: "Restore current database",
+    maintenanceCurrentRestoreIntro: "Backup from {date} is selected. The exact artifact will be checked again before start.",
+    maintenanceCurrentRestoreChanges: "Users, cameras, settings, and service metadata will return to the state in this backup.",
+    maintenanceCurrentRestoreVideoSafe: "The video archive and recording files are neither restored nor deleted.",
+    maintenanceCurrentRestoreBackupFirst: "A verified safety backup of the current database will be created before replacement.",
+    maintenanceCurrentRestoreInterruption: "The API and camera recording will briefly stop during the operation.",
+    maintenanceCurrentRestoreActor: "The current administrator must exist and remain active in the selected backup.",
+    maintenanceCurrentRestorePhraseLabel: "Type RESTORE KM VMS to confirm",
+    maintenanceCurrentRestoreConfirm: "Restore",
+    maintenanceCurrentRestorePreflight: "Checking the backup and restore conditions...",
+    maintenanceCurrentRestoreBlocked: "This backup is not ready for current-database restore.",
+    maintenanceCurrentRestoreReconnect: "Services are restarting. Status will continue to refresh automatically.",
+    maintenanceCurrentRestoreCompleted: "The current database was restored. Sign in again if requested.",
+    maintenanceCurrentRestoreRolledBack: "Restore did not complete; the original current database was automatically restored from the safety backup.",
+    maintenanceCurrentRestoreRecoveryRequired: "Automatic database recovery was not proven. Do not retry and contact support.",
+    maintenanceCurrentRestoreClose: "Close",
+    maintenanceCurrentRestoreCancel: "Cancel",
+    maintenanceCurrentRestoreTerminalPhase: "Result",
+    maintenanceCurrentRestoreStatusLabel: "Current phase",
+    maintenanceCurrentRestorePhraseMismatch: "Type the confirmation phrase exactly as shown.",
+    maintenanceCurrentRestoreRequestRejected: "The restore request was rejected.",
+    maintenanceCurrentRestorePhases: {
+      preflight: "Checking conditions",
+      pre_restore_backup: "Preparing current database safety backup",
+      writers_paused: "Database writers paused",
+      restore_running: "Restoring database",
+      services_starting: "Starting services",
+      post_restore_check: "Final verification",
+      completed: "Completed",
+      blocked: "Operation blocked",
+      failed_rolled_back: "Original database restored",
+      failed_recovery_required: "Support recovery required",
+    },
+    maintenanceCurrentRestoreReasons: {
+      artifact_invalid: "The backup identity is invalid.",
+      artifact_unavailable: "Backup files are unavailable.",
+      artifact_integrity_not_verified: "Verify backup integrity first.",
+      migration_required: "This backup schema requires migration and cannot be restored here.",
+      newer_than_supported: "The backup schema is newer than this application.",
+      restore_not_supported: "Current database restore is unavailable.",
+      initiating_actor_missing_or_inactive_in_backup: "The current administrator is missing or inactive in this backup.",
+      insufficient_space_for_pre_restore_backup: "There is not enough space for the current database safety backup.",
+      backup_root_not_persistent: "The backup directory is not verified as persistent.",
+      update_operation_active: "Wait for the update to finish first.",
+      backup_operation_active: "Wait for the backup operation to finish first.",
+      schema_operation_active: "Wait for the schema operation to finish first.",
+      restore_helper_unavailable: "The restore helper is not available yet.",
+      restore_status_reader_unavailable: "The safe restore status service is not available yet.",
+      postgresql_required: "Current database restore is supported only for PostgreSQL.",
+      schema_migration_required: "The current database schema requires migration.",
+      schema_newer_than_supported: "The current database schema is newer than this application.",
+      artifact_backend_unsupported: "The backup uses an unsupported database type.",
+      artifact_schema_migration_required: "The backup schema requires migration.",
+      artifact_schema_newer: "The backup schema is newer than this application.",
+      artifact_integrity_evidence_stale: "The backup changed after its integrity check.",
+      temporary_restore_validation_required: "Run a trial restore for this backup first.",
+      temporary_restore_validation_failed: "The trial restore for this backup failed.",
+      restore_operation_active: "Another restore is already running.",
+      submission_binding_conflict: "This launch identifier is already bound to another operation.",
+      artifact_evidence_changed: "The backup changed after preflight.",
+      confirmation_required: "Explicit restore confirmation is required.",
+      confirmation_phrase_invalid: "The confirmation phrase is incorrect.",
+      audit_unavailable: "The audit event could not be recorded reliably. Restore was not started.",
+      current_actor_access_changed: "The current administrator access changed. Run preflight again.",
+      artifact_fingerprint_changed: "The backup changed after the operation was accepted.",
+      current_schema_not_exact: "The current database schema no longer matches the supported version.",
+      pre_restore_backup_verification_failed: "The current database safety backup could not be created and verified.",
+      restore_writer_isolation_failed: "Services writing database data could not be stopped safely.",
+      pg_restore_failed: "Database restore failed.",
+      restore_api_health_failed: "The API health check failed after restore.",
+      restore_recorder_start_failed: "Recording could not be started after the database check.",
+      automatic_rollback_failed: "Automatic recovery of the original database failed. Contact support.",
+      restore_interrupted_before_mutation: "The operation stopped before the working database was changed.",
+      restore_interrupted_after_mutation: "The operation stopped after changes began; automatic recovery was performed.",
+      restore_helper_exception: "The restore service ended the operation with an internal error.",
+      post_restore_actor_access_invalid: "Administrator access was not confirmed in the restored database.",
+      post_restore_schema_invalid: "The restored database has an unsupported schema.",
+      post_restore_metadata_invalid: "The restored database failed its core data check.",
+      post_restore_tables_missing: "Required tables are missing from the restored database.",
+    },
     maintenanceBackupStatusEmpty: "No backups yet.",
     maintenanceBackupStatusReady: "Backups: {count}",
     maintenanceBackupCopyOne: "backup",
@@ -1359,6 +1523,87 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceBackupRestoreAvailable: "可恢复",
   maintenanceBackupRestoreUnavailable: "暂不能恢复到工作数据库",
   maintenanceBackupRestoreUnavailableReason: "现在只能在临时数据库中安全检查备份。恢复工作数据库将作为单独受保护流程实现。",
+  maintenanceCurrentRestoreAction: "恢复当前数据库",
+  maintenanceCurrentRestoreTitle: "恢复当前数据库",
+  maintenanceCurrentRestoreIntro: "已选择 {date} 的备份。开始前会再次验证该准确备份。",
+  maintenanceCurrentRestoreChanges: "用户、摄像机、设置和服务元数据将恢复到此备份的状态。",
+  maintenanceCurrentRestoreVideoSafe: "视频归档和录像文件不会被恢复或删除。",
+  maintenanceCurrentRestoreBackupFirst: "替换前会创建并验证当前数据库的安全备份。",
+  maintenanceCurrentRestoreInterruption: "操作期间 API 和摄像机录像会短暂停止。",
+  maintenanceCurrentRestoreActor: "当前管理员必须存在于所选备份中并保持启用。",
+  maintenanceCurrentRestorePhraseLabel: "输入 RESTORE KM VMS 以确认",
+  maintenanceCurrentRestoreConfirm: "恢复",
+  maintenanceCurrentRestorePreflight: "正在检查备份和恢复条件...",
+  maintenanceCurrentRestoreBlocked: "此备份目前不具备恢复条件。",
+  maintenanceCurrentRestoreReconnect: "服务正在重启，状态将自动继续刷新。",
+  maintenanceCurrentRestoreCompleted: "当前数据库已恢复。如有提示，请重新登录。",
+  maintenanceCurrentRestoreRolledBack: "恢复未完成；原当前数据库已从安全备份自动还原。",
+  maintenanceCurrentRestoreRecoveryRequired: "无法确认自动数据库恢复。请勿重试并联系支持人员。",
+  maintenanceCurrentRestoreClose: "关闭",
+  maintenanceCurrentRestoreCancel: "取消",
+  maintenanceCurrentRestoreTerminalPhase: "结果",
+  maintenanceCurrentRestoreStatusLabel: "当前阶段",
+  maintenanceCurrentRestorePhraseMismatch: "请完全按提示输入确认短语。",
+  maintenanceCurrentRestoreRequestRejected: "恢复请求已被拒绝。",
+  maintenanceCurrentRestorePhases: {
+    preflight: "检查条件",
+    pre_restore_backup: "准备当前数据库安全备份",
+    writers_paused: "数据库写入服务已暂停",
+    restore_running: "正在恢复数据库",
+    services_starting: "正在启动服务",
+    post_restore_check: "最终检查",
+    completed: "已完成",
+    blocked: "操作已阻止",
+    failed_rolled_back: "原数据库已恢复",
+    failed_recovery_required: "需要支持恢复",
+  },
+  maintenanceCurrentRestoreReasons: {
+    artifact_invalid: "备份标识无效。",
+    artifact_unavailable: "备份文件不可用。",
+    artifact_integrity_not_verified: "请先验证备份完整性。",
+    migration_required: "此备份架构需要迁移，无法在此恢复。",
+    newer_than_supported: "备份架构比当前应用更新。",
+    restore_not_supported: "当前数据库恢复不可用。",
+    initiating_actor_missing_or_inactive_in_backup: "当前管理员在此备份中缺失或未启用。",
+    insufficient_space_for_pre_restore_backup: "空间不足，无法创建当前数据库安全备份。",
+    backup_root_not_persistent: "备份目录未确认是持久目录。",
+    update_operation_active: "请先等待更新完成。",
+    backup_operation_active: "请先等待备份操作完成。",
+    schema_operation_active: "请先等待架构操作完成。",
+    restore_helper_unavailable: "恢复 helper 暂不可用。",
+    restore_status_reader_unavailable: "安全恢复状态服务暂不可用。",
+    postgresql_required: "当前数据库恢复仅支持 PostgreSQL。",
+    schema_migration_required: "当前数据库架构需要迁移。",
+    schema_newer_than_supported: "当前数据库架构比此应用版本更新。",
+    artifact_backend_unsupported: "此备份使用不支持的数据库类型。",
+    artifact_schema_migration_required: "备份架构需要迁移。",
+    artifact_schema_newer: "备份架构比此应用版本更新。",
+    artifact_integrity_evidence_stale: "备份在完整性检查后发生了变化。",
+    temporary_restore_validation_required: "请先对此备份执行试恢复。",
+    temporary_restore_validation_failed: "此备份的试恢复失败。",
+    restore_operation_active: "另一个恢复操作正在运行。",
+    submission_binding_conflict: "此启动标识已绑定到另一个操作。",
+    artifact_evidence_changed: "备份在预检查后发生了变化。",
+    confirmation_required: "需要明确确认恢复。",
+    confirmation_phrase_invalid: "确认短语不正确。",
+    audit_unavailable: "无法可靠记录审计事件，恢复未启动。",
+    current_actor_access_changed: "当前管理员权限已更改，请重新执行预检查。",
+    artifact_fingerprint_changed: "操作被接受后，备份发生了变化。",
+    current_schema_not_exact: "当前数据库架构不再匹配受支持版本。",
+    pre_restore_backup_verification_failed: "无法创建并验证当前数据库的安全备份。",
+    restore_writer_isolation_failed: "无法安全停止写入数据库的服务。",
+    pg_restore_failed: "数据库恢复失败。",
+    restore_api_health_failed: "恢复后 API 健康检查失败。",
+    restore_recorder_start_failed: "数据库检查后无法启动录像服务。",
+    automatic_rollback_failed: "自动恢复原数据库失败，请联系支持人员。",
+    restore_interrupted_before_mutation: "工作数据库更改前，操作已中断。",
+    restore_interrupted_after_mutation: "更改开始后操作中断；已执行自动恢复。",
+    restore_helper_exception: "恢复服务因内部错误结束了操作。",
+    post_restore_actor_access_invalid: "未能在恢复后的数据库中确认管理员权限。",
+    post_restore_schema_invalid: "恢复后的数据库架构不受支持。",
+    post_restore_metadata_invalid: "恢复后的数据库未通过核心数据检查。",
+    post_restore_tables_missing: "恢复后的数据库缺少必需表。",
+  },
   maintenanceBackupStatusEmpty: "还没有备份。",
   maintenanceBackupStatusReady: "备份数量：{count}",
   maintenanceBackupCopyOne: "个备份",
@@ -1838,6 +2083,18 @@ function MaintenanceTrashIcon() {
   );
 }
 
+function MaintenanceRestoreIcon() {
+  return (
+    <svg className="settingsMaintenanceRestoreIcon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <ellipse cx="12" cy="5.5" rx="6.2" ry="2.6" />
+      <path d="M5.8 5.5v5.2c0 1.4 2.8 2.6 6.2 2.6 1.1 0 2.1-.1 3-.3" />
+      <path d="M5.8 10.7v5.2c0 1.4 2.8 2.6 6.2 2.6" />
+      <path d="M19 13.3a4.2 4.2 0 1 0 .5 4.7" />
+      <path d="M19.1 10.9v3.5h-3.5" />
+    </svg>
+  );
+}
+
 export default function SettingsPage() {
   const router = useRouter();
   const [draft, setDraft] = useState(null);
@@ -1864,6 +2121,9 @@ export default function SettingsPage() {
   const [maintenanceBackupResult, setMaintenanceBackupResult] = useState(null);
   const [maintenanceConfirm, setMaintenanceConfirm] = useState(null);
   const [maintenanceBackupPending, setMaintenanceBackupPending] = useState(null);
+  const [currentRestoreDialog, setCurrentRestoreDialog] = useState(null);
+  const [currentRestorePending, setCurrentRestorePending] = useState(null);
+  const [currentRestoreStatus, setCurrentRestoreStatus] = useState(null);
   const [maintenanceWarningsOpen, setMaintenanceWarningsOpen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState(null);
   const [updateApplyStatus, setUpdateApplyStatus] = useState(null);
@@ -1886,6 +2146,9 @@ export default function SettingsPage() {
   const updateApplyPendingRef = useRef(null);
   const maintenanceBackupPendingRef = useRef(null);
   const maintenanceBackupPollInFlightRef = useRef(false);
+  const currentRestorePendingRef = useRef(null);
+  const currentRestorePollInFlightRef = useRef(false);
+  const currentRestoreDialogRef = useRef(null);
   const updateApplyDialogRef = useRef(null);
   const maintenanceDialogRef = useRef(null);
   const maintenanceTriggerRef = useRef(null);
@@ -1907,7 +2170,13 @@ export default function SettingsPage() {
     unresolvedSubmission: updateApplyHasUnknownLaunch,
   });
   const updateApplyRunning = updateApplyIsRunning(updateApplyStatus?.status || "") && !updateApplyOperator.stateUnknown;
-  const updateApplyAllowed = Boolean(updateApplyOperator.canApply && !updateApplyPending && !updateApplyDialog && !maintenanceBusy);
+  const updateApplyAllowed = Boolean(
+    updateApplyOperator.canApply
+    && !updateApplyPending
+    && !updateApplyDialog
+    && !maintenanceBusy
+    && !currentRestorePending,
+  );
   const updateApplyPrimaryText = updateApplyPending || updateApplyOperator.stateUnknown
       ? t.updateApplyLocked
       : updateApplyButtonText(updateApplyStatus, t);
@@ -1926,6 +2195,8 @@ export default function SettingsPage() {
   updateApplyDialogRef.current = updateApplyDialog;
   updateApplyPendingRef.current = updateApplyPending;
   maintenanceBackupPendingRef.current = maintenanceBackupPending;
+  currentRestorePendingRef.current = currentRestorePending;
+  currentRestoreDialogRef.current = currentRestoreDialog;
 
   useEffect(() => {
     load();
@@ -1961,6 +2232,56 @@ export default function SettingsPage() {
       }
     } catch {}
   }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.sessionStorage.getItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
+      const value = raw ? JSON.parse(raw) : null;
+      const valid = value
+        && typeof value === "object"
+        && typeof value.submissionId === "string"
+        && typeof value.artifactId === "string"
+        && Number.isFinite(value.createdAt)
+        && Date.now() - value.createdAt < 24 * 60 * 60 * 1000;
+      if (valid) {
+        currentRestorePendingRef.current = value;
+        setCurrentRestorePending(value);
+        setCurrentRestoreDialog({
+          artifact: { id: value.artifactId, createdAt: "-" },
+          phrase: CURRENT_RESTORE_CONFIRMATION_PHRASE,
+          preflight: { can_restore: true, reason_codes: [] },
+          preflightBusy: false,
+          accepted: true,
+          reconnecting: true,
+          error: "",
+        });
+      } else if (raw !== null) {
+        window.sessionStorage.removeItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
+      }
+    } catch {
+      try {
+        window.sessionStorage.removeItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
+      } catch {}
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!canManageMaintenance || !currentRestorePending) return undefined;
+    let cancelled = false;
+    let timer = null;
+    let delay = 1500;
+    const tick = async () => {
+      const result = await pollCurrentRestoreStatus();
+      if (cancelled || result?.terminal_result) return;
+      delay = result ? 2500 : Math.min(10000, Math.max(2500, delay * 2));
+      timer = window.setTimeout(tick, delay);
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [canManageMaintenance, currentRestorePending?.submissionId]);
 
   useEffect(() => {
     if (securityModalOpen) {
@@ -2003,7 +2324,7 @@ export default function SettingsPage() {
     const initial = focusableElements(container)[0];
     initial?.focus();
     function onKeyDown(event) {
-      if (updateApplyDialogRef.current) return;
+      if (updateApplyDialogRef.current || currentRestoreDialogRef.current) return;
       if (event.key === "Escape" && !maintenanceBusyRef.current) {
         event.preventDefault();
         closeMaintenanceModal();
@@ -2331,6 +2652,387 @@ export default function SettingsPage() {
     return safeRecord;
   }
 
+  function commitCurrentRestorePending(nextRecord) {
+    const safeRecord = nextRecord
+      && typeof nextRecord === "object"
+      && typeof nextRecord.submissionId === "string"
+      && typeof nextRecord.artifactId === "string"
+      && Number.isFinite(nextRecord.createdAt)
+      ? {
+          submissionId: nextRecord.submissionId,
+          artifactId: nextRecord.artifactId,
+          createdAt: nextRecord.createdAt,
+        }
+      : null;
+    currentRestorePendingRef.current = safeRecord;
+    setCurrentRestorePending(safeRecord);
+    try {
+      if (safeRecord) {
+        window.sessionStorage.setItem(
+          CURRENT_RESTORE_PENDING_STORAGE_KEY,
+          JSON.stringify(safeRecord),
+        );
+      } else {
+        window.sessionStorage.removeItem(CURRENT_RESTORE_PENDING_STORAGE_KEY);
+      }
+    } catch {}
+    return safeRecord;
+  }
+
+  function currentRestoreReasonCode(value) {
+    const detail = value?.detail && typeof value.detail === "object"
+      ? value.detail
+      : value?.data?.detail && typeof value.data.detail === "object"
+        ? value.data.detail
+        : {};
+    return String(
+      value?.reason_code
+      || value?.code
+      || detail.reason_code
+      || detail.code
+      || detail.preflight?.reason_codes?.[0]
+      || "",
+    ).trim();
+  }
+
+  function currentRestoreReasonText(code) {
+    const normalized = String(code || "").trim();
+    const aliases = {
+      artifact_schema_migration_required: "artifact_schema_migration_required",
+      artifact_schema_newer: "artifact_schema_newer",
+      schema_migration_required: "schema_migration_required",
+      schema_newer_than_supported: "schema_newer_than_supported",
+      compatibility_migration_required: "artifact_schema_migration_required",
+      migration_required: "artifact_schema_migration_required",
+      newer_than_supported: "artifact_schema_newer",
+      unsupported_backend: "artifact_backend_unsupported",
+      unknown: "artifact_invalid",
+    };
+    const key = aliases[normalized] || normalized;
+    return t.maintenanceCurrentRestoreReasons?.[key]
+      || t.maintenanceCurrentRestoreRequestRejected;
+  }
+
+  function currentRestoreTerminal(status = currentRestoreStatus) {
+    return ["completed", "blocked", "failed_rolled_back", "failed_recovery_required"]
+      .includes(String(status?.terminal_result || ""));
+  }
+
+  function currentRestoreTerminalText(status = currentRestoreStatus) {
+    const terminal = String(status?.terminal_result || "");
+    if (terminal === "completed") return t.maintenanceCurrentRestoreCompleted;
+    if (terminal === "failed_rolled_back") return t.maintenanceCurrentRestoreRolledBack;
+    if (terminal === "failed_recovery_required") return t.maintenanceCurrentRestoreRecoveryRequired;
+    if (terminal === "blocked") {
+      return currentRestoreReasonText(status?.reason_code);
+    }
+    return "";
+  }
+
+  function closeCurrentRestoreDialog() {
+    if (!currentRestoreDialog) return;
+    if (currentRestoreDialog.accepted && !currentRestoreTerminal()) return;
+    setCurrentRestoreDialog(null);
+    if (currentRestoreTerminal()) setCurrentRestoreStatus(null);
+  }
+
+  async function pollCurrentRestoreStatus(pendingOverride = null) {
+    const pending = pendingOverride || currentRestorePendingRef.current;
+    if (!pending || currentRestorePollInFlightRef.current) return null;
+    currentRestorePollInFlightRef.current = true;
+    try {
+      const result = await apiFetch("/system/restore/current/status");
+      const resultSubmissionId = String(result?.submission_id || "");
+      if (
+        String(result?.status || "") !== "idle"
+        && resultSubmissionId !== pending.submissionId
+      ) {
+        setCurrentRestoreDialog((current) => ({
+          ...(current || {}),
+          artifact: current?.artifact || {
+            id: pending.artifactId,
+            createdAt: "-",
+          },
+          accepted: true,
+          reconnecting: true,
+          error: "",
+        }));
+        return null;
+      }
+      if (String(result?.status || "") === "idle") {
+        setCurrentRestoreDialog((current) => current ? {
+          ...current,
+          accepted: true,
+          reconnecting: true,
+          error: "",
+        } : current);
+        return null;
+      }
+      setCurrentRestoreStatus(result);
+      const terminal = currentRestoreTerminal(result);
+      const sourceArtifact = result?.artifact || {};
+      setCurrentRestoreDialog((current) => {
+        const artifact = current?.artifact || {
+          id: pending.artifactId,
+          createdAt: sourceArtifact.artifact_created_at
+            ? formatAuditTimestamp(sourceArtifact.artifact_created_at, lang)
+            : "-",
+        };
+        return {
+          ...(current || {}),
+          artifact,
+          phrase: current?.phrase || CURRENT_RESTORE_CONFIRMATION_PHRASE,
+          preflight: current?.preflight || { can_restore: true, reason_codes: [] },
+          preflightBusy: false,
+          accepted: true,
+          reconnecting: false,
+          error: "",
+        };
+      });
+      if (terminal) {
+        commitCurrentRestorePending(null);
+        await loadMaintenanceOverview();
+      }
+      return result;
+    } catch (error) {
+      const expectedRestart = updateApplyRequestIsAmbiguous(error);
+      setCurrentRestoreDialog((current) => ({
+        ...(current || {}),
+        artifact: current?.artifact || {
+          id: pending.artifactId,
+          createdAt: "-",
+        },
+        phrase: current?.phrase || CURRENT_RESTORE_CONFIRMATION_PHRASE,
+        preflight: current?.preflight || { can_restore: true, reason_codes: [] },
+        preflightBusy: false,
+        accepted: true,
+        reconnecting: expectedRestart,
+        error: expectedRestart
+          ? ""
+          : currentRestoreReasonText(currentRestoreReasonCode(error)),
+      }));
+      return null;
+    } finally {
+      currentRestorePollInFlightRef.current = false;
+    }
+  }
+
+  async function requestCurrentDatabaseRestore(artifact) {
+    if (
+      !artifact?.id
+      || !artifact.canRestore
+      || maintenanceBusy
+      || maintenanceBackupPendingRef.current
+      || currentRestorePendingRef.current
+    ) return;
+    setCurrentRestoreStatus(null);
+    setCurrentRestoreDialog({
+      artifact,
+      phrase: "",
+      preflight: null,
+      preflightBusy: true,
+      accepted: false,
+      reconnecting: false,
+      error: "",
+    });
+    try {
+      const preflight = await apiFetch("/system/restore/current/preflight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ artifact_id: artifact.id }),
+      });
+      setCurrentRestoreDialog((current) => (
+        current?.artifact?.id === artifact.id
+          ? {
+              ...current,
+              preflight,
+              preflightBusy: false,
+              error: preflight?.can_restore
+                ? ""
+                : currentRestoreReasonText(preflight?.reason_codes?.[0]),
+            }
+          : current
+      ));
+    } catch (error) {
+      const detail = error?.data?.detail;
+      const preflight = detail && typeof detail === "object" ? detail.preflight : null;
+      setCurrentRestoreDialog((current) => (
+        current?.artifact?.id === artifact.id
+          ? {
+              ...current,
+              preflight,
+              preflightBusy: false,
+              error: currentRestoreReasonText(currentRestoreReasonCode(error)),
+            }
+          : current
+      ));
+    }
+  }
+
+  async function confirmCurrentDatabaseRestore() {
+    const dialog = currentRestoreDialog;
+    if (
+      !dialog
+      || dialog.preflightBusy
+      || dialog.accepted
+      || dialog.preflight?.can_restore !== true
+      || dialog.phrase !== CURRENT_RESTORE_CONFIRMATION_PHRASE
+      || currentRestorePendingRef.current
+    ) return;
+    const pending = commitCurrentRestorePending({
+      submissionId: createUpdateApplySubmissionId(),
+      artifactId: dialog.artifact.id,
+      createdAt: Date.now(),
+    });
+    if (!pending) return;
+    setCurrentRestoreStatus({
+      submission_id: pending.submissionId,
+      status: "queued",
+      phase: "preflight",
+      terminal_result: null,
+    });
+    setCurrentRestoreDialog((current) => current ? {
+      ...current,
+      accepted: true,
+      reconnecting: false,
+      error: "",
+    } : current);
+    try {
+      const receipt = await apiFetch("/system/restore/current/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          artifact_id: pending.artifactId,
+          submission_id: pending.submissionId,
+          confirm: true,
+          confirmation_phrase: CURRENT_RESTORE_CONFIRMATION_PHRASE,
+        }),
+      });
+      const restoreStatus = receipt?.restore_status || null;
+      if (restoreStatus) setCurrentRestoreStatus(restoreStatus);
+      void pollCurrentRestoreStatus(pending);
+    } catch (error) {
+      if (updateApplyRequestIsAmbiguous(error)) {
+        setCurrentRestoreDialog((current) => current ? {
+          ...current,
+          accepted: true,
+          reconnecting: true,
+          error: "",
+        } : current);
+        void pollCurrentRestoreStatus(pending);
+      } else {
+        commitCurrentRestorePending(null);
+        setCurrentRestoreStatus(null);
+        setCurrentRestoreDialog((current) => current ? {
+          ...current,
+          accepted: false,
+          reconnecting: false,
+          error: currentRestoreReasonText(currentRestoreReasonCode(error)),
+        } : current);
+      }
+    }
+  }
+
+  function currentRestoreDialogContent() {
+    if (!currentRestoreDialog) return null;
+    const status = currentRestoreStatus;
+    const terminal = currentRestoreTerminal(status);
+    const phase = String(status?.phase || "preflight");
+    const phaseOrder = [
+      "preflight",
+      "pre_restore_backup",
+      "writers_paused",
+      "restore_running",
+      "services_starting",
+      "post_restore_check",
+    ];
+    const activeIndex = phaseOrder.indexOf(phase);
+    const terminalLabel = terminal
+      ? t.maintenanceCurrentRestorePhases?.[status.terminal_result]
+      : t.maintenanceCurrentRestoreTerminalPhase;
+    return (
+      <div className="settingsCurrentRestoreContent">
+        {currentRestoreDialog.preflightBusy ? (
+          <div className="settingsCurrentRestorePreflight" role="status">
+            <span aria-hidden="true" />
+            {t.maintenanceCurrentRestorePreflight}
+          </div>
+        ) : null}
+        {currentRestoreDialog.accepted ? (
+          <>
+            <div className="settingsCurrentRestoreStatus" role="status">
+              <span>{t.maintenanceCurrentRestoreStatusLabel}</span>
+              <strong>
+                {terminal
+                  ? terminalLabel
+                  : t.maintenanceCurrentRestorePhases?.[phase] || t.maintenanceCurrentRestorePhases.preflight}
+              </strong>
+            </div>
+            <ol className="settingsCurrentRestoreTimeline">
+              {phaseOrder.map((item, index) => {
+                const state = terminal
+                  ? status?.terminal_result === "completed"
+                    ? "complete"
+                    : "pending"
+                  : index < activeIndex
+                    ? "complete"
+                    : index === activeIndex
+                      ? "active"
+                      : "pending";
+                return (
+                  <li className={`is-${state}`} key={item}>
+                    <span aria-hidden="true">{state === "complete" ? "✓" : index + 1}</span>
+                    {t.maintenanceCurrentRestorePhases?.[item]}
+                  </li>
+                );
+              })}
+              <li className={terminal ? "is-active" : "is-pending"}>
+                <span aria-hidden="true">{terminal ? "✓" : "7"}</span>
+                {terminalLabel}
+              </li>
+            </ol>
+          </>
+        ) : (
+          <label className="settingsCurrentRestorePhrase">
+            <span>{t.maintenanceCurrentRestorePhraseLabel}</span>
+            <input
+              className="input"
+              value={currentRestoreDialog.phrase}
+              onChange={(event) => setCurrentRestoreDialog((current) => current ? {
+                ...current,
+                phrase: event.target.value,
+                error: "",
+              } : current)}
+              autoComplete="off"
+              spellCheck="false"
+              disabled={currentRestoreDialog.preflightBusy}
+            />
+            {currentRestoreDialog.phrase
+              && currentRestoreDialog.phrase !== CURRENT_RESTORE_CONFIRMATION_PHRASE
+              ? <small>{t.maintenanceCurrentRestorePhraseMismatch}</small>
+              : null}
+          </label>
+        )}
+        {currentRestoreDialog.reconnecting && !terminal ? (
+          <div className="settingsCurrentRestoreReconnect">{t.maintenanceCurrentRestoreReconnect}</div>
+        ) : null}
+        {terminal ? (
+          <div
+            className={`settingsCurrentRestoreTerminal is-${status.terminal_result}`}
+            role={status.terminal_result === "completed" ? "status" : "alert"}
+          >
+            {currentRestoreTerminalText(status)}
+          </div>
+        ) : null}
+        {currentRestoreDialog.error ? (
+          <div className="settingsCurrentRestoreError" role="alert">
+            {currentRestoreDialog.error}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+
   function backupOperationFallback(kind) {
     if (kind === "create") return t.maintenanceBackupCreateFailed;
     if (kind === "delete") return t.maintenanceBackupDeleteFailed;
@@ -2584,7 +3286,7 @@ export default function SettingsPage() {
   }
 
   function requestDbAdoptionApply() {
-    if (maintenanceBusy) return;
+    if (maintenanceBusy || currentRestorePending) return;
     setMaintenanceConfirm({
       kind: "db-adoption-apply",
       title: t.maintenanceDbAdoptionApply,
@@ -2596,7 +3298,7 @@ export default function SettingsPage() {
   }
 
   async function performDbAdoptionApply() {
-    if (maintenanceBusy) return;
+    if (maintenanceBusy || currentRestorePending) return;
     setMaintenanceBusy("db-adoption-apply");
     setMaintenanceConfirm(null);
     setMaintenanceActionResult(null);
@@ -2634,7 +3336,7 @@ export default function SettingsPage() {
   }
 
   async function createMaintenanceBackup() {
-    if (maintenanceBusy || maintenanceBackupPendingRef.current) return;
+    if (maintenanceBusy || maintenanceBackupPendingRef.current || currentRestorePending) return;
     setMaintenanceConfirm({
       kind: "backup-create",
       title: t.maintenanceBackupCreate,
@@ -2650,7 +3352,7 @@ export default function SettingsPage() {
   }
 
   function requestCheckMaintenanceBackup(artifact) {
-    if (!artifact?.id || maintenanceBusy || maintenanceBackupPendingRef.current) return;
+    if (!artifact?.id || maintenanceBusy || maintenanceBackupPendingRef.current || currentRestorePending) return;
     setMaintenanceConfirm({
       kind: "backup-check",
       title: t.maintenanceBackupCheck,
@@ -2663,7 +3365,7 @@ export default function SettingsPage() {
   }
 
   function requestDeleteMaintenanceBackup(artifact) {
-    if (!artifact?.id || maintenanceBusy || maintenanceBackupPendingRef.current) return;
+    if (!artifact?.id || maintenanceBusy || maintenanceBackupPendingRef.current || currentRestorePending) return;
     setMaintenanceConfirm({
       kind: "backup-delete",
       title: t.maintenanceBackupDelete,
@@ -2679,6 +3381,7 @@ export default function SettingsPage() {
     if (
       maintenanceBusy
       || maintenanceBackupPendingRef.current
+      || currentRestorePending
       || !["create", "check", "delete"].includes(kind)
       || (kind !== "create" && !artifact?.id)
     ) return;
@@ -2744,7 +3447,12 @@ export default function SettingsPage() {
       setUpdateStatus(result);
       setUpdateTransportErrors((current) => ({ ...current, update: null }));
       await loadUpdateApplySurface({ silent: true });
-      showToast({ variant: "success", title: t.updateApplyCheck, text: maintenanceStatusText(result?.status, t) });
+      const checkFailed = String(result?.status || "").toLowerCase() === "check_failed";
+      showToast({
+        variant: checkFailed ? "warning" : "success",
+        title: t.updateApplyCheck,
+        text: maintenanceStatusText(result?.status, t),
+      });
     } catch (err) {
       const transportError = safeUpdateTransportError(err, t.updateApplyUnavailable);
       const message = transportError.message;
@@ -3099,8 +3807,13 @@ export default function SettingsPage() {
                     <span>{t.securityText}</span>
                   </div>
                   <div className="settingsRowControl settingsRowControlMeta">
-                    <button className="button secondary small settingsUsersAddButton" onClick={() => setSecurityModalOpen(true)}>
-                      {t.open}
+                    <button
+                      className="button secondary small appIllustratedAction settingsUsersAddButton"
+                      onClick={() => setSecurityModalOpen(true)}
+                      title={`${t.open}: ${t.security}`}
+                      aria-label={`${t.open}: ${t.security}`}
+                    >
+                      <img src="/assets/icons/ui/open.png" alt="" aria-hidden="true" />
                     </button>
                   </div>
                 </div>
@@ -3112,8 +3825,15 @@ export default function SettingsPage() {
                     <span>{t.maintenanceText}</span>
                   </div>
                   <div className="settingsRowControl settingsRowControlMeta">
-                    <button ref={maintenanceTriggerRef} className="button secondary small settingsUsersAddButton" onClick={openMaintenanceModal} disabled={!canManageMaintenance}>
-                      {t.open}
+                    <button
+                      ref={maintenanceTriggerRef}
+                      className="button secondary small appIllustratedAction settingsUsersAddButton"
+                      onClick={openMaintenanceModal}
+                      disabled={!canManageMaintenance}
+                      title={`${t.open}: ${t.maintenance}`}
+                      aria-label={`${t.open}: ${t.maintenance}`}
+                    >
+                      <img src="/assets/icons/ui/open.png" alt="" aria-hidden="true" />
                     </button>
                   </div>
                 </div>
@@ -3125,8 +3845,14 @@ export default function SettingsPage() {
                     <span>{t.usersText}</span>
                   </div>
                   <div className="settingsRowControl settingsRowControlMeta">
-                    <button className="button secondary small settingsUsersAddButton" onClick={openUsersModal} disabled={!canManageUsers || usersLoading || userBusy}>
-                      {t.open}
+                    <button
+                      className="button secondary small appIllustratedAction settingsUsersAddButton"
+                      onClick={openUsersModal}
+                      disabled={!canManageUsers || usersLoading || userBusy}
+                      title={`${t.open}: ${t.users}`}
+                      aria-label={`${t.open}: ${t.users}`}
+                    >
+                      <img src="/assets/icons/ui/open.png" alt="" aria-hidden="true" />
                     </button>
                   </div>
                 </div>
@@ -3251,6 +3977,47 @@ export default function SettingsPage() {
             onConfirm: maintenanceConfirm.onConfirm,
           } : null}
           onClose={() => setMaintenanceConfirm(null)}
+        />
+
+        <OperationDialog
+          dialog={currentRestoreDialog ? {
+            id: `current-db-restore-${currentRestoreDialog.artifact?.id || "current"}`,
+            title: t.maintenanceCurrentRestoreTitle,
+            message: t.maintenanceCurrentRestoreIntro.replace(
+              "{date}",
+              currentRestoreDialog.artifact?.createdAt || "-",
+            ),
+            overlayClassName: "settingsCurrentRestoreDialogOverlay",
+            className: "settingsCurrentRestoreDialog",
+            tone: currentRestoreStatus?.terminal_result === "completed"
+              ? "success"
+              : currentRestoreStatus?.terminal_result === "failed_recovery_required"
+                ? "error"
+                : "warning",
+            items: [
+              t.maintenanceCurrentRestoreChanges,
+              t.maintenanceCurrentRestoreVideoSafe,
+              t.maintenanceCurrentRestoreBackupFirst,
+              t.maintenanceCurrentRestoreInterruption,
+              t.maintenanceCurrentRestoreActor,
+            ],
+            content: currentRestoreDialogContent(),
+            busy: Boolean(currentRestoreDialog.accepted && !currentRestoreTerminal()),
+            dismissible: !currentRestoreDialog.accepted || currentRestoreTerminal(),
+            closeLabel: t.maintenanceCurrentRestoreClose,
+            ...(!currentRestoreDialog.accepted ? {
+              cancelLabel: t.maintenanceCurrentRestoreCancel,
+              confirmLabel: t.maintenanceCurrentRestoreConfirm,
+              confirmTone: "danger",
+              confirmDisabled: Boolean(
+                currentRestoreDialog.preflightBusy
+                || currentRestoreDialog.preflight?.can_restore !== true
+                || currentRestoreDialog.phrase !== CURRENT_RESTORE_CONFIRMATION_PHRASE
+              ),
+              onConfirm: confirmCurrentDatabaseRestore,
+            } : {}),
+          } : null}
+          onClose={closeCurrentRestoreDialog}
         />
 
         {userModal ? (
@@ -3467,7 +4234,7 @@ export default function SettingsPage() {
                             </button>
                           ) : null}
                           {row.showApply ? (
-                            <button type="button" className="button primary small" onClick={requestDbAdoptionApply} disabled={Boolean(maintenanceBusy)}>
+                            <button type="button" className="button primary small" onClick={requestDbAdoptionApply} disabled={Boolean(maintenanceBusy) || Boolean(currentRestorePending)}>
                               {maintenanceBusy === "db-adoption-apply" ? t.saving : row.applyLabel}
                             </button>
                           ) : null}
@@ -3489,7 +4256,7 @@ export default function SettingsPage() {
                     </div>
                     <p className="settingsMaintenanceBackupScope">{t.maintenanceBackupScope}</p>
                     <div className="settingsMaintenanceBackupActions">
-                      <button type="button" className="button secondary small" onClick={createMaintenanceBackup} disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending)}>
+                      <button type="button" className="button secondary small" onClick={createMaintenanceBackup} disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending)}>
                         {maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreateShort}
                       </button>
                     </div>
@@ -3542,13 +4309,36 @@ export default function SettingsPage() {
                                 <div className="settingsMaintenanceBackupItemActions">
                                   <span
                                     className="settingsMaintenanceIconAction"
+                                    title={artifact.canRestore
+                                      ? t.maintenanceCurrentRestoreAction
+                                      : currentRestoreReasonText(artifact.restoreIneligibleReason)}
+                                  >
+                                    <button
+                                      type="button"
+                                      className="settingsMaintenanceMiniButton"
+                                      onClick={() => requestCurrentDatabaseRestore(artifact)}
+                                      disabled={
+                                        Boolean(maintenanceBusy)
+                                        || Boolean(maintenanceBackupPending)
+                                        || Boolean(currentRestorePending)
+                                        || !artifact.canRestore
+                                      }
+                                      aria-label={artifact.canRestore
+                                        ? t.maintenanceCurrentRestoreAction
+                                        : `${t.maintenanceCurrentRestoreAction}: ${currentRestoreReasonText(artifact.restoreIneligibleReason)}`}
+                                    >
+                                      <MaintenanceRestoreIcon />
+                                    </button>
+                                  </span>
+                                  <span
+                                    className="settingsMaintenanceIconAction"
                                     title={maintenanceBusy === "backup-check" ? t.maintenanceBackupChecking : t.maintenanceBackupCheck}
                                   >
                                     <button
                                       type="button"
                                       className="settingsMaintenanceMiniButton"
                                       onClick={() => requestCheckMaintenanceBackup(artifact)}
-                                      disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || !artifact.canCheck}
+                                      disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending) || !artifact.canCheck}
                                       aria-label={maintenanceBusy === "backup-check" ? t.maintenanceBackupChecking : t.maintenanceBackupCheck}
                                       aria-busy={maintenanceBusy === "backup-check" ? "true" : undefined}
                                     >
@@ -3563,7 +4353,7 @@ export default function SettingsPage() {
                                       type="button"
                                       className="settingsMaintenanceMiniButton danger"
                                       onClick={() => requestDeleteMaintenanceBackup(artifact)}
-                                      disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || !artifact.deletable}
+                                      disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending) || !artifact.deletable}
                                       aria-label={maintenanceBusy === "backup-delete" ? t.maintenanceBackupDeleting : t.maintenanceBackupDelete}
                                       aria-busy={maintenanceBusy === "backup-delete" ? "true" : undefined}
                                     >
@@ -3642,10 +4432,10 @@ export default function SettingsPage() {
                       </div>
                     </div>
                     <div className="settingsMaintenanceSupportActions">
-                      <button type="button" className="button secondary small" onClick={() => setDiagnosticChoiceOpen(true)} disabled={Boolean(maintenanceBusy) || securityBusy}>
-                        {t.createDiagnosticArchive}
+                      <button type="button" className="button secondary small settingsMaintenanceSupportActionButton" onClick={() => setDiagnosticChoiceOpen(true)} disabled={Boolean(maintenanceBusy) || securityBusy}>
+                        {t.maintenanceReportDownload}
                       </button>
-                      <button type="button" className="button secondary small" onClick={() => setMaintenanceWarningsOpen((value) => !value)} disabled={!maintenanceWarnings.total}>
+                      <button type="button" className="button secondary small settingsMaintenanceSupportActionButton" onClick={() => setMaintenanceWarningsOpen((value) => !value)} disabled={!maintenanceWarnings.total}>
                         {maintenanceWarningsOpen ? t.maintenanceWarningHide : t.maintenanceWarningDetails}
                       </button>
                     </div>

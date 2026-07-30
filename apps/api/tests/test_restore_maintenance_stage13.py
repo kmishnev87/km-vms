@@ -110,9 +110,9 @@ def test_restore_status_no_artifacts_is_read_only(tmp_path):
     assert payload["status"] == "no_artifacts"
     assert payload["artifact_count"] == 0
     assert payload["can_restore"] is False
-    assert payload["current_product_restore_supported"] is False
-    assert payload["current_product_restore_status"] == "blocked"
-    assert payload["current_product_restore_reason"] == "current_product_restore_not_enabled"
+    assert payload["current_product_restore_supported"] is True
+    assert payload["current_product_restore_status"] == "available"
+    assert payload["current_product_restore_reason"] is None
     assert not root.exists()
 
 

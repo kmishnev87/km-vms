@@ -15,6 +15,11 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 from app.core.config import settings
+from app.services.maintenance_admission import (
+    MaintenanceAdmissionBlocked,
+    assert_no_maintenance_conflicts,
+    maintenance_admission_guard,
+)
 from app.core.version import APP_BUILD_VERSION, APP_VERSION
 from app.services.schema_versioning import CURRENT_SCHEMA_VERSION
 
@@ -444,6 +449,93 @@ def current_validation_context(db_backend: str | None = None) -> dict[str, Any]:
         "schema_version": CURRENT_SCHEMA_VERSION,
         "app_version": APP_VERSION,
         "app_build_version": APP_BUILD_VERSION,
+    }
+
+
+def current_restore_artifact_evidence(
+    artifact_id: str,
+    *,
+    actor: Any,
+    db_backend: str,
+    backup_root: str | Path | None = None,
+) -> dict[str, Any]:
+    safe_id = validate_artifact_id(artifact_id)
+    root = configured_backup_root(backup_root)
+    _ensure_trusted_root(root)
+    manifest_path = root / f"{safe_id}.manifest.json"
+    manifest = _read_json_bounded(manifest_path)
+    if manifest.get("backup_id") != safe_id:
+        raise BackupManagerBlocked(
+            "artifact_unsafe",
+            {"status": "blocked", "reason_code": "artifact_unsafe"},
+        )
+    current = artifact_version_evidence(
+        root,
+        safe_id,
+        manifest,
+        checksum_sha256=str(manifest.get("checksum_sha256") or "") or None,
+        context=current_validation_context(db_backend),
+    )
+    state = _read_artifact_state(root, safe_id) or {}
+    integrity = state.get("integrity") if isinstance(state.get("integrity"), dict) else {}
+    validation = (
+        state.get("restore_validation")
+        if isinstance(state.get("restore_validation"), dict)
+        else {}
+    )
+    integrity_current = (
+        integrity.get("status") == "verified"
+        and _evidence_matches(
+            integrity.get("evidence"),
+            current,
+            compare_validation_context=False,
+        )
+    )
+    validation_current = (
+        validation.get("status") == "passed"
+        and _evidence_matches(
+            validation.get("evidence"),
+            current,
+            compare_validation_context=True,
+        )
+    )
+    actor_current = (
+        validation_current
+        and validation.get("actor_key") == actor_binding_key(actor)
+        and validation.get("actor_subject")
+        == str(getattr(actor, "username", "") or "").strip()
+        and validation.get("actor_role")
+        == str(getattr(actor, "role", "") or "").strip().lower()
+    )
+    fingerprint_payload = {
+        "artifact_id": safe_id,
+        "checksum_sha256": current.get("checksum_sha256"),
+        "manifest_fingerprint": current.get("manifest_fingerprint"),
+        "metadata_fingerprint": current.get("metadata_fingerprint"),
+        "dump_stat": current.get("dump_stat"),
+        "validation_context": current.get("validation_context"),
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            fingerprint_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "artifact_id": safe_id,
+        "artifact_created_at": str(manifest.get("created_at") or "")[:80] or None,
+        "artifact_schema_version": _schema_version(manifest),
+        "db_backend": str(manifest.get("db_backend") or "")[:40] or None,
+        "file_size": int(manifest.get("file_size") or 0),
+        "integrity_verified": bool(integrity_current),
+        "temporary_restore_validated": bool(validation_current),
+        "actor_access_verified": bool(actor_current),
+        "checked_at": integrity.get("checked_at"),
+        "validated_at": validation.get("validated_at"),
+        "fingerprint": fingerprint,
+        "video_archive_files_included": False,
     }
 
 
@@ -955,7 +1047,23 @@ def _reconcile_receipt(root: Path, receipt: dict[str, Any], *, force: bool = Fal
     return receipt
 
 
-def begin_backup_operation(
+def reconcile_backup_operations(
+    *,
+    backup_root: str | Path | None = None,
+) -> None:
+    root = configured_backup_root(backup_root)
+    with _receipt_lock(root):
+        for path in _receipt_files(root):
+            try:
+                _reconcile_receipt(
+                    root,
+                    _read_json_bounded(path),
+                )
+            except Exception:
+                continue
+
+
+def _begin_backup_operation_unlocked(
     *,
     submission_id: str,
     kind: str,
@@ -1022,6 +1130,38 @@ def begin_backup_operation(
         _write_receipt(root, receipt)
         _prune_receipts(root)
         return receipt, False
+
+
+def begin_backup_operation(
+    *,
+    submission_id: str,
+    kind: str,
+    actor: Any,
+    artifact_id: str | None = None,
+    planned_artifact_id: str | None = None,
+    backup_root: str | Path | None = None,
+    db: Any = None,
+) -> tuple[dict[str, Any], bool]:
+    try:
+        with maintenance_admission_guard():
+            assert_no_maintenance_conflicts(
+                "backup",
+                db=db,
+                backup_root=backup_root,
+            )
+            return _begin_backup_operation_unlocked(
+                submission_id=submission_id,
+                kind=kind,
+                actor=actor,
+                artifact_id=artifact_id,
+                planned_artifact_id=planned_artifact_id,
+                backup_root=backup_root,
+            )
+    except MaintenanceAdmissionBlocked as exc:
+        raise BackupManagerBlocked(
+            exc.code,
+            {"status": "blocked", "reason_code": exc.code},
+        ) from exc
 
 
 def update_backup_operation(

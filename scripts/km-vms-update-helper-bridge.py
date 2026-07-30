@@ -3059,8 +3059,28 @@ def activate_or_resume(args: argparse.Namespace) -> int:
             getattr(exc, "code", "activation_journal_invalid"),
             "Activation journal is unavailable or invalid.",
         ) from exc
-    supplied_previous = str(getattr(args, "previous_slot", None) or "")
-    supplied_target = str(getattr(args, "target_slot", None) or "")
+    supplied_previous_raw = str(
+        getattr(args, "previous_slot", None) or ""
+    )
+    supplied_target_raw = str(
+        getattr(args, "target_slot", None) or ""
+    )
+    try:
+        supplied_previous = (
+            engine.require_slot_id(supplied_previous_raw)
+            if supplied_previous_raw
+            else ""
+        )
+        supplied_target = (
+            engine.require_slot_id(supplied_target_raw, target=True)
+            if supplied_target_raw
+            else ""
+        )
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "activation_slot_invalid"),
+            "Prepared activation slot identity is invalid.",
+        ) from exc
     starting_new = journal is None or (
         journal["phase"] in {"completed", "failed_rolled_back", "blocked"}
         and journal["request_id"] != request_id
@@ -3073,6 +3093,54 @@ def activate_or_resume(args: argparse.Namespace) -> int:
                 "activation_slots_missing",
                 "Prepared previous and target slots are required.",
             )
+        expected_commit = str(
+            getattr(args, "target_commit", None) or ""
+        ).lower()
+        expected_version = str(
+            getattr(args, "target_version", None) or ""
+        )
+        if (
+            not COMMIT_SHA_RE.fullmatch(expected_commit)
+            or not expected_version
+        ):
+            raise BridgeError(
+                "activation_target_identity_mismatch",
+                "Prepared target does not match the admitted release.",
+            )
+        try:
+            active = engine.read_active_slot(app_dir)
+            if active is None or active[0] != previous_slot_id:
+                raise BridgeError(
+                    "activation_previous_binding_mismatch",
+                    "Prepared previous slot is not the active runtime.",
+                )
+            target = engine.build_activation_slot_binding(
+                app_dir,
+                target_slot_id,
+            )
+            if (
+                target["commit"] != expected_commit
+                or target["version"] != expected_version
+            ):
+                raise BridgeError(
+                    "activation_target_identity_mismatch",
+                    "Prepared target does not match the admitted release.",
+                )
+        except BridgeError:
+            raise
+        except Exception as exc:
+            raise BridgeError(
+                getattr(exc, "code", "activation_slot_binding_invalid"),
+                "Prepared activation slot binding is invalid.",
+            ) from exc
+        previous = capture_slot_runtime_binding(
+            app_dir,
+            project_name,
+            previous_slot_id,
+            engine=engine,
+            require_http=True,
+            require_helper_image=True,
+        )
         schema = run_target_schema_preflight(
             app_dir,
             project_name,
@@ -3085,34 +3153,33 @@ def activate_or_resume(args: argparse.Namespace) -> int:
             phase="target_prepared",
             current_step="preflight",
         )
-        previous = capture_slot_runtime_binding(
-            app_dir,
-            project_name,
-            previous_slot_id,
-            engine=engine,
-            require_http=True,
-            require_helper_image=True,
-        )
         try:
-            target = engine.build_activation_slot_binding(
+            active_after = engine.read_active_slot(app_dir)
+            target_after = engine.build_activation_slot_binding(
                 app_dir,
                 target_slot_id,
             )
-            expected_commit = str(
-                getattr(args, "target_commit", None) or ""
-            ).lower()
-            expected_version = str(
-                getattr(args, "target_version", None) or ""
-            )
             if (
-                not COMMIT_SHA_RE.fullmatch(expected_commit)
-                or target["commit"] != expected_commit
-                or not expected_version
-                or target["version"] != expected_version
+                active_after is None
+                or active_after[0] != previous_slot_id
+                or target_after != target
             ):
                 raise BridgeError(
-                    "activation_target_identity_mismatch",
-                    "Prepared target does not match the admitted release.",
+                    "activation_slot_binding_changed",
+                    "Release-slot binding changed during schema preflight.",
+                )
+            previous_after = capture_slot_runtime_binding(
+                app_dir,
+                project_name,
+                previous_slot_id,
+                engine=engine,
+                require_http=True,
+                require_helper_image=True,
+            )
+            if previous_after != previous:
+                raise BridgeError(
+                    "activation_slot_binding_changed",
+                    "Active runtime binding changed during schema preflight.",
                 )
             journal = engine.initialize_activation_journal(
                 app_dir,
@@ -3130,6 +3197,8 @@ def activate_or_resume(args: argparse.Namespace) -> int:
                 ],
                 migration_required=schema["migration_required"],
             )
+        except BridgeError:
+            raise
         except Exception as exc:
             raise BridgeError(
                 getattr(exc, "code", "activation_journal_invalid"),

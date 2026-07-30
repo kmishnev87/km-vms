@@ -59,25 +59,27 @@
 }
 
 .archiveManagementHistoryButton {
+  position: relative;
   flex: 0 0 auto;
-  gap: 7px;
-  min-height: 32px;
-  padding: 5px 9px;
   white-space: nowrap;
 }
 
 .archiveManagementHistoryButton strong {
+  position: absolute;
+  top: -7px;
+  right: -7px;
   display: inline-grid;
   place-items: center;
-  min-width: 21px;
+  min-width: 20px;
   min-height: 20px;
-  padding: 0 5px;
-  border: 1px solid #cbd5e1;
+  padding: 0 4px;
+  border: 1px solid #bfdbfe;
   border-radius: 999px;
-  background: #ffffff;
-  color: #475569;
+  background: #eff6ff;
+  color: #1d4ed8;
   font-size: 11px;
   font-weight: 600;
+  line-height: 1;
 }
 
 .archiveManagementGroups {
@@ -113,7 +115,7 @@
 
 .archiveManagementRow {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 40px;
   gap: 14px;
   min-width: 0;
   min-height: 124px;
@@ -134,10 +136,12 @@
 }
 
 .archiveManagementRowTitle {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   min-width: 0;
+  width: 100%;
 }
 
 .archiveManagementRow h4 {
@@ -149,10 +153,13 @@
 
 .archiveManagementRow .storageOpsStatusPill {
   flex: 0 0 auto;
+  justify-self: end;
+  max-width: 100%;
   min-height: 22px;
   padding: 2px 7px;
   font-size: 11px;
   font-weight: 600;
+  text-align: center;
 }
 
 .archiveManagementRow p {
@@ -201,10 +208,11 @@
   align-items: center;
   justify-content: flex-end;
   align-self: center;
-  min-width: 0;
+  width: 40px;
+  min-width: 40px;
 }
 
-.archiveManagementRowAction .button {
+.archiveManagementRowAction .button:not(.appIllustratedAction) {
   width: auto;
   min-width: 0;
   min-height: 32px;
@@ -215,7 +223,7 @@
 .archiveManagementSwitch {
   position: relative;
   flex: 0 0 auto;
-  width: 42px;
+  width: 40px;
   height: 24px;
   padding: 0;
   border: 1px solid #94a3b8;
@@ -243,7 +251,7 @@
 }
 
 .archiveManagementSwitch.isChecked > span {
-  transform: translateX(18px);
+  transform: translateX(16px);
 }
 
 .archiveManagementSwitch:focus-visible {
@@ -334,7 +342,7 @@
   justify-content: flex-end;
 }
 
-.archiveManagementHistoryAction .button {
+.archiveManagementHistoryAction .button:not(.appIllustratedAction) {
   width: auto;
   min-height: 30px;
   padding: 4px 9px;
@@ -410,22 +418,22 @@
 
 @media (max-width: 520px) {
   .archiveManagementRow {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) 40px;
     gap: 10px;
     padding: 13px 14px;
   }
 
   .archiveManagementRowAction {
-    justify-content: flex-start;
-  }
-
-  .archiveManagementRowAction .button {
-    width: 100%;
+    justify-content: flex-end;
   }
 
   .archiveManagementRowTitle {
+    grid-template-columns: minmax(0, 1fr);
     align-items: flex-start;
-    flex-direction: column;
+  }
+
+  .archiveManagementRow .storageOpsStatusPill {
+    justify-self: end;
   }
 }
 
@@ -2029,6 +2037,86 @@
   font-size: 14px;
 }
 
+.button.appIllustratedAction,
+a.appIllustratedAction {
+  box-sizing: border-box;
+  display: inline-flex;
+  flex: 0 0 40px;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  max-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  max-height: 40px;
+  padding: 3px;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #334155;
+  line-height: 1;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+}
+
+.button.secondary.appIllustratedAction {
+  background: #ffffff;
+  color: #334155;
+}
+
+.button.appIllustratedAction:hover:not(:disabled),
+a.appIllustratedAction:hover {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  box-shadow: 0 3px 10px rgba(37, 99, 235, 0.08);
+}
+
+.button.appIllustratedAction:focus-visible,
+a.appIllustratedAction:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.28);
+  outline-offset: 2px;
+}
+
+.button.appIllustratedAction:disabled {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  opacity: 0.42;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.appIllustratedAction > img {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.appIllustratedActionGlyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  color: inherit;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.appIllustratedAction.isRefreshing .appIllustratedActionGlyph {
+  animation: appIllustratedActionSpin 0.9s linear infinite;
+}
+
+@keyframes appIllustratedActionSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .button.secondary.small.recordingsActionButton,
 .button.secondary.small.recordingsDangerTrigger {
   width: 40px;
@@ -3198,7 +3286,7 @@
   min-height: 38px;
 }
 
-.storageOpsAdvancedRoot .storageOpsRootAddButton {
+.storageOpsAdvancedRoot .storageOpsRootAddButton:not(.appIllustratedAction) {
   align-self: end;
   justify-self: end;
   width: auto;
@@ -3766,14 +3854,14 @@
   align-items: center;
 }
 
-.storageOpsAdvancedRoot .storageOpsRootAddButton,
+.storageOpsAdvancedRoot .storageOpsRootAddButton:not(.appIllustratedAction),
 .storageOpsAdvancedRoot .storageOpsRootForm-product .select,
 .storageOpsAdvancedRoot .storageOpsRootForm-product .input {
   min-height: 38px;
   height: 38px;
 }
 
-.storageOpsAdvancedRoot .storageOpsRootAddButton {
+.storageOpsAdvancedRoot .storageOpsRootAddButton:not(.appIllustratedAction) {
   min-width: 92px;
   padding-left: 16px;
   padding-right: 16px;

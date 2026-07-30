@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.4",
-  "tag": "v0.8.4",
-  "title": "KM VMS 0.8.4 — Maintenance Backup Safety and Diagnostic Archive UX",
-  "summary": "Adds truthful and durable maintenance backup management, safe temporary restore validation, compact backup navigation and a consistent full diagnostic archive chooser.",
+  "version": "0.8.5",
+  "tag": "v0.8.5",
+  "title": "KM VMS 0.8.5 — Safe Current Database Restore and Recovery",
+  "summary": "Adds product-grade restoration of the current KM VMS database with verified pre-restore backup, isolated writers, automatic rollback, truthful progress and recorder recovery proof.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.4",
+  "source_ref": "v0.8.5",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,13 +16,14 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Separates backup integrity, compatibility, freshness, availability and temporary restore-validation truth.",
-    "Makes backup create, check and delete operations durable, retryable and restart-reconcilable.",
-    "Rejects unsafe backup ownership, path and symlink conditions before reading or deleting artifacts.",
-    "Validates backups through an isolated temporary database restore and reports cleanup retry as pending instead of failed.",
-    "Uses one consistent backup snapshot in Maintenance, upgrade reports and support diagnostics.",
-    "Shows five compact backup rows per page with aligned metadata, icon actions, tooltips and arrow navigation.",
-    "Restores the standard or extended full diagnostic ZIP chooser across Maintenance and Audit entry points.",
-    "Keeps video archives outside database backup and restore claims."
+    "Enables authenticated current-database restore from eligible product-owned backup artifacts.",
+    "Requires integrity, compatibility, temporary-restore, actor-access, capacity and maintenance-conflict preflight.",
+    "Creates and verifies a persistent pre-restore backup before changing the working database.",
+    "Runs restore through the external helper and one-shot executor only after API and recorder writer isolation is proven.",
+    "Automatically rolls back controlled failures and reports recovery-required when rollback cannot be proven.",
+    "Requires a fresh recorder instance and heartbeat before successful restore or rollback completion.",
+    "Reconciles API and recorder independently after partial or unknown writer-stop failures without starting database mutation.",
+    "Shows clear typed confirmation, bounded progress and truthful restore results while keeping video archives outside DB restore.",
+    "Aligns Settings open actions and restores compact equal support-report buttons without changing their existing behavior."
   ]
 }

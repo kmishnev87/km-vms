@@ -19,6 +19,7 @@ from app.models.user import User
 from app.routers import settings as settings_router
 from app.services.update_check import (
     UpdateCheckBlocked,
+    build_update_status,
     compare_versions,
     get_trusted_apply_snapshot,
     read_installed_update_state,
@@ -494,6 +495,134 @@ def test_successful_check_stores_fresh_trusted_apply_snapshot(tmp_path, monkeypa
     assert stale["fresh"] is False
 
 
+def test_successful_manual_check_survives_immediate_get_and_poll(
+    tmp_path,
+    monkeypatch,
+):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    now = datetime(2026, 6, 18, 5, 0, 0)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(
+        app_root / ".km-vms-release.json",
+        version="0.7.0",
+        commit_sha="a" * 40,
+    )
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.setenv(
+        "KMVMS_UPDATE_MANIFEST_PATH",
+        str(
+            _manifest(
+                tmp_path / "release.json",
+                version="9.0.0",
+                commit="b" * 40,
+            )
+        ),
+    )
+    monkeypatch.setenv("KMVMS_UPDATE_HELPER_ENABLED", "1")
+
+    checked = run_update_check(db, manual=True, now=now)
+    immediate = build_update_status(db, now=now + timedelta(seconds=1))
+    polled = build_update_status(db, now=now + timedelta(minutes=2))
+
+    assert checked["status"] == "update_available"
+    for result in (immediate, polled):
+        assert result["status"] == checked["status"]
+        assert result["comparison"] == checked["comparison"]
+        assert result["available_release"] == checked["available_release"]
+        assert result["check_state"] == "checked"
+        assert result["projection_source"] == "fresh_last_successful_check"
+        assert result["can_apply_from_ui"] is True
+
+
+def test_cache_reset_returns_neutral_recheck_without_persistent_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    now = datetime(2026, 6, 18, 5, 0, 0)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    _release_identity(
+        app_root / ".km-vms-release.json",
+        version="0.7.0",
+        commit_sha="a" * 40,
+    )
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.setenv(
+        "KMVMS_UPDATE_MANIFEST_PATH",
+        str(
+            _manifest(
+                tmp_path / "release.json",
+                version="9.0.0",
+                commit="b" * 40,
+            )
+        ),
+    )
+    monkeypatch.setenv("KMVMS_UPDATE_HELPER_ENABLED", "1")
+
+    before = {item.relative_to(tmp_path) for item in tmp_path.rglob("*")}
+    run_update_check(db, manual=True, now=now)
+    after_check = {item.relative_to(tmp_path) for item in tmp_path.rglob("*")}
+    reset_update_check_cache_for_tests()
+    restarted = build_update_status(db, now=now + timedelta(seconds=1))
+    after_restart = {item.relative_to(tmp_path) for item in tmp_path.rglob("*")}
+
+    assert after_check == before
+    assert after_restart == before
+    assert restarted["check_state"] == "recheck_required"
+    assert restarted["projection_source"] == "installed_identity"
+    assert restarted["status"] != "check_failed"
+    assert restarted["available_release"] is None
+    assert restarted["trusted_apply_candidate"]["latest"] is None
+    assert restarted["can_apply_from_ui"] is False
+
+
+def test_installed_identity_change_invalidates_last_check_projection(
+    tmp_path,
+    monkeypatch,
+):
+    _engine, db = sqlite_session(tmp_path)
+    _seed(db)
+    now = datetime(2026, 6, 18, 5, 0, 0)
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    identity_path = _release_identity(
+        app_root / ".km-vms-release.json",
+        version="0.7.0",
+        commit_sha="a" * 40,
+    )
+    monkeypatch.setenv("KMVMS_APP_ROOT", str(app_root))
+    monkeypatch.setenv(
+        "KMVMS_UPDATE_MANIFEST_PATH",
+        str(
+            _manifest(
+                tmp_path / "release.json",
+                version="9.0.0",
+                commit="b" * 40,
+            )
+        ),
+    )
+    monkeypatch.setenv("KMVMS_UPDATE_HELPER_ENABLED", "1")
+
+    run_update_check(db, manual=True, now=now)
+    _release_identity(
+        identity_path,
+        version="0.8.0",
+        commit_sha="c" * 40,
+    )
+    changed = build_update_status(db, now=now + timedelta(seconds=1))
+
+    assert changed["check_state"] == "recheck_required"
+    assert changed["projection_source"] == "installed_identity"
+    assert changed["available_release"] is None
+    assert changed["trusted_apply_candidate"]["latest"] is None
+    assert changed["trusted_apply_candidate"]["reason"] == "trusted_snapshot_invalidated"
+    assert changed["can_apply_from_ui"] is False
+
+
 def test_transient_failed_recheck_preserves_fresh_trusted_apply_candidate(tmp_path, monkeypatch):
     _engine, db = sqlite_session(tmp_path)
     _seed(db)
@@ -521,6 +650,12 @@ def test_transient_failed_recheck_preserves_fresh_trusted_apply_candidate(tmp_pa
     assert candidate["can_apply_from_ui"] is True
     assert candidate["latest"]["version"] == "9.0.0"
     assert candidate["latest"]["commit"] == "b" * 40
+    polled = build_update_status(db)
+    assert polled["status"] == "update_available"
+    assert polled["check_state"] == "warning"
+    assert polled["last_check_status"] == "check_failed"
+    assert polled["last_update_check"]["errors"][0]["code"] == "check_failed"
+    assert polled["available_release"]["version"] == "9.0.0"
 
 
 class _BytesResponse:

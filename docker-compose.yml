@@ -81,8 +81,10 @@ services:
       KMVMS_CONTROL_PORT: 8080
       KMVMS_UPDATE_CONTROL_ROOT: /update-control
       KMVMS_UPDATE_PUBLIC_ROOT: /update-public
+      KMVMS_RESTORE_PUBLIC_ROOT: /restore-public
     volumes:
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-public:/update-public:ro
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/restore-public:/restore-public:ro
     read_only: true
     tmpfs:
       - /tmp
@@ -112,11 +114,17 @@ services:
       KMVMS_CONTROL_PORT: 8080
       KMVMS_UPDATE_CONTROL_ROOT: /update-control
       KMVMS_UPDATE_PUBLIC_ROOT: /update-public
+      KMVMS_RESTORE_CONTROL_ROOT: /restore-control
+      KMVMS_MAINTENANCE_CONTROL_ROOT: /maintenance-control
+      KMVMS_BACKUP_OPERATION_ROOT: /backup-operations
       KMVMS_TEST_FAULT_INJECTION: ${KMVMS_TEST_FAULT_INJECTION:-0}
       KMVMS_TEST_RETRY_FAILURE_MODE: ${KMVMS_TEST_RETRY_FAILURE_MODE:-}
     volumes:
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-control:/update-control
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-public:/update-public
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/restore-control:/restore-control:ro
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/maintenance-control:/maintenance-control
+      - ${KMVMS_HOST_DB_BACKUP_ROOT:-${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/backups/db}/.kmvms-backup-operations:/backup-operations:ro
     read_only: true
     tmpfs:
       - /tmp
@@ -201,6 +209,10 @@ services:
       STORAGE_ROOT: /storage/archive
       KMVMS_APP_ROOT: /app
       UPDATE_CONTROL_ROOT: /update-control
+      RESTORE_CONTROL_ROOT: /restore-control
+      RESTORE_PUBLIC_ROOT: /restore-public
+      MAINTENANCE_CONTROL_ROOT: /maintenance-control
+      KMVMS_RESTORE_STATUS_READER_HEALTH_URL: http://update-status-reader:8080/health
       KMVMS_UPDATE_MANIFEST_PATH: ${KMVMS_UPDATE_MANIFEST_PATH:-}
       KMVMS_UPDATE_CHANNEL_ID: ${KMVMS_UPDATE_CHANNEL_ID:-stable}
       KMVMS_UPDATE_HELPER_ENABLED: "true"
@@ -230,6 +242,9 @@ services:
       - ${KMVMS_HOST_DB_BACKUP_ROOT:-${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/backups/db}:${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/install-control:/install-control
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-control:/update-control
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/restore-control:/restore-control
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/restore-public:/restore-public
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/maintenance-control:/maintenance-control
       - ./release:/app/release:ro
       - ./.km-vms-release.json:/app/.km-vms-release.json:ro
       - ./.km-vms-source.json:/app/.km-vms-source.json:ro
@@ -249,6 +264,45 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
+    networks:
+      - vms-net
+
+  restore-executor:
+    image: ${COMPOSE_PROJECT_NAME:-tnas-vms}-api:${KM_VMS_RELEASE_IMAGE_TAG:-latest}
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    restart: "no"
+    profiles: ["current-db-restore"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    entrypoint: ["python3", "-m", "app.services.current_db_restore_executor"]
+    environment:
+      TZ: ${TZ:-Asia/Yekaterinburg}
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://vms:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/vms
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?ENCRYPTION_KEY is required}
+      KMVMS_DB_BACKUP_ROOT: ${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
+      UPDATE_CONTROL_ROOT: /update-control
+      RESTORE_CONTROL_ROOT: /restore-control
+      RESTORE_PUBLIC_ROOT: /restore-public
+      MAINTENANCE_CONTROL_ROOT: /maintenance-control
+      KMVMS_TEST_FAULT_INJECTION: "0"
+      KMVMS_RESTORE_TEST_FAILURE_PHASE: ""
+    volumes:
+      - ${KMVMS_HOST_DB_BACKUP_ROOT:-${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/backups/db}:${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-control:/update-control:ro
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/restore-control:/restore-control
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/maintenance-control:/maintenance-control:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
       - vms-net
 

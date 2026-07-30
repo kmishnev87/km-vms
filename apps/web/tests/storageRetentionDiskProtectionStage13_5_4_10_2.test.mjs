@@ -112,16 +112,30 @@ assert.match(page, /busy:\s*true/);
 assert.match(page, /dismissible:\s*false/);
 assert.match(page, /await apiFetch\("\/settings"/);
 assert.match(page, /await loadStatus\(\{ silent: true \}\)/);
-assert.match(page, /href="\/cameras">\{copy\.configureCameras\}<\/a>/);
+assert.match(
+  page,
+  /href="\/cameras"[\s\S]*title=\{copy\.configureCameras\}[\s\S]*aria-label=\{copy\.configureCameras\}[\s\S]*\/assets\/icons\/ui\/camera\.png/,
+);
 assert.match(page, /actionPermissionState\(currentUser, "manage_cameras", language\)/);
-assert.match(page, /disabled title=\{manageCamerasPermission\.reason\}/);
+assert.match(page, /disabled[\s\S]*title=\{manageCamerasPermission\.reason\}/);
 assert.match(page, /retentionOperationPresentation\(retention\)/);
 assert.match(helpers, /retention\?\.active_camera_count/);
 assert.match(helpers, /retention\?\.disabled_camera_count/);
 assert.match(helpers, /retention\?\.retained_deleted_camera_count/);
 assert.match(helpers, /retention\?\.missing_or_invalid_rule_camera_count/);
 assert.match(helpers, /retention\?\.next_due_at/);
-assert.match(page, /nextEnabled && autoFreeAcknowledgementRequired/);
+assert.match(page, /if \(nextEnabled\) \{[\s\S]*?id: "auto-free-confirm"/);
+assert.doesNotMatch(page, /nextEnabled && autoFreeAcknowledgementRequired/);
+assert.match(page, /onConfirm: \(\) => setAutoFreeSpace\(true, \{ acknowledge: true \}\)/);
+assert.match(page, /setAutoFreeSpace\(nextEnabled\);/);
+const autoFreeFlow = page.slice(
+  page.indexOf("function requestAutoFreeSpace"),
+  page.indexOf("function archiveRootSelectionPayload"),
+);
+assert.equal(
+  (autoFreeFlow.match(/await loadStatus\(\{ silent: true \}\);/g) || []).length,
+  2,
+);
 assert.match(page, /onChange=\{requestAutoFreeSpace\}/);
 assert.doesNotMatch(page, /autoFreeMessage/);
 assert.doesNotMatch(page, /setAutoFreeMessage/);
@@ -151,7 +165,10 @@ assert.match(lastCssRule(".storageOpsSection-archiveManagement"), /grid-area:\s*
 assert.match(css, /\.archiveManagementRows\s*\{[\s\S]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
 assert.match(lastCssRule(".archiveManagementRows"), /grid-template-columns:\s*1fr/);
 assert.match(css, /\.archiveManagementRow\s*\{[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\) auto/);
-assert.match(lastCssRule(".archiveManagementRow"), /grid-template-columns:\s*1fr/);
+assert.match(
+  lastCssRule(".archiveManagementRow"),
+  /grid-template-columns:\s*minmax\(0, 1fr\) 40px/,
+);
 assert.match(lastCssRule(".archiveManagementHistoryList"), /display:\s*grid/);
 assert.match(lastCssRule(".archiveManagementHistoryItem"), /border-bottom:\s*1px solid/);
 

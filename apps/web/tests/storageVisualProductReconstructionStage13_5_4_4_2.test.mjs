@@ -64,7 +64,12 @@ assert.match(storagePage, /copy\.actionCheckArchive/);
 const operationsStart = storagePage.indexOf("const archiveManagementGroups");
 const operationsEnd = storagePage.indexOf("const historyDialog", operationsStart);
 const operations = storagePage.slice(operationsStart, operationsEnd);
-for (const required of ["copy.retentionRules", "copy.autoFreeSpace", "copy.integrityCheck", "copy.archiveMigration"]) {
+for (const required of [
+  "copy.archiveManagementRetentionTitle",
+  "copy.archiveManagementAutoFreeTitle",
+  "copy.archiveManagementIntegrityTitle",
+  "copy.archiveManagementMigrationTitle",
+]) {
   assert.match(operations, new RegExp(required.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `${required} is a scenario row`);
 }
 assert.match(storagePage, /retentionOperationPresentation\(retention\)/, "retention primary text is model-driven, not candidate review");

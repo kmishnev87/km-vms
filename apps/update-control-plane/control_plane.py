@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import hashlib
 import hmac
 import json
@@ -12,6 +13,7 @@ import tempfile
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +22,20 @@ from typing import Any
 
 CONTROL_ROOT = Path(os.getenv("KMVMS_UPDATE_CONTROL_ROOT") or "/update-control")
 PUBLIC_ROOT = Path(os.getenv("KMVMS_UPDATE_PUBLIC_ROOT") or "/update-public")
+RESTORE_CONTROL_ROOT = Path(
+    os.getenv("KMVMS_RESTORE_CONTROL_ROOT") or "/restore-control"
+)
+RESTORE_PUBLIC_ROOT = Path(
+    os.getenv("KMVMS_RESTORE_PUBLIC_ROOT") or "/restore-public"
+)
+MAINTENANCE_CONTROL_ROOT = Path(
+    os.getenv("KMVMS_MAINTENANCE_CONTROL_ROOT")
+    or "/maintenance-control"
+)
+BACKUP_OPERATION_ROOT = Path(
+    os.getenv("KMVMS_BACKUP_OPERATION_ROOT")
+    or "/backup-operations"
+)
 ROLE = str(os.getenv("KMVMS_CONTROL_ROLE") or "reader").strip().lower()
 JWT_SECRET = str(os.getenv("JWT_SECRET") or "")
 PORT = int(os.getenv("KMVMS_CONTROL_PORT") or "8080")
@@ -49,6 +65,16 @@ FAILURE_PLANE = PUBLIC_ROOT / "update-failure-plane.signed.json"
 HELPER_STATUS = CONTROL_ROOT / "update-status.json"
 UPDATE_REQUEST = CONTROL_ROOT / "update-request.json"
 RETRY_ADMISSION = CONTROL_ROOT / "update-retry-admission.signed.json"
+MAINTENANCE_ADMISSION_LOCK = (
+    MAINTENANCE_CONTROL_ROOT / "maintenance-admission.lock"
+)
+MANUAL_SCHEMA_OPERATION = (
+    MAINTENANCE_CONTROL_ROOT / "manual-schema-operation.json"
+)
+RESTORE_REQUEST = RESTORE_CONTROL_ROOT / "restore-request.json"
+RESTORE_PUBLIC_STATUS = (
+    RESTORE_PUBLIC_ROOT / "restore-status.json"
+)
 RETRY_LOCK = threading.Lock()
 CONTROLLER_READY = threading.Event()
 TEST_FAULT_INJECTION = (
@@ -1449,6 +1475,230 @@ def create_retry(contract: dict[str, Any], subject: str, body: dict[str, Any]) -
     }
 
 
+@contextmanager
+def maintenance_admission_guard():
+    try:
+        MAINTENANCE_CONTROL_ROOT.mkdir(parents=True, exist_ok=True)
+        root_info = MAINTENANCE_CONTROL_ROOT.lstat()
+    except OSError as exc:
+        raise ContractError("maintenance_control_root_unavailable") from exc
+    if (
+        MAINTENANCE_CONTROL_ROOT.is_symlink()
+        or not stat.S_ISDIR(root_info.st_mode)
+    ):
+        raise ContractError("maintenance_control_root_unsafe")
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    lock_fd: int | None = None
+    try:
+        lock_fd = os.open(MAINTENANCE_ADMISSION_LOCK, flags, 0o600)
+        if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+            raise OSError("admission lock is not a regular file")
+    except OSError as exc:
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+        raise ContractError("maintenance_admission_lock_unsafe") from exc
+    with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def assert_retry_maintenance_idle() -> None:
+    restore = read_regular_json(RESTORE_REQUEST, required=False)
+    if restore and restore.get("state") in {"admitted", "claimed"}:
+        raise ContractError("restore_operation_active")
+    schema = read_regular_json(MANUAL_SCHEMA_OPERATION, required=False)
+    if schema and schema.get("state") in {
+        "accepted",
+        "running",
+        "prepared",
+        "recovering",
+        "migrating",
+    }:
+        raise ContractError("schema_operation_active")
+    try:
+        root_info = BACKUP_OPERATION_ROOT.lstat()
+        if (
+            stat.S_ISLNK(root_info.st_mode)
+            or not stat.S_ISDIR(root_info.st_mode)
+        ):
+            raise ContractError("backup_state_unavailable")
+        paths = sorted(BACKUP_OPERATION_ROOT.glob("*.json"))
+    except OSError as exc:
+        raise ContractError("backup_state_unavailable") from exc
+    if len(paths) > 256:
+        raise ContractError("backup_state_unavailable")
+    for path in paths:
+        receipt = read_regular_json(path)
+        if receipt and receipt.get("state") in {"queued", "running"}:
+            raise ContractError("backup_operation_active")
+
+
+def restore_public_status(headers: Any) -> dict[str, Any]:
+    subject = bearer_subject(headers)
+    payload = read_regular_json(RESTORE_PUBLIC_STATUS, required=False)
+    if payload is None:
+        return {
+            "status": "idle",
+            "phase": None,
+            "terminal_result": None,
+            "video_archive_modified": False,
+        }
+    expected = {
+        "schema",
+        "operation_id",
+        "submission_id",
+        "actor_subject",
+        "status",
+        "phase",
+        "artifact",
+        "pre_restore_backup_id",
+        "accepted_at",
+        "started_at",
+        "updated_at",
+        "finished_at",
+        "terminal_result",
+        "reason_code",
+        "next_action",
+        "video_archive_modified",
+    }
+    artifact = payload.get("artifact")
+    status_value = payload.get("status")
+    phase = payload.get("phase")
+    terminal = payload.get("terminal_result")
+    reason_code = payload.get("reason_code")
+    next_action = payload.get("next_action")
+    terminal_results = {
+        "completed",
+        "blocked",
+        "failed_rolled_back",
+        "failed_recovery_required",
+    }
+    active_statuses = {"queued", "running"}
+    if payload.get("actor_subject") != subject:
+        raise ContractError("foreign_actor_forbidden")
+    if (
+        set(payload) != expected
+        or payload.get("schema") != "stage13.7.8.current-restore-public.v1"
+        or not re.fullmatch(
+            r"restore-[0-9a-f]{32}",
+            str(payload.get("operation_id") or ""),
+        )
+        or not re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+            r"[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            str(payload.get("submission_id") or ""),
+        )
+        or not isinstance(status_value, str)
+        or status_value not in active_statuses | terminal_results
+        or not isinstance(phase, str)
+        or phase
+        not in {
+            "preflight",
+            "pre_restore_backup",
+            "writers_paused",
+            "restore_running",
+            "services_starting",
+            "post_restore_check",
+            "completed",
+            "blocked",
+            "failed_rolled_back",
+            "failed_recovery_required",
+        }
+        or payload.get("video_archive_modified") is not False
+        or type(artifact) is not dict
+        or set(artifact)
+        != {
+            "artifact_id",
+            "artifact_created_at",
+            "artifact_schema_version",
+            "db_backend",
+        }
+        or not re.fullmatch(
+            r"kmvms-db-\d{8}T\d{6}Z-[0-9a-f]{12}",
+            str(artifact.get("artifact_id") or ""),
+        )
+        or artifact.get("artifact_schema_version") != 8
+        or artifact.get("db_backend") != "postgresql"
+        or not isinstance(artifact.get("artifact_created_at"), str)
+        or (
+            payload.get("pre_restore_backup_id") is not None
+            and not re.fullmatch(
+                r"kmvms-db-\d{8}T\d{6}Z-[0-9a-f]{12}",
+                str(payload.get("pre_restore_backup_id") or ""),
+            )
+        )
+        or (
+            reason_code is not None
+            and (
+                not isinstance(reason_code, str)
+                or not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", reason_code)
+            )
+        )
+        or not isinstance(next_action, str)
+        or next_action
+        not in {
+            "wait",
+            "sign_in_again",
+            "current_database_restored",
+            "contact_support",
+            "review_restore_status",
+        }
+    ):
+        raise ContractError("restore_status_contract_invalid")
+    parse_utc(artifact["artifact_created_at"])
+    parse_utc(payload.get("accepted_at"))
+    parse_utc(payload.get("updated_at"))
+    for key in ("started_at", "finished_at"):
+        if payload.get(key) is not None:
+            parse_utc(payload[key])
+    if terminal is None:
+        if (
+            status_value not in active_statuses
+            or phase in terminal_results
+            or payload.get("finished_at") is not None
+            or next_action != "wait"
+            or (
+                status_value == "queued"
+                and payload.get("started_at") is not None
+            )
+            or (
+                status_value == "running"
+                and payload.get("started_at") is None
+            )
+        ):
+            raise ContractError("restore_status_contract_invalid")
+    elif (
+        not isinstance(terminal, str)
+        or terminal not in terminal_results
+        or status_value != terminal
+        or phase != terminal
+        or payload.get("finished_at") is None
+        or payload.get("started_at") is None
+        or (terminal == "completed" and reason_code is not None)
+        or (terminal != "completed" and reason_code is None)
+        or next_action
+        != {
+            "completed": "sign_in_again",
+            "blocked": "review_restore_status",
+            "failed_rolled_back": "current_database_restored",
+            "failed_recovery_required": "contact_support",
+        }[terminal]
+    ):
+        raise ContractError("restore_status_contract_invalid")
+    safe = dict(payload)
+    safe.pop("actor_subject", None)
+    safe.pop("schema", None)
+    return safe
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "KMVMSFailureControl/1"
     sys_version = ""
@@ -1489,15 +1739,26 @@ class Handler(BaseHTTPRequestHandler):
                     {"status": "starting", "role": ROLE},
                 )
                 return
-            self.send_json(200, {"status": "ok", "role": ROLE})
+            payload: dict[str, Any] = {"status": "ok", "role": ROLE}
+            if ROLE == "reader":
+                payload["capabilities"] = [
+                    "update-status-v1",
+                    "update-apply-status-v1",
+                    "current-db-restore-status-v1",
+                ]
+            self.send_json(200, payload)
             return
         if ROLE != "reader" or request_path not in {
             "/system/update/status",
             "/system/update/apply/status",
+            "/system/restore/current/status",
         }:
             self.send_json(404, {"detail": {"code": "not_found"}})
             return
         try:
+            if request_path == "/system/restore/current/status":
+                self.send_json(200, restore_public_status(self.headers))
+                return
             contract, _subject = active_contract(self.headers)
             if request_path == "/system/update/status":
                 self.send_json(200, legacy_check_payload(contract))
@@ -1506,7 +1767,19 @@ class Handler(BaseHTTPRequestHandler):
         except ContractError as exc:
             code = str(exc)
             status = 401 if code.startswith(("authorization_", "bearer_")) else 403 if code == "foreign_actor_forbidden" else 503
-            self.send_json(status, {"detail": {"code": code[:120], "message": "Update status is not available."}})
+            self.send_json(
+                status,
+                {
+                    "detail": {
+                        "code": code[:120],
+                        "message": (
+                            "Restore status is not available."
+                            if request_path == "/system/restore/current/status"
+                            else "Update status is not available."
+                        ),
+                    }
+                },
+            )
 
     def do_POST(self) -> None:
         request_path = self.path.split("?", 1)[0]
@@ -1528,7 +1801,9 @@ class Handler(BaseHTTPRequestHandler):
             contract, subject = active_contract(self.headers)
             body = read_body(self)
             with RETRY_LOCK:
-                result = create_retry(contract, subject, body)
+                with maintenance_admission_guard():
+                    assert_retry_maintenance_idle()
+                    result = create_retry(contract, subject, body)
             result["apply_status"] = {
                 "schema_version": 1,
                 "request_id": result["request_id"],

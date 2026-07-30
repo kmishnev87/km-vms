@@ -28,6 +28,7 @@ from app.services.backup_manager import (
     BACKUP_ARTIFACT_ID_RE,
     TEMPORARY_VALIDATION_DB_PREFIX,
     BackupManagerBlocked,
+    actor_binding_key,
     artifact_state_path,
     artifact_version_evidence,
     begin_backup_operation,
@@ -615,6 +616,7 @@ def _restore_artifact_to_target(
     target_kind: str,
     target_database_url: str | None,
     source_database_url: str | None = None,
+    expected_actor_username: str | None = None,
 ) -> dict[str, Any]:
     artifact_path = _manifest_artifact_path(manifest_path, manifest)
     backend = str(manifest.get("db_backend") or "").lower()
@@ -646,6 +648,7 @@ def _restore_artifact_to_target(
                 target_database_url=target_database_url,
                 validation_root=manifest_path.parent,
                 allow_disposable_target=True,
+                expected_owner_username=expected_actor_username,
             ),
             source_database_url=source_database_url,
         )
@@ -780,14 +783,14 @@ def inspect_restore_maintenance(
         "has_more": bool(snapshot.get("has_more")),
         "valid_artifact_count": verified_count,
         "artifacts": artifacts,
-        "can_restore": False,
+        "can_restore": bool(verified_count),
         "temporary_validation_restore_supported": True,
         "temporary_validation_target": "server_side_disposable_postgresql",
-        "current_product_restore_supported": False,
-        "current_product_restore_status": "blocked",
-        "current_product_restore_reason": "current_product_restore_not_enabled",
-        "requires_explicit_future_enablement": True,
-        "requires_confirmation": False,
+        "current_product_restore_supported": True,
+        "current_product_restore_status": "available",
+        "current_product_restore_reason": None,
+        "requires_explicit_future_enablement": False,
+        "requires_confirmation": True,
         "report_id": report["report_id"],
         "report": report,
     }
@@ -952,6 +955,9 @@ def apply_restore_maintenance(
             target_kind=target_kind,
             target_database_url=restore_target_url,
             source_database_url=db.get_bind().url.render_as_string(hide_password=False),
+            expected_actor_username=(
+                str(getattr(actor, "username", "") or "")[:100] or None
+            ),
         )
     except (RestoreMaintenanceBlocked, RestoreValidationBlocked) as exc:
         status_value = getattr(exc, "status", "restore_failed")
@@ -1054,6 +1060,7 @@ def run_backup_validation_operation(
             actor=actor,
             artifact_id=artifact_id,
             backup_root=root,
+            db=db,
         )
     except BackupManagerBlocked as exc:
         raise RestoreMaintenanceBlocked(exc.code, exc.diagnostics) from exc
@@ -1189,6 +1196,9 @@ def run_backup_validation_operation(
                         "operation_id": receipt["operation_id"],
                         "reason_code": reason_code,
                         "evidence": evidence,
+                        "actor_key": None,
+                        "actor_subject": None,
+                        "actor_role": None,
                     },
                     "last_check": {
                         "operation_id": receipt["operation_id"],
@@ -1253,13 +1263,24 @@ def run_backup_validation_operation(
                     "reason_code": None,
                     "evidence": evidence,
                 },
-                "restore_validation": {
-                    "status": restore_status,
-                    "validated_at": validated_at,
-                    "operation_id": receipt["operation_id"],
-                    "reason_code": None if validation_passed else "post_restore_validation_failed",
-                    "evidence": evidence,
-                },
+                    "restore_validation": {
+                        "status": restore_status,
+                        "validated_at": validated_at,
+                        "operation_id": receipt["operation_id"],
+                        "reason_code": None if validation_passed else "post_restore_validation_failed",
+                        "evidence": evidence,
+                        "actor_key": actor_binding_key(actor) if validation_passed else None,
+                        "actor_subject": (
+                            str(getattr(actor, "username", "") or "").strip()
+                            if validation_passed
+                            else None
+                        ),
+                        "actor_role": (
+                            str(getattr(actor, "role", "") or "").strip().lower()
+                            if validation_passed
+                            else None
+                        ),
+                    },
                 "last_check": {
                     "operation_id": receipt["operation_id"],
                     "outcome": "completed" if validation_passed else "failed",
@@ -1343,6 +1364,7 @@ def run_backup_delete_operation(
     confirm: bool,
     actor: Any,
     backup_root: str | None = None,
+    db: Session | None = None,
 ) -> dict[str, Any]:
     if not confirm:
         raise RestoreMaintenanceBlocked(
@@ -1357,6 +1379,7 @@ def run_backup_delete_operation(
             actor=actor,
             artifact_id=artifact_id,
             backup_root=root,
+            db=db,
         )
     except BackupManagerBlocked as exc:
         raise RestoreMaintenanceBlocked(exc.code, exc.diagnostics) from exc

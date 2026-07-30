@@ -28,7 +28,7 @@ assert.equal(pageSource.includes("previewUpdateApplyDialog"), false);
 assert.equal(pageSource.includes("updateApplyTest"), false);
 
 const confirmStart = pageSource.indexOf("async function confirmUpdateApply");
-const confirmEnd = pageSource.indexOf("async function downloadMaintenanceReport", confirmStart);
+const confirmEnd = pageSource.indexOf("async function submitUserModal", confirmStart);
 assert.ok(confirmStart >= 0 && confirmEnd > confirmStart);
 const confirmSource = pageSource.slice(confirmStart, confirmEnd);
 

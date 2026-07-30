@@ -18,6 +18,15 @@ from app.services.schema_migrations import (
     build_migration_plan,
     execute_migration_plan,
 )
+from app.services.maintenance_admission import (
+    ACTIVE_SCHEMA_STATES,
+    MaintenanceAdmissionBlocked,
+    assert_no_maintenance_conflicts,
+    maintenance_admission_guard,
+    manual_schema_operation_path,
+    read_bounded_json,
+    write_bounded_json_atomic,
+)
 
 
 MIGRATION_MAINTENANCE_REPORT_VERSION = "stage13.migration_apply.v1"
@@ -258,7 +267,7 @@ def dry_run_migration_maintenance(
     return payload
 
 
-def apply_migration_maintenance(
+def _apply_migration_maintenance_after_admission(
     db: Session,
     *,
     confirm: bool,
@@ -415,3 +424,95 @@ def apply_migration_maintenance(
         "report_id": report["report_id"],
         "report": report,
     }
+
+
+def apply_migration_maintenance(
+    db: Session,
+    *,
+    confirm: bool,
+    registry: MigrationRegistry = PRODUCTION_MIGRATIONS,
+    actor: Any = None,
+    backup_root: str | None = None,
+    allow_tmp_backup_root_for_tests: bool = False,
+) -> dict[str, Any]:
+    if not confirm:
+        return _apply_migration_maintenance_after_admission(
+            db,
+            confirm=confirm,
+            registry=registry,
+            actor=actor,
+            backup_root=backup_root,
+            allow_tmp_backup_root_for_tests=allow_tmp_backup_root_for_tests,
+        )
+    operation_id = f"manual-schema-{uuid.uuid4().hex}"
+    accepted_at = _utc_iso()
+    try:
+        with maintenance_admission_guard():
+            existing, state = read_bounded_json(manual_schema_operation_path())
+            if state == "invalid":
+                raise MaintenanceAdmissionBlocked("schema_state_unavailable")
+            if existing and existing.get("state") in ACTIVE_SCHEMA_STATES:
+                raise MaintenanceAdmissionBlocked("schema_operation_active")
+            assert_no_maintenance_conflicts("schema", db=db, backup_root=backup_root)
+            write_bounded_json_atomic(
+                manual_schema_operation_path(),
+                {
+                    "schema_version": 1,
+                    "operation_id": operation_id,
+                    "state": "accepted",
+                    "accepted_at": accepted_at,
+                    "updated_at": accepted_at,
+                },
+            )
+    except MaintenanceAdmissionBlocked as exc:
+        raise MigrationMaintenanceBlocked(
+            exc.code,
+            {
+                "status": "blocked",
+                "reason": exc.code,
+                "migration_executed": False,
+            },
+        ) from exc
+
+    write_bounded_json_atomic(
+        manual_schema_operation_path(),
+        {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "state": "running",
+            "accepted_at": accepted_at,
+            "updated_at": _utc_iso(),
+        },
+    )
+    try:
+        result = _apply_migration_maintenance_after_admission(
+            db,
+            confirm=True,
+            registry=registry,
+            actor=actor,
+            backup_root=backup_root,
+            allow_tmp_backup_root_for_tests=allow_tmp_backup_root_for_tests,
+        )
+    except Exception:
+        write_bounded_json_atomic(
+            manual_schema_operation_path(),
+            {
+                "schema_version": 1,
+                "operation_id": operation_id,
+                "state": "failed",
+                "accepted_at": accepted_at,
+                "updated_at": _utc_iso(),
+            },
+        )
+        raise
+    write_bounded_json_atomic(
+        manual_schema_operation_path(),
+        {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "state": "completed",
+            "accepted_at": accepted_at,
+            "updated_at": _utc_iso(),
+        },
+    )
+    return result

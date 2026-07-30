@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.user import User
+from app.models.audit_event import AuditEvent
 from app.routers.deps import require_permission
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.db_adoption import DbAdoptionBlocked, apply_db_adoption, dry_run_db_adoption, inspect_db_adoption
@@ -25,6 +26,13 @@ from app.services.restore_maintenance import (
     run_backup_validation_operation,
 )
 from app.services.backup_manager import build_backup_snapshot
+from app.services.current_db_restore import (
+    CurrentRestoreBlocked,
+    RESTORE_CONFIRMATION_PHRASE,
+    current_restore_preflight,
+    read_current_restore_status,
+    request_current_restore,
+)
 from app.services.upgrade_report import build_upgrade_report
 
 
@@ -488,6 +496,211 @@ class BackupArtifactDeleteRequest(BaseModel):
     submission_id: str = Field(min_length=36, max_length=36)
 
 
+class CurrentRestorePreflightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str = Field(min_length=1, max_length=80)
+
+
+class CurrentRestoreApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    artifact_id: str = Field(min_length=1, max_length=80)
+    submission_id: str = Field(min_length=36, max_length=36)
+    confirm: bool
+    confirmation_phrase: str = Field(min_length=1, max_length=32)
+
+
+def _current_restore_error(exc: CurrentRestoreBlocked) -> HTTPException:
+    status_code = (
+        status.HTTP_404_NOT_FOUND
+        if exc.code == "restore_status_not_found"
+        else status.HTTP_503_SERVICE_UNAVAILABLE
+        if exc.code in {
+            "restore_status_unavailable",
+            "restore_status_contract_invalid",
+            "restore_helper_unavailable",
+            "restore_status_reader_unavailable",
+            "audit_unavailable",
+        }
+        else status.HTTP_409_CONFLICT
+    )
+    return HTTPException(status_code=status_code, detail=exc.diagnostics)
+
+
+@restore_router.post("/current/preflight")
+def current_restore_preflight_route(
+    payload: CurrentRestorePreflightRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        return current_restore_preflight(
+            db,
+            artifact_id=payload.artifact_id,
+            actor=current_user,
+            perform_validation=True,
+        )
+    except (CurrentRestoreBlocked, RestoreMaintenanceBlocked) as exc:
+        if isinstance(exc, CurrentRestoreBlocked):
+            raise _current_restore_error(exc)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=exc.diagnostics,
+        )
+
+
+@restore_router.post("/current/apply")
+def current_restore_apply_route(
+    payload: CurrentRestoreApplyRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    if (
+        payload.confirm is not True
+        or payload.confirmation_phrase != RESTORE_CONFIRMATION_PHRASE
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "status": "blocked",
+                "reason_code": "confirmation_required",
+            },
+        )
+    started = create_event(
+        db=db,
+        actor=current_user,
+        category="system",
+        event_type="system.current_restore_started",
+        severity="warning",
+        message_ru="Запрошено восстановление рабочей базы данных.",
+        message_en="Current database restore was requested.",
+        target_type="current_db_restore",
+        target_id=payload.submission_id,
+        metadata={
+            "artifact_id": payload.artifact_id,
+            "video_archive_files_restored": False,
+            "migration_auto_apply": False,
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    if started is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "blocked", "reason_code": "audit_unavailable"},
+        )
+    try:
+        def record_accepted(candidate: dict) -> bool:
+            return (
+                create_event(
+                    db=db,
+                    actor=current_user,
+                    category="system",
+                    event_type="system.current_restore_accepted",
+                    severity="warning",
+                    message_ru="Восстановление рабочей базы данных принято к выполнению.",
+                    message_en="Current database restore was accepted.",
+                    target_type="current_db_restore",
+                    target_id=candidate.get("operation_id"),
+                    metadata={
+                        "artifact_id": candidate.get("artifact", {}).get(
+                            "artifact_id"
+                        ),
+                        "video_archive_files_restored": False,
+                    },
+                    ip_address=request_ip(request),
+                    user_agent=request_user_agent(request),
+                )
+                is not None
+            )
+
+        result = request_current_restore(
+            db,
+            artifact_id=payload.artifact_id,
+            submission_id=payload.submission_id,
+            confirm=payload.confirm,
+            confirmation_phrase=payload.confirmation_phrase,
+            actor=current_user,
+            before_admit=record_accepted,
+        )
+    except (CurrentRestoreBlocked, RestoreMaintenanceBlocked) as exc:
+        code = (
+            exc.code
+            if isinstance(exc, CurrentRestoreBlocked)
+            else exc.status
+        )
+        diagnostics = exc.diagnostics
+        create_event(
+            db=db,
+            actor=current_user,
+            category="system",
+            event_type="system.current_restore_blocked",
+            severity="warning",
+            message_ru="Восстановление рабочей базы данных заблокировано.",
+            message_en="Current database restore was blocked.",
+            target_type="current_db_restore",
+            target_id=payload.submission_id,
+            metadata={"reason_code": code, "artifact_id": payload.artifact_id},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+        if isinstance(exc, CurrentRestoreBlocked):
+            raise _current_restore_error(exc)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=diagnostics,
+        )
+    return result
+
+
+@restore_router.get("/current/status")
+def current_restore_status_route(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    try:
+        result = read_current_restore_status(actor=current_user)
+    except CurrentRestoreBlocked as exc:
+        raise _current_restore_error(exc)
+    terminal = result.get("terminal_result")
+    operation_id = result.get("operation_id")
+    if terminal in {
+        "completed",
+        "blocked",
+        "failed_rolled_back",
+        "failed_recovery_required",
+    } and operation_id:
+        event_type = f"system.current_restore_{terminal}"
+        exists = (
+            db.query(AuditEvent.id)
+            .filter(
+                AuditEvent.event_type == event_type,
+                AuditEvent.target_id == str(operation_id),
+            )
+            .first()
+        )
+        if not exists:
+            create_event(
+                db=db,
+                actor=current_user,
+                category="system",
+                event_type=event_type,
+                severity="info" if terminal == "completed" else "warning",
+                message_ru="Восстановление рабочей базы данных завершило выполнение.",
+                message_en="Current database restore reached a terminal state.",
+                target_type="current_db_restore",
+                target_id=operation_id,
+                metadata={
+                    "terminal_result": terminal,
+                    "reason_code": result.get("reason_code"),
+                    "video_archive_files_restored": False,
+                },
+            )
+    return result
+
+
 @restore_router.get("/status")
 def restore_status(
     offset: int = Query(default=0, ge=0),
@@ -600,6 +813,7 @@ def restore_artifact_delete(
             artifact_id=artifact_id,
             confirm=payload.confirm,
             actor=current_user,
+            db=db,
         )
     except RestoreMaintenanceBlocked as exc:
         create_event(

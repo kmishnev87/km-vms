@@ -697,12 +697,18 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const normalizedEffective = normalizedUpdateApplyState(effective);
   const normalizedStatus = normalizedUpdateApplyState(status);
   const normalizedUpdateStatus = normalizedUpdateApplyState(updateStatus?.status);
+  const normalizedLastCheckStatus = normalizedUpdateApplyState(
+    updateStatus?.last_check_status || updateStatus?.last_update_check?.status,
+  );
   const lastKnownRunning = updateApplyIsRunning(applyStatus?.status || "");
   const running = lastKnownRunning && normalizedEffective !== "unknown";
   const stateUnknown = Boolean(context.unresolvedSubmission) || (normalizedEffective === "unknown" && Boolean(context.applyError));
   const trustedCandidate = updateStatus?.trusted_apply_candidate || {};
   const freshTrustedCandidateAvailable = Boolean(trustedCandidate.fresh && trustedCandidate.can_apply_from_ui && trustedCandidate.latest);
-  const liveCheckFailedWithCandidate = normalizedUpdateStatus === "check_failed" && freshTrustedCandidateAvailable;
+  const liveCheckFailedWithCandidate = (
+    normalizedUpdateStatus === "check_failed"
+    || normalizedLastCheckStatus === "check_failed"
+  ) && freshTrustedCandidateAvailable;
   const canApply = Boolean((updateStatus?.can_apply_from_ui || freshTrustedCandidateAvailable) && !lastKnownRunning && !applyStatus?.is_stale && !stateUnknown && !context.unresolvedSubmission);
   const lastSummary = applyStatus?.last_apply_summary || null;
   const currentVersion = updateApplyReleaseValue(updateStatus, "currentVersion");
@@ -734,9 +740,11 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const updateCheckFailure = !suppressUpdateCheckBlocker && !stateUnknown && (
     isUpdateApplyAttentionState(normalizedStatus) ||
     isUpdateApplyAttentionState(normalizedUpdateStatus) ||
+    isUpdateApplyAttentionState(normalizedLastCheckStatus) ||
     UPDATE_CHECK_BLOCKING_STATES.has(normalizedEffective) ||
     UPDATE_CHECK_BLOCKING_STATES.has(normalizedStatus) ||
-    UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus)
+    UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus) ||
+    UPDATE_CHECK_BLOCKING_STATES.has(normalizedLastCheckStatus)
   );
   const failed = terminalVerificationIncomplete || helperFailure || (!liveCheckFailedWithCandidate && updateCheckFailure);
   const severity = failed ? "blocked" : running || stateUnknown || available || liveCheckFailedWithCandidate || context.updateError ? "warning" : "ok";
@@ -762,6 +770,8 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     ? normalizedEffective
     : isUpdateApplyAttentionState(normalizedUpdateStatus) || UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus)
       ? normalizedUpdateStatus
+    : isUpdateApplyAttentionState(normalizedLastCheckStatus) || UPDATE_CHECK_BLOCKING_STATES.has(normalizedLastCheckStatus)
+      ? normalizedLastCheckStatus
     : isUpdateApplyAttentionState(normalizedStatus) || UPDATE_CHECK_BLOCKING_STATES.has(normalizedStatus)
       ? normalizedStatus
       : failed && normalizedStatus && normalizedStatus !== "unknown"
@@ -1205,6 +1215,17 @@ export function maintenanceBackupManagerModel(overview, t, lang = "ru", backupSt
     const compatibility = String(item.compatibility_status || "unknown");
     const validation = String(item.restore_validation_status || "not_performed");
     const deleteStatus = String(item.delete_status || "blocked");
+    const restoreIneligibleReason = !productOwnedIdentity
+      ? "artifact_invalid"
+      : availability !== "available"
+        ? "artifact_unavailable"
+        : integrity !== "verified"
+          ? "artifact_integrity_not_verified"
+          : compatibility !== "compatible"
+            ? compatibility
+            : !productionRestoreSupported
+              ? "restore_not_supported"
+              : "";
     return {
       id: artifactId,
       createdAt: item.artifact_created_at ? formatAuditTimestamp(item.artifact_created_at, lang) : "-",
@@ -1225,6 +1246,8 @@ export function maintenanceBackupManagerModel(overview, t, lang = "ru", backupSt
       deletable: Boolean(productOwnedIdentity && item.delete_supported && ["allowed", "partial_retryable"].includes(deleteStatus)),
       canDelete: Boolean(productOwnedIdentity && item.delete_supported && ["allowed", "partial_retryable"].includes(deleteStatus)),
       canCheck: Boolean(productOwnedIdentity && temporaryValidationSupported),
+      canRestore: Boolean(!restoreIneligibleReason),
+      restoreIneligibleReason,
       schema: item.artifact_schema_version ?? "-",
       backend: item.db_backend || "-",
       sizeText: formatFileSize(item.file_size),

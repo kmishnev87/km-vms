@@ -164,8 +164,14 @@ const diagnosticDialog = settingsPage.slice(diagnosticDialogStart, diagnosticDia
 assert.equal(diagnosticDialog.includes("descriptions: ["), true);
 assert.equal(diagnosticDialog.includes("summary:"), false);
 assert.equal(diagnosticDialog.includes("showFooterClose: false"), true);
-assert.match(cssRule(".settingsMaintenanceSupportActions"), /width:\s*auto;/);
+assert.equal(supportMarkup.includes("{t.maintenanceReportDownload}"), true);
+assert.equal(supportMarkup.includes("{t.createDiagnosticArchive}"), false);
+assert.match(cssRule(".settingsMaintenanceSupportActions"), /grid-template-columns:\s*minmax\(128px, 1fr\)/);
+assert.match(cssRule(".settingsMaintenanceSupportActions"), /width:\s*164px/);
+assert.match(cssRule(".settingsMaintenanceSupportActions"), /min-width:\s*164px/);
 assert.match(cssRule(".settingsMaintenanceSupportActions .button"), /white-space:\s*nowrap;/);
+assert.match(cssRule(".settingsMaintenanceSupportActions .button"), /width:\s*100%/);
+assert.match(cssRule(".settingsMaintenanceSupportActions .button"), /height:\s*38px/);
 assert.equal(settingsPage.includes('downloadLogArchive("normal")'), true);
 assert.equal(settingsPage.includes('downloadLogArchive("extended")'), true);
 assert.equal(settingsPage.includes("/system/upgrade/report"), false);
@@ -181,11 +187,11 @@ assert.equal(settingsPage.includes("санитизирован"), false);
 assert.equal(settingsPage.includes("Sanitized"), false);
 assert.equal(settingsPage.includes("sanitized"), false);
 assert.equal(settingsPage.includes("脱敏"), false);
+assert.match(
+  settingsPage,
+  /settingsSecurityModalButton[\s\S]*\{t\.createDiagnosticArchive\}/,
+);
 
 assert.match(cssRule(".settingsMaintenanceSupportActions"), /display: grid/);
-assert.match(cssRule(".settingsMaintenanceSupportActions"), /grid-template-columns: max-content/);
-assert.match(cssRule(".settingsMaintenanceSupportActions"), /width: auto/);
-assert.match(cssRule(".settingsMaintenanceSupportActions"), /min-width: 0/);
-assert.match(cssRule(".settingsMaintenanceSupportActions .button"), /width: auto/);
 assert.match(cssRule(".settingsMaintenanceWarningsList"), /position: absolute/);
 assert.match(cssRule(".settingsMaintenanceWarningsList"), /max-height: min\(42vh, 340px\)/);

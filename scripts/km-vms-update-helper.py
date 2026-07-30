@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
+import stat
 import subprocess
 import tempfile
 import time
@@ -20,13 +22,33 @@ APP_DIR = Path(os.getenv("KM_VMS_UPDATE_APP_DIR") or "/host-app")
 HOST_APP_DIR_RAW = os.getenv("KM_VMS_UPDATE_HOST_APP_DIR") or ""
 HOST_APP_DIR = Path(HOST_APP_DIR_RAW) if HOST_APP_DIR_RAW else None
 CONTROL_DIR = APP_DIR / "data" / "update-control"
+RESTORE_CONTROL_DIR = APP_DIR / "data" / "restore-control"
+RESTORE_PUBLIC_DIR = APP_DIR / "data" / "restore-public"
+MAINTENANCE_CONTROL_DIR = APP_DIR / "data" / "maintenance-control"
 REQUEST_FILE = CONTROL_DIR / "update-request.json"
 STATUS_FILE = CONTROL_DIR / "update-status.json"
 PROGRESS_FILE = CONTROL_DIR / "update-progress.json"
 APPLY_HISTORY_FILE = CONTROL_DIR / "update-apply-history.json"
 ACTIVATION_JOURNAL_FILE = CONTROL_DIR / "activation-journal.json"
-ADMISSION_LOCK_FILE = CONTROL_DIR / "update-admission.lock"
+ADMISSION_LOCK_FILE = (
+    MAINTENANCE_CONTROL_DIR / "maintenance-admission.lock"
+)
 HELPER_LEASE_FILE = CONTROL_DIR / "update-helper-claim.lock"
+RESTORE_REQUEST_FILE = RESTORE_CONTROL_DIR / "restore-request.json"
+RESTORE_PUBLIC_STATUS_FILE = RESTORE_PUBLIC_DIR / "restore-status.json"
+RESTORE_HELPER_HEALTH_FILE = RESTORE_PUBLIC_DIR / "helper-health.json"
+RESTORE_JOURNAL_FILE = RESTORE_CONTROL_DIR / "restore-journal.json"
+RESTORE_JOURNAL_DIR = RESTORE_CONTROL_DIR / "journal"
+RESTORE_EXECUTOR_RESULT_FILE = (
+    RESTORE_CONTROL_DIR / "restore-executor-result.json"
+)
+RESTORE_DESTRUCTIVE_MARKER_FILE = (
+    RESTORE_CONTROL_DIR / "restore-destructive-started.json"
+)
+RESTORE_HELPER_LEASE_FILE = (
+    RESTORE_CONTROL_DIR / "restore-helper-claim.lock"
+)
+RESTORE_RECEIPT_DIR = RESTORE_CONTROL_DIR / "receipts"
 
 POLL_SECONDS = int(os.getenv("KM_VMS_UPDATE_HELPER_POLL_SECONDS") or "2")
 MAX_CONTROL_BYTES = 64 * 1024
@@ -94,6 +116,30 @@ SENSITIVE_VALUE_RE = re.compile(
     r"-----BEGIN [^-]*PRIVATE KEY-----)",
     re.IGNORECASE,
 )
+RESTORE_REQUEST_SCHEMA = "stage13.7.8.current-restore-request.v1"
+RESTORE_PUBLIC_SCHEMA = "stage13.7.8.current-restore-public.v1"
+RESTORE_REQUEST_ID_RE = re.compile(r"^restore-[0-9a-f]{32}$")
+RESTORE_ARTIFACT_ID_RE = re.compile(
+    r"^kmvms-db-\d{8}T\d{6}Z-[0-9a-f]{12}$"
+)
+RESTORE_FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
+RESTORE_SUBJECT_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,100}$")
+RESTORE_ACTIVE_STATES = {"admitted", "claimed"}
+RESTORE_TERMINAL_RESULTS = {
+    "completed",
+    "blocked",
+    "failed_rolled_back",
+    "failed_recovery_required",
+}
+RESTORE_PHASES = {
+    "preflight",
+    "pre_restore_backup",
+    "writers_paused",
+    "restore_running",
+    "services_starting",
+    "post_restore_check",
+    *RESTORE_TERMINAL_RESULTS,
+}
 
 CURRENT_REQUEST_KEYS = {
     "schema_version",
@@ -209,15 +255,35 @@ def contains_sensitive_content(value: Any) -> bool:
 
 
 def read_json(path: Path) -> dict[str, Any] | None:
+    descriptor: int | None = None
     try:
-        if not path.exists():
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
             return None
-        if not path.is_file() or path.stat().st_size > MAX_CONTROL_BYTES:
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISREG(info.st_mode)
+            or info.st_size <= 1
+            or info.st_size > MAX_CONTROL_BYTES
+        ):
             raise HelperError(
                 "control_file_invalid",
                 "Update control file is invalid.",
             )
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags)
+        with os.fdopen(descriptor, "rb") as handle:
+            descriptor = None
+            raw = handle.read(MAX_CONTROL_BYTES + 1)
+        if len(raw) > MAX_CONTROL_BYTES:
+            raise HelperError(
+                "control_file_invalid",
+                "Update control file is invalid.",
+            )
+        payload = json.loads(raw.decode("utf-8"))
     except HelperError:
         raise
     except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
@@ -225,12 +291,23 @@ def read_json(path: Path) -> dict[str, Any] | None:
             "control_file_invalid",
             "Update control file is invalid.",
         ) from exc
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
     if not isinstance(payload, dict):
         raise HelperError(
             "control_file_invalid",
             "Update control file must contain a JSON object.",
         )
-    if path.parent == CONTROL_DIR and contains_sensitive_content(payload):
+    if path.parent in {
+        CONTROL_DIR,
+        RESTORE_CONTROL_DIR,
+        RESTORE_PUBLIC_DIR,
+        RESTORE_RECEIPT_DIR,
+    } and contains_sensitive_content(payload):
         raise HelperError(
             "control_payload_sensitive",
             "Update control payload contains sensitive content.",
@@ -371,15 +448,66 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
             "Update control payload is too large.",
         )
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     try:
-        temporary.write_text(rendered, encoding="utf-8")
-        try:
-            os.chmod(temporary, 0o600)
-        except OSError:
-            pass
-        temporary.replace(path)
+        parent_info = path.parent.lstat()
+        target_info = path.lstat()
+    except FileNotFoundError:
+        target_info = None
+        parent_info = path.parent.lstat()
     except OSError as exc:
+        raise HelperError(
+            "control_write_failed",
+            "Update control payload could not be persisted.",
+        ) from exc
+    if (
+        stat.S_ISLNK(parent_info.st_mode)
+        or not stat.S_ISDIR(parent_info.st_mode)
+        or (
+            target_info is not None
+            and (
+                stat.S_ISLNK(target_info.st_mode)
+                or not stat.S_ISREG(target_info.st_mode)
+            )
+        )
+    ):
+        raise HelperError(
+            "control_write_unsafe",
+            "Update control output path is unsafe.",
+        )
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    descriptor: int | None = None
+    try:
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(temporary, flags, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = None
+            handle.write(rendered)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(
+            path.parent,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0),
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except OSError as exc:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         try:
             temporary.unlink(missing_ok=True)
         except OSError:
@@ -392,8 +520,41 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 @contextmanager
 def admission_guard():
-    CONTROL_DIR.mkdir(parents=True, exist_ok=True)
-    with ADMISSION_LOCK_FILE.open("a+", encoding="utf-8") as lock_file:
+    try:
+        MAINTENANCE_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+        root_info = MAINTENANCE_CONTROL_DIR.lstat()
+    except OSError as exc:
+        raise HelperError(
+            "maintenance_control_root_unavailable",
+            "Maintenance admission root is unavailable.",
+        ) from exc
+    if (
+        MAINTENANCE_CONTROL_DIR.is_symlink()
+        or not stat.S_ISDIR(root_info.st_mode)
+    ):
+        raise HelperError(
+            "maintenance_control_root_unsafe",
+            "Maintenance admission root is unsafe.",
+        )
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    lock_fd: int | None = None
+    try:
+        lock_fd = os.open(ADMISSION_LOCK_FILE, flags, 0o600)
+        if not stat.S_ISREG(os.fstat(lock_fd).st_mode):
+            raise OSError("admission lock is not a regular file")
+    except OSError as exc:
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+        raise HelperError(
+            "maintenance_admission_lock_unsafe",
+            "Maintenance admission lock is unavailable.",
+        ) from exc
+    with os.fdopen(lock_fd, "r+", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
             yield
@@ -405,6 +566,27 @@ def admission_guard():
 def helper_execution_lease():
     CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     with HELPER_LEASE_FILE.open("a+", encoding="utf-8") as lease_file:
+        try:
+            fcntl.flock(
+                lease_file.fileno(),
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+            )
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(lease_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def restore_execution_lease():
+    RESTORE_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    with RESTORE_HELPER_LEASE_FILE.open(
+        "a+",
+        encoding="utf-8",
+    ) as lease_file:
         try:
             fcntl.flock(
                 lease_file.fileno(),
@@ -1620,9 +1802,1254 @@ def read_stderr_tail(path: Path, *, limit: int = 1200) -> str:
     return safe_text(text[-limit:], limit) or ""
 
 
+def validate_restore_request(value: Any) -> dict[str, Any] | None:
+    expected = {
+        "schema",
+        "operation_id",
+        "submission_id",
+        "intent",
+        "requested_at",
+        "updated_at",
+        "requested_by",
+        "artifact",
+        "confirmed",
+        "confirmation_phrase",
+        "state",
+        "claimed_at",
+        "terminal",
+        "video_archive_scope",
+        "migration_auto_apply",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        return None
+    actor = value.get("requested_by")
+    artifact = value.get("artifact")
+    if (
+        value.get("schema") != RESTORE_REQUEST_SCHEMA
+        or value.get("intent") != "restore_current_database"
+        or value.get("confirmed") is not True
+        or value.get("confirmation_phrase") != "RESTORE KM VMS"
+        or value.get("state") not in {
+            "admitted",
+            "claimed",
+            "terminal",
+        }
+        or value.get("video_archive_scope") != "excluded"
+        or value.get("migration_auto_apply") is not False
+        or not isinstance(value.get("operation_id"), str)
+        or not RESTORE_REQUEST_ID_RE.fullmatch(
+            value["operation_id"]
+        )
+        or not isinstance(value.get("submission_id"), str)
+        or not SUBMISSION_ID_RE.fullmatch(value["submission_id"])
+        or parsed_timestamp(value.get("requested_at")) is None
+        or parsed_timestamp(value.get("updated_at")) is None
+        or not isinstance(actor, dict)
+        or set(actor)
+        != {"user_id", "subject", "role", "binding"}
+        or not isinstance(actor.get("user_id"), int)
+        or isinstance(actor.get("user_id"), bool)
+        or actor["user_id"] < 1
+        or not isinstance(actor.get("subject"), str)
+        or not RESTORE_SUBJECT_RE.fullmatch(actor["subject"])
+        or actor.get("role") not in {"owner", "admin"}
+        or not isinstance(actor.get("binding"), str)
+        or not RESTORE_FINGERPRINT_RE.fullmatch(actor["binding"])
+        or not isinstance(artifact, dict)
+        or set(artifact)
+        != {
+            "artifact_id",
+            "artifact_created_at",
+            "artifact_schema_version",
+            "db_backend",
+            "file_size",
+            "fingerprint",
+        }
+        or not isinstance(artifact.get("artifact_id"), str)
+        or not RESTORE_ARTIFACT_ID_RE.fullmatch(
+            artifact["artifact_id"]
+        )
+        or artifact.get("artifact_schema_version") != 8
+        or artifact.get("db_backend") != "postgresql"
+        or not isinstance(artifact.get("file_size"), int)
+        or artifact["file_size"] < 1
+        or not isinstance(artifact.get("fingerprint"), str)
+        or not RESTORE_FINGERPRINT_RE.fullmatch(
+            artifact["fingerprint"]
+        )
+    ):
+        return None
+    if value["state"] == "admitted":
+        if (
+            value.get("claimed_at") is not None
+            or value.get("terminal") is not None
+        ):
+            return None
+    elif value["state"] == "claimed":
+        if (
+            parsed_timestamp(value.get("claimed_at")) is None
+            or value.get("terminal") is not None
+        ):
+            return None
+    else:
+        terminal = value.get("terminal")
+        if (
+            not isinstance(terminal, dict)
+            or set(terminal)
+            != {"status", "finished_at", "reason_code"}
+            or terminal.get("status")
+            not in RESTORE_TERMINAL_RESULTS
+            or parsed_timestamp(value.get("claimed_at")) is None
+            or parsed_timestamp(terminal.get("finished_at")) is None
+            or (
+                terminal.get("reason_code") is not None
+                and (
+                    not isinstance(terminal.get("reason_code"), str)
+                    or not MACHINE_CODE_RE.fullmatch(
+                        terminal["reason_code"]
+                    )
+                )
+            )
+            or (
+                terminal.get("status") == "completed"
+                and terminal.get("reason_code") is not None
+            )
+            or (
+                terminal.get("status") != "completed"
+                and terminal.get("reason_code") is None
+            )
+        ):
+            return None
+    return json.loads(json.dumps(value))
+
+
+def restore_request_may_need_execution() -> bool:
+    request = validate_restore_request(
+        read_json(RESTORE_REQUEST_FILE)
+    )
+    return bool(
+        request
+        and request.get("state") in RESTORE_ACTIVE_STATES
+    )
+
+
+def restore_receipt_path(submission_id: str) -> Path:
+    if not SUBMISSION_ID_RE.fullmatch(submission_id):
+        raise HelperError(
+            "restore_submission_invalid",
+            "Restore submission identity is invalid.",
+        )
+    return RESTORE_RECEIPT_DIR / f"{submission_id}.json"
+
+
+def restore_destructive_started(operation_id: str) -> bool:
+    marker = read_json(RESTORE_DESTRUCTIVE_MARKER_FILE)
+    return bool(
+        isinstance(marker, dict)
+        and marker.get("operation_id") == operation_id
+        and marker.get("mutation_started") is True
+    )
+
+
+def publish_restore_helper_health() -> None:
+    write_json(
+        RESTORE_HELPER_HEALTH_FILE,
+        {
+            "schema_version": 1,
+            "role": "update-helper-restore-dispatch",
+            "updated_at": utcnow(),
+        },
+    )
+
+
+def _restore_public_payload(
+    request: dict[str, Any],
+    *,
+    phase: str,
+    status: str = "running",
+    pre_restore_backup_id: str | None = None,
+    terminal_result: str | None = None,
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    if phase not in RESTORE_PHASES:
+        phase = "preflight"
+    artifact = request["artifact"]
+    now = utcnow()
+    terminal = (
+        request.get("terminal")
+        if isinstance(request.get("terminal"), dict)
+        else {}
+    )
+    terminal_finished_at = (
+        terminal.get("finished_at")
+        if terminal_result
+        and parsed_timestamp(terminal.get("finished_at")) is not None
+        else now
+        if terminal_result
+        else None
+    )
+    return {
+        "schema": RESTORE_PUBLIC_SCHEMA,
+        "operation_id": request["operation_id"],
+        "submission_id": request["submission_id"],
+        "actor_subject": request["requested_by"]["subject"],
+        "status": terminal_result or status,
+        "phase": phase,
+        "artifact": {
+            "artifact_id": artifact["artifact_id"],
+            "artifact_created_at": artifact.get(
+                "artifact_created_at"
+            ),
+            "artifact_schema_version": artifact[
+                "artifact_schema_version"
+            ],
+            "db_backend": artifact["db_backend"],
+        },
+        "pre_restore_backup_id": pre_restore_backup_id,
+        "accepted_at": request["requested_at"],
+        "started_at": request.get("claimed_at"),
+        "updated_at": terminal_finished_at or now,
+        "finished_at": terminal_finished_at,
+        "terminal_result": terminal_result,
+        "reason_code": reason_code,
+        "next_action": (
+            "sign_in_again"
+            if terminal_result == "completed"
+            else "current_database_restored"
+            if terminal_result == "failed_rolled_back"
+            else "contact_support"
+            if terminal_result == "failed_recovery_required"
+            else "review_restore_status"
+            if terminal_result
+            else "wait"
+        ),
+        "video_archive_modified": False,
+    }
+
+
+def _journal_event(
+    request: dict[str, Any],
+    *,
+    phase: str,
+    pre_restore_backup_id: str | None,
+    destructive_started: bool,
+    terminal_result: str | None = None,
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    event = {
+        "schema_version": 1,
+        "operation_id": request["operation_id"],
+        "submission_id": request["submission_id"],
+        "phase": phase,
+        "recorded_at": utcnow(),
+        "source_artifact_id": request["artifact"]["artifact_id"],
+        "pre_restore_backup_id": pre_restore_backup_id,
+        "destructive_started": bool(destructive_started),
+        "terminal_result": terminal_result,
+        "reason_code": reason_code,
+        "video_archive_modified": False,
+    }
+    write_json(RESTORE_JOURNAL_FILE, event)
+    event_dir = (
+        RESTORE_JOURNAL_DIR / request["operation_id"]
+    )
+    event_path = (
+        event_dir
+        / (
+            f"{int(time.time() * 1000):013d}-"
+            f"{phase}-{uuid.uuid4().hex[:8]}.json"
+        )
+    )
+    write_json(event_path, event)
+    return event
+
+
+def publish_restore_phase(
+    request: dict[str, Any],
+    *,
+    phase: str,
+    pre_restore_backup_id: str | None = None,
+    destructive_started: bool = False,
+) -> None:
+    _journal_event(
+        request,
+        phase=phase,
+        pre_restore_backup_id=pre_restore_backup_id,
+        destructive_started=destructive_started,
+    )
+    write_json(
+        RESTORE_PUBLIC_STATUS_FILE,
+        _restore_public_payload(
+            request,
+            phase=phase,
+            pre_restore_backup_id=pre_restore_backup_id,
+        ),
+    )
+
+
+def finish_restore_request(
+    request: dict[str, Any],
+    *,
+    result: str,
+    reason_code: str | None,
+    pre_restore_backup_id: str | None,
+    destructive_started: bool,
+) -> None:
+    if result not in RESTORE_TERMINAL_RESULTS:
+        raise HelperError(
+            "restore_terminal_invalid",
+            "Restore terminal result is invalid.",
+        )
+    finished = utcnow()
+    terminal = {
+        "status": result,
+        "finished_at": finished,
+        "reason_code": (
+            safe_text(reason_code, 80)
+            if reason_code
+            and MACHINE_CODE_RE.fullmatch(reason_code)
+            else None
+        ),
+    }
+    request = {
+        **request,
+        "state": "terminal",
+        "updated_at": finished,
+        "terminal": terminal,
+    }
+    with admission_guard():
+        current = validate_restore_request(
+            read_json(RESTORE_REQUEST_FILE)
+        )
+        if (
+            current is None
+            or current["operation_id"]
+            != request["operation_id"]
+            or current["state"] not in RESTORE_ACTIVE_STATES
+        ):
+            raise HelperError(
+                "restore_request_changed",
+                "Restore request changed during execution.",
+            )
+        try:
+            write_json(RESTORE_REQUEST_FILE, request)
+        except HelperError:
+            observed = validate_restore_request(
+                read_json(RESTORE_REQUEST_FILE)
+            )
+            if (
+                observed is None
+                or observed.get("operation_id")
+                != request["operation_id"]
+                or observed.get("state") != "terminal"
+                or observed.get("terminal") != terminal
+            ):
+                raise
+        try:
+            write_json(
+                restore_receipt_path(request["submission_id"]),
+                request,
+            )
+        except HelperError:
+            pass
+    try:
+        _journal_event(
+            request,
+            phase=result,
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=destructive_started,
+            terminal_result=result,
+            reason_code=terminal["reason_code"],
+        )
+    except HelperError:
+        pass
+    try:
+        write_json(
+            RESTORE_PUBLIC_STATUS_FILE,
+            _restore_public_payload(
+                request,
+                phase=result,
+                status=result,
+                pre_restore_backup_id=pre_restore_backup_id,
+                terminal_result=result,
+                reason_code=terminal["reason_code"],
+            ),
+        )
+    except HelperError:
+        pass
+
+
+def reconcile_restore_terminal_projection() -> None:
+    request = validate_restore_request(
+        read_json(RESTORE_REQUEST_FILE)
+    )
+    if request is None or request.get("state") != "terminal":
+        return
+    terminal = request["terminal"]
+    result = terminal["status"]
+    try:
+        journal = read_json(RESTORE_JOURNAL_FILE)
+    except HelperError:
+        journal = None
+    journal_matches = bool(
+        isinstance(journal, dict)
+        and journal.get("operation_id") == request["operation_id"]
+    )
+    pre_restore_backup_id = (
+        journal.get("pre_restore_backup_id")
+        if journal_matches
+        else None
+    )
+    try:
+        destructive_started = restore_destructive_started(
+            request["operation_id"]
+        )
+    except HelperError:
+        destructive_started = result in {
+            "completed",
+            "failed_rolled_back",
+            "failed_recovery_required",
+        }
+    try:
+        receipt = validate_restore_request(
+            read_json(restore_receipt_path(request["submission_id"]))
+        )
+    except HelperError:
+        receipt = None
+    if (
+        receipt is None
+        or receipt.get("operation_id") != request["operation_id"]
+        or receipt.get("terminal") != terminal
+    ):
+        try:
+            write_json(
+                restore_receipt_path(request["submission_id"]),
+                request,
+            )
+        except HelperError:
+            pass
+    if not (
+        journal_matches
+        and journal.get("terminal_result") == result
+        and journal.get("reason_code") == terminal.get("reason_code")
+    ):
+        try:
+            _journal_event(
+                request,
+                phase=result,
+                pre_restore_backup_id=pre_restore_backup_id,
+                destructive_started=destructive_started,
+                terminal_result=result,
+                reason_code=terminal.get("reason_code"),
+            )
+        except HelperError:
+            pass
+    try:
+        public = read_json(RESTORE_PUBLIC_STATUS_FILE)
+    except HelperError:
+        public = None
+    if not (
+        isinstance(public, dict)
+        and public.get("operation_id") == request["operation_id"]
+        and public.get("terminal_result") == result
+        and public.get("finished_at") == terminal["finished_at"]
+    ):
+        try:
+            write_json(
+                RESTORE_PUBLIC_STATUS_FILE,
+                _restore_public_payload(
+                    request,
+                    phase=result,
+                    status=result,
+                    pre_restore_backup_id=pre_restore_backup_id,
+                    terminal_result=result,
+                    reason_code=terminal.get("reason_code"),
+                ),
+            )
+        except HelperError:
+            pass
+
+
+def claim_restore_request() -> dict[str, Any] | None:
+    with admission_guard():
+        request = validate_restore_request(
+            read_json(RESTORE_REQUEST_FILE)
+        )
+        if (
+            request is None
+            or request["state"] == "terminal"
+        ):
+            return None
+        if request["state"] == "admitted":
+            claimed_at = utcnow()
+            request["state"] = "claimed"
+            request["claimed_at"] = claimed_at
+            request["updated_at"] = claimed_at
+            write_json(RESTORE_REQUEST_FILE, request)
+            write_json(
+                restore_receipt_path(
+                    request["submission_id"]
+                ),
+                request,
+            )
+        return request
+
+
+def _compose_override() -> str:
+    override = str(
+        os.getenv("KM_VMS_UPDATE_HELPER_DOCKER_COMPOSE")
+        or os.getenv("KM_VMS_DOCKER_COMPOSE")
+        or ""
+    ).strip()
+    if override.startswith("/") and not Path(override).exists():
+        return ""
+    if (
+        override == "docker-compose"
+        and shutil.which("docker-compose") is None
+    ):
+        return ""
+    return override
+
+
+def restore_compose_command(
+    *arguments: str,
+    timeout_seconds: int = 900,
+) -> subprocess.CompletedProcess[str]:
+    stable_dir = compose_app_dir()
+    source_dir = resolve_update_source_dir(stable_dir)
+    common = source_dir / "scripts" / "km-vms-compose-common.sh"
+    if not common.is_file() or common.is_symlink():
+        raise HelperError(
+            "restore_compose_contract_missing",
+            "Restore Compose contract is unavailable.",
+        )
+    shell = (
+        '. "$1"; override="$2"; stable="$3"; source="$4"; '
+        "shift 4; "
+        'km_vms_detect_compose "$override" || exit 91; '
+        'km_vms_compose_for_source "$stable" "$source" "$@"'
+    )
+    try:
+        result = subprocess.run(
+            [
+                "sh",
+                "-c",
+                shell,
+                "km-vms-restore-compose",
+                str(common),
+                _compose_override(),
+                str(stable_dir),
+                str(source_dir),
+                *arguments,
+            ],
+            cwd=stable_dir,
+            env=os.environ.copy(),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HelperError(
+            "restore_compose_failed",
+            "Restore Compose command failed.",
+        ) from exc
+    return result
+
+
+def run_restore_executor(
+    request: dict[str, Any],
+    action: str,
+    *,
+    artifact_id: str | None = None,
+    mode: str = "source",
+    recorder_not_before_epoch: float | None = None,
+    timeout_seconds: int = 1200,
+) -> dict[str, Any]:
+    command = [
+        "run",
+        "--rm",
+        "--no-deps",
+        "restore-executor",
+        action,
+        "--operation-id",
+        request["operation_id"],
+    ]
+    if artifact_id:
+        command.extend(["--artifact-id", artifact_id])
+    if action == "restore":
+        command.extend(["--mode", mode])
+    if action == "recorder-proof":
+        if recorder_not_before_epoch is None:
+            raise HelperError(
+                "restore_recorder_proof_boundary_missing",
+                "Recorder proof boundary is unavailable.",
+            )
+        command.extend(
+            [
+                "--recorder-not-before-epoch",
+                f"{float(recorder_not_before_epoch):.6f}",
+            ]
+        )
+    result = restore_compose_command(
+        *command,
+        timeout_seconds=timeout_seconds,
+    )
+    payload = read_json(RESTORE_EXECUTOR_RESULT_FILE)
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or payload.get("operation_id")
+        != request["operation_id"]
+        or payload.get("action") != action
+        or payload.get("status")
+        not in {"completed", "failed"}
+    ):
+        raise HelperError(
+            "restore_executor_result_invalid",
+            "Restore executor result is unavailable.",
+            diagnostics={
+                "mutation_started": bool(
+                    restore_destructive_started(
+                        request["operation_id"]
+                    )
+                )
+            },
+        )
+    if result.returncode != 0 or payload["status"] != "completed":
+        code = safe_text(
+            payload.get("reason_code"),
+            80,
+        ) or "restore_executor_failed"
+        raise HelperError(
+            code
+            if MACHINE_CODE_RE.fullmatch(code)
+            else "restore_executor_failed",
+            "Restore executor failed.",
+            diagnostics={
+                "mutation_started": bool(
+                    payload.get("mutation_started")
+                )
+            },
+        )
+    details = payload.get("details")
+    return details if isinstance(details, dict) else {}
+
+
+def _service_container_id(service: str) -> str | None:
+    result = restore_compose_command(
+        "ps",
+        "-q",
+        service,
+        timeout_seconds=30,
+    )
+    value = result.stdout.strip()
+    return value if result.returncode == 0 and re.fullmatch(
+        r"[0-9a-f]{12,64}",
+        value,
+    ) else None
+
+
+def _service_running_state(service: str) -> bool | None:
+    try:
+        result = restore_compose_command(
+            "ps",
+            "-q",
+            "--all",
+            service,
+            timeout_seconds=30,
+        )
+    except HelperError:
+        return None
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    if not value:
+        return False
+    if not re.fullmatch(r"[0-9a-f]{12,64}", value):
+        return None
+    try:
+        inspected = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                "{{.State.Running}}",
+                value,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    observed = inspected.stdout.strip().lower()
+    if inspected.returncode != 0 or observed not in {"true", "false"}:
+        return None
+    return observed == "true"
+
+
+def wait_for_restore_writers_stopped(
+    *,
+    timeout_seconds: int = 60,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        states = {
+            service: _service_running_state(service)
+            for service in ("api", "recorder")
+        }
+        if all(state is False for state in states.values()):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(2)
+
+
+def wait_for_service(
+    service: str,
+    *,
+    require_health: bool,
+    timeout_seconds: int,
+) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        container_id = _service_container_id(service)
+        if container_id:
+            template = (
+                "{{.State.Health.Status}}"
+                if require_health
+                else "{{.State.Running}}"
+            )
+            inspected = subprocess.run(
+                [
+                    "docker",
+                    "inspect",
+                    "--format",
+                    template,
+                    container_id,
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            observed = inspected.stdout.strip().lower()
+            if (
+                inspected.returncode == 0
+                and (
+                    observed == "healthy"
+                    if require_health
+                    else observed == "true"
+                )
+            ):
+                return True
+        time.sleep(2)
+    return False
+
+
+def stop_restore_writers() -> None:
+    try:
+        restore_compose_command(
+            "stop",
+            "recorder",
+            "api",
+            timeout_seconds=180,
+        )
+    except HelperError:
+        pass
+    if wait_for_restore_writers_stopped():
+        return
+    raise HelperError(
+        "restore_writer_isolation_failed",
+        "Database writers could not be isolated.",
+    )
+
+
+def start_restore_api() -> None:
+    result = restore_compose_command(
+        "start",
+        "api",
+        timeout_seconds=180,
+    )
+    if (
+        result.returncode != 0
+        or not wait_for_service(
+            "api",
+            require_health=True,
+            timeout_seconds=120,
+        )
+    ):
+        raise HelperError(
+            "restore_api_health_failed",
+            "API did not become healthy after restore.",
+        )
+
+
+def start_restore_recorder() -> None:
+    result = restore_compose_command(
+        "start",
+        "recorder",
+        timeout_seconds=180,
+    )
+    if (
+        result.returncode != 0
+        or not wait_for_service(
+            "recorder",
+            require_health=False,
+            timeout_seconds=60,
+        )
+    ):
+        raise HelperError(
+            "restore_recorder_start_failed",
+            "Recorder did not start after restore.",
+        )
+
+
+def require_restore_recorder_start_proof(
+    request: dict[str, Any],
+    *,
+    not_before_epoch: float,
+) -> None:
+    try:
+        run_restore_executor(
+            request,
+            "recorder-proof",
+            recorder_not_before_epoch=not_before_epoch,
+            timeout_seconds=120,
+        )
+    except HelperError as exc:
+        raise HelperError(
+            "restore_recorder_start_failed",
+            "Recorder did not become operational after restore.",
+            diagnostics=exc.diagnostics,
+        ) from exc
+    if not wait_for_service(
+        "recorder",
+        require_health=False,
+        timeout_seconds=10,
+    ):
+        raise HelperError(
+            "restore_recorder_start_failed",
+            "Recorder stopped before operational proof completed.",
+        )
+
+
+def start_restore_recorder_with_proof(
+    request: dict[str, Any],
+) -> None:
+    not_before_epoch = time.time()
+    start_restore_recorder()
+    require_restore_recorder_start_proof(
+        request,
+        not_before_epoch=not_before_epoch,
+    )
+
+
+def restart_restore_recorder_with_proof(
+    request: dict[str, Any],
+) -> None:
+    not_before_epoch = time.time()
+    result = restore_compose_command(
+        "restart",
+        "recorder",
+        timeout_seconds=180,
+    )
+    if (
+        result.returncode != 0
+        or not wait_for_service(
+            "recorder",
+            require_health=False,
+            timeout_seconds=60,
+        )
+    ):
+        raise HelperError(
+            "restore_recorder_start_failed",
+            "Recorder did not restart during restore recovery.",
+        )
+    require_restore_recorder_start_proof(
+        request,
+        not_before_epoch=not_before_epoch,
+    )
+
+
+def restart_restore_writers_best_effort(
+    request: dict[str, Any],
+) -> bool:
+    try:
+        recorder_state_before_start = _service_running_state(
+            "recorder"
+        )
+    except Exception:
+        recorder_state_before_start = None
+
+    api_recovered = False
+    try:
+        start_restore_api()
+        api_recovered = True
+    except Exception:
+        pass
+
+    recorder_recovered = False
+    try:
+        if recorder_state_before_start is False:
+            start_restore_recorder_with_proof(request)
+        elif recorder_state_before_start is None:
+            restart_restore_recorder_with_proof(request)
+        else:
+            start_restore_recorder()
+            run_restore_executor(
+                request,
+                "recorder-live-proof",
+                timeout_seconds=120,
+            )
+        if not wait_for_service(
+            "recorder",
+            require_health=False,
+            timeout_seconds=10,
+        ):
+            return False
+        recorder_recovered = True
+    except Exception:
+        pass
+    return api_recovered and recorder_recovered
+
+
+def rollback_current_restore(
+    request: dict[str, Any],
+    *,
+    pre_restore_backup_id: str | None,
+    reason_code: str,
+) -> None:
+    if (
+        not pre_restore_backup_id
+        or not RESTORE_ARTIFACT_ID_RE.fullmatch(
+            pre_restore_backup_id
+        )
+    ):
+        finish_restore_request(
+            request,
+            result="failed_recovery_required",
+            reason_code="pre_restore_backup_missing",
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=True,
+        )
+        return
+    try:
+        stop_restore_writers()
+    except HelperError:
+        finish_restore_request(
+            request,
+            result="failed_recovery_required",
+            reason_code="automatic_rollback_failed",
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=True,
+        )
+        return
+    try:
+        run_restore_executor(
+            request,
+            "restore",
+            artifact_id=pre_restore_backup_id,
+            mode="rollback",
+        )
+        publish_restore_phase(
+            request,
+            phase="services_starting",
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=True,
+        )
+        start_restore_api()
+        publish_restore_phase(
+            request,
+            phase="post_restore_check",
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=True,
+        )
+        run_restore_executor(request, "post-check")
+        start_restore_recorder_with_proof(request)
+    except Exception:
+        finish_restore_request(
+            request,
+            result="failed_recovery_required",
+            reason_code="automatic_rollback_failed",
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=True,
+        )
+        return
+    finish_restore_request(
+        request,
+        result="failed_rolled_back",
+        reason_code=reason_code,
+        pre_restore_backup_id=pre_restore_backup_id,
+        destructive_started=True,
+    )
+
+
+def run_current_restore(request: dict[str, Any]) -> None:
+    prior_journal = read_json(RESTORE_JOURNAL_FILE)
+    prior_marker = read_json(
+        RESTORE_DESTRUCTIVE_MARKER_FILE
+    )
+    if (
+        isinstance(prior_marker, dict)
+        and prior_marker.get("operation_id")
+        == request["operation_id"]
+        and prior_marker.get("mutation_started") is True
+    ):
+        pre_restore_backup_id = (
+            prior_journal.get("pre_restore_backup_id")
+            if isinstance(prior_journal, dict)
+            else None
+        )
+        rollback_current_restore(
+            request,
+            pre_restore_backup_id=pre_restore_backup_id,
+            reason_code="restore_interrupted_after_mutation",
+        )
+        return
+    if (
+        request["state"] == "claimed"
+        and isinstance(prior_journal, dict)
+        and prior_journal.get("operation_id")
+        == request["operation_id"]
+    ):
+        writers_recovered = restart_restore_writers_best_effort(
+            request
+        )
+        finish_restore_request(
+            request,
+            result="blocked",
+            reason_code=(
+                "restore_interrupted_before_mutation"
+                if writers_recovered
+                else "restore_writer_isolation_failed"
+            ),
+            pre_restore_backup_id=prior_journal.get(
+                "pre_restore_backup_id"
+            ),
+            destructive_started=False,
+        )
+        return
+
+    pre_restore_backup_id: str | None = None
+    writers_isolation_attempted = False
+    destructive_started = False
+    try:
+        publish_restore_phase(request, phase="preflight")
+        run_restore_executor(request, "preflight")
+        publish_restore_phase(
+            request,
+            phase="pre_restore_backup",
+        )
+        writers_isolation_attempted = True
+        stop_restore_writers()
+        publish_restore_phase(
+            request,
+            phase="writers_paused",
+        )
+        backup = run_restore_executor(
+            request,
+            "pre-restore-backup",
+        )
+        pre_restore_backup_id = safe_text(
+            backup.get("pre_restore_backup_id"),
+            80,
+        )
+        if (
+            not pre_restore_backup_id
+            or not RESTORE_ARTIFACT_ID_RE.fullmatch(
+                pre_restore_backup_id
+            )
+            or backup.get("verified") is not True
+        ):
+            raise HelperError(
+                "pre_restore_backup_verification_failed",
+                "Pre-restore backup verification failed.",
+            )
+        publish_restore_phase(
+            request,
+            phase="restore_running",
+            pre_restore_backup_id=pre_restore_backup_id,
+        )
+        destructive_started = True
+        run_restore_executor(
+            request,
+            "restore",
+            artifact_id=request["artifact"]["artifact_id"],
+            mode="source",
+        )
+        publish_restore_phase(
+            request,
+            phase="services_starting",
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=True,
+        )
+        start_restore_api()
+        publish_restore_phase(
+            request,
+            phase="post_restore_check",
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=True,
+        )
+        run_restore_executor(request, "post-check")
+        start_restore_recorder_with_proof(request)
+        finish_restore_request(
+            request,
+            result="completed",
+            reason_code=None,
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=True,
+        )
+        return
+    except HelperError as exc:
+        destructive_started = bool(
+            destructive_started
+            or exc.diagnostics.get("mutation_started")
+            or restore_destructive_started(
+                request["operation_id"]
+            )
+        )
+        if destructive_started:
+            rollback_current_restore(
+                request,
+                pre_restore_backup_id=pre_restore_backup_id,
+                reason_code=exc.category,
+            )
+            return
+        writers_recovered = bool(
+            not writers_isolation_attempted
+            or restart_restore_writers_best_effort(request)
+        )
+        finish_restore_request(
+            request,
+            result="blocked",
+            reason_code=(
+                exc.category
+                if writers_recovered
+                else "restore_writer_isolation_failed"
+            ),
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=False,
+        )
+        return
+    except Exception:
+        destructive_started = bool(
+            destructive_started
+            or restore_destructive_started(
+                request["operation_id"]
+            )
+        )
+        if destructive_started:
+            rollback_current_restore(
+                request,
+                pre_restore_backup_id=pre_restore_backup_id,
+                reason_code="restore_helper_exception",
+            )
+            return
+        writers_recovered = bool(
+            not writers_isolation_attempted
+            or restart_restore_writers_best_effort(request)
+        )
+        finish_restore_request(
+            request,
+            result="blocked",
+            reason_code=(
+                "restore_helper_exception"
+                if writers_recovered
+                else "restore_writer_isolation_failed"
+            ),
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=False,
+        )
+        return
+
+
+def converge_unhandled_restore_failure(
+    request: dict[str, Any],
+    *,
+    reason_code: str,
+) -> None:
+    journal = read_json(RESTORE_JOURNAL_FILE)
+    pre_restore_backup_id = (
+        journal.get("pre_restore_backup_id")
+        if isinstance(journal, dict)
+        and journal.get("operation_id") == request["operation_id"]
+        else None
+    )
+    if restore_destructive_started(request["operation_id"]):
+        rollback_current_restore(
+            request,
+            pre_restore_backup_id=pre_restore_backup_id,
+            reason_code=reason_code,
+        )
+        return
+    writers_recovered = restart_restore_writers_best_effort(
+        request
+    )
+    finish_restore_request(
+        request,
+        result="blocked",
+        reason_code=(
+            reason_code
+            if writers_recovered
+            else "restore_writer_isolation_failed"
+        ),
+        pre_restore_backup_id=pre_restore_backup_id,
+        destructive_started=False,
+    )
+
+
 def main() -> int:
     CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    RESTORE_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+    RESTORE_PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
+    MAINTENANCE_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     while True:
+        try:
+            publish_restore_helper_health()
+        except HelperError:
+            pass
+        try:
+            reconcile_restore_terminal_projection()
+        except HelperError:
+            pass
+        try:
+            restore_pending = restore_request_may_need_execution()
+        except HelperError:
+            restore_pending = False
+        if restore_pending:
+            with restore_execution_lease() as restore_acquired:
+                if restore_acquired:
+                    restore_request: dict[str, Any] | None = None
+                    try:
+                        restore_request = claim_restore_request()
+                        if restore_request:
+                            run_current_restore(restore_request)
+                    except HelperError as exc:
+                        if restore_request:
+                            try:
+                                converge_unhandled_restore_failure(
+                                    restore_request,
+                                    reason_code=exc.category,
+                                )
+                            except Exception:
+                                pass
+                    except Exception:
+                        if restore_request:
+                            try:
+                                converge_unhandled_restore_failure(
+                                    restore_request,
+                                    reason_code="restore_helper_exception",
+                                )
+                            except Exception:
+                                pass
+            time.sleep(POLL_SECONDS)
+            continue
         try:
             if not request_may_need_execution():
                 time.sleep(POLL_SECONDS)

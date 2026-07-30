@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     kmvms_db_backup_root: str = "/storage/backups/db"
     storage_install_control: str = "/install-control"
     update_control_root: str = "/update-control"
+    restore_control_root: str = "/restore-control"
+    restore_public_root: str = "/restore-public"
+    maintenance_control_root: str = "/maintenance-control"
     kmvms_update_helper_enabled: bool = False
     kmvms_update_source_private: bool = False
     kmvms_update_token_configured: bool = False

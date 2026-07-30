@@ -29,6 +29,7 @@ assert.equal(settingsPage.includes('apiFetch("/system/update/status")'), true);
 assert.equal(settingsPage.includes('apiFetch("/system/update/apply/status")'), true);
 assert.equal(settingsPage.includes('apiFetch("/system/update/apply"'), true);
 assert.equal(settingsPage.includes('apiFetch("/system/update/check"'), true, "Update check must stay inside the dedicated update apply panel");
+assert.equal(settingsPage.includes('variant: checkFailed ? "warning" : "success"'), true, "A failed check must not show a success toast");
 assert.equal(settingsHelpers.includes('update: { path: "/system/update/check", body: {} }'), false, "Legacy maintenance overview update flow must be removed");
 
 assert.equal(settingsPage.includes("buildUpdateApplyConfirmation(t, updateStatus)"), false);

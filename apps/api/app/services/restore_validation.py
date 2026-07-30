@@ -214,16 +214,20 @@ def _pg_restore_command(url: URL, artifact_path: Path, pg_restore_path: str) -> 
     return cmd, env
 
 
+def is_benign_transaction_timeout_restore_warning(output: str) -> bool:
+    value = str(output or "")
+    return bool(
+        'unrecognized configuration parameter "transaction_timeout"' in value
+        and re.search(r"errors ignored on restore:\s*1\s*$", value)
+    )
+
+
 def _restore_postgres_custom_dump(artifact_path: Path, target_url: URL, config: RestoreValidationConfig) -> None:
     cmd, env = _pg_restore_command(target_url, artifact_path, config.pg_restore_path)
     result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=config.timeout_seconds, check=False)
     if result.returncode != 0:
         output = result.stderr or result.stdout or ""
-        benign_transaction_timeout_warning = (
-            'unrecognized configuration parameter "transaction_timeout"' in output
-            and "errors ignored on restore: 1" in output
-        )
-        if benign_transaction_timeout_warning:
+        if is_benign_transaction_timeout_restore_warning(output):
             return
         raise RestoreValidationBlocked(
             "pg_restore_failed",
@@ -240,7 +244,7 @@ def _validate_restored_state(db: Session, *, config: RestoreValidationConfig) ->
     owner = None
     if config.expected_owner_username:
         owner = db.query(User).filter(User.username == config.expected_owner_username).first()
-    if owner is None:
+    else:
         owner = db.query(User).filter(User.role == "owner").order_by(User.id.asc()).first()
     checks["owner_user"] = {
         "passed": bool(owner and owner.is_active and owner.role in {"owner", "admin"}),

@@ -34,6 +34,8 @@ services:
       PYTEST_ADDOPTS: --cache-clear -p no:cacheprovider --basetemp=/tmp/kmvms-pytest/pytest
       KMVMS_STAGE2_POSTGRES_URL: ${KMVMS_STAGE2_POSTGRES_URL:-postgresql+psycopg://kmvms_pytest:kmvms_pytest_password@postgres-test:5432/kmvms_pytest}
       KMVMS_STAGE3_POSTGRES_URL: ${KMVMS_STAGE3_POSTGRES_URL:-postgresql+psycopg://kmvms_pytest:kmvms_pytest_password@postgres-test:5432/kmvms_pytest}
+      KMVMS_STAGE1378_POSTGRES_URL: ${KMVMS_STAGE1378_POSTGRES_URL:-postgresql+psycopg://kmvms_pytest:kmvms_pytest_password@postgres-test:5432/kmvms_pytest}
+      KMVMS_STAGE1378_BACKUP_ROOT: /stage1378-backups
     depends_on:
       postgres-test:
         condition: service_healthy
@@ -43,4 +45,6 @@ services:
     # generated command shims from tmp_path, so this isolated test mount is exec.
     tmpfs:
       - /tmp/kmvms-pytest:exec
+      - /stage1378-backups
+      - /stage1378-runtime
     command: ["pytest", "apps/api/tests"]

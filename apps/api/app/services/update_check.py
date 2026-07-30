@@ -877,6 +877,43 @@ def _installed_matches_snapshot(snapshot: dict[str, Any]) -> bool:
     return True
 
 
+def _successful_check_matches_installed(
+    payload: dict[str, Any],
+    installed: UpdateInstalledState,
+) -> bool:
+    previous = payload.get("installed")
+    if not isinstance(previous, dict):
+        return False
+    return (
+        (previous.get("installed_version") or None)
+        == (installed.installed_version or None)
+        and (_full_commit(previous.get("installed_commit")) or None)
+        == (_full_commit(installed.installed_commit) or None)
+        and (_full_commit(previous.get("git_head")) or None)
+        == (_full_commit(installed.git_head) or None)
+        and (previous.get("identity_validity") or None)
+        == (installed.identity_validity or None)
+    )
+
+
+def _fresh_successful_check_projection(
+    installed: UpdateInstalledState,
+    *,
+    now: datetime,
+) -> dict[str, Any] | None:
+    if not _LAST_SUCCESSFUL_RESULT:
+        return None
+    checked_at = _parse_iso_datetime(_LAST_SUCCESSFUL_RESULT.get("checked_at"))
+    if checked_at is None:
+        return None
+    age_seconds = int((now - checked_at).total_seconds())
+    if not 0 <= age_seconds <= TRUSTED_APPLY_SNAPSHOT_FRESH_SECONDS:
+        return None
+    if not _successful_check_matches_installed(_LAST_SUCCESSFUL_RESULT, installed):
+        return None
+    return _clone_payload(_LAST_SUCCESSFUL_RESULT)
+
+
 def _trusted_apply_candidate_payload(*, now: datetime | None = None) -> dict[str, Any]:
     status = trusted_apply_snapshot_status(now=now)
     payload: dict[str, Any] = {
@@ -895,6 +932,16 @@ def _trusted_apply_candidate_payload(*, now: datetime | None = None) -> dict[str
     commit = _full_commit(latest.get("commit"))
     helper_enabled = str(os.getenv("KMVMS_UPDATE_HELPER_ENABLED") or os.getenv("KM_VMS_UPDATE_HELPER_ENABLED") or "").strip().lower() in {"1", "true", "yes", "on"}
     installed_matches = _installed_matches_snapshot(snapshot)
+    if not installed_matches:
+        payload.update(
+            {
+                "available": False,
+                "fresh": False,
+                "installed_identity_matches": False,
+                "reason": "trusted_snapshot_invalidated",
+            }
+        )
+        return payload
     payload.update(
         {
             "latest": latest,
@@ -1109,7 +1156,27 @@ def _result_payload(result: UpdateCheckResult) -> dict[str, Any]:
 
 
 def build_update_status(db: Session, *, now: datetime | None = None) -> dict[str, Any]:
+    now = now or _utcnow()
     installed = read_installed_update_state()
+    successful = _fresh_successful_check_projection(installed, now=now)
+    if successful is not None:
+        successful["schedule"] = _schedule(db, now=now)
+        successful["cache"] = _cache_payload()
+        successful["has_last_successful_check"] = True
+        successful["last_check_status"] = (
+            _LAST_RESULT.get("status") if _LAST_RESULT else successful.get("status")
+        )
+        successful["last_update_check"] = (
+            _clone_payload(_LAST_RESULT) if _LAST_RESULT else None
+        )
+        successful["check_state"] = (
+            "warning"
+            if successful["last_check_status"] == "check_failed"
+            else "checked"
+        )
+        successful["projection_source"] = "fresh_last_successful_check"
+        return _attach_trusted_apply_candidate(successful, now=now)
+
     source_path, source_status = _available_release_source_path()
     manifest_configured = source_path is not None
     warnings = list(installed.warnings)
@@ -1131,6 +1198,8 @@ def build_update_status(db: Session, *, now: datetime | None = None) -> dict[str
     payload["has_last_successful_check"] = _LAST_SUCCESSFUL_RESULT is not None
     payload["last_check_status"] = _LAST_RESULT.get("status") if _LAST_RESULT else None
     payload["last_update_check"] = _LAST_RESULT
+    payload["check_state"] = "recheck_required"
+    payload["projection_source"] = "installed_identity"
     payload = _attach_trusted_apply_candidate(payload, now=now)
     return payload
 
@@ -1158,6 +1227,8 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
             payload["schedule"] = _schedule(db, now=now)
             payload["has_last_successful_check"] = True
             payload["last_check_status"] = payload.get("status")
+            payload["check_state"] = "checked"
+            payload["projection_source"] = "manual_check"
             _LAST_RESULT = payload
             _LAST_SUCCESSFUL_RESULT = payload
             _store_trusted_apply_snapshot(payload, now=now)
@@ -1190,6 +1261,8 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
         payload["has_last_successful_check"] = True
         payload["last_check_status"] = payload.get("status")
         payload["last_success_at"] = _iso(now)
+        payload["check_state"] = "checked"
+        payload["projection_source"] = "manual_check"
         _LAST_RESULT = payload
         _LAST_SUCCESSFUL_RESULT = payload
         _store_trusted_apply_snapshot(payload, now=now)
@@ -1211,6 +1284,8 @@ def run_update_check(db: Session, *, manual: bool = False, manifest_path_for_tes
         payload["schedule"] = _schedule(db, now=now)
         payload["has_last_successful_check"] = _LAST_SUCCESSFUL_RESULT is not None
         payload["last_check_status"] = payload.get("status")
+        payload["check_state"] = "failed"
+        payload["projection_source"] = "manual_check"
         _LAST_RESULT = payload
         payload["cache"] = _cache_payload()
         payload = _attach_trusted_apply_candidate(payload, now=now)

@@ -711,6 +711,10 @@
   z-index: 9600;
 }
 
+.operationFeedbackOverlay.settingsCurrentRestoreDialogOverlay {
+  z-index: 9700;
+}
+
 .dangerButton {
   background: #991b1b;
   border-color: #991b1b;
@@ -1670,6 +1674,204 @@
   color: #94a3b8;
 }
 
+.settingsMaintenanceRestoreIcon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.settingsCurrentRestoreDialog {
+  width: min(620px, 100%);
+}
+
+.settingsCurrentRestoreContent {
+  display: grid;
+  gap: 12px;
+}
+
+.settingsCurrentRestorePreflight,
+.settingsCurrentRestoreReconnect,
+.settingsCurrentRestoreError,
+.settingsCurrentRestoreTerminal {
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.settingsCurrentRestorePreflight {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.settingsCurrentRestorePreflight > span {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  border: 2px solid #93c5fd;
+  border-top-color: #2563eb;
+  border-radius: 999px;
+  animation: settingsCurrentRestoreSpin 0.8s linear infinite;
+}
+
+@keyframes settingsCurrentRestoreSpin {
+  to { transform: rotate(360deg); }
+}
+
+.settingsCurrentRestorePhrase {
+  display: grid;
+  gap: 6px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.35;
+  font-weight: 600;
+}
+
+.settingsCurrentRestorePhrase .input {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  letter-spacing: 0.03em;
+}
+
+.settingsCurrentRestorePhrase small {
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.settingsCurrentRestoreStatus {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+  padding: 9px 11px;
+}
+
+.settingsCurrentRestoreStatus span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.settingsCurrentRestoreStatus strong {
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 650;
+  text-align: right;
+}
+
+.settingsCurrentRestoreTimeline {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.settingsCurrentRestoreTimeline li {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #64748b;
+  padding: 8px 9px;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.settingsCurrentRestoreTimeline li > span {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #e2e8f0;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.settingsCurrentRestoreTimeline li.is-complete {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.settingsCurrentRestoreTimeline li.is-complete > span {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.settingsCurrentRestoreTimeline li.is-active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.settingsCurrentRestoreTimeline li.is-active > span {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.settingsCurrentRestoreReconnect {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.settingsCurrentRestoreError,
+.settingsCurrentRestoreTerminal.is-failed_recovery_required {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.settingsCurrentRestoreTerminal.is-completed {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.settingsCurrentRestoreTerminal.is-failed_rolled_back,
+.settingsCurrentRestoreTerminal.is-blocked {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+@media (max-width: 640px) {
+  .settingsCurrentRestoreTimeline {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settingsCurrentRestoreStatus {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settingsCurrentRestoreStatus strong {
+    text-align: left;
+  }
+}
+
 .settingsMaintenanceWarningGroups {
   display: flex;
   flex-wrap: wrap;
@@ -2253,17 +2455,19 @@
 
 .settingsMaintenanceSupportActions {
   display: grid;
-  grid-template-columns: max-content;
+  grid-template-columns: minmax(128px, 1fr);
   gap: 6px;
   align-items: center;
   justify-content: end;
-  width: auto;
-  min-width: 0;
+  width: 164px;
+  min-width: 164px;
 }
 
 .settingsMaintenanceSupportActions .button {
-  width: auto;
+  width: 100%;
   min-width: 0;
+  min-height: 38px;
+  height: 38px;
   padding-left: 10px;
   padding-right: 10px;
   justify-content: center;
@@ -2398,8 +2602,9 @@
   }
 
   .settingsMaintenanceSupportActions {
-    justify-content: stretch;
+    display: grid;
     grid-template-columns: 1fr;
+    justify-content: stretch;
     width: 100%;
     min-width: 0;
     max-width: none;
@@ -2450,9 +2655,13 @@
   .settingsMaintenanceReadinessItem .button,
   .settingsMaintenanceBackupCreate .button,
   .settingsMaintenanceBackupActions .button,
-  .settingsMaintenanceSupportActions .button,
   .settingsUpdateApplyActions .button {
     width: 100%;
+  }
+
+  .settingsMaintenanceSupportActions .settingsMaintenanceSupportActionButton {
+    width: 100%;
+    max-width: 100%;
   }
 
   .settingsMaintenanceFlow dl div,
@@ -2610,7 +2819,7 @@
 }
 
 .settingsRowControlMeta {
-  justify-items: end;
+  justify-items: center;
 }
 
 .settingsMetaPill {

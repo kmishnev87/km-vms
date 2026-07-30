@@ -720,9 +720,13 @@
     align-self: flex-start;
   }
 
-  .storageOpsAdvancedRoot .storageOpsRootAddButton {
+  .storageOpsAdvancedRoot .storageOpsRootAddButton:not(.appIllustratedAction) {
     justify-self: stretch;
     width: 100%;
+  }
+
+  .storageOpsAdvancedRoot .storageOpsRootAddButton.appIllustratedAction {
+    justify-self: end;
   }
 
   .storageOpsRootPath {

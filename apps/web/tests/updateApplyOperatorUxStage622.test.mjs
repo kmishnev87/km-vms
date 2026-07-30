@@ -88,7 +88,7 @@ assert.equal(settingsPage.includes("settingsUpdateApplySummaryGrid"), true);
 assert.equal(settingsPage.includes("settingsUpdateApplySupport"), false);
 assert.equal(settingsPage.includes("settingsMaintenanceModalHeader"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceBackupManager"), true);
-assert.equal(settingsPage.includes("settingsMaintenanceBackupCreate"), false);
+assert.equal(settingsPage.includes('className="settingsMaintenanceBackupCreate"'), false);
 assert.equal(settingsPage.includes("<details className=\"settingsUpdateApplyTechnical\">"), false);
 assert.equal(settingsPage.includes("updateApplyOperator.showApplyButton"), true);
 assert.equal(settingsPage.includes("raw JSON"), false);
@@ -239,6 +239,37 @@ assert.equal(failedLiveCheckWithSnapshot.showApplyButton, true);
 assert.equal(failedLiveCheckWithSnapshot.availableVersion, "0.7.4");
 assert.equal(failedLiveCheckWithSnapshot.targetCommitShort, "bbbbbbbbbbbb...");
 assert.equal(failedLiveCheckWithSnapshot.timeline.length, 5);
+
+const projectedFailedCheckWithSnapshot = updateApplyOperatorModel(
+  {
+    status: "update_available",
+    last_check_status: "check_failed",
+    can_apply_from_ui: true,
+    comparison: { status: "update_available", can_apply_from_ui: true },
+    installed_release: { version: "0.7.3", commit: "a".repeat(40) },
+    trusted_apply_candidate: {
+      available: true,
+      fresh: true,
+      can_apply_from_ui: true,
+      freshness: { age_seconds: 35, fresh_for_seconds: 900 },
+      latest: {
+        version: "0.7.4",
+        title: "Trusted snapshot release",
+        summary: "Snapshot remains usable after provider timeout.",
+        commit: "b".repeat(40),
+        source_ref: "v0.7.4",
+      },
+    },
+  },
+  { status: "idle" },
+  t,
+  "en",
+);
+
+assert.equal(projectedFailedCheckWithSnapshot.headline, "Update available");
+assert.equal(projectedFailedCheckWithSnapshot.severity, "warning");
+assert.equal(projectedFailedCheckWithSnapshot.summary, "Live failed but snapshot available");
+assert.equal(projectedFailedCheckWithSnapshot.canApply, true);
 
 const completedWithSteps = updateApplyOperatorModel(
   {

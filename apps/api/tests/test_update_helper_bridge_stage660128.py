@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -614,3 +615,202 @@ def test_slot_image_alias_is_exact_and_conflict_is_rejected(
             slot_id=slot_id,
         )
     assert captured.value.code == "slot_image_alias_conflict"
+
+
+def _activation_args(tmp_path: Path, **overrides) -> SimpleNamespace:
+    values = {
+        "app_dir": str(tmp_path),
+        "project_name": "fixture",
+        "request_id": "update-" + ("a" * 32),
+        "previous_slot": "adopted-" + ("b" * 64),
+        "target_slot": "release-" + TARGET_COMMIT,
+        "target_commit": TARGET_COMMIT,
+        "target_version": "0.8.5",
+        "terminal": False,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+class _ActivationEngine:
+    def __init__(self, args: SimpleNamespace, events: list[str]):
+        self.args = args
+        self.events = events
+        self.journal = None
+        self.target_binding = {
+            "slot_id": args.target_slot,
+            "commit": args.target_commit,
+            "version": args.target_version,
+        }
+
+    def read_activation_journal(self, _app_dir, *, missing_ok):
+        assert missing_ok is True
+        return self.journal
+
+    def require_slot_id(self, value, *, target=False):
+        self.events.append("normalize_target" if target else "normalize_previous")
+        return str(value).lower()
+
+    def read_active_slot(self, app_dir):
+        self.events.append("read_active")
+        return self.args.previous_slot, app_dir / "active-source"
+
+    def build_activation_slot_binding(self, _app_dir, _slot_id):
+        self.events.append("build_target_binding")
+        return dict(self.target_binding)
+
+    def initialize_activation_journal(self, _app_dir, **kwargs):
+        self.events.append("initialize_journal")
+        return {
+            "phase": "target_prepared",
+            "request_id": kwargs["request_id"],
+            "previous": kwargs["previous"],
+            "target": kwargs["target"],
+            "failure_category": None,
+        }
+
+
+def _install_activation_mocks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    engine: _ActivationEngine,
+    events: list[str],
+) -> None:
+    monkeypatch.setattr(bridge, "require_app_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(bridge, "load_slot_engine", lambda _root: engine)
+    monkeypatch.setattr(bridge, "bridge_source_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        bridge,
+        "capture_slot_runtime_binding",
+        lambda _app, _project, slot_id, **_kwargs: (
+            events.append("capture_previous")
+            or {"slot_id": slot_id, "runtime": "verified"}
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "run_target_schema_preflight",
+        lambda _app, _project, _slot, **_kwargs: (
+            events.append("schema_preflight")
+            or {
+                "compatibility_sha256": "c" * 64,
+                "source_schema_version": 7,
+                "target_schema_version": 7,
+                "migration_required": False,
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "write_activation_progress",
+        lambda *_args, **_kwargs: events.append("write_progress"),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "converge_activation",
+        lambda _engine, _app, _project, request_id, **_kwargs: (
+            events.append("converge")
+            or {
+                "phase": "completed",
+                "request_id": request_id,
+                "previous": {
+                    "slot_id": engine.args.previous_slot,
+                },
+                "target": {"slot_id": engine.args.target_slot},
+                "failure_category": None,
+            }
+        ),
+    )
+
+
+def test_activation_rejects_target_identity_before_any_runtime_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    args = _activation_args(tmp_path)
+    engine = _ActivationEngine(args, events)
+    engine.target_binding["commit"] = "d" * 40
+    _install_activation_mocks(monkeypatch, tmp_path, engine, events)
+
+    with pytest.raises(bridge.BridgeError) as captured:
+        bridge.activate_or_resume(args)
+
+    assert captured.value.code == "activation_target_identity_mismatch"
+    assert "schema_preflight" not in events
+    assert "capture_previous" not in events
+    assert "initialize_journal" not in events
+
+
+def test_activation_checks_bindings_before_preflight_and_journals_exact_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    args = _activation_args(tmp_path)
+    engine = _ActivationEngine(args, events)
+    _install_activation_mocks(monkeypatch, tmp_path, engine, events)
+
+    result = bridge.activate_or_resume(args)
+
+    assert result == 0
+    assert events.index("build_target_binding") < events.index("schema_preflight")
+    assert events.index("schema_preflight") < events.index("initialize_journal")
+    assert events.count("capture_previous") == 2
+    assert events.count("build_target_binding") == 2
+    assert events[-1] == "converge"
+
+
+def test_activation_blocks_if_binding_changes_during_schema_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    args = _activation_args(tmp_path)
+    engine = _ActivationEngine(args, events)
+    calls = {"count": 0}
+
+    def changing_binding(_app_dir, _slot_id):
+        events.append("build_target_binding")
+        calls["count"] += 1
+        binding = dict(engine.target_binding)
+        if calls["count"] == 2:
+            binding["version"] = "0.8.6"
+        return binding
+
+    engine.build_activation_slot_binding = changing_binding
+    _install_activation_mocks(monkeypatch, tmp_path, engine, events)
+
+    with pytest.raises(bridge.BridgeError) as captured:
+        bridge.activate_or_resume(args)
+
+    assert captured.value.code == "activation_slot_binding_changed"
+    assert "schema_preflight" in events
+    assert "initialize_journal" not in events
+
+
+def test_activation_resume_rejects_conflicting_supplied_identity(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    args = _activation_args(tmp_path, target_commit="d" * 40)
+    engine = _ActivationEngine(args, events)
+    engine.journal = {
+        "phase": "target_prepared",
+        "request_id": args.request_id,
+        "previous": {"slot_id": args.previous_slot},
+        "target": {
+            "slot_id": args.target_slot,
+            "commit": TARGET_COMMIT,
+            "version": args.target_version,
+        },
+    }
+    _install_activation_mocks(monkeypatch, tmp_path, engine, events)
+
+    with pytest.raises(bridge.BridgeError) as captured:
+        bridge.activate_or_resume(args)
+
+    assert captured.value.code == "activation_journal_conflict"
+    assert "schema_preflight" not in events
+    assert "converge" not in events

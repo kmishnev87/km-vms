@@ -110,7 +110,28 @@ def _nearest_existing_parent(path: Path) -> Path:
 
 
 def _validate_backup_root(path: Path, *, allow_tmp_for_tests: bool) -> dict[str, Any]:
-    resolved = path.expanduser().resolve()
+    expanded = Path(os.path.abspath(os.fspath(path.expanduser())))
+    if expanded.exists() and expanded.is_symlink():
+        raise BackupSafetyBlocked(
+            "backup_root_unsafe",
+            {
+                "status": "blocked",
+                "summary": "Backup destination must not be a symbolic link.",
+                "reason": "backup_root_symlink",
+                "root_status": "backup_root_unsafe",
+            },
+        )
+    resolved = expanded.resolve()
+    if resolved != expanded:
+        raise BackupSafetyBlocked(
+            "backup_root_unsafe",
+            {
+                "status": "blocked",
+                "summary": "Backup destination must use a direct persistent path.",
+                "reason": "backup_root_indirect_path",
+                "root_status": "backup_root_unsafe",
+            },
+        )
     cwd = Path.cwd().resolve()
     if str(resolved) in CONTAINER_ONLY_BACKUP_ROOTS:
         raise BackupSafetyBlocked(
@@ -502,6 +523,7 @@ def run_backup_create_operation(
             actor=actor,
             planned_artifact_id=planned_id,
             backup_root=root,
+            db=db,
         )
     except BackupManagerBlocked as exc:
         raise BackupSafetyBlocked(exc.code, exc.diagnostics) from exc
