@@ -27,6 +27,8 @@ PRIVILEGED_EXECUTABLES = (
     "scripts/km-vms-storage-apply.sh",
     "scripts/km-vms-storage-discovery.sh",
     "scripts/km-vms-permission-gate.sh",
+    "scripts/km-vms-release-identity.py",
+    "scripts/km-vms-release-slots.py",
     "scripts/km-vms-publish-github-release.sh",
 )
 

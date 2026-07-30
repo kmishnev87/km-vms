@@ -66,6 +66,7 @@ TRUSTED_REQUIRED_SOURCE_PATHS = (
     "scripts/install.sh",
     "scripts/km-vms-compose-common.sh",
     "scripts/km-vms-permission-gate.sh",
+    "scripts/km-vms-release-identity.py",
     "scripts/km-vms-update-helper-bridge.py",
     "scripts/km-vms-release-slots.py",
     "docker-compose.yml",
@@ -143,6 +144,14 @@ SLOT_RE = re.compile(
     r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64})$"
 )
 MACHINE_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
+RELEASE_NOTE_LOCALES = frozenset({"en", "ru", "zh-CN"})
+RELEASE_NOTE_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+RELEASE_NOTE_SENSITIVE_RE = re.compile(
+    r"(github_pat_|ghp_|Bearer\s+|rtsp://[^@\s]+@|"
+    r"postgresql://[^:\s]+:[^@\s]+@|"
+    r"-----BEGIN [^-]*PRIVATE KEY-----)",
+    re.IGNORECASE,
+)
 
 ACTIVATION_PHASES = frozenset(
     {
@@ -661,6 +670,79 @@ def _copy_product_source(source: Path, destination: Path) -> None:
             ) from exc
 
 
+def _validated_release_note_fields(
+    descriptor: dict[str, Any],
+) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+
+    def text(value: Any, *, maximum: int, allow_empty: bool = False) -> str:
+        if type(value) is not str:
+            raise SlotError(
+                "release_descriptor_invalid",
+                "Trusted target release notes are invalid.",
+            )
+        normalized = value.strip()
+        if (
+            (not normalized and not allow_empty)
+            or len(normalized) > maximum
+            or RELEASE_NOTE_CONTROL_RE.search(normalized)
+            or RELEASE_NOTE_SENSITIVE_RE.search(normalized)
+        ):
+            raise SlotError(
+                "release_descriptor_invalid",
+                "Trusted target release notes are invalid.",
+            )
+        return normalized
+
+    def entries(value: Any) -> list[str]:
+        if type(value) is not list or len(value) > 20:
+            raise SlotError(
+                "release_descriptor_invalid",
+                "Trusted target release changelog is invalid.",
+            )
+        return [text(item, maximum=180) for item in value]
+
+    for key, maximum in (("title", 160), ("summary", 800)):
+        if key in descriptor:
+            rendered = text(
+                descriptor[key],
+                maximum=maximum,
+                allow_empty=True,
+            )
+            if rendered:
+                result[key] = rendered
+    if "changelog" in descriptor:
+        result["changelog"] = entries(descriptor["changelog"])
+    for key, maximum in (
+        ("title_i18n", 160),
+        ("summary_i18n", 800),
+    ):
+        if key not in descriptor:
+            continue
+        value = descriptor[key]
+        if type(value) is not dict or set(value) != RELEASE_NOTE_LOCALES:
+            raise SlotError(
+                "release_descriptor_invalid",
+                "Trusted target release note locales are invalid.",
+            )
+        result[key] = {
+            locale: text(value[locale], maximum=maximum)
+            for locale in ("en", "ru", "zh-CN")
+        }
+    if "changelog_i18n" in descriptor:
+        value = descriptor["changelog_i18n"]
+        if type(value) is not dict or set(value) != RELEASE_NOTE_LOCALES:
+            raise SlotError(
+                "release_descriptor_invalid",
+                "Trusted target changelog locales are invalid.",
+            )
+        result["changelog_i18n"] = {
+            locale: entries(value[locale])
+            for locale in ("en", "ru", "zh-CN")
+        }
+    return result
+
+
 def _validate_release_descriptor(
     source: Path,
     *,
@@ -688,6 +770,7 @@ def _validate_release_descriptor(
             "release_descriptor_invalid",
             "Trusted target release descriptor does not match the admitted release.",
         )
+    _validated_release_note_fields(descriptor)
     return descriptor
 
 
@@ -702,8 +785,6 @@ def _write_target_identities(
         "schema_version": 1,
         "product": "KM VMS",
         "version": descriptor["version"],
-        "title": str(descriptor.get("title") or ""),
-        "summary": str(descriptor.get("summary") or ""),
         "release_channel": str(descriptor.get("release_channel") or ""),
         "source_kind": descriptor["source_kind"],
         "source_repo": descriptor["source_repo"],
@@ -714,6 +795,7 @@ def _write_target_identities(
         "metadata_status": "complete",
         "metadata_source": "trusted_release_slot",
     }
+    release_identity.update(_validated_release_note_fields(descriptor))
     source_identity = {
         "schema_version": 1,
         "recorded_at": prepared_at,

@@ -10,6 +10,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "utf8");
 const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
+const stageCss = css.slice(css.indexOf("/* Stage 13.7.11:"));
 
 function cssRule(selector) {
   const start = css.indexOf(`${selector} {`);
@@ -147,11 +148,11 @@ assert.notEqual(providerUnavailable.summary, "Generic blocked summary");
 
 const supportStart = settingsPage.indexOf('<section className="settingsMaintenanceSupport">');
 assert.notEqual(supportStart, -1, "support diagnostics section missing");
-const supportEnd = settingsPage.indexOf("{maintenanceWarningsOpen", supportStart);
+const supportEnd = settingsPage.indexOf("</section>", supportStart);
 const supportMarkup = settingsPage.slice(supportStart, supportEnd);
 const supportButtonCount = (supportMarkup.match(/<button /g) || []).length;
 
-assert.equal(supportButtonCount, 2);
+assert.equal(supportButtonCount, 1);
 assert.equal(supportMarkup.includes("downloadMaintenanceReport"), false);
 assert.equal(supportMarkup.includes("setDiagnosticChoiceOpen(true)"), true);
 assert.equal(supportMarkup.includes("viewMaintenanceReport"), false);
@@ -166,9 +167,8 @@ assert.equal(diagnosticDialog.includes("summary:"), false);
 assert.equal(diagnosticDialog.includes("showFooterClose: false"), true);
 assert.equal(supportMarkup.includes("{t.maintenanceReportDownload}"), true);
 assert.equal(supportMarkup.includes("{t.createDiagnosticArchive}"), false);
-assert.match(cssRule(".settingsMaintenanceSupportActions"), /grid-template-columns:\s*minmax\(128px, 1fr\)/);
-assert.match(cssRule(".settingsMaintenanceSupportActions"), /width:\s*164px/);
-assert.match(cssRule(".settingsMaintenanceSupportActions"), /min-width:\s*164px/);
+assert.match(stageCss, /\.settingsMaintenanceSupportActions\s*\{[\s\S]*?width:\s*auto/);
+assert.match(stageCss, /\.settingsMaintenanceSupportActions\s*\{[\s\S]*?min-width:\s*156px/);
 assert.match(cssRule(".settingsMaintenanceSupportActions .button"), /white-space:\s*nowrap;/);
 assert.match(cssRule(".settingsMaintenanceSupportActions .button"), /width:\s*100%/);
 assert.match(cssRule(".settingsMaintenanceSupportActions .button"), /height:\s*38px/);
@@ -181,8 +181,6 @@ assert.equal(settingsPage.includes("maintenanceReportView"), false);
 assert.equal(settingsPage.includes("Открыть отчёт"), false);
 assert.equal(settingsPage.includes("Open report"), false);
 assert.equal(settingsPage.includes("打开报告"), false);
-assert.equal(settingsPage.includes("Показать детали"), true);
-assert.equal(settingsPage.includes("Скрыть детали"), true);
 assert.equal(settingsPage.includes("санитизирован"), false);
 assert.equal(settingsPage.includes("Sanitized"), false);
 assert.equal(settingsPage.includes("sanitized"), false);
@@ -193,5 +191,4 @@ assert.match(
 );
 
 assert.match(cssRule(".settingsMaintenanceSupportActions"), /display: grid/);
-assert.match(cssRule(".settingsMaintenanceWarningsList"), /position: absolute/);
-assert.match(cssRule(".settingsMaintenanceWarningsList"), /max-height: min\(42vh, 340px\)/);
+assert.match(stageCss, /\.settingsMaintenanceWarningsList\s*\{[\s\S]*?max-height:\s*170px/);

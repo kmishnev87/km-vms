@@ -20,6 +20,14 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 slots = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(slots)
+BRIDGE_PATH = ROOT / "scripts/km-vms-update-helper-bridge.py"
+BRIDGE_SPEC = importlib.util.spec_from_file_location(
+    "stage13711_update_helper_bridge",
+    BRIDGE_PATH,
+)
+assert BRIDGE_SPEC and BRIDGE_SPEC.loader
+bridge = importlib.util.module_from_spec(BRIDGE_SPEC)
+BRIDGE_SPEC.loader.exec_module(bridge)
 
 COMMIT_A = "a" * 40
 COMMIT_B = "b" * 40
@@ -83,6 +91,22 @@ def _source_fixture(
         "tag": f"v{version}",
         "title": "Fixture",
         "summary": "Fixture",
+        "changelog": ["Fixture change"],
+        "title_i18n": {
+            "en": "Fixture title",
+            "ru": "Название фикстуры",
+            "zh-CN": "测试标题",
+        },
+        "summary_i18n": {
+            "en": "Fixture summary",
+            "ru": "Описание фикстуры",
+            "zh-CN": "测试说明",
+        },
+        "changelog_i18n": {
+            "en": ["Fixture change"],
+            "ru": ["Изменение фикстуры"],
+            "zh-CN": ["测试变更"],
+        },
         "release_channel": "stable",
         "source_kind": "github-release",
         "source_repo": "example/km-vms",
@@ -96,6 +120,7 @@ def _source_fixture(
     if trusted:
         for relative in (
             "scripts/km-vms-permission-gate.sh",
+            "scripts/km-vms-release-identity.py",
             "scripts/km-vms-update-helper-bridge.py",
             "scripts/km-vms-release-slots.py",
         ):
@@ -302,6 +327,13 @@ def test_trusted_target_id_is_server_derived_and_partial_never_publishes(
         Path(staged["candidate_path"]) / slots.MANIFEST_NAME
     ).exists()
     assert slots.read_active_slot(app) is None
+    staged_identity = json.loads(
+        (
+            Path(staged["source_path"]) / ".km-vms-release.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert staged_identity["title_i18n"]["ru"] == "Название фикстуры"
+    assert staged_identity["changelog_i18n"]["zh-CN"] == ["测试变更"]
 
 
 def test_target_publication_is_immutable_and_has_no_mutable_role(
@@ -342,7 +374,7 @@ def test_target_publication_is_immutable_and_has_no_mutable_role(
     ) == manifest
 
 
-def test_legacy_source_without_new_module_becomes_exact_adopted_slot(
+def test_legacy_source_becomes_exact_adopted_slot_and_new_requests_reuse_it(
     tmp_path: Path,
 ) -> None:
     app = _stable_app(tmp_path, legacy=True)
@@ -375,6 +407,8 @@ def test_legacy_source_without_new_module_becomes_exact_adopted_slot(
     assert str(slot_root / "source/.km-vms-release.json") in runtime_override
     assert slots.read_active_slot(app) is None
 
+    manifest_path = slot_root / slots.MANIFEST_NAME
+    manifest_bytes = manifest_path.read_bytes()
     reused = slots.stage_adopted(
         app,
         request_id="update-" + ("4" * 32),
@@ -384,6 +418,40 @@ def test_legacy_source_without_new_module_becomes_exact_adopted_slot(
     assert reused["status"] == "reused"
     assert reused["slot_id"] == manifest["slot_id"]
     assert reused["manifest"] == manifest
+    retry_compose = json.loads(json.dumps(manifest["compose_evidence"]))
+    retry_compose["captured_plan_sha256"] = "8" * 64
+    retry_compose["slot_plan_sha256"] = "9" * 64
+    assert bridge._reused_adopted_evidence_matches(
+        manifest,
+        compose_evidence=retry_compose,
+        image_evidence=manifest["image_evidence"],
+        health_evidence=manifest["pre_update_health"],
+        installed_identity={
+            "installed_version": "0.7.18",
+            "installed_commit": LEGACY_COMMIT,
+        },
+    )
+    stable_mismatch = json.loads(json.dumps(retry_compose))
+    stable_mismatch["shared_root_contract"] = "different"
+    assert not bridge._reused_adopted_evidence_matches(
+        manifest,
+        compose_evidence=stable_mismatch,
+        image_evidence=manifest["image_evidence"],
+        health_evidence=manifest["pre_update_health"],
+        installed_identity={
+            "installed_version": "0.7.18",
+            "installed_commit": LEGACY_COMMIT,
+        },
+    )
+    reused_again = slots.stage_adopted(
+        app,
+        request_id="update-" + ("a" * 32),
+        declared_version="0.7.18",
+        declared_commit=LEGACY_COMMIT,
+    )
+    assert reused_again["status"] == "reused"
+    assert reused_again["slot_id"] == manifest["slot_id"]
+    assert manifest_path.read_bytes() == manifest_bytes
 
 
 def test_adoption_failure_leaves_legacy_source_and_pointer_untouched(

@@ -48,7 +48,7 @@ def sqlite_session(tmp_path):
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     db = Session()
     seed_state(db, version=CURRENT_SCHEMA_VERSION)
-    settings = SystemSettings(id=1, system_initialized=True, system_name="Stage 13 Update", created_at=datetime(2026, 5, 12, 3, 0, 0), storage_path="/storage/archive")
+    settings = SystemSettings(id=1, system_initialized=True, created_at=datetime(2026, 5, 12, 3, 0, 0), storage_path="/storage/archive")
     owner = User(username="stage13_update_owner", full_name="Stage 13 Update Owner", password_hash=hash_password("stage13-test-password"), role=ROLE_OWNER, is_active=True)
     camera = Camera(
         id=13001,

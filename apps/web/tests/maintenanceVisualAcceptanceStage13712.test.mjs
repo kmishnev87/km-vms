@@ -11,13 +11,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "utf8");
 const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
+const stageCss = css.slice(css.indexOf("/* Stage 13.7.11:"));
 
 function cssRule(selector) {
-  const start = css.indexOf(`${selector} {`);
+  const start = stageCss.indexOf(`${selector} {`);
   assert.notEqual(start, -1, `${selector} rule not found`);
-  const end = css.indexOf("\n}", start);
+  const end = stageCss.indexOf("\n}", start);
   assert.notEqual(end, -1, `${selector} rule is not closed`);
-  return css.slice(start, end + 2);
+  return stageCss.slice(start, end + 2);
 }
 
 const copy = {
@@ -76,24 +77,23 @@ const copy = {
   },
 };
 
-assert.equal(settingsPage.includes("settingsUpdateApplyVersionRows"), false);
-assert.match(
-  cssRule(".settingsUpdateApplyHero"),
-  /grid-template-columns: 38px minmax\(190px, 0\.82fr\) minmax\(0, 1\.75fr\) minmax\(150px, 0\.75fr\)/,
-);
-assert.equal(cssRule(".settingsUpdateApplyHeroFacts").includes("display: contents"), true);
-assert.equal(cssRule(".settingsUpdateApplyHeroPrimaryValue").includes("font-variant-numeric: tabular-nums"), true);
-assert.equal(css.includes("grid-template-columns: 38px minmax(0, 1fr)"), true);
-
-assert.equal(settingsPage.includes("settingsMaintenanceSupportStatus"), true);
+assert.equal(settingsPage.includes("settingsUpdateApplyHero"), false);
+assert.equal(settingsPage.includes("settingsMaintenanceOverall"), true);
+assert.equal(settingsPage.includes("settingsUpdateApplyCompact"), true);
+assert.equal(settingsPage.includes("settingsMaintenanceCoreGrid"), true);
+assert.equal(settingsPage.includes("settingsMaintenanceBackupDetail"), true);
+assert.match(cssRule(".settingsMaintenanceModal"), /width:\s*min\(980px,\s*calc\(100vw - 32px\)\)/);
+assert.match(cssRule(".settingsMaintenanceCoreGrid"), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+assert.match(cssRule(".settingsUpdateApplyCompact"), /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/);
+assert.equal(settingsPage.includes("settingsMaintenanceSupportStatus"), false);
 assert.equal(settingsPage.includes("maintenanceSupportStatusOk"), true);
 assert.equal(settingsPage.includes("<dt>{t.maintenanceWarningActionable}</dt>"), false);
 const supportStart = settingsPage.indexOf('<section className="settingsMaintenanceSupport">');
-const supportActions = settingsPage.slice(supportStart, settingsPage.indexOf("{maintenanceWarningsOpen", supportStart));
-assert.ok(
-  supportActions.indexOf("downloadMaintenanceReport") < supportActions.indexOf("setMaintenanceWarningsOpen"),
-  "support handoff download action must be first in the compact action group",
-);
+const supportEnd = settingsPage.indexOf("</section>", supportStart);
+const supportActions = settingsPage.slice(supportStart, supportEnd);
+assert.equal((supportActions.match(/settingsMaintenanceSupportActionButton/g) || []).length, 1);
+assert.equal(supportActions.includes("setDiagnosticChoiceOpen(true)"), true);
+assert.equal(supportActions.includes("setMaintenanceWarningsOpen"), false);
 
 const providerBlocked = updateApplyOperatorModel(
   {

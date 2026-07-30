@@ -69,7 +69,7 @@ KNOWN_OPTIONAL_MISSING_TABLES = {
     "archive_migration_items",
 }
 KNOWN_CAMERA_NULLABLE_DRIFT_COLUMNS = {"segment_minutes", "retention_days", "storage_quota_gb"}
-KNOWN_SAFE_MISSING_COLUMNS = {"system_settings": {"system_name"}, "cameras": {"rtsp_host", "rtsp_port", "deleted_at"}}
+KNOWN_SAFE_MISSING_COLUMNS = {"cameras": {"rtsp_host", "rtsp_port", "deleted_at"}}
 SAFE_STATUSES = {"current", "adopted_baseline", "drift_known_safe"}
 BLOCKED_STATUSES = {"unknown", "future_version", "downgrade_blocked", "drift_blocked", "adoption_failed"}
 METADATA_INCOMPLETE_STATUS = "metadata_incomplete"
@@ -167,10 +167,6 @@ def classify_schema_shape(shape: SchemaShape) -> dict[str, Any]:
 
     if unknown_tables:
         unsafe.append({"type": "unknown_extra_tables", "tables": _bounded_list(unknown_tables)})
-
-    system_columns = shape.tables.get("system_settings", {}).get("columns", {})
-    if "system_settings" in table_names and "system_name" not in system_columns:
-        known_safe.append({"type": "missing_column", "table": "system_settings", "column": "system_name"})
 
     camera_columns = shape.tables.get("cameras", {}).get("columns", {})
     for column in sorted(KNOWN_SAFE_MISSING_COLUMNS.get("cameras", set())):

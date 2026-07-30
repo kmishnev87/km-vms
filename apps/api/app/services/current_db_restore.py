@@ -57,6 +57,7 @@ PHASES = {
     "post_restore_check",
     *TERMINAL_RESULTS,
 }
+OPERATIONAL_PHASES = PHASES - TERMINAL_RESULTS
 SAFE_SUBJECT_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,100}$")
 FINGERPRINT_RE = re.compile(r"^[0-9a-f]{64}$")
 REQUEST_ID_RE = re.compile(r"^restore-[0-9a-f]{32}$")
@@ -393,6 +394,7 @@ def _public_from_request(
     phase: str,
     terminal_result: str | None = None,
     reason_code: str | None = None,
+    failed_phase: str | None = None,
 ) -> dict[str, Any]:
     now = utc_iso()
     artifact = request.get("artifact") if isinstance(request.get("artifact"), dict) else {}
@@ -416,6 +418,12 @@ def _public_from_request(
         "finished_at": now if terminal_result else None,
         "terminal_result": terminal_result,
         "reason_code": reason_code,
+        "failed_phase": (
+            failed_phase
+            if terminal_result != "completed"
+            and failed_phase in OPERATIONAL_PHASES
+            else None
+        ),
         "next_action": (
             "sign_in_again"
             if terminal_result == "completed"
@@ -450,6 +458,11 @@ def _safe_receipt(request: dict[str, Any], *, replayed: bool) -> dict[str, Any]:
         ),
         reason_code=(
             request.get("terminal", {}).get("reason_code")
+            if isinstance(request.get("terminal"), dict)
+            else None
+        ),
+        failed_phase=(
+            request.get("terminal", {}).get("failed_phase")
             if isinstance(request.get("terminal"), dict)
             else None
         ),
@@ -724,6 +737,7 @@ def read_current_restore_status(*, actor: Any) -> dict[str, Any]:
             "status": "idle",
             "phase": None,
             "terminal_result": None,
+            "failed_phase": None,
             "video_archive_modified": False,
         }
     validated = restore_public_contract(payload)
@@ -760,13 +774,19 @@ def restore_public_contract(payload: Any) -> dict[str, Any] | None:
         "next_action",
         "video_archive_modified",
     }
-    if not isinstance(payload, dict) or set(payload) != required:
+    allowed = required | {"failed_phase"}
+    if (
+        not isinstance(payload, dict)
+        or not required.issubset(payload)
+        or set(payload) - allowed
+    ):
         return None
     artifact = payload.get("artifact")
     terminal = payload.get("terminal_result")
     status_value = payload.get("status")
     phase = payload.get("phase")
     reason_code = payload.get("reason_code")
+    failed_phase = payload.get("failed_phase")
     next_action = payload.get("next_action")
     if (
         payload.get("schema") != RESTORE_PUBLIC_SCHEMA
@@ -815,6 +835,10 @@ def restore_public_contract(payload: Any) -> dict[str, Any] | None:
                 not isinstance(reason_code, str)
                 or not MACHINE_CODE_RE.fullmatch(reason_code)
             )
+        )
+        or (
+            failed_phase is not None
+            and failed_phase not in OPERATIONAL_PHASES
         )
         or not isinstance(next_action, str)
         or next_action
@@ -866,6 +890,7 @@ def restore_public_contract(payload: Any) -> dict[str, Any] | None:
             or next_action != expected_action
             or (terminal == "completed" and reason_code is not None)
             or (terminal != "completed" and reason_code is None)
+            or (terminal == "completed" and failed_phase is not None)
         ):
             return None
     return json.loads(json.dumps(payload))
@@ -952,9 +977,30 @@ def restore_request_contract(payload: Any) -> dict[str, Any] | None:
         return None
     if payload["state"] == "terminal":
         terminal = payload.get("terminal")
+        terminal_keys = (
+            set(terminal)
+            if isinstance(terminal, dict)
+            else set()
+        )
+        failed_phase = (
+            terminal.get("failed_phase")
+            if isinstance(terminal, dict)
+            else None
+        )
         if (
             not isinstance(terminal, dict)
-            or set(terminal) != {"status", "finished_at", "reason_code"}
+            or not {
+                "status",
+                "finished_at",
+                "reason_code",
+            }.issubset(terminal_keys)
+            or terminal_keys
+            - {
+                "status",
+                "finished_at",
+                "reason_code",
+                "failed_phase",
+            }
             or terminal.get("status") not in TERMINAL_RESULTS
             or _parse_utc(payload.get("claimed_at")) is None
             or _parse_utc(terminal.get("finished_at")) is None
@@ -972,6 +1018,14 @@ def restore_request_contract(payload: Any) -> dict[str, Any] | None:
             or (
                 terminal.get("status") != "completed"
                 and terminal.get("reason_code") is None
+            )
+            or (
+                failed_phase is not None
+                and failed_phase not in OPERATIONAL_PHASES
+            )
+            or (
+                terminal.get("status") == "completed"
+                and failed_phase is not None
             )
         ):
             return None

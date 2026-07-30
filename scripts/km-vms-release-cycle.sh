@@ -80,6 +80,14 @@ SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 SAFE_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
 SAFE_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+SENSITIVE_RE = re.compile(
+    r"(github_pat_|ghp_|Bearer\s+|rtsp://[^@\s]+@|"
+    r"postgresql://[^:\s]+:[^@\s]+@|"
+    r"-----BEGIN [^-]*PRIVATE KEY-----)",
+    re.IGNORECASE,
+)
+RELEASE_NOTE_LOCALES = {"en", "ru", "zh-CN"}
 MAX_PATCH_VERSION = 29
 VERSION_FILES = [
     Path("apps/api/app/core/version.py"),
@@ -127,6 +135,58 @@ def write_json(path: Path, payload: dict) -> None:
     (ROOT / path).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def validate_release_note_text(value: object, field: str, max_length: int) -> str:
+    if type(value) is not str:
+        fail(f"release descriptor {field} must be plain text")
+    text = value.strip()
+    if (
+        not text
+        or len(text) > max_length
+        or CONTROL_RE.search(text)
+        or SENSITIVE_RE.search(text)
+    ):
+        fail(f"release descriptor {field} is invalid")
+    return text
+
+
+def validate_release_changelog(value: object, field: str) -> None:
+    if type(value) is not list or len(value) > 20:
+        fail(f"release descriptor {field} must be a bounded list")
+    for index, item in enumerate(value):
+        validate_release_note_text(item, f"{field}[{index}]", 180)
+
+
+def validate_release_note_map(
+    value: object,
+    field: str,
+    max_length: int,
+) -> None:
+    if type(value) is not dict or set(value) != RELEASE_NOTE_LOCALES:
+        fail(
+            f"release descriptor {field} must contain exactly "
+            "en, ru and zh-CN"
+        )
+    for locale in ("en", "ru", "zh-CN"):
+        validate_release_note_text(
+            value[locale],
+            f"{field}.{locale}",
+            max_length,
+        )
+
+
+def validate_release_changelog_map(value: object) -> None:
+    if type(value) is not dict or set(value) != RELEASE_NOTE_LOCALES:
+        fail(
+            "release descriptor changelog_i18n must contain exactly "
+            "en, ru and zh-CN"
+        )
+    for locale in ("en", "ru", "zh-CN"):
+        validate_release_changelog(
+            value[locale],
+            f"changelog_i18n.{locale}",
+        )
+
+
 def versions() -> dict[str, str]:
     api_text = (ROOT / "apps/api/app/core/version.py").read_text(encoding="utf-8")
     api_match = re.search(r'APP_VERSION = "([^"]+)"', api_text)
@@ -163,12 +223,21 @@ def validate_descriptor() -> dict:
     commit = descriptor.get("commit_sha")
     if commit is not None and not SHA_RE.fullmatch(str(commit)):
         fail("release descriptor commit_sha must be null or a full SHA")
-    changelog = descriptor.get("changelog")
-    if not isinstance(changelog, list) or len(changelog) > 20:
-        fail("release descriptor changelog must be a bounded list")
-    for item in changelog:
-        if not isinstance(item, str) or len(item) > 180:
-            fail("release descriptor changelog entries must be short text")
+    validate_release_note_text(descriptor.get("title"), "title", 160)
+    validate_release_note_text(descriptor.get("summary"), "summary", 800)
+    validate_release_changelog(descriptor.get("changelog"), "changelog")
+    validate_release_note_map(
+        descriptor.get("title_i18n"),
+        "title_i18n",
+        160,
+    )
+    validate_release_note_map(
+        descriptor.get("summary_i18n"),
+        "summary_i18n",
+        800,
+    )
+    if "changelog_i18n" in descriptor:
+        validate_release_changelog_map(descriptor["changelog_i18n"])
     for key in ("requires_backup", "requires_manual_action", "requires_migration"):
         if not isinstance(descriptor.get(key), bool):
             fail(f"release descriptor {key} must be boolean")
@@ -376,6 +445,10 @@ def prepare(version: str) -> None:
     validate_immediate_previous_release(current, lineage)
     if dry_run:
         print(f"DRY-RUN: would prepare release version {version}")
+        print(
+            "DRY-RUN: would invalidate title, summary, changelog and "
+            "localized release notes for the new version"
+        )
         return
     api_path = ROOT / "apps/api/app/core/version.py"
     api_path.write_text(replace_app_version(api_path.read_text(encoding="utf-8"), version), encoding="utf-8")
@@ -395,8 +468,17 @@ def prepare(version: str) -> None:
     descriptor["source_ref"] = f"v{version}"
     descriptor["commit_sha"] = None
     descriptor["published_at"] = None
+    descriptor["title"] = ""
+    descriptor["summary"] = ""
+    descriptor["changelog"] = []
+    descriptor.pop("title_i18n", None)
+    descriptor.pop("summary_i18n", None)
+    descriptor.pop("changelog_i18n", None)
     write_json(descriptor_path, descriptor)
-    print(f"Prepared KM VMS release version {version}")
+    print(
+        f"Prepared KM VMS release version {version}; release notes were "
+        "invalidated and must be written before --check"
+    )
 
 
 def print_release_commands(version: str) -> None:

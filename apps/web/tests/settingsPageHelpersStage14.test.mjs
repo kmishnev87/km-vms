@@ -20,6 +20,7 @@ import {
   maintenanceDetailRows,
   maintenanceFlowRows,
   maintenanceBackupManagerModel,
+  maintenanceOverallHealthModel,
   maintenanceReadinessRows,
   maintenanceWarningModel,
   maintenanceStatusClass,
@@ -66,12 +67,11 @@ const apiSettings = {
   hardware_preferred_backend: "qsv",
 };
 const draft = settingsDraftFromApi(apiSettings);
-assert.equal(draft.system_name, "Demo");
+assert.equal(Object.hasOwn(draft, "system_name"), false);
 assert.equal(Object.hasOwn(draft, "archive_primary_path"), false);
 assert.equal(draft.recordingProfile, "compatibility");
 assert.equal(languageOf(draft), "en");
 assert.deepEqual(payloadFromDraft(draft), {
-  system_name: "Demo",
   timezone: "Europe/Moscow",
   language: "en",
   recording_format: "mp4",
@@ -86,6 +86,15 @@ assert.equal(formatBytes(2 * 1024 ** 4), "2.0 TB");
 assert.equal(formatAuditTimestamp("not-a-date", "ru"), "not-a-date");
 
 const maintenanceText = {
+  maintenanceOverallHealthy: "Healthy",
+  maintenanceOverallHealthyText: "Everything is available.",
+  maintenanceOverallAttention: "Attention",
+  maintenanceOverallAttentionText: "Review maintenance.",
+  maintenanceOverallNoBackupText: "No backups.",
+  maintenanceOverallBlocked: "Blocked",
+  maintenanceOverallBlockedText: "Action is required.",
+  maintenanceOverallUnknown: "Unknown",
+  maintenanceOverallUnknownText: "Not all data is available.",
   maintenanceStatuses: {
     ok: "OK",
     blocked: "Blocked",
@@ -159,9 +168,6 @@ const maintenanceText = {
   maintenanceBackupNoCopies: "No copies",
   maintenanceBackupStatusEmpty: "No backups yet",
   maintenanceBackupStatusReady: "{count} backups are available.",
-  maintenanceBackupRestoreAvailable: "Restore is available",
-  maintenanceBackupRestoreUnavailable: "Restore is unavailable",
-  maintenanceBackupRestoreUnavailableReason: "Production restore is not enabled.",
   maintenanceBackupStatuses: {
     valid: "Verified",
     verified: "Verified",
@@ -366,6 +372,7 @@ const backupManager = maintenanceBackupManagerModel({
             validation_status: "verified",
             valid: true,
             deletable: true,
+            delete_status: "allowed",
             delete_supported: true,
           },
         ],
@@ -375,7 +382,7 @@ const backupManager = maintenanceBackupManagerModel({
 }, maintenanceText, "en");
 assert.equal(backupManager.countText, "1 copy");
 assert.equal(backupManager.statusText, "1 backups are available.");
-assert.equal(backupManager.restoreSupported, false);
+assert.equal("restoreSupported" in backupManager, false);
 assert.equal(backupManager.artifacts[0].canDelete, true);
 assert.equal(backupManager.artifacts[0].sizeText, "2.0 KB");
 assert.doesNotMatch(backupManager.countText, /\/1/);
@@ -405,14 +412,40 @@ assert.deepEqual(maintenanceBackupOperationResultText({ kind: "delete", status: 
 });
 const warningModel = maintenanceWarningModel({
   upgrade_report: {
+    available: true,
+    status: "complete",
     warnings_count: 1,
     warning_groups: { actionable: 0, support: 0, informational: 1 },
     warnings: [{ code: "backup_status_source_unavailable", classification: "informational" }],
   },
 }, maintenanceText);
 assert.equal(warningModel.total, 1);
+assert.equal(warningModel.available, true);
+assert.equal(warningModel.status, "complete");
 assert.equal(warningModel.groups.informational, 1);
 assert.equal(warningModel.items[0].title, "Backup status unavailable");
+const overallInputs = {
+  overview: { status: "ok" },
+  updateOperator: { status: "current", severity: "ok" },
+  database: { tone: "ok" },
+  backup: { tone: "ok", rootStatus: "safe", totalCount: 1 },
+  t: maintenanceText,
+};
+assert.equal(maintenanceOverallHealthModel({
+  ...overallInputs,
+  warnings: warningModel,
+}).tone, "ok");
+assert.equal(maintenanceOverallHealthModel({
+  ...overallInputs,
+  warnings: maintenanceWarningModel({
+    upgrade_report: { available: false, status: "unavailable" },
+  }, maintenanceText),
+}).tone, "neutral");
+assert.equal(maintenanceOverallHealthModel({
+  ...overallInputs,
+  warnings: warningModel,
+  loadError: true,
+}).tone, "neutral");
 assert.equal(updateApplyIsRunning("rebuilding"), true);
 assert.equal(updateApplyEffectiveStatus({ status: "update_available" }, { status: "rebuilding" }, "fetch failed"), "reconnecting");
 assert.equal(updateApplyEffectiveStatus({}, { status: "completed", expected_commit: "abc", commit_verified: false }, ""), "failed");

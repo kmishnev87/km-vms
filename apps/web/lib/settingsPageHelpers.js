@@ -38,6 +38,7 @@ export const UPDATE_APPLY_POLL_INTERVAL_MS = 5000;
 export const UPDATE_APPLY_MODAL_GRACE_MS = 10000;
 export const UPDATE_APPLY_PENDING_STORAGE_KEY = "km_vms_update_apply_pending_v1";
 export const BACKUP_OPERATION_PENDING_STORAGE_KEY = "km_vms_backup_operation_pending_v1";
+export const BACKUP_OPERATION_ADMISSION_GRACE_MS = 10000;
 const UPDATE_APPLY_STALE_DEFAULT_SECONDS = 180;
 const UPDATE_APPLY_PENDING_SCHEMA = 1;
 const UPDATE_APPLY_PRESERVED_TERMINAL_STATUSES = new Set([
@@ -145,7 +146,6 @@ export function sortedUsersForTable(users) {
 
 export function settingsDraftFromApi(data) {
   return {
-    system_name: data?.system_name || "KM VMS",
     timezone: data?.timezone || "UTC",
     language: normalizeLocaleImpl(data?.language),
     recordingProfile: profileFromFormat(data?.recording_format),
@@ -155,7 +155,6 @@ export function settingsDraftFromApi(data) {
 
 export function payloadFromDraft(draft) {
   return {
-    system_name: draft.system_name?.trim() || null,
     timezone: timezoneValueForSettings(draft.timezone),
     language: draft.language,
     recording_format: recordingFormatForProfile(draft.recordingProfile),
@@ -435,6 +434,15 @@ export function restoreBackupOperationPending(rawValue, nowMs = Date.now()) {
   }
 }
 
+export function backupOperationWithinAdmissionGrace(
+  pendingValue,
+  nowMs = Date.now(),
+) {
+  const pending = sanitizeBackupOperationPending(pendingValue, nowMs);
+  if (!pending) return false;
+  return nowMs - pending.createdAtMs < BACKUP_OPERATION_ADMISSION_GRACE_MS;
+}
+
 function updateApplyAdmissionContract(applyStatus) {
   if (!isPlainDataRecord(applyStatus)) return null;
   const admission = ownDataField(applyStatus, "admission");
@@ -535,6 +543,9 @@ export function updateApplyTrustedCandidateRelease(updateStatus) {
     title: available.title || latest.title,
     summary: available.summary || latest.summary,
     changelog: available.changelog || latest.breaking_changes || [],
+    title_i18n: available.title_i18n || latest.title_i18n,
+    summary_i18n: available.summary_i18n || latest.summary_i18n,
+    changelog_i18n: available.changelog_i18n || latest.changelog_i18n,
     published_at: available.published_at || latest.published_at,
     tag: available.tag || latest.source_ref || latest.git_ref,
     commit: available.commit_sha || latest.commit,
@@ -609,14 +620,113 @@ function updateApplyReleaseValue(updateStatus, key) {
   return "";
 }
 
+function updateApplyReleaseNotesSource(updateStatus) {
+  const status = normalizedUpdateApplyState(
+    updateStatus?.comparison?.status || updateStatus?.status,
+  );
+  const useCandidate = (
+    status === "update_available"
+    || Boolean(updateStatus?.can_apply_from_ui)
+    || Boolean(updateStatus?.trusted_apply_candidate?.can_apply_from_ui)
+  );
+  if (!useCandidate) return updateStatus?.installed_release || {};
+  const available = updateStatus?.available_release;
+  if (available && typeof available === "object") return available;
+  const trusted = updateApplyTrustedCandidateRelease(updateStatus);
+  if (Object.keys(trusted).length) return trusted;
+  return updateStatus?.latest || updateStatus?.latest_release || {};
+}
+
 function localizedReleaseValue(updateStatus, key, t, lang) {
-  const value = updateApplyReleaseValue(updateStatus, key);
-  if (!value || value === "-") {
-    return key === "title"
-      ? t.updateApplyReleaseTitleFallback || "-"
-      : t.updateApplyReleaseSummaryFallback || "";
+  const release = updateApplyReleaseNotesSource(updateStatus);
+  const localized = release?.[`${key}_i18n`];
+  const exact = localized && typeof localized === "object"
+    ? localized[lang]
+    : "";
+  if (typeof exact === "string" && exact.trim()) return exact.trim();
+  const plain = release?.[key];
+  if (typeof plain === "string" && plain.trim()) return plain.trim();
+  return key === "title"
+    ? t.updateApplyReleaseTitleFallback || "KM VMS release"
+    : "";
+}
+
+function localizedReleaseChangelog(updateStatus, lang) {
+  const release = updateApplyReleaseNotesSource(updateStatus);
+  const localized = release?.changelog_i18n;
+  const exact = localized && typeof localized === "object"
+    ? localized[lang]
+    : null;
+  const source = Array.isArray(exact)
+    ? exact
+    : Array.isArray(release?.changelog)
+      ? release.changelog
+      : [];
+  return source
+    .filter((item) => typeof item === "string" && item.trim())
+    .slice(0, 20)
+    .map((item) => item.trim().slice(0, 180));
+}
+
+function localizedReleaseNotes(updateStatus, t, lang) {
+  let summary = localizedReleaseValue(updateStatus, "summary", t, lang);
+  let changelog = localizedReleaseChangelog(updateStatus, lang);
+  if (summary) {
+    changelog = changelog.filter((item) => item.trim() !== summary.trim());
   }
-  return value;
+  if (!summary && !changelog.length) {
+    summary = t.updateApplyReleaseSummaryFallback || "";
+  }
+  return { summary, changelog };
+}
+
+const FULL_COMMIT_RE = /^[0-9a-f]{40}$/i;
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function validApplyTimestamp(value) {
+  if (
+    typeof value !== "string"
+    || !value
+    || value.length > 80
+    || !ISO_TIMESTAMP_RE.test(value)
+  ) {
+    return "";
+  }
+  return Number.isNaN(new Date(value).getTime()) ? "" : value;
+}
+
+function honestUpdateFinishedAt(updateStatus, lastSummary) {
+  const installedRelease = updateStatus?.installed_release || {};
+  const fallback = validApplyTimestamp(installedRelease.installed_at);
+  const expectedCommit = String(lastSummary?.expected_commit || "").trim();
+  const operationInstalledCommit = String(
+    lastSummary?.installed_commit || "",
+  ).trim();
+  const currentInstalledCommit = String(
+    installedRelease.commit_sha || installedRelease.commit || "",
+  ).trim();
+  const metadataStatus = normalizedUpdateApplyState(
+    installedRelease.metadata_status,
+  );
+  const identityValidity = normalizedUpdateApplyState(
+    installedRelease.identity_validity,
+  );
+  const finishedAt = validApplyTimestamp(lastSummary?.finished_at);
+  if (
+    normalizedUpdateApplyState(lastSummary?.status) === "completed"
+    && lastSummary?.commit_verified === true
+    && FULL_COMMIT_RE.test(expectedCommit)
+    && FULL_COMMIT_RE.test(operationInstalledCommit)
+    && FULL_COMMIT_RE.test(currentInstalledCommit)
+    && expectedCommit.toLowerCase() === operationInstalledCommit.toLowerCase()
+    && expectedCommit.toLowerCase() === currentInstalledCommit.toLowerCase()
+    && metadataStatus === "complete"
+    && identityValidity === "valid"
+    && finishedAt
+  ) {
+    return finishedAt;
+  }
+  return fallback;
 }
 
 function releaseConfirmedText(value, t) {
@@ -627,9 +737,9 @@ function releaseConfirmedText(value, t) {
 }
 
 function formatApplyDate(value, lang = "ru") {
-  if (!value) return "-";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 80);
+  const timestamp = validApplyTimestamp(value);
+  if (!timestamp) return "-";
+  const date = new Date(timestamp);
   return new Intl.DateTimeFormat(lang === "en" ? "en-US" : lang === "zh-CN" ? "zh-CN" : "ru-RU", {
     year: "2-digit",
     month: "2-digit",
@@ -784,7 +894,8 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const updateResult = presentedTerminalSuccess
     ? (t.updateApplyResults?.completedVerified || headline)
     : t.updateApplyResults?.[headlineKey] || headline;
-  const finishedAt = lastSummary?.finished_at || (presentedTerminalSuccess ? applyStatus?.updated_at : "") || updateApplyReleaseValue(updateStatus, "installedAt");
+  const finishedAt = honestUpdateFinishedAt(updateStatus, lastSummary);
+  const releaseNotes = localizedReleaseNotes(updateStatus, t, lang);
   const elapsed = running
     ? formatDurationSeconds(applyStatus?.elapsed_seconds)
     : lastSummary?.elapsed_seconds
@@ -824,8 +935,12 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     currentVersion,
     availableVersion,
     releaseTitle: localizedReleaseValue(updateStatus, "title", t, lang),
-    releaseSummary: localizedReleaseValue(updateStatus, "summary", t, lang),
-    installedAt: formatApplyDate(updateApplyReleaseValue(updateStatus, "installedAt"), lang),
+    releaseSummary: releaseNotes.summary,
+    releaseChangelog: releaseNotes.changelog,
+    installedAt: formatApplyDate(
+      updateStatus?.installed_release?.installed_at,
+      lang,
+    ),
     finishedAt: formatApplyDate(finishedAt, lang),
     elapsed,
     lastProgress: running ? formatDurationSeconds(applyStatus?.last_progress_age_seconds) : "",
@@ -882,6 +997,7 @@ export function updateApplyStepRows(applyStatus, t) {
       "extracting",
       "validating_source",
       "overlay",
+      "apply",
       "applying",
       "compose_config",
       "rebuilding",
@@ -983,6 +1099,8 @@ function normalizeMaintenanceBackendText(value) {
   if (lower === "schema is current; no pending migrations") return "schema_current_no_pending_migrations";
   if (lower === "database schema preparation failed during update apply.") return "schema_update_failed";
   if (lower === "review the database schema preparation failure before retrying the update.") return "schema_update_retry_after_cause_resolved";
+  if (lower === "the preserved previous release no longer matches the current installation.") return "slot_adoption_conflict";
+  if (lower === "verify the installed source and runtime state before retrying.") return "slot_adoption_conflict_action";
   if (lower === "no valid restore artifacts are available in configured backup root.") return "restore_no_valid_artifacts";
   if (lower === "no valid restore artifacts are available in the configured backup root.") return "restore_no_valid_artifacts";
   if (lower.includes("no durable maintenance action history is available")) return "maintenance_history_limited";
@@ -1179,30 +1297,26 @@ export function maintenanceBackupOperationResultText(result, t) {
   };
 }
 
-export function maintenanceBackupManagerModel(overview, t, lang = "ru", backupStatus = null) {
-  const restore = overview?.flows?.restore || {};
-  const overviewDetails = restore?.details || {};
-  const details = backupStatus && typeof backupStatus === "object"
-    ? { ...overviewDetails, ...backupStatus }
-    : overviewDetails;
-  const artifacts = Array.isArray(details.artifacts)
-    ? details.artifacts
-    : Array.isArray(details.items)
-      ? details.items
+function maintenanceBackupProjectionModel(details, flowStatus, t, lang = "ru") {
+  const source = details && typeof details === "object" ? details : {};
+  const artifacts = Array.isArray(source.artifacts)
+    ? source.artifacts
+    : Array.isArray(source.items)
+      ? source.items
       : [];
   const sortedArtifacts = [...artifacts].sort((left, right) => {
     const leftTime = new Date(left?.artifact_created_at || 0).getTime() || 0;
     const rightTime = new Date(right?.artifact_created_at || 0).getTime() || 0;
     return rightTime - leftTime;
   });
-  const totalCount = Number(details.total_count ?? details.artifact_count ?? sortedArtifacts.length) || 0;
-  const totalBytes = Number(details.total_bytes || 0) || 0;
-  const offset = Math.max(0, Number(details.offset || 0) || 0);
-  const limit = Math.max(1, Number(details.limit || sortedArtifacts.length || 20) || 20);
-  const validCount = Number(details.valid_artifact_count || 0) || 0;
+  const totalCount = Number(source.total_count ?? source.artifact_count ?? sortedArtifacts.length) || 0;
+  const totalBytes = Number(source.total_bytes || 0) || 0;
+  const offset = Math.max(0, Number(source.offset || 0) || 0);
+  const limit = Math.max(1, Number(source.limit || sortedArtifacts.length || 20) || 20);
+  const validCount = Number(source.valid_artifact_count ?? source.verified_compatible_count ?? 0) || 0;
   const latest = sortedArtifacts[0] || null;
-  const productionRestoreSupported = Boolean(details.current_product_restore_supported);
-  const temporaryValidationSupported = Boolean(details.temporary_validation_restore_supported);
+  const productionRestoreSupported = Boolean(source.current_product_restore_supported);
+  const temporaryValidationSupported = Boolean(source.temporary_validation_restore_supported);
   const copyWord = totalCount === 1 ? t.maintenanceBackupCopyOne : t.maintenanceBackupCopyMany;
   const renderedCopyWord = String(copyWord || "").includes("{count}")
     ? String(copyWord || "").replace("{count}", String(totalCount))
@@ -1256,6 +1370,24 @@ export function maintenanceBackupManagerModel(overview, t, lang = "ru", backupSt
       hasProblem: [availability, integrity, compatibility, validation].some((status) => backupDimensionTone(status) === "problem"),
     };
   });
+  const latestArtifact = modeledArtifacts[0] || null;
+  const rootStatus = String(source.root_status || "unknown");
+  const latestTones = latestArtifact
+      ? [
+        latestArtifact.availabilityTone,
+        latestArtifact.integrityTone,
+        latestArtifact.compatibilityTone,
+      ]
+    : [];
+  const tone = rootStatus === "unsafe" || String(flowStatus || source.status || "") === "unavailable"
+    ? "blocked"
+    : !totalCount
+      ? "warning"
+      : latestTones.includes("problem")
+        ? "blocked"
+        : validCount < 1 || latestTones.includes("attention") || latestTones.includes("neutral")
+          ? "warning"
+          : "ok";
   return {
     total: totalCount,
     valid: validCount,
@@ -1267,6 +1399,7 @@ export function maintenanceBackupManagerModel(overview, t, lang = "ru", backupSt
     problemCount: 0,
     countText: totalCount ? renderedCopyWord : t.maintenanceBackupNoCopies,
     latest,
+    latestArtifact,
     latestCreatedAt: latest?.artifact_created_at ? formatAuditTimestamp(latest.artifact_created_at, lang) : "-",
     latestStatus: latest
       ? backupDimensionLabel("maintenanceBackupIntegrityStatuses", latest.integrity_status || "not_checked", t)
@@ -1276,16 +1409,143 @@ export function maintenanceBackupManagerModel(overview, t, lang = "ru", backupSt
       : t.maintenanceBackupStatusEmpty,
     canCheck: Boolean(totalCount && temporaryValidationSupported),
     canDelete: modeledArtifacts.some((item) => item.canDelete),
-    restoreSupported: productionRestoreSupported,
-    restoreText: productionRestoreSupported ? t.maintenanceBackupRestoreAvailable : t.maintenanceBackupRestoreUnavailable,
-    restoreReason: productionRestoreSupported ? "" : t.maintenanceBackupRestoreUnavailableReason,
+    rootStatus,
+    flowStatus: String(flowStatus || source.status || "unknown"),
+    tone,
     offset,
     limit,
-    hasMore: Boolean(details.has_more),
+    hasMore: Boolean(source.has_more),
     hasPrevious: offset > 0,
     pageStart: totalCount ? offset + 1 : 0,
     pageEnd: Math.min(totalCount, offset + modeledArtifacts.length),
     artifacts: modeledArtifacts,
+  };
+}
+
+export function maintenanceBackupOverviewModel(overview, t, lang = "ru") {
+  const restore = overview?.flows?.restore || {};
+  return maintenanceBackupProjectionModel(
+    restore?.details || {},
+    restore?.status,
+    t,
+    lang,
+  );
+}
+
+export function maintenanceBackupDetailModel(backupStatus, t, lang = "ru") {
+  return maintenanceBackupProjectionModel(
+    backupStatus || {},
+    backupStatus?.status,
+    t,
+    lang,
+  );
+}
+
+export function maintenanceBackupValidOffset(totalCount, limit, requestedOffset) {
+  const safeTotal = Math.max(0, Number(totalCount || 0) || 0);
+  const safeLimit = Math.max(1, Number(limit || 1) || 1);
+  const safeRequested = Math.max(0, Number(requestedOffset || 0) || 0);
+  if (!safeTotal) return 0;
+  return Math.min(
+    safeRequested,
+    Math.floor((safeTotal - 1) / safeLimit) * safeLimit,
+  );
+}
+
+export function maintenanceBackupManagerModel(overview, t, lang = "ru", backupStatus = null) {
+  return backupStatus && typeof backupStatus === "object"
+    ? maintenanceBackupDetailModel(backupStatus, t, lang)
+    : maintenanceBackupOverviewModel(overview, t, lang);
+}
+
+export function maintenanceDatabaseOverviewModel(overview, t) {
+  const rows = maintenanceReadinessRows(overview, t);
+  const blocked = rows.find((row) => row.userStatus === "blocked");
+  const attention = rows.find((row) => row.userStatus !== "ok");
+  const tone = blocked ? "blocked" : attention ? "warning" : rows.length ? "ok" : "neutral";
+  const primary = blocked || attention || rows.find((row) => row.key === "migration") || rows[0] || {};
+  const facts = rows
+    .flatMap((row) => row.facts || [])
+    .filter(([label, value], index, all) => (
+      all.findIndex(([candidate]) => candidate === label) === index
+      && value !== null
+      && value !== undefined
+      && value !== ""
+    ))
+    .slice(0, 3);
+  return {
+    tone,
+    statusLabel: primary.statusLabel || maintenanceStatusText("unknown", t),
+    summary: primary.summary || t.maintenanceMessageFallback || "",
+    action: primary.action || "",
+    facts,
+    actionableRow: blocked || attention || null,
+  };
+}
+
+export function maintenanceOverallHealthModel({
+  overview,
+  updateOperator,
+  database,
+  backup,
+  warnings,
+  loading = false,
+  loadError = false,
+  t,
+}) {
+  if (
+    loading
+    || loadError
+    || !overview
+    || !updateOperator
+    || updateOperator.status === "unknown"
+    || !database
+    || !backup
+    || backup.rootStatus === "unknown"
+    || warnings?.available !== true
+    || warnings?.status !== "complete"
+  ) {
+    return {
+      tone: "neutral",
+      icon: "i",
+      title: t.maintenanceOverallUnknown,
+      summary: t.maintenanceOverallUnknownText,
+    };
+  }
+  const blocked = (
+    updateOperator.severity === "blocked"
+    || database.tone === "blocked"
+    || backup.tone === "blocked"
+  );
+  if (blocked) {
+    return {
+      tone: "blocked",
+      icon: "!",
+      title: t.maintenanceOverallBlocked,
+      summary: t.maintenanceOverallBlockedText,
+    };
+  }
+  const warning = (
+    updateOperator.severity !== "ok"
+    || database.tone !== "ok"
+    || backup.tone !== "ok"
+    || Number(warnings?.groups?.actionable || 0) > 0
+  );
+  if (warning) {
+    return {
+      tone: "warning",
+      icon: "!",
+      title: t.maintenanceOverallAttention,
+      summary: backup.totalCount === 0
+        ? t.maintenanceOverallNoBackupText
+        : t.maintenanceOverallAttentionText,
+    };
+  }
+  return {
+    tone: "ok",
+    icon: "✓",
+    title: t.maintenanceOverallHealthy,
+    summary: t.maintenanceOverallHealthyText,
   };
 }
 
@@ -1297,6 +1557,8 @@ export function maintenanceWarningModel(overview, t) {
   const commonFallback = t.maintenanceWarningsFallback || {};
   const groups = report.warning_groups || {};
   return {
+    available: report.available === true,
+    status: String(report.status || "unknown").trim().toLowerCase() || "unknown",
     total: Number(report.warnings_count ?? report.total ?? warnings.length) || 0,
     groups: {
       actionable: Number(groups.actionable || 0),

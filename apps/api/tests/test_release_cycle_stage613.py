@@ -28,6 +28,12 @@ def _current_version() -> str:
     return _json("release/km-vms-release.json")["version"]
 
 
+def _next_patch(version: str) -> str:
+    major, minor, patch = (int(item) for item in version.split("."))
+    assert patch < 29
+    return f"{major}.{minor}.{patch + 1}"
+
+
 def test_stage613_versions_are_consistent():
     version_py = (ROOT / "apps/api/app/core/version.py").read_text(encoding="utf-8")
     package = _json("apps/web/package.json")
@@ -53,6 +59,9 @@ def test_stage613_release_descriptor_uses_semver_tag_evidence_model():
     assert descriptor["evidence_model"] == "semver_tag_resolves_to_commit"
     assert descriptor["commit_sha"] is None
     assert descriptor["published_at"] is None
+    assert set(descriptor["title_i18n"]) == {"en", "ru", "zh-CN"}
+    assert set(descriptor["summary_i18n"]) == {"en", "ru", "zh-CN"}
+    assert set(descriptor["changelog_i18n"]) == {"en", "ru", "zh-CN"}
     assert len(descriptor["changelog"]) <= 20
     assert all(isinstance(item, str) and len(item) <= 180 for item in descriptor["changelog"])
 
@@ -67,6 +76,8 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files(tmp
         ROOT / "release/km-vms-update-lineage.json",
     ]
     before = {path: path.read_bytes() for path in tracked}
+    current = _current_version()
+    target = _next_patch(current)
 
     check = subprocess.run(
         ["sh", "scripts/km-vms-release-cycle.sh", "--check", "--allow-dirty"],
@@ -78,7 +89,7 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files(tmp
         check=True,
     )
     dry_run = subprocess.run(
-        ["sh", "scripts/km-vms-release-cycle.sh", "--dry-run", "--prepare-version", "0.8.1", "--allow-dirty"],
+        ["sh", "scripts/km-vms-release-cycle.sh", "--dry-run", "--prepare-version", target, "--allow-dirty"],
         cwd=ROOT,
         env=env,
         text=True,
@@ -88,9 +99,192 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files(tmp
     )
 
     assert "release-cycle check PASS" in check.stdout
-    assert "DRY-RUN: would register current schema-equivalent release 0.8.0" in dry_run.stdout
-    assert "DRY-RUN: would prepare release version 0.8.1" in dry_run.stdout
+    assert f"DRY-RUN: would register current schema-equivalent release {current}" in dry_run.stdout
+    assert f"DRY-RUN: would prepare release version {target}" in dry_run.stdout
+    assert "would invalidate title, summary, changelog and localized release notes" in dry_run.stdout
     assert before == {path: path.read_bytes() for path in tracked}
+
+
+def test_stage1379_prepare_invalidates_old_notes_until_new_payload_is_written(
+    tmp_path: Path,
+):
+    (tmp_path / "scripts").mkdir(parents=True)
+    (tmp_path / "apps/api/app/core").mkdir(parents=True)
+    (tmp_path / "apps/web").mkdir(parents=True)
+    (tmp_path / "release").mkdir(parents=True)
+    script = tmp_path / "scripts/km-vms-release-cycle.sh"
+    script.write_text(
+        (ROOT / "scripts/km-vms-release-cycle.sh").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    gate = tmp_path / "scripts/km-vms-permission-gate.sh"
+    gate.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+    os.chmod(script, 0o755)
+    os.chmod(gate, 0o755)
+
+    current = "0.1.1"
+    target = "0.1.2"
+    (tmp_path / "apps/api/app/core/version.py").write_text(
+        f'APP_VERSION = "{current}"\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "apps/web/package.json").write_text(
+        json.dumps({"version": current}),
+        encoding="utf-8",
+    )
+    (tmp_path / "apps/web/package-lock.json").write_text(
+        json.dumps(
+            {
+                "version": current,
+                "packages": {"": {"version": current}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    notes = {
+        "title": "Old release title",
+        "summary": "Old release summary",
+        "changelog": ["Old release change"],
+        "title_i18n": {locale: f"{locale} old title" for locale in ("en", "ru", "zh-CN")},
+        "summary_i18n": {locale: f"{locale} old summary" for locale in ("en", "ru", "zh-CN")},
+        "changelog_i18n": {locale: [f"{locale} old change"] for locale in ("en", "ru", "zh-CN")},
+    }
+    descriptor = {
+        "schema_version": 1,
+        "product": "KM VMS",
+        "version": current,
+        "tag": f"v{current}",
+        **notes,
+        "release_channel": "public-github",
+        "source_kind": "github-release",
+        "source_repo": "kmishnev87/km-vms",
+        "source_ref": f"v{current}",
+        "evidence_model": "semver_tag_resolves_to_commit",
+        "commit_sha": None,
+        "published_at": None,
+        "requires_backup": False,
+        "requires_manual_action": False,
+        "requires_migration": False,
+    }
+    (tmp_path / "release/km-vms-release.json").write_text(
+        json.dumps(descriptor, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    lineage = {
+        "schema_version": 1,
+        "product": "KM VMS",
+        "tag_commits": {"0.1.0": "a" * 40},
+        "schema_versions": {"0.1.0": 1},
+        "shape_fingerprints": {"0.1.0": "b" * 64},
+        "shape_alternates": {},
+    }
+    (tmp_path / "release/km-vms-update-lineage.json").write_text(
+        json.dumps(lineage),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.invalid"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "KM VMS Test"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "fixture"],
+        cwd=tmp_path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "tag", f"v{current}"],
+        cwd=tmp_path,
+        check=True,
+    )
+
+    subprocess.run(
+        [
+            "sh",
+            "scripts/km-vms-release-cycle.sh",
+            "--prepare-version",
+            target,
+            "--allow-dirty",
+        ],
+        cwd=tmp_path,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    prepared = json.loads(
+        (tmp_path / "release/km-vms-release.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert prepared["title"] == ""
+    assert prepared["summary"] == ""
+    assert prepared["changelog"] == []
+    assert not {
+        "title_i18n",
+        "summary_i18n",
+        "changelog_i18n",
+    }.intersection(prepared)
+
+    blocked = subprocess.run(
+        [
+            "sh",
+            "scripts/km-vms-release-cycle.sh",
+            "--check",
+            "--allow-dirty",
+        ],
+        cwd=tmp_path,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert blocked.returncode != 0
+    assert "title is invalid" in blocked.stderr
+
+    prepared.update(
+        {
+            "title": "New release title",
+            "summary": "New release summary",
+            "changelog": ["New release change"],
+            "title_i18n": {
+                locale: f"{locale} new title"
+                for locale in ("en", "ru", "zh-CN")
+            },
+            "summary_i18n": {
+                locale: f"{locale} new summary"
+                for locale in ("en", "ru", "zh-CN")
+            },
+            "changelog_i18n": {
+                locale: [f"{locale} new change"]
+                for locale in ("en", "ru", "zh-CN")
+            },
+        }
+    )
+    (tmp_path / "release/km-vms-release.json").write_text(
+        json.dumps(prepared, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    accepted = subprocess.run(
+        [
+            "sh",
+            "scripts/km-vms-release-cycle.sh",
+            "--check",
+            "--allow-dirty",
+        ],
+        cwd=tmp_path,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+    assert "release-cycle check PASS" in accepted.stdout
 
 
 def test_stage613_release_cycle_script_rejects_unsafe_and_equal_versions(tmp_path):

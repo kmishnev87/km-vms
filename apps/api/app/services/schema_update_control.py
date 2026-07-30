@@ -167,12 +167,10 @@ CURRENT_REQUEST_FIELDS = {
     "preflight_required",
     "status_path",
 }
-RELEASE_IDENTITY_FIELDS = {
+RELEASE_IDENTITY_REQUIRED_FIELDS = {
     "schema_version",
     "product",
     "version",
-    "title",
-    "summary",
     "release_channel",
     "source_kind",
     "source_repo",
@@ -183,6 +181,22 @@ RELEASE_IDENTITY_FIELDS = {
     "metadata_status",
     "metadata_source",
 }
+RELEASE_IDENTITY_OPTIONAL_NOTE_FIELDS = {
+    "title",
+    "summary",
+    "changelog",
+    "title_i18n",
+    "summary_i18n",
+    "changelog_i18n",
+}
+RELEASE_NOTE_LOCALES = frozenset({"en", "ru", "zh-CN"})
+RELEASE_NOTE_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
+RELEASE_NOTE_SENSITIVE_RE = re.compile(
+    r"(github_pat_|ghp_|Bearer\s+|rtsp://[^@\s]+@|"
+    r"postgresql://[^:\s]+:[^@\s]+@|"
+    r"-----BEGIN [^-]*PRIVATE KEY-----)",
+    re.IGNORECASE,
+)
 
 
 UPDATE_LINEAGE_FILENAME = "km-vms-update-lineage.json"
@@ -522,6 +536,67 @@ def exact_string(
     ):
         raise SchemaControlError(code)
     return value
+
+
+def _validate_release_note_text(
+    value: Any,
+    *,
+    max_length: int,
+    allow_empty: bool = False,
+) -> str:
+    text = exact_string(
+        value,
+        code="release_identity_contract_invalid",
+        max_length=max_length,
+        allow_empty=allow_empty,
+    )
+    normalized = text.strip()
+    if (
+        (not normalized and not allow_empty)
+        or RELEASE_NOTE_CONTROL_RE.search(normalized)
+        or RELEASE_NOTE_SENSITIVE_RE.search(normalized)
+    ):
+        raise SchemaControlError("release_identity_contract_invalid")
+    return normalized
+
+
+def _validate_release_changelog(value: Any) -> None:
+    if type(value) is not list or len(value) > 20:
+        raise SchemaControlError("release_identity_contract_invalid")
+    for item in value:
+        _validate_release_note_text(item, max_length=180)
+
+
+def _validate_release_identity_notes(release: dict[str, Any]) -> None:
+    for key, max_length in (("title", 160), ("summary", 800)):
+        if key in release:
+            _validate_release_note_text(
+                release[key],
+                max_length=max_length,
+                allow_empty=True,
+            )
+    if "changelog" in release:
+        _validate_release_changelog(release["changelog"])
+    for key, max_length in (
+        ("title_i18n", 160),
+        ("summary_i18n", 800),
+    ):
+        if key not in release:
+            continue
+        value = release[key]
+        if type(value) is not dict or set(value) != RELEASE_NOTE_LOCALES:
+            raise SchemaControlError("release_identity_contract_invalid")
+        for locale in ("en", "ru", "zh-CN"):
+            _validate_release_note_text(
+                value[locale],
+                max_length=max_length,
+            )
+    if "changelog_i18n" in release:
+        value = release["changelog_i18n"]
+        if type(value) is not dict or set(value) != RELEASE_NOTE_LOCALES:
+            raise SchemaControlError("release_identity_contract_invalid")
+        for locale in ("en", "ru", "zh-CN"):
+            _validate_release_changelog(value[locale])
 
 
 def _validate_request_source(
@@ -2534,8 +2609,14 @@ def target_identity(
     source = request.get("source")
     if type(source) is not dict:
         raise SchemaControlError("request_source_invalid")
+    release_fields = set(release)
     if (
-        set(release) != RELEASE_IDENTITY_FIELDS
+        not RELEASE_IDENTITY_REQUIRED_FIELDS.issubset(release_fields)
+        or release_fields
+        - (
+            RELEASE_IDENTITY_REQUIRED_FIELDS
+            | RELEASE_IDENTITY_OPTIONAL_NOTE_FIELDS
+        )
         or type(release.get("schema_version")) is not int
         or release["schema_version"] != 1
         or release.get("product") != "KM VMS"
@@ -2601,12 +2682,7 @@ def target_identity(
         code="release_target_version_invalid",
         max_length=81,
     )
-    for key, max_length in (("title", 200), ("summary", 1000)):
-        exact_string(
-            release.get(key),
-            code="release_identity_contract_invalid",
-            max_length=max_length,
-        )
+    _validate_release_identity_notes(release)
     parse_utc(release.get("installed_at"))
     valid_release_refs = {f"v{target_release}"}
     if terminal_evidence:

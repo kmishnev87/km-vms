@@ -89,7 +89,6 @@ export default function SetupPage() {
   const [language, setLanguage] = useState("ru");
   const [form, setForm] = useState({
     username: "admin",
-    system_name: "KM VMS",
     password: "",
     password_confirm: "",
     timezone: "Etc/GMT-5",
@@ -117,7 +116,6 @@ export default function SetupPage() {
   });
 
   const ownerValid = USERNAME_RE.test(form.username.trim()) && form.password.length >= 8 && form.password === form.password_confirm;
-  const systemNameValid = form.system_name.trim().length <= 80 && !/[\x00-\x1f]/.test(form.system_name);
   const recordingValid = Boolean(form.timezone.trim()) && ["mkv", "mp4"].includes(form.recording_format);
 
   const usingManualRoot = storageState.candidateId === "manual";
@@ -132,7 +130,7 @@ export default function SetupPage() {
   const actionLabel = storageState.preview?.action === "create_and_select"
     ? t.storageCreateSelect
     : t.storageCheckSelect;
-  const canAdvance = [systemNameValid, storageReady, ownerValid, recordingValid, systemNameValid && storageReady && ownerValid && recordingValid][step];
+  const canAdvance = [true, storageReady, ownerValid, recordingValid, storageReady && ownerValid && recordingValid][step];
 
   function patch(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -237,7 +235,6 @@ export default function SetupPage() {
     setForm((current) => ({
       ...current,
       username: typeof draftForm.username === "string" ? draftForm.username : current.username,
-      system_name: typeof draftForm.system_name === "string" ? draftForm.system_name : current.system_name,
       timezone: typeof draftForm.timezone === "string" ? setupTimezoneValue(draftForm.timezone) : current.timezone,
       recording_format: ["mkv", "mp4"].includes(draftForm.recording_format) ? draftForm.recording_format : current.recording_format,
       password: "",
@@ -260,12 +257,11 @@ export default function SetupPage() {
       language,
       form: {
         username: form.username,
-        system_name: form.system_name,
         timezone: setupTimezoneValue(form.timezone),
         recording_format: form.recording_format,
       },
     });
-  }, [draftLoaded, form.username, form.system_name, form.timezone, form.recording_format, language, step]);
+  }, [draftLoaded, form.username, form.timezone, form.recording_format, language, step]);
 
   useEffect(() => {
     fetch("/api/setup/storage/discovery")
@@ -356,7 +352,6 @@ export default function SetupPage() {
   }, [busy, selectedRootPath, step, storageState.candidateId, storageState.folderName, storageState.manualRootPath, t.storagePreviewFailed, usingManualRoot]);
 
   function validateCurrentStep() {
-    if (step === 0 && !systemNameValid) return t.required;
     if (step === 1 && !storageReady) return storageDisabledReason() || t.storageBlockedReady;
     if (step === 2) {
       if (!USERNAME_RE.test(form.username.trim())) return t.invalidUsername;
@@ -369,10 +364,10 @@ export default function SetupPage() {
 
   function canVisitStep(index) {
     if (index <= step) return true;
-    if (index === 1) return systemNameValid;
-    if (index === 2) return systemNameValid && storageReady;
-    if (index === 3) return systemNameValid && storageReady && ownerValid;
-    return systemNameValid && storageReady && ownerValid && recordingValid;
+    if (index === 1) return true;
+    if (index === 2) return storageReady;
+    if (index === 3) return storageReady && ownerValid;
+    return storageReady && ownerValid && recordingValid;
   }
 
   function goToStep(index) {
@@ -436,7 +431,7 @@ export default function SetupPage() {
 
   async function submitSetup() {
     if (busy) return;
-    if (!systemNameValid || !ownerValid || !storageReady || !recordingValid) {
+    if (!ownerValid || !storageReady || !recordingValid) {
       setError(validateCurrentStep() || t.required);
       return;
     }
@@ -454,7 +449,6 @@ export default function SetupPage() {
           ...form,
           timezone: setupTimezoneValue(form.timezone),
           username: form.username.trim(),
-          system_name: form.system_name.trim() || null,
           storage_path: storageState.confirmation?.selected_host_path || "",
           language,
         }),
@@ -512,12 +506,7 @@ export default function SetupPage() {
             <section className="setupPane">
               <h2>{t.welcomeTitle}</h2>
               <p>{t.welcomeText}</p>
-              <div className="setupFormGrid setupFormGrid-two">
-                <label className="setupField">
-                  <span className="setupFieldLabel">{t.systemName}</span>
-                  <input className="input" value={form.system_name} onChange={(e) => patch("system_name", e.target.value)} maxLength={80} />
-                  <small className="setupFieldHint">{t.systemNameHelp}</small>
-                </label>
+              <div className="setupFormGrid">
                 <label className="setupField">
                   <span className="setupFieldLabel">{t.language}</span>
                   <LanguageSelect className="select" value={language} onChange={changeLanguage} aria-label={t.language} />
@@ -672,7 +661,6 @@ export default function SetupPage() {
             <section className="setupPane">
               <h2>{t.reviewTitle}</h2>
               <div className="setupReviewGrid">
-                <span>{t.systemName}</span><strong>{form.system_name.trim() || "KM VMS"}</strong>
                 <span>{t.language}</span><strong>{localeMetadata(language).nativeName}</strong>
                 <span>{t.username}</span><strong>{form.username.trim()}</strong>
                 <span>{t.storagePreview}</span><strong>{storageState.confirmation?.selected_host_path || t.storageBlockedReady}</strong>
@@ -682,7 +670,6 @@ export default function SetupPage() {
                 <span>{t.timezone}</span><strong>{UTC_TIMEZONES.find((zone) => zone.value === setupTimezoneValue(form.timezone))?.label || "GMT+00:00"}</strong>
                 <span>{t.format}</span><strong>{form.recording_format.toUpperCase()}</strong>
               </div>
-              <p>{t.reviewNote}</p>
               <p>{t.finalLockNote}</p>
             </section>
           ) : null}

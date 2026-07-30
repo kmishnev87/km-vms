@@ -217,22 +217,40 @@ release_exists = github_release_exists(repo, tag)
 if release_exists is False:
     fail("GitHub Release object is missing for the release tag")
 
-identity_payload = {
-    "schema_version": 1,
-    "product": "KM VMS",
-    "version": version,
-    "title": descriptor.get("title") or f"KM VMS {tag}",
-    "summary": descriptor.get("summary") or f"KM VMS {tag}",
-    "release_channel": descriptor.get("release_channel") or "public-github",
-    "source_kind": descriptor.get("source_kind") or "github-release",
-    "source_repo": repo,
-    "source_ref": tag,
-    "commit_sha": local_tag_commit,
-    "installed_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-    "installed_by": "release_cycle_closeout",
-    "metadata_status": "complete",
-    "metadata_source": "release_cycle_closeout",
-}
+identity_builder = root / "scripts" / "km-vms-release-identity.py"
+if not identity_builder.is_file():
+    fail("release identity builder is missing")
+identity_result = subprocess.run(
+    [
+        sys.executable,
+        str(identity_builder),
+        "--descriptor",
+        str(root / "release" / "km-vms-release.json"),
+        "--commit",
+        local_tag_commit,
+        "--installed-at",
+        datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "--installed-by",
+        "release_cycle_closeout",
+        "--metadata-status",
+        "complete",
+        "--metadata-source",
+        "release_cycle_closeout",
+    ],
+    cwd=root,
+    text=True,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+if identity_result.returncode != 0:
+    fail(
+        identity_result.stderr.strip()
+        or "release identity builder failed"
+    )
+try:
+    identity_payload = json.loads(identity_result.stdout)
+except Exception:
+    fail("release identity builder returned invalid JSON")
 
 print("KM VMS release-cycle closeout identity sync")
 print(f"App dir: {root}")

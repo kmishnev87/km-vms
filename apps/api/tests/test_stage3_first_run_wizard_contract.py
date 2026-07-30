@@ -53,7 +53,6 @@ def db():
 def payload(**overrides) -> SetupRequest:
     data = {
         "username": "owner_admin",
-        "system_name": "KM VMS Lab",
         "password": "stage3-password",
         "password_confirm": "stage3-password",
         "timezone": "UTC",
@@ -146,7 +145,6 @@ def test_successful_setup_creates_exactly_one_owner_and_initializes_system(db):
     assert response["ok"] is True
     assert row.system_initialized is True
     assert row.language == "en"
-    assert row.system_name == "KM VMS Lab"
     assert row.timezone == "UTC"
     assert row.recording_format == "mp4"
     assert len(owners) == 1
@@ -209,17 +207,6 @@ def test_setup_rejects_naked_container_storage_confirmation(db):
 
     assert exc.value.status_code == 422
     assert "selected_host_path_must_be_host_path" in str(exc.value.detail)
-    assert_no_partial_owner(db)
-
-
-def test_setup_rejects_secret_like_system_name_without_partial_owner(db):
-    write_storage_selection()
-
-    with pytest.raises(HTTPException) as exc:
-        setup(payload(system_name="jwt token holder"), db=db, request=FakeRequest())
-
-    assert exc.value.status_code == 422
-    assert "system_name" in str(exc.value.detail)
     assert_no_partial_owner(db)
 
 

@@ -68,7 +68,7 @@ for (const phase of [
   "services_starting",
   "post_restore_check",
 ]) {
-  assert.match(restoreFlow, new RegExp(`"${phase}"`));
+  assert.match(page, new RegExp(`"${phase}"`));
 }
 assert.match(
   page,
@@ -77,6 +77,12 @@ assert.match(
 assert.match(restoreFlow, /currentRestoreTerminal\(status\)/);
 assert.match(page, /current_database_restored|maintenanceCurrentRestoreRolledBack/);
 assert.match(page, /maintenanceCurrentRestoreRecoveryRequired/);
+assert.match(restoreFlow, /currentRestoreFailedPhase\(status\)/);
+assert.match(page, /status\?\.failed_phase/);
+assert.match(page, /automatic_rollback_api_recovery_failed:\s*"services_starting"/);
+assert.match(page, /automatic_rollback_recorder_recovery_failed:\s*"post_restore_check"/);
+assert.match(restoreFlow, /state === "failed"[\s\S]*?"!"/);
+assert.match(restoreFlow, /resultState === "rolled-back"[\s\S]*?"↩"/);
 
 assert.match(dialog, /settingsCurrentRestoreDialogOverlay/);
 assert.match(dialog, /maintenanceCurrentRestoreChanges/);
@@ -87,6 +93,9 @@ assert.match(dialog, /maintenanceCurrentRestoreActor/);
 assert.match(dialog, /confirmTone: "danger"/);
 assert.doesNotMatch(dialog, /presentation: "compact-confirmation"/);
 assert.doesNotMatch(dialog, /showFooterClose:\s*true/);
+assert.doesNotMatch(page, /settingsCurrentRestoreStatus/);
+assert.doesNotMatch(page, /maintenanceCurrentRestoreStatusLabel/);
+assert.doesNotMatch(page, /settingsMaintenanceBackupRestoreNote/);
 
 assert.equal(
   (page.match(/maintenanceCurrentRestoreTitle:/g) || []).length,
@@ -96,11 +105,25 @@ assert.equal(
   (page.match(/maintenanceCurrentRestoreReasons:/g) || []).length,
   3,
 );
+assert.equal(
+  (page.match(/automatic_rollback_api_recovery_failed:/g) || []).length,
+  4,
+);
+assert.equal(
+  (page.match(/maintenanceCurrentRestoreBackupFirst:/g) || []).length,
+  3,
+);
+assert.match(
+  page,
+  /Страховочная копия базы возвращена, но API не запустился/,
+);
 assert.match(
   css,
   /\.operationFeedbackOverlay\.settingsCurrentRestoreDialogOverlay\s*\{[\s\S]*z-index:\s*9700;/,
 );
 assert.match(css, /\.settingsCurrentRestoreTimeline/);
+assert.match(css, /\.settingsCurrentRestoreTimeline li\.is-failed/);
+assert.match(css, /\.settingsCurrentRestoreTimeline li\.is-rolled-back/);
 assert.match(css, /@media \(max-width: 640px\)[\s\S]*\.settingsCurrentRestoreTimeline/);
 
 const actionStart = page.indexOf(

@@ -110,7 +110,6 @@ def stage4103(tmp_path, monkeypatch):
         [
             SystemSettings(
                 system_initialized=True,
-                system_name="KM VMS",
                 timezone="UTC",
                 language="ru",
                 storage_path=str(archive),

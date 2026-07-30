@@ -81,8 +81,9 @@ export function OperationDialog({ dialog, onClose }) {
 
   function handleKeyDown(event) {
     if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
       if (canClose) {
-        event.preventDefault();
         requestClose();
       }
       return;

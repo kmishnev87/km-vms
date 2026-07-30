@@ -44,7 +44,7 @@ def sqlite_session(tmp_path):
 
 
 def _seed(db):
-    row = SystemSettings(id=1, system_initialized=True, system_name="Stage 6.0.8", created_at=datetime(2026, 6, 18, 3, 0, 0))
+    row = SystemSettings(id=1, system_initialized=True, created_at=datetime(2026, 6, 18, 3, 0, 0))
     db.merge(row)
     db.add(User(username="stage608_owner", full_name="Stage 608 Owner", password_hash="hash-value-not-exported", role=ROLE_OWNER, is_active=True))
     db.commit()

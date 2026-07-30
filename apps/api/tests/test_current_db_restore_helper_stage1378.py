@@ -105,6 +105,147 @@ def test_stop_proof_rejects_partially_running_writers(
     )
 
 
+def test_existing_restore_service_action_uses_compose_scope_and_exact_docker_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container_id = "a" * 64
+    compose_calls: list[tuple[str, ...]] = []
+    docker_calls: list[tuple[str, ...]] = []
+
+    def compose(*args, **_kwargs):
+        compose_calls.append(args)
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            f"{container_id}\n",
+            "",
+        )
+
+    def docker_run(args, **_kwargs):
+        docker_calls.append(tuple(args))
+        if args[1] == "inspect":
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                "api\n",
+                "",
+            )
+        return subprocess.CompletedProcess(args, 0, None, None)
+
+    monkeypatch.setattr(helper, "restore_compose_command", compose)
+    monkeypatch.setattr(helper.subprocess, "run", docker_run)
+
+    assert (
+        helper._run_existing_restore_service_action("api", "start")
+        == container_id
+    )
+    assert compose_calls == [("ps", "-q", "--all", "api")]
+    assert docker_calls == [
+        (
+            "docker",
+            "inspect",
+            "--format",
+            '{{ index .Config.Labels "com.docker.compose.service" }}',
+            container_id,
+        ),
+        ("docker", "start", container_id),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("service", "compose_stdout", "inspect_label"),
+    (
+        ("api", "", "api"),
+        ("api", f"{'a' * 64}\n{'b' * 64}\n", "api"),
+        ("api", "not-a-container-id\n", "api"),
+        ("api", f"{'a' * 64}\n", "recorder"),
+        ("schema-update", f"{'a' * 64}\n", "schema-update"),
+    ),
+)
+def test_existing_restore_service_action_rejects_untrusted_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    service: str,
+    compose_stdout: str,
+    inspect_label: str,
+) -> None:
+    docker_actions: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        helper,
+        "restore_compose_command",
+        lambda *args, **_kwargs: subprocess.CompletedProcess(
+            args,
+            0,
+            compose_stdout,
+            "",
+        ),
+    )
+
+    def docker_run(args, **_kwargs):
+        if args[1] != "inspect":
+            docker_actions.append(tuple(args))
+        return subprocess.CompletedProcess(
+            args,
+            0,
+            f"{inspect_label}\n",
+            "",
+        )
+
+    monkeypatch.setattr(helper.subprocess, "run", docker_run)
+
+    with pytest.raises(helper.HelperError):
+        helper._run_existing_restore_service_action(service, "start")
+    assert docker_actions == []
+
+
+def test_recorder_restart_uses_exact_existing_id_and_fresh_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container_id = "b" * 64
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        helper,
+        "_run_existing_restore_service_action",
+        lambda service, action: (
+            calls.append(("docker", action, service))
+            or container_id
+        ),
+    )
+    monkeypatch.setattr(
+        helper,
+        "wait_for_service",
+        lambda service, **kwargs: (
+            calls.append(
+                (
+                    "wait",
+                    service,
+                    kwargs["expected_container_id"],
+                )
+            )
+            or True
+        ),
+    )
+    monkeypatch.setattr(
+        helper,
+        "run_restore_executor",
+        lambda _request_value, action, **kwargs: calls.append(
+            (
+                "executor",
+                action,
+                kwargs["recorder_not_before_epoch"],
+            )
+        ),
+    )
+
+    helper.restart_restore_recorder_with_proof(_request())
+
+    assert calls[0] == ("docker", "restart", "recorder")
+    assert calls[1] == ("wait", "recorder", container_id)
+    assert calls[2][0:2] == ("executor", "recorder-proof")
+    assert calls[2][2] > 0
+    assert calls[3] == ("wait", "recorder", container_id)
+
+
 @pytest.mark.parametrize("recorder_was_running", (False, True))
 def test_writer_reconciliation_uses_required_recorder_proof(
     monkeypatch: pytest.MonkeyPatch,
@@ -201,14 +342,13 @@ def test_partial_stop_with_unknown_recorder_restarts_both_writers_without_db_mut
         lambda: events.append("api:start"),
     )
 
-    def compose_command(*args, **_kwargs):
-        events.append("compose:" + ":".join(args))
-        return subprocess.CompletedProcess(args, 0, "", "")
-
     monkeypatch.setattr(
         helper,
-        "restore_compose_command",
-        compose_command,
+        "_run_existing_restore_service_action",
+        lambda service, action: (
+            events.append(f"docker:{action}:{service}")
+            or ("a" * 64)
+        ),
     )
     monkeypatch.setattr(
         helper,
@@ -226,7 +366,7 @@ def test_partial_stop_with_unknown_recorder_restarts_both_writers_without_db_mut
     assert actions == ["preflight", "recorder-proof"]
     assert "pre-restore-backup" not in actions
     assert "restore" not in actions
-    assert events == ["api:start", "compose:restart:recorder"]
+    assert events == ["api:start", "docker:restart:recorder"]
     assert len(recorder_boundaries) == 1
     assert recorder_boundaries[0] > 0
     assert terminal == [
@@ -235,6 +375,7 @@ def test_partial_stop_with_unknown_recorder_restarts_both_writers_without_db_mut
             "reason_code": "restore_writer_isolation_failed",
             "pre_restore_backup_id": None,
             "destructive_started": False,
+            "failed_phase": "writers_paused",
         }
     ]
 
@@ -380,6 +521,7 @@ def test_failure_after_mutation_converges_to_rollback(
         {
             "pre_restore_backup_id": ARTIFACT_B,
             "reason_code": "injected_after_mutation",
+            "failed_phase": "restore_running",
         }
     ]
 
@@ -427,6 +569,7 @@ def test_source_recorder_proof_failure_converges_to_rollback(
         {
             "pre_restore_backup_id": ARTIFACT_B,
             "reason_code": "restore_recorder_start_failed",
+            "failed_phase": "post_restore_check",
         }
     ]
 
@@ -466,6 +609,58 @@ def test_successful_rollback_reports_failed_rolled_back_not_success(
             "reason_code": "source_restore_failed",
             "pre_restore_backup_id": ARTIFACT_B,
             "destructive_started": True,
+            "failed_phase": "restore_running",
+        }
+    ]
+
+
+def test_rollback_api_failure_reports_database_returned_but_recovery_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    terminal: list[dict] = []
+    monkeypatch.setattr(helper, "stop_restore_writers", lambda: None)
+    monkeypatch.setattr(helper, "run_restore_executor", _successful_executor)
+    monkeypatch.setattr(
+        helper,
+        "publish_restore_phase",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        helper,
+        "start_restore_api",
+        lambda: (_ for _ in ()).throw(
+            helper.HelperError(
+                "restore_api_health_failed",
+                "Injected rollback API failure.",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        helper,
+        "start_restore_recorder_with_proof",
+        lambda _request_value: pytest.fail(
+            "recorder must not start before API recovery"
+        ),
+    )
+    monkeypatch.setattr(
+        helper,
+        "finish_restore_request",
+        lambda _request_value, **kwargs: terminal.append(kwargs),
+    )
+
+    helper.rollback_current_restore(
+        _request(),
+        pre_restore_backup_id=ARTIFACT_B,
+        reason_code="source_restore_failed",
+    )
+
+    assert terminal == [
+        {
+            "result": "failed_recovery_required",
+            "reason_code": "automatic_rollback_api_recovery_failed",
+            "pre_restore_backup_id": ARTIFACT_B,
+            "destructive_started": True,
+            "failed_phase": "services_starting",
         }
     ]
 
@@ -507,9 +702,10 @@ def test_rollback_recorder_proof_failure_requires_recovery(
     assert terminal == [
         {
             "result": "failed_recovery_required",
-            "reason_code": "automatic_rollback_failed",
+            "reason_code": "automatic_rollback_recorder_recovery_failed",
             "pre_restore_backup_id": ARTIFACT_B,
             "destructive_started": True,
+            "failed_phase": "post_restore_check",
         }
     ]
 
@@ -553,6 +749,7 @@ def test_restart_after_destructive_marker_never_repeats_source_restore(
         {
             "pre_restore_backup_id": ARTIFACT_B,
             "reason_code": "restore_interrupted_after_mutation",
+            "failed_phase": "restore_running",
         }
     ]
 
@@ -592,6 +789,7 @@ def test_unexpected_failure_after_destructive_start_rolls_back(
         {
             "pre_restore_backup_id": ARTIFACT_B,
             "reason_code": "restore_helper_exception",
+            "failed_phase": "restore_running",
         }
     ]
 
@@ -627,9 +825,10 @@ def test_rollback_failure_reports_recovery_required(
     assert terminal == [
         {
             "result": "failed_recovery_required",
-            "reason_code": "automatic_rollback_failed",
+            "reason_code": "automatic_rollback_database_failed",
             "pre_restore_backup_id": ARTIFACT_B,
             "destructive_started": True,
+            "failed_phase": "restore_running",
         }
     ]
 
@@ -685,6 +884,7 @@ def test_partial_initial_writer_stop_recovers_without_db_mutation(
             "reason_code": "restore_writer_isolation_failed",
             "pre_restore_backup_id": None,
             "destructive_started": False,
+            "failed_phase": "writers_paused",
         }
     ]
 
@@ -725,9 +925,10 @@ def test_rollback_writer_stop_failure_never_calls_executor(
     assert terminal == [
         {
             "result": "failed_recovery_required",
-            "reason_code": "automatic_rollback_failed",
+            "reason_code": "automatic_rollback_isolation_failed",
             "pre_restore_backup_id": ARTIFACT_B,
             "destructive_started": True,
+            "failed_phase": "writers_paused",
         }
     ]
 

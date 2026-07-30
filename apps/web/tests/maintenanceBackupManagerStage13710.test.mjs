@@ -3,11 +3,16 @@ import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  BACKUP_OPERATION_ADMISSION_GRACE_MS,
   BACKUP_OPERATION_PENDING_STORAGE_KEY,
+  backupOperationWithinAdmissionGrace,
   createBackupOperationPending,
   maintenanceBackupCheckResultText,
+  maintenanceBackupDetailModel,
   maintenanceBackupOperationResultText,
-  maintenanceBackupManagerModel,
+  maintenanceBackupOverviewModel,
+  maintenanceBackupValidOffset,
+  maintenanceOverallHealthModel,
   maintenanceWarningModel,
   restoreBackupOperationPending,
   sanitizeBackupOperationPending,
@@ -29,7 +34,10 @@ assert.equal(settingsPage.includes("BACKUP_OPERATION_PENDING_STORAGE_KEY"), true
 assert.equal(BACKUP_OPERATION_PENDING_STORAGE_KEY, "km_vms_backup_operation_pending_v1");
 assert.equal(settingsPage.includes("window.confirm(t.maintenanceBackupCreateConfirm)"), false);
 assert.equal(settingsPage.includes("window.confirm(maintenanceBackupDeleteConfirm)"), false);
-assert.equal(settingsPage.includes("maintenanceWarningsOpen"), true);
+assert.equal(settingsPage.includes("maintenanceWarningsOpen"), false);
+assert.equal(settingsPage.includes("maintenanceBackupDetailOpen"), true);
+assert.equal(settingsPage.includes("settingsMaintenanceOverall"), true);
+assert.equal(settingsPage.includes("settingsMaintenanceCoreGrid"), true);
 assert.equal(settingsPage.includes("const MAINTENANCE_BACKUP_PAGE_SIZE = 5;"), true);
 assert.equal(settingsPage.includes('className="storageOpsCheckIcon">✓</span>'), true);
 assert.equal(settingsPage.includes('className="recordingsUiIcon recordingsTrashIcon recordingsRowSvgIcon storageOpsTrashIcon"'), true);
@@ -41,6 +49,10 @@ assert.equal(settingsPage.includes('className="settingsMaintenanceBackupDetailRo
 assert.equal(settingsPage.includes('className="settingsMaintenanceIconAction"'), true);
 assert.equal(settingsPage.includes('aria-hidden="true">←</span>'), true);
 assert.equal(settingsPage.includes('aria-hidden="true">→</span>'), true);
+assert.equal(
+  settingsPage.includes("settingsMaintenanceBackupRestoreNote"),
+  false,
+);
 assert.match(settingsCss, /\.settingsMaintenanceBackupItemHead\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*baseline;/);
 assert.match(settingsCss, /\.settingsMaintenanceBackupDetailRow\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;[\s\S]*?align-items:\s*center;/);
 const pendingCommitBlock = settingsPage.slice(
@@ -62,11 +74,26 @@ assert.equal(
   operationBlock.indexOf("commitBackupOperationPending(pending)") < operationBlock.indexOf("apiFetch(endpoint"),
   true,
 );
+assert.equal(
+  operationBlock.indexOf("maintenanceBackupAdmissionRef.current = pending.submissionId")
+    < operationBlock.indexOf("apiFetch(endpoint"),
+  true,
+);
+assert.match(
+  settingsPage,
+  /maintenanceBackupAdmissionRef\.current\s*===\s*pending\.submissionId[\s\S]*?return;/,
+);
+assert.match(
+  operationBlock,
+  /updateApplyRequestIsAmbiguous\(error\)[\s\S]*?reconcilePendingBackupOperation\(\)/,
+);
 const overviewLoadBlock = settingsPage.slice(
   settingsPage.indexOf("async function loadMaintenanceOverview"),
   settingsPage.indexOf("async function loadMaintenanceBackupPage"),
 );
 assert.equal(overviewLoadBlock.includes("setMaintenanceBackupResult(null)"), false);
+assert.equal(overviewLoadBlock.includes("/system/restore/status"), false);
+assert.equal(overviewLoadBlock.includes("setMaintenanceBackupDetail"), false);
 
 const t = {
   maintenanceBackupNoCopies: "No backups",
@@ -74,9 +101,6 @@ const t = {
   maintenanceBackupCopyMany: "{count} backups",
   maintenanceBackupStatusEmpty: "No backups yet.",
   maintenanceBackupStatusReady: "Backups: {count}",
-  maintenanceBackupRestoreAvailable: "Restore is available",
-  maintenanceBackupRestoreUnavailable: "Restore is unavailable",
-  maintenanceBackupRestoreUnavailableReason: "Only safe checks are available.",
   maintenanceBackupAvailabilityStatuses: {
     available: "Available",
     incomplete: "Incomplete",
@@ -163,6 +187,15 @@ const t = {
     summary: "A service warning is present.",
     action: "Open diagnostics if support asks.",
   },
+  maintenanceOverallUnknown: "Unknown",
+  maintenanceOverallUnknownText: "Unknown text",
+  maintenanceOverallBlocked: "Blocked",
+  maintenanceOverallBlockedText: "Blocked text",
+  maintenanceOverallAttention: "Attention",
+  maintenanceOverallAttentionText: "Attention text",
+  maintenanceOverallNoBackupText: "No backup text",
+  maintenanceOverallHealthy: "Healthy",
+  maintenanceOverallHealthyText: "Healthy text",
 };
 
 const overview = {
@@ -216,14 +249,14 @@ const backupStatus = {
     },
   ],
 };
-const model = maintenanceBackupManagerModel(overview, t, "en", backupStatus);
+const model = maintenanceBackupDetailModel(backupStatus, t, "en");
 
 assert.equal(model.total, 25);
 assert.equal(model.valid, 7);
 assert.equal(model.countText, "25 backups");
 assert.equal(model.statusText, "Backups: 25");
 assert.equal(model.totalBytesText, "8.0 KB");
-assert.equal(model.restoreSupported, false);
+assert.equal("restoreSupported" in model, false);
 assert.equal(model.artifacts[0].canDelete, true);
 assert.equal(model.artifacts[1].canDelete, false);
 assert.equal(model.artifacts[0].canCheck, true);
@@ -242,7 +275,7 @@ assert.equal(model.hasPrevious, true);
 assert.equal(model.hasMore, true);
 assert.equal(model.artifacts.length, 2);
 assert.equal(model.artifacts[0].sizeText, "4.0 KB");
-const unownedProblem = maintenanceBackupManagerModel(overview, t, "en", {
+const unownedProblem = maintenanceBackupDetailModel({
   total_count: 1,
   temporary_validation_restore_supported: true,
   artifacts: [{
@@ -252,9 +285,68 @@ const unownedProblem = maintenanceBackupManagerModel(overview, t, "en", {
     delete_status: "allowed",
     delete_supported: true,
   }],
-});
+}, t, "en");
 assert.equal(unownedProblem.artifacts[0].canCheck, false);
 assert.equal(unownedProblem.artifacts[0].canDelete, false);
+assert.equal(maintenanceBackupValidOffset(25, 5, 25), 20);
+assert.equal(maintenanceBackupValidOffset(20, 5, 20), 15);
+assert.equal(maintenanceBackupValidOffset(0, 5, 10), 0);
+
+const globalOverview = {
+  flows: {
+    restore: {
+      status: "available",
+      details: {
+        root_status: "safe",
+        total_count: 9,
+        total_bytes: 9000,
+        valid_artifact_count: 5,
+        current_product_restore_supported: true,
+        temporary_validation_restore_supported: true,
+        artifacts: [{
+          artifact_id: "kmvms-db-20260730T010203Z-abcdef123456",
+          artifact_created_at: "2026-07-30T01:02:03Z",
+          file_size: 1000,
+          availability_status: "available",
+          integrity_status: "verified",
+          compatibility_status: "compatible",
+          restore_validation_status: "passed",
+          delete_status: "allowed",
+          delete_supported: true,
+        }],
+      },
+    },
+  },
+};
+const overviewProjectionBeforePaging = maintenanceBackupOverviewModel(globalOverview, t, "en");
+const pageTwoProjection = maintenanceBackupDetailModel(backupStatus, t, "en");
+const overviewProjectionAfterPaging = maintenanceBackupOverviewModel(globalOverview, t, "en");
+assert.equal(overviewProjectionBeforePaging.totalCount, 9);
+assert.equal(overviewProjectionBeforePaging.totalBytesText, "8.8 KB");
+assert.equal(overviewProjectionBeforePaging.latestCreatedAt, overviewProjectionAfterPaging.latestCreatedAt);
+assert.equal(overviewProjectionAfterPaging.totalCount, 9);
+assert.equal(pageTwoProjection.totalCount, 25);
+assert.equal(pageTwoProjection.offset, 10);
+
+const overallNoBackup = maintenanceOverallHealthModel({
+  overview: { flows: {} },
+  updateOperator: { severity: "ok" },
+  database: { tone: "ok" },
+  backup: { tone: "warning", rootStatus: "safe", totalCount: 0 },
+  warnings: { groups: { actionable: 0 } },
+  t,
+});
+assert.equal(overallNoBackup.tone, "warning");
+assert.equal(overallNoBackup.summary, "No backup text");
+const overallUnknown = maintenanceOverallHealthModel({
+  overview: { flows: {} },
+  updateOperator: { severity: "ok" },
+  database: { tone: "ok" },
+  backup: { tone: "ok", rootStatus: "unknown", totalCount: 1 },
+  warnings: { groups: { actionable: 0 } },
+  t,
+});
+assert.equal(overallUnknown.tone, "neutral");
 assert.doesNotMatch(model.countText, /\d+\/\d+/);
 assert.doesNotMatch(model.statusText, /\d+\/\d+/);
 assert.equal(maintenanceBackupCheckResultText("valid", t), "Check passed");
@@ -357,6 +449,29 @@ assert.equal(restoreBackupOperationPending("{broken", nowMs), null);
 assert.equal(restoreBackupOperationPending("x".repeat(1025), nowMs), null);
 assert.equal(restoreBackupOperationPending(JSON.stringify({ ...pending, schema: 2 }), nowMs), null);
 assert.equal(restoreBackupOperationPending(JSON.stringify(pending), nowMs + (25 * 60 * 60 * 1000)), null);
+assert.equal(BACKUP_OPERATION_ADMISSION_GRACE_MS, 10_000);
+for (const kind of ["create", "check", "delete"]) {
+  const operation = createBackupOperationPending(
+    kind,
+    kind === "create" ? "" : artifactId,
+    submissionId,
+    nowMs,
+  );
+  assert.equal(
+    backupOperationWithinAdmissionGrace(
+      operation,
+      nowMs + BACKUP_OPERATION_ADMISSION_GRACE_MS - 1,
+    ),
+    true,
+  );
+  assert.equal(
+    backupOperationWithinAdmissionGrace(
+      operation,
+      nowMs + BACKUP_OPERATION_ADMISSION_GRACE_MS,
+    ),
+    false,
+  );
+}
 
 const warnings = maintenanceWarningModel({
   upgrade_report: {
@@ -375,6 +490,6 @@ assert.equal(warnings.groups.support, 2);
 assert.equal(warnings.groups.informational, 4);
 assert.equal(warnings.items[0].title, "Video archive is not included");
 assert.equal(warnings.items[1].title, "Warning");
-assert.equal(settingsPage.includes("settingsMaintenanceSupportStatus"), true);
+assert.equal(settingsPage.includes("settingsMaintenanceSupportStatus"), false);
 assert.equal(settingsPage.includes("maintenanceSupportStatusOk"), true);
 assert.equal(settingsPage.includes("<dt>{t.maintenanceWarningActionable}</dt>"), false);

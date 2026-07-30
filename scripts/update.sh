@@ -48,6 +48,7 @@ SLOT_AWARE_ACTIVATION=1
 SLOT_ACTIVATION_RESULT=""
 PREVIOUS_SLOT_ID=""
 TARGET_SLOT_ID=""
+FAILURE_CATEGORY=""
 
 usage() {
   cat <<'EOF'
@@ -129,6 +130,25 @@ write_helper_progress() {
   mv "$tmp_progress" "$UPDATE_PROGRESS_FILE" 2>/dev/null || true
 }
 
+capture_safe_bridge_failure_category() {
+  failure_file="$1"
+  category=""
+  if [ -f "$failure_file" ]; then
+    category=$(
+      sed -n 's/^ERROR \[\([a-z][a-z0-9_]*\)\]:.*$/\1/p' "$failure_file" |
+        tail -n 1
+    )
+  fi
+  case "$category" in
+    slot_adoption_conflict)
+      FAILURE_CATEGORY="$category"
+      ;;
+    *)
+      FAILURE_CATEGORY=""
+      ;;
+  esac
+}
+
 write_update_metadata() {
   status="$1"
   error_message="${2:-}"
@@ -143,6 +163,11 @@ write_update_metadata() {
       printf '  "failed_phase": null,\n'
     else
       printf '  "failed_phase": "%s",\n' "$(json_escape "$PHASE")"
+    fi
+    if [ "$status" != "success" ] && [ -n "$FAILURE_CATEGORY" ]; then
+      printf '  "error_category": "%s",\n' "$(json_escape "$FAILURE_CATEGORY")"
+    else
+      printf '  "error_category": null,\n'
     fi
     printf '  "source_kind": "github-tarball",\n'
     printf '  "github_repo": "%s",\n' "$(json_escape "$GITHUB_REPO")"
@@ -812,18 +837,21 @@ prepare_schema_handoff() {
     grep -Eq '^(update|stage609)-[0-9a-fA-F]{32}$' ||
     fail "A canonical request id is required for schema handoff."
   handoff_output="$TMP_ROOT/slot-handoff.out"
+  handoff_error="$TMP_ROOT/slot-handoff.err"
   if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then
-    python3 "$TMP_ROOT/source/scripts/km-vms-update-helper-bridge.py" \
+    if ! python3 "$TMP_ROOT/source/scripts/km-vms-update-helper-bridge.py" \
       handoff \
       --app-dir "$APP_DIR" \
       --target-source-dir "$TMP_ROOT/source" \
       --request-id "$request_id" \
-      --project-name "$PROJECT_NAME" >"$handoff_output" ||
+      --project-name "$PROJECT_NAME" >"$handoff_output" 2>"$handoff_error"; then
+      capture_safe_bridge_failure_category "$handoff_error"
       fail "Cannot prepare the pre-overlay schema handoff."
+    fi
   else
     version=$(staged_release_descriptor_value version)
     [ -n "$version" ] || fail "Trusted target version is unavailable."
-    python3 "$TMP_ROOT/source/scripts/km-vms-update-helper-bridge.py" \
+    if ! python3 "$TMP_ROOT/source/scripts/km-vms-update-helper-bridge.py" \
       handoff \
       --app-dir "$APP_DIR" \
       --target-source-dir "$TMP_ROOT/source" \
@@ -831,8 +859,10 @@ prepare_schema_handoff() {
       --project-name "$PROJECT_NAME" \
       --terminal \
       --trusted-commit "$SOURCE_COMMIT_SHA" \
-      --declared-version "$version" >"$handoff_output" ||
+      --declared-version "$version" >"$handoff_output" 2>"$handoff_error"; then
+      capture_safe_bridge_failure_category "$handoff_error"
       fail "Cannot prepare the terminal release-slot handoff."
+    fi
   fi
   PREVIOUS_SLOT_ID=$(
     sed -n 's/^previous_slot=//p' "$handoff_output" | tail -n 1
@@ -966,39 +996,21 @@ write_schema_candidate_identity() {
   cp "$TMP_ROOT/source/release/km-vms-update-lineage.json" \
     "$candidate_dir/update-lineage.json" ||
     fail "Cannot stage target update lineage for schema preflight."
-  version=$(staged_release_descriptor_value version)
-  title=$(staged_release_descriptor_value title)
-  summary=$(staged_release_descriptor_value summary)
-  channel=$(staged_release_descriptor_value release_channel)
-  source_kind=$(staged_release_descriptor_value source_kind)
-  source_repo=$(staged_release_descriptor_value source_repo)
-  source_ref=$(staged_release_descriptor_value source_ref)
-  [ -n "$version" ] && [ -n "$title" ] && [ -n "$summary" ] &&
-    [ -n "$channel" ] && [ -n "$source_kind" ] &&
-    [ -n "$source_repo" ] && [ -n "$source_ref" ] ||
-    fail "Target release descriptor is incomplete."
   [ -n "$SOURCE_COMMIT_SHA" ] ||
     fail "Trusted target commit is missing for schema preflight."
   identity="$candidate_dir/release-identity.json"
   installed_at=$(metadata_time)
-  {
-    printf '{\n'
-    printf '  "schema_version": 1,\n'
-    printf '  "product": "KM VMS",\n'
-    printf '  "version": "%s",\n' "$(json_escape "$version")"
-    printf '  "title": "%s",\n' "$(json_escape "$title")"
-    printf '  "summary": "%s",\n' "$(json_escape "$summary")"
-    printf '  "release_channel": "%s",\n' "$(json_escape "$channel")"
-    printf '  "source_kind": "%s",\n' "$(json_escape "$source_kind")"
-    printf '  "source_repo": "%s",\n' "$(json_escape "$source_repo")"
-    printf '  "source_ref": "%s",\n' "$(json_escape "$source_ref")"
-    printf '  "commit_sha": "%s",\n' "$(json_escape "$SOURCE_COMMIT_SHA")"
-    printf '  "installed_at": "%s",\n' "$(json_escape "$installed_at")"
-    printf '  "installed_by": "in_app_helper",\n'
-    printf '  "metadata_status": "precompose",\n'
-    printf '  "metadata_source": "helper"\n'
-    printf '}\n'
-  } > "$identity" ||
+  identity_builder="$TMP_ROOT/source/scripts/km-vms-release-identity.py"
+  [ -f "$identity_builder" ] ||
+    fail "Target release identity builder is missing."
+  python3 "$identity_builder" \
+    --descriptor "$TMP_ROOT/source/release/km-vms-release.json" \
+    --commit "$SOURCE_COMMIT_SHA" \
+    --installed-at "$installed_at" \
+    --installed-by in_app_helper \
+    --metadata-status precompose \
+    --metadata-source helper \
+    > "$identity" ||
     fail "Cannot write target schema candidate identity."
 }
 
@@ -1348,56 +1360,27 @@ write_source_provenance() {
   } > "$provenance"
 }
 
-release_descriptor_value() {
-  key="$1"
-  file="$APP_DIR/release/km-vms-release.json"
-  [ -f "$file" ] || return 0
-  sed -n "s/^[[:space:]]*\"$key\"[[:space:]]*:[[:space:]]*\"\(.*\)\"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p" "$file" | head -n 1
-}
-
 write_release_identity() {
   metadata_status="${1:-}"
   identity="$APP_DIR/.km-vms-release.json"
   tmp_identity="$identity.tmp.$$"
   installed_at=$(metadata_time)
-  version=$(release_descriptor_value version)
-  title=$(release_descriptor_value title)
-  summary=$(release_descriptor_value summary)
-  channel=$(release_descriptor_value release_channel)
-  source_kind=$(release_descriptor_value source_kind)
-  source_repo=$(release_descriptor_value source_repo)
-  source_ref=$(release_descriptor_value source_ref)
-  [ -n "$version" ] || version="0.7.2"
-  [ -n "$title" ] || title="Public GitHub Release Identity and Drift-Proof Update Status"
-  [ -n "$summary" ] || summary="Public GitHub install/update identity and update status hardening."
-  [ -n "$channel" ] || channel="public-github"
-  [ -n "$source_kind" ] || source_kind="github-release"
-  [ -n "$source_repo" ] || source_repo="$GITHUB_REPO"
-  [ -n "$source_ref" ] || source_ref="$BRANCH"
   [ -n "$metadata_status" ] || metadata_status="$(if [ -n "$SOURCE_COMMIT_SHA" ]; then printf complete; else printf partial; fi)"
   [ ! -d "$identity" ] || fail "Release identity path is a directory and cannot be mounted by Docker Compose: $identity"
-  {
-    printf '{\n'
-    printf '  "schema_version": 1,\n'
-    printf '  "product": "KM VMS",\n'
-    printf '  "version": "%s",\n' "$(json_escape "$version")"
-    printf '  "title": "%s",\n' "$(json_escape "$title")"
-    printf '  "summary": "%s",\n' "$(json_escape "$summary")"
-    printf '  "release_channel": "%s",\n' "$(json_escape "$channel")"
-    printf '  "source_kind": "%s",\n' "$(json_escape "$source_kind")"
-    printf '  "source_repo": "%s",\n' "$(json_escape "$source_repo")"
-    printf '  "source_ref": "%s",\n' "$(json_escape "$source_ref")"
-    if [ -n "$SOURCE_COMMIT_SHA" ]; then
-      printf '  "commit_sha": "%s",\n' "$(json_escape "$SOURCE_COMMIT_SHA")"
-    else
-      printf '  "commit_sha": null,\n'
-    fi
-    printf '  "installed_at": "%s",\n' "$(json_escape "$installed_at")"
-    printf '  "installed_by": "%s",\n' "$(if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then printf in_app_helper; else printf terminal_update; fi)"
-    printf '  "metadata_status": "%s",\n' "$(json_escape "$metadata_status")"
-    printf '  "metadata_source": "%s"\n' "$(if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then printf helper; else printf official_update; fi)"
-    printf '}\n'
-  } > "$tmp_identity"
+  identity_builder="$APP_DIR/scripts/km-vms-release-identity.py"
+  [ -f "$identity_builder" ] ||
+    fail "Release identity builder is missing."
+  installed_by="$(if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then printf in_app_helper; else printf terminal_update; fi)"
+  metadata_source="$(if [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ]; then printf helper; else printf official_update; fi)"
+  python3 "$identity_builder" \
+    --descriptor "$APP_DIR/release/km-vms-release.json" \
+    --commit "$SOURCE_COMMIT_SHA" \
+    --installed-at "$installed_at" \
+    --installed-by "$installed_by" \
+    --metadata-status "$metadata_status" \
+    --metadata-source "$metadata_source" \
+    > "$tmp_identity" ||
+    fail "Cannot write release identity."
   if [ -f "$identity" ]; then
     # Preserve the bind-mounted file inode so running containers do not keep
     # reading a stale precompose identity after the final complete write.

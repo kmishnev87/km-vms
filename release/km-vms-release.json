@@ -1,14 +1,24 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.5",
-  "tag": "v0.8.5",
-  "title": "KM VMS 0.8.5 — Safe Current Database Restore and Recovery",
-  "summary": "Adds product-grade restoration of the current KM VMS database with verified pre-restore backup, isolated writers, automatic rollback, truthful progress and recorder recovery proof.",
+  "version": "0.8.6",
+  "tag": "v0.8.6",
+  "title": "KM VMS 0.8.6 — Reliable Updates and Maintenance Overview",
+  "title_i18n": {
+    "en": "KM VMS 0.8.6 — Reliable Updates and Maintenance Overview",
+    "ru": "KM VMS 0.8.6 — надёжные обновления и обзор обслуживания",
+    "zh-CN": "KM VMS 0.8.6 — 可靠更新与维护概览"
+  },
+  "summary": "Improves update retry convergence and current-database restore recovery, and delivers a responsive Maintenance Overview with truthful health, stable backup summaries and clear localized actions.",
+  "summary_i18n": {
+    "en": "Improves update retry convergence and current-database restore recovery, and delivers a responsive Maintenance Overview with truthful health, stable backup summaries and clear localized actions.",
+    "ru": "Повышает надёжность повторных попыток обновления и восстановления рабочей базы, а также добавляет адаптивный обзор обслуживания с правдивым состоянием, стабильной сводкой резервных копий и понятными локализованными действиями.",
+    "zh-CN": "提高更新重试收敛和当前数据库恢复的可靠性，并提供自适应维护概览、真实健康状态、稳定的备份摘要和清晰的本地化操作。"
+  },
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.5",
+  "source_ref": "v0.8.6",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,14 +26,41 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Enables authenticated current-database restore from eligible product-owned backup artifacts.",
-    "Requires integrity, compatibility, temporary-restore, actor-access, capacity and maintenance-conflict preflight.",
-    "Creates and verifies a persistent pre-restore backup before changing the working database.",
-    "Runs restore through the external helper and one-shot executor only after API and recorder writer isolation is proven.",
-    "Automatically rolls back controlled failures and reports recovery-required when rollback cannot be proven.",
-    "Requires a fresh recorder instance and heartbeat before successful restore or rollback completion.",
-    "Reconciles API and recorder independently after partial or unknown writer-stop failures without starting database mutation.",
-    "Shows clear typed confirmation, bounded progress and truthful restore results while keeping video archives outside DB restore.",
-    "Aligns Settings open actions and restores compact equal support-report buttons without changing their existing behavior."
-  ]
+    "Allows compatible no-active-pointer installations to reuse a proven adopted slot on retry while preserving real source, identity and service mismatch blockers.",
+    "Recovers current-database restore services by starting exact existing API and recorder containers without re-evaluating a missing one-shot dependency.",
+    "Shows localized release summaries and changelogs without exact duplicate lines or a false missing-description message.",
+    "Redesigns Maintenance Overview as a concise responsive dashboard with truthful update, database, backup and diagnostic states.",
+    "Keeps global backup totals, latest copy and health independent from the currently open paginated backup detail page.",
+    "Makes nested maintenance dialogs own focus and Escape correctly, and prevents unavailable or incomplete diagnostics from appearing healthy.",
+    "Removes the unused System Name setting from setup, Settings and active API contracts without a risky physical database-column drop."
+  ],
+  "changelog_i18n": {
+    "en": [
+      "Allows compatible no-active-pointer installations to reuse a proven adopted slot on retry while preserving real source, identity and service mismatch blockers.",
+      "Recovers current-database restore services by starting exact existing API and recorder containers without re-evaluating a missing one-shot dependency.",
+      "Shows localized release summaries and changelogs without exact duplicate lines or a false missing-description message.",
+      "Redesigns Maintenance Overview as a concise responsive dashboard with truthful update, database, backup and diagnostic states.",
+      "Keeps global backup totals, latest copy and health independent from the currently open paginated backup detail page.",
+      "Makes nested maintenance dialogs own focus and Escape correctly, and prevents unavailable or incomplete diagnostics from appearing healthy.",
+      "Removes the unused System Name setting from setup, Settings and active API contracts without a risky physical database-column drop."
+    ],
+    "ru": [
+      "Совместимые установки без active pointer повторно используют доказанный adopted slot, а реальные расхождения исходников, identity и сервисов по-прежнему блокируются.",
+      "После восстановления рабочей базы запускаются точные существующие контейнеры API и регистратора без повторной проверки отсутствующей одноразовой зависимости.",
+      "Локализованные описание и список изменений показываются без точных дублей и ложного сообщения об отсутствии описания.",
+      "Обзор обслуживания стал компактной адаптивной панелью с правдивыми состояниями обновления, базы, копий и диагностики.",
+      "Общее число, объём, последняя копия и состояние резервных копий больше не зависят от открытой страницы подробного списка.",
+      "Вложенные окна обслуживания правильно управляют фокусом и Escape, а недоступная или незавершённая диагностика не отображается зелёной.",
+      "Неиспользуемое «Имя системы» удалено из установки, Настроек и активных API-контрактов без рискованного физического удаления столбца БД."
+    ],
+    "zh-CN": [
+      "无 active pointer 的兼容安装可在重试时复用已验证的 adopted slot，同时继续阻止真实的源码、身份和服务差异。",
+      "恢复当前数据库后，直接启动现有的 API 和录像容器，不会因缺失的一次性依赖而重新评估 Compose 依赖。",
+      "本地化版本摘要和更新列表不再显示完全重复的内容，也不会错误提示缺少说明。",
+      "维护概览改为简洁的自适应面板，如实显示更新、数据库、备份和诊断状态。",
+      "备份总数、总容量、最新副本和健康状态不再受当前分页详情页影响。",
+      "嵌套维护对话框正确管理焦点和 Escape，诊断不可用或未完成时不会显示为健康。",
+      "从安装、设置和活动 API 契约中移除未使用的系统名称，同时避免高风险的数据库物理删列。"
+    ]
+  }
 }

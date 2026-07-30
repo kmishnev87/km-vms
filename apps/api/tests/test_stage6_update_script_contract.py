@@ -322,6 +322,44 @@ def test_update_helper_classifies_health_check_failure_from_metadata(tmp_path):
     )
     assert preflight_failure.category == "preflight_failed"
     assert "/volume/private" not in str(preflight_failure)
+    (tmp_path / ".km-vms-update.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "failed_phase": "schema_preflight",
+                "error_category": "slot_adoption_conflict",
+            }
+        ),
+        encoding="utf-8",
+    )
+    adoption_conflict = helper.classify_apply_failure(
+        tmp_path,
+        "/volume/private/raw-preflight-error",
+    )
+    assert adoption_conflict.category == "slot_adoption_conflict"
+    assert "/volume/private" not in str(adoption_conflict)
+    assert helper.classify_preflight_failure(
+        "ERROR [slot_adoption_conflict]: hidden detail"
+    ).category == "slot_adoption_conflict"
+    unknown_preflight = helper.classify_preflight_failure(
+        "ERROR [arbitrary_internal_code]: /volume/private/raw"
+    )
+    assert unknown_preflight.category == "preflight_failed"
+    assert "/volume/private" not in str(unknown_preflight)
+    (tmp_path / ".km-vms-update.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "failed_phase": "schema_preflight",
+                "error_category": "arbitrary_internal_code",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert helper.classify_apply_failure(
+        tmp_path,
+        "ERROR [arbitrary_internal_code]: /volume/private/raw",
+    ).category == "preflight_failed"
     (tmp_path / ".km-vms-update.json").unlink()
     generic = helper.classify_apply_failure(tmp_path, "/volume/private/raw-stderr-marker")
     assert generic.category == "apply_failed"
@@ -684,6 +722,9 @@ def test_update_script_locking_preservation_dry_run_and_metadata_contracts():
         "updated_paths_summary",
         "preserved_paths_summary",
         "error_message",
+        "error_category",
+        "capture_safe_bridge_failure_category",
+        "slot_adoption_conflict",
         '"implemented": true',
     ):
         assert required in script

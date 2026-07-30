@@ -28,6 +28,8 @@ const dictionaries = {
       schema_current_no_pending_migrations: "Схема актуальна, ожидающих миграций нет.",
       schema_update_failed: "Подготовка схемы базы данных завершилась ошибкой.",
       schema_update_retry_after_cause_resolved: "Устраните причину ошибки подготовки базы данных и только затем повторите обновление.",
+      slot_adoption_conflict: "Сохранённый предыдущий релиз больше не совпадает с текущей установкой.",
+      slot_adoption_conflict_action: "Перед повторной попыткой проверьте установленный код и состояние сервисов.",
       restore_no_valid_artifacts: "В настроенной папке резервных копий нет подходящих артефактов восстановления.",
       update_apply_not_available_for_release: "Применение этого релиза из интерфейса недоступно.",
       maintenance_history_limited: "Долговременная история ограничена: показаны текущий статус и последний безопасный отчёт.",
@@ -50,6 +52,8 @@ const dictionaries = {
       schema_current_no_pending_migrations: "Schema is current; no pending migrations.",
       schema_update_failed: "Database schema preparation failed.",
       schema_update_retry_after_cause_resolved: "Resolve the database schema preparation failure before retrying the update.",
+      slot_adoption_conflict: "The preserved previous release no longer matches the current installation.",
+      slot_adoption_conflict_action: "Verify the installed source and runtime state before retrying.",
       restore_no_valid_artifacts: "No valid restore artifacts are available in the configured backup root.",
       update_apply_not_available_for_release: "In-app apply is not available for this release.",
       maintenance_history_limited: "Durable history is limited: current status and the latest safe report are shown.",
@@ -72,6 +76,8 @@ const dictionaries = {
       schema_current_no_pending_migrations: "架构已是最新，没有待执行的迁移。",
       schema_update_failed: "数据库架构准备失败。",
       schema_update_retry_after_cause_resolved: "解决数据库架构准备失败的原因后再重试更新。",
+      slot_adoption_conflict: "保存的上一版本与当前安装不再匹配。",
+      slot_adoption_conflict_action: "重试前请检查已安装源代码和服务运行状态。",
       restore_no_valid_artifacts: "配置的备份根目录中没有可用的恢复工件。",
       update_apply_not_available_for_release: "此版本不支持在界面内应用。",
       maintenance_history_limited: "持久历史记录有限：仅显示当前状态和最新安全报告。",
@@ -84,6 +90,8 @@ const dictionaries = {
 const samples = [
   ["Schema metadata is already valid.", "schema_metadata_valid"],
   ["Schema is current; no pending migrations.", "schema_current_no_pending_migrations"],
+  ["The preserved previous release no longer matches the current installation.", "slot_adoption_conflict"],
+  ["Verify the installed source and runtime state before retrying.", "slot_adoption_conflict_action"],
   ["No valid restore artifacts are available in configured backup root.", "restore_no_valid_artifacts"],
   ["update_apply_not_available_for_release", "update_apply_not_available_for_release"],
   ["No durable maintenance action history is available beyond current status and generated upgrade report summary.", "maintenance_history_limited"],
@@ -115,6 +123,17 @@ for (const [lang, copy] of Object.entries(dictionaries)) {
       copy.maintenanceMessageLabels.schema_update_retry_after_cause_resolved,
     ],
   );
+  assert.deepEqual(
+    updateApplyErrorMessages({
+      category: "slot_adoption_conflict",
+      message: "The preserved previous release no longer matches the current installation.",
+      operator_action: "Verify the installed source and runtime state before retrying.",
+    }, copy, lang),
+    [
+      copy.maintenanceMessageLabels.slot_adoption_conflict,
+      copy.maintenanceMessageLabels.slot_adoption_conflict_action,
+    ],
+  );
 }
 
 for (const forbidden of [
@@ -128,5 +147,16 @@ for (const forbidden of [
   assert.equal(settingsPage.includes(forbidden), false, `${forbidden} must not render raw backend text`);
 }
 
-assert.equal(settingsPage.includes("maintenanceReadinessRows(maintenanceOverview, t)"), true);
+assert.equal(settingsPage.includes("maintenanceDatabaseOverviewModel(maintenanceOverview, t)"), true);
 assert.equal(settingsPage.includes("updateApplyErrorMessages(updateApplyStatus?.error, t, lang)"), true);
+
+for (const localizedReleaseFallback of [
+  'updateApplyReleaseTitleFallback: "Релиз KM VMS"',
+  'updateApplyReleaseSummaryFallback: "Описание релиза отсутствует."',
+  'updateApplyReleaseTitleFallback: "KM VMS release"',
+  'updateApplyReleaseSummaryFallback: "Release notes are unavailable."',
+  'updateApplyReleaseTitleFallback: "KM VMS 版本"',
+  'updateApplyReleaseSummaryFallback: "版本说明缺失。"',
+]) {
+  assert.equal(settingsPage.includes(localizedReleaseFallback), true);
+}

@@ -137,7 +137,6 @@ def stage4101(tmp_path, monkeypatch):
     )
     system = SystemSettings(
         system_initialized=True,
-        system_name="KM VMS",
         timezone="UTC",
         language="ru",
         storage_path=str(archive),

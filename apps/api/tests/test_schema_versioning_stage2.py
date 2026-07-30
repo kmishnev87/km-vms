@@ -46,7 +46,7 @@ def existing_shape(*, missing_setup=False, recorder_runtime=True, nullable_camer
                 "deleted_at": {"nullable": True},
             }
         },
-        "system_settings": {"columns": {"id": {"nullable": False}, "system_name": {"nullable": True}}},
+        "system_settings": {"columns": {"id": {"nullable": False}}},
         "archive_roots": {"columns": {"id": {"nullable": False}}},
         "recording_jobs": {"columns": {"id": {"nullable": False}}},
         "recording_segments": {"columns": {"id": {"nullable": False}}},

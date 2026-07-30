@@ -20,7 +20,8 @@ assert.doesNotMatch(setupPage, /<option value=\{form\.timezone\}>/, "setup wizar
 assert.match(setupPage, /setupFormGrid setupFormGrid-two/, "setup wizard aligns two-column fields through a dedicated setup grid");
 assert.match(setupPage, /setupOwnerGrid[\s\S]*setupOwnerPassword[\s\S]*setupOwnerConfirm/, "owner password confirmation is grouped under the password field");
 assert.match(setupPage, /setupStorageFolder[\s\S]*setupActionField/, "storage folder input and action button share the setup field rhythm");
-assert.match(setupPage, /canAdvance = \[systemNameValid, storageReady, ownerValid, recordingValid/, "setup wizard applies storage before owner credentials");
+assert.match(setupPage, /canAdvance = \[true, storageReady, ownerValid, recordingValid/, "setup wizard applies storage before owner credentials");
+assert.doesNotMatch(setupPage, /system_name|systemName|reviewNote/, "removed system name is absent from setup UI and payload");
 assert.match(setupPage, /if \(step === 1 && !storageReady\)/, "storage validation runs before owner password validation");
 assert.match(setupPage, /if \(step === 2\)[\s\S]{0,220}form\.password/, "owner password validation runs after storage is active");
 assert.match(setupPage, /step !== 1 \|\| busy/, "storage preview runs only on the storage step");

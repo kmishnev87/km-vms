@@ -83,6 +83,13 @@ ACTIVATION_RUNTIME_SERVICES = (
     "setup-helper",
 )
 CORE_RUNTIME_SERVICES = ("api", "recorder", "web", "nginx")
+REQUEST_SCOPED_COMPOSE_EVIDENCE_FIELDS = frozenset(
+    {
+        "captured_plan_sha256",
+        "slot_plan_sha256",
+    }
+)
+REQUEST_ID_COMPOSE_TOKEN = "${KM_VMS_UPDATE_CONTROL_REQUEST_ID}"
 
 LEGACY_HISTORICAL_REQUEST_FIELDS = {
     "schema_version",
@@ -1001,6 +1008,120 @@ def _normalized_compose_digest(
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
+def _normalize_current_compose_contract(
+    value: Any,
+    *,
+    app_dir: Path,
+    source_dir: Path,
+    request_id: str,
+) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _normalize_current_compose_contract(
+                item,
+                app_dir=app_dir,
+                source_dir=source_dir,
+                request_id=request_id,
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _normalize_current_compose_contract(
+                item,
+                app_dir=app_dir,
+                source_dir=source_dir,
+                request_id=request_id,
+            )
+            for item in value
+        ]
+    if not isinstance(value, str):
+        return value
+    normalized = value
+    source_text = str(source_dir.resolve())
+    app_text = str(app_dir.resolve())
+    if source_text != app_text:
+        normalized = normalized.replace(source_text, app_text)
+    return normalized.replace(request_id, REQUEST_ID_COMPOSE_TOKEN)
+
+
+def _current_compose_security_contract(
+    compose: Sequence[str],
+    *,
+    app_dir: Path,
+    source_dir: Path,
+    request_id: str,
+) -> dict[str, Any]:
+    rendered = run_command(
+        [*compose, "config", "--format", "json"],
+        timeout=60,
+        error_code="slot_compose_evidence_failed",
+        error_message="Current Compose security contract could not be captured.",
+    )
+    try:
+        payload = json.loads(rendered.stdout)
+    except json.JSONDecodeError as exc:
+        raise BridgeError(
+            "slot_compose_evidence_failed",
+            "Current Compose security contract is invalid.",
+        ) from exc
+    if type(payload) is not dict or type(payload.get("services")) is not dict:
+        raise BridgeError(
+            "slot_compose_evidence_failed",
+            "Current Compose security contract is invalid.",
+        )
+    return _normalize_current_compose_contract(
+        payload,
+        app_dir=app_dir,
+        source_dir=source_dir,
+        request_id=request_id,
+    )
+
+
+def _historical_compose_evidence_matches(
+    historical: Any,
+    current: dict[str, Any],
+) -> bool:
+    if type(historical) is not dict or set(historical) != set(current):
+        return False
+    if any(
+        type(historical.get(key)) is not str
+        or not re.fullmatch(r"[0-9a-f]{64}", historical[key])
+        or type(current.get(key)) is not str
+        or not re.fullmatch(r"[0-9a-f]{64}", current[key])
+        for key in REQUEST_SCOPED_COMPOSE_EVIDENCE_FIELDS
+    ):
+        return False
+    return all(
+        historical[key] == value
+        for key, value in current.items()
+        if key not in REQUEST_SCOPED_COMPOSE_EVIDENCE_FIELDS
+    )
+
+
+def _reused_adopted_evidence_matches(
+    manifest: dict[str, Any],
+    *,
+    compose_evidence: dict[str, Any],
+    image_evidence: dict[str, Any],
+    health_evidence: dict[str, Any],
+    installed_identity: dict[str, Any],
+) -> bool:
+    return (
+        _historical_compose_evidence_matches(
+            manifest.get("compose_evidence"),
+            compose_evidence,
+        )
+        and manifest.get("image_evidence") == image_evidence
+        and manifest.get("pre_update_health") == health_evidence
+        and manifest.get("declared_identity")
+        == {
+            "version": str(installed_identity["installed_version"]),
+            "commit": str(installed_identity["installed_commit"]),
+        }
+    )
+
+
 def _archive_override_evidence(app_dir: Path) -> tuple[bool, str | None]:
     archive_override = (
         app_dir / "data/install-control/docker-compose.archive-roots.yml"
@@ -1018,7 +1139,8 @@ def capture_pre_update_slot_evidence(
     app_dir: Path,
     *,
     project_name: str,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    request_id: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     ensure_docker_runtime()
     compose = compose_base(
         app_dir,
@@ -1043,6 +1165,12 @@ def capture_pre_update_slot_evidence(
         config.stdout,
         app_dir=app_dir,
         source_dir=app_dir,
+    )
+    current_security_contract = _current_compose_security_contract(
+        compose,
+        app_dir=app_dir,
+        source_dir=app_dir,
+        request_id=request_id,
     )
     compose_evidence = {
         "schema_version": 1,
@@ -1152,7 +1280,12 @@ def capture_pre_update_slot_evidence(
         "api_visible_identity_sha256": identity_digest,
         "core_services": ["api", "nginx", "recorder", "web"],
     }
-    return compose_evidence, image_evidence, health_evidence
+    return (
+        compose_evidence,
+        image_evidence,
+        health_evidence,
+        current_security_contract,
+    )
 
 
 def preserve_slot_images(
@@ -1260,10 +1393,16 @@ def prepare_legacy_adopted_slot(
     project_name = require_project_name(
         os.getenv("KM_VMS_PROJECT_NAME", "").strip()
     )
-    compose_evidence, captured_images, health_evidence = (
+    (
+        compose_evidence,
+        captured_images,
+        health_evidence,
+        current_security_contract,
+    ) = (
         capture_pre_update_slot_evidence(
             app_dir,
             project_name=project_name,
+            request_id=request_id,
         )
     )
     inspect_result = run_command(
@@ -1418,6 +1557,17 @@ def prepare_legacy_adopted_slot(
                 "slot_compose_evidence_failed",
                 "Adopted slot changed the current Compose service set.",
             )
+        slot_security_contract = _current_compose_security_contract(
+            slot_compose,
+            app_dir=app_dir,
+            source_dir=source_path,
+            request_id=request_id,
+        )
+        if slot_security_contract != current_security_contract:
+            raise BridgeError(
+                "slot_adoption_conflict",
+                "Existing adopted slot no longer matches the running legacy source.",
+            )
         compose_evidence["slot_plan_sha256"] = _normalized_compose_digest(
             slot_config.stdout,
             app_dir=app_dir,
@@ -1431,15 +1581,12 @@ def prepare_legacy_adopted_slot(
         )
 
         if stage_payload.get("status") == "reused":
-            if (
-                manifest.get("compose_evidence") != compose_evidence
-                or manifest.get("image_evidence") != image_evidence
-                or manifest.get("pre_update_health") != health_evidence
-                or manifest.get("declared_identity")
-                != {
-                    "version": str(installed_identity["installed_version"]),
-                    "commit": str(installed_identity["installed_commit"]),
-                }
+            if not _reused_adopted_evidence_matches(
+                manifest,
+                compose_evidence=compose_evidence,
+                image_evidence=image_evidence,
+                health_evidence=health_evidence,
+                installed_identity=installed_identity,
             ):
                 raise BridgeError(
                     "slot_adoption_conflict",

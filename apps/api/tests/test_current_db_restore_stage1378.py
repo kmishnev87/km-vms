@@ -192,6 +192,14 @@ def test_current_restore_public_contract_is_bounded_and_consistent() -> None:
         "video_archive_modified": False,
     }
     assert restore.restore_public_contract(payload) == payload
+    with_failed_phase = {
+        **payload,
+        "failed_phase": "restore_running",
+    }
+    assert (
+        restore.restore_public_contract(with_failed_phase)
+        == with_failed_phase
+    )
 
     contradictory = {**payload, "next_action": "sign_in_again"}
     assert restore.restore_public_contract(contradictory) is None

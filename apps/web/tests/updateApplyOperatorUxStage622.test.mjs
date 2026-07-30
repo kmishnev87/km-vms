@@ -14,7 +14,7 @@ const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "
 const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
 
 function cssRule(selector) {
-  const start = css.indexOf(`${selector} {`);
+  const start = css.lastIndexOf(`${selector} {`);
   assert.notEqual(start, -1, `${selector} rule not found`);
   const end = css.indexOf("\n}", start);
   assert.notEqual(end, -1, `${selector} rule is not closed`);
@@ -83,7 +83,9 @@ const t = {
   },
 };
 
-assert.equal(settingsPage.includes("settingsUpdateApplyHero"), true);
+assert.equal(settingsPage.includes("settingsUpdateApplyHero"), false);
+assert.equal(settingsPage.includes("settingsUpdateApplyCompact"), true);
+assert.equal(settingsPage.includes("settingsMaintenanceOverall"), true);
 assert.equal(settingsPage.includes("settingsUpdateApplySummaryGrid"), true);
 assert.equal(settingsPage.includes("settingsUpdateApplySupport"), false);
 assert.equal(settingsPage.includes("settingsMaintenanceModalHeader"), true);
@@ -111,18 +113,19 @@ assert.equal(css.includes(".settingsUpdateApplyTimeline li.is-idle"), true);
 assert.equal(css.includes(".settingsMaintenanceModalHeader"), true);
 assert.equal(css.includes(".settingsMaintenanceBackupManager"), true);
 assert.equal(css.includes("settingsUpdateApplyHero.is-blocked"), true);
-assert.match(
-  cssRule(".settingsUpdateApplyHero"),
-  /grid-template-columns: 38px minmax\(190px, 0\.82fr\) minmax\(0, 1\.75fr\) minmax\(150px, 0\.75fr\)/,
-);
 assert.equal(settingsPage.includes("settingsUpdateApplyVersionRows"), false);
 assert.equal(css.includes(".settingsUpdateApplyVersionRows"), false);
-assert.equal(cssRule(".settingsUpdateApplyHeroFacts").includes("display: contents"), true);
-assert.equal(cssRule(".settingsUpdateApplyHeroPrimaryValue").includes("font-variant-numeric: tabular-nums"), true);
-assert.equal(css.includes("grid-template-columns: 38px minmax(0, 1fr)"), true);
+assert.equal(settingsPage.includes("settingsUpdateApplyHeroPrimaryValue"), false);
+assert.equal(css.includes(".settingsUpdateApplyHeroPrimaryValue"), false);
+assert.match(cssRule(".settingsUpdateApplyCompact"), /grid-template-columns: minmax\(0, 1fr\) auto/);
 assert.equal(css.includes(".settingsUpdateApplySupport"), false);
 assert.equal(settingsPage.includes("<OperationDialog"), true);
 assert.equal(css.includes("overflow-wrap: anywhere"), true);
+assert.equal(settingsPage.includes("settingsUpdateApplyProgressRule"), false);
+assert.equal(css.includes(".settingsUpdateApplyProgressRule"), false);
+assert.equal(settingsPage.includes("{t.updateApplyLastState}"), false);
+assert.match(cssRule(".settingsUpdateApplySummaryGrid"), /grid-template-columns: minmax\(0, 1fr\)/);
+assert.equal(settingsPage.includes("updateApplyOperator.releaseChangelog.map"), true);
 
 assert.equal(updateApplyRecoveryText("provider_unavailable", {}, t), "Provider-specific recovery");
 assert.equal(updateApplyRecoveryText("trusted_snapshot_stale", {}, t), "Refresh-required recovery");
@@ -369,8 +372,244 @@ const ruFallback = updateApplyOperatorModel(
   "ru",
 );
 
-assert.equal(ruFallback.releaseTitle, "Stage 6.3.0 Settings Maintenance");
-assert.equal(ruFallback.releaseSummary, "English-only release notes.");
+assert.equal(ruFallback.releaseTitle, "Published release");
+assert.equal(ruFallback.releaseSummary, "Release notes are not localized.");
+
+const localizedCurrent = updateApplyOperatorModel(
+  {
+    status: "current",
+    can_apply_from_ui: false,
+    comparison: { status: "current" },
+    installed_release: {
+      version: "0.8.5",
+      commit_sha: "c".repeat(40),
+      installed_at: "2026-07-30T08:00:00Z",
+      metadata_status: "complete",
+      identity_validity: "valid",
+      title: "Plain current title",
+      summary: "Plain current summary",
+      changelog: ["Plain current change"],
+      title_i18n: {
+        en: "English current title",
+        ru: "Русское название",
+        "zh-CN": "中文标题",
+      },
+      summary_i18n: {
+        en: "English current summary",
+        ru: "Русское описание",
+        "zh-CN": "中文说明",
+      },
+      changelog_i18n: {
+        en: ["English current change"],
+        ru: ["Русское изменение"],
+        "zh-CN": ["中文变更"],
+      },
+    },
+    available_release: {
+      version: "0.8.5",
+      title: "Must not replace installed notes",
+      summary: "Must not replace installed summary",
+      commit_sha: "c".repeat(40),
+    },
+  },
+  { status: "idle" },
+  t,
+  "ru",
+);
+
+assert.equal(localizedCurrent.releaseTitle, "Русское название");
+assert.equal(localizedCurrent.releaseSummary, "Русское описание");
+assert.deepEqual(localizedCurrent.releaseChangelog, ["Русское изменение"]);
+
+const localizedAvailable = updateApplyOperatorModel(
+  {
+    status: "update_available",
+    can_apply_from_ui: true,
+    comparison: { status: "update_available" },
+    installed_release: {
+      version: "0.8.5",
+      commit_sha: "c".repeat(40),
+    },
+    available_release: {
+      version: "0.8.6",
+      commit_sha: "d".repeat(40),
+      title: "Plain candidate title",
+      summary: "s".repeat(600),
+      changelog: ["Plain candidate change"],
+      title_i18n: {
+        en: "English candidate title",
+        ru: "Русский кандидат",
+        "zh-CN": "中文候选版本",
+      },
+      summary_i18n: {
+        en: "English candidate summary",
+        ru: "Русское описание кандидата",
+        "zh-CN": "中文候选版本说明",
+      },
+      changelog_i18n: {
+        en: ["English candidate change"],
+        ru: ["Русское изменение кандидата"],
+        "zh-CN": ["中文候选版本变更"],
+      },
+    },
+  },
+  { status: "idle" },
+  t,
+  "zh-CN",
+);
+
+assert.equal(localizedAvailable.releaseTitle, "中文候选版本");
+assert.equal(localizedAvailable.releaseSummary, "中文候选版本说明");
+assert.deepEqual(localizedAvailable.releaseChangelog, ["中文候选版本变更"]);
+
+const plainLongSummary = updateApplyOperatorModel(
+  {
+    status: "update_available",
+    can_apply_from_ui: true,
+    comparison: { status: "update_available" },
+    installed_release: { version: "0.8.5", commit_sha: "c".repeat(40) },
+    available_release: {
+      version: "0.8.6",
+      commit_sha: "d".repeat(40),
+      title: "Plain candidate title",
+      summary: "s".repeat(600),
+    },
+  },
+  { status: "idle" },
+  t,
+  "ru",
+);
+
+assert.equal(plainLongSummary.releaseTitle, "Plain candidate title");
+assert.equal(plainLongSummary.releaseSummary.length, 600);
+assert.deepEqual(plainLongSummary.releaseChangelog, []);
+
+const releaseNotesModel = (release) => updateApplyOperatorModel(
+  {
+    status: "update_available",
+    can_apply_from_ui: true,
+    comparison: { status: "update_available" },
+    installed_release: { version: "0.8.5", commit_sha: "c".repeat(40) },
+    available_release: {
+      version: "0.8.6",
+      commit_sha: "d".repeat(40),
+      title: "Candidate",
+      ...release,
+    },
+  },
+  { status: "idle" },
+  t,
+  "en",
+);
+
+const exactDuplicateNotes = releaseNotesModel({
+  summary: "Same text",
+  changelog: [" Same text ", "Other"],
+});
+assert.equal(exactDuplicateNotes.releaseSummary, "Same text");
+assert.deepEqual(exactDuplicateNotes.releaseChangelog, ["Other"]);
+
+const changelogOnlyNotes = releaseNotesModel({
+  changelog: ["Only changelog"],
+});
+assert.equal(changelogOnlyNotes.releaseSummary, "");
+assert.deepEqual(changelogOnlyNotes.releaseChangelog, ["Only changelog"]);
+
+const absentNotes = releaseNotesModel({});
+assert.equal(absentNotes.releaseSummary, "Release notes are not localized.");
+assert.deepEqual(absentNotes.releaseChangelog, []);
+
+const nonExactNotes = releaseNotesModel({
+  summary: "Same text",
+  changelog: ["same text", "Same text.", "Same text"],
+});
+assert.deepEqual(nonExactNotes.releaseChangelog, ["same text", "Same text."]);
+assert.equal(
+  settingsPage.includes("updateApplyOperator.releaseSummary ?"),
+  true,
+);
+
+const installedDate = "2026-07-30T08:00:00Z";
+const finishedDate = "2026-07-30T09:00:00Z";
+const dateStatus = {
+  status: "current",
+  can_apply_from_ui: false,
+  comparison: { status: "current" },
+  installed_release: {
+    version: "0.8.5",
+    commit_sha: "e".repeat(40),
+    installed_at: installedDate,
+    metadata_status: "complete",
+    identity_validity: "valid",
+  },
+};
+const formatEnglishDate = (value) => new Intl.DateTimeFormat("en-US", {
+  year: "2-digit",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+}).format(new Date(value));
+const dateModel = (summary) => updateApplyOperatorModel(
+  dateStatus,
+  { status: "idle", last_apply_summary: summary },
+  t,
+  "en",
+);
+const matchingSummary = {
+  expected_commit: "e".repeat(40),
+  installed_commit: "e".repeat(40),
+  finished_at: finishedDate,
+};
+
+assert.equal(
+  dateModel({ ...matchingSummary, status: "failed", commit_verified: true }).finishedAt,
+  formatEnglishDate(installedDate),
+);
+assert.equal(
+  dateModel({ ...matchingSummary, status: "blocked", commit_verified: true }).finishedAt,
+  formatEnglishDate(installedDate),
+);
+assert.equal(
+  dateModel({ ...matchingSummary, status: "completed" }).finishedAt,
+  formatEnglishDate(installedDate),
+);
+assert.equal(
+  dateModel({ ...matchingSummary, status: "completed", commit_verified: true }).finishedAt,
+  formatEnglishDate(finishedDate),
+);
+assert.equal(
+  dateModel({
+    ...matchingSummary,
+    status: "completed",
+    commit_verified: true,
+    expected_commit: "e".repeat(12),
+  }).finishedAt,
+  formatEnglishDate(installedDate),
+);
+assert.equal(
+  updateApplyOperatorModel(
+    {
+      ...dateStatus,
+      installed_release: {
+        ...dateStatus.installed_release,
+        installed_at: "not-a-date",
+      },
+    },
+    {
+      status: "idle",
+      last_apply_summary: {
+        ...matchingSummary,
+        status: "failed",
+        commit_verified: true,
+        finished_at: "also-not-a-date",
+      },
+    },
+    t,
+    "en",
+  ).finishedAt,
+  "-",
+);
 
 const internalSteps = [
   { name: "queued", status: "completed" },
@@ -390,3 +629,28 @@ assert.deepEqual(macroSteps.map((step) => step.name), ["request", "preflight", "
 assert.equal(macroSteps.length, 5);
 assert.equal(macroSteps[2].status, "running");
 assert.equal(macroSteps.some((step) => ["extracting", "validating_source", "overlay", "compose_config", "rebuilding", "restarting"].includes(step.name)), false);
+
+const completedRuntimeMacroSteps = updateApplyStepRows({
+  steps: [
+    { name: "request", status: "completed" },
+    { name: "preflight", status: "completed" },
+    { name: "apply", status: "completed" },
+    { name: "health_check", status: "completed" },
+    { name: "commit_verification", status: "completed" },
+  ],
+}, t);
+assert.deepEqual(
+  completedRuntimeMacroSteps.map((step) => step.status),
+  ["completed", "completed", "completed", "completed", "completed"],
+);
+
+for (const wording of [
+  'updateApplyStart: "Обновить KM VMS"',
+  'updateApplyStart: "Update KM VMS"',
+  'updateApplyStart: "更新 KM VMS"',
+  'updateApplyConfirm: "Установить доступное обновление KM VMS?"',
+  'updateApplyConfirm: "Install the available KM VMS update?"',
+  'updateApplyConfirm: "安装可用的 KM VMS 更新？"',
+]) {
+  assert.equal(settingsPage.includes(wording), true);
+}

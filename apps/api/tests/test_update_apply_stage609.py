@@ -31,7 +31,7 @@ def sqlite_session(tmp_path):
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     db = Session()
-    db.merge(SystemSettings(id=1, system_initialized=True, system_name="Stage 6.0.9", created_at=datetime(2026, 6, 19, 3, 0, 0)))
+    db.merge(SystemSettings(id=1, system_initialized=True, created_at=datetime(2026, 6, 19, 3, 0, 0)))
     db.add_all(
         [
             User(username="stage609_owner", full_name="Stage 609 Owner", password_hash=hash_password("stage609-password"), role=ROLE_OWNER, is_active=True),

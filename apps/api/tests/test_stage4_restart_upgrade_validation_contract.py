@@ -14,10 +14,11 @@ from app.core.config import settings
 from app.core.permissions import ROLE_OWNER
 from app.db.session import Base
 from app.models.setup_lock import SetupLock
+from app.models.system_settings import SystemSettings
 from app.models.user import User
-from app.routers.settings import SetupRequest, setup
+from app.routers.settings import SettingsUpdateRequest, SetupRequest, setup
 from app.services.setup_storage import CONTAINER_ARCHIVE_PATH, SELECTION_CONTROL_FILE, SELECTION_FILE
-from app.services.system_settings import get_system_settings, update_system_settings
+from app.services.system_settings import get_system_settings, serialize_settings
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -90,7 +91,6 @@ def write_storage_selection(apply_status="active"):
 def payload(**overrides):
     data = {
         "username": "owner_stage4",
-        "system_name": "KM VMS Stage 4",
         "password": "stage4-password",
         "password_confirm": "stage4-password",
         "timezone": "UTC",
@@ -115,22 +115,12 @@ def test_db_backed_setup_lock_blocks_duplicate_owner_after_lock_row(db):
     assert get_system_settings(db).system_initialized is False
 
 
-def test_system_name_is_saved_serialized_and_patchable(db):
-    write_storage_selection()
-
-    setup(payload(system_name="Garage VMS"), db=db, request=FakeRequest())
+def test_removed_system_name_is_absent_from_active_contracts(db):
     row = get_system_settings(db)
-    assert row.system_name == "Garage VMS"
-
-    updated = update_system_settings(db, {"system_name": "Office VMS"})
-    assert updated.system_name == "Office VMS"
-
-
-def test_system_name_rejects_control_and_secret_like_values(db):
-    with pytest.raises(ValueError):
-        update_system_settings(db, {"system_name": "bad\nname"})
-    with pytest.raises(ValueError):
-        update_system_settings(db, {"system_name": "secret token"})
+    assert "system_name" not in SetupRequest.model_fields
+    assert "system_name" not in SettingsUpdateRequest.model_fields
+    assert "system_name" not in serialize_settings(row)
+    assert not hasattr(SystemSettings, "system_name")
 
 
 def test_install_source_dir_excludes_private_key_material():

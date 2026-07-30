@@ -1549,9 +1549,10 @@ def restore_public_status(headers: Any) -> dict[str, Any]:
             "status": "idle",
             "phase": None,
             "terminal_result": None,
+            "failed_phase": None,
             "video_archive_modified": False,
         }
-    expected = {
+    required = {
         "schema",
         "operation_id",
         "submission_id",
@@ -1569,11 +1570,13 @@ def restore_public_status(headers: Any) -> dict[str, Any]:
         "next_action",
         "video_archive_modified",
     }
+    allowed = required | {"failed_phase"}
     artifact = payload.get("artifact")
     status_value = payload.get("status")
     phase = payload.get("phase")
     terminal = payload.get("terminal_result")
     reason_code = payload.get("reason_code")
+    failed_phase = payload.get("failed_phase")
     next_action = payload.get("next_action")
     terminal_results = {
         "completed",
@@ -1582,10 +1585,19 @@ def restore_public_status(headers: Any) -> dict[str, Any]:
         "failed_recovery_required",
     }
     active_statuses = {"queued", "running"}
+    operational_phases = {
+        "preflight",
+        "pre_restore_backup",
+        "writers_paused",
+        "restore_running",
+        "services_starting",
+        "post_restore_check",
+    }
     if payload.get("actor_subject") != subject:
         raise ContractError("foreign_actor_forbidden")
     if (
-        set(payload) != expected
+        not required.issubset(payload)
+        or set(payload) - allowed
         or payload.get("schema") != "stage13.7.8.current-restore-public.v1"
         or not re.fullmatch(
             r"restore-[0-9a-f]{32}",
@@ -1642,6 +1654,10 @@ def restore_public_status(headers: Any) -> dict[str, Any]:
                 or not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", reason_code)
             )
         )
+        or (
+            failed_phase is not None
+            and failed_phase not in operational_phases
+        )
         or not isinstance(next_action, str)
         or next_action
         not in {
@@ -1684,6 +1700,7 @@ def restore_public_status(headers: Any) -> dict[str, Any]:
         or payload.get("started_at") is None
         or (terminal == "completed" and reason_code is not None)
         or (terminal != "completed" and reason_code is None)
+        or (terminal == "completed" and failed_phase is not None)
         or next_action
         != {
             "completed": "sign_in_again",

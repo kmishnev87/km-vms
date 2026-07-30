@@ -127,7 +127,6 @@ def _seed_representative_source(db, owner_password: str):
     )
     settings = SystemSettings(
         system_initialized=True,
-        system_name="KM VMS Stage 5 Disposable",
         timezone="UTC",
         language="ru",
         storage_path="/storage/archive",

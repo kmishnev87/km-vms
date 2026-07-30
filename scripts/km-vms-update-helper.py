@@ -140,6 +140,8 @@ RESTORE_PHASES = {
     "post_restore_check",
     *RESTORE_TERMINAL_RESULTS,
 }
+RESTORE_OPERATIONAL_PHASES = RESTORE_PHASES - RESTORE_TERMINAL_RESULTS
+RESTORE_SERVICE_ALLOWLIST = frozenset({"api", "recorder"})
 
 CURRENT_REQUEST_KEYS = {
     "schema_version",
@@ -189,6 +191,10 @@ APPLY_FRESHNESS_KEYS = {
     "provider",
 }
 TERMINAL_SUMMARY_KEYS = {"status", "finished_at", "error_category"}
+SAFE_PREFLIGHT_FAILURE_CATEGORIES = frozenset({"slot_adoption_conflict"})
+SAFE_FAILURE_LINE_RE = re.compile(
+    r"^ERROR \[([a-z][a-z0-9_]*)\]:[^\r\n]*$"
+)
 SCHEMA_RETRY_KEYS = {
     "schema_version",
     "request_id",
@@ -821,6 +827,7 @@ def error_payload(category: str) -> dict[str, str]:
         "helper_host_app_dir_invalid": "Update helper application directory is invalid.",
         "helper_host_app_dir_unmounted": "Update helper application directory is unavailable.",
         "preflight_failed": "Update preflight failed.",
+        "slot_adoption_conflict": "The preserved previous release no longer matches the current installation.",
         "compose_config_failed": "Docker Compose configuration validation failed.",
         "jellyfin_ffmpeg_repo_unavailable": "External FFmpeg repository was unavailable during image build.",
         "build_network_dependency_failed": "A network dependency failed during image build.",
@@ -843,21 +850,55 @@ def error_payload(category: str) -> dict[str, str]:
         "activation_pointer_conflict": "Release activation state is contradictory.",
         "activation_journal_invalid": "Release activation state is unavailable or invalid.",
     }
-    operator_action = (
-        "The previous release was restored. Review the target failure before retrying."
-        if category
-        in {
-            "target_health_failed",
-            "target_identity_mismatch",
-            "helper_handoff_failed",
-        }
-        else "Review update status and retry only after the cause is resolved."
-    )
+    if category in {
+        "target_health_failed",
+        "target_identity_mismatch",
+        "helper_handoff_failed",
+    }:
+        operator_action = (
+            "The previous release was restored. Review the target failure before retrying."
+        )
+    elif category == "slot_adoption_conflict":
+        operator_action = (
+            "Verify the installed source and runtime state before retrying."
+        )
+    else:
+        operator_action = (
+            "Review update status and retry only after the cause is resolved."
+        )
     return {
         "category": category,
         "message": messages.get(category, "Update apply failed."),
         "operator_action": operator_action,
     }
+
+
+def _allowlisted_preflight_failure_category(
+    metadata: dict[str, Any] | None,
+    stderr: str,
+) -> str | None:
+    metadata_category = (
+        metadata.get("error_category")
+        if isinstance(metadata, dict)
+        else None
+    )
+    if metadata_category in SAFE_PREFLIGHT_FAILURE_CATEGORIES:
+        return str(metadata_category)
+    for line in str(stderr or "").splitlines():
+        match = SAFE_FAILURE_LINE_RE.fullmatch(line.strip())
+        if match and match.group(1) in SAFE_PREFLIGHT_FAILURE_CATEGORIES:
+            return match.group(1)
+    return None
+
+
+def classify_preflight_failure(stderr: str) -> HelperError:
+    category = _allowlisted_preflight_failure_category(None, stderr)
+    if category:
+        return HelperError(
+            category,
+            error_payload(category)["message"],
+        )
+    return HelperError("preflight_failed", "Update preflight failed.")
 
 
 def macro_step(value: str) -> str:
@@ -1257,6 +1298,15 @@ def classify_apply_failure(update_dir: Path, stderr: str) -> HelperError:
             "Docker Compose configuration validation failed.",
         )
     if failed_phase == "schema_preflight":
+        safe_category = _allowlisted_preflight_failure_category(
+            metadata,
+            stderr,
+        )
+        if safe_category:
+            return HelperError(
+                safe_category,
+                error_payload(safe_category)["message"],
+            )
         return HelperError(
             "preflight_failed",
             "Update preflight failed.",
@@ -1635,7 +1685,7 @@ def run_update(request: dict[str, Any]) -> int:
         status_value="preflight",
     )
     if dry.returncode != 0:
-        raise HelperError("preflight_failed", "Update preflight failed.")
+        raise classify_preflight_failure(dry.stderr.strip())
     write_json(
         STATUS_FILE,
         base_status(
@@ -1893,10 +1943,30 @@ def validate_restore_request(value: Any) -> dict[str, Any] | None:
             return None
     else:
         terminal = value.get("terminal")
+        terminal_keys = (
+            set(terminal)
+            if isinstance(terminal, dict)
+            else set()
+        )
+        failed_phase = (
+            terminal.get("failed_phase")
+            if isinstance(terminal, dict)
+            else None
+        )
         if (
             not isinstance(terminal, dict)
-            or set(terminal)
-            != {"status", "finished_at", "reason_code"}
+            or not {
+                "status",
+                "finished_at",
+                "reason_code",
+            }.issubset(terminal_keys)
+            or terminal_keys
+            - {
+                "status",
+                "finished_at",
+                "reason_code",
+                "failed_phase",
+            }
             or terminal.get("status")
             not in RESTORE_TERMINAL_RESULTS
             or parsed_timestamp(value.get("claimed_at")) is None
@@ -1917,6 +1987,15 @@ def validate_restore_request(value: Any) -> dict[str, Any] | None:
             or (
                 terminal.get("status") != "completed"
                 and terminal.get("reason_code") is None
+            )
+            or (
+                failed_phase is not None
+                and failed_phase
+                not in RESTORE_OPERATIONAL_PHASES
+            )
+            or (
+                terminal.get("status") == "completed"
+                and failed_phase is not None
             )
         ):
             return None
@@ -1970,6 +2049,7 @@ def _restore_public_payload(
     pre_restore_backup_id: str | None = None,
     terminal_result: str | None = None,
     reason_code: str | None = None,
+    failed_phase: str | None = None,
 ) -> dict[str, Any]:
     if phase not in RESTORE_PHASES:
         phase = "preflight"
@@ -1988,6 +2068,16 @@ def _restore_public_payload(
         if terminal_result
         else None
     )
+    terminal_failed_phase = (
+        failed_phase
+        if failed_phase in RESTORE_OPERATIONAL_PHASES
+        else terminal.get("failed_phase")
+        if terminal.get("failed_phase")
+        in RESTORE_OPERATIONAL_PHASES
+        else None
+    )
+    if terminal_result == "completed":
+        terminal_failed_phase = None
     return {
         "schema": RESTORE_PUBLIC_SCHEMA,
         "operation_id": request["operation_id"],
@@ -2012,6 +2102,7 @@ def _restore_public_payload(
         "finished_at": terminal_finished_at,
         "terminal_result": terminal_result,
         "reason_code": reason_code,
+        "failed_phase": terminal_failed_phase,
         "next_action": (
             "sign_in_again"
             if terminal_result == "completed"
@@ -2094,6 +2185,7 @@ def finish_restore_request(
     reason_code: str | None,
     pre_restore_backup_id: str | None,
     destructive_started: bool,
+    failed_phase: str | None = None,
 ) -> None:
     if result not in RESTORE_TERMINAL_RESULTS:
         raise HelperError(
@@ -2101,6 +2193,12 @@ def finish_restore_request(
             "Restore terminal result is invalid.",
         )
     finished = utcnow()
+    safe_failed_phase = (
+        failed_phase
+        if result != "completed"
+        and failed_phase in RESTORE_OPERATIONAL_PHASES
+        else None
+    )
     terminal = {
         "status": result,
         "finished_at": finished,
@@ -2110,6 +2208,7 @@ def finish_restore_request(
             and MACHINE_CODE_RE.fullmatch(reason_code)
             else None
         ),
+        "failed_phase": safe_failed_phase,
     }
     request = {
         **request,
@@ -2173,6 +2272,7 @@ def finish_restore_request(
                 pre_restore_backup_id=pre_restore_backup_id,
                 terminal_result=result,
                 reason_code=terminal["reason_code"],
+                failed_phase=terminal["failed_phase"],
             ),
         )
     except HelperError:
@@ -2264,6 +2364,7 @@ def reconcile_restore_terminal_projection() -> None:
                     pre_restore_backup_id=pre_restore_backup_id,
                     terminal_result=result,
                     reason_code=terminal.get("reason_code"),
+                    failed_phase=terminal.get("failed_phase"),
                 ),
             )
         except HelperError:
@@ -2438,6 +2539,8 @@ def run_restore_executor(
 
 
 def _service_container_id(service: str) -> str | None:
+    if service not in RESTORE_SERVICE_ALLOWLIST:
+        return None
     result = restore_compose_command(
         "ps",
         "-q",
@@ -2451,7 +2554,106 @@ def _service_container_id(service: str) -> str | None:
     ) else None
 
 
+def _existing_restore_service_container_id(service: str) -> str:
+    if service not in RESTORE_SERVICE_ALLOWLIST:
+        raise HelperError(
+            "restore_service_not_allowed",
+            "Restore service is not allowlisted.",
+        )
+    try:
+        result = restore_compose_command(
+            "ps",
+            "-q",
+            "--all",
+            service,
+            timeout_seconds=30,
+        )
+    except HelperError as exc:
+        raise HelperError(
+            "restore_service_discovery_failed",
+            "Restore service container discovery failed.",
+        ) from exc
+    container_ids = [
+        value.strip()
+        for value in result.stdout.splitlines()
+        if value.strip()
+    ]
+    if (
+        result.returncode != 0
+        or len(container_ids) != 1
+        or not re.fullmatch(r"[0-9a-f]{12,64}", container_ids[0])
+    ):
+        raise HelperError(
+            "restore_service_container_unavailable",
+            "Exact restore service container is unavailable.",
+        )
+    container_id = container_ids[0]
+    try:
+        inspected = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                '{{ index .Config.Labels "com.docker.compose.service" }}',
+                container_id,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HelperError(
+            "restore_service_discovery_failed",
+            "Restore service container validation failed.",
+        ) from exc
+    if (
+        inspected.returncode != 0
+        or inspected.stdout.strip() != service
+    ):
+        raise HelperError(
+            "restore_service_identity_mismatch",
+            "Restore service container identity did not match.",
+        )
+    return container_id
+
+
+def _run_existing_restore_service_action(
+    service: str,
+    action: str,
+) -> str:
+    if action not in {"start", "restart"}:
+        raise HelperError(
+            "restore_service_action_invalid",
+            "Restore service action is invalid.",
+        )
+    container_id = _existing_restore_service_container_id(service)
+    try:
+        result = subprocess.run(
+            ["docker", action, container_id],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HelperError(
+            "restore_service_action_failed",
+            "Restore service action failed.",
+        ) from exc
+    if result.returncode != 0:
+        raise HelperError(
+            "restore_service_action_failed",
+            "Restore service action failed.",
+        )
+    return container_id
+
+
 def _service_running_state(service: str) -> bool | None:
+    if service not in RESTORE_SERVICE_ALLOWLIST:
+        return None
     try:
         result = restore_compose_command(
             "ps",
@@ -2514,10 +2716,24 @@ def wait_for_service(
     *,
     require_health: bool,
     timeout_seconds: int,
+    expected_container_id: str | None = None,
 ) -> bool:
+    if service not in RESTORE_SERVICE_ALLOWLIST:
+        return False
+    if (
+        expected_container_id is not None
+        and not re.fullmatch(
+            r"[0-9a-f]{12,64}",
+            expected_container_id,
+        )
+    ):
+        return False
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        container_id = _service_container_id(service)
+        container_id = (
+            expected_container_id
+            or _service_container_id(service)
+        )
         if container_id:
             template = (
                 "{{.State.Health.Status}}"
@@ -2570,50 +2786,59 @@ def stop_restore_writers() -> None:
     )
 
 
-def start_restore_api() -> None:
-    result = restore_compose_command(
-        "start",
-        "api",
-        timeout_seconds=180,
-    )
-    if (
-        result.returncode != 0
-        or not wait_for_service(
+def start_restore_api() -> str:
+    try:
+        container_id = _run_existing_restore_service_action(
             "api",
-            require_health=True,
-            timeout_seconds=120,
+            "start",
         )
+    except HelperError as exc:
+        raise HelperError(
+            "restore_api_start_failed",
+            "API container did not start after restore.",
+        ) from exc
+    if not wait_for_service(
+        "api",
+        require_health=True,
+        timeout_seconds=120,
+        expected_container_id=container_id,
     ):
         raise HelperError(
             "restore_api_health_failed",
             "API did not become healthy after restore.",
         )
+    return container_id
 
 
-def start_restore_recorder() -> None:
-    result = restore_compose_command(
-        "start",
-        "recorder",
-        timeout_seconds=180,
-    )
-    if (
-        result.returncode != 0
-        or not wait_for_service(
+def start_restore_recorder() -> str:
+    try:
+        container_id = _run_existing_restore_service_action(
             "recorder",
-            require_health=False,
-            timeout_seconds=60,
+            "start",
         )
+    except HelperError as exc:
+        raise HelperError(
+            "restore_recorder_start_failed",
+            "Recorder container did not start after restore.",
+        ) from exc
+    if not wait_for_service(
+        "recorder",
+        require_health=False,
+        timeout_seconds=60,
+        expected_container_id=container_id,
     ):
         raise HelperError(
             "restore_recorder_start_failed",
             "Recorder did not start after restore.",
         )
+    return container_id
 
 
 def require_restore_recorder_start_proof(
     request: dict[str, Any],
     *,
     not_before_epoch: float,
+    expected_container_id: str | None = None,
 ) -> None:
     try:
         run_restore_executor(
@@ -2632,6 +2857,7 @@ def require_restore_recorder_start_proof(
         "recorder",
         require_health=False,
         timeout_seconds=10,
+        expected_container_id=expected_container_id,
     ):
         raise HelperError(
             "restore_recorder_start_failed",
@@ -2643,10 +2869,11 @@ def start_restore_recorder_with_proof(
     request: dict[str, Any],
 ) -> None:
     not_before_epoch = time.time()
-    start_restore_recorder()
+    container_id = start_restore_recorder()
     require_restore_recorder_start_proof(
         request,
         not_before_epoch=not_before_epoch,
+        expected_container_id=container_id,
     )
 
 
@@ -2654,18 +2881,21 @@ def restart_restore_recorder_with_proof(
     request: dict[str, Any],
 ) -> None:
     not_before_epoch = time.time()
-    result = restore_compose_command(
-        "restart",
-        "recorder",
-        timeout_seconds=180,
-    )
-    if (
-        result.returncode != 0
-        or not wait_for_service(
+    try:
+        container_id = _run_existing_restore_service_action(
             "recorder",
-            require_health=False,
-            timeout_seconds=60,
+            "restart",
         )
+    except HelperError as exc:
+        raise HelperError(
+            "restore_recorder_start_failed",
+            "Recorder did not restart during restore recovery.",
+        ) from exc
+    if not wait_for_service(
+        "recorder",
+        require_health=False,
+        timeout_seconds=60,
+        expected_container_id=container_id,
     ):
         raise HelperError(
             "restore_recorder_start_failed",
@@ -2674,6 +2904,7 @@ def restart_restore_recorder_with_proof(
     require_restore_recorder_start_proof(
         request,
         not_before_epoch=not_before_epoch,
+        expected_container_id=container_id,
     )
 
 
@@ -2724,30 +2955,44 @@ def rollback_current_restore(
     *,
     pre_restore_backup_id: str | None,
     reason_code: str,
+    failed_phase: str | None = None,
 ) -> None:
+    source_failed_phase = (
+        failed_phase
+        if failed_phase in RESTORE_OPERATIONAL_PHASES
+        else "restore_running"
+    )
+
+    def recovery_required(
+        recovery_reason: str,
+        recovery_phase: str,
+    ) -> None:
+        finish_restore_request(
+            request,
+            result="failed_recovery_required",
+            reason_code=recovery_reason,
+            pre_restore_backup_id=pre_restore_backup_id,
+            destructive_started=True,
+            failed_phase=recovery_phase,
+        )
+
     if (
         not pre_restore_backup_id
         or not RESTORE_ARTIFACT_ID_RE.fullmatch(
             pre_restore_backup_id
         )
     ):
-        finish_restore_request(
-            request,
-            result="failed_recovery_required",
-            reason_code="pre_restore_backup_missing",
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=True,
+        recovery_required(
+            "pre_restore_backup_missing",
+            "restore_running",
         )
         return
     try:
         stop_restore_writers()
     except HelperError:
-        finish_restore_request(
-            request,
-            result="failed_recovery_required",
-            reason_code="automatic_rollback_failed",
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=True,
+        recovery_required(
+            "automatic_rollback_isolation_failed",
+            "writers_paused",
         )
         return
     try:
@@ -2757,28 +3002,46 @@ def rollback_current_restore(
             artifact_id=pre_restore_backup_id,
             mode="rollback",
         )
-        publish_restore_phase(
-            request,
-            phase="services_starting",
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=True,
+    except Exception:
+        recovery_required(
+            "automatic_rollback_database_failed",
+            "restore_running",
         )
+        return
+    publish_restore_phase(
+        request,
+        phase="services_starting",
+        pre_restore_backup_id=pre_restore_backup_id,
+        destructive_started=True,
+    )
+    try:
         start_restore_api()
-        publish_restore_phase(
-            request,
-            phase="post_restore_check",
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=True,
+    except Exception:
+        recovery_required(
+            "automatic_rollback_api_recovery_failed",
+            "services_starting",
         )
+        return
+    publish_restore_phase(
+        request,
+        phase="post_restore_check",
+        pre_restore_backup_id=pre_restore_backup_id,
+        destructive_started=True,
+    )
+    try:
         run_restore_executor(request, "post-check")
+    except Exception:
+        recovery_required(
+            "automatic_rollback_validation_failed",
+            "post_restore_check",
+        )
+        return
+    try:
         start_restore_recorder_with_proof(request)
     except Exception:
-        finish_restore_request(
-            request,
-            result="failed_recovery_required",
-            reason_code="automatic_rollback_failed",
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=True,
+        recovery_required(
+            "automatic_rollback_recorder_recovery_failed",
+            "post_restore_check",
         )
         return
     finish_restore_request(
@@ -2787,6 +3050,7 @@ def rollback_current_restore(
         reason_code=reason_code,
         pre_restore_backup_id=pre_restore_backup_id,
         destructive_started=True,
+        failed_phase=source_failed_phase,
     )
 
 
@@ -2810,6 +3074,13 @@ def run_current_restore(request: dict[str, Any]) -> None:
             request,
             pre_restore_backup_id=pre_restore_backup_id,
             reason_code="restore_interrupted_after_mutation",
+            failed_phase=(
+                prior_journal.get("phase")
+                if isinstance(prior_journal, dict)
+                and prior_journal.get("phase")
+                in RESTORE_OPERATIONAL_PHASES
+                else "restore_running"
+            ),
         )
         return
     if (
@@ -2833,25 +3104,36 @@ def run_current_restore(request: dict[str, Any]) -> None:
                 "pre_restore_backup_id"
             ),
             destructive_started=False,
+            failed_phase=(
+                prior_journal.get("phase")
+                if prior_journal.get("phase")
+                in RESTORE_OPERATIONAL_PHASES
+                else "preflight"
+            ),
         )
         return
 
     pre_restore_backup_id: str | None = None
     writers_isolation_attempted = False
     destructive_started = False
+    current_phase = "preflight"
     try:
+        current_phase = "preflight"
         publish_restore_phase(request, phase="preflight")
         run_restore_executor(request, "preflight")
+        current_phase = "pre_restore_backup"
         publish_restore_phase(
             request,
             phase="pre_restore_backup",
         )
         writers_isolation_attempted = True
+        current_phase = "writers_paused"
         stop_restore_writers()
         publish_restore_phase(
             request,
             phase="writers_paused",
         )
+        current_phase = "pre_restore_backup"
         backup = run_restore_executor(
             request,
             "pre-restore-backup",
@@ -2871,6 +3153,7 @@ def run_current_restore(request: dict[str, Any]) -> None:
                 "pre_restore_backup_verification_failed",
                 "Pre-restore backup verification failed.",
             )
+        current_phase = "restore_running"
         publish_restore_phase(
             request,
             phase="restore_running",
@@ -2883,6 +3166,7 @@ def run_current_restore(request: dict[str, Any]) -> None:
             artifact_id=request["artifact"]["artifact_id"],
             mode="source",
         )
+        current_phase = "services_starting"
         publish_restore_phase(
             request,
             phase="services_starting",
@@ -2890,6 +3174,7 @@ def run_current_restore(request: dict[str, Any]) -> None:
             destructive_started=True,
         )
         start_restore_api()
+        current_phase = "post_restore_check"
         publish_restore_phase(
             request,
             phase="post_restore_check",
@@ -2919,6 +3204,7 @@ def run_current_restore(request: dict[str, Any]) -> None:
                 request,
                 pre_restore_backup_id=pre_restore_backup_id,
                 reason_code=exc.category,
+                failed_phase=current_phase,
             )
             return
         writers_recovered = bool(
@@ -2935,6 +3221,7 @@ def run_current_restore(request: dict[str, Any]) -> None:
             ),
             pre_restore_backup_id=pre_restore_backup_id,
             destructive_started=False,
+            failed_phase=current_phase,
         )
         return
     except Exception:
@@ -2949,6 +3236,7 @@ def run_current_restore(request: dict[str, Any]) -> None:
                 request,
                 pre_restore_backup_id=pre_restore_backup_id,
                 reason_code="restore_helper_exception",
+                failed_phase=current_phase,
             )
             return
         writers_recovered = bool(
@@ -2965,6 +3253,7 @@ def run_current_restore(request: dict[str, Any]) -> None:
             ),
             pre_restore_backup_id=pre_restore_backup_id,
             destructive_started=False,
+            failed_phase=current_phase,
         )
         return
 
@@ -2986,6 +3275,13 @@ def converge_unhandled_restore_failure(
             request,
             pre_restore_backup_id=pre_restore_backup_id,
             reason_code=reason_code,
+            failed_phase=(
+                journal.get("phase")
+                if isinstance(journal, dict)
+                and journal.get("phase")
+                in RESTORE_OPERATIONAL_PHASES
+                else "restore_running"
+            ),
         )
         return
     writers_recovered = restart_restore_writers_best_effort(
@@ -3001,6 +3297,13 @@ def converge_unhandled_restore_failure(
         ),
         pre_restore_backup_id=pre_restore_backup_id,
         destructive_started=False,
+        failed_phase=(
+            journal.get("phase")
+            if isinstance(journal, dict)
+            and journal.get("phase")
+            in RESTORE_OPERATIONAL_PHASES
+            else "preflight"
+        ),
     )
 
 

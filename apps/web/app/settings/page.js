@@ -24,9 +24,12 @@ import {
   hardwareOptionState,
   humanErrorText,
   languageOf,
-  maintenanceBackupManagerModel,
+  maintenanceBackupDetailModel,
+  maintenanceBackupOverviewModel,
   maintenanceBackupOperationResultText,
-  maintenanceReadinessRows,
+  maintenanceBackupValidOffset,
+  maintenanceDatabaseOverviewModel,
+  maintenanceOverallHealthModel,
   maintenanceStatusClass,
   maintenanceStatusText,
   maintenanceWarningModel,
@@ -46,6 +49,7 @@ import {
   UPDATE_APPLY_POLL_INTERVAL_MS,
   UPDATE_APPLY_PENDING_STORAGE_KEY,
   BACKUP_OPERATION_PENDING_STORAGE_KEY,
+  backupOperationWithinAdmissionGrace,
   createBackupOperationPending,
   createUpdateApplyPending,
   reconcileUpdateApplyPending,
@@ -71,6 +75,32 @@ const MAINTENANCE_BACKUP_PAGE_SIZE = 5;
 const MAINTENANCE_BACKUP_POLL_INTERVAL_MS = 3000;
 const CURRENT_RESTORE_PENDING_STORAGE_KEY = "km_vms_current_restore_pending_v1";
 const CURRENT_RESTORE_CONFIRMATION_PHRASE = "RESTORE KM VMS";
+const CURRENT_RESTORE_OPERATIONAL_PHASES = [
+  "preflight",
+  "pre_restore_backup",
+  "writers_paused",
+  "restore_running",
+  "services_starting",
+  "post_restore_check",
+];
+const CURRENT_RESTORE_LEGACY_REASON_PHASES = {
+  pre_restore_backup_verification_failed: "pre_restore_backup",
+  restore_writer_isolation_failed: "writers_paused",
+  automatic_rollback_isolation_failed: "writers_paused",
+  pg_restore_failed: "restore_running",
+  pre_restore_backup_missing: "restore_running",
+  restore_interrupted_after_mutation: "restore_running",
+  automatic_rollback_database_failed: "restore_running",
+  restore_api_health_failed: "services_starting",
+  automatic_rollback_api_recovery_failed: "services_starting",
+  automatic_rollback_validation_failed: "post_restore_check",
+  post_restore_actor_access_invalid: "post_restore_check",
+  post_restore_schema_invalid: "post_restore_check",
+  post_restore_metadata_invalid: "post_restore_check",
+  post_restore_tables_missing: "post_restore_check",
+  restore_recorder_start_failed: "post_restore_check",
+  automatic_rollback_recorder_recovery_failed: "post_restore_check",
+};
 
 let settingsBodyScrollLockCount = 0;
 let settingsBodyPreviousOverflow = "";
@@ -162,8 +192,6 @@ const TEXT = {
     cancel: "Отменить",
     dirty: "Есть несохранённые изменения",
     checking: "Проверка...",
-    systemName: "Имя системы",
-    systemNameHelp: "Несекретное имя продукта для админских экранов.",
     language: "Язык",
     languageHelp: "Язык интерфейса KM VMS.",
     russian: "Русский",
@@ -189,6 +217,15 @@ const TEXT = {
     maintenance: "Обслуживание",
     maintenanceText: "Обновление, обслуживание: БД, миграций, восстановления и отчёта.",
     maintenanceOverview: "Обзор обслуживания",
+    maintenanceOverallHealthy: "Система работает нормально",
+    maintenanceOverallHealthyText: "Обновление, база данных, резервные копии и диагностика доступны.",
+    maintenanceOverallAttention: "Есть пункты, требующие внимания",
+    maintenanceOverallAttentionText: "Основные функции доступны, но один из разделов обслуживания требует проверки.",
+    maintenanceOverallNoBackupText: "Система работает, но резервных копий базы данных пока нет.",
+    maintenanceOverallBlocked: "Обслуживание требует действий",
+    maintenanceOverallBlockedText: "Одна из важных операций недоступна. Откройте соответствующий раздел или скачайте отчёт.",
+    maintenanceOverallUnknown: "Состояние обслуживания уточняется",
+    maintenanceOverallUnknownText: "Не все данные получены. Обновите обзор или повторите попытку позже.",
     maintenanceRefresh: "Обновить",
     maintenanceLoadError: "Обзор обслуживания недоступен.",
     maintenanceLimitedHistory: "Долговременная история ограничена: показаны текущий статус и последний безопасный отчёт.",
@@ -205,6 +242,10 @@ const TEXT = {
     maintenanceBackupResult: "Последняя резервная копия",
     maintenanceBackupsTitle: "Резервные копии",
     maintenanceBackupsText: "Создание, проверка и удаление копий базы и служебных метаданных.",
+    maintenanceDatabaseTitle: "База данных",
+    maintenanceBackupOpenList: "Открыть список",
+    maintenanceBackupBackToOverview: "К обзору",
+    maintenanceLastUpdate: "Последнее обновление",
     maintenanceBackupCreateShort: "Создать",
     maintenanceBackupCheck: "Проверить",
     maintenanceBackupDelete: "Удалить",
@@ -213,15 +254,12 @@ const TEXT = {
     maintenanceBackupDeleteFailed: "Не удалось удалить резервную копию.",
     maintenanceBackupDeleteConfirm: "Удалить резервную копию от {date}? Это удалит только продуктовые файлы этой копии. Видеоархивы не затрагиваются.",
     maintenanceBackupRestore: "Восстановить",
-    maintenanceBackupRestoreAvailable: "Восстановление доступно",
-    maintenanceBackupRestoreUnavailable: "Восстановление в рабочую базу пока недоступно",
-    maintenanceBackupRestoreUnavailableReason: "Сейчас доступна безопасная проверка копии во временной базе. Восстановление рабочей базы будет отдельным защищённым сценарием.",
     maintenanceCurrentRestoreAction: "Восстановить рабочую базу",
     maintenanceCurrentRestoreTitle: "Восстановление рабочей базы данных",
     maintenanceCurrentRestoreIntro: "Выбрана копия от {date}. Перед запуском система ещё раз проверит именно эту копию.",
     maintenanceCurrentRestoreChanges: "Пользователи, камеры, настройки и служебные метаданные вернутся к состоянию этой копии.",
     maintenanceCurrentRestoreVideoSafe: "Видеоархив и файлы записей не восстанавливаются и не удаляются.",
-    maintenanceCurrentRestoreBackupFirst: "Перед заменой базы будет создана и проверена резервная копия текущего состояния.",
+    maintenanceCurrentRestoreBackupFirst: "Перед заменой базы система создаст и проверит страховочную копию её текущего состояния. При неуспехе выбранного восстановления база автоматически вернётся из этой копии; видеоархив в неё не входит и не изменяется.",
     maintenanceCurrentRestoreInterruption: "Во время операции API и запись камер будут кратковременно остановлены.",
     maintenanceCurrentRestoreActor: "Текущий администратор должен существовать и быть активным в выбранной копии.",
     maintenanceCurrentRestorePhraseLabel: "Для подтверждения введите RESTORE KM VMS",
@@ -235,7 +273,6 @@ const TEXT = {
     maintenanceCurrentRestoreClose: "Закрыть",
     maintenanceCurrentRestoreCancel: "Отмена",
     maintenanceCurrentRestoreTerminalPhase: "Результат",
-    maintenanceCurrentRestoreStatusLabel: "Текущий этап",
     maintenanceCurrentRestorePhraseMismatch: "Введите фразу подтверждения точно как указано.",
     maintenanceCurrentRestoreRequestRejected: "Запуск восстановления отклонён.",
     maintenanceCurrentRestorePhases: {
@@ -289,6 +326,11 @@ const TEXT = {
       restore_api_health_failed: "После восстановления API не прошёл проверку здоровья.",
       restore_recorder_start_failed: "После проверки базы не удалось запустить запись.",
       automatic_rollback_failed: "Автоматический возврат исходной базы не завершился. Обратитесь в поддержку.",
+      automatic_rollback_isolation_failed: "Не удалось безопасно остановить службы записи для автоматического возврата базы. Возврат базы не выполнен; обратитесь в поддержку.",
+      automatic_rollback_database_failed: "Автоматический возврат базы не завершён или не подтверждён. Не повторяйте операцию и обратитесь в поддержку.",
+      automatic_rollback_api_recovery_failed: "Страховочная копия базы возвращена, но API не запустился. Полная готовность приложения не подтверждена.",
+      automatic_rollback_validation_failed: "Страховочная копия базы возвращена, но итоговая проверка не завершилась. Полная готовность приложения не подтверждена.",
+      automatic_rollback_recorder_recovery_failed: "База возвращена и API проверен, но служба записи камер не восстановилась. Полная готовность приложения не подтверждена.",
       restore_interrupted_before_mutation: "Операция прервалась до изменения рабочей базы.",
       restore_interrupted_after_mutation: "Операция прервалась после начала изменения; выполнен автоматический возврат.",
       restore_helper_exception: "Служба восстановления завершила операцию с внутренней ошибкой.",
@@ -441,13 +483,13 @@ const TEXT = {
     },
     maintenanceMessageFallback: "Статус получен, подробности недоступны.",
     maintenanceActionFallback: "Действие сейчас недоступно. Проверьте состояние системы и повторите позже.",
-    updateApplyTitle: "Применение обновления",
+    updateApplyTitle: "Обновление KM VMS",
     updateApplyCheck: "Проверить обновление",
-    updateApplyStart: "Применить обновление",
-    updateApplyConfirm: "Установить доступное обновление?",
+    updateApplyStart: "Обновить KM VMS",
+    updateApplyConfirm: "Установить доступное обновление KM VMS?",
     updateApplyConfirmRestart: "Сервисы могут временно перезапуститься; статус продолжит обновляться после восстановления API.",
     updateApplyModalTitle: "Обновление KM VMS",
-    updateApplyModalConfirm: "Обновить",
+    updateApplyModalConfirm: "Обновить KM VMS",
     updateApplyLaunchChecking: "Проверяем запуск обновления",
     updateApplyLaunchCheckingText: "Ответ сервера временно недоступен. KM VMS проверяет статус и не отправляет повторный запрос.",
     updateApplyLaunchUnknown: "Результат запуска пока не подтверждён. Проверка продолжается автоматически; повторное применение заблокировано.",
@@ -464,7 +506,7 @@ const TEXT = {
       request_failed: "Не удалось получить статус обновления. Проверка продолжится автоматически.",
       typed_backend_error: "Сервис обновления сообщил об ошибке.",
     },
-    updateApplyQueued: "Запрос обновления передан helper.",
+    updateApplyQueued: "Запрос на обновление KM VMS передан helper.",
     updateApplyUnavailable: "Действие сейчас недоступно. Проверьте сообщение в этом блоке и повторите проверку обновления.",
     updateApplyConnection: "Сервис может временно перезапускаться; опрос статуса продолжится автоматически.",
     updateApplyRecoveryAvailable: "Проверьте целевую версию и commit, затем запустите применение.",
@@ -516,8 +558,8 @@ const TEXT = {
       unknown: "Статус временно неизвестен",
     },
     updateApplyReleaseChanges: "Что изменилось в этом релизе",
-    updateApplyReleaseTitleFallback: "Опубликованный релиз",
-    updateApplyReleaseSummaryFallback: "Описание релиза не локализовано. Техническое название доступно в диагностическом отчёте.",
+    updateApplyReleaseTitleFallback: "Релиз KM VMS",
+    updateApplyReleaseSummaryFallback: "Описание релиза отсутствует.",
     updateApplyLastState: "Последний прогресс",
     updateApplyStepDone: "Готово",
     updateApplyTimelineCurrent: "Текущая версия",
@@ -678,6 +720,8 @@ const TEXT = {
       schema_current_no_pending_migrations: "Схема актуальна, ожидающих миграций нет.",
       schema_update_failed: "Подготовка схемы базы данных завершилась ошибкой.",
       schema_update_retry_after_cause_resolved: "Устраните причину ошибки подготовки базы данных и только затем повторите обновление.",
+      slot_adoption_conflict: "Сохранённый предыдущий релиз больше не совпадает с текущей установкой.",
+      slot_adoption_conflict_action: "Перед повторной попыткой проверьте установленный код и состояние сервисов.",
       restore_no_valid_artifacts: "В настроенной папке резервных копий нет подходящих артефактов восстановления.",
       update_apply_not_available_for_release: "Применение этого релиза из интерфейса недоступно.",
       maintenance_history_limited: "Долговременная история ограничена: показаны текущий статус и последний безопасный отчёт.",
@@ -830,8 +874,6 @@ const TEXT = {
     cancel: "Cancel",
     dirty: "You have unsaved changes",
     checking: "Checking...",
-    systemName: "System name",
-    systemNameHelp: "Non-secret product name for admin screens.",
     language: "Language",
     languageHelp: "KM VMS interface language.",
     russian: "Русский",
@@ -857,6 +899,15 @@ const TEXT = {
     maintenance: "Maintenance",
     maintenanceText: "Updates and maintenance: database, migrations, restore, and reports.",
     maintenanceOverview: "Maintenance overview",
+    maintenanceOverallHealthy: "The system is operating normally",
+    maintenanceOverallHealthyText: "Updates, database maintenance, backups, and diagnostics are available.",
+    maintenanceOverallAttention: "Some items need attention",
+    maintenanceOverallAttentionText: "Core functions are available, but one maintenance area needs review.",
+    maintenanceOverallNoBackupText: "The system is operating, but there are no database backups yet.",
+    maintenanceOverallBlocked: "Maintenance action is required",
+    maintenanceOverallBlockedText: "An important operation is unavailable. Review its section or download a report.",
+    maintenanceOverallUnknown: "Maintenance status is being checked",
+    maintenanceOverallUnknownText: "Not all data is available. Refresh the overview or try again later.",
     maintenanceRefresh: "Refresh",
     maintenanceLoadError: "Maintenance overview is unavailable.",
     maintenanceLimitedHistory: "Durable history is limited: current status and the latest safe report are shown.",
@@ -873,6 +924,10 @@ const TEXT = {
     maintenanceBackupResult: "Latest backup",
     maintenanceBackupsTitle: "Backups",
     maintenanceBackupsText: "Create, check, and delete database and service metadata backups.",
+    maintenanceDatabaseTitle: "Database",
+    maintenanceBackupOpenList: "Open list",
+    maintenanceBackupBackToOverview: "Back to overview",
+    maintenanceLastUpdate: "Last update",
     maintenanceBackupCreateShort: "Create",
     maintenanceBackupCheck: "Check",
     maintenanceBackupDelete: "Delete",
@@ -881,15 +936,12 @@ const TEXT = {
     maintenanceBackupDeleteFailed: "Failed to delete backup.",
     maintenanceBackupDeleteConfirm: "Delete the backup from {date}? Only product-owned files for this backup are removed. Video archives are not affected.",
     maintenanceBackupRestore: "Restore",
-    maintenanceBackupRestoreAvailable: "Restore is available",
-    maintenanceBackupRestoreUnavailable: "Restore to the working database is not available yet",
-    maintenanceBackupRestoreUnavailableReason: "A safe check in a temporary database is available now. Working database restore will be a separate protected flow.",
     maintenanceCurrentRestoreAction: "Restore current database",
     maintenanceCurrentRestoreTitle: "Restore current database",
     maintenanceCurrentRestoreIntro: "Backup from {date} is selected. The exact artifact will be checked again before start.",
     maintenanceCurrentRestoreChanges: "Users, cameras, settings, and service metadata will return to the state in this backup.",
     maintenanceCurrentRestoreVideoSafe: "The video archive and recording files are neither restored nor deleted.",
-    maintenanceCurrentRestoreBackupFirst: "A verified safety backup of the current database will be created before replacement.",
+    maintenanceCurrentRestoreBackupFirst: "Before replacement, the system creates and verifies a safety backup of the current database. If the selected restore fails, the database is returned automatically from that backup; the video archive is neither included nor changed.",
     maintenanceCurrentRestoreInterruption: "The API and camera recording will briefly stop during the operation.",
     maintenanceCurrentRestoreActor: "The current administrator must exist and remain active in the selected backup.",
     maintenanceCurrentRestorePhraseLabel: "Type RESTORE KM VMS to confirm",
@@ -903,7 +955,6 @@ const TEXT = {
     maintenanceCurrentRestoreClose: "Close",
     maintenanceCurrentRestoreCancel: "Cancel",
     maintenanceCurrentRestoreTerminalPhase: "Result",
-    maintenanceCurrentRestoreStatusLabel: "Current phase",
     maintenanceCurrentRestorePhraseMismatch: "Type the confirmation phrase exactly as shown.",
     maintenanceCurrentRestoreRequestRejected: "The restore request was rejected.",
     maintenanceCurrentRestorePhases: {
@@ -957,6 +1008,11 @@ const TEXT = {
       restore_api_health_failed: "The API health check failed after restore.",
       restore_recorder_start_failed: "Recording could not be started after the database check.",
       automatic_rollback_failed: "Automatic recovery of the original database failed. Contact support.",
+      automatic_rollback_isolation_failed: "Recording services could not be stopped safely for automatic database recovery. The database was not returned; contact support.",
+      automatic_rollback_database_failed: "Automatic database recovery did not complete or could not be verified. Do not retry and contact support.",
+      automatic_rollback_api_recovery_failed: "The safety database backup was restored, but the API did not start. Full application readiness is not confirmed.",
+      automatic_rollback_validation_failed: "The safety database backup was restored, but final validation did not complete. Full application readiness is not confirmed.",
+      automatic_rollback_recorder_recovery_failed: "The database was restored and the API was verified, but camera recording did not recover. Full application readiness is not confirmed.",
       restore_interrupted_before_mutation: "The operation stopped before the working database was changed.",
       restore_interrupted_after_mutation: "The operation stopped after changes began; automatic recovery was performed.",
       restore_helper_exception: "The restore service ended the operation with an internal error.",
@@ -1109,13 +1165,13 @@ const TEXT = {
     },
     maintenanceMessageFallback: "Status received; details are unavailable.",
     maintenanceActionFallback: "The action is currently unavailable. Check system status and try again later.",
-    updateApplyTitle: "Update apply",
+    updateApplyTitle: "KM VMS update",
     updateApplyCheck: "Check update",
-    updateApplyStart: "Apply update",
-    updateApplyConfirm: "Install the available update?",
+    updateApplyStart: "Update KM VMS",
+    updateApplyConfirm: "Install the available KM VMS update?",
     updateApplyConfirmRestart: "Services may restart temporarily; status polling will resume after the API is available.",
     updateApplyModalTitle: "KM VMS update",
-    updateApplyModalConfirm: "Update",
+    updateApplyModalConfirm: "Update KM VMS",
     updateApplyLaunchChecking: "Checking whether the update started",
     updateApplyLaunchCheckingText: "The server response is temporarily unavailable. KM VMS is checking status and will not send a second request.",
     updateApplyLaunchUnknown: "The launch result is not confirmed yet. Checking continues automatically and another apply is locked.",
@@ -1132,7 +1188,7 @@ const TEXT = {
       request_failed: "Update status could not be received. Checking will continue automatically.",
       typed_backend_error: "The update service reported an error.",
     },
-    updateApplyQueued: "Update request was handed to the helper.",
+    updateApplyQueued: "The KM VMS update request was handed to the helper.",
     updateApplyUnavailable: "Update cannot start now. Review the message in this panel and run Check update again if needed.",
     updateApplyConnection: "Services may restart temporarily; status polling will continue automatically.",
     updateApplyRecoveryAvailable: "Check the target version and commit, then start apply.",
@@ -1184,8 +1240,8 @@ const TEXT = {
       unknown: "Status temporarily unknown",
     },
     updateApplyReleaseChanges: "What changed in this release",
-    updateApplyReleaseTitleFallback: "Published release",
-    updateApplyReleaseSummaryFallback: "Release notes are not localized. The technical title is available in the diagnostic report.",
+    updateApplyReleaseTitleFallback: "KM VMS release",
+    updateApplyReleaseSummaryFallback: "Release notes are unavailable.",
     updateApplyLastState: "Latest progress",
     updateApplyStepDone: "Done",
     updateApplyTimelineCurrent: "Current version",
@@ -1346,6 +1402,8 @@ const TEXT = {
       schema_current_no_pending_migrations: "Schema is current; no pending migrations.",
       schema_update_failed: "Database schema preparation failed.",
       schema_update_retry_after_cause_resolved: "Resolve the database schema preparation failure before retrying the update.",
+      slot_adoption_conflict: "The preserved previous release no longer matches the current installation.",
+      slot_adoption_conflict_action: "Verify the installed source and runtime state before retrying.",
       restore_no_valid_artifacts: "No valid restore artifacts are available in the configured backup root.",
       update_apply_not_available_for_release: "In-app apply is not available for this release.",
       maintenance_history_limited: "Durable history is limited: current status and the latest safe report are shown.",
@@ -1496,6 +1554,15 @@ const ZH_TEXT_OVERRIDES = {
   maintenance: "维护",
   maintenanceText: "更新与维护：数据库、迁移、恢复和报告。",
   maintenanceOverview: "维护概览",
+  maintenanceOverallHealthy: "系统运行正常",
+  maintenanceOverallHealthyText: "更新、数据库维护、备份和诊断均可用。",
+  maintenanceOverallAttention: "有项目需要注意",
+  maintenanceOverallAttentionText: "核心功能可用，但有一个维护区域需要检查。",
+  maintenanceOverallNoBackupText: "系统正在运行，但目前还没有数据库备份。",
+  maintenanceOverallBlocked: "维护需要处理",
+  maintenanceOverallBlockedText: "一项重要操作不可用。请检查相应区域或下载报告。",
+  maintenanceOverallUnknown: "正在确认维护状态",
+  maintenanceOverallUnknownText: "尚未获取全部数据。请刷新概览或稍后重试。",
   maintenanceRefresh: "刷新",
   maintenanceLoadError: "维护概览不可用。",
   maintenanceLimitedHistory: "持久历史记录有限：仅显示当前状态和最新安全报告。",
@@ -1512,6 +1579,10 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceBackupResult: "最新备份",
   maintenanceBackupsTitle: "备份",
   maintenanceBackupsText: "创建、检查和删除数据库及服务元数据备份。",
+  maintenanceDatabaseTitle: "数据库",
+  maintenanceBackupOpenList: "打开列表",
+  maintenanceBackupBackToOverview: "返回概览",
+  maintenanceLastUpdate: "最近更新",
   maintenanceBackupCreateShort: "创建",
   maintenanceBackupCheck: "检查",
   maintenanceBackupDelete: "删除",
@@ -1520,15 +1591,12 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceBackupDeleteFailed: "无法删除备份。",
   maintenanceBackupDeleteConfirm: "删除 {date} 的备份？只会删除此备份的产品文件，不会影响视频归档。",
   maintenanceBackupRestore: "恢复",
-  maintenanceBackupRestoreAvailable: "可恢复",
-  maintenanceBackupRestoreUnavailable: "暂不能恢复到工作数据库",
-  maintenanceBackupRestoreUnavailableReason: "现在只能在临时数据库中安全检查备份。恢复工作数据库将作为单独受保护流程实现。",
   maintenanceCurrentRestoreAction: "恢复当前数据库",
   maintenanceCurrentRestoreTitle: "恢复当前数据库",
   maintenanceCurrentRestoreIntro: "已选择 {date} 的备份。开始前会再次验证该准确备份。",
   maintenanceCurrentRestoreChanges: "用户、摄像机、设置和服务元数据将恢复到此备份的状态。",
   maintenanceCurrentRestoreVideoSafe: "视频归档和录像文件不会被恢复或删除。",
-  maintenanceCurrentRestoreBackupFirst: "替换前会创建并验证当前数据库的安全备份。",
+  maintenanceCurrentRestoreBackupFirst: "替换前，系统会创建并验证当前数据库的安全备份。如果所选恢复失败，数据库将自动从该备份返回；视频归档不会包含在内，也不会被更改。",
   maintenanceCurrentRestoreInterruption: "操作期间 API 和摄像机录像会短暂停止。",
   maintenanceCurrentRestoreActor: "当前管理员必须存在于所选备份中并保持启用。",
   maintenanceCurrentRestorePhraseLabel: "输入 RESTORE KM VMS 以确认",
@@ -1542,7 +1610,6 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceCurrentRestoreClose: "关闭",
   maintenanceCurrentRestoreCancel: "取消",
   maintenanceCurrentRestoreTerminalPhase: "结果",
-  maintenanceCurrentRestoreStatusLabel: "当前阶段",
   maintenanceCurrentRestorePhraseMismatch: "请完全按提示输入确认短语。",
   maintenanceCurrentRestoreRequestRejected: "恢复请求已被拒绝。",
   maintenanceCurrentRestorePhases: {
@@ -1596,6 +1663,11 @@ const ZH_TEXT_OVERRIDES = {
     restore_api_health_failed: "恢复后 API 健康检查失败。",
     restore_recorder_start_failed: "数据库检查后无法启动录像服务。",
     automatic_rollback_failed: "自动恢复原数据库失败，请联系支持人员。",
+    automatic_rollback_isolation_failed: "无法安全停止录像服务以自动返回数据库。数据库尚未返回，请联系支持人员。",
+    automatic_rollback_database_failed: "自动返回数据库未完成或无法确认。请勿重试，并联系支持人员。",
+    automatic_rollback_api_recovery_failed: "安全数据库备份已恢复，但 API 未启动，无法确认应用已完全就绪。",
+    automatic_rollback_validation_failed: "安全数据库备份已恢复，但最终检查未完成，无法确认应用已完全就绪。",
+    automatic_rollback_recorder_recovery_failed: "数据库已恢复且 API 已验证，但摄像机录像服务未恢复，无法确认应用已完全就绪。",
     restore_interrupted_before_mutation: "工作数据库更改前，操作已中断。",
     restore_interrupted_after_mutation: "更改开始后操作中断；已执行自动恢复。",
     restore_helper_exception: "恢复服务因内部错误结束了操作。",
@@ -1754,13 +1826,13 @@ const ZH_TEXT_OVERRIDES = {
   },
   maintenanceMessageFallback: "已收到状态，详细信息不可用。",
   maintenanceActionFallback: "该操作当前不可用。请检查系统状态后重试。",
-  updateApplyTitle: "应用更新",
+  updateApplyTitle: "KM VMS 更新",
   updateApplyCheck: "检查更新",
-  updateApplyStart: "应用更新",
-  updateApplyConfirm: "安装可用更新？",
+  updateApplyStart: "更新 KM VMS",
+  updateApplyConfirm: "安装可用的 KM VMS 更新？",
   updateApplyConfirmRestart: "服务可能会短暂重启；API 恢复后状态轮询会继续。",
   updateApplyModalTitle: "KM VMS 更新",
-  updateApplyModalConfirm: "更新",
+  updateApplyModalConfirm: "更新 KM VMS",
   updateApplyLaunchChecking: "正在检查更新是否已启动",
   updateApplyLaunchCheckingText: "服务器响应暂时不可用。KM VMS 正在检查状态，不会发送第二次请求。",
   updateApplyLaunchUnknown: "尚未确认启动结果。系统会自动继续检查，并阻止再次应用。",
@@ -1777,7 +1849,7 @@ const ZH_TEXT_OVERRIDES = {
     request_failed: "无法获取更新状态。系统会自动继续检查。",
     typed_backend_error: "更新服务报告了错误。",
   },
-  updateApplyQueued: "更新请求已交给 helper。",
+  updateApplyQueued: "KM VMS 更新请求已交给 helper。",
   updateApplyUnavailable: "现在无法启动更新。请查看此面板中的消息，必要时重新检查更新。",
   updateApplyConnection: "服务可能会短暂重启；状态轮询会自动继续。",
   updateApplyRecoveryAvailable: "检查目标版本和 commit，然后启动应用。",
@@ -1829,8 +1901,8 @@ const ZH_TEXT_OVERRIDES = {
     unknown: "状态暂时未知",
   },
   updateApplyReleaseChanges: "此版本的变更",
-  updateApplyReleaseTitleFallback: "已发布版本",
-  updateApplyReleaseSummaryFallback: "版本说明尚未本地化。技术名称可在诊断报告中查看。",
+  updateApplyReleaseTitleFallback: "KM VMS 版本",
+  updateApplyReleaseSummaryFallback: "版本说明缺失。",
   updateApplyLastState: "最新进度",
   updateApplyStepDone: "完成",
   updateApplyTimelineCurrent: "当前版本",
@@ -1991,6 +2063,8 @@ const ZH_TEXT_OVERRIDES = {
     schema_current_no_pending_migrations: "架构已是最新，没有待执行的迁移。",
     schema_update_failed: "数据库架构准备失败。",
     schema_update_retry_after_cause_resolved: "解决数据库架构准备失败的原因后再重试更新。",
+    slot_adoption_conflict: "保存的上一版本与当前安装不再匹配。",
+    slot_adoption_conflict_action: "重试前请检查已安装源代码和服务运行状态。",
     restore_no_valid_artifacts: "配置的备份根目录中没有可用的恢复工件。",
     update_apply_not_available_for_release: "此版本不支持在界面内应用。",
     maintenance_history_limited: "持久历史记录有限：仅显示当前状态和最新安全报告。",
@@ -2113,7 +2187,8 @@ export default function SettingsPage() {
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
   const [maintenanceModalOpen, setMaintenanceModalOpen] = useState(false);
   const [maintenanceOverview, setMaintenanceOverview] = useState(null);
-  const [maintenanceBackupStatus, setMaintenanceBackupStatus] = useState(null);
+  const [maintenanceBackupDetail, setMaintenanceBackupDetail] = useState(null);
+  const [maintenanceBackupDetailOpen, setMaintenanceBackupDetailOpen] = useState(false);
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
   const [maintenanceError, setMaintenanceError] = useState("");
   const [maintenanceBusy, setMaintenanceBusy] = useState("");
@@ -2124,7 +2199,6 @@ export default function SettingsPage() {
   const [currentRestoreDialog, setCurrentRestoreDialog] = useState(null);
   const [currentRestorePending, setCurrentRestorePending] = useState(null);
   const [currentRestoreStatus, setCurrentRestoreStatus] = useState(null);
-  const [maintenanceWarningsOpen, setMaintenanceWarningsOpen] = useState(false);
   const [updateStatus, setUpdateStatus] = useState(null);
   const [updateApplyStatus, setUpdateApplyStatus] = useState(null);
   const [updateTransportErrors, setUpdateTransportErrors] = useState({ update: null, apply: null });
@@ -2145,11 +2219,14 @@ export default function SettingsPage() {
   const updatePollInFlightRef = useRef(false);
   const updateApplyPendingRef = useRef(null);
   const maintenanceBackupPendingRef = useRef(null);
+  const maintenanceBackupAdmissionRef = useRef(null);
   const maintenanceBackupPollInFlightRef = useRef(false);
+  const maintenanceBackupDetailRef = useRef(null);
   const currentRestorePendingRef = useRef(null);
   const currentRestorePollInFlightRef = useRef(false);
   const currentRestoreDialogRef = useRef(null);
   const updateApplyDialogRef = useRef(null);
+  const maintenanceChildDialogOpenRef = useRef(false);
   const maintenanceDialogRef = useRef(null);
   const maintenanceTriggerRef = useRef(null);
   const maintenanceBusyRef = useRef("");
@@ -2181,11 +2258,47 @@ export default function SettingsPage() {
       ? t.updateApplyLocked
       : updateApplyButtonText(updateApplyStatus, t);
   const updateApplyErrors = updateApplyErrorMessages(updateApplyStatus?.error, t, lang);
+  const maintenanceBackupOverview = useMemo(
+    () => maintenanceBackupOverviewModel(maintenanceOverview, t, lang),
+    [maintenanceOverview, t, lang],
+  );
   const maintenanceBackupManager = useMemo(
-    () => maintenanceBackupManagerModel(maintenanceOverview, t, lang, maintenanceBackupStatus),
-    [maintenanceOverview, maintenanceBackupStatus, t, lang],
+    () => maintenanceBackupDetailModel(maintenanceBackupDetail, t, lang),
+    [maintenanceBackupDetail, t, lang],
+  );
+  const maintenanceDatabase = useMemo(
+    () => maintenanceDatabaseOverviewModel(maintenanceOverview, t),
+    [maintenanceOverview, t],
   );
   const maintenanceWarnings = useMemo(() => maintenanceWarningModel(maintenanceOverview, t), [maintenanceOverview, t]);
+  const maintenanceChildDialogOpen = Boolean(
+    maintenanceConfirm
+    || currentRestoreDialog
+    || updateApplyDialog
+    || diagnosticChoiceOpen
+  );
+  const maintenanceOverall = useMemo(
+    () => maintenanceOverallHealthModel({
+      overview: maintenanceOverview,
+      updateOperator: updateApplyOperator,
+      database: maintenanceDatabase,
+      backup: maintenanceBackupOverview,
+      warnings: maintenanceWarnings,
+      loading: maintenanceLoading,
+      loadError: Boolean(maintenanceError),
+      t,
+    }),
+    [
+      maintenanceOverview,
+      updateApplyOperator,
+      maintenanceDatabase,
+      maintenanceBackupOverview,
+      maintenanceWarnings,
+      maintenanceLoading,
+      maintenanceError,
+      t,
+    ],
+  );
   const maintenanceBackupResultModel = useMemo(() => (
     maintenanceBackupResult ? maintenanceBackupOperationResultText(maintenanceBackupResult, t) : null
   ), [maintenanceBackupResult, t]);
@@ -2195,8 +2308,10 @@ export default function SettingsPage() {
   updateApplyDialogRef.current = updateApplyDialog;
   updateApplyPendingRef.current = updateApplyPending;
   maintenanceBackupPendingRef.current = maintenanceBackupPending;
+  maintenanceBackupDetailRef.current = maintenanceBackupDetail;
   currentRestorePendingRef.current = currentRestorePending;
   currentRestoreDialogRef.current = currentRestoreDialog;
+  maintenanceChildDialogOpenRef.current = maintenanceChildDialogOpen;
 
   useEffect(() => {
     load();
@@ -2324,7 +2439,7 @@ export default function SettingsPage() {
     const initial = focusableElements(container)[0];
     initial?.focus();
     function onKeyDown(event) {
-      if (updateApplyDialogRef.current || currentRestoreDialogRef.current) return;
+      if (event.defaultPrevented || maintenanceChildDialogOpenRef.current) return;
       if (event.key === "Escape" && !maintenanceBusyRef.current) {
         event.preventDefault();
         closeMaintenanceModal();
@@ -2346,7 +2461,7 @@ export default function SettingsPage() {
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      if (!updateApplyDialogRef.current) maintenanceTriggerRef.current?.focus();
+      if (!maintenanceChildDialogOpenRef.current) maintenanceTriggerRef.current?.focus();
     };
   }, [maintenanceModalOpen]);
 
@@ -2590,8 +2705,9 @@ export default function SettingsPage() {
   }
 
   function closeMaintenanceModal() {
-    if (updateApplyDialogRef.current) return;
+    if (maintenanceChildDialogOpenRef.current) return;
     setMaintenanceModalOpen(false);
+    setMaintenanceBackupDetailOpen(false);
     setMaintenanceActionResult(null);
     setMaintenanceBackupResult(null);
     setMaintenanceConfirm(null);
@@ -2695,7 +2811,10 @@ export default function SettingsPage() {
     ).trim();
   }
 
-  function currentRestoreReasonText(code) {
+  function currentRestoreReasonText(
+    code,
+    fallback = t.maintenanceCurrentRestoreRequestRejected,
+  ) {
     const normalized = String(code || "").trim();
     const aliases = {
       artifact_schema_migration_required: "artifact_schema_migration_required",
@@ -2710,7 +2829,17 @@ export default function SettingsPage() {
     };
     const key = aliases[normalized] || normalized;
     return t.maintenanceCurrentRestoreReasons?.[key]
-      || t.maintenanceCurrentRestoreRequestRejected;
+      || fallback;
+  }
+
+  function currentRestoreFailedPhase(status) {
+    const exact = String(status?.failed_phase || "");
+    if (CURRENT_RESTORE_OPERATIONAL_PHASES.includes(exact)) {
+      return exact;
+    }
+    return CURRENT_RESTORE_LEGACY_REASON_PHASES[
+      String(status?.reason_code || "")
+    ] || "";
   }
 
   function currentRestoreTerminal(status = currentRestoreStatus) {
@@ -2722,7 +2851,12 @@ export default function SettingsPage() {
     const terminal = String(status?.terminal_result || "");
     if (terminal === "completed") return t.maintenanceCurrentRestoreCompleted;
     if (terminal === "failed_rolled_back") return t.maintenanceCurrentRestoreRolledBack;
-    if (terminal === "failed_recovery_required") return t.maintenanceCurrentRestoreRecoveryRequired;
+    if (terminal === "failed_recovery_required") {
+      return currentRestoreReasonText(
+        status?.reason_code,
+        t.maintenanceCurrentRestoreRecoveryRequired,
+      );
+    }
     if (terminal === "blocked") {
       return currentRestoreReasonText(status?.reason_code);
     }
@@ -2791,7 +2925,7 @@ export default function SettingsPage() {
       });
       if (terminal) {
         commitCurrentRestorePending(null);
-        await loadMaintenanceOverview();
+        await refreshMaintenanceBackupProjections();
       }
       return result;
     } catch (error) {
@@ -2938,15 +3072,12 @@ export default function SettingsPage() {
     const status = currentRestoreStatus;
     const terminal = currentRestoreTerminal(status);
     const phase = String(status?.phase || "preflight");
-    const phaseOrder = [
-      "preflight",
-      "pre_restore_backup",
-      "writers_paused",
-      "restore_running",
-      "services_starting",
-      "post_restore_check",
-    ];
+    const phaseOrder = CURRENT_RESTORE_OPERATIONAL_PHASES;
     const activeIndex = phaseOrder.indexOf(phase);
+    const failedPhase = terminal
+      ? currentRestoreFailedPhase(status)
+      : "";
+    const failedIndex = phaseOrder.indexOf(failedPhase);
     const terminalLabel = terminal
       ? t.maintenanceCurrentRestorePhases?.[status.terminal_result]
       : t.maintenanceCurrentRestoreTerminalPhase;
@@ -2959,39 +3090,64 @@ export default function SettingsPage() {
           </div>
         ) : null}
         {currentRestoreDialog.accepted ? (
-          <>
-            <div className="settingsCurrentRestoreStatus" role="status">
-              <span>{t.maintenanceCurrentRestoreStatusLabel}</span>
-              <strong>
-                {terminal
-                  ? terminalLabel
-                  : t.maintenanceCurrentRestorePhases?.[phase] || t.maintenanceCurrentRestorePhases.preflight}
-              </strong>
-            </div>
-            <ol className="settingsCurrentRestoreTimeline">
-              {phaseOrder.map((item, index) => {
-                const state = terminal
-                  ? status?.terminal_result === "completed"
-                    ? "complete"
-                    : "pending"
-                  : index < activeIndex
-                    ? "complete"
-                    : index === activeIndex
-                      ? "active"
-                      : "pending";
-                return (
-                  <li className={`is-${state}`} key={item}>
-                    <span aria-hidden="true">{state === "complete" ? "✓" : index + 1}</span>
-                    {t.maintenanceCurrentRestorePhases?.[item]}
-                  </li>
-                );
-              })}
-              <li className={terminal ? "is-active" : "is-pending"}>
-                <span aria-hidden="true">{terminal ? "✓" : "7"}</span>
-                {terminalLabel}
-              </li>
-            </ol>
-          </>
+          <ol className="settingsCurrentRestoreTimeline">
+            {phaseOrder.map((item, index) => {
+              const state = terminal
+                ? status?.terminal_result === "completed"
+                  ? "complete"
+                  : status?.terminal_result === "failed_rolled_back"
+                    ? index === failedIndex
+                      ? "failed"
+                      : "complete"
+                    : failedIndex < 0
+                      ? "pending"
+                      : index < failedIndex
+                        ? "complete"
+                        : index === failedIndex
+                          ? "failed"
+                          : "pending"
+                : index < activeIndex
+                  ? "complete"
+                  : index === activeIndex
+                    ? "active"
+                    : "pending";
+              return (
+                <li className={`is-${state}`} key={item}>
+                  <span aria-hidden="true">
+                    {state === "complete"
+                      ? "✓"
+                      : state === "failed"
+                        ? "!"
+                        : index + 1}
+                  </span>
+                  {t.maintenanceCurrentRestorePhases?.[item]}
+                </li>
+              );
+            })}
+            {(() => {
+              const resultState = !terminal
+                ? "pending"
+                : status?.terminal_result === "completed"
+                  ? "complete"
+                  : status?.terminal_result === "failed_rolled_back"
+                    ? "rolled-back"
+                    : "failed";
+              return (
+                <li className={`is-${resultState}`}>
+                  <span aria-hidden="true">
+                    {resultState === "complete"
+                      ? "✓"
+                      : resultState === "rolled-back"
+                        ? "↩"
+                        : resultState === "failed"
+                          ? "!"
+                          : "7"}
+                  </span>
+                  {terminalLabel}
+                </li>
+              );
+            })()}
+          </ol>
         ) : (
           <label className="settingsCurrentRestorePhrase">
             <span>{t.maintenanceCurrentRestorePhraseLabel}</span>
@@ -3080,7 +3236,9 @@ export default function SettingsPage() {
         text: presentation.text || backupOperationFallback(kind),
       });
     }
-    await loadMaintenanceOverview();
+    await refreshMaintenanceBackupProjections({
+      clampInvalid: kind === "delete",
+    });
     return true;
   }
 
@@ -3094,6 +3252,10 @@ export default function SettingsPage() {
       if (maintenanceBackupPendingRef.current) commitBackupOperationPending(null);
       return;
     }
+    if (
+      maintenanceBackupAdmissionRef.current
+      === pending.submissionId
+    ) return;
     maintenanceBackupPollInFlightRef.current = true;
     try {
       const receipt = await apiFetch(
@@ -3102,6 +3264,17 @@ export default function SettingsPage() {
       await acceptBackupOperationReceipt(receipt, pending, { recovered: true });
     } catch (err) {
       if (Number(err?.status || 0) === 404) {
+        if (backupOperationWithinAdmissionGrace(pending, Date.now())) {
+          setMaintenanceBusy(`backup-${pending.kind}`);
+          setMaintenanceBackupResult({
+            kind: pending.kind,
+            status: "running",
+            state: "running",
+            reason: "",
+            recovering: true,
+          });
+          return;
+        }
         commitBackupOperationPending(null);
         setMaintenanceBusy((current) => current.startsWith("backup-") ? "" : current);
         setMaintenanceBackupResult({
@@ -3173,24 +3346,26 @@ export default function SettingsPage() {
   }
 
   async function refreshMaintenanceSurface() {
-    await Promise.allSettled([
+    const tasks = [
       loadMaintenanceOverview(),
       loadUpdateApplySurface({ silent: true }),
-    ]);
+    ];
+    if (maintenanceBackupDetailOpen || maintenanceBackupDetailRef.current) {
+      tasks.push(loadMaintenanceBackupPage(
+        maintenanceBackupDetailRef.current?.offset || 0,
+        { allowClamp: true, silent: true },
+      ));
+    }
+    await Promise.allSettled(tasks);
   }
 
-  async function loadMaintenanceOverview(offset = 0) {
+  async function loadMaintenanceOverview() {
     if (!canManageMaintenance) return;
     setMaintenanceLoading(true);
     setMaintenanceError("");
     try {
-      const safeOffset = Math.max(0, Number(offset || 0));
-      const [overview, backupStatus] = await Promise.all([
-        apiFetch("/system/maintenance/overview"),
-        apiFetch(`/system/restore/status?offset=${safeOffset}&limit=${MAINTENANCE_BACKUP_PAGE_SIZE}`),
-      ]);
+      const overview = await apiFetch("/system/maintenance/overview");
       setMaintenanceOverview(overview);
-      setMaintenanceBackupStatus(backupStatus);
     } catch (err) {
       setMaintenanceError(humanErrorText(String(err?.message || ""), t.maintenanceLoadError));
     } finally {
@@ -3198,24 +3373,65 @@ export default function SettingsPage() {
     }
   }
 
-  async function loadMaintenanceBackupPage(offset) {
-    if (!canManageMaintenance || maintenanceBusy) return;
+  async function loadMaintenanceBackupPage(
+    offset,
+    { allowClamp = false, silent = false } = {},
+  ) {
+    if (!canManageMaintenance) return null;
     const safeOffset = Math.max(0, Number(offset || 0));
-    setMaintenanceBusy("backup-page");
+    if (!silent) setMaintenanceBusy("backup-page");
     try {
-      const backupStatus = await apiFetch(
+      let backupStatus = await apiFetch(
         `/system/restore/status?offset=${safeOffset}&limit=${MAINTENANCE_BACKUP_PAGE_SIZE}`,
       );
-      setMaintenanceBackupStatus(backupStatus);
+      const validOffset = maintenanceBackupValidOffset(
+        backupStatus?.total_count,
+        backupStatus?.limit || MAINTENANCE_BACKUP_PAGE_SIZE,
+        safeOffset,
+      );
+      if (allowClamp && validOffset !== safeOffset) {
+        backupStatus = await apiFetch(
+          `/system/restore/status?offset=${validOffset}&limit=${MAINTENANCE_BACKUP_PAGE_SIZE}`,
+        );
+      }
+      setMaintenanceBackupDetail(backupStatus);
+      return backupStatus;
     } catch (err) {
       showToast({
         variant: "warning",
         title: t.maintenanceBackupsTitle,
         text: humanErrorText(String(err?.message || ""), t.maintenanceLoadError),
       });
+      return null;
     } finally {
-      setMaintenanceBusy("");
+      if (!silent) setMaintenanceBusy("");
     }
+  }
+
+  async function refreshMaintenanceBackupProjections({ clampInvalid = false } = {}) {
+    const currentOffset = maintenanceBackupDetailRef.current?.offset || 0;
+    const tasks = [loadMaintenanceOverview()];
+    if (maintenanceBackupDetailOpen || maintenanceBackupDetailRef.current) {
+      tasks.push(loadMaintenanceBackupPage(currentOffset, {
+        allowClamp: clampInvalid,
+        silent: true,
+      }));
+    }
+    await Promise.allSettled(tasks);
+  }
+
+  async function openMaintenanceBackupDetail() {
+    if (maintenanceBusy) return;
+    setMaintenanceBackupDetailOpen(true);
+    await loadMaintenanceBackupPage(
+      maintenanceBackupDetailRef.current?.offset || 0,
+      { allowClamp: true },
+    );
+  }
+
+  function closeMaintenanceBackupDetail() {
+    if (maintenanceBusy || currentRestorePending) return;
+    setMaintenanceBackupDetailOpen(false);
   }
 
   async function loadUpdateApplySurface({ silent = false } = {}) {
@@ -3412,14 +3628,43 @@ export default function SettingsPage() {
     } else if (kind === "delete") {
       endpoint = `/system/restore/artifacts/${encodeURIComponent(artifact.id)}/delete`;
     }
+    maintenanceBackupAdmissionRef.current = pending.submissionId;
     try {
       const receipt = await apiFetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
+      if (
+        maintenanceBackupAdmissionRef.current
+        === pending.submissionId
+      ) {
+        maintenanceBackupAdmissionRef.current = null;
+      }
       await acceptBackupOperationReceipt(receipt, pending);
-    } catch {
+    } catch (error) {
+      if (
+        maintenanceBackupAdmissionRef.current
+        === pending.submissionId
+      ) {
+        maintenanceBackupAdmissionRef.current = null;
+      }
+      if (!updateApplyRequestIsAmbiguous(error)) {
+        commitBackupOperationPending(null);
+        setMaintenanceBackupResult({
+          kind,
+          status: "failed",
+          state: "failed",
+          reason: "request_rejected",
+        });
+        showToast({
+          variant: "warning",
+          title: t.maintenanceBackupOperationLabels?.[kind]
+            || t.maintenanceBackupsTitle,
+          text: backupOperationFallback(kind),
+        });
+        return;
+      }
       setMaintenanceBackupResult({
         kind,
         status: "running",
@@ -3428,6 +3673,12 @@ export default function SettingsPage() {
       });
       await reconcilePendingBackupOperation();
     } finally {
+      if (
+        maintenanceBackupAdmissionRef.current
+        === pending.submissionId
+      ) {
+        maintenanceBackupAdmissionRef.current = null;
+      }
       if (!maintenanceBackupPendingRef.current) {
         setMaintenanceBusy((current) => current === `backup-${kind}` ? "" : current);
       }
@@ -3713,17 +3964,6 @@ export default function SettingsPage() {
           {!draft ? null : (
             <div className="settingsReferenceLayout">
               <section className="settingsPanel">
-                <div className="settingsRow">
-                  <div className="settingsRowIcon"><img src="/assets/icons/ui/settings.png" alt="" /></div>
-                  <div className="settingsRowText">
-                    <label htmlFor="settings-system-name">{t.systemName}</label>
-                    <span>{t.systemNameHelp}</span>
-                  </div>
-                  <div className="settingsRowControl">
-                    <input id="settings-system-name" className="input settingsSelect" value={draft.system_name || ""} onChange={(event) => patch("system_name", event.target.value)} maxLength={80} disabled={saving} />
-                  </div>
-                </div>
-
                 <div className="settingsRow">
                   <div className="settingsRowIcon"><img src={languageIcon} alt="" /></div>
                   <div className="settingsRowText">
@@ -4093,8 +4333,8 @@ export default function SettingsPage() {
               tabIndex={-1}
               aria-modal="true"
               aria-label={t.maintenanceOverview}
-              aria-hidden={updateApplyDialog ? "true" : undefined}
-              inert={updateApplyDialog ? true : undefined}
+              aria-hidden={maintenanceChildDialogOpen ? "true" : undefined}
+              inert={maintenanceChildDialogOpen ? true : undefined}
             >
               <div className="settingsMaintenanceModalHeader">
                 <h2>{t.maintenanceOverview}</h2>
@@ -4109,7 +4349,7 @@ export default function SettingsPage() {
                   >
                     ↻
                   </button>
-                  <button type="button" className="settingsMaintenanceIconButton" onClick={closeMaintenanceModal} disabled={Boolean(updateApplyDialog)} aria-label={t.close}>×</button>
+                  <button type="button" className="settingsMaintenanceIconButton" onClick={closeMaintenanceModal} disabled={maintenanceChildDialogOpen} aria-label={t.close}>×</button>
                 </div>
               </div>
 
@@ -4118,339 +4358,387 @@ export default function SettingsPage() {
 
               {maintenanceOverview || updateStatus || updateApplyStatus ? (
                 <div className="settingsMaintenanceContent">
+                  {!maintenanceBackupDetailOpen ? (
+                    <>
+                  <section className={`settingsMaintenanceOverall is-${maintenanceOverall.tone}`}>
+                    <span className="settingsMaintenanceOverallIcon" aria-hidden="true">{maintenanceOverall.icon}</span>
+                    <div>
+                      <strong>{maintenanceOverall.title}</strong>
+                      <p>{maintenanceOverall.summary}</p>
+                    </div>
+                  </section>
+
                   <section className="settingsUpdateApplyPanel">
-                    <h3>{t.updateApplyTitle}</h3>
-                    <div className={`settingsUpdateApplyHero is-${updateApplyOperator.severity}`}>
-                      <span className="settingsUpdateApplyHeroIcon" aria-hidden="true">
-                        {updateApplyOperator.severity === "blocked" ? "!" : updateApplyOperator.severity === "warning" ? "..." : "✓"}
+                    <div className="settingsMaintenanceCardHeading">
+                      <h3>{t.updateApplyTitle}</h3>
+                      <span className={`settingsMaintenancePill is-${updateApplyOperator.severity}`}>
+                        {updateApplyOperator.headline}
                       </span>
-                      <div className="settingsUpdateApplyHeroState">
-                        <strong>{updateApplyOperator.headline}</strong>
-                        <span className="settingsUpdateApplyHeroPrimaryValue">{updateApplyOperator.currentVersion}</span>
-                        <small>{t.maintenanceLabels.available}: {updateApplyOperator.availableVersion}</small>
-                        {updateApplyOperator.showHeroSummary ? <p>{updateApplyOperator.summary}</p> : null}
+                    </div>
+                    <div className="settingsUpdateApplyCompact">
+                      <div className="settingsUpdateApplyRelease">
+                        <dl>
+                          <div>
+                            <dt>{t.maintenanceLabels.current}</dt>
+                            <dd>{updateApplyOperator.currentVersion}</dd>
+                          </div>
+                          <div>
+                            <dt>{t.maintenanceLastUpdate}</dt>
+                            <dd>{updateApplyOperator.installedAt}</dd>
+                          </div>
+                        </dl>
+                        <p>{updateApplyOperator.releaseTitle}</p>
                       </div>
-                      <dl className="settingsUpdateApplyHeroFacts">
-                        <div>
-                          <dt>{t.maintenanceLabels.releaseTitle}</dt>
-                          <dd>{updateApplyOperator.releaseTitle}</dd>
-                        </div>
-                        <div>
-                          <dt>{t.maintenanceLabels.completedAt}</dt>
-                          <dd>{updateApplyOperator.finishedAt}</dd>
-                        </div>
-                      </dl>
+                      <div className="settingsUpdateApplyActions">
+                        <button type="button" className="button secondary small" onClick={runUpdateCheck} disabled={Boolean(maintenanceBusy)}>
+                          {maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
+                        </button>
+                        {updateApplyOperator.showApplyButton ? (
+                          <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
+                            {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyPending || updateApplyOperator.stateUnknown
+                              ? updateApplyPrimaryText
+                              : t.updateApplyStart}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
 
-                    <div className="settingsUpdateApplyTimeline" aria-label={t.updateApplyProgress}>
-                      <ol>
-                        {updateApplyOperator.timeline.map((step) => (
-                          <li className={`is-${step.status}`} key={step.name}>
-                            <span className="settingsUpdateApplyTimelineDot" aria-hidden="true">
-                              {step.icon === "alert" ? "!" : step.icon === "pulse" ? "•" : step.icon === "check" ? "✓" : ""}
-                            </span>
-                            <strong>{step.label}</strong>
-                            {step.timeLabel ? <small>{step.timeLabel}</small> : null}
-                          </li>
-                        ))}
-                      </ol>
-                    </div>
-
-                    {updateApplyOperator.lastProgress ? (
-                      <div className="settingsUpdateApplyProgressRule">
-                        <span>{t.maintenanceLabels.lastProgress}</span>
-                        <strong>{updateApplyOperator.lastProgress}</strong>
-                      </div>
+                    {updateApplyRunning || updateApplyOperator.stateUnknown || updateApplyOperator.reconnecting || updateApplyOperator.severity === "blocked" ? (
+                      <>
+                        <p className={`settingsUpdateApplyCompactMessage is-${updateApplyOperator.severity}`}>
+                          {updateApplyOperator.summary}
+                        </p>
+                        <div className="settingsUpdateApplyTimeline" aria-label={t.updateApplyProgress}>
+                          <ol>
+                            {updateApplyOperator.timeline.map((step) => (
+                              <li className={`is-${step.status}`} key={step.name}>
+                                <span className="settingsUpdateApplyTimelineDot" aria-hidden="true">
+                                  {step.icon === "alert" ? "!" : step.icon === "pulse" ? "•" : step.icon === "check" ? "✓" : ""}
+                                </span>
+                                <strong>{step.label}</strong>
+                                {step.timeLabel ? <small>{step.timeLabel}</small> : null}
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      </>
                     ) : null}
 
-                    <div className="settingsUpdateApplySummaryGrid">
-                      <section>
+                    {(updateApplyOperator.canApply || updateApplyRunning || updateApplyOperator.severity === "blocked")
+                      && (updateApplyOperator.releaseSummary || updateApplyOperator.releaseChangelog.length) ? (
+                      <div className="settingsUpdateApplySummaryGrid">
+                        <section>
                         <span>{t.updateApplyReleaseChanges}</span>
-                        <p>{updateApplyOperator.releaseSummary || updateApplyOperator.summary}</p>
-                      </section>
-                      <section>
-                        <span>{t.updateApplyLastState}</span>
-                        <dl>
-                          <div><dt>{t.maintenanceLabels.status}</dt><dd>{updateApplyOperator.updateResult}</dd></div>
-                          <div><dt>{t.maintenanceLabels.verification}</dt><dd>{updateApplyOperator.commitStatus}</dd></div>
-                          <div><dt>{t.maintenanceLabels.releaseIdentity}</dt><dd>{updateApplyOperator.metadataStatus}</dd></div>
-                        </dl>
-                      </section>
-                    </div>
+                        {updateApplyOperator.releaseSummary ? (
+                          <p>{updateApplyOperator.releaseSummary}</p>
+                        ) : null}
+                        {updateApplyOperator.releaseChangelog.length ? (
+                          <ul>
+                            {updateApplyOperator.releaseChangelog.map((item, index) => (
+                              <li key={`${index}-${item}`}>{item}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        </section>
+                      </div>
+                    ) : null}
 
                     {updateApplyLaunchNotice ? <div className="settingsUpdateApplyNotice">{updateApplyLaunchNotice}</div> : null}
                     {updateTransportErrors.update && !updateTransportErrors.apply ? (
                       <div className="settingsUpdateApplyNotice">{t.updateApplyPeerCheckUnavailable}</div>
                     ) : null}
-                    <div className="settingsUpdateApplyActions">
-                      <button type="button" className="button secondary small" onClick={runUpdateCheck} disabled={Boolean(maintenanceBusy)}>
-                        {maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
-                      </button>
-                      {updateApplyOperator.showApplyButton ? (
-                        <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
-                          {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyPending || updateApplyOperator.stateUnknown
-                            ? updateApplyPrimaryText
-                            : t.updateApplyStart}
-                        </button>
-                      ) : null}
-                    </div>
                     {updateApplyErrors.map((message) => <small className="settingsUpdateApplyError" key={message}>{message}</small>)}
                   </section>
 
-                  <section className="settingsMaintenanceReadiness">
-                    <div className="settingsMaintenanceReadinessHead">
-                      <div>
-                        <h3>{t.maintenanceReadinessTitle}</h3>
-                        <p>{t.maintenanceReadinessText}</p>
+                  <div className="settingsMaintenanceCoreGrid">
+                    <section className={`settingsMaintenanceCoreCard is-${maintenanceDatabase.tone}`}>
+                      <div className="settingsMaintenanceCardHeading">
+                        <h3>{t.maintenanceDatabaseTitle}</h3>
+                        <span className={`settingsMaintenancePill is-${maintenanceDatabase.tone}`}>
+                          {maintenanceDatabase.statusLabel}
+                        </span>
                       </div>
-                    </div>
-                    <div className="settingsMaintenanceReadinessGrid">
-                      {maintenanceReadinessRows(maintenanceOverview, t).map((row) => (
-                        <article className={`settingsMaintenanceReadinessItem is-${row.userStatus}`} key={row.key}>
-                          <span className="settingsMaintenanceReadinessIcon" aria-hidden="true">
-                            {row.userStatus === "ok" ? "✓" : row.userStatus === "blocked" ? "!" : "i"}
-                          </span>
-                          <div className="settingsMaintenanceReadinessBody">
-                            <div className="settingsMaintenanceReadinessTitle">
-                              <h4>{row.title}</h4>
-                              <span className={`settingsMaintenanceStatus ${row.statusClass}`}>{row.statusLabel}</span>
+                      {maintenanceDatabase.facts.length ? (
+                        <dl className="settingsMaintenanceCoreFacts">
+                          {maintenanceDatabase.facts.map(([label, value]) => (
+                            <div key={label}>
+                              <dt>{label}</dt>
+                              <dd>{String(value)}</dd>
                             </div>
-                            <p>{row.summary}</p>
-                            {row.facts.length ? (
-                              <dl>
-                                {row.facts.map(([label, value]) => (
-                                  <div key={label}>
-                                    <dt>{label}</dt>
-                                    <dd>{String(value)}</dd>
-                                  </div>
-                                ))}
-                              </dl>
-                            ) : null}
-                            {row.action ? <small>{row.action}</small> : null}
-                          </div>
-                          {row.showCheck ? (
-                            <button type="button" className="button secondary small" onClick={() => runMaintenanceDryRun(row.key)} disabled={Boolean(maintenanceBusy)}>
-                              {maintenanceBusy === row.key ? t.checking : row.checkLabel}
-                            </button>
-                          ) : null}
-                          {row.showApply ? (
-                            <button type="button" className="button primary small" onClick={requestDbAdoptionApply} disabled={Boolean(maintenanceBusy) || Boolean(currentRestorePending)}>
-                              {maintenanceBusy === "db-adoption-apply" ? t.saving : row.applyLabel}
-                            </button>
-                          ) : null}
-                        </article>
-                      ))}
-                    </div>
-                  </section>
+                          ))}
+                        </dl>
+                      ) : null}
+                      <p>{maintenanceDatabase.summary}</p>
+                      {maintenanceDatabase.tone !== "ok" && maintenanceDatabase.action ? (
+                        <small>{maintenanceDatabase.action}</small>
+                      ) : null}
+                      {maintenanceDatabase.actionableRow?.showCheck ? (
+                        <button
+                          type="button"
+                          className="button secondary small settingsMaintenanceCoreAction"
+                          onClick={() => runMaintenanceDryRun(maintenanceDatabase.actionableRow.key)}
+                          disabled={Boolean(maintenanceBusy)}
+                        >
+                          {maintenanceBusy === maintenanceDatabase.actionableRow.key
+                            ? t.checking
+                            : maintenanceDatabase.actionableRow.checkLabel}
+                        </button>
+                      ) : null}
+                      {maintenanceDatabase.actionableRow?.showApply ? (
+                        <button
+                          type="button"
+                          className="button primary small settingsMaintenanceCoreAction"
+                          onClick={requestDbAdoptionApply}
+                          disabled={Boolean(maintenanceBusy) || Boolean(currentRestorePending)}
+                        >
+                          {maintenanceBusy === "db-adoption-apply"
+                            ? t.saving
+                            : maintenanceDatabase.actionableRow.applyLabel}
+                        </button>
+                      ) : null}
+                    </section>
 
-                  <section className="settingsMaintenanceBackupManager">
+                  <section className={`settingsMaintenanceBackupManager settingsMaintenanceCoreCard is-${maintenanceBackupOverview.tone}`}>
                     <div className="settingsMaintenanceBackupHead">
-                      <div>
+                      <div className="settingsMaintenanceCardHeading">
                         <h3>{t.maintenanceBackupsTitle}</h3>
-                        <p>{t.maintenanceBackupsText}</p>
-                      </div>
-                      <div className="settingsMaintenanceBackupCounts">
-                        <strong>{maintenanceBackupManager.statusText}</strong>
-                        <span>{t.maintenanceBackupTotalSize}: {maintenanceBackupManager.totalBytesText}</span>
+                        <span className={`settingsMaintenancePill is-${maintenanceBackupOverview.tone}`}>
+                          {maintenanceBackupOverview.statusText}
+                        </span>
                       </div>
                     </div>
-                    <p className="settingsMaintenanceBackupScope">{t.maintenanceBackupScope}</p>
+                    <p className="settingsMaintenanceBackupTotals">
+                      {maintenanceBackupOverview.countText} · {maintenanceBackupOverview.totalBytesText}
+                    </p>
+                    <div className="settingsMaintenanceBackupLatest">
+                      <span>{t.maintenanceBackupLatest}: {maintenanceBackupOverview.latestCreatedAt}</span>
+                      {maintenanceBackupOverview.latestArtifact ? (
+                        <span>
+                          {maintenanceBackupOverview.latestArtifact.availabilityLabel}
+                          {" · "}
+                          {maintenanceBackupOverview.latestArtifact.integrityLabel}
+                          {" · "}
+                          {maintenanceBackupOverview.latestArtifact.compatibilityLabel}
+                        </span>
+                      ) : (
+                        <span>{t.maintenanceBackupNoCopies}</span>
+                      )}
+                    </div>
                     <div className="settingsMaintenanceBackupActions">
-                      <button type="button" className="button secondary small" onClick={createMaintenanceBackup} disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending)}>
+                      <button
+                        type="button"
+                        className="button secondary small"
+                        onClick={createMaintenanceBackup}
+                        disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending)}
+                      >
                         {maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreateShort}
                       </button>
-                    </div>
-                    <div className="settingsMaintenanceBackupRestoreNote">
-                      <strong>{maintenanceBackupManager.restoreText}</strong>
-                      <span>{maintenanceBackupManager.restoreReason}</span>
+                      <button
+                        type="button"
+                        className="button secondary small"
+                        onClick={openMaintenanceBackupDetail}
+                        disabled={Boolean(maintenanceBusy)}
+                      >
+                        {t.maintenanceBackupOpenList}
+                      </button>
                     </div>
                     {maintenanceBackupPending || maintenanceBackupResult?.recovering ? (
-                      <div className="settingsMaintenanceBackupPending" role="status">
-                        {t.maintenanceBackupRecovering}
-                      </div>
-                    ) : null}
-                    {maintenanceBackupManager.artifacts.length ? (
-                      <div className="settingsMaintenanceBackupList">
-                        <div className="settingsMaintenanceBackupListHead">
-                          <span>{t.maintenanceBackupList}</span>
-                          <span>
-                            {t.maintenanceBackupPage
-                              .replace("{start}", String(maintenanceBackupManager.pageStart))
-                              .replace("{end}", String(maintenanceBackupManager.pageEnd))
-                              .replace("{total}", String(maintenanceBackupManager.totalCount))}
-                          </span>
-                        </div>
-                        {maintenanceBackupManager.artifacts.map((artifact) => (
-                          <article className={`settingsMaintenanceBackupItem ${artifact.hasProblem ? "is-problem" : ""}`} key={artifact.id}>
-                            <div className="settingsMaintenanceBackupItemBody">
-                              <div className="settingsMaintenanceBackupItemHead">
-                                <span className="settingsMaintenanceBackupCreatedAt">{artifact.createdAt}</span>
-                                <span className="settingsMaintenanceBackupMeta">{t.maintenanceBackupSize}: {artifact.size} · {t.maintenanceBackupSchema}: {artifact.schema} · {artifact.backend}</span>
-                              </div>
-                              <div className="settingsMaintenanceBackupDetailRow">
-                                <div className="settingsMaintenanceBackupStatusGrid">
-                                  <div>
-                                    <span>{t.maintenanceBackupAvailability}</span>
-                                    <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.availabilityTone}`}>{artifact.availabilityLabel}</strong>
-                                  </div>
-                                  <div>
-                                    <span>{t.maintenanceBackupIntegrity}</span>
-                                    <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.integrityTone}`}>{artifact.integrityLabel}</strong>
-                                  </div>
-                                  <div>
-                                    <span>{t.maintenanceBackupCompatibility}</span>
-                                    <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.compatibilityTone}`}>{artifact.compatibilityLabel}</strong>
-                                  </div>
-                                  <div>
-                                    <span>{t.maintenanceBackupValidation}</span>
-                                    <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.validationTone}`}>{artifact.validationLabel}</strong>
-                                  </div>
-                                </div>
-                                <div className="settingsMaintenanceBackupItemActions">
-                                  <span
-                                    className="settingsMaintenanceIconAction"
-                                    title={artifact.canRestore
-                                      ? t.maintenanceCurrentRestoreAction
-                                      : currentRestoreReasonText(artifact.restoreIneligibleReason)}
-                                  >
-                                    <button
-                                      type="button"
-                                      className="settingsMaintenanceMiniButton"
-                                      onClick={() => requestCurrentDatabaseRestore(artifact)}
-                                      disabled={
-                                        Boolean(maintenanceBusy)
-                                        || Boolean(maintenanceBackupPending)
-                                        || Boolean(currentRestorePending)
-                                        || !artifact.canRestore
-                                      }
-                                      aria-label={artifact.canRestore
-                                        ? t.maintenanceCurrentRestoreAction
-                                        : `${t.maintenanceCurrentRestoreAction}: ${currentRestoreReasonText(artifact.restoreIneligibleReason)}`}
-                                    >
-                                      <MaintenanceRestoreIcon />
-                                    </button>
-                                  </span>
-                                  <span
-                                    className="settingsMaintenanceIconAction"
-                                    title={maintenanceBusy === "backup-check" ? t.maintenanceBackupChecking : t.maintenanceBackupCheck}
-                                  >
-                                    <button
-                                      type="button"
-                                      className="settingsMaintenanceMiniButton"
-                                      onClick={() => requestCheckMaintenanceBackup(artifact)}
-                                      disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending) || !artifact.canCheck}
-                                      aria-label={maintenanceBusy === "backup-check" ? t.maintenanceBackupChecking : t.maintenanceBackupCheck}
-                                      aria-busy={maintenanceBusy === "backup-check" ? "true" : undefined}
-                                    >
-                                      <MaintenanceCheckIcon />
-                                    </button>
-                                  </span>
-                                  <span
-                                    className="settingsMaintenanceIconAction"
-                                    title={maintenanceBusy === "backup-delete" ? t.maintenanceBackupDeleting : t.maintenanceBackupDelete}
-                                  >
-                                    <button
-                                      type="button"
-                                      className="settingsMaintenanceMiniButton danger"
-                                      onClick={() => requestDeleteMaintenanceBackup(artifact)}
-                                      disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending) || !artifact.deletable}
-                                      aria-label={maintenanceBusy === "backup-delete" ? t.maintenanceBackupDeleting : t.maintenanceBackupDelete}
-                                      aria-busy={maintenanceBusy === "backup-delete" ? "true" : undefined}
-                                    >
-                                      <MaintenanceTrashIcon />
-                                    </button>
-                                  </span>
-                                </div>
-                              </div>
-                              {artifact.checkedAt || artifact.validatedAt ? (
-                                <small className="settingsMaintenanceBackupEvidenceTime">
-                                  {artifact.checkedAt ? t.maintenanceBackupCheckedAt.replace("{date}", artifact.checkedAt) : ""}
-                                  {artifact.checkedAt && artifact.validatedAt ? " · " : ""}
-                                  {artifact.validatedAt ? t.maintenanceBackupValidatedAt.replace("{date}", artifact.validatedAt) : ""}
-                                </small>
-                              ) : null}
-                            </div>
-                          </article>
-                        ))}
-                        <div className="settingsMaintenanceBackupPagination">
-                          <span
-                            className="settingsMaintenanceIconAction"
-                            title={t.maintenanceBackupPrevious}
-                          >
-                            <button
-                              type="button"
-                              className="settingsMaintenanceMiniButton"
-                              onClick={() => loadMaintenanceBackupPage(Math.max(0, maintenanceBackupManager.offset - maintenanceBackupManager.limit))}
-                              disabled={Boolean(maintenanceBusy) || !maintenanceBackupManager.hasPrevious}
-                              aria-label={t.maintenanceBackupPrevious}
-                            >
-                              <span aria-hidden="true">←</span>
-                            </button>
-                          </span>
-                          <span
-                            className="settingsMaintenanceIconAction"
-                            title={t.maintenanceBackupNext}
-                          >
-                            <button
-                              type="button"
-                              className="settingsMaintenanceMiniButton"
-                              onClick={() => loadMaintenanceBackupPage(maintenanceBackupManager.offset + maintenanceBackupManager.limit)}
-                              disabled={Boolean(maintenanceBusy) || !maintenanceBackupManager.hasMore}
-                              aria-label={t.maintenanceBackupNext}
-                            >
-                              <span aria-hidden="true">→</span>
-                            </button>
-                          </span>
-                        </div>
-                      </div>
-                    ) : <div className="settingsJournalEmpty">{t.maintenanceBackupStatusEmpty}</div>}
-                    {maintenanceBackupResultModel ? (
-                      <small className="settingsMaintenanceBackupResult">
-                        {maintenanceBackupResultModel.label}: {maintenanceBackupResultModel.text}
-                      </small>
+                      <div className="settingsMaintenanceBackupPending" role="status">{t.maintenanceBackupRecovering}</div>
                     ) : null}
                   </section>
+                  </div>
 
                   <section className="settingsMaintenanceSupport">
                     <div className="settingsMaintenanceSupportMain">
                       <div className="settingsMaintenanceSupportCopy">
-                        <strong>{t.maintenanceSupportTitle}</strong>
+                        <div className="settingsMaintenanceCardHeading">
+                          <h3>{t.maintenanceSupportTitle}</h3>
+                          <span className={`settingsMaintenancePill ${maintenanceWarnings.groups.actionable ? "is-warning" : "is-ok"}`}>
+                            {maintenanceWarnings.groups.actionable
+                              ? `${t.maintenanceWarningActionable}: ${maintenanceWarnings.groups.actionable}`
+                              : t.maintenanceSupportStatusOk}
+                          </span>
+                        </div>
                         <p>{t.maintenanceSupportText}</p>
-                      </div>
-                      <div className="settingsMaintenanceSupportStatus">
-                        <span className={maintenanceWarnings.groups.actionable ? "is-attention" : "is-ok"}>
-                          {maintenanceWarnings.groups.actionable ? `${t.maintenanceWarningActionable}: ${maintenanceWarnings.groups.actionable}` : t.maintenanceSupportStatusOk}
-                        </span>
-                        <small>
-                          {t.maintenanceReport}: {maintenanceStatusText(maintenanceOverview?.upgrade_report?.status, t)} · {t.maintenanceLastAction}: {maintenanceOverview?.history?.last_action?.available ? maintenanceStatusText(maintenanceOverview.history.last_action.status, t) : t.maintenanceNoHistory}
-                        </small>
-                      </div>
-                      <div className="settingsMaintenanceWarningGroups">
-                        <span>{t.maintenanceWarningActionable}: {maintenanceWarnings.groups.actionable}</span>
-                        <span>{t.maintenanceWarningInfo}: {maintenanceWarnings.groups.informational}</span>
-                        <span>{t.maintenanceWarningSupport}: {maintenanceWarnings.groups.support}</span>
                       </div>
                     </div>
                     <div className="settingsMaintenanceSupportActions">
                       <button type="button" className="button secondary small settingsMaintenanceSupportActionButton" onClick={() => setDiagnosticChoiceOpen(true)} disabled={Boolean(maintenanceBusy) || securityBusy}>
                         {t.maintenanceReportDownload}
                       </button>
-                      <button type="button" className="button secondary small settingsMaintenanceSupportActionButton" onClick={() => setMaintenanceWarningsOpen((value) => !value)} disabled={!maintenanceWarnings.total}>
-                        {maintenanceWarningsOpen ? t.maintenanceWarningHide : t.maintenanceWarningDetails}
-                      </button>
                     </div>
-                    {maintenanceWarningsOpen ? (
+                    {maintenanceWarnings.groups.actionable ? (
                       <div className="settingsMaintenanceWarningsList">
-                        {maintenanceWarnings.items.length ? maintenanceWarnings.items.map((item) => (
+                        {maintenanceWarnings.items
+                          .filter((item) => item.classification === "actionable")
+                          .slice(0, 3)
+                          .map((item) => (
                           <article className={`is-${item.classification}`} key={`${item.code}-${item.title}`}>
                             <strong>{item.title}</strong>
                             <p>{item.summary}</p>
                             <small>{item.action}</small>
                           </article>
-                        )) : <p>{t.maintenanceWarningNone}</p>}
+                          ))}
                       </div>
                     ) : null}
                   </section>
+                    </>
+                  ) : (
+                    <section className="settingsMaintenanceBackupDetail">
+                      <div className="settingsMaintenanceBackupDetailHeader">
+                        <button
+                          type="button"
+                          className="settingsMaintenanceBackButton"
+                          onClick={closeMaintenanceBackupDetail}
+                          disabled={Boolean(maintenanceBusy) || Boolean(currentRestorePending)}
+                        >
+                          <span aria-hidden="true">←</span>
+                          {t.maintenanceBackupBackToOverview}
+                        </button>
+                        <div>
+                          <h3>{t.maintenanceBackupsTitle}</h3>
+                          <p>{maintenanceBackupManager.statusText} · {t.maintenanceBackupTotalSize}: {maintenanceBackupManager.totalBytesText}</p>
+                        </div>
+                        <button
+                          type="button"
+                          className="button secondary small"
+                          onClick={createMaintenanceBackup}
+                          disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending)}
+                        >
+                          {maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreateShort}
+                        </button>
+                      </div>
+                      <p className="settingsMaintenanceBackupScope">{t.maintenanceBackupScope}</p>
+                      {maintenanceBackupPending || maintenanceBackupResult?.recovering ? (
+                        <div className="settingsMaintenanceBackupPending" role="status">{t.maintenanceBackupRecovering}</div>
+                      ) : null}
+                      {maintenanceBusy === "backup-page" && !maintenanceBackupDetail ? (
+                        <div className="settingsJournalEmpty">{t.checking}</div>
+                      ) : maintenanceBackupManager.artifacts.length ? (
+                        <div className="settingsMaintenanceBackupList">
+                          <div className="settingsMaintenanceBackupListHead">
+                            <span>{t.maintenanceBackupList}</span>
+                            <span>
+                              {t.maintenanceBackupPage
+                                .replace("{start}", String(maintenanceBackupManager.pageStart))
+                                .replace("{end}", String(maintenanceBackupManager.pageEnd))
+                                .replace("{total}", String(maintenanceBackupManager.totalCount))}
+                            </span>
+                          </div>
+                          {maintenanceBackupManager.artifacts.map((artifact) => (
+                            <article className={`settingsMaintenanceBackupItem ${artifact.hasProblem ? "is-problem" : ""}`} key={artifact.id}>
+                              <div className="settingsMaintenanceBackupItemBody">
+                                <div className="settingsMaintenanceBackupItemHead">
+                                  <span className="settingsMaintenanceBackupCreatedAt">{artifact.createdAt}</span>
+                                  <span className="settingsMaintenanceBackupMeta">{t.maintenanceBackupSize}: {artifact.size} · {t.maintenanceBackupSchema}: {artifact.schema} · {artifact.backend}</span>
+                                </div>
+                                <div className="settingsMaintenanceBackupDetailRow">
+                                  <div className="settingsMaintenanceBackupStatusGrid">
+                                    <div>
+                                      <span>{t.maintenanceBackupAvailability}</span>
+                                      <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.availabilityTone}`}>{artifact.availabilityLabel}</strong>
+                                    </div>
+                                    <div>
+                                      <span>{t.maintenanceBackupIntegrity}</span>
+                                      <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.integrityTone}`}>{artifact.integrityLabel}</strong>
+                                    </div>
+                                    <div>
+                                      <span>{t.maintenanceBackupCompatibility}</span>
+                                      <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.compatibilityTone}`}>{artifact.compatibilityLabel}</strong>
+                                    </div>
+                                    <div>
+                                      <span>{t.maintenanceBackupValidation}</span>
+                                      <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.validationTone}`}>{artifact.validationLabel}</strong>
+                                    </div>
+                                  </div>
+                                  <div className="settingsMaintenanceBackupItemActions">
+                                    <span
+                                      className="settingsMaintenanceIconAction"
+                                      title={artifact.canRestore
+                                        ? t.maintenanceCurrentRestoreAction
+                                        : currentRestoreReasonText(artifact.restoreIneligibleReason)}
+                                    >
+                                      <button
+                                        type="button"
+                                        className="settingsMaintenanceMiniButton"
+                                        onClick={() => requestCurrentDatabaseRestore(artifact)}
+                                        disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending) || !artifact.canRestore}
+                                        aria-label={artifact.canRestore
+                                          ? t.maintenanceCurrentRestoreAction
+                                          : `${t.maintenanceCurrentRestoreAction}: ${currentRestoreReasonText(artifact.restoreIneligibleReason)}`}
+                                      >
+                                        <MaintenanceRestoreIcon />
+                                      </button>
+                                    </span>
+                                    <span className="settingsMaintenanceIconAction" title={maintenanceBusy === "backup-check" ? t.maintenanceBackupChecking : t.maintenanceBackupCheck}>
+                                      <button
+                                        type="button"
+                                        className="settingsMaintenanceMiniButton"
+                                        onClick={() => requestCheckMaintenanceBackup(artifact)}
+                                        disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending) || !artifact.canCheck}
+                                        aria-label={maintenanceBusy === "backup-check" ? t.maintenanceBackupChecking : t.maintenanceBackupCheck}
+                                        aria-busy={maintenanceBusy === "backup-check" ? "true" : undefined}
+                                      >
+                                        <MaintenanceCheckIcon />
+                                      </button>
+                                    </span>
+                                    <span className="settingsMaintenanceIconAction" title={maintenanceBusy === "backup-delete" ? t.maintenanceBackupDeleting : t.maintenanceBackupDelete}>
+                                      <button
+                                        type="button"
+                                        className="settingsMaintenanceMiniButton danger"
+                                        onClick={() => requestDeleteMaintenanceBackup(artifact)}
+                                        disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending) || !artifact.deletable}
+                                        aria-label={maintenanceBusy === "backup-delete" ? t.maintenanceBackupDeleting : t.maintenanceBackupDelete}
+                                        aria-busy={maintenanceBusy === "backup-delete" ? "true" : undefined}
+                                      >
+                                        <MaintenanceTrashIcon />
+                                      </button>
+                                    </span>
+                                  </div>
+                                </div>
+                                {artifact.checkedAt || artifact.validatedAt ? (
+                                  <small className="settingsMaintenanceBackupEvidenceTime">
+                                    {artifact.checkedAt ? t.maintenanceBackupCheckedAt.replace("{date}", artifact.checkedAt) : ""}
+                                    {artifact.checkedAt && artifact.validatedAt ? " · " : ""}
+                                    {artifact.validatedAt ? t.maintenanceBackupValidatedAt.replace("{date}", artifact.validatedAt) : ""}
+                                  </small>
+                                ) : null}
+                              </div>
+                            </article>
+                          ))}
+                          <div className="settingsMaintenanceBackupPagination">
+                            <span className="settingsMaintenanceIconAction" title={t.maintenanceBackupPrevious}>
+                              <button
+                                type="button"
+                                className="settingsMaintenanceMiniButton"
+                                onClick={() => loadMaintenanceBackupPage(Math.max(0, maintenanceBackupManager.offset - maintenanceBackupManager.limit))}
+                                disabled={Boolean(maintenanceBusy) || !maintenanceBackupManager.hasPrevious}
+                                aria-label={t.maintenanceBackupPrevious}
+                              >
+                                <span aria-hidden="true">←</span>
+                              </button>
+                            </span>
+                            <span className="settingsMaintenanceIconAction" title={t.maintenanceBackupNext}>
+                              <button
+                                type="button"
+                                className="settingsMaintenanceMiniButton"
+                                onClick={() => loadMaintenanceBackupPage(maintenanceBackupManager.offset + maintenanceBackupManager.limit)}
+                                disabled={Boolean(maintenanceBusy) || !maintenanceBackupManager.hasMore}
+                                aria-label={t.maintenanceBackupNext}
+                              >
+                                <span aria-hidden="true">→</span>
+                              </button>
+                            </span>
+                          </div>
+                        </div>
+                      ) : <div className="settingsJournalEmpty">{t.maintenanceBackupStatusEmpty}</div>}
+                      {maintenanceBackupResultModel ? (
+                        <small className="settingsMaintenanceBackupResult">
+                          {maintenanceBackupResultModel.label}: {maintenanceBackupResultModel.text}
+                        </small>
+                      ) : null}
+                    </section>
+                  )}
 
                   {maintenanceActionResult ? (
                     <div className={`settingsMaintenanceResult ${maintenanceStatusClass(maintenanceActionResult.status)}`}>

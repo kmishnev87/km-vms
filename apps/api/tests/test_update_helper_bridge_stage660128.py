@@ -34,6 +34,163 @@ def _write_json(path: Path, payload: dict) -> None:
     )
 
 
+def test_reused_adopted_slot_ignores_only_historical_request_digests(
+    tmp_path: Path,
+) -> None:
+    app = tmp_path / "app"
+    slot_source = tmp_path / "slots" / ("adopted-" + ("a" * 64)) / "source"
+    request_id = "update-" + ("b" * 32)
+    current_contract = {
+        "name": "fixture",
+        "services": {
+            "api": {
+                "build": {"context": str(app)},
+                "environment": {
+                    "KM_VMS_UPDATE_CONTROL_REQUEST_ID": request_id,
+                    "KEEP_SECURITY_RELEVANT": "yes",
+                },
+                "privileged": False,
+                "volumes": [
+                    {
+                        "source": str(app / "data"),
+                        "target": "/data",
+                        "type": "bind",
+                    },
+                    {
+                        "source": str(app / "release"),
+                        "target": "/app/release",
+                        "type": "bind",
+                    },
+                ],
+            }
+        },
+    }
+    slot_contract = json.loads(json.dumps(current_contract))
+    slot_contract["services"]["api"]["build"]["context"] = str(slot_source)
+    slot_contract["services"]["api"]["volumes"][1]["source"] = str(
+        slot_source / "release"
+    )
+    normalized_current = bridge._normalize_current_compose_contract(
+        current_contract,
+        app_dir=app,
+        source_dir=app,
+        request_id=request_id,
+    )
+    normalized_slot = bridge._normalize_current_compose_contract(
+        slot_contract,
+        app_dir=app,
+        source_dir=slot_source,
+        request_id=request_id,
+    )
+    assert normalized_slot == normalized_current
+
+    slot_contract["services"]["api"]["privileged"] = True
+    assert (
+        bridge._normalize_current_compose_contract(
+            slot_contract,
+            app_dir=app,
+            source_dir=slot_source,
+            request_id=request_id,
+        )
+        != normalized_current
+    )
+
+    current_compose = {
+        "schema_version": 1,
+        "project_name": "fixture",
+        "project_directory": "source",
+        "captured_plan_sha256": "1" * 64,
+        "slot_plan_sha256": "2" * 64,
+        "archive_override_attached": True,
+        "archive_override_sha256": "3" * 64,
+        "runtime_override_sha256": "4" * 64,
+        "shared_root_contract": "stable_app_dir_v1",
+        "services": ["api", "nginx", "recorder", "web"],
+    }
+    historical_compose = {
+        **current_compose,
+        "captured_plan_sha256": "5" * 64,
+        "slot_plan_sha256": "6" * 64,
+    }
+    images = {
+        "schema_version": 1,
+        "services": {
+            "api": {
+                "image_id": "sha256:" + ("7" * 64),
+                "source_image_ref": "fixture-api:latest",
+                "immutable_image_ref": "fixture-api:adopted",
+            }
+        },
+    }
+    health = {
+        "schema_version": 1,
+        "status": "healthy",
+        "api_visible_identity_sha256": "8" * 64,
+        "core_services": ["api", "nginx", "recorder", "web"],
+    }
+    identity = {
+        "installed_version": "0.8.3",
+        "installed_commit": "9" * 40,
+    }
+    manifest = {
+        "compose_evidence": historical_compose,
+        "image_evidence": images,
+        "pre_update_health": health,
+        "declared_identity": {
+            "version": identity["installed_version"],
+            "commit": identity["installed_commit"],
+        },
+    }
+    assert bridge._reused_adopted_evidence_matches(
+        manifest,
+        compose_evidence=current_compose,
+        image_evidence=images,
+        health_evidence=health,
+        installed_identity=identity,
+    )
+
+    for field, replacement in (
+        ("project_name", "other"),
+        ("archive_override_sha256", "a" * 64),
+        ("runtime_override_sha256", "b" * 64),
+        ("services", ["api", "nginx", "web"]),
+    ):
+        changed = json.loads(json.dumps(current_compose))
+        changed[field] = replacement
+        assert not bridge._reused_adopted_evidence_matches(
+            manifest,
+            compose_evidence=changed,
+            image_evidence=images,
+            health_evidence=health,
+            installed_identity=identity,
+        )
+
+    changed_images = json.loads(json.dumps(images))
+    changed_images["services"]["api"]["image_id"] = "sha256:" + ("c" * 64)
+    assert not bridge._reused_adopted_evidence_matches(
+        manifest,
+        compose_evidence=current_compose,
+        image_evidence=changed_images,
+        health_evidence=health,
+        installed_identity=identity,
+    )
+    changed_health = {**health, "status": "unhealthy"}
+    assert not bridge._reused_adopted_evidence_matches(
+        manifest,
+        compose_evidence=current_compose,
+        image_evidence=images,
+        health_evidence=changed_health,
+        installed_identity=identity,
+    )
+    assert not bridge._reused_adopted_evidence_matches(
+        manifest,
+        compose_evidence=current_compose,
+        image_evidence=images,
+        health_evidence=health,
+        installed_identity={**identity, "installed_commit": "d" * 40},
+    )
+
+
 def _fixture(root: Path, request_id: str) -> None:
     _write_json(
         root / "data/update-control/update-request.json",

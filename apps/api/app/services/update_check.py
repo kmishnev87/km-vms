@@ -41,6 +41,10 @@ SENSITIVE_VALUE_RE = re.compile(
     r"(github_pat_[A-Za-z0-9_]+|ghp_[A-Za-z0-9_]+|Bearer\s+[A-Za-z0-9._~+/=-]+|rtsp://[^@\s]+@|postgresql://[^:\s]+:[^@\s]+@|-----BEGIN [^-]*PRIVATE KEY-----)",
     re.IGNORECASE,
 )
+UNSAFE_RELEASE_TEXT_RE = re.compile(r"[\x00-\x1f\x7f]")
+RELEASE_NOTE_LOCALES = frozenset({"en", "ru", "zh-CN"})
+RELEASE_CHANGELOG_ENTRY_MAX = 180
+RELEASE_CHANGELOG_MAX_ENTRIES = 20
 
 _LAST_RESULT: dict[str, Any] | None = None
 _LAST_SUCCESSFUL_RESULT: dict[str, Any] | None = None
@@ -77,6 +81,10 @@ class UpdateInstalledState:
     installed_commit: str | None
     installed_title: str | None
     installed_summary: str | None
+    installed_changelog: list[str]
+    installed_title_i18n: dict[str, str] | None
+    installed_summary_i18n: dict[str, str] | None
+    installed_changelog_i18n: dict[str, list[str]] | None
     source_kind: str | None
     repo: str | None
     ref: str | None
@@ -107,6 +115,9 @@ class UpdateManifestSummary:
     published_at: str | None
     title: str | None
     summary: str | None
+    title_i18n: dict[str, str] | None
+    summary_i18n: dict[str, str] | None
+    changelog_i18n: dict[str, list[str]] | None
     release_notes_url: str | None
     requires_backup: bool
     requires_manual_action: bool
@@ -186,6 +197,150 @@ def _safe_url(value: Any) -> str | None:
     if text.startswith(("https://", "http://")) and not SENSITIVE_VALUE_RE.search(text):
         return text
     return None
+
+
+def _release_note_text(
+    value: Any,
+    *,
+    field_name: str,
+    max_length: int,
+    required: bool = False,
+) -> str | None:
+    if value is None:
+        if required:
+            raise UpdateCheckBlocked(
+                "check_failed",
+                {
+                    "summary": (
+                        f"Release field {field_name} is required."
+                    ),
+                    "error_category": "manifest_schema_invalid",
+                },
+            )
+        return None
+    if type(value) is not str:
+        raise UpdateCheckBlocked(
+            "check_failed",
+            {
+                "summary": (
+                    f"Release field {field_name} must be plain text."
+                ),
+                "error_category": "manifest_schema_invalid",
+            },
+        )
+    text = value.strip()
+    if (
+        not text
+        or len(text) > max_length
+        or UNSAFE_RELEASE_TEXT_RE.search(text)
+        or SENSITIVE_VALUE_RE.search(text)
+    ):
+        if not text and not required:
+            return None
+        raise UpdateCheckBlocked(
+            "check_failed",
+            {
+                "summary": (
+                    f"Release field {field_name} is invalid."
+                ),
+                "error_category": "manifest_schema_invalid",
+            },
+        )
+    return text
+
+
+def _release_note_text_map(
+    value: Any,
+    *,
+    field_name: str,
+    max_length: int,
+) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if (
+        type(value) is not dict
+        or set(value) != RELEASE_NOTE_LOCALES
+    ):
+        raise UpdateCheckBlocked(
+            "check_failed",
+            {
+                "summary": (
+                    f"Release field {field_name} has invalid locales."
+                ),
+                "error_category": "manifest_schema_invalid",
+            },
+        )
+    return {
+        locale: _release_note_text(
+            value[locale],
+            field_name=f"{field_name}.{locale}",
+            max_length=max_length,
+            required=True,
+        )
+        or ""
+        for locale in ("en", "ru", "zh-CN")
+    }
+
+
+def _release_changelog(
+    value: Any,
+    *,
+    field_name: str,
+) -> list[str]:
+    if value is None:
+        return []
+    if (
+        type(value) is not list
+        or len(value) > RELEASE_CHANGELOG_MAX_ENTRIES
+    ):
+        raise UpdateCheckBlocked(
+            "check_failed",
+            {
+                "summary": (
+                    f"Release field {field_name} must be a bounded list."
+                ),
+                "error_category": "manifest_schema_invalid",
+            },
+        )
+    return [
+        _release_note_text(
+            item,
+            field_name=f"{field_name}[{index}]",
+            max_length=RELEASE_CHANGELOG_ENTRY_MAX,
+            required=True,
+        )
+        or ""
+        for index, item in enumerate(value)
+    ]
+
+
+def _release_changelog_map(
+    value: Any,
+    *,
+    field_name: str,
+) -> dict[str, list[str]] | None:
+    if value is None:
+        return None
+    if (
+        type(value) is not dict
+        or set(value) != RELEASE_NOTE_LOCALES
+    ):
+        raise UpdateCheckBlocked(
+            "check_failed",
+            {
+                "summary": (
+                    f"Release field {field_name} has invalid locales."
+                ),
+                "error_category": "manifest_schema_invalid",
+            },
+        )
+    return {
+        locale: _release_changelog(
+            value[locale],
+            field_name=f"{field_name}.{locale}",
+        )
+        for locale in ("en", "ru", "zh-CN")
+    }
 
 
 def _read_json_file(path: Path) -> tuple[dict[str, Any] | None, str]:
@@ -319,12 +474,59 @@ def read_installed_update_state(*, app_root: Path | None = None) -> UpdateInstal
     else:
         status = "metadata_invalid"
         identity_validity = "invalid"
+    try:
+        installed_title = _release_note_text(
+            release.get("title"),
+            field_name="title",
+            max_length=160,
+        )
+        installed_summary = _release_note_text(
+            release.get("summary"),
+            field_name="summary",
+            max_length=800,
+        )
+        installed_changelog = _release_changelog(
+            release.get("changelog"),
+            field_name="changelog",
+        )
+        installed_title_i18n = _release_note_text_map(
+            release.get("title_i18n"),
+            field_name="title_i18n",
+            max_length=160,
+        )
+        installed_summary_i18n = _release_note_text_map(
+            release.get("summary_i18n"),
+            field_name="summary_i18n",
+            max_length=800,
+        )
+        installed_changelog_i18n = _release_changelog_map(
+            release.get("changelog_i18n"),
+            field_name="changelog_i18n",
+        )
+    except UpdateCheckBlocked:
+        installed_title = None
+        installed_summary = None
+        installed_changelog = []
+        installed_title_i18n = None
+        installed_summary_i18n = None
+        installed_changelog_i18n = None
+        warnings.append(
+            UpdateMetadataWarning(
+                "release_identity_notes_invalid",
+                "Installed release notes are invalid and were ignored.",
+                field=".km-vms-release.json",
+            )
+        )
     return UpdateInstalledState(
         status=status,
         installed_version=version,
         installed_commit=commit,
-        installed_title=_safe_field("title", release.get("title"), max_length=160),
-        installed_summary=_safe_field("summary", release.get("summary"), max_length=800),
+        installed_title=installed_title,
+        installed_summary=installed_summary,
+        installed_changelog=installed_changelog,
+        installed_title_i18n=installed_title_i18n,
+        installed_summary_i18n=installed_summary_i18n,
+        installed_changelog_i18n=installed_changelog_i18n,
         source_kind=_safe_field("source_kind", release.get("source_kind") or source.get("source_kind") or update.get("source_kind") or build.get("install_source"), max_length=80),
         repo=repo,
         ref=ref,
@@ -378,8 +580,11 @@ def _string_list(value: Any) -> list[str]:
         return []
     result: list[str] = []
     for item in value[:20]:
-        text = _sanitize_text(item, max_length=160)
-        if text:
+        text = _sanitize_text(
+            item,
+            max_length=RELEASE_CHANGELOG_ENTRY_MAX + 1,
+        )
+        if text and len(text) <= RELEASE_CHANGELOG_ENTRY_MAX:
             result.append(text)
     return result
 
@@ -433,8 +638,30 @@ def _normalize_manifest(payload: dict[str, Any]) -> UpdateManifestSummary:
         git_ref=git_ref,
         commit=commit,
         published_at=published_at,
-        title=_manifest_text(payload, "title", max_length=160),
-        summary=_manifest_text(payload, "summary", max_length=800),
+        title=_release_note_text(
+            payload.get("title"),
+            field_name="title",
+            max_length=160,
+        ),
+        summary=_release_note_text(
+            payload.get("summary"),
+            field_name="summary",
+            max_length=800,
+        ),
+        title_i18n=_release_note_text_map(
+            payload.get("title_i18n"),
+            field_name="title_i18n",
+            max_length=160,
+        ),
+        summary_i18n=_release_note_text_map(
+            payload.get("summary_i18n"),
+            field_name="summary_i18n",
+            max_length=800,
+        ),
+        changelog_i18n=_release_changelog_map(
+            payload.get("changelog_i18n"),
+            field_name="changelog_i18n",
+        ),
         release_notes_url=_safe_url(payload.get("release_notes_url")),
         requires_backup=_bool(payload, "requires_backup"),
         requires_manual_action=_bool(payload, "requires_manual_action"),
@@ -443,7 +670,10 @@ def _normalize_manifest(payload: dict[str, Any]) -> UpdateManifestSummary:
         source_type=source_type,
         source_repo=source_repo,
         source_ref=source_ref,
-        breaking_changes=_string_list(payload.get("breaking_changes")),
+        breaking_changes=_release_changelog(
+            payload.get("breaking_changes"),
+            field_name="breaking_changes",
+        ),
     )
 
 
@@ -658,10 +888,35 @@ def _manifest_from_release_payload(payload: dict[str, Any], *, resolve_commit: b
         "git_ref": source_ref,
         "commit": commit,
         "published_at": _safe_timestamp(payload.get("published_at")),
-        "title": _manifest_text(payload, "title", max_length=160),
-        "summary": _manifest_text(payload, "summary", max_length=800),
+        "title": _release_note_text(
+            payload.get("title"),
+            field_name="title",
+            max_length=160,
+        ),
+        "summary": _release_note_text(
+            payload.get("summary"),
+            field_name="summary",
+            max_length=800,
+        ),
+        "title_i18n": _release_note_text_map(
+            payload.get("title_i18n"),
+            field_name="title_i18n",
+            max_length=160,
+        ),
+        "summary_i18n": _release_note_text_map(
+            payload.get("summary_i18n"),
+            field_name="summary_i18n",
+            max_length=800,
+        ),
+        "changelog_i18n": _release_changelog_map(
+            payload.get("changelog_i18n"),
+            field_name="changelog_i18n",
+        ),
         "release_notes_url": None,
-        "breaking_changes": _string_list(payload.get("changelog")),
+        "breaking_changes": _release_changelog(
+            payload.get("changelog"),
+            field_name="changelog",
+        ),
         "requires_backup": bool(payload.get("requires_backup") is True),
         "requires_manual_action": bool(payload.get("requires_manual_action") is True),
         "requires_migration": bool(payload.get("requires_migration") is True),
@@ -791,6 +1046,20 @@ def _trusted_apply_snapshot_from_payload(payload: dict[str, Any], *, now: dateti
             "version": _safe_field("version", latest.get("version"), max_length=80),
             "title": _safe_field("title", latest.get("title"), max_length=160),
             "summary": _safe_field("summary", latest.get("summary"), max_length=800),
+            "title_i18n": _release_note_text_map(
+                latest.get("title_i18n"),
+                field_name="title_i18n",
+                max_length=160,
+            ),
+            "summary_i18n": _release_note_text_map(
+                latest.get("summary_i18n"),
+                field_name="summary_i18n",
+                max_length=800,
+            ),
+            "changelog_i18n": _release_changelog_map(
+                latest.get("changelog_i18n"),
+                field_name="changelog_i18n",
+            ),
             "breaking_changes": _string_list(latest.get("breaking_changes")),
             "published_at": _safe_timestamp(latest.get("published_at")),
             "channel": _safe_field("channel", latest.get("channel"), max_length=80),
@@ -950,6 +1219,9 @@ def _trusted_apply_candidate_payload(*, now: datetime | None = None) -> dict[str
                 "title": latest.get("title"),
                 "summary": latest.get("summary"),
                 "changelog": latest.get("breaking_changes") if isinstance(latest.get("breaking_changes"), list) else [],
+                "title_i18n": latest.get("title_i18n"),
+                "summary_i18n": latest.get("summary_i18n"),
+                "changelog_i18n": latest.get("changelog_i18n"),
                 "published_at": latest.get("published_at"),
                 "tag": latest.get("source_ref") or latest.get("git_ref"),
                 "commit_sha": commit,
@@ -1046,6 +1318,9 @@ def _result_payload(result: UpdateCheckResult) -> dict[str, Any]:
         "title": latest["title"],
         "summary": latest["summary"],
         "changelog": latest["breaking_changes"],
+        "title_i18n": latest["title_i18n"],
+        "summary_i18n": latest["summary_i18n"],
+        "changelog_i18n": latest["changelog_i18n"],
         "published_at": latest["published_at"],
         "tag": latest["source_ref"] or latest["git_ref"],
         "commit_sha": latest["commit"],
@@ -1059,6 +1334,10 @@ def _result_payload(result: UpdateCheckResult) -> dict[str, Any]:
         "version": installed["installed_version"],
         "title": installed["installed_title"],
         "summary": installed["installed_summary"],
+        "changelog": installed["installed_changelog"],
+        "title_i18n": installed["installed_title_i18n"],
+        "summary_i18n": installed["installed_summary_i18n"],
+        "changelog_i18n": installed["installed_changelog_i18n"],
         "commit_sha": installed["installed_commit"],
         "commit_short": installed["installed_commit"][:12] if installed["installed_commit"] else None,
         "source_kind": installed["source_kind"],

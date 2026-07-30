@@ -137,7 +137,7 @@ def _seed_database(
         db.execute(text("UPDATE cameras SET enabled=false"))
         system = db.query(SystemSettings).first()
         assert system is not None
-        system.system_name = sentinel
+        system.timezone = sentinel
         owner = db.query(User).filter(User.username == "stage5_owner").one()
         db.commit()
         return SimpleNamespace(
@@ -156,7 +156,7 @@ def _database_sentinel(url: URL) -> str:
         with engine.connect() as connection:
             return str(
                 connection.execute(
-                    text("SELECT system_name FROM system_settings LIMIT 1")
+                    text("SELECT timezone FROM system_settings LIMIT 1")
                 ).scalar_one()
             )
     finally:
@@ -480,19 +480,7 @@ def _run_flow(
                 "",
                 "",
             )
-        if arguments[0] == "start":
-            events.append(f"service:start:{arguments[1]}")
-            if arguments[1] == "recorder":
-                recorder_process = _start_disposable_recorder(
-                    current_url=current_url,
-                    storage_root=run_root / "recorder-storage",
-                )
-            return subprocess.CompletedProcess(
-                list(arguments),
-                0,
-                "",
-                "",
-            )
+        assert arguments[0] not in {"start", "restart"}
         assert arguments[:4] == (
             "run",
             "--rm",
@@ -567,7 +555,26 @@ def _run_flow(
         )
         return result
 
+    def existing_service_action(service: str, action: str) -> str:
+        nonlocal recorder_process
+        assert service in {"api", "recorder"}
+        assert action in {"start", "restart"}
+        events.append(f"service:docker:{action}:{service}")
+        if service == "recorder":
+            if action == "restart":
+                _stop_disposable_recorder(recorder_process)
+            recorder_process = _start_disposable_recorder(
+                current_url=current_url,
+                storage_root=run_root / "recorder-storage",
+            )
+        return ("a" if service == "api" else "b") * 64
+
     monkeypatch.setattr(helper, "restore_compose_command", compose)
+    monkeypatch.setattr(
+        helper,
+        "_run_existing_restore_service_action",
+        existing_service_action,
+    )
     monkeypatch.setattr(
         helper,
         "wait_for_service",
@@ -618,13 +625,13 @@ def test_disposable_current_restore_happy_rollback_and_recovery_required(
         source_actor = _seed_database(
             _db_url(source_name),
             owner_password=owner_password,
-            sentinel="SENTINEL-B",
+            sentinel="Etc/GMT-2",
         )
         for name in current_names.values():
             actor = _seed_database(
                 _db_url(name),
                 owner_password=owner_password,
-                sentinel="SENTINEL-A",
+                sentinel="Etc/GMT-1",
             )
             assert actor.username == source_actor.username
             assert actor.role == source_actor.role
@@ -663,15 +670,15 @@ def test_disposable_current_restore_happy_rollback_and_recovery_required(
         )
         assert _database_sentinel(
             _db_url(current_names["happy"])
-        ) == "SENTINEL-B"
+        ) == "Etc/GMT-2"
         assert happy_events.index("writers:stop") < happy_events.index(
             "executor:pre-restore-backup"
         )
         assert happy_events.index(
             "executor:post-check"
-        ) < happy_events.index("service:start:recorder")
+        ) < happy_events.index("service:docker:start:recorder")
         assert happy_events.index(
-            "service:start:recorder"
+            "service:docker:start:recorder"
         ) < happy_events.index("executor:recorder-proof")
 
         rolled_back, rollback_events = _run_flow(
@@ -687,7 +694,7 @@ def test_disposable_current_restore_happy_rollback_and_recovery_required(
         assert rolled_back["next_action"] == "current_database_restored"
         assert _database_sentinel(
             _db_url(current_names["rollback"])
-        ) == "SENTINEL-A"
+        ) == "Etc/GMT-1"
         assert rollback_events.count("executor:restore:source") == 1
         assert rollback_events.count("executor:restore:rollback") == 1
         assert rollback_events.count("executor:recorder-proof") == 1

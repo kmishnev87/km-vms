@@ -53,8 +53,6 @@ def migrate_system_settings_table() -> None:
         return
     columns = {column["name"] for column in inspector.get_columns("system_settings")}
     with engine.begin() as conn:
-        if "system_name" not in columns:
-            conn.execute(text("ALTER TABLE system_settings ADD COLUMN IF NOT EXISTS system_name VARCHAR(100) NULL"))
         if "language" in columns:
             dialect = engine.dialect.name
             if dialect == "postgresql":
@@ -271,7 +269,6 @@ def ensure_system_settings(db: Session) -> SystemSettings:
     has_users = db.query(User).count() > 0
     row = SystemSettings(
         system_initialized=has_users,
-        system_name="KM VMS",
         timezone=default_timezone(),
         language="ru",
         storage_path=settings.storage_root,

@@ -49,6 +49,7 @@ def _public_status() -> dict:
         "finished_at": NOW,
         "terminal_result": "failed_rolled_back",
         "reason_code": "source_restore_failed",
+        "failed_phase": "restore_running",
         "next_action": "current_database_restored",
         "video_archive_modified": False,
     }
@@ -78,6 +79,7 @@ def test_reader_restore_status_is_actor_bound_and_redacted(
     safe = control.restore_public_status({"subject": "owner"})
 
     assert safe["terminal_result"] == "failed_rolled_back"
+    assert safe["failed_phase"] == "restore_running"
     assert safe["next_action"] == "current_database_restored"
     assert "actor_subject" not in safe
     assert "schema" not in safe
@@ -92,6 +94,16 @@ def test_reader_restore_status_is_actor_bound_and_redacted(
         match="restore_status_contract_invalid",
     ):
         control.restore_public_status({"subject": "owner"})
+
+    legacy = _public_status()
+    legacy.pop("failed_phase")
+    _write(status_path, legacy)
+    assert (
+        control.restore_public_status({"subject": "owner"})[
+            "terminal_result"
+        ]
+        == "failed_rolled_back"
+    )
 
 
 def test_reader_restore_status_returns_authenticated_idle_before_first_operation(
@@ -113,6 +125,7 @@ def test_reader_restore_status_returns_authenticated_idle_before_first_operation
         "status": "idle",
         "phase": None,
         "terminal_result": None,
+        "failed_phase": None,
         "video_archive_modified": False,
     }
 

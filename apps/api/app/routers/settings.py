@@ -107,7 +107,6 @@ class SetupRequest(BaseModel):
     username: str = Field(min_length=2, max_length=64)
     password: str = Field(min_length=8, max_length=256)
     password_confirm: str = Field(min_length=8, max_length=256)
-    system_name: str | None = Field(default=None, max_length=80)
     timezone: str
     language: str
     storage_path: str
@@ -123,7 +122,6 @@ class AutoFreeSpaceAcknowledgement(BaseModel):
 
 
 class SettingsUpdateRequest(BaseModel):
-    system_name: str | None = Field(default=None, max_length=80)
     timezone: str | None = None
     language: str | None = None
     storage_path: str | None = None
@@ -663,7 +661,6 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request
             "owner_role": admin.role,
             "timezone": system.timezone,
             "language": system.language,
-            "system_name": system.system_name or "KM VMS",
             "recording_format": system.recording_format,
             "setup_storage_status": storage_confirmation["status"],
             "setup_storage_next_action": storage_confirmation["next_action"],
