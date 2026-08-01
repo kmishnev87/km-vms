@@ -30,6 +30,7 @@ from app.services.archive_integrity import (
     ORPHAN_OBSERVATION_GRACE,
     RECENT_WRITE_WINDOW,
     _bounded_fingerprint,
+    _file_within_recent_write_window,
     _metadata_version,
     _normalize_relative,
     _receipt_matches,
@@ -108,7 +109,7 @@ MUTATING_ACTIONS = {
         "mutation": "mark_stale_nonplayable",
     },
     "delete_unusable_recording": {
-        "categories": {"zero_size_file", "corrupted_file"},
+        "categories": {"zero_size_file", "corrupted_file", "partial_file"},
         "permission": "delete_recordings",
         "operation_type": "integrity_recording_delete",
         "mutation": "delete_trusted_unusable_recording",
@@ -351,6 +352,8 @@ def _revalidate_stale(db: Session, finding: ArchiveIntegrityFinding) -> tuple[Re
         raise IntegrityRemediationBlocked("archive_integrity_file_changed") from exc
     if not stat_module.S_ISREG(stat_result.st_mode) or not _stat_facts_match(dict(finding.observed_facts or {}), stat_result):
         raise IntegrityRemediationBlocked("archive_integrity_file_changed")
+    if _file_within_recent_write_window(stat_result):
+        raise IntegrityRemediationBlocked("archive_integrity_recorder_window_active", retry_mode="new_scan")
     return segment, root, relative_ref, {
         "segment_version": _metadata_version(segment),
         "root_snapshot_key": _root_snapshot_key(root),
@@ -367,10 +370,19 @@ def _revalidate_unusable(db: Session, finding: ArchiveIntegrityFinding) -> tuple
     segment = _segment_for_finding(db, finding)
     root = _root_for_finding(db, finding)
     relative_ref = _relative_for_finding(finding)
-    if segment.ownership != "KM VMS" or segment.source != "recorder" or str(segment.status) != "finalized":
-        raise IntegrityRemediationBlocked("archive_integrity_unusable_not_finalized")
+    category = str(finding.category or "")
+    expected_statuses = {"failed"} if category == "partial_file" else {"finalized"}
+    if (
+        segment.ownership != "KM VMS"
+        or segment.source != "recorder"
+        or str(segment.status or "") not in expected_statuses
+    ):
+        raise IntegrityRemediationBlocked("archive_integrity_unusable_state_changed")
     if _active_write_exists(db, segment):
         raise IntegrityRemediationBlocked("archive_integrity_active_write")
+    anchor = segment.updated_at or segment.ended_at or segment.started_at
+    if not anchor or datetime.utcnow() - anchor < RECENT_WRITE_WINDOW:
+        raise IntegrityRemediationBlocked("archive_integrity_recorder_window_active")
     target = safe_resolve_relative_for_root(relative_ref, root)
     try:
         stat_result = target.lstat()
@@ -378,13 +390,20 @@ def _revalidate_unusable(db: Session, finding: ArchiveIntegrityFinding) -> tuple
         raise IntegrityRemediationBlocked("archive_integrity_file_changed") from exc
     if not stat_module.S_ISREG(stat_result.st_mode) or not _stat_facts_match(dict(finding.observed_facts or {}), stat_result):
         raise IntegrityRemediationBlocked("archive_integrity_file_changed")
-    if finding.category == "zero_size_file":
+    if _file_within_recent_write_window(stat_result):
+        raise IntegrityRemediationBlocked("archive_integrity_recorder_window_active", retry_mode="new_scan")
+    if category == "zero_size_file":
         if int(stat_result.st_size) != 0:
             raise IntegrityRemediationBlocked("archive_integrity_file_changed")
-    else:
+    elif category == "corrupted_file":
         probe_ok, _probe_status = _safe_probe(target)
         if probe_ok is not False:
             raise IntegrityRemediationBlocked("archive_integrity_corruption_not_reproduced")
+    elif category == "partial_file":
+        if str((finding.observed_facts or {}).get("status") or "") != "failed":
+            raise IntegrityRemediationBlocked("archive_integrity_incomplete_state_changed")
+    else:
+        raise IntegrityRemediationBlocked("archive_integrity_unusable_category_changed")
     return segment, root, relative_ref, {
         "segment_version": _metadata_version(segment),
         "root_snapshot_key": _root_snapshot_key(root),
@@ -686,22 +705,11 @@ def _apply_missing(db: Session, plan, item, finding, actor) -> dict[str, Any]:
 
 
 def _apply_stale(db: Session, plan, item, finding, actor) -> dict[str, Any]:
-    segment, _root, _relative, current = _revalidate_stale(db, finding)
-    if not _evidence_matches(item, current):
-        raise IntegrityRemediationBlocked("archive_integrity_plan_stale")
-    now = database_now(db)
-    segment.status = "stale_writing"
-    segment.integrity_status = "stale_writing_segment"
-    segment.integrity_error = "recorder_write_not_active"
-    segment.content_probe_status = "not_playable"
-    segment.cleanup_candidate = False
-    segment.cleanup_reason = None
-    segment.reconciliation_status = "stale_writing_segment"
-    segment.reconciliation_checked_at = now
-    segment.last_integrity_check_at = now
-    segment.updated_at = now
-    db.add(segment)
-    return {"status": "completed", "updated_count": 1, "deleted_file_count": 0}
+    _revalidate_stale(db, finding)
+    raise IntegrityRemediationBlocked(
+        "archive_integrity_stale_requires_new_scan",
+        retry_mode="new_scan",
+    )
 
 
 def _persist_item_state(
@@ -847,6 +855,13 @@ def _apply_unusable(db: Session, plan, item, finding, actor, handle) -> dict[str
             "archive_root_id": str(segment.archive_root_id or ""),
             "relative_path": relative_ref,
             "size_bytes": int(segment.size_bytes or 0),
+            "file_facts": {
+                "device_id": str(current["device_id"]),
+                "inode": str(current["inode"]),
+                "size_bytes": int(current["size_bytes"]),
+                "mtime_ns": int(current["mtime_ns"]),
+                "minimum_age_seconds": int(RECENT_WRITE_WINDOW.total_seconds()),
+            },
         }
     }
     result = execute_segments(
@@ -868,6 +883,7 @@ def _apply_unusable(db: Session, plan, item, finding, actor, handle) -> dict[str
         manage_outer_operation=False,
         write_terminal_audit=False,
         allowed_integrity_statuses={str(segment.integrity_status or ""), finding.category},
+        allowed_segment_statuses={str(segment.status or "")},
     )
     if result.get("status") not in {"completed", "partial"}:
         raise IntegrityRemediationBlocked("archive_integrity_recording_delete_blocked", retry_mode="new_scan")

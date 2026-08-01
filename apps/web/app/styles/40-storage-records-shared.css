@@ -379,6 +379,212 @@
   }
 }
 
+/* Stage 4.10.6: concise storage truth, useful history and compact integrity actions. */
+.storageOpsOverview {
+  grid-template-columns: minmax(280px, 1.2fr) minmax(420px, 1.65fr) 40px;
+}
+
+.storageOpsTopMetrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.storageOpsHealthAction {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 40px;
+  padding: 0;
+}
+
+.archiveManagementUsefulHistory,
+.archiveManagementHistorySection {
+  display: grid;
+  gap: 12px;
+}
+
+.archiveManagementHistorySummary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.archiveManagementHistorySummary article {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid #dbe3ef;
+  border-radius: 7px;
+  background: #f8fafc;
+}
+
+.archiveManagementHistorySummary span,
+.archiveManagementHistorySummary small {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.archiveManagementHistorySummary strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.archiveManagementHistorySection h3 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.storageIntegrityFindingAction {
+  width: 40px;
+  min-width: 40px;
+}
+
+.storageIntegrityIconAction {
+  width: 40px !important;
+  min-width: 40px !important;
+  height: 40px;
+  min-height: 40px !important;
+  padding: 0 !important;
+}
+
+.storageIntegrityIconAction img {
+  display: block;
+  width: 40px;
+  height: 40px;
+}
+
+.storageIntegrityIconAction:focus-visible,
+.storageIntegrityConfirmation .button:focus-visible,
+.storageIntegrityConfirmation .storageIntegrityClose:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.28);
+  outline-offset: 2px;
+}
+
+.storageIntegrityConfirmationOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1140;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.3);
+}
+
+.storageIntegrityConfirmation {
+  display: grid;
+  gap: 9px;
+  width: min(460px, 100%);
+  padding: 16px;
+  border: 1px solid #dbe3ef;
+  border-left-width: 4px;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.3);
+}
+
+.storageIntegrityConfirmation > header,
+.storageIntegrityConfirmation > footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.storageIntegrityConfirmation > header {
+  justify-content: space-between;
+}
+
+.storageIntegrityConfirmation > footer {
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.storageIntegrityConfirmation h3,
+.storageIntegrityConfirmation p {
+  margin: 0;
+}
+
+.storageIntegrityConfirmation h3 {
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.storageIntegrityConfirmation > strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.storageIntegrityConfirmation > span,
+.storageIntegrityConfirmation > p {
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.storageOpsSection-roots {
+  --storage-root-action-column: 40px;
+  --storage-root-action-inset: 10px;
+}
+
+.storageOpsRootListRow {
+  grid-template-columns: minmax(190px, 1.5fr) 36px repeat(3, minmax(58px, 0.44fr)) minmax(62px, 0.38fr) var(--storage-root-action-column);
+  padding-right: var(--storage-root-action-inset);
+}
+
+.storageOpsRootActionsCell {
+  justify-self: end;
+  width: var(--storage-root-action-column);
+}
+
+.storageOpsAdvancedRoot .storageOpsRootForm-product {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--storage-root-action-column);
+  padding-right: var(--storage-root-action-inset);
+}
+
+.storageOpsAdvancedRoot .storageOpsRootAddButton.appIllustratedAction {
+  justify-self: end;
+  width: var(--storage-root-action-column);
+  min-width: var(--storage-root-action-column);
+}
+
+@media (max-width: 760px) {
+  .storageOpsOverview {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsTopMetrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 0;
+  }
+
+  .storageOpsHealthAction {
+    justify-content: flex-start;
+  }
+
+  .archiveManagementHistorySummary {
+    grid-template-columns: 1fr;
+  }
+
+  .storageIntegrityFindingAction .storageIntegrityIconAction {
+    width: 40px !important;
+  }
+
+  .storageOpsAdvancedRoot .storageOpsRootForm-product {
+    grid-template-columns: 1fr;
+    padding-right: var(--storage-root-action-inset);
+  }
+
+  .storageOpsAdvancedRoot .storageOpsRootAddButton.appIllustratedAction {
+    justify-self: end;
+  }
+}
+
 @media (max-width: 760px) {
   .archiveManagementHeader {
     align-items: flex-start;
@@ -4410,5 +4616,90 @@ a.appIllustratedAction:focus-visible {
       "cameras"
       "roots"
       "management";
+  }
+}
+
+/* Stage 4.10.6 final cascade ownership. */
+.storageOpsOverview {
+  grid-template-columns: minmax(280px, 1.2fr) minmax(420px, 1.65fr) 40px;
+}
+
+.storageOpsTopMetrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.storageOpsHealthAction {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 40px;
+  padding: 0;
+}
+
+.storageIntegrityFindingAction {
+  width: 40px;
+  min-width: 40px;
+}
+
+.storageIntegrityIconAction,
+.storageIntegrityFindingAction .storageIntegrityIconAction {
+  width: 40px !important;
+  min-width: 40px !important;
+  height: 40px;
+  min-height: 40px !important;
+  padding: 0 !important;
+}
+
+.storageOpsSection-roots {
+  --storage-root-action-column: 40px;
+  --storage-root-action-inset: 10px;
+}
+
+.storageOpsRootListRow {
+  grid-template-columns: minmax(190px, 1.5fr) 36px repeat(3, minmax(58px, 0.44fr)) minmax(62px, 0.38fr) var(--storage-root-action-column);
+  padding-right: var(--storage-root-action-inset);
+}
+
+.storageOpsRootActionsCell {
+  justify-self: end;
+  width: var(--storage-root-action-column);
+}
+
+.storageOpsAdvancedRoot .storageOpsRootForm-product {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--storage-root-action-column);
+  padding-right: var(--storage-root-action-inset);
+}
+
+.storageOpsAdvancedRoot .storageOpsRootAddButton.appIllustratedAction {
+  justify-self: end;
+  width: var(--storage-root-action-column);
+  min-width: var(--storage-root-action-column);
+}
+
+@media (max-width: 760px) {
+  .storageOpsOverview {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsTopMetrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 0;
+  }
+
+  .storageOpsHealthAction {
+    justify-content: flex-start;
+  }
+
+  .storageIntegrityFindingAction .storageIntegrityIconAction {
+    width: 40px !important;
+  }
+
+  .storageOpsAdvancedRoot .storageOpsRootForm-product {
+    grid-template-columns: 1fr;
+    padding-right: var(--storage-root-action-inset);
+  }
+
+  .storageOpsAdvancedRoot .storageOpsRootAddButton.appIllustratedAction {
+    justify-self: end;
   }
 }

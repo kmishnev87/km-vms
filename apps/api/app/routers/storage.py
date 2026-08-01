@@ -65,7 +65,7 @@ from app.services.recording_storage import (
     write_archive_roots_runtime_files,
 )
 from app.services import setup_storage
-from app.services.storage_monitoring import build_lightweight_storage_monitoring_summary
+from app.services.storage_monitoring import build_lightweight_storage_monitoring_summary, useful_storage_operation_history
 from app.services.storage_operation_conflicts import (
     StorageOperationLifecycle,
     StorageOperationConflict as StorageOuterConflict,
@@ -201,6 +201,14 @@ def storage_status(
     if isinstance(summary.get("storage_operations"), dict):
         summary["storage_operations"]["archive_root_activation"] = summary["archive_root_activation"]
     return summary
+
+
+@router.get("/operations/history")
+def storage_operations_history(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission("manage_settings")),
+):
+    return useful_storage_operation_history(db)
 
 
 @router.get("/archive-roots")

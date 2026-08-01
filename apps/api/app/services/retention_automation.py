@@ -267,18 +267,32 @@ def camera_policy_snapshot(
     high_watermark: int,
     evaluation_at: datetime,
 ) -> dict:
-    base = {
+    policy_identity = {
         "schema_version": 1,
         "camera_id": int(camera.id),
         "policy_version": int(getattr(camera, "retention_policy_version", 1) or 1),
         "retention_days": int(camera.retention_days or 0),
         "storage_quota_gb": int(camera.storage_quota_gb or 0),
+        "camera_state": "soft_deleted" if camera.deleted_at is not None else ("enabled" if camera.enabled else "disabled"),
+    }
+    base = {
+        **policy_identity,
         "signal_watermark": int(signal_watermark),
         "segment_high_watermark": int(high_watermark),
         "evaluation_at": _iso(evaluation_at),
-        "camera_state": "soft_deleted" if camera.deleted_at is not None else ("enabled" if camera.enabled else "disabled"),
     }
-    return {**base, "policy_hash": _policy_hash(base)}
+    return {**base, "policy_hash": _policy_hash(policy_identity)}
+
+
+def _camera_policy_matches(left: dict, right: dict) -> bool:
+    return bool(
+        int(left.get("camera_id") or 0) == int(right.get("camera_id") or 0)
+        and int(left.get("policy_version") or 0) == int(right.get("policy_version") or 0)
+        and int(left.get("retention_days") or 0) == int(right.get("retention_days") or 0)
+        and int(left.get("storage_quota_gb") or 0) == int(right.get("storage_quota_gb") or 0)
+        and str(left.get("camera_state") or "") == str(right.get("camera_state") or "")
+        and str(left.get("policy_hash") or "") == str(right.get("policy_hash") or "")
+    )
 
 
 def _authoritative_camera_query(db: Session, snapshot: dict):
@@ -573,6 +587,28 @@ def run_camera_retention_operation(
     page_size: int,
     should_preempt: Callable[[], bool] | None = None,
 ) -> dict:
+    operation_id = _camera_operation_id(snapshot["camera_id"], snapshot["signal_watermark"])
+    existing = db.get(StorageOperation, operation_id)
+    if existing is not None and operation_effective_status(existing, database_now(db)) in TERMINAL_OPERATION_STATUSES:
+        result = terminal_result_summary(existing.result)
+        return {**result, "replayed": True}
+
+    preliminary = measure_camera_retention(db, snapshot)
+    if existing is None and not preliminary["violation"]:
+        return _camera_terminal_result(
+            snapshot,
+            {
+                "planned_count": 0,
+                "deleted_count": 0,
+                "skipped_count": 0,
+                "failed_count": 0,
+                "bytes_freed": 0,
+                "reason_counts": {},
+            },
+            preliminary,
+            status="compliant",
+        )
+
     try:
         claim = _claim_camera_operation(db, snapshot)
     except StorageOperationConflict as exc:
@@ -607,8 +643,59 @@ def run_camera_retention_operation(
     }
     scan_cursor: tuple[datetime, int] | None = None
     try:
+        current_camera = db.get(Camera, int(snapshot["camera_id"]))
+        if current_camera is None:
+            current_measurement = measure_camera_retention(db, snapshot)
+            result = _camera_terminal_result(snapshot, totals, current_measurement, status="camera_missing")
+            finish_operation(
+                db,
+                handle,
+                status="blocked",
+                result=result,
+                progress=_operation_progress(snapshot, totals, current_measurement),
+                reason_code="retention_camera_missing",
+                next_action="retry_operation",
+                retry_allowed=True,
+                retry_mode="scheduled",
+            )
+            return {**result, "retryable": True}
+
+        current_snapshot = camera_policy_snapshot(
+            current_camera,
+            signal_watermark=int(snapshot["signal_watermark"]),
+            high_watermark=int(snapshot["segment_high_watermark"]),
+            evaluation_at=database_now(db),
+        )
+        if not _camera_policy_matches(snapshot, current_snapshot):
+            current_measurement = measure_camera_retention(db, current_snapshot)
+            result = _camera_terminal_result(current_snapshot, totals, current_measurement, status="superseded_policy_changed")
+            finish_operation(
+                db,
+                handle,
+                status="partial" if totals["deleted_count"] else "completed",
+                result=result,
+                progress=_operation_progress(snapshot, totals, current_measurement),
+                reason_code="retention_policy_changed_after_claim",
+            )
+            advance_retention_signal(db)
+            return result
+
+        snapshot = current_snapshot
+        current_measurement = measure_camera_retention(db, snapshot)
+        if not current_measurement["violation"]:
+            result = _camera_terminal_result(snapshot, totals, current_measurement, status="compliant_after_claim")
+            finish_operation(
+                db,
+                handle,
+                status="completed",
+                result=result,
+                progress=_operation_progress(snapshot, totals, current_measurement),
+                reason_code="retention_compliant_after_claim",
+            )
+            return result
+
         while True:
-            measurement = measure_camera_retention(db, snapshot)
+            measurement = current_measurement
             if not measurement["violation"]:
                 result = _camera_terminal_result(snapshot, totals, measurement, status="compliant")
                 finish_operation(
@@ -674,6 +761,7 @@ def run_camera_retention_operation(
             totals["bytes_freed"] += int(execution.get("bytes_freed") or 0)
             totals["reason_counts"].update(execution.get("reason_counts") or {})
             measurement = measure_camera_retention(db, snapshot)
+            current_measurement = measurement
             heartbeat_operation(db, handle, progress=_operation_progress(snapshot, totals, measurement))
             if int(execution.get("deleted_count") or 0) <= 0:
                 terminal = "partial" if totals["deleted_count"] else "blocked"

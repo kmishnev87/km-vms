@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Удалить подтверждённый лишний файл</title>
+  <defs>
+    <linearGradient id="sheet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dce5ee"/>
+    </linearGradient>
+    <linearGradient id="danger" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f38b8b"/>
+      <stop offset="1" stop-color="#d94747"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="2" stdDeviation="1.6" flood-color="#334155" flood-opacity=".24"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <path d="M13 8h25l10 10v31a5 5 0 0 1-5 5H13a5 5 0 0 1-5-5V13a5 5 0 0 1 5-5z" fill="url(#sheet)" stroke="#8493a3" stroke-width="1.5"/>
+    <path d="M38 8v10h10" fill="#d8e1ea" stroke="#8493a3" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M17 28h17M17 35h13" stroke="#8291a0" stroke-width="2.7" stroke-linecap="round"/>
+    <path d="m32 41 5-5m-1 8 5-5" stroke="#9aa8b6" stroke-width="2.2" stroke-linecap="round"/>
+    <circle cx="46" cy="44" r="12" fill="url(#danger)" stroke="#bc3030" stroke-width="1.5"/>
+    <path d="M40.5 41.2h11M43.2 41.2l.7 8h4.2l.7-8M44 39.1h4M44.7 44v3M47.8 44v3" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

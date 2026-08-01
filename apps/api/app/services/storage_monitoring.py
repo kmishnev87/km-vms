@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import os
 import re
@@ -9,13 +9,14 @@ import shutil
 import threading
 import time
 
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
 from app.core.sanitization import redact_text
 from app.models.camera import Camera
 from app.models.recording import ArchiveRoot, RecordingSegment
+from app.models.storage_operation import StorageOperation
 from app.services.audit_log import create_event
 from app.services.recording_storage import (
     KMVMS_RECORDINGS_NAMESPACE,
@@ -64,6 +65,10 @@ MAX_SAMPLE_ITEMS = 50
 _STORAGE_AUDIT_LOCK = threading.Lock()
 TECHNICAL_DELETED_CAMERA_RE = re.compile(r"__deleted_\d+_\d+$")
 _LAST_STORAGE_AUDIT_STATE: dict[str, dict] = {}
+USEFUL_HISTORY_DAYS = 30
+USEFUL_HISTORY_DAILY_LIMIT = 60
+USEFUL_HISTORY_ATTENTION_LIMIT = 20
+USEFUL_HISTORY_OPERATION_TYPES = ("retention_auto_run", "retention_auto_free_space")
 
 
 def _utc_now() -> str:
@@ -824,6 +829,125 @@ def _build_storage_operations_summary(db: Session, summary: dict) -> dict:
         },
         "active_operations": list(durable_operations.get("active") or [])[:8],
         "interrupted_operations": list(durable_operations.get("interrupted") or [])[:8],
+    }
+
+
+def _history_source(operation_type: str) -> str:
+    return "camera_retention" if operation_type == "retention_auto_run" else "auto_free_space"
+
+
+def useful_storage_operation_history(db: Session) -> dict:
+    """Return bounded, display-safe history only when the operator opens it."""
+    now = datetime.utcnow()
+    since_24h = now - timedelta(hours=24)
+    since_history = now - timedelta(days=USEFUL_HISTORY_DAYS)
+    deleted_expr = func.coalesce(StorageOperation.result["deleted_count"].as_integer(), 0)
+    bytes_expr = func.coalesce(StorageOperation.result["bytes_freed"].as_integer(), 0)
+
+    aggregate_rows = (
+        db.query(
+            StorageOperation.operation_type,
+            func.count(StorageOperation.id),
+            func.coalesce(func.sum(deleted_expr), 0),
+            func.coalesce(func.sum(bytes_expr), 0),
+        )
+        .filter(
+            StorageOperation.operation_type.in_(USEFUL_HISTORY_OPERATION_TYPES),
+            StorageOperation.finished_at.isnot(None),
+            StorageOperation.finished_at >= since_24h,
+        )
+        .group_by(StorageOperation.operation_type)
+        .all()
+    )
+    aggregates = {
+        str(row[0]): {
+            "run_count": int(row[1] or 0),
+            "deleted_count": int(row[2] or 0),
+            "bytes_freed": int(row[3] or 0),
+        }
+        for row in aggregate_rows
+    }
+
+    daily_rows = (
+        db.query(
+            func.date(StorageOperation.finished_at).label("day"),
+            StorageOperation.operation_type,
+            func.coalesce(func.sum(deleted_expr), 0),
+            func.coalesce(func.sum(bytes_expr), 0),
+        )
+        .filter(
+            StorageOperation.operation_type.in_(USEFUL_HISTORY_OPERATION_TYPES),
+            StorageOperation.finished_at.isnot(None),
+            StorageOperation.finished_at >= since_history,
+            or_(deleted_expr > 0, bytes_expr > 0),
+        )
+        .group_by(func.date(StorageOperation.finished_at), StorageOperation.operation_type)
+        .order_by(func.date(StorageOperation.finished_at).desc(), StorageOperation.operation_type.asc())
+        .limit(USEFUL_HISTORY_DAILY_LIMIT)
+        .all()
+    )
+
+    attention_rows = (
+        db.query(StorageOperation)
+        .filter(
+            StorageOperation.finished_at.isnot(None),
+            StorageOperation.finished_at >= since_history,
+            or_(
+                StorageOperation.status.in_(("failed", "blocked", "partial", "interrupted")),
+                StorageOperation.retry_allowed.is_(True),
+                and_(
+                    StorageOperation.retry_mode.isnot(None),
+                    StorageOperation.retry_mode != "none",
+                ),
+                StorageOperation.next_action.isnot(None),
+            ),
+        )
+        .order_by(StorageOperation.finished_at.desc(), StorageOperation.id.desc())
+        .limit(USEFUL_HISTORY_ATTENTION_LIMIT)
+        .all()
+    )
+
+    summary: dict[str, dict] = {}
+    for operation_type in USEFUL_HISTORY_OPERATION_TYPES:
+        facts = aggregates.get(operation_type, {"run_count": 0, "deleted_count": 0, "bytes_freed": 0})
+        summary[_history_source(operation_type)] = {
+            **facts,
+            "state": (
+                "deleted"
+                if facts["deleted_count"] > 0 or facts["bytes_freed"] > 0
+                else "no_deletion_required"
+                if operation_type == "retention_auto_run"
+                else "not_triggered"
+            ),
+        }
+
+    return {
+        "available": True,
+        "generated_at": now.isoformat() + "Z",
+        "window_hours": 24,
+        "summary": summary,
+        "daily_items": [
+            {
+                "day": str(row[0]),
+                "source": _history_source(str(row[1])),
+                "deleted_count": int(row[2] or 0),
+                "bytes_freed": int(row[3] or 0),
+            }
+            for row in daily_rows
+        ],
+        "attention_items": [
+            {
+                "id": str(row.id),
+                "operation_type": str(row.operation_type),
+                "status": str(row.status),
+                "finished_at": row.finished_at.isoformat() + "Z" if row.finished_at else None,
+                "reason_code": safe_reason_code(row.reason_code, fallback="storage_operation_attention_required"),
+                "retry_allowed": bool(row.retry_allowed),
+                "retry_mode": str(row.retry_mode) if row.retry_mode else None,
+                "next_action": str(row.next_action) if row.next_action else None,
+            }
+            for row in attention_rows
+        ],
     }
 
 

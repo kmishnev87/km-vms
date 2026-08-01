@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">Убрать отсутствующую запись из каталога</title>
+  <defs>
+    <linearGradient id="sheet" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dce5ee"/>
+    </linearGradient>
+    <linearGradient id="badge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f6c56b"/>
+      <stop offset="1" stop-color="#d99216"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="2" stdDeviation="1.6" flood-color="#334155" flood-opacity=".24"/>
+    </filter>
+  </defs>
+  <g filter="url(#shadow)">
+    <path d="M13 8h25l10 10v31a5 5 0 0 1-5 5H13a5 5 0 0 1-5-5V13a5 5 0 0 1 5-5z" fill="url(#sheet)" stroke="#8493a3" stroke-width="1.5"/>
+    <path d="M38 8v10h10" fill="#d8e1ea" stroke="#8493a3" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M16 25h23M16 32h18M16 39h14" stroke="#8291a0" stroke-width="2.7" stroke-linecap="round"/>
+    <circle cx="45" cy="44" r="12" fill="url(#badge)" stroke="#b8790b" stroke-width="1.5"/>
+    <path d="M39.5 44h11" stroke="#fff" stroke-width="3" stroke-linecap="round"/>
+  </g>
+</svg>

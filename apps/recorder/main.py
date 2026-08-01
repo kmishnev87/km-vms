@@ -1274,7 +1274,7 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
                 text("SELECT physical_identity FROM archive_roots WHERE id = :root_id"),
                 {"root_id": job.archive_root_id},
             ).scalar()
-            conn.execute(
+            receipt_result = conn.execute(
                 text(
                     """
                     UPDATE recorder_file_receipts
@@ -1290,6 +1290,13 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
                         updated_at = NOW()
                     WHERE segment_id = :segment_id
                       AND contract_version = :contract_version
+                      AND root_id = :root_id
+                      AND physical_identity IS NOT DISTINCT FROM :physical_identity
+                      AND relative_path = :relative_path
+                      AND object_identity = :object_identity
+                      AND device_id IS NOT DISTINCT FROM :device_id
+                      AND inode IS NOT DISTINCT FROM :inode
+                      AND state = 'writing'
                     """
                 ),
                 {
@@ -1302,8 +1309,12 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
                     "content_fingerprint": final_fingerprint,
                     "segment_id": int(finalized_row.id),
                     "contract_version": RECORDER_RECEIPT_CONTRACT_VERSION,
+                    "root_id": job.archive_root_id,
+                    "relative_path": rel_path,
                 },
             )
+            if receipt_result.rowcount != 1:
+                raise RuntimeError("recorder_finalization_receipt_mismatch")
             conn.execute(
                 text(
                     """

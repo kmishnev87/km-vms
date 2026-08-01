@@ -805,6 +805,7 @@ const ARCHIVE_INTEGRITY_ACTION_KEYS = Object.freeze({
 });
 
 const ARCHIVE_INTEGRITY_NO_ACTION_KEYS = Object.freeze({
+  automatic_reconciliation_pending: "integrityNoActionAutomaticReconciliation",
   orphan_observation_grace_required: "integrityNoActionOrphanGrace",
   wait_for_recording_completion: "integrityNoActionRecordingActive",
   incomplete_recording_review_required: "integrityNoActionIncompleteReview",
@@ -875,6 +876,11 @@ export function archiveIntegrityFindingPresentation(finding = {}) {
     key: String(finding?.finding_id || ""),
     categoryKey: ARCHIVE_INTEGRITY_CATEGORY_KEYS[finding?.category] || "integrityCategoryUnknown",
     impactKey: ARCHIVE_INTEGRITY_IMPACT_KEYS[finding?.impact_key] || "integrityImpactUnknown",
+    detailKey: finding?.category === "zero_size_file"
+      ? "integrityDetailZeroSize"
+      : finding?.category === "partial_file"
+        ? "integrityDetailPartial"
+        : null,
     actionLabelKey: ARCHIVE_INTEGRITY_ACTION_KEYS[actionKey] || null,
     noActionLabelKey: permissionDenied
       ? "integrityNoActionPermission"

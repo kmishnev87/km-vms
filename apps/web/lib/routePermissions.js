@@ -50,6 +50,7 @@ export const FRONTEND_ROUTE_ACCESS = Object.freeze({
     permission: "manage_settings",
     backend: Object.freeze([
       "/storage/status",
+      "/storage/operations/history",
       "/settings",
       "/storage/archive-roots",
       "/storage/archive-roots/discovery",
@@ -82,6 +83,7 @@ export const FRONTEND_ROUTE_ACCESS = Object.freeze({
     ]),
     backendEndpoints: Object.freeze([
       Object.freeze({ method: "GET", path: "/storage/status", permission: "manage_settings" }),
+      Object.freeze({ method: "GET", path: "/storage/operations/history", permission: "manage_settings" }),
       Object.freeze({ method: "GET", path: "/settings", permission: "manage_settings" }),
       Object.freeze({ method: "PATCH", path: "/settings", permission: "manage_settings" }),
       Object.freeze({ method: "GET", path: "/storage/archive-roots", permission: "manage_settings" }),

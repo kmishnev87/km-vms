@@ -134,14 +134,14 @@ CATEGORY_CONTRACT: dict[str, dict[str, Any]] = {
     "stale_writing_segment": {
         "severity": "warning",
         "impact": "recording_unplayable",
-        "action": "mark_stale_recording",
-        "permission": "manage_settings",
-        "confirmation": "metadata",
+        "no_action": "automatic_reconciliation_pending",
     },
     "partial_file": {
         "severity": "info",
         "impact": "recording_incomplete",
-        "no_action": "incomplete_recording_review_required",
+        "action": "delete_unusable_recording",
+        "permission": "delete_recordings",
+        "confirmation": "destructive_media",
     },
     "orphan_file": {
         "severity": "warning",
@@ -656,6 +656,218 @@ def _safe_probe(path: Path) -> tuple[bool | None, str]:
     return True, "probe_ok"
 
 
+def _same_file_facts(left: os.stat_result, right: os.stat_result) -> bool:
+    return bool(
+        stat_module.S_ISREG(right.st_mode)
+        and not stat_module.S_ISLNK(right.st_mode)
+        and int(left.st_dev) == int(right.st_dev)
+        and int(left.st_ino) == int(right.st_ino)
+        and int(left.st_size) == int(right.st_size)
+        and int(left.st_mtime_ns) == int(right.st_mtime_ns)
+    )
+
+
+def _file_within_recent_write_window(
+    stat_result: os.stat_result,
+    *,
+    current_time_ns: int | None = None,
+) -> bool:
+    """Fail closed while the actual file is inside the recorder safety window."""
+    try:
+        now_ns = time.time_ns() if current_time_ns is None else int(current_time_ns)
+        file_mtime_ns = int(stat_result.st_mtime_ns)
+        window_ns = int(RECENT_WRITE_WINDOW.total_seconds() * 1_000_000_000)
+    except (AttributeError, OSError, OverflowError, TypeError, ValueError):
+        return True
+    age_ns = now_ns - file_mtime_ns
+    return age_ns < 0 or age_ns < window_ns
+
+
+def _receipt_object_identity(root_id: str, relative_ref: str, stat_result: os.stat_result) -> str:
+    canonical = ":".join(
+        (
+            "v1",
+            str(root_id),
+            str(relative_ref),
+            str(int(stat_result.st_dev)),
+            str(int(stat_result.st_ino)),
+        )
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _segment_format_metadata(path: Path) -> dict[str, str]:
+    suffix = path.suffix.lower()
+    if suffix == ".mp4":
+        return {"container_format": "mp4", "file_extension": ".mp4", "mime_type": "video/mp4"}
+    if suffix == ".mkv":
+        return {"container_format": "mkv", "file_extension": ".mkv", "mime_type": "video/x-matroska"}
+    return {
+        "container_format": suffix.lstrip(".") or "unknown",
+        "file_extension": suffix,
+        "mime_type": "application/octet-stream",
+    }
+
+
+def _update_converged_receipt(
+    db: Session,
+    receipt: RecorderFileReceipt,
+    *,
+    root: ArchiveRoot,
+    segment: RecordingSegment,
+    relative_ref: str,
+    stat_result: os.stat_result,
+    fingerprint: str,
+    finalized_at: datetime,
+) -> None:
+    receipt.job_id = segment.job_id
+    receipt.camera_id = int(segment.camera_id)
+    receipt.root_id = str(root.id)
+    receipt.physical_identity = str(root.physical_identity or "") or None
+    receipt.relative_path = relative_ref
+    receipt.state = "finalized"
+    receipt.object_identity = _receipt_object_identity(str(root.id), relative_ref, stat_result)
+    receipt.device_id = str(int(stat_result.st_dev))
+    receipt.inode = str(int(stat_result.st_ino))
+    receipt.size_bytes = int(stat_result.st_size)
+    receipt.mtime_ns = int(stat_result.st_mtime_ns)
+    receipt.content_fingerprint = fingerprint
+    receipt.finalized_at = finalized_at
+    receipt.updated_at = finalized_at
+    db.add(receipt)
+
+
+def _advance_converged_retention_signal(db: Session) -> None:
+    from app.services.retention_automation import advance_retention_signal
+
+    advance_retention_signal(db, commit=False)
+
+
+def _converge_stale_segment(
+    db: Session,
+    *,
+    scan: ArchiveIntegrityScan,
+    segment: RecordingSegment,
+    root: ArchiveRoot,
+    relative_ref: str,
+    target: Path,
+    initial_stat: os.stat_result,
+) -> tuple[str, str]:
+    if _file_within_recent_write_window(initial_stat):
+        return ("changing", "file_recent")
+    probe_ok, probe_status = _safe_probe(target)
+    if probe_ok is not True:
+        return ("unresolved", probe_status)
+    try:
+        observed_stat = target.lstat()
+        if not _same_file_facts(initial_stat, observed_stat):
+            return ("changing", "file_changed_during_probe")
+        fingerprint = _bounded_fingerprint(target, observed_stat)
+    except OSError:
+        return ("unresolved", "file_revalidation_failed")
+
+    try:
+        with db.begin_nested():
+            locked = (
+                db.query(RecordingSegment)
+                .filter(RecordingSegment.id == int(segment.id))
+                .with_for_update()
+                .one_or_none()
+            )
+            if (
+                locked is None
+                or locked.ownership != "KM VMS"
+                or locked.source != "recorder"
+                or str(locked.status or "") not in {"writing", "stale_writing"}
+                or locked.deleted_at is not None
+                or str(locked.archive_root_id or "") != str(root.id)
+                or _normalize_relative(locked.relative_path) != relative_ref
+                or _segment_recent(locked, scan)
+            ):
+                return ("changing", "segment_changed_before_finalize")
+            if locked.job_id and (
+                db.query(RecordingJob.id)
+                .filter(
+                    RecordingJob.id == str(locked.job_id),
+                    RecordingJob.state.in_(tuple(ACTIVE_JOB_STATES)),
+                )
+                .first()
+                is not None
+            ):
+                return ("changing", "writer_active")
+
+            final_stat = target.lstat()
+            if not _same_file_facts(observed_stat, final_stat):
+                return ("changing", "file_changed_before_finalize")
+            final_fingerprint = _bounded_fingerprint(target, final_stat)
+            if final_fingerprint != fingerprint:
+                return ("changing", "file_content_changed_before_finalize")
+
+            receipts = (
+                db.query(RecorderFileReceipt)
+                .filter(RecorderFileReceipt.segment_id == int(locked.id))
+                .with_for_update()
+                .limit(2)
+                .all()
+            )
+            expected_object_identity = _receipt_object_identity(str(root.id), relative_ref, final_stat)
+            if len(receipts) != 1:
+                return ("unresolved", "exact_receipt_missing_or_ambiguous")
+            receipt = receipts[0]
+            if not (
+                int(receipt.contract_version or 0) == 1
+                and receipt.state == "writing"
+                and str(receipt.root_id or "") == str(root.id)
+                and str(receipt.physical_identity or "") == str(root.physical_identity or "")
+                and str(receipt.relative_path or "") == relative_ref
+                and str(receipt.object_identity or "") == expected_object_identity
+            ):
+                return ("unresolved", "exact_receipt_mismatch")
+
+            now = database_now(db)
+            if _file_within_recent_write_window(final_stat):
+                return ("changing", "file_recent_before_finalize")
+            ended_at = datetime.fromtimestamp(final_stat.st_mtime)
+            metadata = _segment_format_metadata(target)
+            locked.status = "finalized"
+            locked.ended_at = ended_at
+            locked.finalized_at = now
+            locked.duration_sec = max(int((ended_at - locked.started_at).total_seconds()), 0)
+            locked.size_bytes = int(final_stat.st_size)
+            locked.error_message = None
+            locked.storage_namespace = locked.storage_namespace or KMVMS_RECORDINGS_NAMESPACE
+            locked.container_format = metadata["container_format"]
+            locked.file_extension = metadata["file_extension"]
+            locked.mime_type = metadata["mime_type"]
+            locked.integrity_status = "ok_owned_finalized"
+            locked.integrity_error = None
+            locked.last_integrity_check_at = now
+            locked.file_size_verified_at = now
+            locked.file_mtime = ended_at
+            locked.content_probe_status = "probe_ok"
+            locked.cleanup_candidate = False
+            locked.cleanup_reason = None
+            locked.reconciliation_status = "ok_owned_finalized"
+            locked.reconciliation_checked_at = now
+            locked.updated_at = now
+            db.add(locked)
+            _update_converged_receipt(
+                db,
+                receipt,
+                root=root,
+                segment=locked,
+                relative_ref=relative_ref,
+                stat_result=final_stat,
+                fingerprint=final_fingerprint,
+                finalized_at=now,
+            )
+            _advance_converged_retention_signal(db)
+            db.flush()
+    except Exception:
+        return ("unresolved", "automatic_finalization_failed")
+    return ("finalized", "finalized")
+
+
 def _root_by_snapshot(db: Session, scan: ArchiveIntegrityScan) -> dict[str, tuple[ArchiveRoot, dict[str, Any], dict[str, Any]]]:
     result: dict[str, tuple[ArchiveRoot, dict[str, Any], dict[str, Any]]] = {}
     for snapshot in list(scan.root_snapshot or []):
@@ -869,6 +1081,9 @@ def _classify_metadata_page(
             )
             continue
 
+        probe_status: str | None = None
+        if stat_module.S_ISREG(target_stat.st_mode) and _file_within_recent_write_window(target_stat):
+            continue
         if stat_module.S_ISLNK(target_stat.st_mode) or not stat_module.S_ISREG(target_stat.st_mode):
             category = "invalid_path"
         elif not os.access(target, os.R_OK):
@@ -876,6 +1091,21 @@ def _classify_metadata_page(
         elif int(target_stat.st_size) == 0:
             category = "zero_size_file"
         elif str(segment.status or "") in {"writing", "stale_writing"}:
+            heartbeat.touch(force=True)
+            convergence_state, probe_status = _converge_stale_segment(
+                db,
+                scan=scan,
+                segment=segment,
+                root=root,
+                relative_ref=relative_ref,
+                target=target,
+                initial_stat=target_stat,
+            )
+            if convergence_state == "finalized":
+                scan.checked_bytes += int(target_stat.st_size)
+                continue
+            if convergence_state == "changing":
+                continue
             category = "stale_writing_segment"
         elif str(segment.status or "") == "finalized":
             heartbeat.touch(force=True)
@@ -919,6 +1149,7 @@ def _classify_metadata_page(
                 root_snapshot=snapshot,
                 access_identity=_root_access_identity(root, access),
                 stat_result=target_stat,
+                probe_status=probe_status,
             ),
         )
         scan.checked_bytes += int(target_stat.st_size)
@@ -1022,8 +1253,7 @@ def _classify_filesystem_entry(
         # publish a second active finding for the same catalog object.
         return
 
-    age = scan.scan_cutoff_at - datetime.fromtimestamp(entry_stat.st_mtime)
-    if age < RECENT_WRITE_WINDOW:
+    if _file_within_recent_write_window(entry_stat):
         return
 
     receipt = (

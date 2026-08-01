@@ -624,9 +624,9 @@ def test_missing_system_settings_read_only_fallback_does_not_create_orm_state(st
     assert not stage4102.db.deleted
 
 
-def test_immutable_policy_snapshot_and_terminal_replay_do_not_repeat_mutation(stage4102, monkeypatch):
+def test_policy_change_after_precheck_supersedes_without_mutation_and_replays(stage4102, monkeypatch):
     camera = add_camera(stage4102, days=1, quota=50)
-    segment, _path = add_segment(stage4102, camera, index=1, days_ago=4)
+    segment, path = add_segment(stage4102, camera, index=1, days_ago=4)
     snapshot = automation.camera_policy_snapshot(
         camera,
         signal_watermark=77,
@@ -651,11 +651,13 @@ def test_immutable_policy_snapshot_and_terminal_replay_do_not_repeat_mutation(st
     audit_count_after_replay = stage4102.db.query(AuditEvent).count()
 
     operation = stage4102.db.get(StorageOperation, f"ret-auto-c{camera.id}-w77")
-    assert first["policy_version"] == 1
+    assert first["status"] == "superseded_policy_changed"
+    assert first["policy_version"] == 2
     assert operation.progress["policy_snapshot"]["retention_days"] == 1
     assert operation.progress["policy_snapshot"]["policy_version"] == 1
     assert replay["replayed"] is True
-    assert calls["count"] == 1
+    assert calls["count"] == 0
+    assert path.exists()
     assert audit_count_after_replay == audit_count_before_replay
 
 
@@ -1105,3 +1107,7 @@ def test_recorder_finalization_source_advances_signal_in_same_transaction():
     assert "GREATEST(" in function
     assert "requested_watermark" in function
     assert "conn.execute" in function
+    assert "receipt_result.rowcount != 1" in function
+    assert "recorder_finalization_receipt_mismatch" in function
+    assert "AND object_identity = :object_identity" in function
+    assert "AND physical_identity IS NOT DISTINCT FROM :physical_identity" in function

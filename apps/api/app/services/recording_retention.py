@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat as stat_module
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -305,6 +306,7 @@ def validate_segment_for_deletion(
     require_file: bool = True,
     block_active_job: bool = False,
     allowed_integrity_statuses: set[str] | frozenset[str] | None = None,
+    allowed_segment_statuses: set[str] | frozenset[str] | None = None,
 ) -> tuple[bool, str, Path | None, int]:
     if segment.ownership != OWNERSHIP_KM_VMS:
         return False, "unowned", None, 0
@@ -314,7 +316,8 @@ def validate_segment_for_deletion(
         return False, "already_deleted", None, 0
     if block_active_job and segment.job_id and str(segment.job_id) in active_job_ids:
         return False, "active_job", None, 0
-    if segment.status != SEGMENT_STATUS_FINALIZED:
+    permitted_statuses = set(allowed_segment_statuses or {SEGMENT_STATUS_FINALIZED})
+    if str(segment.status or "") not in permitted_statuses:
         return False, "not_finalized", None, 0
     allowed_integrity = set(allowed_integrity_statuses or ())
     if segment.integrity_status in PROBLEM_INTEGRITY_STATUSES and segment.integrity_status not in allowed_integrity:
@@ -345,6 +348,32 @@ def _matches_expected_identity(db: Session, segment: RecordingSegment, expected:
         )
     except (TypeError, ValueError):
         return False
+
+
+def _matches_expected_file_facts(file_path: Path, expected: dict | None) -> tuple[bool, str]:
+    facts = dict((expected or {}).get("file_facts") or {})
+    if not facts:
+        return True, "eligible"
+    required = {"device_id", "inode", "size_bytes", "mtime_ns", "minimum_age_seconds"}
+    if not required.issubset(facts):
+        return False, "deletion_plan_file_identity_invalid"
+    try:
+        stat_result = file_path.lstat()
+        minimum_age_ns = max(0, int(facts["minimum_age_seconds"])) * 1_000_000_000
+    except (OSError, TypeError, ValueError):
+        return False, "deletion_plan_file_state_unavailable"
+    if not stat_module.S_ISREG(stat_result.st_mode):
+        return False, "deletion_plan_file_not_regular"
+    if not (
+        str(int(stat_result.st_dev)) == str(facts["device_id"])
+        and str(int(stat_result.st_ino)) == str(facts["inode"])
+        and int(stat_result.st_size) == int(facts["size_bytes"])
+        and int(stat_result.st_mtime_ns) == int(facts["mtime_ns"])
+    ):
+        return False, "deletion_plan_file_changed"
+    if time.time_ns() - int(stat_result.st_mtime_ns) < minimum_age_ns:
+        return False, "deletion_plan_file_recent"
+    return True, "eligible"
 
 
 def _fresh_segment(db: Session, segment_id: int) -> RecordingSegment | None:
@@ -689,6 +718,7 @@ def execute_segments(
     outer_operation_handle: StorageOperationHandle | None = None,
     manage_outer_operation: bool = True,
     allowed_integrity_statuses: set[str] | frozenset[str] | None = None,
+    allowed_segment_statuses: set[str] | frozenset[str] | None = None,
 ) -> dict:
     if policy not in {
         EXECUTION_POLICY_AUTOMATIC_BOUNDED,
@@ -769,6 +799,7 @@ def execute_segments(
                 outer_operation_handle=managed_handle,
                 manage_outer_operation=False,
                 allowed_integrity_statuses=allowed_integrity_statuses,
+                allowed_segment_statuses=allowed_segment_statuses,
             )
             managed_lifecycle.finish_result(
                 finished,
@@ -831,6 +862,7 @@ def execute_segments(
                             operation_owner_token=operation_owner_token,
                             expected_identities=expected_identities,
                             allowed_integrity_statuses=allowed_integrity_statuses,
+                            allowed_segment_statuses=allowed_segment_statuses,
                         )
                 return _execute_segments_with_lease(
                     db,
@@ -850,6 +882,7 @@ def execute_segments(
                     operation_owner_token=None,
                     expected_identities=expected_identities,
                     allowed_integrity_statuses=allowed_integrity_statuses,
+                    allowed_segment_statuses=allowed_segment_statuses,
                 )
         except DestructiveScopeConflict as exc:
             _add_item(
@@ -883,6 +916,7 @@ def execute_segments(
         operation_owner_token=operation_owner_token,
         expected_identities=expected_identities,
         allowed_integrity_statuses=allowed_integrity_statuses,
+        allowed_segment_statuses=allowed_segment_statuses,
     )
 
 
@@ -905,6 +939,7 @@ def _execute_segments_with_lease(
     operation_owner_token: str | None,
     expected_identities: dict[int, dict] | None,
     allowed_integrity_statuses: set[str] | frozenset[str] | None,
+    allowed_segment_statuses: set[str] | frozenset[str] | None,
 ) -> dict:
     if policy == EXECUTION_POLICY_AUTOMATIC_BOUNDED:
         max_candidates = min(int(max_candidates or DEFAULT_MAX_CANDIDATES), HARD_MAX_CANDIDATES)
@@ -943,9 +978,14 @@ def _execute_segments_with_lease(
             active_job_ids=active_job_ids,
             block_active_job=operation.startswith("camera_delete"),
             allowed_integrity_statuses=allowed_integrity_statuses,
+            allowed_segment_statuses=allowed_segment_statuses,
         )
         if not ok or file_path is None:
             _add_item(result, _item(segment, action="skipped", reason=item_reason, size_bytes=size))
+            continue
+        file_facts_match, file_facts_reason = _matches_expected_file_facts(file_path, expected)
+        if not file_facts_match:
+            _add_item(result, _item(segment, action="skipped", reason=file_facts_reason, size_bytes=size))
             continue
         planned.append((segment, file_path, size, expected))
 
@@ -1004,9 +1044,17 @@ def _execute_segments_with_lease(
                         active_job_ids=active_job_ids,
                         block_active_job=operation.startswith("camera_delete"),
                         allowed_integrity_statuses=allowed_integrity_statuses,
+                        allowed_segment_statuses=allowed_segment_statuses,
                     )
                     if not ok or file_path is None:
                         _add_item(result, _item(fresh, action="skipped", reason=final_reason, size_bytes=final_size))
+                        continue
+                    file_facts_match, file_facts_reason = _matches_expected_file_facts(file_path, expected)
+                    if not file_facts_match:
+                        _add_item(
+                            result,
+                            _item(fresh, action="skipped", reason=file_facts_reason, size_bytes=final_size),
+                        )
                         continue
                     file_path.unlink()
                     try:

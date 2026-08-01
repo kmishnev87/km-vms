@@ -322,7 +322,8 @@ def test_lightweight_status_bridge_preserves_durable_integrity_truth(stage4103):
 def test_residual_partial_recording_is_not_presented_as_an_active_write():
     contract = CATEGORY_CONTRACT["partial_file"]
     assert contract["impact"] == "recording_incomplete"
-    assert contract["no_action"] == "incomplete_recording_review_required"
+    assert contract["action"] == "delete_unusable_recording"
+    assert contract["permission"] == "delete_recordings"
 
 
 def test_start_is_durable_fast_idempotent_and_coalesces(stage4103):
@@ -569,51 +570,26 @@ def test_missing_retirement_is_exact_permissioned_metadata_only_and_replay_safe(
     assert stage4103.db.get(ArchiveIntegrityScan, result["scan_id"]).found_count == 0
 
 
-def test_stale_writing_remediation_is_metadata_only_permissioned_and_replay_safe(stage4103):
+def test_stale_writing_without_exact_receipt_stays_unresolved_without_false_action(stage4103):
     camera = add_camera(stage4103)
     segment, path = add_segment(stage4103, camera, name="stale-writing.mkv", status="writing")
-    original_bytes = path.read_bytes()
     result = run_scan(stage4103, key="stale-writing-scan")
     finding = next(row for row in active_findings(stage4103, result["scan_id"]) if row.segment_id == segment.id)
     assert finding.category == "stale_writing_segment"
-    assert finding.action_key == "mark_stale_recording"
+    assert finding.action_key is None
+    assert finding.no_action_reason == "automatic_reconciliation_pending"
     with pytest.raises(IntegrityRemediationBlocked):
         create_remediation_plan(
             stage4103.db,
             finding_id=finding.id,
             action_key="mark_stale_recording",
-            actor=diagnostics_only(),
-            idempotency_key="stale-permission-denied",
+            actor=owner(),
+            idempotency_key="stale-action-not-published",
         )
-    plan = create_remediation_plan(
-        stage4103.db,
-        finding_id=finding.id,
-        action_key="mark_stale_recording",
-        actor=owner(),
-        idempotency_key="stale-plan",
-    )
-    applied = apply_remediation_plan(
-        stage4103.db,
-        plan_id=plan["plan_id"],
-        actor=owner(),
-        confirm=True,
-        operation_id="integrity-stale-apply-4103",
-    )
-    replay = apply_remediation_plan(
-        stage4103.db,
-        plan_id=plan["plan_id"],
-        actor=owner(),
-        confirm=True,
-        operation_id="integrity-stale-replay-4103",
-    )
     stage4103.db.expire_all()
     updated = stage4103.db.get(RecordingSegment, segment.id)
-    assert applied["state"] == "completed"
-    assert replay["state"] == "completed" and replay["replayed"] is True
-    assert updated.status == "stale_writing"
-    assert updated.integrity_status == "stale_writing_segment"
-    assert updated.content_probe_status == "not_playable"
-    assert path.read_bytes() == original_bytes
+    assert updated.status == "writing"
+    assert path.exists()
 
 
 @pytest.mark.parametrize(

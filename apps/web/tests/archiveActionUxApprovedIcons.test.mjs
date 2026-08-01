@@ -107,8 +107,8 @@ const settingsCss = readText("app/styles/20-settings-maintenance.css");
 const responsiveCss = readText("app/styles/60-responsive-shared.css");
 
 assert.match(center, /operation-history\.png/);
-assert.match(center, /historyCount > 0 \? <strong aria-hidden="true">/);
-assert.match(center, /appIllustratedAction[\s\S]*open\.png/);
+assert.doesNotMatch(center, /historyCount/);
+assert.doesNotMatch(center, /aria-hidden="true">\{historyCount\}/);
 
 assert.match(storagePage, /href="\/cameras"[\s\S]*\/assets\/icons\/ui\/camera\.png/);
 assert.match(storagePage, /archiveManagementAddLocation[\s\S]*add-storage-location\.png/);
@@ -140,7 +140,7 @@ assert.match(responsiveCss, /\.storageOpsRootAddButton\.appIllustratedAction[\s\
 const supportStart = settingsPage.indexOf('<div className="settingsMaintenanceSupportActions">');
 const supportEnd = settingsPage.indexOf("</div>", supportStart);
 const supportActions = settingsPage.slice(supportStart, supportEnd);
-assert.equal((supportActions.match(/settingsMaintenanceSupportActionButton/g) || []).length, 2);
+assert.equal((supportActions.match(/settingsMaintenanceSupportActionButton/g) || []).length, 1);
 assert.match(supportActions, /\{t\.maintenanceReportDownload\}/);
 assert.match(supportActions, /setDiagnosticChoiceOpen\(true\)/);
 assert.match(settingsCss, /\.settingsMaintenanceSupportActions \.button[\s\S]*height:\s*38px;[\s\S]*white-space:\s*nowrap;/);

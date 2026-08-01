@@ -24,7 +24,6 @@ import {
   humanBlockerReason,
   isStorageAccessDeniedError,
   actionPermissionState,
-  accessRightsModel,
   archiveIntegrityActionContract,
   archiveIntegrityCategoryPresentations,
   archiveIntegrityFindingPresentation,
@@ -38,7 +37,6 @@ import {
   migrationOperationPresentation,
   normalizeReconciliationSummary,
   publishStorageMigrationActivity,
-  recentOperationPresentations,
   retentionOperationPresentation,
   statusLabel,
   storageTopHealthModel,
@@ -104,6 +102,12 @@ function TrashIcon() {
   );
 }
 
+const INTEGRITY_ACTION_ICONS = Object.freeze({
+  retire_missing_recording: "/assets/icons/ui/retire-missing-recording.svg",
+  delete_unusable_recording: "/assets/icons/ui/delete-recording.svg",
+  delete_proven_orphan: "/assets/icons/ui/delete-orphan-file.svg",
+});
+
 function dialogFocusableElements(container) {
   if (!container) return [];
   return Array.from(container.querySelectorAll(
@@ -120,7 +124,6 @@ function ArchiveIntegrityDialog({
   error,
   selectedFinding,
   plan,
-  confirmed,
   copy,
   language,
   permission,
@@ -130,10 +133,10 @@ function ArchiveIntegrityDialog({
   onLoadMore,
   onPrepare,
   onClearPlan,
-  onConfirmChange,
   onApply,
 }) {
   const dialogRef = useRef(null);
+  const confirmationRef = useRef(null);
   const closeRef = useRef(null);
   const returnFocusRef = useRef(null);
   useModalBodyScrollLock(open);
@@ -156,7 +159,7 @@ function ArchiveIntegrityDialog({
   }, [open]);
 
   useEffect(() => {
-    if (!open) return undefined;
+    if (!open || plan) return undefined;
     const timer = window.setTimeout(() => {
       const activeElement = document.activeElement;
       const activeInsideDialog = activeElement instanceof HTMLElement && dialogRef.current?.contains(activeElement);
@@ -165,7 +168,16 @@ function ArchiveIntegrityDialog({
       target?.focus({ preventScroll: true });
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [open, busy]);
+  }, [open, busy, plan]);
+
+  useEffect(() => {
+    if (!open || !plan) return undefined;
+    const timer = window.setTimeout(() => {
+      const target = dialogFocusableElements(confirmationRef.current)[0] || confirmationRef.current;
+      target?.focus({ preventScroll: true });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [open, plan, busy]);
 
   if (!open) return null;
 
@@ -193,13 +205,38 @@ function ArchiveIntegrityDialog({
     }
   }
 
+  function handleConfirmationKeyDown(event) {
+    if (event.key === "Escape" && !busy) {
+      event.preventDefault();
+      onClearPlan();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const elements = dialogFocusableElements(confirmationRef.current);
+    if (!elements.length) {
+      event.preventDefault();
+      confirmationRef.current?.focus();
+      return;
+    }
+    const first = elements[0];
+    const last = elements[elements.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
   const checkedTime = scan?.finished_at || scan?.started_at || scan?.created_at;
   const canShowFindings = ["completed", "partial"].includes(scanModel.status) && scanModel.found > 0;
   const primaryStartLabel = scanModel.status === "not_run" ? copy.integrityCheckArchive : copy.integrityCheckAgain;
   const resultTone = resultState === "completed" ? "ok" : resultState === "failed" ? "error" : "warning";
 
   return (
-    <div className="storageIntegrityOverlay" role="presentation">
+    <>
+    <div className="storageIntegrityOverlay" role="presentation" aria-hidden={plan ? "true" : undefined}>
       <section
         ref={dialogRef}
         className="storageIntegrityDialog"
@@ -264,7 +301,7 @@ function ArchiveIntegrityDialog({
                   <article className={`storageIntegrityFinding storageIntegrityFinding-${item.tone}`} key={item.key || `${item.categoryKey}-${index}`}>
                     <div className="storageIntegrityFindingHead">
                       <strong>{copy[item.categoryKey] || copy.integrityCategoryUnknown}</strong>
-                      <span>{copy[item.impactKey] || copy.integrityImpactUnknown}</span>
+                      <span>{copy[item.detailKey] || copy[item.impactKey] || copy.integrityImpactUnknown}</span>
                     </div>
                     <dl>
                       {item.cameraName ? <div><dt>{copy.camera}</dt><dd>{item.cameraName}</dd></div> : null}
@@ -273,8 +310,8 @@ function ArchiveIntegrityDialog({
                     </dl>
                     <div className="storageIntegrityFindingAction">
                       {item.actionAllowed && !item.stale ? (
-                        <button className="button secondary small" type="button" onClick={() => onPrepare(findings[index])} disabled={busy || scanModel.stale}>
-                          {copy[item.actionLabelKey]}
+                        <button className={`button secondary small appIllustratedAction storageIntegrityIconAction ${item.destructive ? "isDestructive" : ""}`} type="button" onClick={() => onPrepare(findings[index])} disabled={busy || scanModel.stale} title={copy[item.actionLabelKey]} aria-label={copy[item.actionLabelKey]}>
+                          <img src={INTEGRITY_ACTION_ICONS[item.actionKey] || "/assets/icons/ui/open.png"} alt="" aria-hidden="true" />
                         </button>
                       ) : (
                         <span>{item.stale ? copy.integrityNoActionStale : copy[item.noActionLabelKey] || copy.integrityNoActionUnavailable}</span>
@@ -295,31 +332,6 @@ function ArchiveIntegrityDialog({
             <div className="storageIntegrityClean">{copy.integrityNoFindings}</div>
           ) : null}
 
-          {selectedRow && plan ? (
-            <section className={`storageIntegrityPlan storageIntegrityPlan-${resultTone}`}>
-              <div className="storageIntegritySectionHead">
-                <h3>{resultState ? copy.integrityResultTitle : copy.integrityConfirmationTitle}</h3>
-                <button type="button" className="storageIntegrityBack" onClick={onClearPlan} disabled={busy}>{copy.integrityBackToFindings}</button>
-              </div>
-              <strong>{copy[selectedRow.categoryKey] || copy.integrityCategoryUnknown}</strong>
-              <p>{resultState
-                ? copy[`integrityResult${resultState.charAt(0).toUpperCase()}${resultState.slice(1)}`] || copy.integrityResultFailed
-                : copy[actionContract.confirmationKey] || copy.integrityNoActionUnavailable}</p>
-              {!resultState ? (
-                <>
-                  <label className="storageIntegrityConfirm">
-                    <input type="checkbox" checked={confirmed} onChange={(event) => onConfirmChange(event.target.checked)} disabled={busy} />
-                    <span>{copy.integrityConfirmationAcknowledge}</span>
-                  </label>
-                  <button className={`button small ${actionContract.destructive ? "dangerButton" : ""}`} type="button" onClick={onApply} disabled={busy || !confirmed}>
-                    {busy ? copy.applying : copy.integrityApplyAction}
-                  </button>
-                </>
-              ) : (
-                <button className="button secondary small" type="button" onClick={onClearPlan}>{copy.integrityAcknowledgeResult}</button>
-              )}
-            </section>
-          ) : null}
         </div>
 
         <footer className="storageIntegrityDialogFooter">
@@ -329,6 +341,44 @@ function ArchiveIntegrityDialog({
         </footer>
       </section>
     </div>
+    {selectedRow && plan ? (
+      <div className="storageIntegrityConfirmationOverlay" role="presentation">
+        <section
+          ref={confirmationRef}
+          className={`storageIntegrityConfirmation storageIntegrityPlan-${resultTone}`}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="storage-integrity-confirmation-title"
+          tabIndex={-1}
+          onKeyDown={handleConfirmationKeyDown}
+        >
+          <header>
+            <h3 id="storage-integrity-confirmation-title">{resultState ? copy.integrityResultTitle : copy.integrityConfirmationTitle}</h3>
+            <button className="storageIntegrityClose" type="button" onClick={onClearPlan} disabled={busy} aria-label={copy.close}>×</button>
+          </header>
+          <strong>{copy[selectedRow.categoryKey] || copy.integrityCategoryUnknown}</strong>
+          {selectedRow.cameraName ? <span>{selectedRow.cameraName}</span> : null}
+          {selectedRow.displayName ? <span>{selectedRow.displayName}</span> : null}
+          <p>{resultState
+            ? copy[`integrityResult${resultState.charAt(0).toUpperCase()}${resultState.slice(1)}`] || copy.integrityResultFailed
+            : copy[actionContract.confirmationKey] || copy.integrityNoActionUnavailable}</p>
+          {error ? <div className="storageIntegrityMessage storageIntegrityMessage-error" role="alert">{error}</div> : null}
+          <footer>
+            {!resultState ? (
+              <>
+                <button className="button secondary small" type="button" onClick={onClearPlan} disabled={busy}>{copy.cancel}</button>
+                <button className={`button small ${actionContract.destructive ? "dangerButton" : ""}`} type="button" onClick={onApply} disabled={busy}>
+                  {busy ? copy.applying : copy[selectedRow.actionLabelKey] || copy.integrityApplyAction}
+                </button>
+              </>
+            ) : (
+              <button className="button secondary small" type="button" onClick={onClearPlan}>{copy.integrityAcknowledgeResult}</button>
+            )}
+          </footer>
+        </section>
+      </div>
+    ) : null}
+    </>
   );
 }
 
@@ -441,16 +491,6 @@ function healthReasonText(topHealth, recording, copy) {
   return copy.healthReasonCheck;
 }
 
-function healthActionText(topHealth, copy) {
-  if (topHealth?.status === "availability_unconfirmed" || topHealth?.status === "unknown") return copy.actionCheckArchive;
-  if (topHealth?.status === "low_disk") return copy.actionReviewSpace;
-  if (topHealth?.status === "reconciliation") return copy.actionCheckArchive;
-  if (topHealth?.status === "unreadable" || topHealth?.status === "unwritable" || topHealth?.status === "unavailable") return copy.actionCheckAccess;
-  if (topHealth?.status === "migration_blocked") return copy.actionRetryLater;
-  if (topHealth?.tone === "ok") return copy.noActionNeeded;
-  return copy.actionCheckArchive;
-}
-
 function rootProblemTone(root) {
   if (!root) return "unknown";
   return rootHasProblems(root) ? "error" : "ok";
@@ -476,12 +516,6 @@ function rootProblemItems(root, copy, language) {
   if (root.is_active && root.is_writable === false) items.push(copy.archiveRootUnwritableDetail);
   if (root.namespace_exists === false) items.push(copy.archiveRootNamespaceMissingDetail);
   return Array.from(new Set(items.length ? items : [copy.no]));
-}
-
-function compactAccessLabel(accessRights, copy) {
-  if (accessRights.status === "ok") return copy.accessOkShort;
-  if (accessRights.status === "unknown") return copy.accessUnknownShort;
-  return accessRights.label;
 }
 
 function archiveMigrationStatusText(scenario, archiveRoots, copy) {
@@ -908,6 +942,9 @@ function StorageOperationsPageContent() {
   const [archiveRootDialog, setArchiveRootDialog] = useState(null);
   const [operationToast, setOperationToast] = useState(null);
   const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [operationHistory, setOperationHistory] = useState(null);
+  const [operationHistoryLoading, setOperationHistoryLoading] = useState(false);
+  const [operationHistoryError, setOperationHistoryError] = useState("");
   const [trackedActivationOperationId, setTrackedActivationOperationId] = useState(null);
   const [dismissedActivationOperationId, setDismissedActivationOperationId] = useState(null);
   const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
@@ -929,7 +966,6 @@ function StorageOperationsPageContent() {
   const [integrityError, setIntegrityError] = useState("");
   const [integritySelectedFinding, setIntegritySelectedFinding] = useState(null);
   const [integrityPlan, setIntegrityPlan] = useState(null);
-  const [integrityConfirmed, setIntegrityConfirmed] = useState(false);
   const [migrationMessage, setMigrationMessage] = useState("");
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { locale: language, t } = useI18n();
@@ -1025,8 +1061,6 @@ function StorageOperationsPageContent() {
   const autoCleanup = operations.auto_free_space_cleanup || {};
   const retention = operations.retention || {};
   const reconciliation = operations.reconciliation || {};
-  const recent = operations.recent_operations || {};
-  const recentOperationRows = recentOperationPresentations(recent.items, 5);
   const archiveRoots = status?.archive_roots || operations.archive_roots || [];
   const archiveRootActivation = status?.archive_root_activation || operations.archive_root_activation || {};
   const activationModel = activationProgressModel(archiveRootActivation);
@@ -1047,7 +1081,6 @@ function StorageOperationsPageContent() {
   );
   const topHealth = storageTopHealthModel({ operations, pathHealth, capacity, policy, reconciliation, retention }, language);
   const tone = topHealth.tone || healthTone(operations, pathHealth, capacity, policy, reconciliation);
-  const accessRights = accessRightsModel(pathHealth, language);
   const recording = recordingState(operations, pathHealth, policy, copy);
   const normalizedReconciliation = normalizeReconciliationSummary(reconciliation, language);
   const archivePathText = storageContract.archive_primary_path || storageContract.archive_host_path || storageContract.storage_host_path || "-";
@@ -1073,29 +1106,6 @@ function StorageOperationsPageContent() {
     allowed: Boolean(manageSettingsPermission.allowed && retentionPermission.allowed),
     reason: !manageSettingsPermission.allowed ? manageSettingsPermission.reason : !retentionPermission.allowed ? retentionPermission.reason : "",
   };
-  const historyOperationRows = recentOperationRows.map((item) => {
-    if (item.actionKind === "integrity") {
-      return {
-        ...item,
-        action: {
-          labelKey: "operationHistoryOpenIntegrityScan",
-          disabled: !diagnosticsPermission.allowed,
-          title: diagnosticsPermission.allowed ? "" : diagnosticsPermission.reason,
-        },
-      };
-    }
-    if (item.actionKind === "migration") {
-      return {
-        ...item,
-        action: {
-          labelKey: "operationHistoryOpenMigration",
-          disabled: !manageSettingsPermission.allowed,
-          title: manageSettingsPermission.allowed ? "" : manageSettingsPermission.reason,
-        },
-      };
-    }
-    return item;
-  });
   const migrationScenario = migrationScenarioModel({
     plan: migrationPlan,
     operation: migrationOperation,
@@ -1115,7 +1125,6 @@ function StorageOperationsPageContent() {
   const migrationManagement = migrationOperationPresentation(migrationScenario, archiveRoots.length);
   const currentArchivePath = archiveRootPath(currentArchiveRoot, archivePathText);
   const healthReason = healthReasonText(topHealth, recording, copy);
-  const healthAction = healthActionText(topHealth, copy);
   const archiveRootSelectionReady = archiveRootDiscoveryModel.current && archiveRootFolderName.trim() && archiveRootChoiceId;
 
   useEffect(() => {
@@ -1787,7 +1796,6 @@ function StorageOperationsPageContent() {
     setIntegrityNextCursor(null);
     setIntegritySelectedFinding(null);
     setIntegrityPlan(null);
-    setIntegrityConfirmed(false);
     try {
       const next = await apiFetch("/storage/integrity/scans", {
         method: "POST",
@@ -1841,7 +1849,6 @@ function StorageOperationsPageContent() {
     setIntegrityError("");
     setIntegritySelectedFinding(finding);
     setIntegrityPlan(null);
-    setIntegrityConfirmed(false);
     try {
       const plan = await apiFetch(`/storage/integrity/findings/${encodeURIComponent(finding.finding_id)}/${contract.planKind}-plan`, {
         method: "POST",
@@ -1861,7 +1868,7 @@ function StorageOperationsPageContent() {
   }
 
   async function applyIntegrityAction() {
-    if (!integrityPlan?.plan_id || !integrityConfirmed || !integritySelectedFinding) return;
+    if (!integrityPlan?.plan_id || !integritySelectedFinding) return;
     const presentation = archiveIntegrityFindingPresentation(integritySelectedFinding);
     const contract = archiveIntegrityActionContract(presentation.actionKey);
     if (!contract.planKind) return;
@@ -1877,7 +1884,6 @@ function StorageOperationsPageContent() {
         }),
       });
       setIntegrityPlan(result);
-      setIntegrityConfirmed(false);
       const latest = await apiFetch("/storage/integrity/scans/latest");
       setIntegrityScan(latest);
       if (latest.scan_id) await loadIntegrityFindingPage(latest.scan_id);
@@ -1892,7 +1898,6 @@ function StorageOperationsPageContent() {
   async function clearIntegrityPlan() {
     setIntegritySelectedFinding(null);
     setIntegrityPlan(null);
-    setIntegrityConfirmed(false);
     setIntegrityError("");
     if (integrityScan?.scan_id && ["completed", "partial"].includes(String(integrityScan.status || ""))) {
       try {
@@ -1917,15 +1922,17 @@ function StorageOperationsPageContent() {
     } catch (_) {}
   }
 
-  function openHistoryOperation(item) {
-    if (item?.actionKind === "integrity" && item.scanId && diagnosticsPermission.allowed) {
-      setHistoryDialogOpen(false);
-      window.setTimeout(() => { void openIntegrityDialog(item.scanId); }, 0);
-      return;
-    }
-    if (item?.actionKind === "migration" && item.operationId && manageSettingsPermission.allowed) {
-      setHistoryDialogOpen(false);
-      router.replace(`/storage?migration=${encodeURIComponent(item.operationId)}`, { scroll: false });
+  async function openOperationHistory() {
+    setHistoryDialogOpen(true);
+    setOperationHistoryLoading(true);
+    setOperationHistoryError("");
+    try {
+      setOperationHistory(await apiFetch("/storage/operations/history"));
+    } catch (err) {
+      setOperationHistory(null);
+      setOperationHistoryError(errorDetailText(err, copy.operationHistoryUnavailable, language));
+    } finally {
+      setOperationHistoryLoading(false);
     }
   }
 
@@ -2242,14 +2249,14 @@ function StorageOperationsPageContent() {
     closeLabel: copy.close,
     content: (
       <ArchiveOperationHistoryContent
-        available={recent.available}
-        items={historyOperationRows}
+        history={operationHistory}
+        loading={operationHistoryLoading}
+        error={operationHistoryError}
         copy={copy}
         language={language}
         formatDateTime={formatDateTime}
         formatBytes={formatBytes}
         humanBlockerReason={humanBlockerReason}
-        onOpenItem={openHistoryOperation}
       />
     ),
   } : null;
@@ -2286,19 +2293,17 @@ function StorageOperationsPageContent() {
                 <div>
                   <strong>{healthTitle(copy, tone)}</strong>
                   <p>{healthReason}</p>
-                  <div className="storageOpsBadges">
-                    <Badge label={compactAccessLabel(accessRights, copy)} tone={accessRights.tone} />
-                    <Badge label={recording.detail} tone={recording.tone} />
-                  </div>
                 </div>
               </div>
               <div className="storageOpsTopMetrics" aria-label={copy.firstScreenMetrics}>
                 <TopMetric label={copy.recording} value={recording.label} detail={recording.detail} tone={recording.tone} />
+                <TopMetric label={copy.free} value={formatBytes(capacity.free_bytes)} detail={formatPercent(capacity.free_percent)} tone={freeSpaceTone(capacity, policy)} />
                 <TopMetric label={copy.archiveProblems} value={String(normalizedReconciliation.problemCount || 0)} detail={copy.integrity} tone={normalizedReconciliation.problemCount ? "warning" : "ok"} />
               </div>
               <div className="storageOpsHealthAction">
-                <strong>{copy.primaryAction}</strong>
-                <span>{healthAction}</span>
+                <button className="button secondary small appIllustratedAction" type="button" onClick={() => openIntegrityDialog()} title={copy.integrityOpenCheck} aria-label={copy.integrityOpenCheck} disabled={!diagnosticsPermission.allowed}>
+                  <img src="/assets/icons/ui/open.png" alt="" aria-hidden="true" />
+                </button>
               </div>
             </section>
             {refreshWarning ? <div className="storageOpsState storageOpsState-warning">{refreshWarning}</div> : null}
@@ -2518,8 +2523,7 @@ function StorageOperationsPageContent() {
                 title={copy.archiveManagementTitle}
                 subtitle={refreshWarning ? copy.archiveManagementStale : copy.archiveManagementSubtitle}
                 historyLabel={copy.operationHistory}
-                historyCount={historyOperationRows.length}
-                onOpenHistory={() => setHistoryDialogOpen(true)}
+                onOpenHistory={openOperationHistory}
                 groups={archiveManagementGroups}
               />
             </div>
@@ -2535,7 +2539,6 @@ function StorageOperationsPageContent() {
           error={integrityError}
           selectedFinding={integritySelectedFinding}
           plan={integrityPlan}
-          confirmed={integrityConfirmed}
           copy={copy}
           language={language}
           permission={diagnosticsPermission}
@@ -2545,7 +2548,6 @@ function StorageOperationsPageContent() {
           onLoadMore={loadMoreIntegrityFindings}
           onPrepare={prepareIntegrityAction}
           onClearPlan={clearIntegrityPlan}
-          onConfirmChange={setIntegrityConfirmed}
           onApply={applyIntegrityAction}
         />
         <ArchiveMigrationDialog

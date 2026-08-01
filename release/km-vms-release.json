@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.6",
-  "tag": "v0.8.6",
-  "title": "KM VMS 0.8.6 — Reliable Updates and Maintenance Overview",
+  "version": "0.8.7",
+  "tag": "v0.8.7",
+  "title": "KM VMS 0.8.7 — Storage Operator Acceptance, Integrity Reconciliation and Timezone-Safe File Protection",
   "title_i18n": {
-    "en": "KM VMS 0.8.6 — Reliable Updates and Maintenance Overview",
-    "ru": "KM VMS 0.8.6 — надёжные обновления и обзор обслуживания",
-    "zh-CN": "KM VMS 0.8.6 — 可靠更新与维护概览"
+    "en": "KM VMS 0.8.7 — Storage Operator Acceptance, Integrity Reconciliation and Timezone-Safe File Protection",
+    "ru": "KM VMS 0.8.7 — понятное управление архивом и безопасное согласование целостности",
+    "zh-CN": "KM VMS 0.8.7 — 清晰的存储管理、安全的完整性协调与时区保护"
   },
-  "summary": "Improves update retry convergence and current-database restore recovery, and delivers a responsive Maintenance Overview with truthful health, stable backup summaries and clear localized actions.",
+  "summary": "Refines Storage into a clearer operator workflow, makes archive history useful, safely reconciles abandoned recordings, and protects recent files from retention or integrity actions across timezones.",
   "summary_i18n": {
-    "en": "Improves update retry convergence and current-database restore recovery, and delivers a responsive Maintenance Overview with truthful health, stable backup summaries and clear localized actions.",
-    "ru": "Повышает надёжность повторных попыток обновления и восстановления рабочей базы, а также добавляет адаптивный обзор обслуживания с правдивым состоянием, стабильной сводкой резервных копий и понятными локализованными действиями.",
-    "zh-CN": "提高更新重试收敛和当前数据库恢复的可靠性，并提供自适应维护概览、真实健康状态、稳定的备份摘要和清晰的本地化操作。"
+    "en": "Refines Storage into a clearer operator workflow, makes archive history useful, safely reconciles abandoned recordings, and protects recent files from retention or integrity actions across timezones.",
+    "ru": "Делает раздел «Хранилище» понятнее, превращает историю архива в полезную сводку, безопасно согласует брошенные записи и защищает недавно изменённые файлы от retention и integrity-операций независимо от часового пояса.",
+    "zh-CN": "优化“存储”操作流程，使归档历史更有用，安全协调遗留录像，并在不同时区下保护近期变更文件免受保留策略或完整性操作影响。"
   },
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.6",
+  "source_ref": "v0.8.7",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -26,41 +26,41 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Allows compatible no-active-pointer installations to reuse a proven adopted slot on retry while preserving real source, identity and service mismatch blockers.",
-    "Recovers current-database restore services by starting exact existing API and recorder containers without re-evaluating a missing one-shot dependency.",
-    "Shows localized release summaries and changelogs without exact duplicate lines or a false missing-description message.",
-    "Redesigns Maintenance Overview as a concise responsive dashboard with truthful update, database, backup and diagnostic states.",
-    "Keeps global backup totals, latest copy and health independent from the currently open paginated backup detail page.",
-    "Makes nested maintenance dialogs own focus and Escape correctly, and prevents unavailable or incomplete diagnostics from appearing healthy.",
-    "Removes the unused System Name setting from setup, Settings and active API contracts without a risky physical database-column drop."
+    "Simplifies the Storage overview to one clear health result and useful archive, access and capacity facts without duplicate status noise.",
+    "Shows archive operation history on demand, omits zero-result retention passes and aggregates useful deletion activity.",
+    "Remeasures claimed retention files before deletion so files that changed size, identity or mtime are skipped safely.",
+    "Automatically finalizes safe playable abandoned recordings with their exact receipt and retention signal; uncertain cases remain blocked.",
+    "Lets operators delete confirmed unusable incomplete recordings through permission-bound, revalidated plans and compact confirmation.",
+    "Uses approved compact archive action icons and aligns Storage actions consistently across desktop and mobile layouts.",
+    "Compares recent-file safety with Unix epoch nanoseconds, preventing timezone offsets from exposing fresh files."
   ],
   "changelog_i18n": {
     "en": [
-      "Allows compatible no-active-pointer installations to reuse a proven adopted slot on retry while preserving real source, identity and service mismatch blockers.",
-      "Recovers current-database restore services by starting exact existing API and recorder containers without re-evaluating a missing one-shot dependency.",
-      "Shows localized release summaries and changelogs without exact duplicate lines or a false missing-description message.",
-      "Redesigns Maintenance Overview as a concise responsive dashboard with truthful update, database, backup and diagnostic states.",
-      "Keeps global backup totals, latest copy and health independent from the currently open paginated backup detail page.",
-      "Makes nested maintenance dialogs own focus and Escape correctly, and prevents unavailable or incomplete diagnostics from appearing healthy.",
-      "Removes the unused System Name setting from setup, Settings and active API contracts without a risky physical database-column drop."
+      "Simplifies the Storage overview to one clear health result and useful archive, access and capacity facts without duplicate status noise.",
+      "Shows archive operation history on demand, omits zero-result retention passes and aggregates useful deletion activity.",
+      "Remeasures claimed retention files before deletion so files that changed size, identity or mtime are skipped safely.",
+      "Automatically finalizes safe playable abandoned recordings with their exact receipt and retention signal; uncertain cases remain blocked.",
+      "Lets operators delete confirmed unusable incomplete recordings through permission-bound, revalidated plans and compact confirmation.",
+      "Uses approved compact archive action icons and aligns Storage actions consistently across desktop and mobile layouts.",
+      "Compares recent-file safety with Unix epoch nanoseconds, preventing timezone offsets from exposing fresh files."
     ],
     "ru": [
-      "Совместимые установки без active pointer повторно используют доказанный adopted slot, а реальные расхождения исходников, identity и сервисов по-прежнему блокируются.",
-      "После восстановления рабочей базы запускаются точные существующие контейнеры API и регистратора без повторной проверки отсутствующей одноразовой зависимости.",
-      "Локализованные описание и список изменений показываются без точных дублей и ложного сообщения об отсутствии описания.",
-      "Обзор обслуживания стал компактной адаптивной панелью с правдивыми состояниями обновления, базы, копий и диагностики.",
-      "Общее число, объём, последняя копия и состояние резервных копий больше не зависят от открытой страницы подробного списка.",
-      "Вложенные окна обслуживания правильно управляют фокусом и Escape, а недоступная или незавершённая диагностика не отображается зелёной.",
-      "Неиспользуемое «Имя системы» удалено из установки, Настроек и активных API-контрактов без рискованного физического удаления столбца БД."
+      "Сводка «Хранилища» показывает один понятный итог здоровья и полезные сведения об архиве, доступе и ёмкости без дублирующего шума.",
+      "История операций открывается по запросу, не показывает нулевые проходы retention и объединяет полезную статистику удаления.",
+      "Перед удалением retention повторно измеряет выбранные файлы и безопасно пропускает изменившиеся размер, identity или mtime.",
+      "Безопасные воспроизводимые брошенные записи автоматически завершаются вместе с точной квитанцией и retention-сигналом; сомнительные блокируются.",
+      "Подтверждённые непригодные незавершённые записи удаляются через permission-bound план, повторную проверку и компактное подтверждение.",
+      "Утверждённые компактные иконки и единое выравнивание действий работают в «Хранилище» на desktop и mobile.",
+      "Защита недавних файлов сравнивает Unix epoch nanoseconds, поэтому смещение часовых поясов не открывает свежие файлы для обработки."
     ],
     "zh-CN": [
-      "无 active pointer 的兼容安装可在重试时复用已验证的 adopted slot，同时继续阻止真实的源码、身份和服务差异。",
-      "恢复当前数据库后，直接启动现有的 API 和录像容器，不会因缺失的一次性依赖而重新评估 Compose 依赖。",
-      "本地化版本摘要和更新列表不再显示完全重复的内容，也不会错误提示缺少说明。",
-      "维护概览改为简洁的自适应面板，如实显示更新、数据库、备份和诊断状态。",
-      "备份总数、总容量、最新副本和健康状态不再受当前分页详情页影响。",
-      "嵌套维护对话框正确管理焦点和 Escape，诊断不可用或未完成时不会显示为健康。",
-      "从安装、设置和活动 API 契约中移除未使用的系统名称，同时避免高风险的数据库物理删列。"
+      "存储概览只显示一个清晰的健康结论，以及有用的归档、访问权限和容量信息，不再重复状态噪音。",
+      "归档操作历史按需打开，隐藏结果为零的保留策略执行，并汇总有用的删除活动。",
+      "保留策略在删除前重新测量已选文件，大小、身份或 mtime 发生变化时会安全跳过。",
+      "安全且可播放的遗留录像会与精确回执和保留信号一起自动完成；不确定情况继续阻止处理。",
+      "已确认不可用的未完成录像可通过权限约束计划、再次验证和紧凑确认进行删除。",
+      "使用已批准的紧凑归档操作图标，并在桌面和移动布局中统一对齐存储操作。",
+      "近期文件保护使用 Unix epoch 纳秒比较，避免时区偏移使新文件暴露给处理流程。"
     ]
   }
 }

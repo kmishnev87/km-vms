@@ -102,13 +102,17 @@ assert.equal(permissionDenied.noActionLabelKey, "integrityNoActionPermission");
 const incomplete = context.archiveIntegrityFindingPresentation({
   category: "partial_file",
   impact_key: "recording_incomplete",
-  no_action_reason: "incomplete_recording_review_required",
-  action_allowed: false,
+  action_key: "delete_unusable_recording",
+  required_permission: "delete_recordings",
+  confirmation_level: "destructive_media",
+  action_allowed: true,
   state: "active",
 });
 assert.equal(incomplete.categoryKey, "integrityCategoryActivePartial");
 assert.equal(incomplete.impactKey, "integrityImpactRecordingIncomplete");
-assert.equal(incomplete.noActionLabelKey, "integrityNoActionIncompleteReview");
+assert.equal(incomplete.detailKey, "integrityDetailPartial");
+assert.equal(incomplete.actionLabelKey, "integrityActionDeleteUnusable");
+assert.equal(incomplete.actionAllowed, true);
 
 const categories = context.archiveIntegrityCategoryPresentations({
   missing_file: 2,
@@ -158,8 +162,8 @@ assert.match(page, /const page = await apiFetch\(`\/storage\/integrity\/scans\/\
 assert.match(page, /setIntegrityFindings\(\(current\) => append \? \[\.\.\.current, \.\.\.\(page\.items \|\| \[\]\)\]/);
 assert.match(page, /role="dialog"/);
 assert.match(page, /aria-modal="true"/);
-assert.match(page, /storageIntegrityConfirm/);
-assert.match(page, /integrityConfirmationAcknowledge/);
+assert.match(page, /storageIntegrityConfirmationOverlay/);
+assert.doesNotMatch(page, /type="checkbox"[\s\S]*integrityConfirmationAcknowledge/);
 assert.doesNotMatch(page, /runReconciliationPreview/);
 assert.doesNotMatch(page, /applyReconciliationSafe/);
 assert.doesNotMatch(page, /mode:\s*"apply_safe"/);
@@ -195,6 +199,8 @@ for (const key of [
   "integrityCategoryProvenOrphan",
   "integrityImpactRecordingUnavailable",
   "integrityImpactRecordingIncomplete",
+  "integrityDetailZeroSize",
+  "integrityDetailPartial",
   "integrityActionRetireMissing",
   "integrityNoActionLegacyReview",
   "integrityNoActionPermission",

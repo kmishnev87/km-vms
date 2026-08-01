@@ -207,13 +207,15 @@ assert.match(page, /if \(!busy && activeInsideDialog && activeElement !== dialog
 assert.match(page, /if \(!open\) return <OperationDialog dialog=\{null\} onClose=\{onClose\} \/>;/);
 assert.match(page, /archiveManagementIntegrityTitle/);
 assert.match(page, /archiveManagementMigrationTitle/);
-assert.match(page, /openHistoryOperation/);
+assert.match(page, /openOperationHistory/);
+assert.match(page, /apiFetch\("\/storage\/operations\/history"\)/);
 assert.match(page, /storage\/integrity\/scans\/\$\{encodeURIComponent\(requestedScanId\)\}/);
 assert.match(center, /groups\.map/);
 assert.match(center, /role="switch"/);
 assert.match(center, /ArchiveOperationHistoryContent/);
 assert.match(center, /operationHistoryUnavailable/);
-assert.match(center, /onOpenItem\?\.\(item\)/);
+assert.match(center, /operationHistoryCameraRetention/);
+assert.doesNotMatch(center, /onOpenItem\?\.\(item\)/);
 assert.match(feedback, /useModalBodyScrollLock/);
 assert.match(feedback, /bodyScrollLockCount/);
 assert.match(feedback, /document\.body\.style\.overflow = "hidden"/);
