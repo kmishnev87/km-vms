@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.core.config import settings
+from sqlalchemy.orm import Session
 
 CONTAINER_ARCHIVE_PATH = "/storage/archive"
 DISCOVERY_FILE = "storage-discovery.json"
@@ -27,6 +28,8 @@ APPLY_STATUS_FILE = "storage-apply-status.json"
 ACTIVATION_REQUEST_FILE = "storage-activation-request.json"
 ACTIVATION_REQUEST_CONTROL_FILE = "storage-activation-request.control"
 SETUP_COMPLETE_FILE = "setup-complete.json"
+RUNTIME_CONVERGENCE_FILE = "storage-runtime-convergence.json"
+RUNTIME_CONVERGENCE_CONTROL_FILE = "storage-runtime-convergence.control"
 MARKER_FILE = ".km-vms-storage-root.json"
 ACTIVE_SELECTION_STATUSES = {"active"}
 IN_PROGRESS_SELECTION_STATUSES = {"activation_requested", "activation_in_progress", "applied_restart_required"}
@@ -574,13 +577,289 @@ def revalidate_configured_archive_root(root_row, *, timeout_seconds: int = DISCO
     return result
 
 
-def storage_confirmation_status() -> dict:
+def _initial_storage_request_contract(
+    selected_host_path: str,
+    request_id: str,
+) -> tuple[dict, dict]:
+    selection = _safe_read_json(install_control_dir() / SELECTION_FILE)
+    apply_state = _safe_read_json(install_control_dir() / APPLY_STATUS_FILE)
+    selected = str(selected_host_path or "").strip()
+    request = str(request_id or "").strip()
+    if (install_control_dir() / SETUP_COMPLETE_FILE).exists():
+        raise ValueError("initial_storage_setup_already_completed")
+    if not selected or not Path(selected).is_absolute():
+        raise ValueError("initial_storage_selected_path_invalid")
+    if not request:
+        raise ValueError("initial_storage_request_id_missing")
+    if str(selection.get("activation_request_id") or "") != request:
+        raise ValueError("initial_storage_selection_request_mismatch")
+    if str(apply_state.get("request_id") or "") != request:
+        raise ValueError("initial_storage_apply_request_mismatch")
+    if str(selection.get("selected_host_path") or "") != selected:
+        raise ValueError("initial_storage_selection_path_mismatch")
+    if str(apply_state.get("selected_host_path") or "") != selected:
+        raise ValueError("initial_storage_apply_path_mismatch")
+    if selection.get("operation_id") or apply_state.get("operation_id"):
+        raise ValueError("initial_storage_runtime_activation_forbidden")
+    if str(apply_state.get("status") or "") not in {
+        "applied_restart_required",
+        "activation_in_progress",
+        "active",
+    }:
+        raise ValueError("initial_storage_apply_state_invalid")
+    return selection, apply_state
+
+
+def _write_runtime_convergence(
+    *,
+    request_id: str,
+    selected_host_path: str,
+    state: str,
+    proof: dict | None = None,
+) -> None:
+    if state not in {"configuration_published", "runtime_verified"}:
+        raise ValueError("initial_storage_convergence_state_invalid")
+    payload = {
+        "schema_version": 1,
+        "request_id": request_id,
+        "selected_host_path": selected_host_path,
+        "state": state,
+        "proof": dict(proof or {}),
+        "updated_at": _utc_now(),
+    }
+    _write_json(
+        install_control_dir() / RUNTIME_CONVERGENCE_FILE,
+        payload,
+    )
+    _write_control(
+        install_control_dir() / RUNTIME_CONVERGENCE_CONTROL_FILE,
+        {
+            "schema_version": 1,
+            "request_id": request_id,
+            "selected_host_path": selected_host_path,
+            "state": state,
+        },
+    )
+
+
+def converge_initial_storage_runtime_files(
+    db: Session,
+    *,
+    selected_host_path: str,
+    request_id: str,
+) -> dict:
+    _initial_storage_request_contract(selected_host_path, request_id)
+    from app.services.recording_storage import (
+        DEFAULT_ARCHIVE_ROOT_ID,
+        write_archive_roots_runtime_files,
+    )
+
+    result = write_archive_roots_runtime_files(
+        db,
+        initial_default_host_path=selected_host_path,
+    )
+    default_item = next(
+        (
+            item
+            for item in result.get("items") or []
+            if item.get("root_id") == DEFAULT_ARCHIVE_ROOT_ID
+        ),
+        None,
+    )
+    if (
+        not default_item
+        or default_item.get("user_display_path") != selected_host_path
+        or not default_item.get("backend_runtime_path")
+    ):
+        raise ValueError("initial_storage_default_binding_not_published")
+    _write_runtime_convergence(
+        request_id=request_id,
+        selected_host_path=selected_host_path,
+        state="configuration_published",
+    )
+    return {
+        "status": "configuration_published",
+        "request_id": request_id,
+        "default_root_id": DEFAULT_ARCHIVE_ROOT_ID,
+        "root_count": int(result.get("root_count") or 0),
+    }
+
+
+def _marker_and_namespace_state(
+    runtime_path: Path,
+    *,
+    selected_host_path: str,
+    write_probe: bool,
+) -> dict:
+    marker = _safe_read_json(runtime_path / MARKER_FILE)
+    namespace = runtime_path / "kmvms" / "recordings"
+    marker_matches = bool(
+        marker.get("product") == "KM VMS"
+        and marker.get("selected_host_path") == selected_host_path
+    )
+    readable = bool(
+        runtime_path.is_dir()
+        and namespace.is_dir()
+        and os.access(runtime_path, os.R_OK | os.X_OK)
+        and os.access(namespace, os.R_OK | os.X_OK)
+    )
+    writable = bool(
+        readable and os.access(namespace, os.W_OK | os.X_OK)
+    )
+    if writable and write_probe:
+        probe = namespace / f".km-vms-setup-proof-{uuid.uuid4().hex}"
+        try:
+            descriptor = os.open(
+                probe,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+            try:
+                os.write(descriptor, b"km-vms-setup-proof\n")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            writable = probe.read_bytes() == b"km-vms-setup-proof\n"
+        except OSError:
+            writable = False
+        finally:
+            try:
+                probe.unlink()
+            except OSError:
+                pass
+    return {
+        "marker_matches": marker_matches,
+        "namespace_exists": namespace.is_dir(),
+        "readable": readable,
+        "writable": writable,
+    }
+
+
+def _initial_storage_runtime_state(
+    db: Session | None,
+    *,
+    selected_host_path: str,
+    write_probe: bool,
+) -> dict:
+    from app.services.recording_storage import (
+        DEFAULT_ARCHIVE_ROOT_ID,
+        _archive_roots_runtime_entries,
+    )
+
+    try:
+        default_item = _archive_roots_runtime_entries().get(
+            DEFAULT_ARCHIVE_ROOT_ID
+        )
+    except ValueError:
+        default_item = None
+    manifest_matches = bool(
+        default_item
+        and default_item.get("user_display_path") == selected_host_path
+    )
+    target_value = (
+        str(default_item.get("backend_runtime_path") or "")
+        if default_item
+        else ""
+    )
+    target_path = Path(target_value) if target_value else Path("/")
+    canonical = _marker_and_namespace_state(
+        Path(settings.storage_root),
+        selected_host_path=selected_host_path,
+        write_probe=write_probe,
+    )
+    per_root = (
+        _marker_and_namespace_state(
+            target_path,
+            selected_host_path=selected_host_path,
+            write_probe=write_probe,
+        )
+        if manifest_matches and target_value
+        else {
+            "marker_matches": False,
+            "namespace_exists": False,
+            "readable": False,
+            "writable": False,
+        }
+    )
+    database_matches = True
+    if db is not None:
+        from app.models.recording import ArchiveRoot
+
+        default_root = db.get(ArchiveRoot, DEFAULT_ARCHIVE_ROOT_ID)
+        active_count = int(
+            db.query(ArchiveRoot)
+            .filter(
+                ArchiveRoot.is_active.is_(True),
+                ArchiveRoot.retired_at.is_(None),
+            )
+            .count()
+        )
+        database_matches = bool(
+            default_root
+            and default_root.retired_at is None
+            and default_root.is_active
+            and active_count == 1
+            and Path(str(default_root.root_path)).as_posix()
+            == Path(settings.storage_root).as_posix()
+        )
+    return {
+        "manifest_matches": manifest_matches,
+        "database_matches": database_matches,
+        "canonical": canonical,
+        "per_root": per_root,
+    }
+
+
+def prove_initial_storage_runtime(
+    db: Session,
+    *,
+    selected_host_path: str,
+    request_id: str,
+) -> dict:
+    _initial_storage_request_contract(selected_host_path, request_id)
+    state = _initial_storage_runtime_state(
+        db,
+        selected_host_path=selected_host_path,
+        write_probe=True,
+    )
+    if not (
+        state["manifest_matches"]
+        and state["database_matches"]
+        and all(state["canonical"].values())
+        and all(state["per_root"].values())
+    ):
+        raise ValueError("initial_storage_runtime_proof_failed")
+    proof = {
+        "manifest_default_source": True,
+        "database_default_root": True,
+        "api_canonical_marker": True,
+        "api_default_runtime_marker": True,
+        "api_default_runtime_namespace": True,
+        "api_default_runtime_read_write": True,
+    }
+    _write_runtime_convergence(
+        request_id=request_id,
+        selected_host_path=selected_host_path,
+        state="runtime_verified",
+        proof=proof,
+    )
+    return {"status": "runtime_verified", "request_id": request_id, "proof": proof}
+
+
+def storage_confirmation_status(db: Session | None = None) -> dict:
     selection = _safe_read_json(install_control_dir() / SELECTION_FILE)
     apply_state = _safe_read_json(install_control_dir() / APPLY_STATUS_FILE)
     selected_host_path = str(selection.get("selected_host_path") or "").strip()
     container_archive_path = str(selection.get("container_archive_path") or CONTAINER_ARCHIVE_PATH).strip()
     apply_status = str(apply_state.get("status") or selection.get("apply_status") or "").strip()
+    selection_request_id = str(selection.get("activation_request_id") or "").strip()
     runtime_request_id = str(apply_state.get("request_id") or selection.get("activation_request_id") or "").strip()
+    operation_id = str(
+        apply_state.get("operation_id")
+        or selection.get("operation_id")
+        or ""
+    ).strip()
+    initial_setup_activation = not operation_id
     errors: list[str] = []
 
     if not selection:
@@ -593,8 +872,52 @@ def storage_confirmation_status() -> dict:
         errors.append("selected_host_path_must_be_absolute")
     if container_archive_path != CONTAINER_ARCHIVE_PATH:
         errors.append("container_archive_path_invalid")
+    if not selection_request_id or not runtime_request_id:
+        errors.append("storage_activation_request_missing")
+    elif selection_request_id != runtime_request_id:
+        errors.append("storage_activation_request_mismatch")
+    if (
+        selected_host_path
+        and str(apply_state.get("selected_host_path") or "").strip()
+        != selected_host_path
+    ):
+        errors.append("storage_apply_path_mismatch")
     if apply_status != "active":
         errors.append("storage_apply_status_not_active")
+    elif (
+        initial_setup_activation
+        and selected_host_path
+        and selection_request_id == runtime_request_id
+    ):
+        convergence = _safe_read_json(
+            install_control_dir() / RUNTIME_CONVERGENCE_FILE
+        )
+        runtime_proof = (
+            apply_state.get("runtime_proof")
+            if isinstance(apply_state.get("runtime_proof"), dict)
+            else {}
+        )
+        if (
+            convergence.get("request_id") != runtime_request_id
+            or convergence.get("selected_host_path") != selected_host_path
+            or convergence.get("state") != "runtime_verified"
+        ):
+            errors.append("storage_runtime_convergence_missing")
+        if runtime_proof.get("recorder_canonical_marker") is not True:
+            errors.append("storage_recorder_runtime_proof_missing")
+        runtime_state = _initial_storage_runtime_state(
+            db,
+            selected_host_path=selected_host_path,
+            write_probe=False,
+        )
+        if not runtime_state["manifest_matches"]:
+            errors.append("storage_default_manifest_mismatch")
+        if not runtime_state["database_matches"]:
+            errors.append("storage_default_root_mismatch")
+        if not all(runtime_state["canonical"].values()):
+            errors.append("storage_canonical_runtime_proof_failed")
+        if not all(runtime_state["per_root"].values()):
+            errors.append("storage_default_runtime_proof_failed")
 
     safe_selection = deepcopy(selection)
     for key in list(safe_selection):
@@ -606,8 +929,10 @@ def storage_confirmation_status() -> dict:
         next_action = "wait_for_storage_activation"
     elif apply_status in FAILED_SELECTION_STATUSES:
         next_action = "resolve_storage_activation_error"
-    elif apply_status == "active":
+    elif apply_status == "active" and not errors:
         next_action = "continue_setup"
+    elif apply_status == "active":
+        next_action = "resolve_storage_activation_error"
 
     return {
         "ready": not errors,
@@ -617,18 +942,18 @@ def storage_confirmation_status() -> dict:
         "container_archive_path": CONTAINER_ARCHIVE_PATH,
         "apply_status": apply_status or None,
         "runtime_request_id": runtime_request_id or None,
-        "operation_id": apply_state.get("operation_id") or selection.get("operation_id"),
+        "operation_id": operation_id or None,
         "apply_state": apply_state if apply_state else None,
         "restart_required": apply_status in IN_PROGRESS_SELECTION_STATUSES,
-        "manual_action_required": apply_status in FAILED_SELECTION_STATUSES,
+        "manual_action_required": apply_status in FAILED_SELECTION_STATUSES or bool(apply_status == "active" and errors),
         "next_action": next_action,
         "errors": errors,
         "selection": safe_selection if selection else None,
     }
 
 
-def require_storage_confirmation() -> dict:
-    status = storage_confirmation_status()
+def require_storage_confirmation(db: Session | None = None) -> dict:
+    status = storage_confirmation_status(db)
     if not status["ready"]:
         raise ValueError(",".join(status["errors"]) or "storage_confirmation_required")
     return status
@@ -813,6 +1138,7 @@ def persist_selection(candidate_id: str, folder_name: str, manual_root_path: str
             "container_archive_path": CONTAINER_ARCHIVE_PATH,
             "requested_at": _utc_now(),
             "next_action": "setup_helper_activation",
+            "request_id": request_id,
         }
     )
     activation_request = {
@@ -896,3 +1222,40 @@ def mark_setup_completed() -> None:
             "completed_at": _utc_now(),
         },
     )
+
+
+def _runtime_convergence_cli() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument(
+        "action",
+        choices=("converge-runtime-files", "prove-runtime"),
+    )
+    parser.add_argument("--selected-host-path", required=True)
+    parser.add_argument("--request-id", required=True)
+    args = parser.parse_args()
+
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        if args.action == "converge-runtime-files":
+            converge_initial_storage_runtime_files(
+                db,
+                selected_host_path=args.selected_host_path,
+                request_id=args.request_id,
+            )
+        else:
+            prove_initial_storage_runtime(
+                db,
+                selected_host_path=args.selected_host_path,
+                request_id=args.request_id,
+            )
+    finally:
+        db.close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_runtime_convergence_cli())

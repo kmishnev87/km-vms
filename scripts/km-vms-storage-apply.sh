@@ -2,6 +2,9 @@
 set -eu
 
 APP_DIR=""
+INITIAL_SETUP=0
+RECOVERY_ACTION=""
+RECOVERY_REQUEST_ID=""
 DOCKER_COMPOSE_BIN="${KM_VMS_DOCKER_COMPOSE:-${KMVMS_DOCKER_COMPOSE:-}}"
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
@@ -10,7 +13,9 @@ usage() {
 KM VMS storage apply helper
 
 Usage:
-  sh scripts/km-vms-storage-apply.sh --app-dir <path>
+  sh scripts/km-vms-storage-apply.sh --app-dir <path> [--initial-setup]
+  sh scripts/km-vms-storage-apply.sh --app-dir <path> --restore-initial-recovery <request-id>
+  sh scripts/km-vms-storage-apply.sh --app-dir <path> --cleanup-initial-recovery <request-id>
 
 Reads data/install-control/storage-selection.control and updates only the
 SURVEILLANCE_ROOT line in .env. Does not print .env contents or secrets.
@@ -83,6 +88,154 @@ read_control_value() {
   return 1
 }
 
+validate_recovery_request_id() {
+  value="$1"
+  [ -n "$value" ] || fail "storage recovery request id is required"
+  printf '%s' "$value" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$' || fail "storage recovery request id is invalid"
+}
+
+remove_recovery_directory() {
+  recovery_dir="$1"
+  rm -f \
+    "$recovery_dir/env.previous" \
+    "$recovery_dir/manifest.previous" \
+    "$recovery_dir/manifest.absent" \
+    "$recovery_dir/override.previous" \
+    "$recovery_dir/override.absent" \
+    "$recovery_dir/request.control"
+  rmdir "$recovery_dir" 2>/dev/null || return 1
+  rmdir "$RECOVERY_ROOT" 2>/dev/null || true
+  return 0
+}
+
+create_initial_recovery_set() {
+  validate_recovery_request_id "$request_id"
+  recovery_dir="$RECOVERY_ROOT/$request_id"
+  if [ -d "$recovery_dir" ]; then
+    saved_request=$(read_control_value "$recovery_dir/request.control" request_id || true)
+    saved_path=$(read_control_value "$recovery_dir/request.control" selected_host_path || true)
+    [ "$saved_request" = "$request_id" ] || fail "storage recovery request mismatch"
+    [ "$saved_path" = "$selected_path" ] || fail "storage recovery selected path mismatch"
+    return 0
+  fi
+
+  umask 077
+  mkdir -p "$RECOVERY_ROOT"
+  chmod 700 "$RECOVERY_ROOT" 2>/dev/null || true
+  recovery_tmp="$RECOVERY_ROOT/.new-$request_id-$$"
+  mkdir "$recovery_tmp"
+  chmod 700 "$recovery_tmp" 2>/dev/null || true
+  if ! cp "$ENV_FILE" "$recovery_tmp/env.previous"; then
+    remove_recovery_directory "$recovery_tmp" 2>/dev/null || true
+    fail "cannot preserve initial storage environment"
+  fi
+  chmod 600 "$recovery_tmp/env.previous" 2>/dev/null || true
+  if [ -f "$ARCHIVE_ROOTS_MANIFEST_FILE" ]; then
+    if ! cp "$ARCHIVE_ROOTS_MANIFEST_FILE" "$recovery_tmp/manifest.previous"; then
+      remove_recovery_directory "$recovery_tmp" 2>/dev/null || true
+      fail "cannot preserve archive roots manifest"
+    fi
+  else
+    : > "$recovery_tmp/manifest.absent"
+  fi
+  if [ -f "$ARCHIVE_ROOTS_COMPOSE_FILE" ]; then
+    if ! cp "$ARCHIVE_ROOTS_COMPOSE_FILE" "$recovery_tmp/override.previous"; then
+      remove_recovery_directory "$recovery_tmp" 2>/dev/null || true
+      fail "cannot preserve archive roots compose override"
+    fi
+  else
+    : > "$recovery_tmp/override.absent"
+  fi
+  if ! {
+    printf 'schema_version=1\n'
+    printf 'request_id=%s\n' "$request_id"
+    printf 'selected_host_path=%s\n' "$selected_path"
+  } > "$recovery_tmp/request.control"; then
+    remove_recovery_directory "$recovery_tmp" 2>/dev/null || true
+    fail "cannot publish initial storage recovery identity"
+  fi
+  chmod 600 "$recovery_tmp"/* 2>/dev/null || true
+  if ! mv "$recovery_tmp" "$recovery_dir"; then
+    remove_recovery_directory "$recovery_tmp" 2>/dev/null || true
+    fail "cannot publish initial storage recovery set"
+  fi
+}
+
+initial_recovery_set_matches() {
+  recovery_dir="$1"
+  cmp -s "$recovery_dir/env.previous" "$ENV_FILE" || return 1
+
+  if [ -f "$recovery_dir/manifest.previous" ] && [ ! -e "$recovery_dir/manifest.absent" ]; then
+    cmp -s "$recovery_dir/manifest.previous" "$ARCHIVE_ROOTS_MANIFEST_FILE" || return 1
+  elif [ -f "$recovery_dir/manifest.absent" ] && [ ! -e "$recovery_dir/manifest.previous" ]; then
+    [ ! -e "$ARCHIVE_ROOTS_MANIFEST_FILE" ] && [ ! -L "$ARCHIVE_ROOTS_MANIFEST_FILE" ] || return 1
+  else
+    return 1
+  fi
+
+  if [ -f "$recovery_dir/override.previous" ] && [ ! -e "$recovery_dir/override.absent" ]; then
+    cmp -s "$recovery_dir/override.previous" "$ARCHIVE_ROOTS_COMPOSE_FILE" || return 1
+  elif [ -f "$recovery_dir/override.absent" ] && [ ! -e "$recovery_dir/override.previous" ]; then
+    [ ! -e "$ARCHIVE_ROOTS_COMPOSE_FILE" ] && [ ! -L "$ARCHIVE_ROOTS_COMPOSE_FILE" ] || return 1
+  else
+    return 1
+  fi
+  return 0
+}
+
+restore_initial_recovery_set() {
+  recovery_request="$1"
+  validate_recovery_request_id "$recovery_request"
+  recovery_dir="$RECOVERY_ROOT/$recovery_request"
+  [ -d "$recovery_dir" ] || return 0
+  saved_request=$(read_control_value "$recovery_dir/request.control" request_id || true)
+  [ "$saved_request" = "$recovery_request" ] || return 1
+  [ -f "$recovery_dir/env.previous" ] || return 1
+  { [ -f "$recovery_dir/manifest.previous" ] || [ -f "$recovery_dir/manifest.absent" ]; } || return 1
+  { [ -f "$recovery_dir/override.previous" ] || [ -f "$recovery_dir/override.absent" ]; } || return 1
+
+  env_restore="$ENV_FILE.restore.$$"
+  if ! cp "$recovery_dir/env.previous" "$env_restore"; then
+    rm -f "$env_restore"
+    return 1
+  fi
+  chmod --reference="$ENV_FILE" "$env_restore" 2>/dev/null || chmod 600 "$env_restore" 2>/dev/null || true
+  if ! mv "$env_restore" "$ENV_FILE"; then
+    rm -f "$env_restore"
+    return 1
+  fi
+
+  if [ -f "$recovery_dir/manifest.previous" ]; then
+    manifest_restore="$ARCHIVE_ROOTS_MANIFEST_FILE.restore.$$"
+    if ! cp "$recovery_dir/manifest.previous" "$manifest_restore" || ! mv "$manifest_restore" "$ARCHIVE_ROOTS_MANIFEST_FILE"; then
+      rm -f "$manifest_restore"
+      return 1
+    fi
+  else
+    rm -f "$ARCHIVE_ROOTS_MANIFEST_FILE" || return 1
+  fi
+  if [ -f "$recovery_dir/override.previous" ]; then
+    override_restore="$ARCHIVE_ROOTS_COMPOSE_FILE.restore.$$"
+    if ! cp "$recovery_dir/override.previous" "$override_restore" || ! mv "$override_restore" "$ARCHIVE_ROOTS_COMPOSE_FILE"; then
+      rm -f "$override_restore"
+      return 1
+    fi
+  else
+    rm -f "$ARCHIVE_ROOTS_COMPOSE_FILE" || return 1
+  fi
+  initial_recovery_set_matches "$recovery_dir" || return 1
+  rm -f "$RUNTIME_CONVERGENCE_FILE" "$RUNTIME_CONVERGENCE_CONTROL_FILE" || return 1
+  remove_recovery_directory "$recovery_dir"
+}
+
+cleanup_initial_recovery_set() {
+  recovery_request="$1"
+  validate_recovery_request_id "$recovery_request"
+  recovery_dir="$RECOVERY_ROOT/$recovery_request"
+  [ ! -d "$recovery_dir" ] || remove_recovery_directory "$recovery_dir"
+  rm -f "$APP_DIR/.env.stage2-storage.bak"
+}
+
 detect_compose() {
   km_vms_detect_compose "$DOCKER_COMPOSE_BIN"
 }
@@ -105,6 +258,22 @@ while [ "$#" -gt 0 ]; do
       APP_DIR="$2"
       shift 2
       ;;
+    --initial-setup)
+      INITIAL_SETUP=1
+      shift
+      ;;
+    --restore-initial-recovery)
+      [ "$#" -ge 2 ] || fail "--restore-initial-recovery requires a request id"
+      RECOVERY_ACTION="restore"
+      RECOVERY_REQUEST_ID="$2"
+      shift 2
+      ;;
+    --cleanup-initial-recovery)
+      [ "$#" -ge 2 ] || fail "--cleanup-initial-recovery requires a request id"
+      RECOVERY_ACTION="cleanup"
+      RECOVERY_REQUEST_ID="$2"
+      shift 2
+      ;;
     --help|-h)
       usage
       exit 0
@@ -119,8 +288,20 @@ done
 ENV_FILE="$APP_DIR/.env"
 SELECTION_FILE="$APP_DIR/data/install-control/storage-selection.control"
 STATUS_FILE="$APP_DIR/data/install-control/storage-apply-status.json"
+ARCHIVE_ROOTS_MANIFEST_FILE="$APP_DIR/data/install-control/archive-roots-runtime.json"
 ARCHIVE_ROOTS_COMPOSE_FILE="$APP_DIR/data/install-control/docker-compose.archive-roots.yml"
+RUNTIME_CONVERGENCE_FILE="$APP_DIR/data/install-control/storage-runtime-convergence.json"
+RUNTIME_CONVERGENCE_CONTROL_FILE="$APP_DIR/data/install-control/storage-runtime-convergence.control"
+RECOVERY_ROOT="$APP_DIR/data/install-control/.storage-activation-recovery"
 [ -f "$ENV_FILE" ] || fail ".env not found"
+[ -z "$RECOVERY_ACTION" ] || {
+  if [ "$RECOVERY_ACTION" = "restore" ]; then
+    restore_initial_recovery_set "$RECOVERY_REQUEST_ID" || fail "initial storage configuration recovery failed"
+  else
+    cleanup_initial_recovery_set "$RECOVERY_REQUEST_ID" || fail "initial storage recovery cleanup failed"
+  fi
+  exit 0
+}
 [ -f "$SELECTION_FILE" ] || fail "storage-selection.control not found"
 
 selected_path=$(read_control_value "$SELECTION_FILE" selected_host_path || true)
@@ -228,24 +409,32 @@ backup="$ENV_FILE.stage2-storage.bak"
 tmp="$ENV_FILE.tmp.$$"
 ENV_CHANGED=0
 
-restore_env_on_failure() {
+restore_configuration_on_failure() {
   status=$?
   trap - EXIT HUP INT TERM
-  if [ "$status" -ne 0 ] && [ "$ENV_CHANGED" = "1" ] && [ -f "$backup" ]; then
-    restore_tmp="$ENV_FILE.restore.$$"
-    if cp "$backup" "$restore_tmp"; then
-      chmod --reference="$ENV_FILE" "$restore_tmp" 2>/dev/null || chmod 600 "$restore_tmp" 2>/dev/null || true
-      mv "$restore_tmp" "$ENV_FILE" || rm -f "$restore_tmp"
-    else
-      rm -f "$restore_tmp"
+  if [ "$status" -ne 0 ] && [ "$ENV_CHANGED" = "1" ]; then
+    if [ "$INITIAL_SETUP" = "1" ]; then
+      restore_initial_recovery_set "$request_id" || true
+    elif [ -f "$backup" ]; then
+      restore_tmp="$ENV_FILE.restore.$$"
+      if cp "$backup" "$restore_tmp"; then
+        chmod --reference="$ENV_FILE" "$restore_tmp" 2>/dev/null || chmod 600 "$restore_tmp" 2>/dev/null || true
+        mv "$restore_tmp" "$ENV_FILE" || rm -f "$restore_tmp"
+      else
+        rm -f "$restore_tmp"
+      fi
     fi
   fi
   exit "$status"
 }
 
-trap restore_env_on_failure EXIT
+trap restore_configuration_on_failure EXIT
 trap 'exit 1' HUP INT TERM
-cp "$ENV_FILE" "$backup"
+if [ "$INITIAL_SETUP" = "1" ]; then
+  create_initial_recovery_set
+else
+  cp "$ENV_FILE" "$backup"
+fi
 awk -v value="$selected_path" '
   BEGIN { done = 0 }
   /^SURVEILLANCE_ROOT=/ { print "SURVEILLANCE_ROOT=" value; done = 1; next }

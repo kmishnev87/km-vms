@@ -1238,10 +1238,13 @@ export function maintenanceBackupOperationResultText(result, t) {
     const labels = t.maintenanceBackupCreateStatuses || {};
     const created = ["ok", "created", "verified", "valid", "completed", "complete", "satisfied"].includes(status);
     const failed = ["blocked", "failed", "error", "backup_failed"].includes(status);
+    const label = operationLabels.create || t.maintenanceBackupCreate || "Create";
     return {
       kind,
-      label: operationLabels.create || t.maintenanceBackupCreate || "Create",
+      label,
+      title: label,
       text: labels[status] || (created ? t.maintenanceBackupCreated : failed ? t.maintenanceBackupCreateFailed : labels.fallback || t.maintenanceMessageFallback || maintenanceStatusText(status, t)),
+      successful: created,
       showReason: !created,
     };
   }
@@ -1249,10 +1252,13 @@ export function maintenanceBackupOperationResultText(result, t) {
     const labels = t.maintenanceBackupDeleteStatuses || {};
     const deleted = ["deleted", "deleted_with_missing_files", "ok", "completed", "complete"].includes(status);
     const failed = ["blocked", "failed", "error", "delete_failed", "not_found"].includes(status);
+    const label = operationLabels.delete || t.maintenanceBackupDelete || "Delete";
     return {
       kind,
-      label: operationLabels.delete || t.maintenanceBackupDelete || "Delete",
+      label,
+      title: label,
       text: labels[status] || (deleted ? t.maintenanceBackupDeleted : failed ? t.maintenanceBackupDeleteFailed : labels.fallback || t.maintenanceMessageFallback || maintenanceStatusText(status, t)),
+      successful: deleted,
       showReason: !deleted,
     };
   }
@@ -1260,6 +1266,26 @@ export function maintenanceBackupOperationResultText(result, t) {
   const compatibilityStatus = String(operationResult.compatibility_status || "").trim().toLowerCase();
   const validationStatus = String(operationResult.restore_validation_status || "").trim().toLowerCase();
   const outcomeLabels = t.maintenanceBackupCheckOutcomes || {};
+  const label = operationLabels.check || t.maintenanceBackupCheck || "Check";
+  const passedTitle = t.maintenanceBackupCheckPassedTitle || maintenanceBackupCheckResultText("valid", t);
+  const hasStructuredOutcome = Boolean(integrityStatus || compatibilityStatus || validationStatus);
+  const fullyValidated = integrityStatus === "verified"
+    && compatibilityStatus === "compatible"
+    && validationStatus === "passed";
+  const statusValidated = !hasStructuredOutcome
+    && ["valid", "verified", "validated", "passed"].includes(status);
+  if (fullyValidated || statusValidated) {
+    return {
+      kind: "check",
+      label,
+      title: passedTitle,
+      text: outcomeLabels.fully_validated
+        || t.maintenanceBackupCheckPassedText
+        || maintenanceBackupCheckResultText(status, t),
+      successful: true,
+      showReason: false,
+    };
+  }
   if (
     integrityStatus === "verified" &&
     compatibilityStatus === "migration_required" &&
@@ -1267,33 +1293,41 @@ export function maintenanceBackupOperationResultText(result, t) {
   ) {
     return {
       kind: "check",
-      label: operationLabels.check || t.maintenanceBackupCheck || "Check",
+      label,
+      title: label,
       text: outcomeLabels.integrity_verified_migration_required || maintenanceBackupCheckResultText(status, t),
+      successful: false,
       showReason: false,
     };
   }
   if (integrityStatus === "failed") {
     return {
       kind: "check",
-      label: operationLabels.check || t.maintenanceBackupCheck || "Check",
+      label,
+      title: label,
       text: outcomeLabels.integrity_failed || maintenanceBackupCheckResultText(status, t),
+      successful: false,
       showReason: true,
     };
   }
   if (validationStatus === "failed") {
     return {
       kind: "check",
-      label: operationLabels.check || t.maintenanceBackupCheck || "Check",
+      label,
+      title: label,
       text: outcomeLabels.restore_failed || maintenanceBackupCheckResultText(status, t),
+      successful: false,
       showReason: true,
     };
   }
-  const checked = ["valid", "verified", "available", "validated", "passed", "completed"].includes(status);
+  const knownResult = ["valid", "verified", "available", "validated", "passed", "completed"].includes(status);
   return {
     kind: "check",
-    label: operationLabels.check || t.maintenanceBackupCheck || "Check",
+    label,
+    title: label,
     text: maintenanceBackupCheckResultText(status, t),
-    showReason: !checked,
+    successful: false,
+    showReason: !knownResult,
   };
 }
 

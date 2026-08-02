@@ -150,7 +150,7 @@ const supportStart = settingsPage.indexOf('<section className="settingsMaintenan
 assert.notEqual(supportStart, -1, "support diagnostics section missing");
 const supportEnd = settingsPage.indexOf("</section>", supportStart);
 const supportMarkup = settingsPage.slice(supportStart, supportEnd);
-const supportButtonCount = (supportMarkup.match(/<button /g) || []).length;
+const supportButtonCount = (supportMarkup.match(/<button\b/g) || []).length;
 
 assert.equal(supportButtonCount, 1);
 assert.equal(supportMarkup.includes("downloadMaintenanceReport"), false);
@@ -166,12 +166,10 @@ assert.equal(diagnosticDialog.includes("descriptions: ["), true);
 assert.equal(diagnosticDialog.includes("summary:"), false);
 assert.equal(diagnosticDialog.includes("showFooterClose: false"), true);
 assert.equal(supportMarkup.includes("{t.maintenanceReportDownload}"), true);
+assert.equal(supportMarkup.includes("download-report.svg"), true);
 assert.equal(supportMarkup.includes("{t.createDiagnosticArchive}"), false);
-assert.match(stageCss, /\.settingsMaintenanceSupportActions\s*\{[\s\S]*?width:\s*auto/);
-assert.match(stageCss, /\.settingsMaintenanceSupportActions\s*\{[\s\S]*?min-width:\s*156px/);
-assert.match(cssRule(".settingsMaintenanceSupportActions .button"), /white-space:\s*nowrap;/);
-assert.match(cssRule(".settingsMaintenanceSupportActions .button"), /width:\s*100%/);
-assert.match(cssRule(".settingsMaintenanceSupportActions .button"), /height:\s*38px/);
+assert.match(stageCss, /\.settingsMaintenanceSupportActions\s*\{[\s\S]*?grid-template-columns:\s*40px;[\s\S]*?width:\s*40px;[\s\S]*?min-width:\s*40px/);
+assert.match(stageCss, /\.settingsMaintenanceSupportActions \.settingsMaintenanceSupportActionButton\s*\{[\s\S]*?width:\s*40px;[\s\S]*?height:\s*40px/);
 assert.equal(settingsPage.includes('downloadLogArchive("normal")'), true);
 assert.equal(settingsPage.includes('downloadLogArchive("extended")'), true);
 assert.equal(settingsPage.includes("/system/upgrade/report"), false);

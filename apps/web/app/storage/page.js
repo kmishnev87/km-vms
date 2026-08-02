@@ -65,12 +65,22 @@ function Badge({ label, tone = "neutral" }) {
   return <span className={`storageOpsBadge storageOpsBadge-${tone}`}>{label}</span>;
 }
 
-function TopMetric({ label, value, detail = "", tone = "neutral" }) {
+function TopMetric({ label, value, tone = "neutral", onValueClick = null, actionLabel = "", disabled = false }) {
   return (
     <div className={`storageOpsTopMetric storageOpsTopMetric-${tone}`}>
       <span>{label}</span>
-      <strong>{value}</strong>
-      {detail ? <small>{detail}</small> : null}
+      {onValueClick ? (
+        <button
+          type="button"
+          className="storageOpsTopMetricValueButton"
+          onClick={onValueClick}
+          disabled={disabled}
+          title={actionLabel}
+          aria-label={actionLabel}
+        >
+          {value}
+        </button>
+      ) : <strong>{value}</strong>}
     </div>
   );
 }
@@ -141,7 +151,7 @@ function ArchiveIntegrityDialog({
   const returnFocusRef = useRef(null);
   useModalBodyScrollLock(open);
   const scanModel = archiveIntegrityScanModel(scan || {}, permission);
-  const categories = archiveIntegrityCategoryPresentations(scan?.category_counts);
+  const categories = archiveIntegrityCategoryPresentations(scanModel.stale ? {} : scan?.category_counts);
   const findingRows = findings.map(archiveIntegrityFindingPresentation);
   const selectedRow = selectedFinding ? archiveIntegrityFindingPresentation(selectedFinding) : null;
   const actionContract = archiveIntegrityActionContract(selectedRow?.actionKey);
@@ -233,6 +243,8 @@ function ArchiveIntegrityDialog({
   const canShowFindings = ["completed", "partial"].includes(scanModel.status) && scanModel.found > 0;
   const primaryStartLabel = scanModel.status === "not_run" ? copy.integrityCheckArchive : copy.integrityCheckAgain;
   const resultTone = resultState === "completed" ? "ok" : resultState === "failed" ? "error" : "warning";
+  const scanDetail = String(copy[scanModel.detailKey] || copy.integrityScanFailedText)
+    .replace("{count}", String(scanModel.found));
 
   return (
     <>
@@ -260,18 +272,20 @@ function ArchiveIntegrityDialog({
             <div className="storageIntegrityStateHead">
               <div>
                 <strong>{copy[scanModel.titleKey] || copy.integrityScanFailedTitle}</strong>
-                <p>{scanModel.stale ? copy.integrityScanStaleText : copy[scanModel.detailKey] || copy.integrityScanFailedText}</p>
+                <p>{scanModel.stale ? copy.integrityScanStaleText : scanDetail}</p>
               </div>
               {checkedTime ? <time dateTime={checkedTime}>{formatDateTime(checkedTime, language)}</time> : null}
             </div>
             {scanModel.running ? (
               <>
-                <div className="storageIntegrityProgress" aria-label={copy.integrityProgress}>
-                  <span style={{ width: `${scanModel.percent}%` }} />
+                <div className={`storageIntegrityProgress ${scanModel.progressIndeterminate ? "isIndeterminate" : ""}`} aria-label={copy.integrityProgress}>
+                  <span style={scanModel.progressIndeterminate ? undefined : { width: `${scanModel.percent}%` }} />
                 </div>
                 <div className="storageIntegrityProgressFacts">
                   <span>{copy.integrityPhase}: {copy[scanModel.phaseKey] || copy.integrityPhaseChecking}</span>
-                  <span>{copy.integrityChecked}: {scanModel.checked}{scanModel.planned ? ` / ${scanModel.planned}` : ""}</span>
+                  {scanModel.progressIndeterminate
+                    ? <span>{copy.integrityFilesystemChecked}: {scanModel.filesystemChecked}</span>
+                    : <span>{copy.integrityChecked}: {scanModel.metadataChecked}{scanModel.planned ? ` / ${scanModel.planned}` : ""}</span>}
                   <span>{copy.problems}: {scanModel.found}</span>
                   {scanModel.failed ? <span>{copy.integrityFailedItems}: {scanModel.failed}</span> : null}
                 </div>
@@ -310,8 +324,9 @@ function ArchiveIntegrityDialog({
                     </dl>
                     <div className="storageIntegrityFindingAction">
                       {item.actionAllowed && !item.stale ? (
-                        <button className={`button secondary small appIllustratedAction storageIntegrityIconAction ${item.destructive ? "isDestructive" : ""}`} type="button" onClick={() => onPrepare(findings[index])} disabled={busy || scanModel.stale} title={copy[item.actionLabelKey]} aria-label={copy[item.actionLabelKey]}>
+                        <button className={`button secondary small appIllustratedAction storageIntegrityIconAction settingsInfoTip ${item.destructive ? "isDestructive" : ""}`} type="button" onClick={() => onPrepare(findings[index])} disabled={busy || scanModel.stale} title={copy[item.actionLabelKey]} aria-label={copy[item.actionLabelKey]}>
                           <img src={INTEGRITY_ACTION_ICONS[item.actionKey] || "/assets/icons/ui/open.png"} alt="" aria-hidden="true" />
+                          <span className="settingsInfoBubble" role="tooltip">{copy[item.actionLabelKey]}</span>
                         </button>
                       ) : (
                         <span>{item.stale ? copy.integrityNoActionStale : copy[item.noActionLabelKey] || copy.integrityNoActionUnavailable}</span>
@@ -2296,14 +2311,16 @@ function StorageOperationsPageContent() {
                 </div>
               </div>
               <div className="storageOpsTopMetrics" aria-label={copy.firstScreenMetrics}>
-                <TopMetric label={copy.recording} value={recording.label} detail={recording.detail} tone={recording.tone} />
-                <TopMetric label={copy.free} value={formatBytes(capacity.free_bytes)} detail={formatPercent(capacity.free_percent)} tone={freeSpaceTone(capacity, policy)} />
-                <TopMetric label={copy.archiveProblems} value={String(normalizedReconciliation.problemCount || 0)} detail={copy.integrity} tone={normalizedReconciliation.problemCount ? "warning" : "ok"} />
-              </div>
-              <div className="storageOpsHealthAction">
-                <button className="button secondary small appIllustratedAction" type="button" onClick={() => openIntegrityDialog()} title={copy.integrityOpenCheck} aria-label={copy.integrityOpenCheck} disabled={!diagnosticsPermission.allowed}>
-                  <img src="/assets/icons/ui/open.png" alt="" aria-hidden="true" />
-                </button>
+                <TopMetric label={copy.archiveAccess} value={recording.label} tone={recording.tone} />
+                <TopMetric label={`${copy.free} ${formatPercent(capacity.free_percent)}`} value={formatBytes(capacity.free_bytes)} tone={freeSpaceTone(capacity, policy)} />
+                <TopMetric
+                  label={copy.archiveProblems}
+                  value={String(normalizedReconciliation.problemCount || 0)}
+                  tone={normalizedReconciliation.problemCount ? "warning" : "ok"}
+                  onValueClick={() => openIntegrityDialog()}
+                  actionLabel={diagnosticsPermission.allowed ? copy.integrityOpenCheck : diagnosticsPermission.reason}
+                  disabled={!diagnosticsPermission.allowed}
+                />
               </div>
             </section>
             {refreshWarning ? <div className="storageOpsState storageOpsState-warning">{refreshWarning}</div> : null}

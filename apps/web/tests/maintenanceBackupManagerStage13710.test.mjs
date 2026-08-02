@@ -55,6 +55,15 @@ assert.equal(
 );
 assert.match(settingsCss, /\.settingsMaintenanceBackupItemHead\s*\{[\s\S]*?display:\s*flex;[\s\S]*?align-items:\s*baseline;/);
 assert.match(settingsCss, /\.settingsMaintenanceBackupDetailRow\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto;[\s\S]*?align-items:\s*center;/);
+assert.match(settingsCss, /\.settingsMaintenanceBackupStatusGrid > div\s*\{[\s\S]*?justify-items:\s*center;[\s\S]*?text-align:\s*center;/);
+assert.equal((settingsPage.match(/<MaintenanceBackupDimensionStatus\s/g) || []).length, 4);
+assert.match(settingsPage, /function MaintenanceBackupDimensionStatus\(\{ tone, label \}\)/);
+assert.match(settingsPage, /tone === "ok"[\s\S]*?<MaintenanceCheckIcon \/>[\s\S]*?storageOpsCheckIcon">×<\/span>/);
+assert.match(settingsCss, /\.settingsMaintenanceBackupStatusPill\.is-symbol\s*\{[\s\S]*?width:\s*26px;[\s\S]*?height:\s*26px;[\s\S]*?border-radius:\s*50%/);
+assert.match(settingsPage, /if \(presentation\.successful\)/);
+assert.match(settingsPage, /title:\s*presentation\.title/);
+assert.match(settingsPage, /maintenanceBackupProgressText/);
+assert.match(settingsPage, /maintenanceBackupRecoveryRef\.current/);
 const pendingCommitBlock = settingsPage.slice(
   settingsPage.indexOf("function commitBackupOperationPending"),
   settingsPage.indexOf("function backupOperationFallback"),
@@ -142,6 +151,9 @@ const t = {
   maintenanceBackupCheckStatuses: {
     valid: "Check passed",
     verified: "Check passed",
+    validated: "Backup is available, intact, and compatible; the trial restore passed.",
+    passed: "Backup is available, intact, and compatible; the trial restore passed.",
+    completed: "Check completed",
     available: "Backup is available to check",
     no_artifacts: "Nothing to check yet",
     blocked: "Check is blocked",
@@ -150,6 +162,7 @@ const t = {
     fallback: "Check status received",
   },
   maintenanceBackupCheckOutcomes: {
+    fully_validated: "Backup is available, intact, and compatible; the trial restore passed.",
     integrity_verified_migration_required: "Integrity is verified. Trial restore was not run because this backup requires a compatible migration.",
     integrity_failed: "Backup integrity could not be verified: the backup is damaged or incomplete.",
     restore_failed: "Backup integrity is verified, but the trial restore failed.",
@@ -159,6 +172,8 @@ const t = {
     create: "Create",
     delete: "Delete",
   },
+  maintenanceBackupCheckPassedTitle: "Check passed",
+  maintenanceBackupCheckPassedText: "Backup is available, intact, and compatible; the trial restore passed.",
   maintenanceBackupCreateStatuses: {
     verified: "Backup was created",
     blocked: "Create blocked",
@@ -333,7 +348,7 @@ const overallNoBackup = maintenanceOverallHealthModel({
   updateOperator: { severity: "ok" },
   database: { tone: "ok" },
   backup: { tone: "warning", rootStatus: "safe", totalCount: 0 },
-  warnings: { groups: { actionable: 0 } },
+  warnings: { available: true, status: "complete", groups: { actionable: 0 } },
   t,
 });
 assert.equal(overallNoBackup.tone, "warning");
@@ -343,7 +358,7 @@ const overallUnknown = maintenanceOverallHealthModel({
   updateOperator: { severity: "ok" },
   database: { tone: "ok" },
   backup: { tone: "ok", rootStatus: "unknown", totalCount: 1 },
-  warnings: { groups: { actionable: 0 } },
+  warnings: { available: true, status: "complete", groups: { actionable: 0 } },
   t,
 });
 assert.equal(overallUnknown.tone, "neutral");
@@ -353,23 +368,32 @@ assert.equal(maintenanceBackupCheckResultText("valid", t), "Check passed");
 assert.equal(maintenanceBackupCheckResultText("available", t), "Backup is available to check");
 assert.equal(maintenanceBackupCheckResultText("no_artifacts", t), "Nothing to check yet");
 assert.equal(maintenanceBackupCheckResultText("check_failed", t), "Check failed");
+assert.equal(maintenanceBackupCheckResultText("validated", t), "Backup is available, intact, and compatible; the trial restore passed.");
+assert.equal(maintenanceBackupCheckResultText("passed", t), "Backup is available, intact, and compatible; the trial restore passed.");
+assert.equal(maintenanceBackupCheckResultText("completed", t), "Check completed");
 assert.notEqual(maintenanceBackupCheckResultText("valid", t), "Unknown");
 assert.deepEqual(maintenanceBackupOperationResultText({ kind: "check", status: "valid" }, t), {
   kind: "check",
   label: "Check",
-  text: "Check passed",
+  title: "Check passed",
+  text: "Backup is available, intact, and compatible; the trial restore passed.",
+  successful: true,
   showReason: false,
 });
 assert.deepEqual(maintenanceBackupOperationResultText({ kind: "create", status: "verified" }, t), {
   kind: "create",
   label: "Create",
+  title: "Create",
   text: "Backup was created",
+  successful: true,
   showReason: false,
 });
 assert.deepEqual(maintenanceBackupOperationResultText({ kind: "delete", status: "deleted_with_missing_files" }, t), {
   kind: "delete",
   label: "Delete",
+  title: "Delete",
   text: "Backup was deleted with missing files",
+  successful: true,
   showReason: false,
 });
 assert.deepEqual(maintenanceBackupOperationResultText({
@@ -379,7 +403,26 @@ assert.deepEqual(maintenanceBackupOperationResultText({
 }, t), {
   kind: "check",
   label: "Check",
-  text: "Check status received",
+  title: "Check passed",
+  text: "Backup is available, intact, and compatible; the trial restore passed.",
+  successful: true,
+  showReason: false,
+});
+assert.deepEqual(maintenanceBackupOperationResultText({
+  kind: "check",
+  state: "completed",
+  result: {
+    status: "validated",
+    integrity_status: "verified",
+    compatibility_status: "compatible",
+    restore_validation_status: "passed",
+  },
+}, t), {
+  kind: "check",
+  label: "Check",
+  title: "Check passed",
+  text: "Backup is available, intact, and compatible; the trial restore passed.",
+  successful: true,
   showReason: false,
 });
 assert.deepEqual(maintenanceBackupOperationResultText({
@@ -396,7 +439,9 @@ assert.deepEqual(maintenanceBackupOperationResultText({
 }, t), {
   kind: "check",
   label: "Check",
+  title: "Check",
   text: "Integrity is verified. Trial restore was not run because this backup requires a compatible migration.",
+  successful: false,
   showReason: false,
 });
 assert.deepEqual(maintenanceBackupOperationResultText({
@@ -411,7 +456,9 @@ assert.deepEqual(maintenanceBackupOperationResultText({
 }, t), {
   kind: "check",
   label: "Check",
+  title: "Check",
   text: "Backup integrity could not be verified: the backup is damaged or incomplete.",
+  successful: false,
   showReason: true,
 });
 assert.deepEqual(maintenanceBackupOperationResultText({
@@ -426,7 +473,9 @@ assert.deepEqual(maintenanceBackupOperationResultText({
 }, t), {
   kind: "check",
   label: "Check",
+  title: "Check",
   text: "Backup integrity is verified, but the trial restore failed.",
+  successful: false,
   showReason: true,
 });
 

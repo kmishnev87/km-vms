@@ -99,6 +99,17 @@ for (const icon of ["open.png", "operation-history.png", "add-storage-location.p
   decodeRgbaPng(`public/assets/icons/ui/${icon}`);
 }
 
+for (const [icon, requiredGeometry] of [
+  ["backup-create.svg", 'circle cx="99" cy="91" r="21"'],
+  ["update-check.svg", 'circle cx="91" cy="91" r="17"'],
+  ["download-report.svg", 'circle cx="91" cy="91" r="23"'],
+]) {
+  const svg = readText(`public/assets/icons/ui/${icon}`);
+  assert.match(svg, /<svg[^>]+viewBox="0 0 128 128"/);
+  assert.ok(svg.includes(requiredGeometry), `${icon} must keep approved geometry`);
+  assert.match(svg, /<feDropShadow/);
+}
+
 const storagePage = readText("app/storage/page.js");
 const settingsPage = readText("app/settings/page.js");
 const center = readText("components/storage/ArchiveManagementCenter.js");
@@ -113,7 +124,8 @@ assert.doesNotMatch(center, /aria-hidden="true">\{historyCount\}/);
 assert.match(storagePage, /href="\/cameras"[\s\S]*\/assets\/icons\/ui\/camera\.png/);
 assert.match(storagePage, /archiveManagementAddLocation[\s\S]*add-storage-location\.png/);
 assert.match(storagePage, /storageOpsRootAddButton[\s\S]*add-storage-location\.png/);
-assert.match(storagePage, /openIntegrityDialog\(\)[\s\S]*\/assets\/icons\/ui\/open\.png/);
+assert.match(storagePage, /className="storageOpsTopMetricValueButton"[\s\S]*onValueClick=\{\(\) => openIntegrityDialog\(\)\}/);
+assert.doesNotMatch(storagePage.slice(storagePage.indexOf("<section className={`storageOpsOverview"), storagePage.indexOf("{refreshWarning ?")), /storageOpsHealthAction|\/assets\/icons\/ui\/open\.png/);
 assert.match(storagePage, /onClick=\{openMigrationDialog\}[\s\S]*\/assets\/icons\/ui\/open\.png/);
 assert.match(storagePage, /appIllustratedActionGlyph[\s\S]*↻/);
 assert.equal(storagePage.includes("/assets/icons/ui/refresh.png"), false, "refresh must reuse the existing glyph pattern");
@@ -134,6 +146,8 @@ assert.match(storageCss, /\.button\.appIllustratedAction,[\s\S]*width:\s*40px;[\
 assert.match(storageCss, /\.appIllustratedAction > img[\s\S]*width:\s*32px;[\s\S]*height:\s*32px;/);
 assert.match(storageCss, /\.archiveManagementRowTitle[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\) auto;/);
 assert.match(storageCss, /\.archiveManagementRow \.storageOpsStatusPill[\s\S]*justify-self:\s*end;/);
+assert.match(storageCss, /--storage-root-action-inset:\s*calc\(var\(--storage-shared-action-edge, 16px\) - var\(--storage-root-horizontal-margin, 14px\)\)/);
+assert.match(storageCss, /--storage-root-horizontal-margin:\s*14px;[\s\S]*--storage-shared-action-edge:\s*16px;/);
 assert.match(storageCss, /@media \(max-width: 520px\)[\s\S]*\.archiveManagementRowTitle[\s\S]*grid-template-columns:\s*minmax\(0, 1fr\);/);
 assert.match(responsiveCss, /\.storageOpsRootAddButton\.appIllustratedAction[\s\S]*justify-self:\s*end;/);
 
@@ -141,10 +155,18 @@ const supportStart = settingsPage.indexOf('<div className="settingsMaintenanceSu
 const supportEnd = settingsPage.indexOf("</div>", supportStart);
 const supportActions = settingsPage.slice(supportStart, supportEnd);
 assert.equal((supportActions.match(/settingsMaintenanceSupportActionButton/g) || []).length, 1);
-assert.match(supportActions, /\{t\.maintenanceReportDownload\}/);
+assert.match(supportActions, /download-report\.svg/);
 assert.match(supportActions, /setDiagnosticChoiceOpen\(true\)/);
-assert.match(settingsCss, /\.settingsMaintenanceSupportActions \.button[\s\S]*height:\s*38px;[\s\S]*white-space:\s*nowrap;/);
-assert.match(settingsCss, /\.settingsMaintenanceSupportActions\s*\{[\s\S]*grid-template-columns:\s*minmax\(128px, 1fr\);[\s\S]*width:\s*164px;[\s\S]*min-width:\s*164px;/);
-assert.match(settingsCss, /@media \(max-width: 760px\)[\s\S]*\.settingsMaintenanceSupportActions\s*\{[\s\S]*grid-template-columns:\s*1fr;[\s\S]*width:\s*100%;/);
+assert.match(settingsCss, /\.settingsMaintenanceSupportActions\s*\{[\s\S]*grid-template-columns:\s*40px;[\s\S]*width:\s*40px;[\s\S]*min-width:\s*40px;/);
+assert.match(settingsCss, /\.settingsMaintenanceSupportActions \.settingsMaintenanceSupportActionButton\s*\{[\s\S]*width:\s*40px;[\s\S]*height:\s*40px;/);
+
+const maintenanceOverview = settingsPage.slice(
+  settingsPage.indexOf('<section className="settingsUpdateApplyPanel">'),
+  settingsPage.indexOf('<section className="settingsMaintenanceBackupDetail">'),
+);
+assert.equal((maintenanceOverview.match(/update-check\.svg/g) || []).length, 1);
+assert.equal((maintenanceOverview.match(/download-report\.svg/g) || []).length, 1);
+assert.equal((settingsPage.match(/backup-create\.svg/g) || []).length, 2);
+assert.match(maintenanceOverview, /maintenanceBackupOpenList[\s\S]*\/assets\/icons\/ui\/open\.png/);
 
 console.log("Approved archive action icons and compact UI composition: PASS");

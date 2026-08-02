@@ -107,6 +107,17 @@ REMEDIATION_ACTION_MUTATIONS = {
     "delete_unusable_recording": "delete_trusted_unusable_recording",
     "delete_proven_orphan": "delete_proven_orphan_file",
 }
+RESTORE_INVALIDATED_REASON = "archive_integrity_restore_invalidated"
+RESTORE_INTEGRITY_OPERATION_TYPES = frozenset(
+    {
+        SCAN_OPERATION_TYPE,
+        "integrity_plan_prepare",
+        *REMEDIATION_ACTION_OPERATION_TYPES.values(),
+    }
+)
+RESTORE_INVALIDATION_ITEM_TERMINAL_STATES = frozenset(
+    {"completed", "partial", "blocked", "failed", "cancelled"}
+)
 
 
 CATEGORY_CONTRACT: dict[str, dict[str, Any]] = {
@@ -304,6 +315,174 @@ def _active_scan(db: Session) -> ArchiveIntegrityScan | None:
         .order_by(ArchiveIntegrityScan.created_at.asc())
         .first()
     )
+
+
+def invalidate_integrity_truth_after_restore(
+    db: Session,
+    *,
+    restore_operation_id: str,
+    final_db_outcome: str,
+) -> dict[str, Any]:
+    """Make integrity truth restored with a DB snapshot non-executable.
+
+    This deliberately performs DB-only convergence. Archive roots are not read
+    here because the restore executor does not own their runtime mounts.
+    """
+
+    operation_id = str(restore_operation_id or "").strip().lower()
+    outcome = str(final_db_outcome or "").strip().lower()
+    if not operation_id.startswith("restore-") or len(operation_id) != 40:
+        raise StorageOperationContractError("archive_integrity_restore_identity_invalid")
+    if outcome not in {"source", "rollback"}:
+        raise StorageOperationContractError("archive_integrity_restore_outcome_invalid")
+
+    now = database_now(db)
+    scans = db.query(ArchiveIntegrityScan).all()
+    active_scan_ids: set[str] = set()
+    for scan in scans:
+        was_active = bool(scan.active_slot) or str(scan.status) in ACTIVE_SCAN_STATUSES
+        if was_active:
+            active_scan_ids.add(str(scan.id))
+            scan.status = "failed"
+            scan.phase = "failed"
+            scan.finished_at = now
+        scan.is_stale = True
+        scan.active_slot = None
+        scan.cancel_requested = False
+        scan.reason_code = RESTORE_INVALIDATED_REASON
+        scan.retry_mode = "new_scan"
+        scan.next_action = "retry_integrity_scan"
+        scan.heartbeat_at = now
+        scan.updated_at = now
+        db.add(scan)
+
+    findings = (
+        db.query(ArchiveIntegrityFinding)
+        .filter(ArchiveIntegrityFinding.is_active.is_(True))
+        .all()
+    )
+    for finding in findings:
+        finding.is_active = False
+        finding.state = "superseded"
+        finding.resolved_at = now
+        finding.retry_mode = "new_scan"
+        finding.next_action = "retry_integrity_scan"
+        finding.updated_at = now
+        db.add(finding)
+
+    directory_work = (
+        db.query(ArchiveIntegrityDirectoryWork)
+        .filter(
+            ArchiveIntegrityDirectoryWork.status.in_(
+                ("queued", "claimed", "interrupted")
+            )
+        )
+        .all()
+    )
+    for work in directory_work:
+        work.status = "failed"
+        work.reason_code = RESTORE_INVALIDATED_REASON
+        work.owner_instance_id = None
+        work.lease_expires_at = None
+        work.heartbeat_at = now
+        work.completed_at = now
+        work.updated_at = now
+        db.add(work)
+
+    plans = (
+        db.query(ArchiveIntegrityRemediationPlan)
+        .filter(
+            ArchiveIntegrityRemediationPlan.state.notin_(
+                tuple(TERMINAL_REMEDIATION_PLAN_STATES)
+            )
+        )
+        .all()
+    )
+    plan_ids = {str(plan.id) for plan in plans}
+    for plan in plans:
+        plan.state = "blocked"
+        plan.reason_code = RESTORE_INVALIDATED_REASON
+        plan.retry_mode = "new_scan"
+        plan.next_action = "create_new_integrity_scan"
+        plan.result_summary = {
+            "status": "blocked",
+            "reason_code": RESTORE_INVALIDATED_REASON,
+        }
+        plan.finished_at = now
+        plan.updated_at = now
+        db.add(plan)
+
+    items: list[ArchiveIntegrityRemediationItem] = []
+    if plan_ids:
+        items = (
+            db.query(ArchiveIntegrityRemediationItem)
+            .filter(
+                ArchiveIntegrityRemediationItem.plan_id.in_(tuple(plan_ids)),
+                ArchiveIntegrityRemediationItem.state.notin_(
+                    tuple(RESTORE_INVALIDATION_ITEM_TERMINAL_STATES)
+                ),
+            )
+            .all()
+        )
+        for item in items:
+            item.state = "blocked"
+            item.result_code = RESTORE_INVALIDATED_REASON
+            item.updated_at = now
+            db.add(item)
+
+    operations = (
+        db.query(StorageOperation)
+        .filter(
+            StorageOperation.operation_type.in_(
+                tuple(RESTORE_INTEGRITY_OPERATION_TYPES)
+            ),
+            StorageOperation.status.notin_(tuple(TERMINAL_OPERATION_STATUSES)),
+        )
+        .all()
+    )
+    for operation in operations:
+        operation.status = "failed"
+        operation.progress = {
+            **dict(operation.progress or {}),
+            "phase": "restore_invalidated",
+        }
+        operation.result = {
+            "status": "failed",
+            "reason_code": RESTORE_INVALIDATED_REASON,
+            "final_db_outcome": outcome,
+        }
+        operation.reason_code = RESTORE_INVALIDATED_REASON
+        operation.next_action = "create_new_integrity_scan"
+        operation.retry_mode = "new_scan"
+        operation.cancel_allowed = False
+        operation.retry_allowed = False
+        operation.owner_token_hash = None
+        operation.owner_instance_id = None
+        operation.lease_expires_at = None
+        operation.fencing_token = int(operation.fencing_token or 0) + 1
+        operation.revision = int(operation.revision or 0) + 1
+        operation.heartbeat_at = now
+        operation.finished_at = now
+        operation.updated_at = now
+        db.add(operation)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {
+        "status": "invalidated",
+        "final_db_outcome": outcome,
+        "scan_count": len(scans),
+        "active_scan_count": len(active_scan_ids),
+        "finding_count": len(findings),
+        "directory_work_count": len(directory_work),
+        "plan_count": len(plans),
+        "item_count": len(items),
+        "operation_count": len(operations),
+        "archive_roots_read": False,
+    }
 
 
 def start_integrity_scan(db: Session, *, actor: Any, idempotency_key: str | None = None) -> dict[str, Any]:
@@ -1255,6 +1434,9 @@ def _classify_filesystem_entry(
 
     if _file_within_recent_write_window(entry_stat):
         return
+    age = timedelta(
+        seconds=max(0.0, time.time() - float(entry_stat.st_mtime))
+    )
 
     receipt = (
         db.query(RecorderFileReceipt)
@@ -1550,12 +1732,21 @@ def _process_directory_unit(
     )
 
 
+def _phase_progress_counts(scan: ArchiveIntegrityScan) -> tuple[int, int, int]:
+    planned = max(0, int(scan.planned_count or 0))
+    checked = max(0, int(scan.checked_count or 0))
+    return planned, min(checked, planned), max(checked - planned, 0)
+
+
 def _operation_progress(scan: ArchiveIntegrityScan) -> dict[str, Any]:
+    planned, metadata_checked, filesystem_checked = _phase_progress_counts(scan)
     return {
         "scan_id": scan.id,
         "phase": scan.phase,
-        "planned_count": int(scan.planned_count or 0),
+        "planned_count": planned,
         "checked_count": int(scan.checked_count or 0),
+        "metadata_checked_count": metadata_checked,
+        "filesystem_checked_count": filesystem_checked,
         "found_count": int(scan.found_count or 0),
         "failed_count": int(scan.failed_count or 0),
         "checked_bytes": int(scan.checked_bytes or 0),
@@ -1996,22 +2187,26 @@ def public_scan(
     replayed: bool = False,
     coalesced: bool = False,
 ) -> dict[str, Any]:
+    planned, metadata_checked, filesystem_checked = _phase_progress_counts(scan)
+    stale = bool(scan.is_stale)
     return {
         "scan_id": scan.id,
         "operation_id": scan.operation_id,
         "status": scan.status,
         "phase": scan.phase,
-        "stale": bool(scan.is_stale),
+        "stale": stale,
         "progress": {
-            "planned_count": int(scan.planned_count or 0),
+            "planned_count": planned,
             "checked_count": int(scan.checked_count or 0),
-            "found_count": int(scan.found_count or 0),
+            "metadata_checked_count": metadata_checked,
+            "filesystem_checked_count": filesystem_checked,
+            "found_count": 0 if stale else int(scan.found_count or 0),
             "failed_count": int(scan.failed_count or 0),
             "checked_bytes": int(scan.checked_bytes or 0),
         },
-        "category_counts": dict(scan.category_summary or {}),
-        "impact_counts": dict(scan.impact_summary or {}),
-        "root_counts": dict(scan.root_summary or {}),
+        "category_counts": {} if stale else dict(scan.category_summary or {}),
+        "impact_counts": {} if stale else dict(scan.impact_summary or {}),
+        "root_counts": {} if stale else dict(scan.root_summary or {}),
         "reason_code": scan.reason_code,
         "next_action": scan.next_action,
         "retry_mode": scan.retry_mode,
@@ -2036,7 +2231,15 @@ def latest_integrity_scan(db: Session) -> dict[str, Any]:
             "scan_id": None,
             "operation_id": None,
             "stale": False,
-            "progress": {"planned_count": 0, "checked_count": 0, "found_count": 0, "failed_count": 0, "checked_bytes": 0},
+            "progress": {
+                "planned_count": 0,
+                "checked_count": 0,
+                "metadata_checked_count": 0,
+                "filesystem_checked_count": 0,
+                "found_count": 0,
+                "failed_count": 0,
+                "checked_bytes": 0,
+            },
             "category_counts": {},
             "impact_counts": {},
             "root_counts": {},
@@ -2112,6 +2315,15 @@ def list_integrity_findings(
     if scan is None:
         raise StorageOperationContractError("archive_integrity_scan_not_found")
     bounded_limit = max(1, min(int(limit or FINDING_PAGE_DEFAULT), FINDING_PAGE_MAX))
+    if scan.is_stale:
+        return {
+            "scan_id": scan.id,
+            "status": scan.status,
+            "items": [],
+            "next_cursor": None,
+            "has_more": False,
+            "limit": bounded_limit,
+        }
     query = db.query(ArchiveIntegrityFinding).filter(
         ArchiveIntegrityFinding.scan_id == scan.id,
         ArchiveIntegrityFinding.is_active.is_(True),
@@ -2152,13 +2364,14 @@ def latest_integrity_summary_for_status(db: Session) -> dict[str, Any]:
             "active": False,
             "scan_id": None,
         }
-    active = scan.status in ACTIVE_SCAN_STATUSES
+    stale = bool(scan.is_stale)
+    active = scan.status in ACTIVE_SCAN_STATUSES and not stale
     return {
-        "evidence_status": "running" if active else "stale" if scan.is_stale else scan.status,
+        "evidence_status": "stale" if stale else "running" if active else scan.status,
         "status": scan.status,
-        "problem_count": int(scan.found_count or 0),
-        "problem_file_count": int(scan.found_count or 0),
-        "category_counts": dict(scan.category_summary or {}),
+        "problem_count": 0 if stale else int(scan.found_count or 0),
+        "problem_file_count": 0 if stale else int(scan.found_count or 0),
+        "category_counts": {} if stale else dict(scan.category_summary or {}),
         "last_checked_at": scan.finished_at.isoformat() if scan.finished_at else scan.heartbeat_at.isoformat() if scan.heartbeat_at else None,
         "active": active,
         "scan_id": scan.id,

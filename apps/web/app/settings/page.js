@@ -248,6 +248,8 @@ const TEXT = {
     maintenanceLastUpdate: "Последнее обновление",
     maintenanceBackupCreateShort: "Создать",
     maintenanceBackupCheck: "Проверить",
+    maintenanceBackupCheckPassedTitle: "Проверка пройдена",
+    maintenanceBackupCheckPassedText: "Копия доступна, цела и совместима; пробное восстановление пройдено.",
     maintenanceBackupDelete: "Удалить",
     maintenanceBackupDeleting: "Удаление...",
     maintenanceBackupDeleted: "Резервная копия удалена.",
@@ -351,8 +353,8 @@ const TEXT = {
     maintenanceBackupList: "Последние копии",
     maintenanceBackupNothingToCheck: "Проверять пока нечего",
     maintenanceBackupCheckConfirm: "Проверить копию от {date} реальным восстановлением во временную базу? Рабочая база и видеоархив не изменятся.",
-    maintenanceBackupChecking: "Проверка во временной базе...",
-    maintenanceBackupRecovering: "Восстанавливается статус незавершённой операции...",
+    maintenanceBackupChecking: "Проверяем резервную копию во временной базе…",
+    maintenanceBackupRecovering: "Уточняем состояние ранее начатой проверки…",
     maintenanceBackupTotalSize: "Общий размер",
     maintenanceBackupPage: "{start}–{end} из {total}",
     maintenanceBackupPrevious: "Назад",
@@ -412,6 +414,9 @@ const TEXT = {
     maintenanceBackupCheckStatuses: {
       valid: "Проверка пройдена",
       verified: "Проверка пройдена",
+      validated: "Копия доступна, цела и совместима; пробное восстановление пройдено.",
+      passed: "Копия доступна, цела и совместима; пробное восстановление пройдено.",
+      completed: "Проверка завершена",
       available: "Копия доступна для проверки",
       no_artifacts: "Проверять пока нечего",
       blocked: "Проверка заблокирована",
@@ -420,6 +425,7 @@ const TEXT = {
       fallback: "Статус проверки получен",
     },
     maintenanceBackupCheckOutcomes: {
+      fully_validated: "Копия доступна, цела и совместима; пробное восстановление пройдено.",
       integrity_verified_migration_required: "Целостность подтверждена. Пробное восстановление не выполнялось: для этой копии требуется совместимая миграция.",
       integrity_failed: "Целостность копии не подтверждена: копия повреждена или неполная.",
       restore_failed: "Целостность копии подтверждена, но пробное восстановление не прошло.",
@@ -930,6 +936,8 @@ const TEXT = {
     maintenanceLastUpdate: "Last update",
     maintenanceBackupCreateShort: "Create",
     maintenanceBackupCheck: "Check",
+    maintenanceBackupCheckPassedTitle: "Check passed",
+    maintenanceBackupCheckPassedText: "The backup is available, intact, and compatible; the trial restore passed.",
     maintenanceBackupDelete: "Delete",
     maintenanceBackupDeleting: "Deleting...",
     maintenanceBackupDeleted: "Backup was deleted.",
@@ -1033,8 +1041,8 @@ const TEXT = {
     maintenanceBackupList: "Recent backups",
     maintenanceBackupNothingToCheck: "Nothing to check yet",
     maintenanceBackupCheckConfirm: "Check the backup from {date} by restoring it into a temporary database? The working database and video archive will not change.",
-    maintenanceBackupChecking: "Checking in a temporary database...",
-    maintenanceBackupRecovering: "Recovering the unfinished operation status...",
+    maintenanceBackupChecking: "Checking the backup in a temporary database…",
+    maintenanceBackupRecovering: "Checking the state of a previously started check…",
     maintenanceBackupTotalSize: "Total size",
     maintenanceBackupPage: "{start}–{end} of {total}",
     maintenanceBackupPrevious: "Previous",
@@ -1094,6 +1102,9 @@ const TEXT = {
     maintenanceBackupCheckStatuses: {
       valid: "Check passed",
       verified: "Check passed",
+      validated: "The backup is available, intact, and compatible; the trial restore passed.",
+      passed: "The backup is available, intact, and compatible; the trial restore passed.",
+      completed: "Check completed",
       available: "Backup is available to check",
       no_artifacts: "Nothing to check yet",
       blocked: "Check is blocked",
@@ -1102,6 +1113,7 @@ const TEXT = {
       fallback: "Check status received",
     },
     maintenanceBackupCheckOutcomes: {
+      fully_validated: "The backup is available, intact, and compatible; the trial restore passed.",
       integrity_verified_migration_required: "Integrity is verified. Trial restore was not run because this backup requires a compatible migration.",
       integrity_failed: "Backup integrity could not be verified: the backup is damaged or incomplete.",
       restore_failed: "Backup integrity is verified, but the trial restore failed.",
@@ -1585,6 +1597,8 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceLastUpdate: "最近更新",
   maintenanceBackupCreateShort: "创建",
   maintenanceBackupCheck: "检查",
+  maintenanceBackupCheckPassedTitle: "检查已通过",
+  maintenanceBackupCheckPassedText: "备份可用、完整且兼容；试恢复已通过。",
   maintenanceBackupDelete: "删除",
   maintenanceBackupDeleting: "正在删除...",
   maintenanceBackupDeleted: "备份已删除。",
@@ -1688,8 +1702,8 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceBackupList: "最近备份",
   maintenanceBackupNothingToCheck: "暂无可检查的备份",
   maintenanceBackupCheckConfirm: "通过恢复到临时数据库来检查 {date} 的备份？工作数据库和视频归档不会更改。",
-  maintenanceBackupChecking: "正在临时数据库中检查...",
-  maintenanceBackupRecovering: "正在恢复未完成操作的状态...",
+  maintenanceBackupChecking: "正在临时数据库中检查备份…",
+  maintenanceBackupRecovering: "正在确认之前启动的检查状态…",
   maintenanceBackupTotalSize: "总大小",
   maintenanceBackupPage: "第 {start}–{end} 项，共 {total} 项",
   maintenanceBackupPrevious: "上一页",
@@ -1749,6 +1763,9 @@ const ZH_TEXT_OVERRIDES = {
   maintenanceBackupCheckStatuses: {
     valid: "检查通过",
     verified: "检查通过",
+    validated: "备份可用、完整且兼容；试恢复已通过。",
+    passed: "备份可用、完整且兼容；试恢复已通过。",
+    completed: "检查已完成",
     available: "备份可检查",
     no_artifacts: "暂无可检查的备份",
     blocked: "检查被阻止",
@@ -1757,6 +1774,7 @@ const ZH_TEXT_OVERRIDES = {
     fallback: "已收到检查状态",
   },
   maintenanceBackupCheckOutcomes: {
+    fully_validated: "备份可用、完整且兼容；试恢复已通过。",
     integrity_verified_migration_required: "完整性已确认。未执行试恢复：此备份需要兼容迁移。",
     integrity_failed: "无法确认备份完整性：备份已损坏或不完整。",
     restore_failed: "备份完整性已确认，但试恢复失败。",
@@ -2145,6 +2163,24 @@ function MaintenanceCheckIcon() {
   return <span aria-hidden="true" className="storageOpsCheckIcon">✓</span>;
 }
 
+function MaintenanceBackupDimensionStatus({ tone, label }) {
+  if (!["ok", "problem"].includes(tone)) {
+    return <strong className={`settingsMaintenanceBackupStatusPill is-${tone}`}>{label}</strong>;
+  }
+  return (
+    <strong
+      className={`settingsMaintenanceBackupStatusPill is-${tone} is-symbol`}
+      role="img"
+      aria-label={label}
+      title={label}
+    >
+      {tone === "ok"
+        ? <MaintenanceCheckIcon />
+        : <span aria-hidden="true" className="storageOpsCheckIcon">×</span>}
+    </strong>
+  );
+}
+
 function MaintenanceTrashIcon() {
   return (
     <svg className="recordingsUiIcon recordingsTrashIcon recordingsRowSvgIcon storageOpsTrashIcon" viewBox="0 1 24 24" aria-hidden="true" focusable="false">
@@ -2219,6 +2255,7 @@ export default function SettingsPage() {
   const updatePollInFlightRef = useRef(false);
   const updateApplyPendingRef = useRef(null);
   const maintenanceBackupPendingRef = useRef(null);
+  const maintenanceBackupRecoveryRef = useRef(false);
   const maintenanceBackupAdmissionRef = useRef(null);
   const maintenanceBackupPollInFlightRef = useRef(false);
   const maintenanceBackupDetailRef = useRef(null);
@@ -2302,6 +2339,16 @@ export default function SettingsPage() {
   const maintenanceBackupResultModel = useMemo(() => (
     maintenanceBackupResult ? maintenanceBackupOperationResultText(maintenanceBackupResult, t) : null
   ), [maintenanceBackupResult, t]);
+  const maintenanceBackupProgressKind = String(
+    maintenanceBackupPending?.kind || maintenanceBackupResult?.kind || "check",
+  );
+  const maintenanceBackupProgressText = maintenanceBackupResult?.recovering
+    ? t.maintenanceBackupRecovering
+    : maintenanceBackupProgressKind === "create"
+      ? t.maintenanceBackupCreating
+      : maintenanceBackupProgressKind === "delete"
+        ? t.maintenanceBackupDeleting
+        : t.maintenanceBackupChecking;
   const updateApplyLaunchNotice = updateApplyPending ? t.updateApplyLaunchUnknown : "";
 
   maintenanceBusyRef.current = maintenanceBusy;
@@ -2329,8 +2376,15 @@ export default function SettingsPage() {
       const raw = window.sessionStorage.getItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
       const restored = restoreBackupOperationPending(raw, Date.now());
       if (restored) {
+        maintenanceBackupRecoveryRef.current = true;
         maintenanceBackupPendingRef.current = restored;
         setMaintenanceBackupPending(restored);
+        setMaintenanceBackupResult({
+          kind: restored.kind,
+          status: "running",
+          state: "running",
+          recovering: true,
+        });
       } else if (raw !== null) {
         window.sessionStorage.removeItem(BACKUP_OPERATION_PENDING_STORAGE_KEY);
       }
@@ -3213,26 +3267,28 @@ export default function SettingsPage() {
       phase: receipt?.phase || "",
       reason: receipt?.reason_code || "",
       result: receipt?.result || null,
-      recovered,
+      recovering: recovered,
     };
     const presentation = maintenanceBackupOperationResultText(presentationResult, t);
     setMaintenanceBackupResult(presentationResult);
     if (!terminal) {
+      maintenanceBackupRecoveryRef.current = recovered;
       setMaintenanceBusy(`backup-${kind}`);
       return false;
     }
+    maintenanceBackupRecoveryRef.current = false;
     commitBackupOperationPending(null);
     setMaintenanceBusy((current) => current.startsWith("backup-") ? "" : current);
-    if (state === "completed") {
+    if (presentation.successful) {
       showToast({
         variant: "success",
-        title: t.maintenanceBackupOperationLabels?.[kind] || t.maintenanceBackupsTitle,
+        title: presentation.title || t.maintenanceBackupOperationLabels?.[kind] || t.maintenanceBackupsTitle,
         text: presentation.text || backupOperationSuccess(kind),
       });
     } else {
       showToast({
         variant: "warning",
-        title: t.maintenanceBackupOperationLabels?.[kind] || t.maintenanceBackupsTitle,
+        title: presentation.title || t.maintenanceBackupOperationLabels?.[kind] || t.maintenanceBackupsTitle,
         text: presentation.text || backupOperationFallback(kind),
       });
     }
@@ -3261,7 +3317,9 @@ export default function SettingsPage() {
       const receipt = await apiFetch(
         `/system/backup/operations/${encodeURIComponent(pending.submissionId)}`,
       );
-      await acceptBackupOperationReceipt(receipt, pending, { recovered: true });
+      await acceptBackupOperationReceipt(receipt, pending, {
+        recovered: maintenanceBackupRecoveryRef.current,
+      });
     } catch (err) {
       if (Number(err?.status || 0) === 404) {
         if (backupOperationWithinAdmissionGrace(pending, Date.now())) {
@@ -3271,7 +3329,7 @@ export default function SettingsPage() {
             status: "running",
             state: "running",
             reason: "",
-            recovering: true,
+            recovering: maintenanceBackupRecoveryRef.current,
           });
           return;
         }
@@ -3289,6 +3347,7 @@ export default function SettingsPage() {
           text: backupOperationFallback(pending.kind),
         });
       } else {
+        maintenanceBackupRecoveryRef.current = true;
         setMaintenanceBusy(`backup-${pending.kind}`);
         setMaintenanceBackupResult({
           kind: pending.kind,
@@ -3616,6 +3675,7 @@ export default function SettingsPage() {
       });
       return;
     }
+    maintenanceBackupRecoveryRef.current = false;
     setMaintenanceBusy(`backup-${kind}`);
     setMaintenanceConfirm(null);
     setMaintenanceActionResult(null);
@@ -3671,6 +3731,7 @@ export default function SettingsPage() {
         state: "running",
         recovering: true,
       });
+      maintenanceBackupRecoveryRef.current = true;
       await reconcilePendingBackupOperation();
     } finally {
       if (
@@ -3698,11 +3759,20 @@ export default function SettingsPage() {
       setUpdateStatus(result);
       setUpdateTransportErrors((current) => ({ ...current, update: null }));
       await loadUpdateApplySurface({ silent: true });
-      const checkFailed = String(result?.status || "").toLowerCase() === "check_failed";
+      const checkStatus = String(result?.status || "").toLowerCase();
+      const checkFailed = ["check_failed", "blocked", "not_configured", "failed"].includes(checkStatus);
+      const checkResultKey = checkStatus === "current"
+        ? "current"
+        : ["update_available", "available"].includes(checkStatus)
+          ? "available"
+          : checkFailed
+            ? "blocked"
+            : "unknown";
+      const checkStatusText = maintenanceStatusText(result?.status, t);
       showToast({
         variant: checkFailed ? "warning" : "success",
-        title: t.updateApplyCheck,
-        text: maintenanceStatusText(result?.status, t),
+        title: t.updateApplyHeadlines?.[checkResultKey] || checkStatusText,
+        text: t.updateApplySummaries?.[checkResultKey] || checkStatusText,
       });
     } catch (err) {
       const transportError = safeUpdateTransportError(err, t.updateApplyUnavailable);
@@ -3951,7 +4021,12 @@ export default function SettingsPage() {
             </div>
 
             <div className="settingsHeaderActions">
-              {dirty ? <span className="settingsDirtyNote">{t.dirty}</span> : null}
+              <span
+                className={`settingsDirtyNote${dirty ? " is-visible" : ""}`}
+                aria-hidden={dirty ? undefined : "true"}
+              >
+                {t.dirty}
+              </span>
               <button className="button secondary small settingsCancelButton" onClick={cancelChanges} disabled={!dirty || anyBusy}>
                 {t.cancel}
               </button>
@@ -3964,7 +4039,7 @@ export default function SettingsPage() {
           {!draft ? null : (
             <div className="settingsReferenceLayout">
               <section className="settingsPanel">
-                <div className="settingsRow">
+                <div className="settingsRow settingsRowCompactSelect">
                   <div className="settingsRowIcon"><img src={languageIcon} alt="" /></div>
                   <div className="settingsRowText">
                     <label htmlFor="settings-language">{t.language}</label>
@@ -3975,7 +4050,7 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="settingsRow">
+                <div className="settingsRow settingsRowCompactSelect">
                   <div className="settingsRowIcon"><img src="/assets/icons/ui/timezone.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label htmlFor="settings-timezone">{t.timezone}<InfoTip text={t.tooltips.timezone} /></label>
@@ -3991,7 +4066,7 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="settingsRow">
+                <div className="settingsRow settingsRowCompactSelect">
                   <div className="settingsRowIcon"><img src="/assets/icons/ui/recordings.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label htmlFor="settings-recording">{t.recording}<InfoTip text={t.tooltips.recording} /></label>
@@ -4005,7 +4080,7 @@ export default function SettingsPage() {
                   </div>
                 </div>
 
-                <div className="settingsRow settingsRowHardware">
+                <div className="settingsRow settingsRowHardware settingsRowCompactSelect">
                   <div className="settingsRowIcon"><img src="/assets/icons/ui/hardware.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label htmlFor="settings-hardware">{t.hardware}<InfoTip text={t.tooltips.hardware} /></label>
@@ -4369,7 +4444,7 @@ export default function SettingsPage() {
                   </section>
 
                   <section className="settingsUpdateApplyPanel">
-                    <div className="settingsMaintenanceCardHeading">
+                    <div className="settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned">
                       <h3>{t.updateApplyTitle}</h3>
                       <span className={`settingsMaintenancePill is-${updateApplyOperator.severity}`}>
                         {updateApplyOperator.headline}
@@ -4390,8 +4465,16 @@ export default function SettingsPage() {
                         <p>{updateApplyOperator.releaseTitle}</p>
                       </div>
                       <div className="settingsUpdateApplyActions">
-                        <button type="button" className="button secondary small" onClick={runUpdateCheck} disabled={Boolean(maintenanceBusy)}>
-                          {maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
+                        <button
+                          type="button"
+                          className="button secondary small appIllustratedAction settingsMaintenanceActionIcon"
+                          onClick={runUpdateCheck}
+                          disabled={Boolean(maintenanceBusy)}
+                          title={maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
+                          aria-label={maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
+                          aria-busy={maintenanceBusy === "update" ? "true" : undefined}
+                        >
+                          <img src="/assets/icons/ui/update-check.svg" alt="" aria-hidden="true" />
                         </button>
                         {updateApplyOperator.showApplyButton ? (
                           <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
@@ -4500,7 +4583,7 @@ export default function SettingsPage() {
 
                   <section className={`settingsMaintenanceBackupManager settingsMaintenanceCoreCard is-${maintenanceBackupOverview.tone}`}>
                     <div className="settingsMaintenanceBackupHead">
-                      <div className="settingsMaintenanceCardHeading">
+                      <div className="settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned">
                         <h3>{t.maintenanceBackupsTitle}</h3>
                         <span className={`settingsMaintenancePill is-${maintenanceBackupOverview.tone}`}>
                           {maintenanceBackupOverview.statusText}
@@ -4510,40 +4593,47 @@ export default function SettingsPage() {
                     <p className="settingsMaintenanceBackupTotals">
                       {maintenanceBackupOverview.countText} · {maintenanceBackupOverview.totalBytesText}
                     </p>
-                    <div className="settingsMaintenanceBackupLatest">
-                      <span>{t.maintenanceBackupLatest}: {maintenanceBackupOverview.latestCreatedAt}</span>
-                      {maintenanceBackupOverview.latestArtifact ? (
-                        <span>
-                          {maintenanceBackupOverview.latestArtifact.availabilityLabel}
-                          {" · "}
-                          {maintenanceBackupOverview.latestArtifact.integrityLabel}
-                          {" · "}
-                          {maintenanceBackupOverview.latestArtifact.compatibilityLabel}
-                        </span>
-                      ) : (
-                        <span>{t.maintenanceBackupNoCopies}</span>
-                      )}
-                    </div>
-                    <div className="settingsMaintenanceBackupActions">
-                      <button
-                        type="button"
-                        className="button secondary small"
-                        onClick={createMaintenanceBackup}
-                        disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending)}
-                      >
-                        {maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreateShort}
-                      </button>
-                      <button
-                        type="button"
-                        className="button secondary small"
-                        onClick={openMaintenanceBackupDetail}
-                        disabled={Boolean(maintenanceBusy)}
-                      >
-                        {t.maintenanceBackupOpenList}
-                      </button>
+                    <div className="settingsMaintenanceBackupLatestRow">
+                      <div className="settingsMaintenanceBackupLatest">
+                        <span>{t.maintenanceBackupLatest}: {maintenanceBackupOverview.latestCreatedAt}</span>
+                        {maintenanceBackupOverview.latestArtifact ? (
+                          <span>
+                            {maintenanceBackupOverview.latestArtifact.availabilityLabel}
+                            {" · "}
+                            {maintenanceBackupOverview.latestArtifact.integrityLabel}
+                            {" · "}
+                            {maintenanceBackupOverview.latestArtifact.compatibilityLabel}
+                          </span>
+                        ) : (
+                          <span>{t.maintenanceBackupNoCopies}</span>
+                        )}
+                      </div>
+                      <div className="settingsMaintenanceBackupActions">
+                        <button
+                          type="button"
+                          className="button secondary small appIllustratedAction settingsMaintenanceActionIcon"
+                          onClick={createMaintenanceBackup}
+                          disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending)}
+                          title={maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreate}
+                          aria-label={maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreate}
+                          aria-busy={maintenanceBusy === "backup-create" ? "true" : undefined}
+                        >
+                          <img src="/assets/icons/ui/backup-create.svg" alt="" aria-hidden="true" />
+                        </button>
+                        <button
+                          type="button"
+                          className="button secondary small appIllustratedAction settingsMaintenanceActionIcon"
+                          onClick={openMaintenanceBackupDetail}
+                          disabled={Boolean(maintenanceBusy)}
+                          title={t.maintenanceBackupOpenList}
+                          aria-label={t.maintenanceBackupOpenList}
+                        >
+                          <img src="/assets/icons/ui/open.png" alt="" aria-hidden="true" />
+                        </button>
+                      </div>
                     </div>
                     {maintenanceBackupPending || maintenanceBackupResult?.recovering ? (
-                      <div className="settingsMaintenanceBackupPending" role="status">{t.maintenanceBackupRecovering}</div>
+                      <div className="settingsMaintenanceBackupPending" role="status">{maintenanceBackupProgressText}</div>
                     ) : null}
                   </section>
                   </div>
@@ -4551,7 +4641,7 @@ export default function SettingsPage() {
                   <section className="settingsMaintenanceSupport">
                     <div className="settingsMaintenanceSupportMain">
                       <div className="settingsMaintenanceSupportCopy">
-                        <div className="settingsMaintenanceCardHeading">
+                        <div className="settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned">
                           <h3>{t.maintenanceSupportTitle}</h3>
                           <span className={`settingsMaintenancePill ${maintenanceWarnings.groups.actionable ? "is-warning" : "is-ok"}`}>
                             {maintenanceWarnings.groups.actionable
@@ -4563,8 +4653,15 @@ export default function SettingsPage() {
                       </div>
                     </div>
                     <div className="settingsMaintenanceSupportActions">
-                      <button type="button" className="button secondary small settingsMaintenanceSupportActionButton" onClick={() => setDiagnosticChoiceOpen(true)} disabled={Boolean(maintenanceBusy) || securityBusy}>
-                        {t.maintenanceReportDownload}
+                      <button
+                        type="button"
+                        className="button secondary small appIllustratedAction settingsMaintenanceActionIcon settingsMaintenanceSupportActionButton"
+                        onClick={() => setDiagnosticChoiceOpen(true)}
+                        disabled={Boolean(maintenanceBusy) || securityBusy}
+                        title={t.maintenanceReportDownload}
+                        aria-label={t.maintenanceReportDownload}
+                      >
+                        <img src="/assets/icons/ui/download-report.svg" alt="" aria-hidden="true" />
                       </button>
                     </div>
                     {maintenanceWarnings.groups.actionable ? (
@@ -4601,16 +4698,19 @@ export default function SettingsPage() {
                         </div>
                         <button
                           type="button"
-                          className="button secondary small"
+                          className="button secondary small appIllustratedAction settingsMaintenanceActionIcon"
                           onClick={createMaintenanceBackup}
                           disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending)}
+                          title={maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreate}
+                          aria-label={maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreate}
+                          aria-busy={maintenanceBusy === "backup-create" ? "true" : undefined}
                         >
-                          {maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreateShort}
+                          <img src="/assets/icons/ui/backup-create.svg" alt="" aria-hidden="true" />
                         </button>
                       </div>
                       <p className="settingsMaintenanceBackupScope">{t.maintenanceBackupScope}</p>
                       {maintenanceBackupPending || maintenanceBackupResult?.recovering ? (
-                        <div className="settingsMaintenanceBackupPending" role="status">{t.maintenanceBackupRecovering}</div>
+                        <div className="settingsMaintenanceBackupPending" role="status">{maintenanceBackupProgressText}</div>
                       ) : null}
                       {maintenanceBusy === "backup-page" && !maintenanceBackupDetail ? (
                         <div className="settingsJournalEmpty">{t.checking}</div>
@@ -4636,19 +4736,19 @@ export default function SettingsPage() {
                                   <div className="settingsMaintenanceBackupStatusGrid">
                                     <div>
                                       <span>{t.maintenanceBackupAvailability}</span>
-                                      <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.availabilityTone}`}>{artifact.availabilityLabel}</strong>
+                                      <MaintenanceBackupDimensionStatus tone={artifact.availabilityTone} label={artifact.availabilityLabel} />
                                     </div>
                                     <div>
                                       <span>{t.maintenanceBackupIntegrity}</span>
-                                      <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.integrityTone}`}>{artifact.integrityLabel}</strong>
+                                      <MaintenanceBackupDimensionStatus tone={artifact.integrityTone} label={artifact.integrityLabel} />
                                     </div>
                                     <div>
                                       <span>{t.maintenanceBackupCompatibility}</span>
-                                      <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.compatibilityTone}`}>{artifact.compatibilityLabel}</strong>
+                                      <MaintenanceBackupDimensionStatus tone={artifact.compatibilityTone} label={artifact.compatibilityLabel} />
                                     </div>
                                     <div>
                                       <span>{t.maintenanceBackupValidation}</span>
-                                      <strong className={`settingsMaintenanceBackupStatusPill is-${artifact.validationTone}`}>{artifact.validationLabel}</strong>
+                                      <MaintenanceBackupDimensionStatus tone={artifact.validationTone} label={artifact.validationLabel} />
                                     </div>
                                   </div>
                                   <div className="settingsMaintenanceBackupItemActions">

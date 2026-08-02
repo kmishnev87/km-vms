@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#aeb9c5"/>
+    </linearGradient>
+    <linearGradient id="metalDark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#dce4ec"/>
+      <stop offset="1" stop-color="#8e9ba8"/>
+    </linearGradient>
+    <linearGradient id="greenBadge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#75d78e"/>
+      <stop offset="1" stop-color="#20994c"/>
+    </linearGradient>
+    <filter id="softShadow" x="-25%" y="-25%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="4" stdDeviation="3" flood-color="#334155" flood-opacity=".25"/>
+    </filter>
+  </defs>
+  <g filter="url(#softShadow)">
+    <ellipse cx="52" cy="31" rx="33" ry="13" fill="url(#metal)" stroke="#7e8d9c" stroke-width="2"/>
+    <path d="M19 31v23c0 7 15 13 33 13s33-6 33-13V31" fill="url(#metalDark)" stroke="#7e8d9c" stroke-width="2"/>
+    <ellipse cx="52" cy="31" rx="33" ry="13" fill="url(#metal)" stroke="#7e8d9c" stroke-width="2"/>
+    <ellipse cx="61" cy="66" rx="35" ry="14" fill="url(#metal)" stroke="#748596" stroke-width="2"/>
+    <path d="M26 66v25c0 8 16 14 35 14s35-6 35-14V66" fill="url(#metalDark)" stroke="#748596" stroke-width="2"/>
+    <ellipse cx="61" cy="66" rx="35" ry="14" fill="url(#metal)" stroke="#748596" stroke-width="2"/>
+    <path d="M31 86c8 7 49 9 60-1" fill="none" stroke="#f8fafc" stroke-width="3" opacity=".7"/>
+    <circle cx="99" cy="91" r="21" fill="url(#greenBadge)" stroke="#16823d" stroke-width="2"/>
+    <path d="M99 80v22M88 91h22" stroke="#fff" stroke-width="6" stroke-linecap="round"/>
+  </g>
+</svg>

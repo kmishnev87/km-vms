@@ -1,3 +1,6 @@
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 
@@ -77,7 +80,8 @@ def test_setup_activation_helper_is_bounded_runtime_storage_helper():
     assert "KMVMS_UPDATE_MANIFEST_PATH" in compose
     assert "KMVMS_UPDATE_CHANNEL_ID" in compose
     assert "KM_VMS_HOST_APP_DIR" in script
-    assert 'setup_already_completed && [ "$status" != "requested" ]' in helper
+    assert "setup_completed_now" in helper
+    assert "initial_runtime_verified" in helper
     assert "km-vms-storage-apply.sh" in helper
     assert "km-vms-restart.sh" in helper
     assert "docker run --rm" in helper
@@ -156,6 +160,18 @@ def test_setup_activation_helper_is_bounded_runtime_storage_helper():
     assert 'mkdir -p "$namespace_path"' in storage_apply
     assert '[ ! -L "$fs_selected_path/kmvms" ]' in storage_apply
     assert '[ ! -L "$namespace_path" ]' in storage_apply
+    assert "MAX_INITIAL_ACTIVATION_ATTEMPTS=3" in helper
+    assert "initial_configuration_published" in helper
+    assert "--restore-initial-recovery" in helper
+    assert "--cleanup-initial-recovery" in helper
+    assert 'storage_apply_mode="--initial-setup"' in helper
+    assert 'restart_mode="--initial-setup"' in helper
+    assert "converge-runtime-files" in restart
+    assert "prove-runtime" in restart
+    assert ".storage-activation-recovery" in storage_apply
+    assert "manifest.previous" in storage_apply
+    assert "override.previous" in storage_apply
+    assert "restore_initial_recovery_set" in storage_apply
     for old_json_sed in (
         '"selected_host_path"[[:space:]]*:',
         '"selected_mount_path"[[:space:]]*:',
@@ -164,3 +180,190 @@ def test_setup_activation_helper_is_bounded_runtime_storage_helper():
     ):
         assert old_json_sed not in helper
         assert old_json_sed not in storage_apply
+
+
+def test_initial_storage_recovery_restores_complete_configuration_set(
+    tmp_path: Path,
+) -> None:
+    app_dir = tmp_path / "app"
+    control = app_dir / "data" / "install-control"
+    request_id = "setup-storage-recovery-test"
+    recovery = control / ".storage-activation-recovery" / request_id
+    recovery.mkdir(parents=True)
+    app_dir.joinpath(".env").write_text(
+        "SURVEILLANCE_ROOT=/new/archive\nSECRET=never-print\n",
+        encoding="utf-8",
+    )
+    control.joinpath("archive-roots-runtime.json").write_text(
+        "new-manifest\n",
+        encoding="utf-8",
+    )
+    control.joinpath("docker-compose.archive-roots.yml").write_text(
+        "new-override\n",
+        encoding="utf-8",
+    )
+    recovery.joinpath("env.previous").write_text(
+        "SURVEILLANCE_ROOT=/old/archive\nSECRET=never-print\n",
+        encoding="utf-8",
+    )
+    recovery.joinpath("manifest.previous").write_text(
+        "old-manifest\n",
+        encoding="utf-8",
+    )
+    recovery.joinpath("override.previous").write_text(
+        "old-override\n",
+        encoding="utf-8",
+    )
+    recovery.joinpath("request.control").write_text(
+        f"schema_version=1\nrequest_id={request_id}\nselected_host_path=/old/archive\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "sh",
+            str(ROOT / "scripts" / "km-vms-storage-apply.sh"),
+            "--app-dir",
+            str(app_dir),
+            "--restore-initial-recovery",
+            request_id,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert app_dir.joinpath(".env").read_text(encoding="utf-8").startswith(
+        "SURVEILLANCE_ROOT=/old/archive\n"
+    )
+    assert control.joinpath("archive-roots-runtime.json").read_text(
+        encoding="utf-8"
+    ) == "old-manifest\n"
+    assert control.joinpath("docker-compose.archive-roots.yml").read_text(
+        encoding="utf-8"
+    ) == "old-override\n"
+    assert not recovery.exists()
+    assert "SECRET" not in result.stdout
+    assert "SECRET" not in result.stderr
+
+
+def test_initial_storage_recovery_resumes_after_each_partial_replace_failure(
+    tmp_path: Path,
+) -> None:
+    real_mv = shutil.which("mv")
+    assert real_mv
+    cases = (
+        ("env", ".env", ("new-env\n", "new-manifest\n", "new-override\n")),
+        (
+            "manifest",
+            "data/install-control/archive-roots-runtime.json",
+            ("old-env\n", "new-manifest\n", "new-override\n"),
+        ),
+        (
+            "override",
+            "data/install-control/docker-compose.archive-roots.yml",
+            ("old-env\n", "old-manifest\n", "new-override\n"),
+        ),
+    )
+
+    for label, failed_relative, expected_after_failure in cases:
+        app_dir = tmp_path / label / "app"
+        control = app_dir / "data" / "install-control"
+        request_id = f"setup-storage-recovery-{label}"
+        recovery = control / ".storage-activation-recovery" / request_id
+        recovery.mkdir(parents=True)
+        app_dir.joinpath(".env").write_text("new-env\n", encoding="utf-8")
+        control.joinpath("archive-roots-runtime.json").write_text(
+            "new-manifest\n", encoding="utf-8"
+        )
+        control.joinpath("docker-compose.archive-roots.yml").write_text(
+            "new-override\n", encoding="utf-8"
+        )
+        recovery.joinpath("env.previous").write_text("old-env\n", encoding="utf-8")
+        recovery.joinpath("manifest.previous").write_text(
+            "old-manifest\n", encoding="utf-8"
+        )
+        recovery.joinpath("override.previous").write_text(
+            "old-override\n", encoding="utf-8"
+        )
+        recovery.joinpath("request.control").write_text(
+            f"schema_version=1\nrequest_id={request_id}\nselected_host_path=/old/archive\n",
+            encoding="utf-8",
+        )
+
+        shim_dir = tmp_path / label / "bin"
+        shim_dir.mkdir()
+        mv_shim = shim_dir / "mv"
+        mv_shim.write_text(
+            "#!/bin/sh\n"
+            'if [ "$#" -eq 2 ] && [ "$2" = "$KM_VMS_TEST_FAIL_TARGET" ]; then\n'
+            "  exit 73\n"
+            "fi\n"
+            f'exec "{real_mv}" "$@"\n',
+            encoding="utf-8",
+        )
+        mv_shim.chmod(0o755)
+        failed_env = os.environ.copy()
+        failed_env["PATH"] = f"{shim_dir}{os.pathsep}{failed_env['PATH']}"
+        failed_env["KM_VMS_TEST_FAIL_TARGET"] = str(app_dir / failed_relative)
+
+        first = subprocess.run(
+            [
+                "sh",
+                str(ROOT / "scripts" / "km-vms-storage-apply.sh"),
+                "--app-dir",
+                str(app_dir),
+                "--restore-initial-recovery",
+                request_id,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=failed_env,
+        )
+
+        assert first.returncode != 0, label
+        assert recovery.is_dir(), label
+        assert (
+            app_dir.joinpath(".env").read_text(encoding="utf-8"),
+            control.joinpath("archive-roots-runtime.json").read_text(encoding="utf-8"),
+            control.joinpath("docker-compose.archive-roots.yml").read_text(encoding="utf-8"),
+        ) == expected_after_failure, label
+
+        second = subprocess.run(
+            [
+                "sh",
+                str(ROOT / "scripts" / "km-vms-storage-apply.sh"),
+                "--app-dir",
+                str(app_dir),
+                "--restore-initial-recovery",
+                request_id,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+        assert second.returncode == 0, f"{label}: {second.stderr}"
+        assert app_dir.joinpath(".env").read_text(encoding="utf-8") == "old-env\n"
+        assert control.joinpath("archive-roots-runtime.json").read_text(
+            encoding="utf-8"
+        ) == "old-manifest\n"
+        assert control.joinpath("docker-compose.archive-roots.yml").read_text(
+            encoding="utf-8"
+        ) == "old-override\n"
+        assert not recovery.exists(), label
+
+
+def test_initial_storage_recovery_failure_stays_nonterminal_until_converged() -> None:
+    helper = read("scripts/km-vms-setup-activation-helper.sh")
+
+    assert '"status": "activation_in_progress"' in helper
+    assert '"phase": "restoring_previous_configuration"' in helper
+    assert helper.count("continue_initial_recovery ") == 3
+    recovery_function = helper.split("continue_initial_recovery() {", 1)[1].split(
+        "\n}\n", 1
+    )[0]
+    assert '"processing"' in recovery_function
+    assert '"failed"' not in recovery_function

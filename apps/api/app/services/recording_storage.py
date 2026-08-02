@@ -387,8 +387,8 @@ def verify_archive_root_access(root_row, *, require_write: bool) -> dict:
     return verify_runtime_path_access(status["runtime_path"], require_write=require_write, base_status=status)
 
 
-def archive_root_physical_volume_id(root_row) -> str:
-    raw = archive_root_host_display_path(root_row).replace("\\", "/")
+def _archive_root_physical_volume_id_from_host_path(host_path: str) -> str:
+    raw = str(host_path or "").replace("\\", "/")
     parts = [part for part in raw.split("/") if part]
     if raw.startswith("/") and parts:
         if parts[0].lower().startswith("volume"):
@@ -399,11 +399,21 @@ def archive_root_physical_volume_id(root_row) -> str:
     return parts[0] if parts else "unknown"
 
 
+def archive_root_physical_volume_id(root_row) -> str:
+    return _archive_root_physical_volume_id_from_host_path(
+        archive_root_host_display_path(root_row)
+    )
+
+
 def _compose_yaml_quote(value: str) -> str:
     return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def write_archive_roots_runtime_files(db: Session) -> dict:
+def write_archive_roots_runtime_files(
+    db: Session,
+    *,
+    initial_default_host_path: str | None = None,
+) -> dict:
     from app.models.recording import ArchiveRoot
 
     control_dir = Path(settings.storage_install_control)
@@ -415,6 +425,56 @@ def write_archive_roots_runtime_files(db: Session) -> dict:
         .all()
     )
     existing_entries = _archive_roots_runtime_entries()
+    selected_default_host_path: str | None = None
+    if initial_default_host_path is not None:
+        selected = Path(str(initial_default_host_path or "").strip())
+        if (
+            not selected.is_absolute()
+            or any(part == ".." for part in selected.parts)
+            or selected.as_posix() == Path(settings.storage_root).as_posix()
+        ):
+            raise ValueError("initial_default_archive_host_path_invalid")
+        default_root = next(
+            (
+                root
+                for root in roots
+                if str(getattr(root, "id", "") or "")
+                == DEFAULT_ARCHIVE_ROOT_ID
+            ),
+            None,
+        )
+        active_roots = [
+            root for root in roots if bool(getattr(root, "is_active", False))
+        ]
+        if (
+            default_root is None
+            or getattr(default_root, "retired_at", None) is not None
+            or not bool(getattr(default_root, "is_active", False))
+            or len(active_roots) != 1
+        ):
+            raise ValueError("initial_default_archive_root_not_active")
+        selected_default_host_path = selected.as_posix()
+        roots_by_id = {
+            str(getattr(root, "id", "") or ""): root
+            for root in roots
+            if str(getattr(root, "id", "") or "")
+        }
+        ordered_roots = [
+            roots_by_id[root_id]
+            for root_id in existing_entries
+            if root_id in roots_by_id
+        ]
+        ordered_root_ids = {
+            str(getattr(root, "id", "") or "")
+            for root in ordered_roots
+        }
+        ordered_roots.extend(
+            root
+            for root in roots
+            if str(getattr(root, "id", "") or "")
+            not in ordered_root_ids
+        )
+        roots = ordered_roots
     items = []
     volume_lines = []
     seen_targets: set[str] = set()
@@ -423,7 +483,20 @@ def write_archive_roots_runtime_files(db: Session) -> dict:
         if not root_id:
             continue
         existing = existing_entries.get(root_id)
-        if existing is not None:
+        if (
+            selected_default_host_path is not None
+            and root_id == DEFAULT_ARCHIVE_ROOT_ID
+        ):
+            host_path = selected_default_host_path
+            target_path = (
+                str(existing["backend_runtime_path"])
+                if existing is not None
+                else (
+                    archive_roots_runtime_base()
+                    / safe_archive_root_mount_id(root_id)
+                ).as_posix()
+            )
+        elif existing is not None:
             host_path = str(existing["user_display_path"])
             target_path = str(existing["backend_runtime_path"])
         else:
@@ -432,14 +505,26 @@ def write_archive_roots_runtime_files(db: Session) -> dict:
         if target_path in seen_targets:
             continue
         seen_targets.add(target_path)
-        item = {
-            "root_id": root_id,
-            "user_display_path": host_path,
-            "backend_runtime_path": target_path,
-            "physical_volume_id": archive_root_physical_volume_id(root),
-            "storage_namespace": getattr(root, "storage_namespace", KMVMS_RECORDINGS_NAMESPACE),
-            "active_write_target": bool(getattr(root, "is_active", False)),
-        }
+        if (
+            selected_default_host_path is not None
+            and existing is not None
+            and root_id != DEFAULT_ARCHIVE_ROOT_ID
+        ):
+            item = dict(existing)
+        else:
+            item = {
+                "root_id": root_id,
+                "user_display_path": host_path,
+                "backend_runtime_path": target_path,
+                "physical_volume_id": (
+                    _archive_root_physical_volume_id_from_host_path(host_path)
+                    if root_id == DEFAULT_ARCHIVE_ROOT_ID
+                    and selected_default_host_path is not None
+                    else archive_root_physical_volume_id(root)
+                ),
+                "storage_namespace": getattr(root, "storage_namespace", KMVMS_RECORDINGS_NAMESPACE),
+                "active_write_target": bool(getattr(root, "is_active", False)),
+            }
         items.append(item)
         volume_lines.extend(
             [

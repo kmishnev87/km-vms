@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="metal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#aeb9c5"/>
+    </linearGradient>
+    <linearGradient id="blueBadge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7ec5ef"/>
+      <stop offset="1" stop-color="#2873ac"/>
+    </linearGradient>
+    <filter id="softShadow" x="-25%" y="-25%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="4" stdDeviation="3" flood-color="#334155" flood-opacity=".25"/>
+    </filter>
+  </defs>
+  <g filter="url(#softShadow)">
+    <path d="M40 35l24-13 25 13-25 14z" fill="url(#metal)" stroke="#7d8b99" stroke-width="2"/>
+    <path d="M40 35v31l24 14V49z" fill="#c9d2db" stroke="#7d8b99" stroke-width="2"/>
+    <path d="M89 35v31L64 80V49z" fill="#edf1f5" stroke="#7d8b99" stroke-width="2"/>
+    <path d="M33 43c-12 9-17 24-12 39 4 12 13 21 24 25" fill="none" stroke="url(#blueBadge)" stroke-width="9" stroke-linecap="round"/>
+    <path d="M35 29l-4 19 19-4" fill="url(#blueBadge)" stroke="#286f9f" stroke-width="1.5" stroke-linejoin="round"/>
+    <path d="M95 85c12-10 16-26 10-41-4-11-13-19-23-23" fill="none" stroke="url(#blueBadge)" stroke-width="9" stroke-linecap="round"/>
+    <path d="M94 100l4-19-19 5" fill="url(#blueBadge)" stroke="#286f9f" stroke-width="1.5" stroke-linejoin="round"/>
+    <circle cx="91" cy="91" r="17" fill="#effbf4" stroke="#2ca85a" stroke-width="3"/>
+    <path d="M83 91l6 6 11-13" fill="none" stroke="#22984d" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -21,6 +22,10 @@ from app.services.backup_before_upgrade import (
     BackupSafetyBlocked,
     create_backup_before_upgrade,
     verify_backup_manifest,
+)
+from app.services.archive_integrity import (
+    invalidate_integrity_truth_after_restore,
+    start_integrity_scan,
 )
 from app.services.backup_manager import (
     artifact_version_evidence,
@@ -109,14 +114,23 @@ def _write_result(
     )
 
 
-def _load_request(operation_id: str) -> dict[str, Any]:
+def _load_request(
+    operation_id: str,
+    *,
+    allow_terminal: bool = False,
+) -> dict[str, Any]:
     payload, state = read_bounded_json(restore_request_path())
     request = restore_request_contract(payload)
     if (
         state != "valid"
         or request is None
         or request.get("operation_id") != operation_id
-        or request.get("state") not in {"admitted", "claimed"}
+        or request.get("state")
+        not in (
+            {"admitted", "claimed", "terminal"}
+            if allow_terminal
+            else {"admitted", "claimed"}
+        )
     ):
         raise RestoreExecutorBlocked("restore_request_invalid")
     return request
@@ -135,6 +149,84 @@ def _session() -> tuple[Session, Any]:
     engine = create_engine(settings.database_url)
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     return SessionLocal(), engine
+
+
+def _integrity_convergence_identity(
+    request: dict[str, Any],
+    final_db_outcome: str | None,
+) -> tuple[str, str]:
+    outcome = str(final_db_outcome or "").strip().lower()
+    if outcome not in {"source", "rollback"}:
+        raise RestoreExecutorBlocked(
+            "restore_integrity_outcome_invalid",
+            mutation_started=True,
+        )
+    if request.get("state") == "terminal":
+        terminal = request.get("terminal") or {}
+        expected = {
+            "completed": "source",
+            "failed_rolled_back": "rollback",
+        }.get(str(terminal.get("status") or ""))
+        if expected != outcome:
+            raise RestoreExecutorBlocked(
+                "restore_integrity_terminal_outcome_mismatch",
+                mutation_started=True,
+            )
+    identity = (
+        "archive-integrity-post-restore:v1:"
+        f"{request['operation_id']}:{outcome}"
+    )
+    return outcome, hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _invalidate_integrity_truth(
+    request: dict[str, Any],
+    *,
+    final_db_outcome: str | None,
+) -> dict[str, Any]:
+    outcome, _idempotency_key = _integrity_convergence_identity(
+        request,
+        final_db_outcome,
+    )
+    db, engine = _session()
+    try:
+        return invalidate_integrity_truth_after_restore(
+            db,
+            restore_operation_id=request["operation_id"],
+            final_db_outcome=outcome,
+        )
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def _enqueue_integrity_scan(
+    request: dict[str, Any],
+    *,
+    final_db_outcome: str | None,
+) -> dict[str, Any]:
+    outcome, idempotency_key = _integrity_convergence_identity(
+        request,
+        final_db_outcome,
+    )
+    db, engine = _session()
+    try:
+        result = start_integrity_scan(
+            db,
+            actor=_actor_from_request(request),
+            idempotency_key=idempotency_key,
+        )
+        return {
+            "final_db_outcome": outcome,
+            "scan_id": str(result.get("scan_id") or ""),
+            "scan_status": str(result.get("status") or "queued"),
+            "replayed": bool(result.get("replayed")),
+            "coalesced": bool(result.get("coalesced")),
+            "idempotency_key": idempotency_key,
+        }
+    finally:
+        db.close()
+        engine.dispose()
 
 
 def _exact_artifact(
@@ -602,8 +694,12 @@ def execute(
     artifact_id: str | None,
     mode: str,
     recorder_not_before_epoch: float | None = None,
+    final_db_outcome: str | None = None,
 ) -> dict[str, Any]:
-    request = _load_request(operation_id)
+    request = _load_request(
+        operation_id,
+        allow_terminal=action == "enqueue-integrity",
+    )
     if action == "preflight":
         return _preflight(request)
     if action == "pre-restore-backup":
@@ -612,6 +708,11 @@ def execute(
         if not artifact_id:
             raise RestoreExecutorBlocked("restore_artifact_missing")
         return _restore(request, artifact_id=artifact_id, mode=mode)
+    if action == "invalidate-integrity":
+        return _invalidate_integrity_truth(
+            request,
+            final_db_outcome=final_db_outcome,
+        )
     if action == "post-check":
         return _post_check(request)
     if action == "recorder-proof":
@@ -624,6 +725,11 @@ def execute(
         )
     if action == "recorder-live-proof":
         return _recorder_runtime_proof(not_before_epoch=None)
+    if action == "enqueue-integrity":
+        return _enqueue_integrity_scan(
+            request,
+            final_db_outcome=final_db_outcome,
+        )
     raise RestoreExecutorBlocked("restore_action_invalid")
 
 
@@ -635,15 +741,21 @@ def main() -> int:
             "preflight",
             "pre-restore-backup",
             "restore",
+            "invalidate-integrity",
             "post-check",
             "recorder-proof",
             "recorder-live-proof",
+            "enqueue-integrity",
         ),
     )
     parser.add_argument("--operation-id", required=True)
     parser.add_argument("--artifact-id")
     parser.add_argument("--mode", choices=("source", "rollback"), default="source")
     parser.add_argument("--recorder-not-before-epoch", type=float)
+    parser.add_argument(
+        "--final-db-outcome",
+        choices=("source", "rollback"),
+    )
     args = parser.parse_args()
     operation_id = str(args.operation_id or "")
     try:
@@ -653,6 +765,7 @@ def main() -> int:
             args.artifact_id,
             args.mode,
             args.recorder_not_before_epoch,
+            args.final_db_outcome,
         )
         _write_result(
             operation_id=operation_id,

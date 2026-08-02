@@ -54,7 +54,10 @@ from app.services.archive_integrity_remediation import (
 from app.services.recording_storage import archive_root_runtime_access_state
 from app.services.schema_migrations import STAGE4103_ARCHIVE_INTEGRITY_MIGRATION, STAGE4103_TABLES
 from app.services.schema_versioning import CURRENT_SCHEMA_VERSION
-from app.services.storage_monitoring import _build_storage_operations_summary
+from app.services.storage_monitoring import (
+    _build_storage_operations_summary,
+    build_lightweight_storage_monitoring_summary,
+)
 from app.services.storage_operations_foundation import (
     StorageOperationContractError,
     StorageOperationLeaseLost,
@@ -231,7 +234,7 @@ def run_scan(ctx, *, actor=None, key="stage4103-scan"):
     assert started["status"] == "queued"
     assert run_integrity_worker_once() is True
     ctx.db.expire_all()
-    return latest_integrity_scan(ctx.db)
+    return integrity.get_integrity_scan(ctx.db, started["scan_id"])
 
 
 def active_findings(ctx, scan_id):
@@ -334,6 +337,128 @@ def test_start_is_durable_fast_idempotent_and_coalesces(stage4103):
     assert replay["scan_id"] == first["scan_id"] and replay["replayed"] is True
     assert coalesced["scan_id"] == first["scan_id"] and coalesced["coalesced"] is True
     assert stage4103.db.query(ArchiveIntegrityScan).count() == 1
+
+
+def test_restore_invalidation_makes_restored_integrity_truth_non_executable(stage4103):
+    camera = add_camera(stage4103)
+    add_segment(stage4103, camera, name="restore-missing.mkv", create_file=False)
+    result = run_scan(stage4103, key="restore-invalidation-scan")
+    finding = active_findings(stage4103, result["scan_id"])[0]
+    plan = create_remediation_plan(
+        stage4103.db,
+        finding_id=finding.id,
+        action_key="retire_missing_recording",
+        actor=owner(),
+        idempotency_key="restore-invalidation-plan",
+    )
+    scan = stage4103.db.get(ArchiveIntegrityScan, result["scan_id"])
+    historical_found_count = int(scan.found_count or 0)
+    historical_categories = dict(scan.category_summary or {})
+    historical_impacts = dict(scan.impact_summary or {})
+    historical_roots = dict(scan.root_summary or {})
+    operation = stage4103.db.get(StorageOperation, scan.operation_id)
+    directory_work = (
+        stage4103.db.query(ArchiveIntegrityDirectoryWork)
+        .filter(ArchiveIntegrityDirectoryWork.scan_id == scan.id)
+        .first()
+    )
+    scan.status = "running"
+    scan.phase = "filesystem"
+    scan.active_slot = integrity.SCAN_ACTIVE_SLOT
+    scan.is_stale = False
+    operation.status = "running"
+    operation.owner_instance_id = "restored-worker"
+    operation.owner_token_hash = "a" * 64
+    if directory_work is not None:
+        directory_work.status = "claimed"
+        directory_work.owner_instance_id = "restored-worker"
+    stage4103.db.commit()
+    stage4103.monkeypatch.setattr(
+        integrity,
+        "_scan_roots",
+        lambda _db: pytest.fail("restore invalidation must not read archive roots"),
+    )
+
+    invalidated = integrity.invalidate_integrity_truth_after_restore(
+        stage4103.db,
+        restore_operation_id="restore-" + ("a" * 32),
+        final_db_outcome="source",
+    )
+    replay = integrity.invalidate_integrity_truth_after_restore(
+        stage4103.db,
+        restore_operation_id="restore-" + ("a" * 32),
+        final_db_outcome="source",
+    )
+    stage4103.db.expire_all()
+
+    scan = stage4103.db.get(ArchiveIntegrityScan, result["scan_id"])
+    operation = stage4103.db.get(StorageOperation, scan.operation_id)
+    persisted_finding = stage4103.db.get(ArchiveIntegrityFinding, finding.id)
+    persisted_plan = stage4103.db.get(
+        ArchiveIntegrityRemediationPlan,
+        plan["plan_id"],
+    )
+    assert invalidated["archive_roots_read"] is False
+    assert replay["active_scan_count"] == 0
+    assert scan.status == "failed" and scan.is_stale is True
+    assert scan.active_slot is None
+    assert operation.status == "failed"
+    assert operation.owner_instance_id is None
+    assert persisted_finding.is_active is False
+    assert persisted_finding.state == "superseded"
+    assert persisted_plan.state == "blocked"
+    assert int(scan.found_count or 0) == historical_found_count
+    assert dict(scan.category_summary or {}) == historical_categories
+    assert dict(scan.impact_summary or {}) == historical_impacts
+    assert dict(scan.root_summary or {}) == historical_roots
+
+    current_scan = latest_integrity_scan(stage4103.db)
+    assert current_scan["stale"] is True
+    assert current_scan["progress"]["found_count"] == 0
+    assert current_scan["category_counts"] == {}
+    assert current_scan["impact_counts"] == {}
+    assert current_scan["root_counts"] == {}
+    current_findings = list_integrity_findings(
+        stage4103.db,
+        scan.id,
+        role="owner",
+    )
+    assert current_findings["items"] == []
+    assert current_findings["has_more"] is False
+
+    current_summary = integrity.latest_integrity_summary_for_status(stage4103.db)
+    assert current_summary["evidence_status"] == "stale"
+    assert current_summary["problem_count"] == 0
+    assert current_summary["problem_file_count"] == 0
+    assert current_summary["category_counts"] == {}
+    assert current_summary["active"] is False
+
+    storage_summary = build_lightweight_storage_monitoring_summary(stage4103.db)
+    assert storage_summary["reconciliation_summary"]["evidence_status"] == "stale"
+    assert storage_summary["reconciliation_summary"]["problem_file_count"] == 0
+    assert storage_summary["reconciliation_summary"]["category_counts"] == {}
+    assert storage_summary["status"] != "degraded"
+    if directory_work is not None:
+        persisted_work = stage4103.db.get(
+            ArchiveIntegrityDirectoryWork,
+            directory_work.id,
+        )
+        assert persisted_work.status == "failed"
+        assert persisted_work.owner_instance_id is None
+
+
+def test_phase_progress_separates_metadata_and_filesystem_counts(stage4103):
+    camera = add_camera(stage4103)
+    add_segment(stage4103, camera, name="phase-progress.mkv")
+    result = run_scan(stage4103, key="phase-progress-scan")
+    progress = result["progress"]
+    assert progress["planned_count"] == 1
+    assert progress["metadata_checked_count"] == 1
+    assert progress["filesystem_checked_count"] >= 1
+    assert progress["checked_count"] == (
+        progress["metadata_checked_count"]
+        + progress["filesystem_checked_count"]
+    )
 
 
 def test_soft_deleted_camera_retained_archive_is_scanned(stage4103):
@@ -568,6 +693,67 @@ def test_missing_retirement_is_exact_permissioned_metadata_only_and_replay_safe(
     assert path.exists() is False
     assert resolved.is_active is False and resolved.state == "resolved" and resolved.resolved_at is not None
     assert stage4103.db.get(ArchiveIntegrityScan, result["scan_id"]).found_count == 0
+
+
+def test_stable_failed_missing_recording_can_be_retired_but_reappeared_file_blocks(stage4103):
+    camera = add_camera(stage4103)
+    segment, path = add_segment(
+        stage4103,
+        camera,
+        name="failed-missing.mkv",
+        create_file=False,
+        status="failed",
+    )
+    result = run_scan(stage4103, key="failed-missing-scan")
+    finding = next(
+        row
+        for row in active_findings(stage4103, result["scan_id"])
+        if row.segment_id == segment.id
+    )
+    blocked_plan = create_remediation_plan(
+        stage4103.db,
+        finding_id=finding.id,
+        action_key="retire_missing_recording",
+        actor=owner(),
+        idempotency_key="failed-missing-reappeared-plan",
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"recording-reappeared")
+    blocked = apply_remediation_plan(
+        stage4103.db,
+        plan_id=blocked_plan["plan_id"],
+        actor=owner(),
+        confirm=True,
+        operation_id="failed-missing-reappeared-apply",
+    )
+    assert blocked["state"] == "blocked"
+    assert blocked["reason_code"] == "archive_integrity_missing_file_reappeared"
+    path.unlink()
+
+    fresh = run_scan(stage4103, key="failed-missing-fresh-scan")
+    fresh_finding = next(
+        row
+        for row in active_findings(stage4103, fresh["scan_id"])
+        if row.segment_id == segment.id
+    )
+    plan = create_remediation_plan(
+        stage4103.db,
+        finding_id=fresh_finding.id,
+        action_key="retire_missing_recording",
+        actor=owner(),
+        idempotency_key="failed-missing-retire-plan",
+    )
+    applied = apply_remediation_plan(
+        stage4103.db,
+        plan_id=plan["plan_id"],
+        actor=owner(),
+        confirm=True,
+        operation_id="failed-missing-retire-apply",
+    )
+    stage4103.db.expire_all()
+    retired = stage4103.db.get(RecordingSegment, segment.id)
+    assert applied["state"] == "completed"
+    assert retired.status == "deleted" and retired.deleted_at is not None
 
 
 def test_stale_writing_without_exact_receipt_stays_unresolved_without_false_action(stage4103):

@@ -91,15 +91,21 @@
   }
 
   .settingsHeaderActions {
-    width: 100%;
-    min-width: 0;
-    grid-template-columns: minmax(0, 1fr) auto auto;
+    width: var(--settings-header-actions-width);
+    min-width: var(--settings-header-actions-width);
+    max-width: 100%;
+    align-self: center;
+    grid-template-columns: repeat(2, var(--settings-header-action-width));
+    grid-template-areas:
+      "dirty dirty"
+      "cancel save";
+    justify-content: center;
     justify-items: end;
   }
 
   .settingsDirtyNote {
     justify-self: start;
-    white-space: normal;
+    white-space: nowrap;
   }
 
   .settingsSecuritySummary {
@@ -919,5 +925,53 @@
   .migrationNavIndicator img {
     width: 22px;
     height: 22px;
+  }
+}
+
+/* Collected visual fixes: compact Settings controls and Storage summary. */
+@media (max-width: 900px) {
+  .settingsRowCompactSelect .settingsRowControl {
+    justify-self: end;
+    width: min(var(--settings-compact-select-width), 100%);
+  }
+
+  .settingsRowControlMeta {
+    justify-self: end;
+    width: min(200px, 100%);
+  }
+
+  .storageOpsOverview {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsHealthMain {
+    padding: 13px 14px;
+  }
+
+  .storageOpsTopMetrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 0;
+    border-top: 1px solid rgba(148, 163, 184, 0.25);
+  }
+
+  .storageOpsTopMetric {
+    min-height: 64px;
+    padding: 9px 10px;
+    border-bottom: 0;
+  }
+}
+
+@media (max-width: 520px) {
+  .storageOpsTopMetrics {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsTopMetric {
+    border-right: 0;
+    border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  }
+
+  .storageOpsTopMetric:last-child {
+    border-bottom: 0;
   }
 }

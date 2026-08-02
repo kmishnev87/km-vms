@@ -265,6 +265,55 @@ def test_stale_destructive_marker_does_not_bind_new_operation(
     ) is False
 
 
+def test_post_restore_integrity_identity_is_deterministic_and_outcome_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = {
+        "operation_id": "restore-" + ("a" * 32),
+        "state": "claimed",
+        "requested_by": {
+            "user_id": 1,
+            "subject": "owner",
+            "role": "owner",
+        },
+    }
+    calls: list[tuple[int, str]] = []
+    db = SimpleNamespace(close=lambda: None)
+    engine = SimpleNamespace(dispose=lambda: None)
+    monkeypatch.setattr(executor, "_session", lambda: (db, engine))
+
+    def start(_db, *, actor, idempotency_key):
+        calls.append((actor.id, idempotency_key))
+        return {
+            "scan_id": "41030000-0000-0000-0000-000000000011",
+            "status": "queued",
+            "replayed": len(calls) > 1,
+        }
+
+    monkeypatch.setattr(executor, "start_integrity_scan", start)
+
+    first = executor._enqueue_integrity_scan(
+        request,
+        final_db_outcome="source",
+    )
+    replay = executor._enqueue_integrity_scan(
+        request,
+        final_db_outcome="source",
+    )
+    rollback_key = executor._integrity_convergence_identity(
+        request,
+        "rollback",
+    )[1]
+
+    assert first["scan_id"] == replay["scan_id"]
+    assert first["idempotency_key"] == replay["idempotency_key"]
+    assert first["idempotency_key"] != rollback_key
+    assert calls == [
+        (1, first["idempotency_key"]),
+        (1, first["idempotency_key"]),
+    ]
+
+
 @pytest.mark.parametrize(
     ("mode", "phase"),
     (

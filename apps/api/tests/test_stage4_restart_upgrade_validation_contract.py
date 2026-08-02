@@ -17,7 +17,13 @@ from app.models.setup_lock import SetupLock
 from app.models.system_settings import SystemSettings
 from app.models.user import User
 from app.routers.settings import SettingsUpdateRequest, SetupRequest, setup
-from app.services.setup_storage import CONTAINER_ARCHIVE_PATH, SELECTION_CONTROL_FILE, SELECTION_FILE
+from app.services.setup_storage import (
+    APPLY_STATUS_FILE,
+    CONTAINER_ARCHIVE_PATH,
+    RUNTIME_CONVERGENCE_FILE,
+    SELECTION_CONTROL_FILE,
+    SELECTION_FILE,
+)
 from app.services.system_settings import get_system_settings, serialize_settings
 
 
@@ -30,13 +36,31 @@ class FakeRequest:
 
 
 @pytest.fixture
-def db():
+def db(monkeypatch):
     tmp = tempfile.TemporaryDirectory(prefix="stage4_restart_upgrade_")
     tmp_path = Path(tmp.name)
     original_storage_root = settings.storage_root
     original_control = settings.storage_install_control
     settings.storage_root = str(tmp_path / "archive")
     settings.storage_install_control = str(tmp_path / "install-control")
+    from app.services import setup_storage
+
+    healthy = {
+        "marker_matches": True,
+        "namespace_exists": True,
+        "readable": True,
+        "writable": True,
+    }
+    monkeypatch.setattr(
+        setup_storage,
+        "_initial_storage_runtime_state",
+        lambda *_args, **_kwargs: {
+            "manifest_matches": True,
+            "database_matches": True,
+            "canonical": dict(healthy),
+            "per_root": dict(healthy),
+        },
+    )
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(bind=engine)
@@ -55,6 +79,7 @@ def write_storage_selection(apply_status="active"):
     control = Path(settings.storage_install_control)
     control.mkdir(parents=True, exist_ok=True)
     selected = str(control.parent / "host archive with spaces")
+    request_id = "setup-storage-stage4"
     (control / SELECTION_FILE).write_text(
         json.dumps(
             {
@@ -66,6 +91,7 @@ def write_storage_selection(apply_status="active"):
                 "candidate_id": "stage4-test-candidate",
                 "selected_at": "2026-05-07T00:00:00Z",
                 "apply_status": apply_status,
+                "activation_request_id": request_id,
             }
         )
         + "\n",
@@ -81,9 +107,40 @@ def write_storage_selection(apply_status="active"):
                 f"container_archive_path={CONTAINER_ARCHIVE_PATH}",
                 "candidate_id=stage4-test-candidate",
                 f"apply_status={apply_status}",
+                f"activation_request_id={request_id}",
             ]
         )
         + "\n",
+        encoding="utf-8",
+    )
+    (control / APPLY_STATUS_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "status": apply_status,
+                "request_id": request_id,
+                "selected_host_path": selected,
+                "container_archive_path": CONTAINER_ARCHIVE_PATH,
+                "runtime_proof": {
+                    "api_canonical_marker": True,
+                    "recorder_canonical_marker": True,
+                    "api_default_runtime_marker": True,
+                    "api_default_runtime_namespace": True,
+                    "api_default_runtime_read_write": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (control / RUNTIME_CONVERGENCE_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "request_id": request_id,
+                "selected_host_path": selected,
+                "state": "runtime_verified",
+            }
+        ),
         encoding="utf-8",
     )
 

@@ -19,6 +19,7 @@ REQUEST_FILE="$CONTROL_DIR/storage-activation-request.json"
 REQUEST_CONTROL_FILE="$CONTROL_DIR/storage-activation-request.control"
 SELECTION_CONTROL_FILE="$CONTROL_DIR/storage-selection.control"
 STATUS_FILE="$CONTROL_DIR/storage-apply-status.json"
+RUNTIME_CONVERGENCE_CONTROL_FILE="$CONTROL_DIR/storage-runtime-convergence.control"
 DISCOVERY_REQUEST_CONTROL_FILE="$CONTROL_DIR/storage-discovery-request.control"
 DISCOVERY_RESULT_FILE="$CONTROL_DIR/storage-discovery-result.json"
 DISCOVERY_CANDIDATES_CONTROL_FILE="$CONTROL_DIR/storage-discovery-candidates.control"
@@ -36,6 +37,7 @@ DISCOVERY_VALIDATION_OUT="/tmp/km-vms-storage-discovery-validation.out"
 DISCOVERY_VALIDATION_ERR="/tmp/km-vms-storage-discovery-validation.err"
 ROOT_CLEANUP_OUT="/tmp/km-vms-storage-root-cleanup.out"
 ROOT_CLEANUP_ERR="/tmp/km-vms-storage-root-cleanup.err"
+MAX_INITIAL_ACTIVATION_ATTEMPTS=3
 
 fail_status() {
   message="$1"
@@ -59,6 +61,32 @@ fail_status() {
     printf '  "container_archive_path": "/storage/archive",\n'
     printf '  "configuration_consistent": %s,\n' "$configuration_consistent"
     printf '  "updated_at": "%s",\n' "$created_at"
+    printf '  "error": "%s"\n' "$(printf '%s' "$message" | tr '\r\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')"
+    printf '}\n'
+  } > "$tmp"
+  mv "$tmp" "$STATUS_FILE"
+  chmod 600 "$STATUS_FILE" 2>/dev/null || true
+}
+
+recovery_status() {
+  message="$1"
+  selected_path="${2:-}"
+  request_id_value="${3:-}"
+  operation_id_value="${4:-}"
+  created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
+  tmp="$STATUS_FILE.tmp.$$"
+  {
+    printf '{\n'
+    printf '  "schema_version": 2,\n'
+    printf '  "status": "activation_in_progress",\n'
+    printf '  "phase": "restoring_previous_configuration",\n'
+    printf '  "request_id": "%s",\n' "$(json_escape "$request_id_value")"
+    printf '  "operation_id": "%s",\n' "$(json_escape "$operation_id_value")"
+    printf '  "selected_host_path": "%s",\n' "$(json_escape "$selected_path")"
+    printf '  "container_archive_path": "/storage/archive",\n'
+    printf '  "configuration_consistent": false,\n'
+    printf '  "updated_at": "%s",\n' "$created_at"
+    printf '  "next_action": "retry_initial_configuration_recovery",\n'
     printf '  "error": "%s"\n' "$(printf '%s' "$message" | tr '\r\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')"
     printf '}\n'
   } > "$tmp"
@@ -103,11 +131,52 @@ read_control_value() {
   return 1
 }
 
+initial_configuration_published() {
+  request_value="$1"
+  convergence_request=$(read_control_value "$RUNTIME_CONVERGENCE_CONTROL_FILE" request_id || true)
+  convergence_state=$(read_control_value "$RUNTIME_CONVERGENCE_CONTROL_FILE" state || true)
+  [ "$convergence_request" = "$request_value" ] || return 1
+  [ "$convergence_state" = "configuration_published" ] || [ "$convergence_state" = "runtime_verified" ]
+}
+
+initial_runtime_verified() {
+  request_value="$1"
+  convergence_request=$(read_control_value "$RUNTIME_CONVERGENCE_CONTROL_FILE" request_id || true)
+  convergence_state=$(read_control_value "$RUNTIME_CONVERGENCE_CONTROL_FILE" state || true)
+  [ "$convergence_request" = "$request_value" ] && [ "$convergence_state" = "runtime_verified" ]
+}
+
+run_initial_recovery_action() {
+  action="$1"
+  request_value="$2"
+  sh "$SOURCE_DIR/scripts/km-vms-storage-apply.sh" \
+    --app-dir "$APP_DIR" \
+    "$action" "$request_value"
+}
+
+continue_initial_recovery() {
+  recovery_message="$1"
+  recovery_selected_path="$2"
+  recovery_request_id="$3"
+  recovery_operation_id="$4"
+  recovery_attempt_count="$5"
+  if run_initial_recovery_action --restore-initial-recovery "$recovery_request_id"; then
+    return 0
+  fi
+  recovery_status "$recovery_message" "$recovery_selected_path" "$recovery_request_id" "$recovery_operation_id"
+  write_request_control "$recovery_request_id" "$recovery_selected_path" "processing" "$recovery_operation_id" "$recovery_attempt_count"
+  return 1
+}
+
 write_request_control() {
   request_id_value="$1"
   selected_path_value="$2"
   status_value="$3"
   operation_id_value="${4:-}"
+  attempt_count_value="${5:-0}"
+  case "$attempt_count_value" in
+    ''|*[!0-9]*) attempt_count_value=0 ;;
+  esac
   tmp="$REQUEST_CONTROL_FILE.tmp.$$"
   {
     printf 'schema_version=1\n'
@@ -115,6 +184,7 @@ write_request_control() {
     printf 'selected_host_path=%s\n' "$selected_path_value"
     printf 'container_archive_path=/storage/archive\n'
     printf 'operation_id=%s\n' "$operation_id_value"
+    printf 'attempt_count=%s\n' "$attempt_count_value"
     printf 'status=%s\n' "$status_value"
   } > "$tmp"
   mv "$tmp" "$REQUEST_CONTROL_FILE"
@@ -529,12 +599,50 @@ while :; do
   status=$(read_control_value "$REQUEST_CONTROL_FILE" status || true)
   request_id=$(read_control_value "$REQUEST_CONTROL_FILE" request_id || true)
   operation_id=$(read_control_value "$REQUEST_CONTROL_FILE" operation_id || true)
+  attempt_count=$(read_control_value "$REQUEST_CONTROL_FILE" attempt_count || true)
   selected_path=$(read_control_value "$REQUEST_CONTROL_FILE" selected_host_path || true)
   selected_mount=$(read_control_value "$SELECTION_CONTROL_FILE" selected_mount_path || true)
   folder_name=$(read_control_value "$SELECTION_CONTROL_FILE" folder_name || true)
   expected_physical_identity=$(read_control_value "$SELECTION_CONTROL_FILE" physical_identity || true)
+  case "$attempt_count" in
+    ''|*[!0-9]*) attempt_count=0 ;;
+  esac
+  if [ -z "$operation_id" ]; then
+    initial_activation=1
+  else
+    initial_activation=0
+  fi
+  if setup_already_completed; then
+    setup_completed_now=1
+  else
+    setup_completed_now=0
+  fi
 
-  if setup_already_completed && [ "$status" != "requested" ]; then
+  if [ "$initial_activation" = "1" ] && [ "$setup_completed_now" = "1" ]; then
+    if [ -n "$request_id" ] && initial_runtime_verified "$request_id"; then
+      run_initial_recovery_action --cleanup-initial-recovery "$request_id" || true
+      write_request_control "$request_id" "$selected_path" "completed" "$operation_id" "$attempt_count"
+    fi
+    sleep 5
+    continue
+  fi
+
+  if [ "$status" = "processing" ] && [ -n "$request_id" ]; then
+    if [ "$initial_activation" = "1" ]; then
+      if ! initial_configuration_published "$request_id"; then
+        if ! continue_initial_recovery "initial storage configuration recovery is pending" "$selected_path" "$request_id" "$operation_id" "$attempt_count"; then
+          sleep 2
+          continue
+        fi
+      fi
+    else
+      restore_env_backup || true
+    fi
+    write_request_control "$request_id" "$selected_path" "requested" "$operation_id" "$attempt_count"
+    status="requested"
+  fi
+
+  if [ "$setup_completed_now" = "1" ] && [ "$status" != "requested" ]; then
     sleep 5
     continue
   fi
@@ -544,16 +652,16 @@ while :; do
     continue
   fi
 
-  if setup_already_completed && [ -z "$operation_id" ]; then
+  if [ "$setup_completed_now" = "1" ] && [ -z "$operation_id" ]; then
     fail_status "archive root activation operation id is required" "$selected_path" "$request_id" "$operation_id"
-    write_request_control "$request_id" "$selected_path" "failed" "$operation_id"
+    write_request_control "$request_id" "$selected_path" "failed" "$operation_id" "$attempt_count"
     sleep 2
     continue
   fi
 
-  if setup_already_completed && [ -z "$expected_physical_identity" ]; then
+  if [ "$setup_completed_now" = "1" ] && [ -z "$expected_physical_identity" ]; then
     fail_status "storage candidate identity is required" "$selected_path" "$request_id" "$operation_id"
-    write_request_control "$request_id" "$selected_path" "failed" "$operation_id"
+    write_request_control "$request_id" "$selected_path" "failed" "$operation_id" "$attempt_count"
     sleep 2
     continue
   fi
@@ -566,7 +674,7 @@ while :; do
       docker:27-cli \
       sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-discovery.sh" --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
       fail_status "storage candidate refresh failed before activation" "$selected_path" "$request_id" "$operation_id"
-      write_request_control "$request_id" "$selected_path" "failed" "$operation_id"
+      write_request_control "$request_id" "$selected_path" "failed" "$operation_id" "$attempt_count"
       sleep 2
       continue
     fi
@@ -576,7 +684,7 @@ while :; do
     activation_safety=$(printf '%s\n' "$activation_candidate" | awk -F '\t' '{print $5}')
     if [ -z "$activation_candidate" ] || [ "$activation_identity" != "$expected_physical_identity" ] || [ "$activation_writable" != "true" ] || [ "$activation_safety" != "allowed" ]; then
       fail_status "storage candidate changed before activation" "$selected_path" "$request_id" "$operation_id"
-      write_request_control "$request_id" "$selected_path" "failed" "$operation_id"
+      write_request_control "$request_id" "$selected_path" "failed" "$operation_id" "$attempt_count"
       sleep 2
       continue
     fi
@@ -590,12 +698,13 @@ while :; do
     sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-candidate-validate.sh" --folder-name "$folder_name" >"$DISCOVERY_VALIDATION_OUT" 2>"$DISCOVERY_VALIDATION_ERR"; then
     validation_error=$(read_control_value "$DISCOVERY_VALIDATION_OUT" error || true)
     fail_status "${validation_error:-storage candidate revalidation failed before activation}" "$selected_path" "$request_id" "$operation_id"
-    write_request_control "$request_id" "$selected_path" "failed" "$operation_id"
+    write_request_control "$request_id" "$selected_path" "failed" "$operation_id" "$attempt_count"
     sleep 2
     continue
   fi
 
   created_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
+  attempt_count=$((attempt_count + 1))
   request_tmp="$REQUEST_FILE.tmp.$$"
   {
     printf '{\n'
@@ -608,9 +717,16 @@ while :; do
     printf '}\n'
   } > "$request_tmp"
   mv "$request_tmp" "$REQUEST_FILE"
-  write_request_control "$request_id" "$selected_path" "processing" "$operation_id"
+  write_request_control "$request_id" "$selected_path" "processing" "$operation_id" "$attempt_count"
 
   rm -f "$APPLY_OUT" "$APPLY_ERR" "$RESTART_OUT" "$RESTART_ERR"
+
+  storage_apply_mode=""
+  restart_mode=""
+  if [ "$initial_activation" = "1" ]; then
+    storage_apply_mode="--initial-setup"
+    restart_mode="--initial-setup"
+  fi
 
   if ! docker run --rm \
     -v "$APP_DIR:/host-app" \
@@ -619,10 +735,20 @@ while :; do
     -e KM_VMS_SELECTED_MOUNT_CONTAINER=/selected-root \
     -e "KM_VMS_SELECTED_PATH_CONTAINER=/selected-root/$folder_name" \
     docker:27-cli \
-    sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-apply.sh" --app-dir /host-app >"$APPLY_OUT" 2>"$APPLY_ERR"; then
+    sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-apply.sh" --app-dir /host-app $storage_apply_mode >"$APPLY_OUT" 2>"$APPLY_ERR"; then
+    activation_error=$(cat "$APPLY_ERR" 2>/dev/null || printf 'storage apply failed')
     configuration_consistent=false
-    restore_env_backup && configuration_consistent=true
-    fail_status "$(cat "$APPLY_ERR" 2>/dev/null || printf 'storage apply failed')" "$selected_path" "$request_id" "$operation_id" "$configuration_consistent"
+    if [ "$initial_activation" = "1" ]; then
+      if continue_initial_recovery "$activation_error" "$selected_path" "$request_id" "$operation_id" "$attempt_count"; then
+        configuration_consistent=true
+      else
+        sleep 2
+        continue
+      fi
+    else
+      restore_env_backup && configuration_consistent=true
+    fi
+    fail_status "$activation_error" "$selected_path" "$request_id" "$operation_id" "$configuration_consistent"
     request_tmp="$REQUEST_FILE.tmp.$$"
     {
       printf '{\n'
@@ -635,15 +761,44 @@ while :; do
       printf '}\n'
     } > "$request_tmp"
     mv "$request_tmp" "$REQUEST_FILE"
-    write_request_control "$request_id" "$selected_path" "failed" "$operation_id"
+    write_request_control "$request_id" "$selected_path" "failed" "$operation_id" "$attempt_count"
     sleep 2
     continue
   fi
 
-  if ! sh "$SOURCE_DIR/scripts/km-vms-restart.sh" --app-dir "$APP_DIR" --verify-storage-selection >"$RESTART_OUT" 2>"$RESTART_ERR"; then
+  if ! sh "$SOURCE_DIR/scripts/km-vms-restart.sh" --app-dir "$APP_DIR" --verify-storage-selection $restart_mode >"$RESTART_OUT" 2>"$RESTART_ERR"; then
+    if [ "$initial_activation" = "1" ] && initial_configuration_published "$request_id" && [ "$attempt_count" -lt "$MAX_INITIAL_ACTIVATION_ATTEMPTS" ]; then
+      request_tmp="$REQUEST_FILE.tmp.$$"
+      {
+        printf '{\n'
+        printf '  "schema_version": 1,\n'
+        printf '  "request_id": "%s",\n' "$request_id"
+        printf '  "operation_id": "",\n'
+        printf '  "selected_host_path": "%s",\n' "$(json_escape "$selected_path")"
+        printf '  "requested_at": "%s",\n' "$created_at"
+        printf '  "status": "requested"\n'
+        printf '}\n'
+      } > "$request_tmp"
+      mv "$request_tmp" "$REQUEST_FILE"
+      write_request_control "$request_id" "$selected_path" "requested" "$operation_id" "$attempt_count"
+      sleep 2
+      continue
+    fi
+    activation_error=$(cat "$RESTART_ERR" 2>/dev/null || printf 'storage restart failed')
     configuration_consistent=false
-    restore_env_backup && configuration_consistent=true
-    fail_status "$(cat "$RESTART_ERR" 2>/dev/null || printf 'storage restart failed')" "$selected_path" "$request_id" "$operation_id" "$configuration_consistent"
+    if [ "$initial_activation" = "1" ]; then
+      if initial_configuration_published "$request_id"; then
+        configuration_consistent=true
+      elif continue_initial_recovery "$activation_error" "$selected_path" "$request_id" "$operation_id" "$attempt_count"; then
+        configuration_consistent=true
+      else
+        sleep 2
+        continue
+      fi
+    else
+      restore_env_backup && configuration_consistent=true
+    fi
+    fail_status "$activation_error" "$selected_path" "$request_id" "$operation_id" "$configuration_consistent"
     request_tmp="$REQUEST_FILE.tmp.$$"
     {
       printf '{\n'
@@ -656,9 +811,18 @@ while :; do
       printf '}\n'
     } > "$request_tmp"
     mv "$request_tmp" "$REQUEST_FILE"
-    write_request_control "$request_id" "$selected_path" "failed" "$operation_id"
+    write_request_control "$request_id" "$selected_path" "failed" "$operation_id" "$attempt_count"
     sleep 2
     continue
+  fi
+
+  if [ "$initial_activation" = "1" ]; then
+    if ! run_initial_recovery_action --cleanup-initial-recovery "$request_id"; then
+      fail_status "initial storage recovery cleanup failed" "$selected_path" "$request_id" "$operation_id" true
+      write_request_control "$request_id" "$selected_path" "failed" "$operation_id" "$attempt_count"
+      sleep 2
+      continue
+    fi
   fi
 
   request_tmp="$REQUEST_FILE.tmp.$$"
@@ -673,7 +837,7 @@ while :; do
     printf '}\n'
   } > "$request_tmp"
   mv "$request_tmp" "$REQUEST_FILE"
-  write_request_control "$request_id" "$selected_path" "completed" "$operation_id"
+  write_request_control "$request_id" "$selected_path" "completed" "$operation_id" "$attempt_count"
   rm -f "$APPLY_OUT" "$APPLY_ERR" "$RESTART_OUT" "$RESTART_ERR"
   sleep 2
 done

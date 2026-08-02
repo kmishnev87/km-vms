@@ -19,10 +19,32 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 helper = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(helper)
+REAL_RUN_RESTORE_API_INTEGRITY_EXECUTOR = (
+    helper.run_restore_api_integrity_executor
+)
 
 
 ARTIFACT_A = "kmvms-db-20260729T120000Z-aaaaaaaaaaaa"
 ARTIFACT_B = "kmvms-db-20260729T120100Z-bbbbbbbbbbbb"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_post_restore_integrity_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        helper,
+        "_write_restore_integrity_convergence",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        helper,
+        "run_restore_api_integrity_executor",
+        lambda *_args, **_kwargs: {
+            "scan_id": "41030000-0000-0000-0000-000000000001",
+            "status": "queued",
+        },
+    )
 
 
 def _request(*, state: str = "claimed") -> dict:
@@ -58,6 +80,22 @@ def _request(*, state: str = "claimed") -> dict:
         "terminal": None,
         "video_archive_scope": "excluded",
         "migration_auto_apply": False,
+    }
+
+
+def _terminal_request(*, status: str = "completed") -> dict:
+    request = _request(state="claimed")
+    finished_at = "2026-07-29T12:00:30Z"
+    return {
+        **request,
+        "state": "terminal",
+        "updated_at": finished_at,
+        "terminal": {
+            "status": status,
+            "finished_at": finished_at,
+            "reason_code": None if status == "completed" else "source_restore_failed",
+            "failed_phase": None if status == "completed" else "restore_running",
+        },
     }
 
 
@@ -196,6 +234,61 @@ def test_existing_restore_service_action_rejects_untrusted_discovery(
     with pytest.raises(helper.HelperError):
         helper._run_existing_restore_service_action(service, "start")
     assert docker_actions == []
+
+
+def test_post_restore_integrity_scan_runs_inside_existing_api_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    request = _request()
+    monkeypatch.setattr(
+        helper,
+        "restore_compose_command",
+        lambda *args, **_kwargs: (
+            calls.append(tuple(args))
+            or subprocess.CompletedProcess(args, 0, "", "")
+        ),
+    )
+    monkeypatch.setattr(
+        helper,
+        "read_json",
+        lambda path: (
+            {
+                "schema_version": 1,
+                "operation_id": request["operation_id"],
+                "action": "enqueue-integrity",
+                "status": "completed",
+                "reason_code": None,
+                "details": {
+                    "scan_id": "41030000-0000-0000-0000-000000000010",
+                },
+            }
+            if path == helper.RESTORE_EXECUTOR_RESULT_FILE
+            else None
+        ),
+    )
+
+    details = REAL_RUN_RESTORE_API_INTEGRITY_EXECUTOR(
+        request,
+        final_db_outcome="source",
+    )
+
+    assert details["scan_id"] == "41030000-0000-0000-0000-000000000010"
+    assert calls == [
+        (
+            "exec",
+            "-T",
+            "api",
+            "python3",
+            "-m",
+            "app.services.current_db_restore_executor",
+            "enqueue-integrity",
+            "--operation-id",
+            request["operation_id"],
+            "--final-db-outcome",
+            "source",
+        )
+    ]
 
 
 def test_recorder_restart_uses_exact_existing_id_and_fresh_proof(
@@ -456,6 +549,14 @@ def test_restore_helper_happy_path_orders_writers_and_terminal(
     )
     monkeypatch.setattr(
         helper,
+        "run_restore_api_integrity_executor",
+        lambda _request_value, *, final_db_outcome, **_kwargs: (
+            events.append(f"integrity:{final_db_outcome}")
+            or {"scan_id": "41030000-0000-0000-0000-000000000001"}
+        ),
+    )
+    monkeypatch.setattr(
+        helper,
         "finish_restore_request",
         lambda _request_value, **kwargs: terminal.append(kwargs),
     )
@@ -474,10 +575,13 @@ def test_restore_helper_happy_path_orders_writers_and_terminal(
         "executor:pre-restore-backup"
     )
     assert events.index("executor:restore") < events.index("api:start")
+    assert events.index("executor:invalidate-integrity") < events.index("api:start")
     assert events.index("api:start") < events.index("executor:post-check")
     assert events.index("executor:post-check") < events.index(
         "recorder:start"
     )
+    assert events.index("recorder:start") < events.index("integrity:source")
+    assert events.count("integrity:source") == 1
 
 
 def test_failure_after_mutation_converges_to_rollback(
@@ -578,6 +682,7 @@ def test_successful_rollback_reports_failed_rolled_back_not_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     terminal: list[dict] = []
+    sequence: list[str] = []
     monkeypatch.setattr(
         helper,
         "stop_restore_writers",
@@ -591,10 +696,23 @@ def test_successful_rollback_reports_failed_rolled_back_not_success(
         "start_restore_recorder_with_proof",
         lambda _request_value: None,
     )
+    scheduled: list[str] = []
+    monkeypatch.setattr(
+        helper,
+        "run_restore_api_integrity_executor",
+        lambda _request_value, *, final_db_outcome, **_kwargs: (
+            sequence.append("schedule")
+            or
+            scheduled.append(final_db_outcome)
+            or {"scan_id": "41030000-0000-0000-0000-000000000002"}
+        ),
+    )
     monkeypatch.setattr(
         helper,
         "finish_restore_request",
-        lambda _request_value, **kwargs: terminal.append(kwargs),
+        lambda _request_value, **kwargs: (
+            sequence.append("terminal") or terminal.append(kwargs)
+        ),
     )
 
     helper.rollback_current_restore(
@@ -612,6 +730,238 @@ def test_successful_rollback_reports_failed_rolled_back_not_success(
             "failed_phase": "restore_running",
         }
     ]
+    assert scheduled == ["rollback"]
+    assert sequence == ["terminal", "schedule"]
+
+
+def test_source_validation_failure_schedules_only_rollback_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    post_checks = 0
+    terminal: list[dict] = []
+    scheduled: list[str] = []
+    monkeypatch.setattr(helper, "read_json", lambda _path: None)
+    monkeypatch.setattr(
+        helper,
+        "publish_restore_phase",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(helper, "stop_restore_writers", lambda: None)
+    monkeypatch.setattr(helper, "start_restore_api", lambda: None)
+    monkeypatch.setattr(
+        helper,
+        "start_restore_recorder_with_proof",
+        lambda _request_value: None,
+    )
+
+    def executor(request_value, action, **kwargs):
+        nonlocal post_checks
+        if action == "post-check":
+            post_checks += 1
+            if post_checks == 1:
+                raise helper.HelperError(
+                    "post_restore_metadata_invalid",
+                    "Injected source DB validation failure.",
+                )
+        return _successful_executor(
+            request_value,
+            action,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(helper, "run_restore_executor", executor)
+    monkeypatch.setattr(
+        helper,
+        "run_restore_api_integrity_executor",
+        lambda _request_value, *, final_db_outcome, **_kwargs: (
+            scheduled.append(final_db_outcome)
+            or {"scan_id": "41030000-0000-0000-0000-000000000003"}
+        ),
+    )
+    monkeypatch.setattr(
+        helper,
+        "finish_restore_request",
+        lambda _request_value, **kwargs: terminal.append(kwargs),
+    )
+
+    helper.run_current_restore(_request())
+
+    assert post_checks == 2
+    assert scheduled == ["rollback"]
+    assert terminal[0]["result"] == "failed_rolled_back"
+
+
+def test_integrity_enqueue_failure_keeps_verified_source_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    terminal: list[dict] = []
+    rollbacks: list[dict] = []
+    convergence: list[dict] = []
+    monkeypatch.setattr(helper, "read_json", lambda _path: None)
+    monkeypatch.setattr(
+        helper,
+        "publish_restore_phase",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(helper, "run_restore_executor", _successful_executor)
+    monkeypatch.setattr(helper, "stop_restore_writers", lambda: None)
+    monkeypatch.setattr(helper, "start_restore_api", lambda: None)
+    monkeypatch.setattr(
+        helper,
+        "start_restore_recorder_with_proof",
+        lambda _request_value: None,
+    )
+    monkeypatch.setattr(
+        helper,
+        "run_restore_api_integrity_executor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            helper.HelperError(
+                "restore_integrity_enqueue_failed",
+                "Injected auxiliary scheduling failure.",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        helper,
+        "_write_restore_integrity_convergence",
+        lambda _request_value, **kwargs: convergence.append(kwargs),
+    )
+    monkeypatch.setattr(
+        helper,
+        "rollback_current_restore",
+        lambda _request_value, **kwargs: rollbacks.append(kwargs),
+    )
+    monkeypatch.setattr(
+        helper,
+        "finish_restore_request",
+        lambda _request_value, **kwargs: terminal.append(kwargs),
+    )
+
+    helper.run_current_restore(_request())
+
+    assert rollbacks == []
+    assert terminal[0]["result"] == "completed"
+    assert [item["state"] for item in convergence] == [
+        "invalidated",
+        "retry_required",
+    ]
+    assert convergence[-1]["reason_code"] == "restore_integrity_enqueue_failed"
+
+
+def test_verified_source_terminal_survives_crash_before_integrity_scheduling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _request()
+    terminal_request: dict = {}
+    convergence: dict = {}
+    sequence: list[str] = []
+    enqueue_calls: list[str] = []
+    rollbacks: list[dict] = []
+    restart_phase = False
+
+    monkeypatch.setattr(helper, "publish_restore_phase", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(helper, "run_restore_executor", _successful_executor)
+    monkeypatch.setattr(helper, "stop_restore_writers", lambda: None)
+    monkeypatch.setattr(helper, "start_restore_api", lambda: None)
+    monkeypatch.setattr(helper, "start_restore_recorder_with_proof", lambda _request_value: None)
+    monkeypatch.setattr(
+        helper,
+        "rollback_current_restore",
+        lambda _request_value, **kwargs: rollbacks.append(kwargs),
+    )
+
+    def finish(_request_value: dict, **kwargs) -> None:
+        sequence.append("terminal")
+        terminal_request.update(_terminal_request(status=kwargs["result"]))
+
+    def write_convergence(
+        request_value: dict,
+        *,
+        final_db_outcome: str,
+        state: str,
+        attempt_count: int,
+        scan_id: str | None = None,
+        reason_code: str | None = None,
+        next_retry_at_epoch: float | None = None,
+    ) -> None:
+        convergence.clear()
+        convergence.update(
+            {
+                "schema": helper.RESTORE_INTEGRITY_CONVERGENCE_SCHEMA,
+                "operation_id": request_value["operation_id"],
+                "final_db_outcome": final_db_outcome,
+                "idempotency_key": helper._restore_integrity_idempotency_key(
+                    request_value,
+                    final_db_outcome,
+                ),
+                "state": state,
+                "attempt_count": attempt_count,
+                "scan_id": scan_id,
+                "reason_code": reason_code,
+                "next_retry_at_epoch": next_retry_at_epoch,
+            }
+        )
+
+    def enqueue(_request_value: dict, *, final_db_outcome: str, **_kwargs) -> dict:
+        enqueue_calls.append(final_db_outcome)
+        if len(enqueue_calls) == 1:
+            raise SystemExit("injected helper stop after terminal write")
+        return {"scan_id": "41030000-0000-0000-0000-000000000004"}
+
+    def read(path: Path):
+        if not restart_phase:
+            return None
+        if path == helper.RESTORE_REQUEST_FILE:
+            return terminal_request
+        if path == helper.RESTORE_INTEGRITY_CONVERGENCE_FILE:
+            return convergence or None
+        return None
+
+    monkeypatch.setattr(helper, "read_json", read)
+    monkeypatch.setattr(helper, "finish_restore_request", finish)
+    monkeypatch.setattr(helper, "_write_restore_integrity_convergence", write_convergence)
+    monkeypatch.setattr(helper, "run_restore_api_integrity_executor", enqueue)
+
+    with pytest.raises(SystemExit, match="injected helper stop"):
+        helper.run_current_restore(request)
+
+    assert sequence == ["terminal"]
+    assert terminal_request["terminal"]["status"] == "completed"
+    assert convergence["state"] == "invalidated"
+    assert rollbacks == []
+
+    restart_phase = True
+    helper.reconcile_restore_integrity_convergence()
+    assert enqueue_calls == ["source", "source"]
+    assert convergence["state"] == "scheduled"
+
+    helper.reconcile_restore_integrity_convergence()
+    assert enqueue_calls == ["source", "source"]
+    assert rollbacks == []
+
+
+def test_terminal_restore_without_convergence_schedules_scan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    terminal = _terminal_request()
+    scheduled: list[str] = []
+
+    monkeypatch.setattr(
+        helper,
+        "read_json",
+        lambda path: terminal if path == helper.RESTORE_REQUEST_FILE else None,
+    )
+    monkeypatch.setattr(
+        helper,
+        "schedule_post_restore_integrity",
+        lambda _request_value, *, final_db_outcome: (
+            scheduled.append(final_db_outcome) or True
+        ),
+    )
+
+    helper.reconcile_restore_integrity_convergence()
+
+    assert scheduled == ["source"]
 
 
 def test_rollback_api_failure_reports_database_returned_but_recovery_required(

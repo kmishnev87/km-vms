@@ -192,7 +192,7 @@ def setup_storage_discovery(db: Session = Depends(get_db)):
 @router.get("/setup/storage/status")
 def setup_storage_status(db: Session = Depends(get_db)):
     require_setup_mode(db)
-    return setup_storage_confirmation_status()
+    return setup_storage_confirmation_status(db)
 
 
 @router.post("/setup/storage/preview")
@@ -593,7 +593,7 @@ def setup(payload: SetupRequest, db: Session = Depends(get_db), request: Request
 
         requested_storage_path = settings_data.get("storage_path")
         try:
-            storage_confirmation = require_setup_storage_confirmation()
+            storage_confirmation = require_setup_storage_confirmation(db)
         except ValueError as exc:
             db.rollback()
             audit_setup_failed(db, request, "storage_confirmation_invalid", status.HTTP_422_UNPROCESSABLE_ENTITY)

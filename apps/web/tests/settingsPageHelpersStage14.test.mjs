@@ -181,6 +181,9 @@ const maintenanceText = {
   maintenanceBackupCheckStatuses: {
     valid: "Check passed",
     verified: "Check passed",
+    validated: "Backup is available, intact, and compatible; the trial restore passed.",
+    passed: "Backup is available, intact, and compatible; the trial restore passed.",
+    completed: "Check completed",
     available: "Backup is available",
     no_artifacts: "Nothing to check",
     blocked: "Check blocked",
@@ -188,6 +191,11 @@ const maintenanceText = {
     check_failed: "Check failed",
     fallback: "Check status received",
   },
+  maintenanceBackupCheckOutcomes: {
+    fully_validated: "Backup is available, intact, and compatible; the trial restore passed.",
+  },
+  maintenanceBackupCheckPassedTitle: "Check passed",
+  maintenanceBackupCheckPassedText: "Backup is available, intact, and compatible; the trial restore passed.",
   maintenanceBackupOperationLabels: {
     check: "Check",
     create: "Create",
@@ -391,23 +399,37 @@ assert.equal(maintenanceBackupCheckResultText("verified", maintenanceText), "Che
 assert.equal(maintenanceBackupCheckResultText("available", maintenanceText), "Backup is available");
 assert.equal(maintenanceBackupCheckResultText("no_artifacts", maintenanceText), "Nothing to check");
 assert.equal(maintenanceBackupCheckResultText("check_failed", maintenanceText), "Check failed");
-assert.equal(maintenanceBackupOperationResultText({ kind: "check", status: "valid" }, maintenanceText).text, "Check passed");
+assert.equal(maintenanceBackupCheckResultText("validated", maintenanceText), "Backup is available, intact, and compatible; the trial restore passed.");
+assert.deepEqual(maintenanceBackupOperationResultText({ kind: "check", status: "valid" }, maintenanceText), {
+  kind: "check",
+  label: "Check",
+  title: "Check passed",
+  text: "Backup is available, intact, and compatible; the trial restore passed.",
+  successful: true,
+  showReason: false,
+});
 assert.deepEqual(maintenanceBackupOperationResultText({ kind: "create", status: "verified" }, maintenanceText), {
   kind: "create",
   label: "Create",
+  title: "Create",
   text: "Backup created",
+  successful: true,
   showReason: false,
 });
 assert.deepEqual(maintenanceBackupOperationResultText({ kind: "delete", status: "deleted" }, maintenanceText), {
   kind: "delete",
   label: "Delete",
+  title: "Delete",
   text: "Backup deleted",
+  successful: true,
   showReason: false,
 });
 assert.deepEqual(maintenanceBackupOperationResultText({ kind: "delete", status: "deleted_with_missing_files" }, maintenanceText), {
   kind: "delete",
   label: "Delete",
+  title: "Delete",
   text: "Backup deleted with already-missing files",
+  successful: true,
   showReason: false,
 });
 const warningModel = maintenanceWarningModel({

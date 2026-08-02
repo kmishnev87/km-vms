@@ -1,6 +1,8 @@
 /* Settings, users, security/audit modal, diagnostics and maintenance surfaces; retains late dashboard card tail in original cascade position. */
 
 .settingsPage {
+  --settings-compact-select-width: 200px;
+  --settings-panel-border-width: 1px;
   position: relative;
   width: 100%;
   max-width: var(--page-working-width);
@@ -357,7 +359,7 @@
 }
 
 .settingsPanel {
-  border: 1px solid #dbe3ef;
+  border: var(--settings-panel-border-width) solid #dbe3ef;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.92);
   backdrop-filter: blur(6px);
@@ -450,6 +452,23 @@
   min-height: 38px;
 }
 
+.settingsRowCompactSelect {
+  grid-template-columns: var(--settings-row-icon) minmax(0, 1fr) var(--settings-compact-select-width);
+}
+
+.settingsRowCompactSelect .settingsRowControl {
+  width: var(--settings-compact-select-width);
+}
+
+.settingsRowCompactSelect .settingsSelect {
+  height: 34px;
+  min-height: 34px;
+  padding: 5px 32px 5px 10px;
+  font-size: 13px;
+  text-align: left;
+  text-align-last: left;
+}
+
 .settingsHardwareRescanButton {
   position: absolute;
   right: 0;
@@ -503,25 +522,54 @@
 }
 
 .settingsHeaderActions {
+  --settings-header-actions-gap: 7px;
+  --settings-header-actions-width: calc(var(--settings-compact-select-width) + var(--settings-row-padding-x) + var(--settings-panel-border-width));
+  --settings-header-action-width: calc((var(--settings-header-actions-width) - var(--settings-header-actions-gap)) / 2);
   position: relative;
-  min-width: 202px;
+  width: var(--settings-header-actions-width);
+  min-width: var(--settings-header-actions-width);
   display: grid;
-  grid-template-columns: minmax(0, auto) auto auto;
+  grid-template-columns: repeat(2, var(--settings-header-action-width));
+  grid-template-areas:
+    "dirty dirty"
+    "cancel save";
   align-items: center;
+  justify-content: end;
   justify-items: end;
-  gap: 8px;
+  column-gap: var(--settings-header-actions-gap);
+  row-gap: 3px;
 }
 
 .settingsDirtyNote {
+  grid-area: dirty;
   position: static;
+  min-height: 14px;
   color: #92400e;
   font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
+  visibility: hidden;
+}
+
+.settingsDirtyNote.is-visible {
+  visibility: visible;
 }
 
 .settingsCancelButton {
-  min-width: 82px;
+  grid-area: cancel;
+}
+
+.settingsHeaderActions > .button {
+  width: var(--settings-header-action-width);
+  min-width: var(--settings-header-action-width);
+  max-width: var(--settings-header-action-width);
+  padding-right: 10px;
+  padding-left: 10px;
+  white-space: nowrap;
+}
+
+.settingsHeaderActions > .button:last-child {
+  grid-area: save;
 }
 
 .settingsUsersAddButton {
@@ -1539,7 +1587,9 @@
   min-width: 0;
   display: grid;
   align-content: start;
+  justify-items: center;
   gap: 4px;
+  text-align: center;
 }
 
 .settingsMaintenanceBackupStatusGrid span {
@@ -1577,6 +1627,17 @@
   border-color: #fecaca;
   background: #fef2f2;
   color: #991b1b;
+}
+
+.settingsMaintenanceBackupStatusPill.is-symbol {
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-radius: 50%;
+  align-items: center;
+  justify-content: center;
+  overflow-wrap: normal;
 }
 
 .settingsMaintenanceBackupEvidenceTime {
@@ -2761,6 +2822,7 @@
 
 .settingsRowControlMeta {
   justify-items: center;
+  width: 200px;
 }
 
 .settingsMetaPill {
@@ -2976,6 +3038,16 @@
   gap: 10px;
 }
 
+.settingsMaintenanceCardHeadingAligned {
+  display: grid;
+  grid-template-columns: 180px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.settingsMaintenanceCardHeadingAligned .settingsMaintenancePill {
+  justify-self: start;
+}
+
 .settingsMaintenanceCardHeading h3 {
   margin: 0;
   color: #182335;
@@ -3139,14 +3211,15 @@
 .settingsMaintenanceCoreCard,
 .settingsMaintenanceBackupManager.settingsMaintenanceCoreCard {
   min-width: 0;
-  min-height: 205px;
-  padding: 18px 20px;
+  min-height: 0;
+  height: 100%;
+  padding: 16px 20px;
   border: 1px solid #dce5ee;
   border-radius: 9px;
   background: #ffffff;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
 }
 
 .settingsMaintenanceCoreFacts {
@@ -3207,6 +3280,14 @@
   gap: 5px;
 }
 
+.settingsMaintenanceBackupLatestRow {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
 .settingsMaintenanceBackupLatest span {
   color: #64748b;
   font-size: 13px;
@@ -3215,14 +3296,14 @@
 }
 
 .settingsMaintenanceBackupActions {
-  margin-top: auto;
+  margin-top: 0;
   flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
 }
 
-.settingsMaintenanceBackupActions .button {
-  min-height: 38px;
-  justify-content: center;
-  white-space: nowrap;
+.settingsMaintenanceActionIcon {
+  flex: 0 0 40px;
 }
 
 .settingsMaintenanceSupport {
@@ -3245,8 +3326,17 @@
 }
 
 .settingsMaintenanceSupportActions {
-  width: auto;
-  min-width: 156px;
+  grid-template-columns: 40px;
+  width: 40px;
+  min-width: 40px;
+}
+
+.settingsMaintenanceSupportActions .settingsMaintenanceSupportActionButton {
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  min-height: 40px;
+  padding: 3px;
 }
 
 .settingsMaintenanceWarningsList {
@@ -3394,14 +3484,16 @@
   }
 
   .settingsMaintenanceSupportActions {
-    width: 100%;
+    justify-self: end;
+    width: 40px;
+    min-width: 40px;
   }
 
   .settingsMaintenanceSupportActions .button {
-    width: 100%;
+    width: 40px;
   }
 
-  .settingsMaintenanceBackupDetailHeader .button,
+  .settingsMaintenanceBackupDetailHeader .button:not(.appIllustratedAction),
   .settingsMaintenanceBackButton {
     width: 100%;
     justify-content: center;
@@ -3415,6 +3507,11 @@
 
   .settingsMaintenanceCardHeading {
     align-items: flex-start;
+  }
+
+  .settingsMaintenanceCardHeadingAligned {
+    grid-template-columns: 1fr;
+    gap: 7px;
   }
 
   .settingsMaintenancePill {
@@ -3432,15 +3529,17 @@
     border-left: 0;
   }
 
-  .settingsUpdateApplyActions,
-  .settingsMaintenanceBackupActions {
+  .settingsUpdateApplyActions {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .settingsUpdateApplyActions .button,
-  .settingsMaintenanceBackupActions .button {
+  .settingsUpdateApplyActions .button {
     width: 100%;
+  }
+
+  .settingsMaintenanceBackupLatestRow {
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .settingsMaintenanceCoreFacts {

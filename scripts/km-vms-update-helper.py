@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -41,6 +42,9 @@ RESTORE_JOURNAL_FILE = RESTORE_CONTROL_DIR / "restore-journal.json"
 RESTORE_JOURNAL_DIR = RESTORE_CONTROL_DIR / "journal"
 RESTORE_EXECUTOR_RESULT_FILE = (
     RESTORE_CONTROL_DIR / "restore-executor-result.json"
+)
+RESTORE_INTEGRITY_CONVERGENCE_FILE = (
+    RESTORE_CONTROL_DIR / "restore-integrity-convergence.json"
 )
 RESTORE_DESTRUCTIVE_MARKER_FILE = (
     RESTORE_CONTROL_DIR / "restore-destructive-started.json"
@@ -142,6 +146,11 @@ RESTORE_PHASES = {
 }
 RESTORE_OPERATIONAL_PHASES = RESTORE_PHASES - RESTORE_TERMINAL_RESULTS
 RESTORE_SERVICE_ALLOWLIST = frozenset({"api", "recorder"})
+RESTORE_INTEGRITY_CONVERGENCE_SCHEMA = (
+    "archive-integrity-post-restore-convergence.v1"
+)
+RESTORE_INTEGRITY_MAX_ATTEMPTS = 3
+RESTORE_INTEGRITY_RETRY_SECONDS = 30
 
 CURRENT_REQUEST_KEYS = {
     "schema_version",
@@ -2466,6 +2475,7 @@ def run_restore_executor(
     artifact_id: str | None = None,
     mode: str = "source",
     recorder_not_before_epoch: float | None = None,
+    final_db_outcome: str | None = None,
     timeout_seconds: int = 1200,
 ) -> dict[str, Any]:
     command = [
@@ -2481,6 +2491,15 @@ def run_restore_executor(
         command.extend(["--artifact-id", artifact_id])
     if action == "restore":
         command.extend(["--mode", mode])
+    if action == "invalidate-integrity":
+        if final_db_outcome not in {"source", "rollback"}:
+            raise HelperError(
+                "restore_integrity_outcome_invalid",
+                "Restore integrity outcome is invalid.",
+            )
+        command.extend(
+            ["--final-db-outcome", final_db_outcome]
+        )
     if action == "recorder-proof":
         if recorder_not_before_epoch is None:
             raise HelperError(
@@ -2536,6 +2555,262 @@ def run_restore_executor(
         )
     details = payload.get("details")
     return details if isinstance(details, dict) else {}
+
+
+def _restore_integrity_idempotency_key(
+    request: dict[str, Any],
+    final_db_outcome: str,
+) -> str:
+    if final_db_outcome not in {"source", "rollback"}:
+        raise HelperError(
+            "restore_integrity_outcome_invalid",
+            "Restore integrity outcome is invalid.",
+        )
+    identity = (
+        "archive-integrity-post-restore:v1:"
+        f"{request['operation_id']}:{final_db_outcome}"
+    )
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _restore_integrity_convergence_status(
+    request: dict[str, Any],
+    final_db_outcome: str,
+) -> dict[str, Any] | None:
+    try:
+        payload = read_json(RESTORE_INTEGRITY_CONVERGENCE_FILE)
+    except HelperError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    expected_key = _restore_integrity_idempotency_key(
+        request,
+        final_db_outcome,
+    )
+    if (
+        payload.get("schema")
+        != RESTORE_INTEGRITY_CONVERGENCE_SCHEMA
+        or payload.get("operation_id") != request["operation_id"]
+        or payload.get("final_db_outcome") != final_db_outcome
+        or payload.get("idempotency_key") != expected_key
+        or payload.get("state")
+        not in {"invalidated", "scheduled", "retry_required"}
+        or not isinstance(payload.get("attempt_count"), int)
+        or isinstance(payload.get("attempt_count"), bool)
+        or payload["attempt_count"] < 0
+    ):
+        return None
+    return payload
+
+
+def _write_restore_integrity_convergence(
+    request: dict[str, Any],
+    *,
+    final_db_outcome: str,
+    state: str,
+    attempt_count: int,
+    scan_id: str | None = None,
+    reason_code: str | None = None,
+    next_retry_at_epoch: float | None = None,
+) -> None:
+    if state not in {"invalidated", "scheduled", "retry_required"}:
+        raise HelperError(
+            "restore_integrity_state_invalid",
+            "Restore integrity convergence state is invalid.",
+        )
+    write_json(
+        RESTORE_INTEGRITY_CONVERGENCE_FILE,
+        {
+            "schema": RESTORE_INTEGRITY_CONVERGENCE_SCHEMA,
+            "operation_id": request["operation_id"],
+            "final_db_outcome": final_db_outcome,
+            "idempotency_key": _restore_integrity_idempotency_key(
+                request,
+                final_db_outcome,
+            ),
+            "state": state,
+            "attempt_count": max(0, int(attempt_count)),
+            "scan_id": safe_text(scan_id, 64) if scan_id else None,
+            "reason_code": (
+                reason_code
+                if reason_code
+                and MACHINE_CODE_RE.fullmatch(reason_code)
+                else None
+            ),
+            "next_action": (
+                "retry_integrity_scan"
+                if state == "retry_required"
+                else None
+            ),
+            "next_retry_at_epoch": (
+                float(next_retry_at_epoch)
+                if next_retry_at_epoch is not None
+                else None
+            ),
+            "updated_at": utcnow(),
+        },
+    )
+
+
+def invalidate_post_restore_integrity(
+    request: dict[str, Any],
+    *,
+    final_db_outcome: str,
+) -> dict[str, Any]:
+    details = run_restore_executor(
+        request,
+        "invalidate-integrity",
+        final_db_outcome=final_db_outcome,
+        timeout_seconds=120,
+    )
+    _write_restore_integrity_convergence(
+        request,
+        final_db_outcome=final_db_outcome,
+        state="invalidated",
+        attempt_count=0,
+    )
+    return details
+
+
+def run_restore_api_integrity_executor(
+    request: dict[str, Any],
+    *,
+    final_db_outcome: str,
+    timeout_seconds: int = 120,
+) -> dict[str, Any]:
+    command = [
+        "exec",
+        "-T",
+        "api",
+        "python3",
+        "-m",
+        "app.services.current_db_restore_executor",
+        "enqueue-integrity",
+        "--operation-id",
+        request["operation_id"],
+        "--final-db-outcome",
+        final_db_outcome,
+    ]
+    result = restore_compose_command(
+        *command,
+        timeout_seconds=timeout_seconds,
+    )
+    payload = read_json(RESTORE_EXECUTOR_RESULT_FILE)
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or payload.get("operation_id") != request["operation_id"]
+        or payload.get("action") != "enqueue-integrity"
+        or payload.get("status") not in {"completed", "failed"}
+    ):
+        raise HelperError(
+            "restore_integrity_enqueue_result_invalid",
+            "Archive integrity scheduling result is unavailable.",
+        )
+    if result.returncode != 0 or payload["status"] != "completed":
+        raise HelperError(
+            "restore_integrity_enqueue_failed",
+            "Archive integrity scan could not be scheduled.",
+        )
+    details = payload.get("details")
+    if not isinstance(details, dict) or not safe_text(
+        details.get("scan_id"),
+        64,
+    ):
+        raise HelperError(
+            "restore_integrity_enqueue_result_invalid",
+            "Archive integrity scheduling result is unavailable.",
+        )
+    return details
+
+
+def schedule_post_restore_integrity(
+    request: dict[str, Any],
+    *,
+    final_db_outcome: str,
+) -> bool:
+    previous = _restore_integrity_convergence_status(
+        request,
+        final_db_outcome,
+    )
+    attempts = int((previous or {}).get("attempt_count") or 0) + 1
+    try:
+        details = run_restore_api_integrity_executor(
+            request,
+            final_db_outcome=final_db_outcome,
+        )
+    except Exception:
+        try:
+            _write_restore_integrity_convergence(
+                request,
+                final_db_outcome=final_db_outcome,
+                state="retry_required",
+                attempt_count=attempts,
+                reason_code="restore_integrity_enqueue_failed",
+                next_retry_at_epoch=(
+                    time.time() + RESTORE_INTEGRITY_RETRY_SECONDS
+                    if attempts < RESTORE_INTEGRITY_MAX_ATTEMPTS
+                    else None
+                ),
+            )
+        except Exception:
+            pass
+        return False
+    try:
+        _write_restore_integrity_convergence(
+            request,
+            final_db_outcome=final_db_outcome,
+            state="scheduled",
+            attempt_count=attempts,
+            scan_id=safe_text(details.get("scan_id"), 64),
+        )
+    except Exception:
+        pass
+    return True
+
+
+def reconcile_restore_integrity_convergence() -> None:
+    request = validate_restore_request(
+        read_json(RESTORE_REQUEST_FILE)
+    )
+    if request is None or request.get("state") != "terminal":
+        return
+    terminal_status = str(
+        (request.get("terminal") or {}).get("status") or ""
+    )
+    final_db_outcome = {
+        "completed": "source",
+        "failed_rolled_back": "rollback",
+    }.get(terminal_status)
+    if final_db_outcome is None:
+        return
+    convergence = _restore_integrity_convergence_status(
+        request,
+        final_db_outcome,
+    )
+    if convergence and convergence.get("state") == "scheduled":
+        return
+    if not convergence or convergence.get("state") == "invalidated":
+        schedule_post_restore_integrity(
+            request,
+            final_db_outcome=final_db_outcome,
+        )
+        return
+    if convergence.get("state") != "retry_required":
+        return
+    attempts = int(convergence.get("attempt_count") or 0)
+    retry_at = convergence.get("next_retry_at_epoch")
+    if (
+        attempts >= RESTORE_INTEGRITY_MAX_ATTEMPTS
+        or not isinstance(retry_at, (int, float))
+        or isinstance(retry_at, bool)
+        or float(retry_at) > time.time()
+    ):
+        return
+    schedule_post_restore_integrity(
+        request,
+        final_db_outcome=final_db_outcome,
+    )
 
 
 def _service_container_id(service: str) -> str | None:
@@ -3002,6 +3277,10 @@ def rollback_current_restore(
             artifact_id=pre_restore_backup_id,
             mode="rollback",
         )
+        invalidate_post_restore_integrity(
+            request,
+            final_db_outcome="rollback",
+        )
     except Exception:
         recovery_required(
             "automatic_rollback_database_failed",
@@ -3051,6 +3330,10 @@ def rollback_current_restore(
         pre_restore_backup_id=pre_restore_backup_id,
         destructive_started=True,
         failed_phase=source_failed_phase,
+    )
+    schedule_post_restore_integrity(
+        request,
+        final_db_outcome="rollback",
     )
 
 
@@ -3166,6 +3449,10 @@ def run_current_restore(request: dict[str, Any]) -> None:
             artifact_id=request["artifact"]["artifact_id"],
             mode="source",
         )
+        invalidate_post_restore_integrity(
+            request,
+            final_db_outcome="source",
+        )
         current_phase = "services_starting"
         publish_restore_phase(
             request,
@@ -3189,6 +3476,10 @@ def run_current_restore(request: dict[str, Any]) -> None:
             reason_code=None,
             pre_restore_backup_id=pre_restore_backup_id,
             destructive_started=True,
+        )
+        schedule_post_restore_integrity(
+            request,
+            final_db_outcome="source",
         )
         return
     except HelperError as exc:
@@ -3319,6 +3610,10 @@ def main() -> int:
             pass
         try:
             reconcile_restore_terminal_projection()
+        except HelperError:
+            pass
+        try:
+            reconcile_restore_integrity_convergence()
         except HelperError:
             pass
         try:

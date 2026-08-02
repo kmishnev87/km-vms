@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.7",
-  "tag": "v0.8.7",
-  "title": "KM VMS 0.8.7 — Storage Operator Acceptance, Integrity Reconciliation and Timezone-Safe File Protection",
+  "version": "0.8.8",
+  "tag": "v0.8.8",
+  "title": "KM VMS 0.8.8 — Restore-Safe Archive Integrity, First-Run Storage Convergence and Unified Maintenance UX",
   "title_i18n": {
-    "en": "KM VMS 0.8.7 — Storage Operator Acceptance, Integrity Reconciliation and Timezone-Safe File Protection",
-    "ru": "KM VMS 0.8.7 — понятное управление архивом и безопасное согласование целостности",
-    "zh-CN": "KM VMS 0.8.7 — 清晰的存储管理、安全的完整性协调与时区保护"
+    "en": "KM VMS 0.8.8 — Restore-Safe Archive Integrity, First-Run Storage Convergence and Unified Maintenance UX",
+    "ru": "KM VMS 0.8.8 — безопасная целостность после восстановления, надёжный первый запуск и единый интерфейс обслуживания",
+    "zh-CN": "KM VMS 0.8.8 — 恢复后的安全完整性、首次运行存储收敛与统一维护体验"
   },
-  "summary": "Refines Storage into a clearer operator workflow, makes archive history useful, safely reconciles abandoned recordings, and protects recent files from retention or integrity actions across timezones.",
+  "summary": "Prevents database restore from reviving stale archive-integrity actions, makes custom first-run storage activation converge safely across restarts without breaking multi-root mounts, and finalizes clear Maintenance, backup and archive-check feedback.",
   "summary_i18n": {
-    "en": "Refines Storage into a clearer operator workflow, makes archive history useful, safely reconciles abandoned recordings, and protects recent files from retention or integrity actions across timezones.",
-    "ru": "Делает раздел «Хранилище» понятнее, превращает историю архива в полезную сводку, безопасно согласует брошенные записи и защищает недавно изменённые файлы от retention и integrity-операций независимо от часового пояса.",
-    "zh-CN": "优化“存储”操作流程，使归档历史更有用，安全协调遗留录像，并在不同时区下保护近期变更文件免受保留策略或完整性操作影响。"
+    "en": "Prevents database restore from reviving stale archive-integrity actions, makes custom first-run storage activation converge safely across restarts without breaking multi-root mounts, and finalizes clear Maintenance, backup and archive-check feedback.",
+    "ru": "Не позволяет восстановлению БД возвращать устаревшие действия проверки архива, безопасно доводит выбранное при первом запуске хранилище до рабочего состояния после перезапусков без поломки multi-root и завершает понятную обратную связь в обслуживании, резервных копиях и проверке архива.",
+    "zh-CN": "防止数据库恢复重新激活过期的归档完整性操作，使自定义首次运行存储在重启后安全收敛且不破坏多根挂载，并完善维护、备份和归档检查的清晰反馈。"
   },
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.7",
+  "source_ref": "v0.8.8",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -26,41 +26,45 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Simplifies the Storage overview to one clear health result and useful archive, access and capacity facts without duplicate status noise.",
-    "Shows archive operation history on demand, omits zero-result retention passes and aggregates useful deletion activity.",
-    "Remeasures claimed retention files before deletion so files that changed size, identity or mtime are skipped safely.",
-    "Automatically finalizes safe playable abandoned recordings with their exact receipt and retention signal; uncertain cases remain blocked.",
-    "Lets operators delete confirmed unusable incomplete recordings through permission-bound, revalidated plans and compact confirmation.",
-    "Uses approved compact archive action icons and aligns Storage actions consistently across desktop and mobile layouts.",
-    "Compares recent-file safety with Unix epoch nanoseconds, preventing timezone offsets from exposing fresh files."
+    "Recovers backup create, check and delete operations after page reload and reports full validation only when availability, integrity, compatibility and trial restore all pass.",
+    "Uses consistent accessible action icons and stable alignment for Maintenance and Settings across supported languages, desktop and mobile layouts.",
+    "Reports the actual manual update-check outcome instead of a generic completion message.",
+    "Shows truthful archive-integrity progress and current findings, keeps stale restored results out of active problem counts, and opens details directly from the problem total.",
+    "Allows safe missing-file remediation for confirmed failed recorder segments while preserving root, active-write and changed-file guards.",
+    "Invalidates stale integrity work after database restore and schedules one idempotent fresh scan only after the source or rollback result is terminal.",
+    "Applies the first-run volume and folder consistently to environment, runtime manifest and Compose while preserving stable container paths and existing non-default roots.",
+    "Makes first-run configuration recovery durable and restart-convergent, retaining recovery copies until all three configuration files are verified consistent."
   ],
   "changelog_i18n": {
     "en": [
-      "Simplifies the Storage overview to one clear health result and useful archive, access and capacity facts without duplicate status noise.",
-      "Shows archive operation history on demand, omits zero-result retention passes and aggregates useful deletion activity.",
-      "Remeasures claimed retention files before deletion so files that changed size, identity or mtime are skipped safely.",
-      "Automatically finalizes safe playable abandoned recordings with their exact receipt and retention signal; uncertain cases remain blocked.",
-      "Lets operators delete confirmed unusable incomplete recordings through permission-bound, revalidated plans and compact confirmation.",
-      "Uses approved compact archive action icons and aligns Storage actions consistently across desktop and mobile layouts.",
-      "Compares recent-file safety with Unix epoch nanoseconds, preventing timezone offsets from exposing fresh files."
+      "Recovers backup create, check and delete operations after page reload and reports full validation only when availability, integrity, compatibility and trial restore all pass.",
+      "Uses consistent accessible action icons and stable alignment for Maintenance and Settings across supported languages, desktop and mobile layouts.",
+      "Reports the actual manual update-check outcome instead of a generic completion message.",
+      "Shows truthful archive-integrity progress and current findings, keeps stale restored results out of active problem counts, and opens details directly from the problem total.",
+      "Allows safe missing-file remediation for confirmed failed recorder segments while preserving root, active-write and changed-file guards.",
+      "Invalidates stale integrity work after database restore and schedules one idempotent fresh scan only after the source or rollback result is terminal.",
+      "Applies the first-run volume and folder consistently to environment, runtime manifest and Compose while preserving stable container paths and existing non-default roots.",
+      "Makes first-run configuration recovery durable and restart-convergent, retaining recovery copies until all three configuration files are verified consistent."
     ],
     "ru": [
-      "Сводка «Хранилища» показывает один понятный итог здоровья и полезные сведения об архиве, доступе и ёмкости без дублирующего шума.",
-      "История операций открывается по запросу, не показывает нулевые проходы retention и объединяет полезную статистику удаления.",
-      "Перед удалением retention повторно измеряет выбранные файлы и безопасно пропускает изменившиеся размер, identity или mtime.",
-      "Безопасные воспроизводимые брошенные записи автоматически завершаются вместе с точной квитанцией и retention-сигналом; сомнительные блокируются.",
-      "Подтверждённые непригодные незавершённые записи удаляются через permission-bound план, повторную проверку и компактное подтверждение.",
-      "Утверждённые компактные иконки и единое выравнивание действий работают в «Хранилище» на desktop и mobile.",
-      "Защита недавних файлов сравнивает Unix epoch nanoseconds, поэтому смещение часовых поясов не открывает свежие файлы для обработки."
+      "Операции с резервными копиями восстанавливаются после перезагрузки страницы; полная проверка заявляется только при успешном прохождении всех четырёх этапов.",
+      "В обслуживании и настройках используются единые доступные иконки действий и стабильное выравнивание во всех поддерживаемых языках, на desktop и mobile.",
+      "После ручной проверки обновления показывается фактический результат, а не общее сообщение о завершении.",
+      "Проверка целостности честно показывает текущий прогресс и находки, не считает устаревшие результаты активными проблемами и открывает детали по числу проблем.",
+      "Подтверждённые отсутствующие файлы failed-записей Recorder можно безопасно согласовать с сохранением проверок корня, активной записи и изменения файла.",
+      "После восстановления БД устаревшая работа по целостности инвалидируется, а новая идемпотентная проверка ставится ровно после terminal-результата исходной БД или отката.",
+      "Выбранные при первом запуске том и папка согласованно применяются к окружению, runtime manifest и Compose без изменения стабильных container paths и существующих non-default roots.",
+      "Восстановление конфигурации первого запуска переживает перезапуск и хранит recovery-копии до подтверждения согласованности всех трёх конфигурационных файлов."
     ],
     "zh-CN": [
-      "存储概览只显示一个清晰的健康结论，以及有用的归档、访问权限和容量信息，不再重复状态噪音。",
-      "归档操作历史按需打开，隐藏结果为零的保留策略执行，并汇总有用的删除活动。",
-      "保留策略在删除前重新测量已选文件，大小、身份或 mtime 发生变化时会安全跳过。",
-      "安全且可播放的遗留录像会与精确回执和保留信号一起自动完成；不确定情况继续阻止处理。",
-      "已确认不可用的未完成录像可通过权限约束计划、再次验证和紧凑确认进行删除。",
-      "使用已批准的紧凑归档操作图标，并在桌面和移动布局中统一对齐存储操作。",
-      "近期文件保护使用 Unix epoch 纳秒比较，避免时区偏移使新文件暴露给处理流程。"
+      "页面重新加载后可恢复备份创建、检查和删除操作，并且仅在可用性、完整性、兼容性和试恢复全部通过时才报告完整验证成功。",
+      "维护和设置在所有支持的语言、桌面和移动布局中使用统一且可访问的操作图标与稳定对齐。",
+      "手动检查更新后显示实际结果，而不是通用的完成消息。",
+      "归档完整性检查如实显示当前进度和发现，不再把恢复出的过期结果计为活动问题，并可直接点击问题总数查看详情。",
+      "在保留根目录、活动写入和文件变更保护的同时，可安全协调 Recorder 已确认失败记录的缺失文件。",
+      "数据库恢复后会使过期的完整性工作失效，并仅在源数据库或回滚结果进入终态后安排一次幂等的新检查。",
+      "首次运行选择的卷和文件夹会一致应用到环境、运行时清单和生成的 Compose 配置，同时保留稳定的容器路径及现有非默认根。",
+      "首次运行配置恢复可跨重启收敛，并在三个配置文件全部验证一致之前保留恢复副本。"
     ]
   }
 }

@@ -28,12 +28,16 @@ this.archiveIntegrityFindingPresentation = archiveIntegrityFindingPresentation;`
 
 const overview = page.slice(page.indexOf("<section className={`storageOpsOverview"), page.indexOf("{refreshWarning ?"));
 assert.equal((overview.match(/<TopMetric/g) || []).length, 3);
-assert.match(overview, /label=\{copy\.recording\}/);
-assert.match(overview, /label=\{copy\.free\}/);
+assert.match(overview, /label=\{copy\.archiveAccess\}/);
+assert.match(overview, /label=\{`\$\{copy\.free\} \$\{formatPercent\(capacity\.free_percent\)\}`\}/);
 assert.match(overview, /label=\{copy\.archiveProblems\}/);
 assert.doesNotMatch(overview, /storageOpsBadges|compactAccessLabel|primaryAction/);
-assert.match(overview, /\/assets\/icons\/ui\/open\.png/);
+assert.match(overview, /onValueClick=\{\(\) => openIntegrityDialog\(\)\}/);
+assert.doesNotMatch(overview, /storageOpsHealthAction|\/assets\/icons\/ui\/open\.png|recording\.detail/);
+assert.match(overview, /actionLabel=\{diagnosticsPermission\.allowed \? copy\.integrityOpenCheck : diagnosticsPermission\.reason\}/);
 assert.equal(page.includes("/assets/icons/ui/open-"), false);
+assert.match(css, /Stage 4\.10\.6 final cascade ownership[\s\S]*\.storageOpsOverview\s*\{[\s\S]*grid-template-columns:\s*minmax\(280px, 1\.2fr\) minmax\(420px, 1\.65fr\);/);
+assert.match(css, /\.storageOpsTopMetricValueButton\s*\{[\s\S]*text-decoration:\s*none;/);
 
 assert.doesNotMatch(center, /historyCount/);
 assert.doesNotMatch(center, /archiveManagementHistoryButton[\s\S]*<strong aria-hidden/);
@@ -82,6 +86,7 @@ assert.match(page, /confirm:\s*true/);
 assert.doesNotMatch(page, /integrityConfirmed|type="checkbox"/);
 assert.match(page, /title=\{copy\[item\.actionLabelKey\]\}/);
 assert.match(page, /aria-label=\{copy\[item\.actionLabelKey\]\}/);
+assert.match(page, /settingsInfoBubble" role="tooltip">\{copy\[item\.actionLabelKey\]\}/);
 assert.match(css, /\.storageIntegrityConfirmationOverlay\s*\{[\s\S]*place-items:\s*center/);
 assert.match(css, /\.storageIntegrityIconAction\s*\{[\s\S]*width:\s*40px !important;[\s\S]*height:\s*40px/);
 
@@ -103,6 +108,9 @@ for (const key of [
   "integrityDetailZeroSize",
   "integrityDetailPartial",
   "integrityNoActionAutomaticReconciliation",
+  "archiveAccess",
+  "integrityScanCompletedWithProblemsTitle",
+  "integrityScanCompletedWithProblemsText",
 ]) {
   assert.equal((i18n.match(new RegExp(`${key}:`, "g")) || []).length, 3, `${key} must exist in all locales`);
 }

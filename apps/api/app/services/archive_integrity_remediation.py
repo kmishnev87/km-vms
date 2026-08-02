@@ -303,7 +303,11 @@ def _revalidate_missing(db: Session, finding: ArchiveIntegrityFinding) -> tuple[
     segment = _segment_for_finding(db, finding)
     root = _root_for_finding(db, finding)
     relative_ref = _relative_for_finding(finding)
-    if segment.ownership != "KM VMS" or segment.source != "recorder" or str(segment.status) != "finalized":
+    if (
+        segment.ownership != "KM VMS"
+        or segment.source != "recorder"
+        or str(segment.status) not in {"finalized", "failed"}
+    ):
         raise IntegrityRemediationBlocked("archive_integrity_missing_not_finalized")
     if _active_write_exists(db, segment):
         raise IntegrityRemediationBlocked("archive_integrity_active_write")

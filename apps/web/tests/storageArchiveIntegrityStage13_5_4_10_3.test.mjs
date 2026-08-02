@@ -16,6 +16,7 @@ this.archiveIntegrityScanModel = archiveIntegrityScanModel;
 this.archiveIntegrityFindingPresentation = archiveIntegrityFindingPresentation;
 this.archiveIntegrityCategoryPresentations = archiveIntegrityCategoryPresentations;
 this.archiveIntegrityActionContract = archiveIntegrityActionContract;
+this.humanBlockerReason = humanBlockerReason;
 this.recentOperationPresentation = recentOperationPresentation;`,
   context
 );
@@ -41,14 +42,74 @@ for (const [status, expected] of Object.entries({
 const progress = context.archiveIntegrityScanModel({
   status: "running",
   phase: "filesystem",
-  progress: { planned_count: 200, checked_count: 50, found_count: 9, failed_count: 2 },
+  progress: {
+    planned_count: 200,
+    checked_count: 250,
+    metadata_checked_count: 200,
+    filesystem_checked_count: 50,
+    found_count: 9,
+    failed_count: 2,
+  },
   operation: { cancel_allowed: true },
 }, allowed);
-assert.equal(progress.percent, 25);
+assert.equal(progress.percent, 99);
+assert.equal(progress.progressIndeterminate, true);
+assert.equal(progress.metadataChecked, 200);
+assert.equal(progress.filesystemChecked, 50);
 assert.equal(progress.found, 9);
 assert.equal(progress.failed, 2);
 assert.equal(progress.phaseKey, "integrityPhaseFilesystem");
 assert.equal(progress.canCancel, true);
+
+const completedWithFindings = context.archiveIntegrityScanModel({
+  status: "completed",
+  progress: { planned_count: 12, checked_count: 12, found_count: 5, failed_count: 0 },
+}, allowed);
+assert.equal(completedWithFindings.titleKey, "integrityScanCompletedWithProblemsTitle");
+assert.equal(completedWithFindings.detailKey, "integrityScanCompletedWithProblemsText");
+assert.equal(completedWithFindings.tone, "warning");
+const completedClean = context.archiveIntegrityScanModel({
+  status: "completed",
+  progress: { planned_count: 12, checked_count: 12, found_count: 0, failed_count: 0 },
+}, allowed);
+assert.equal(completedClean.titleKey, "integrityScanCompletedTitle");
+assert.equal(completedClean.tone, "ok");
+assert.equal(completedClean.percent, 100);
+
+const staleHistoricalResult = context.archiveIntegrityScanModel({
+  status: "failed",
+  stale: true,
+  progress: { planned_count: 12, checked_count: 12, found_count: 5, failed_count: 0 },
+  category_counts: { missing_file: 5 },
+}, allowed);
+assert.equal(staleHistoricalResult.stale, true);
+assert.equal(staleHistoricalResult.found, 0);
+assert.notEqual(staleHistoricalResult.titleKey, "integrityScanCompletedWithProblemsTitle");
+
+const metadataRunning = context.archiveIntegrityScanModel({
+  status: "running",
+  phase: "metadata",
+  progress: { planned_count: 4, checked_count: 4 },
+}, allowed);
+assert.equal(metadataRunning.percent, 99);
+assert.equal(metadataRunning.progressIndeterminate, false);
+
+for (const code of [
+  "archive_integrity_segment_changed",
+  "archive_integrity_root_access_changed",
+  "archive_integrity_recorder_window_active",
+  "archive_integrity_permission_denied",
+  "archive_integrity_operation_busy",
+  "archive_integrity_future_safe_fallback",
+]) {
+  for (const language of ["ru", "en", "zh-CN"]) {
+    const message = context.humanBlockerReason(code, language);
+    assert.equal(message.length > 10, true, `${code}:${language}`);
+    assert.equal(message.includes(code), false, `${code}:${language}`);
+    assert.notEqual(message, "Неизвестно", `${code}:${language}`);
+    assert.notEqual(message, "Unknown", `${code}:${language}`);
+  }
+}
 
 const denied = context.archiveIntegrityScanModel(
   { status: "not_run" },
@@ -149,6 +210,7 @@ const i18n = read("lib/i18n.js");
 const routes = read("lib/routePermissions.js");
 
 assert.match(page, /function ArchiveIntegrityDialog\(/);
+assert.match(page, /archiveIntegrityCategoryPresentations\(scanModel\.stale \? \{\} : scan\?\.category_counts\)/);
 assert.match(page, /integrityOperationPresentation\(reconciliation\)/);
 assert.match(page, /copy\.archiveManagementIntegrityFindingsText\.replace\("\{count\}", String\(model\.problemCount\)\)/);
 assert.doesNotMatch(page, /normalized\.safeFixCount > 0\) return copy\.integrityProblemsSafe/);
@@ -163,6 +225,8 @@ assert.match(page, /setIntegrityFindings\(\(current\) => append \? \[\.\.\.curre
 assert.match(page, /role="dialog"/);
 assert.match(page, /aria-modal="true"/);
 assert.match(page, /storageIntegrityConfirmationOverlay/);
+assert.match(page, /settingsInfoBubble" role="tooltip">\{copy\[item\.actionLabelKey\]\}/);
+assert.match(page, /progressIndeterminate/);
 assert.doesNotMatch(page, /type="checkbox"[\s\S]*integrityConfirmationAcknowledge/);
 assert.doesNotMatch(page, /runReconciliationPreview/);
 assert.doesNotMatch(page, /applyReconciliationSafe/);
@@ -191,6 +255,8 @@ for (const key of [
   "integrityScanNotRunTitle",
   "integrityScanRunningTitle",
   "integrityScanCompletedTitle",
+  "integrityScanCompletedWithProblemsTitle",
+  "integrityScanCompletedWithProblemsText",
   "integrityScanPartialTitle",
   "integrityScanFailedTitle",
   "integrityScanCancelledTitle",
@@ -208,12 +274,15 @@ for (const key of [
   "integrityConfirmRetireMissing",
   "integrityConfirmDeleteUnusable",
   "integrityResultCompleted",
+  "integrityFilesystemChecked",
   "recentOperationIntegrityScan",
   "recentOperationIntegrityRetirement",
   "recentOperationOrphanCleanup",
 ]) {
   assert.equal((i18n.match(new RegExp(`${key}:`, "g")) || []).length, 3, `${key} must exist in ru/en/zh-CN`);
 }
+
+assert.equal((i18n.match(/integrityAcknowledgeResult: "(?:Закрыть|Close|关闭)"/g) || []).length, 3);
 
 assert.match(page, /<ArchiveManagementCenter/);
 assert.match(page, /<OperationDialog dialog=\{historyDialog\}/);

@@ -11,6 +11,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "utf8");
 const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
+const responsiveCss = fs.readFileSync(resolve(webRoot, "app/styles/60-responsive-shared.css"), "utf8");
 const stageCss = css.slice(css.indexOf("/* Stage 13.7.11:"));
 
 function cssRule(selector) {
@@ -68,7 +69,10 @@ const copy = {
   maintenanceBackupDeleteFailed: "Backup delete failed",
   maintenanceMessageFallback: "Fallback",
   maintenanceBackupOperationLabels: { check: "Check", create: "Create", delete: "Delete" },
+  maintenanceBackupCheckPassedTitle: "Check passed",
+  maintenanceBackupCheckPassedText: "The backup is available, intact, and compatible; the trial restore passed.",
   maintenanceBackupCheckStatuses: { valid: "Check passed", fallback: "Check status received" },
+  maintenanceBackupCheckOutcomes: { fully_validated: "The backup is available, intact, and compatible; the trial restore passed." },
   maintenanceBackupCreateStatuses: { verified: "Backup was created", fallback: "Create status received" },
   maintenanceBackupDeleteStatuses: {
     deleted: "Backup was deleted",
@@ -94,6 +98,26 @@ const supportActions = settingsPage.slice(supportStart, supportEnd);
 assert.equal((supportActions.match(/settingsMaintenanceSupportActionButton/g) || []).length, 1);
 assert.equal(supportActions.includes("setDiagnosticChoiceOpen(true)"), true);
 assert.equal(supportActions.includes("setMaintenanceWarningsOpen"), false);
+assert.match(settingsPage, /settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned/);
+assert.match(settingsPage, /settingsMaintenanceBackupLatestRow/);
+assert.match(settingsPage, /update-check\.svg/);
+assert.match(settingsPage, /backup-create\.svg/);
+assert.match(settingsPage, /download-report\.svg/);
+assert.match(settingsPage, /maintenanceBackupProgressText/);
+assert.match(settingsPage, /title:\s*t\.updateApplyHeadlines\?\.\[checkResultKey\]\s*\|\|\s*checkStatusText/);
+assert.match(settingsPage, /text:\s*t\.updateApplySummaries\?\.\[checkResultKey\]\s*\|\|\s*checkStatusText/);
+assert.match(settingsPage, /className=\{`settingsDirtyNote\$\{dirty \? " is-visible" : ""\}`\}/);
+assert.match(css, /\.settingsHeaderActions\s*\{[\s\S]*grid-template-areas:\s*\n\s*"dirty dirty"\s*\n\s*"cancel save"/);
+assert.match(css, /\.settingsHeaderActions\s*\{[\s\S]*--settings-header-actions-width:\s*calc\(var\(--settings-compact-select-width\) \+ var\(--settings-row-padding-x\) \+ var\(--settings-panel-border-width\)\);[\s\S]*--settings-header-action-width:\s*calc\(\(var\(--settings-header-actions-width\) - var\(--settings-header-actions-gap\)\) \/ 2\);[\s\S]*width:\s*var\(--settings-header-actions-width\);[\s\S]*grid-template-columns:\s*repeat\(2, var\(--settings-header-action-width\)\)/);
+assert.match(css, /\.settingsHeaderActions > \.button\s*\{[\s\S]*width:\s*var\(--settings-header-action-width\);[\s\S]*min-width:\s*var\(--settings-header-action-width\);[\s\S]*max-width:\s*var\(--settings-header-action-width\)/);
+assert.match(responsiveCss, /@media \(max-width: 900px\)[\s\S]*\.settingsHeaderActions\s*\{[\s\S]*width:\s*var\(--settings-header-actions-width\);[\s\S]*align-self:\s*center;[\s\S]*grid-template-columns:\s*repeat\(2, var\(--settings-header-action-width\)\)/);
+assert.match(css, /\.settingsDirtyNote\s*\{[\s\S]*min-height:\s*14px;[\s\S]*visibility:\s*hidden/);
+assert.match(css, /\.settingsDirtyNote\.is-visible\s*\{[\s\S]*visibility:\s*visible/);
+assert.match(css, /\.settingsPage\s*\{[\s\S]*--settings-compact-select-width:\s*200px/);
+assert.match(css, /\.settingsRowCompactSelect \.settingsSelect\s*\{[\s\S]*text-align-last:\s*left/);
+assert.match(css, /\.settingsRowControlMeta\s*\{[\s\S]*justify-items:\s*center;[\s\S]*width:\s*200px/);
+assert.match(css, /\.settingsMaintenanceCardHeadingAligned\s*\{[\s\S]*grid-template-columns:\s*180px minmax\(0, 1fr\)/);
+assert.doesNotMatch(css, /\.settingsMaintenanceCoreCard,\s*\.settingsMaintenanceBackupManager\.settingsMaintenanceCoreCard\s*\{[^}]*min-height:\s*205px/);
 
 const providerBlocked = updateApplyOperatorModel(
   {
@@ -113,18 +137,24 @@ assert.notEqual(providerBlocked.summary, "Generic blocked summary");
 assert.deepEqual(maintenanceBackupOperationResultText({ kind: "check", status: "valid" }, copy), {
   kind: "check",
   label: "Check",
-  text: "Check passed",
+  title: "Check passed",
+  text: "The backup is available, intact, and compatible; the trial restore passed.",
+  successful: true,
   showReason: false,
 });
 assert.deepEqual(maintenanceBackupOperationResultText({ kind: "create", status: "verified" }, copy), {
   kind: "create",
   label: "Create",
+  title: "Create",
   text: "Backup was created",
+  successful: true,
   showReason: false,
 });
 assert.deepEqual(maintenanceBackupOperationResultText({ kind: "delete", status: "deleted_with_missing_files" }, copy), {
   kind: "delete",
   label: "Delete",
+  title: "Delete",
   text: "Backup was deleted; some files were already missing",
+  successful: true,
   showReason: false,
 });

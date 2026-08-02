@@ -5,6 +5,7 @@ APP_DIR="${KM_VMS_APP_DIR:-}"
 PROJECT_NAME="${KM_VMS_PROJECT_NAME:-}"
 DOCKER_COMPOSE_BIN="${KM_VMS_DOCKER_COMPOSE:-}"
 VERIFY_STORAGE_SELECTION=0
+INITIAL_SETUP=0
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 usage() {
@@ -12,7 +13,7 @@ usage() {
 KM VMS safe restart helper
 
 Usage:
-  sh scripts/km-vms-restart.sh --app-dir <path> [--project-name <name>] [--verify-storage-selection] [--help]
+  sh scripts/km-vms-restart.sh --app-dir <path> [--project-name <name>] [--verify-storage-selection] [--initial-setup] [--help]
 
 Environment equivalents:
   KM_VMS_APP_DIR, KM_VMS_PROJECT_NAME, KM_VMS_DOCKER_COMPOSE.
@@ -173,6 +174,21 @@ wait_for_marker() {
   return 1
 }
 
+prepare_initial_storage_configuration() {
+  selected_path=$(read_control_value "$SELECTION_CONTROL_FILE" selected_host_path || true)
+  request_id_value=$(read_control_value "$SELECTION_CONTROL_FILE" activation_request_id || true)
+  operation_id_value=$(read_control_value "$SELECTION_CONTROL_FILE" operation_id || true)
+  [ -n "$selected_path" ] || fail "selected_host_path missing in storage-selection.control"
+  [ -n "$request_id_value" ] || fail "activation_request_id missing in storage-selection.control"
+  [ -z "$operation_id_value" ] || fail "initial storage convergence cannot process runtime activation"
+  write_apply_status "activation_in_progress" "Publishing the selected initial storage binding." "$selected_path"
+  compose_with_archive_roots exec -T api \
+    python3 -m app.services.setup_storage \
+    converge-runtime-files \
+    --selected-host-path "$selected_path" \
+    --request-id "$request_id_value" >/dev/null
+}
+
 verify_storage_selection() {
   [ -f "$SELECTION_CONTROL_FILE" ] || fail "storage-selection.control not found for verification"
   selected_path=$(read_control_value "$SELECTION_CONTROL_FILE" selected_host_path || true)
@@ -182,6 +198,13 @@ verify_storage_selection() {
   write_apply_status "activation_in_progress" "Waiting for recreated services to expose the selected storage marker." "$selected_path"
   wait_for_marker api "$selected_path" || fail "API service did not expose the selected archive marker after restart"
   wait_for_marker recorder "$selected_path" || fail "Recorder service did not expose the selected archive marker after restart"
+  if [ "$INITIAL_SETUP" = "1" ]; then
+    compose_with_archive_roots exec -T api \
+      python3 -m app.services.setup_storage \
+      prove-runtime \
+      --selected-host-path "$selected_path" \
+      --request-id "$request_id_value" >/dev/null || fail "API default archive runtime proof failed after restart"
+  fi
   verified_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)
   tmp="$STATUS_FILE.tmp.$$"
   {
@@ -195,7 +218,17 @@ verify_storage_selection() {
     printf '  "verified_at": "%s",\n' "$(json_escape "$verified_at")"
     printf '  "runtime_proof": {\n'
     printf '    "type": "container_marker_visibility",\n'
-    printf '    "services": ["api", "recorder"]\n'
+    printf '    "api_canonical_marker": true,\n'
+    printf '    "recorder_canonical_marker": true,\n'
+    if [ "$INITIAL_SETUP" = "1" ]; then
+      printf '    "api_default_runtime_marker": true,\n'
+      printf '    "api_default_runtime_namespace": true,\n'
+      printf '    "api_default_runtime_read_write": true\n'
+    else
+      printf '    "api_default_runtime_marker": null,\n'
+      printf '    "api_default_runtime_namespace": null,\n'
+      printf '    "api_default_runtime_read_write": null\n'
+    fi
     printf '  }\n'
     printf '}\n'
   } > "$tmp"
@@ -219,6 +252,10 @@ while [ "$#" -gt 0 ]; do
       VERIFY_STORAGE_SELECTION=1
       shift
       ;;
+    --initial-setup)
+      INITIAL_SETUP=1
+      shift
+      ;;
     --help|-h)
       usage
       exit 0
@@ -230,6 +267,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ -n "$APP_DIR" ] || fail "--app-dir or KM_VMS_APP_DIR is required."
+[ "$INITIAL_SETUP" = "0" ] || [ "$VERIFY_STORAGE_SELECTION" = "1" ] || fail "--initial-setup requires --verify-storage-selection"
 APP_DIR=$(normalize_path "$APP_DIR")
 [ -f "$APP_DIR/.env" ] || fail ".env not found in app dir: $APP_DIR"
 SOURCE_DIR=$(km_vms_resolve_product_source "$APP_DIR")
@@ -250,13 +288,16 @@ fi
   cd "$APP_DIR"
   archive_roots_compose_was_present=0
   archive_roots_compose_present && archive_roots_compose_was_present=1
+  if [ "$VERIFY_STORAGE_SELECTION" = "1" ] && [ "$INITIAL_SETUP" = "1" ]; then
+    prepare_initial_storage_configuration
+  fi
   compose_with_archive_roots "$@" config >/dev/null
   if [ "$VERIFY_STORAGE_SELECTION" = "1" ]; then
-    compose_with_archive_roots "$@" up -d --no-deps --force-recreate api recorder web nginx
+    compose_with_archive_roots "$@" up -d --no-deps --force-recreate api recorder
   else
     reconcile_persistent_services "$@"
+    apply_generated_archive_roots_compose_if_needed "$archive_roots_compose_was_present" "$@"
   fi
-  apply_generated_archive_roots_compose_if_needed "$archive_roots_compose_was_present" "$@"
 )
 
 if [ "$VERIFY_STORAGE_SELECTION" = "1" ]; then

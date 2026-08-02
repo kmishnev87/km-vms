@@ -29,10 +29,12 @@ from app.services.setup_storage import (
     APPLY_STATUS_FILE,
     CONTAINER_ARCHIVE_PATH,
     DISCOVERY_FILE,
+    RUNTIME_CONVERGENCE_FILE,
     SELECTION_FILE,
     SELECTION_CONTROL_FILE,
     discovery_snapshot,
     queue_runtime_activation,
+    storage_confirmation_status,
     validate_folder_name,
 )
 
@@ -221,6 +223,36 @@ def test_runtime_activation_writes_same_helper_contract_as_first_run(db):
     assert apply_state["next_action"] == "runtime_storage_activation"
 
 
+def test_runtime_root_activation_does_not_require_initial_setup_proof(db):
+    _session, root = db
+    target = root / "host-storage" / "RuntimeArchive"
+    target.parent.mkdir()
+    queued = queue_runtime_activation(
+        str(target),
+        request_prefix="archive-root",
+        operation_id="archive-root-operation-1",
+    )
+    control = root / "install-control"
+    (control / APPLY_STATUS_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "status": "active",
+                "request_id": queued["request_id"],
+                "operation_id": "archive-root-operation-1",
+                "selected_host_path": str(target),
+                "container_archive_path": CONTAINER_ARCHIVE_PATH,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    status = storage_confirmation_status()
+
+    assert status["ready"] is True
+    assert status["operation_id"] == "archive-root-operation-1"
+
+
 def test_setup_storage_endpoints_close_after_initialization(db):
     session, root = db
     session.add(SystemSettings(system_initialized=True, timezone="UTC", language="en", storage_path="/storage/archive"))
@@ -252,3 +284,161 @@ def test_folder_name_accepts_safe_unicode_and_manual_root(db):
 
     assert preview["selected_mount_path"] == str(manual_root)
     assert preview["final_host_path"] == str(manual_root / "Архив KM VMS")
+
+
+@pytest.mark.parametrize(
+    ("volume_name", "folder_name"),
+    [
+        ("volume-default", "KM-VMS-Recordings"),
+        ("volume-default", "Custom Archive"),
+        ("volume-other", "KM-VMS-Recordings"),
+    ],
+)
+def test_initial_selection_preserves_exact_allowed_volume_and_folder(
+    db,
+    volume_name,
+    folder_name,
+):
+    session, root = db
+    mount = root / volume_name
+    mount.mkdir()
+    payload = SetupStorageSelectionRequest(
+        candidate_id="manual",
+        folder_name=folder_name,
+        manual_root_path=str(mount),
+    )
+
+    result = setup_storage_apply(payload, db=session)
+    apply_state = json.loads(
+        (root / "install-control" / APPLY_STATUS_FILE).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert result["selected_host_path"] == str(mount / folder_name)
+    assert apply_state["selected_host_path"] == str(mount / folder_name)
+    assert apply_state["request_id"] == result["activation_request_id"]
+
+
+def _write_active_storage_contract(root: Path, *, apply_request_id: str) -> None:
+    control = root / "install-control"
+    control.mkdir(parents=True, exist_ok=True)
+    selected_path = str(root / "selected-archive")
+    selection_request_id = "setup-storage-123"
+    (control / SELECTION_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "selected_host_path": selected_path,
+                "container_archive_path": CONTAINER_ARCHIVE_PATH,
+                "activation_request_id": selection_request_id,
+                "apply_status": "activation_requested",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (control / APPLY_STATUS_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "status": "active",
+                "request_id": apply_request_id,
+                "selected_host_path": selected_path,
+                "container_archive_path": CONTAINER_ARCHIVE_PATH,
+                "runtime_proof": {
+                    "api_canonical_marker": True,
+                    "recorder_canonical_marker": True,
+                    "api_default_runtime_marker": True,
+                    "api_default_runtime_namespace": True,
+                    "api_default_runtime_read_write": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (control / RUNTIME_CONVERGENCE_FILE).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "request_id": selection_request_id,
+                "selected_host_path": selected_path,
+                "state": "runtime_verified",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_setup_completion_rejects_request_mismatch(db):
+    _session, root = db
+    _write_active_storage_contract(root, apply_request_id="different-request")
+
+    status = storage_confirmation_status()
+
+    assert status["ready"] is False
+    assert "storage_activation_request_mismatch" in status["errors"]
+    assert status["next_action"] == "resolve_storage_activation_error"
+
+
+def test_setup_completion_rejects_missing_default_runtime_proof(db, monkeypatch):
+    _session, root = db
+    _write_active_storage_contract(root, apply_request_id="setup-storage-123")
+    from app.services import setup_storage
+
+    monkeypatch.setattr(
+        setup_storage,
+        "_initial_storage_runtime_state",
+        lambda *_args, **_kwargs: {
+            "manifest_matches": True,
+            "database_matches": True,
+            "canonical": {
+                "marker_matches": True,
+                "namespace_exists": True,
+                "readable": True,
+                "writable": True,
+            },
+            "per_root": {
+                "marker_matches": False,
+                "namespace_exists": True,
+                "readable": True,
+                "writable": True,
+            },
+        },
+    )
+
+    status = storage_confirmation_status()
+
+    assert status["ready"] is False
+    assert "storage_default_runtime_proof_failed" in status["errors"]
+
+
+def test_setup_completion_accepts_matching_canonical_and_default_runtime_proof(
+    db,
+    monkeypatch,
+):
+    _session, root = db
+    _write_active_storage_contract(root, apply_request_id="setup-storage-123")
+    from app.services import setup_storage
+
+    healthy = {
+        "marker_matches": True,
+        "namespace_exists": True,
+        "readable": True,
+        "writable": True,
+    }
+    monkeypatch.setattr(
+        setup_storage,
+        "_initial_storage_runtime_state",
+        lambda *_args, **_kwargs: {
+            "manifest_matches": True,
+            "database_matches": True,
+            "canonical": dict(healthy),
+            "per_root": dict(healthy),
+        },
+    )
+
+    status = storage_confirmation_status()
+
+    assert status["ready"] is True
+    assert status["errors"] == []
+    assert status["next_action"] == "continue_setup"

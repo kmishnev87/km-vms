@@ -834,31 +834,51 @@ export function archiveIntegrityScanModel(scan = {}, permission = { allowed: tru
   const status = String(scan?.status || "not_run");
   const presentation = ARCHIVE_INTEGRITY_SCAN_STATUS_KEYS[status] || ARCHIVE_INTEGRITY_SCAN_STATUS_KEYS.failed;
   const progress = scan?.progress && typeof scan.progress === "object" ? scan.progress : {};
+  const stale = Boolean(scan?.stale);
   const planned = Math.max(0, asNumber(progress.planned_count, 0));
   const checked = Math.max(0, asNumber(progress.checked_count, 0));
-  const found = Math.max(0, asNumber(progress.found_count, 0));
+  const metadataChecked = Math.max(
+    0,
+    asNumber(progress.metadata_checked_count, Math.min(checked, planned)),
+  );
+  const filesystemChecked = Math.max(
+    0,
+    asNumber(progress.filesystem_checked_count, Math.max(checked - planned, 0)),
+  );
+  const found = stale ? 0 : Math.max(0, asNumber(progress.found_count, 0));
   const failed = Math.max(0, asNumber(progress.failed_count, 0));
   const running = ["queued", "running", "cancel_requested", "interrupted"].includes(status);
-  const stale = Boolean(scan?.stale);
   const terminal = ["completed", "partial", "failed", "cancelled"].includes(status);
+  const phase = String(scan?.phase || "queued");
+  const successfulTerminal = ["completed", "partial"].includes(status);
+  const progressIndeterminate = running && phase === "filesystem";
+  const percent = successfulTerminal
+    ? 100
+    : planned > 0
+      ? Math.max(0, Math.min(running ? 99 : 100, (metadataChecked / planned) * 100))
+      : 0;
+  const completedWithFindings = status === "completed" && found > 0;
   const operationCancelAllowed = scan?.operation?.cancel_allowed;
   return {
     status,
-    titleKey: presentation.titleKey,
-    detailKey: presentation.detailKey,
-    tone: stale && status === "completed" ? "warning" : presentation.tone,
+    titleKey: completedWithFindings ? "integrityScanCompletedWithProblemsTitle" : presentation.titleKey,
+    detailKey: completedWithFindings ? "integrityScanCompletedWithProblemsText" : presentation.detailKey,
+    tone: stale && status === "completed" || completedWithFindings ? "warning" : presentation.tone,
     running,
     terminal,
     stale,
     planned,
     checked,
+    metadataChecked,
+    filesystemChecked,
     found,
     failed,
-    percent: planned > 0 ? Math.max(0, Math.min(100, (checked / planned) * 100)) : 0,
+    percent,
+    progressIndeterminate,
     canStart: Boolean(permission.allowed && !running),
     canCancel: Boolean(permission.allowed && running && operationCancelAllowed !== false && status !== "cancel_requested"),
     permissionReason: permission.allowed ? "" : permission.reason,
-    phaseKey: `integrityPhase${String(scan?.phase || "queued").replace(/(^|_)([a-z])/g, (_, _separator, letter) => letter.toUpperCase())}`,
+    phaseKey: `integrityPhase${phase.replace(/(^|_)([a-z])/g, (_, _separator, letter) => letter.toUpperCase())}`,
   };
 }
 
@@ -982,6 +1002,24 @@ function reasonCode(reason) {
 export function humanBlockerReason(reason, language = "ru") {
   const rawCode = reasonCode(reason);
   const aliases = {
+    archive_integrity_finding_stale: "archive_integrity_new_scan_required",
+    archive_integrity_scan_stale: "archive_integrity_new_scan_required",
+    archive_integrity_segment_missing: "archive_integrity_new_scan_required",
+    archive_integrity_segment_changed: "archive_integrity_new_scan_required",
+    archive_integrity_plan_stale: "archive_integrity_new_scan_required",
+    archive_integrity_stale_requires_new_scan: "archive_integrity_new_scan_required",
+    archive_integrity_missing_file_reappeared: "archive_integrity_new_scan_required",
+    archive_integrity_file_changed: "archive_integrity_new_scan_required",
+    archive_integrity_root_unresolved: "archive_integrity_root_unavailable_or_changed",
+    archive_integrity_root_changed: "archive_integrity_root_unavailable_or_changed",
+    archive_integrity_root_access_changed: "archive_integrity_root_unavailable_or_changed",
+    archive_integrity_root_unavailable: "archive_integrity_root_unavailable_or_changed",
+    archive_integrity_active_write: "archive_integrity_recording_active_or_recent",
+    archive_integrity_recorder_window_active: "archive_integrity_recording_active_or_recent",
+    archive_integrity_permission_denied: "archive_integrity_action_permission_denied",
+    archive_integrity_operation_busy: "archive_integrity_action_busy",
+    archive_integrity_operation_conflict: "archive_integrity_action_busy",
+    archive_integrity_plan_operation_unavailable: "archive_integrity_action_busy",
     archive_root_identity_changed: "physical_volume_identity_changed",
     archive_root_not_readable: "archive_root_unavailable",
     archive_root_open_failed: "archive_root_unavailable",
@@ -1008,6 +1046,31 @@ export function humanBlockerReason(reason, language = "ru") {
   };
   const code = aliases[rawCode] || rawCode;
   const labels = {
+    archive_integrity_new_scan_required: {
+      ru: "Состояние записи изменилось после проверки. Запустите новую проверку архива.",
+      en: "The recording state changed after the check. Run a new archive check.",
+      "zh-CN": "录像状态在检查后发生变化。请重新运行归档检查。",
+    },
+    archive_integrity_root_unavailable_or_changed: {
+      ru: "Расположение архива недоступно или изменилось. Проверьте подключение и запустите проверку заново.",
+      en: "The archive location is unavailable or changed. Check its mount and run the check again.",
+      "zh-CN": "归档位置不可用或已更改。请检查挂载并重新运行检查。",
+    },
+    archive_integrity_recording_active_or_recent: {
+      ru: "Запись ещё активна или была изменена недавно. Дождитесь завершения и повторите проверку.",
+      en: "The recording is active or was changed recently. Wait for it to finish and retry the check.",
+      "zh-CN": "录像仍处于活动状态或最近发生过更改。请等待结束后重新检查。",
+    },
+    archive_integrity_action_permission_denied: {
+      ru: "Недостаточно прав для этого действия с архивом.",
+      en: "You do not have permission for this archive action.",
+      "zh-CN": "没有执行此归档操作的权限。",
+    },
+    archive_integrity_action_busy: {
+      ru: "С архивом уже выполняется другая операция. Дождитесь её завершения и обновите состояние.",
+      en: "Another archive operation is already running. Wait for it to finish and refresh the state.",
+      "zh-CN": "另一个归档操作正在运行。请等待其完成并刷新状态。",
+    },
     auto_free_space_acknowledgement_required: {
       ru: "Перед включением подтвердите условия автоматического удаления старых записей.",
       en: "Review and confirm the automatic deletion terms before enabling auto-free-space.",
@@ -1504,7 +1567,15 @@ export function humanBlockerReason(reason, language = "ru") {
       "zh-CN": "状态不可用。请刷新检查或打开诊断。",
     },
   };
-  return labels[code]?.[language] || labels[code]?.ru || statusLabel("unknown", language);
+  if (labels[code]) return labels[code][language] || labels[code].ru;
+  if (rawCode.startsWith("archive_integrity_")) {
+    return ({
+      ru: "Действие с архивом сейчас недоступно. Обновите состояние и повторите проверку.",
+      en: "The archive action is currently unavailable. Refresh the state and run the check again.",
+      "zh-CN": "归档操作当前不可用。请刷新状态并重新运行检查。",
+    })[language] || "Действие с архивом сейчас недоступно. Обновите состояние и повторите проверку.";
+  }
+  return statusLabel("unknown", language);
 }
 
 export function storageTopHealthModel({ operations = {}, pathHealth = {}, capacity = {}, policy = {}, reconciliation = {}, retention = {} } = {}, language = "ru") {
