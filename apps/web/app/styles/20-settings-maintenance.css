@@ -676,6 +676,7 @@
 }
 
 .settingsUserStatus {
+  width: fit-content;
   min-height: 24px;
   display: inline-flex;
   align-items: center;
@@ -727,10 +728,19 @@
   color: #1d4ed8;
 }
 
+.settingsUserIconButton.danger {
+  color: #b91c1c;
+}
+
 .settingsUserIconButton.danger:hover:not(:disabled) {
   border-color: #fecaca;
   background: #fef2f2;
   color: #b91c1c;
+}
+
+.settingsUserIconButton:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 .settingsUserIconButton:disabled {
@@ -835,6 +845,69 @@
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.settingsSecurityModalSectionHead h2 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.auditEntrySurface {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.auditEntrySectionHead {
+  padding: 0 2px 12px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.diagnosticsEntryGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.diagnosticsEntryCard {
+  min-width: 0;
+  min-height: 250px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.diagnosticsEntryCard > div {
+  display: grid;
+  gap: 5px;
+}
+
+.diagnosticsEntryCard h3,
+.diagnosticsEntryCard p {
+  margin: 0;
+}
+
+.diagnosticsEntryCard p {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.diagnosticsEntryCard > .button:last-child {
+  margin-top: auto;
+}
+
+.diagnosticsEntryCard .settingsBugReportTextarea {
+  width: 100%;
+  min-height: 108px;
 }
 
 .settingsSecurityModalSection h3 {

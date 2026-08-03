@@ -2645,23 +2645,31 @@ def target_identity(
                 raise SchemaControlError(
                     "release_identity_contract_invalid"
                 )
-    elif (
-        release.get("installed_by")
-        not in {
-            "install",
-            "in_app_helper",
-            "terminal_update",
-            "release_cycle_closeout",
-        }
-        or release.get("metadata_source")
-        not in {
-            "official_install",
-            "official_update",
-            "helper",
-            "release_cycle_closeout",
-        }
-    ):
-        raise SchemaControlError("release_identity_contract_invalid")
+    else:
+        installed_by = release.get("installed_by")
+        metadata_source = release.get("metadata_source")
+        established_identity = (
+            installed_by
+            in {
+                "install",
+                "in_app_helper",
+                "terminal_update",
+                "release_cycle_closeout",
+            }
+            and metadata_source
+            in {
+                "official_install",
+                "official_update",
+                "helper",
+                "release_cycle_closeout",
+            }
+        )
+        trusted_slot_identity = (
+            installed_by == "slot_engine"
+            and metadata_source == "trusted_release_slot"
+        )
+        if not (established_identity or trusted_slot_identity):
+            raise SchemaControlError("release_identity_contract_invalid")
     target_commit_value = exact_string(
         source.get("commit"),
         code="request_target_commit_invalid",

@@ -382,9 +382,9 @@
 }
 
 .cameraTileIconButton {
-  width: 27px;
-  min-width: 27px;
-  height: 27px;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
   border: 1px solid #cbd5e1;
   border-radius: 7px;
   background: #ffffff;
@@ -397,6 +397,10 @@
   cursor: pointer;
 }
 
+.cameraPageWarnings {
+  margin-bottom: 16px;
+}
+
 .cameraTileIconButton:hover {
   border-color: #bfdbfe;
   background: #eff6ff;
@@ -405,6 +409,12 @@
 
 .cameraTileIconButton.danger {
   color: #b91c1c;
+}
+
+.cameraTileIconButton:focus-visible,
+.cameraIconButton:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 .cameraTileSystem {
@@ -637,6 +647,10 @@
   border-color: #93c5fd;
   background: #eff6ff;
   color: #1d4ed8;
+}
+
+.cameraIconButton.danger {
+  color: #b91c1c;
 }
 
 .cameraIconButton.danger:hover:not(:disabled) {

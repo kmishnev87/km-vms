@@ -8,6 +8,7 @@ import { useSystemHealthStatus } from "../../components/SystemHealthIndicator";
 import { canAccessPath, getAuthToken } from "../../lib/api";
 import { useCurrentUser } from "../../lib/currentUser";
 import { useI18n } from "../../lib/i18n";
+import { formatProductDateTime } from "../../lib/timezone";
 
 const DOMAIN_ORDER = ["cameras", "recorder", "live", "storage", "retention", "reconciliation"];
 
@@ -52,7 +53,7 @@ function SystemStatusProblemAction({ action, currentUser, text }) {
 export default function SystemStatusPage() {
   const router = useRouter();
   const { currentUser, status: currentUserStatus, loading } = useCurrentUser();
-  const { t, text } = useI18n();
+  const { locale, t, text } = useI18n();
   const systemHealth = useSystemHealthStatus(currentUser, { enabled: Boolean(currentUser) });
   const [ready, setReady] = useState(false);
 
@@ -82,6 +83,14 @@ export default function SystemStatusPage() {
     };
   });
   const problems = summary?.problems || [];
+  const generatedAt = systemHealth.runtimeStatus?.generated_at_utc
+    || systemHealth.runtimeStatus?.generated_at
+    || "";
+  const generatedAtLabel = formatProductDateTime(
+    generatedAt,
+    systemHealth.runtimeStatus?.system_timezone,
+    locale === "en" ? "en-US" : locale === "zh-CN" ? "zh-CN" : "ru-RU"
+  ) || "-";
 
   return (
     <Layout>
@@ -132,7 +141,13 @@ export default function SystemStatusPage() {
                     <h2>{t("systemStatus.activeProblems")}</h2>
                     <p>{t("systemStatus.safeHint")}</p>
                   </div>
-                  <span>{t("systemStatus.updated")}: {systemHealth.runtimeStatus?.generated_at || "-"}</span>
+                  <span>
+                    {t("systemStatus.updated")}: {generatedAt ? (
+                      <time dateTime={systemHealth.runtimeStatus?.generated_at_utc || generatedAt} title={generatedAt}>
+                        {generatedAtLabel}
+                      </time>
+                    ) : "-"}
+                  </span>
                 </div>
 
                 <div className="systemStatusIncidents">

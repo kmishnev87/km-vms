@@ -486,6 +486,103 @@ def test_pre_overlay_handoff_uses_staged_target_descriptor(
     assert request["request_id"] == request_id
 
 
+def test_legacy_handoff_binds_adopted_slot_as_active_before_returning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    request_id = "update-" + ("e" * 32)
+    _fixture(tmp_path, request_id)
+    staged = tmp_path / "staged-target"
+    _write_json(
+        staged / "release/km-vms-release.json",
+        json.loads(
+            (tmp_path / "release/km-vms-release.json").read_text(
+                encoding="utf-8"
+            )
+        ),
+    )
+    adopted_slot = "adopted-" + ("f" * 64)
+
+    class Engine:
+        active = None
+
+        def read_active_slot(self, app_dir: Path):
+            if self.active is None:
+                return None
+            return (
+                self.active,
+                app_dir
+                / "data/update-runtime/slots"
+                / self.active
+                / "source",
+            )
+
+        def atomic_switch_pointer(self, _app_dir: Path, slot_id: str):
+            self.active = slot_id
+
+    engine = Engine()
+    monkeypatch.setattr(bridge, "require_app_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(
+        bridge,
+        "normalize_archive_roots_override",
+        lambda _app_dir: False,
+    )
+    monkeypatch.setattr(bridge, "load_slot_engine", lambda _source: engine)
+    monkeypatch.setattr(
+        bridge,
+        "capture_installed_source_identity",
+        lambda *_args, **_kwargs: {
+            "installed_version": "0.7.18",
+            "installed_commit": "1" * 40,
+        },
+    )
+    monkeypatch.setattr(
+        bridge,
+        "prepare_legacy_adopted_slot",
+        lambda **_kwargs: adopted_slot,
+    )
+
+    result = bridge.handoff(
+        SimpleNamespace(
+            app_dir=str(tmp_path),
+            target_source_dir=str(staged),
+            request_id=request_id,
+            project_name="fixture",
+            terminal=False,
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert engine.active == adopted_slot
+    assert "handoff_kind=legacy_adoption" in output
+    assert f"previous_slot={adopted_slot}" in output
+
+
+def test_legacy_adoption_does_not_overwrite_a_different_active_pointer(
+    tmp_path: Path,
+) -> None:
+    adopted_slot = "adopted-" + ("a" * 64)
+    different_slot = "release-" + ("b" * 40)
+
+    class Engine:
+        def read_active_slot(self, app_dir: Path):
+            return different_slot, app_dir / "different-source"
+
+        def atomic_switch_pointer(self, _app_dir: Path, _slot_id: str):
+            raise AssertionError("a different active pointer must not be overwritten")
+
+    with pytest.raises(bridge.BridgeError) as captured:
+        bridge.bind_legacy_adopted_slot_as_active(
+            app_dir=tmp_path,
+            slot_id=adopted_slot,
+            engine=Engine(),
+        )
+
+    assert captured.value.code == "activation_previous_binding_mismatch"
+
+
 def test_terminal_handoff_writes_bounded_schema_request_without_api_admission(
     tmp_path: Path,
 ) -> None:

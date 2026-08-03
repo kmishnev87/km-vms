@@ -350,9 +350,11 @@ function ArchiveIntegrityDialog({
         </div>
 
         <footer className="storageIntegrityDialogFooter">
-          {scanModel.canCancel ? <button className="button secondary small" type="button" onClick={onCancel} disabled={busy}>{copy.integrityCancelScan}</button> : null}
-          {scanModel.canStart ? <button className="button small" type="button" onClick={onStart} disabled={busy || !permission.allowed}>{busy ? copy.checking : primaryStartLabel}</button> : null}
           <button className="button secondary small" type="button" onClick={onClose} disabled={busy}>{copy.close}</button>
+          <div className="storageIntegrityDialogPrimaryActions">
+            {scanModel.canCancel ? <button className="button secondary small" type="button" onClick={onCancel} disabled={busy}>{copy.integrityCancelScan}</button> : null}
+            {scanModel.canStart ? <button className="button small" type="button" onClick={onStart} disabled={busy || !permission.allowed}>{busy ? copy.checking : primaryStartLabel}</button> : null}
+          </div>
         </footer>
       </section>
     </div>

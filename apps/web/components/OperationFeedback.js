@@ -71,9 +71,13 @@ export function OperationDialog({ dialog, onClose }) {
   const showStandaloneClose = !hasConfirm && canClose && dialog.showFooterClose !== false;
   const titleId = `operation-dialog-title-${dialog.id || "current"}`;
   const descriptionId = `operation-dialog-description-${dialog.id || "current"}`;
-  const presentationClass = dialog.presentation === "compact-confirmation"
+  const compactConfirmation = dialog.presentation === "compact-confirmation";
+  const neutralChoice = dialog.presentation === "neutral-choice";
+  const presentationClass = compactConfirmation
     ? "operationFeedbackDialog-compactConfirmation"
-    : "";
+    : neutralChoice
+      ? "operationFeedbackDialog-neutralChoice"
+      : "";
 
   function requestClose() {
     if (canClose) onClose?.();
@@ -108,7 +112,7 @@ export function OperationDialog({ dialog, onClose }) {
 
   return (
     <div
-      className={`operationFeedbackOverlay ${presentationClass ? "operationFeedbackOverlay-compactConfirmation" : ""} ${dialog.overlayClassName || ""}`.trim()}
+      className={`operationFeedbackOverlay ${compactConfirmation ? "operationFeedbackOverlay-compactConfirmation" : ""} ${dialog.overlayClassName || ""}`.trim()}
       role="presentation"
     >
       <div
@@ -151,10 +155,15 @@ export function OperationDialog({ dialog, onClose }) {
             </dl>
           ) : null}
           {Array.isArray(dialog.descriptions) && dialog.descriptions.length ? (
-            <div className="operationFeedbackDescriptions">
+            <div className={`operationFeedbackDescriptions ${neutralChoice ? "operationFeedbackDescriptions-neutralChoice" : ""}`.trim()}>
               {dialog.descriptions.map((item) => (
                 <p key={`${item.label}-${item.value}`}>
-                  {item.label ? `${item.label} — ${item.value}` : item.value}
+                  {neutralChoice && item.label ? (
+                    <>
+                      <strong>{item.label}</strong>
+                      <span>{item.value}</span>
+                    </>
+                  ) : item.label ? `${item.label} — ${item.value}` : item.value}
                 </p>
               ))}
             </div>
@@ -178,7 +187,7 @@ export function OperationDialog({ dialog, onClose }) {
           {(dialog.detail || dialog.action) ? <div className="operationFeedbackDetail">{dialog.detail || dialog.action}</div> : null}
         </div>
         {(hasConfirm || dialogActions.length || showStandaloneClose) ? (
-          <div className="operationFeedbackFooter">
+          <div className={`operationFeedbackFooter ${neutralChoice ? "operationFeedbackFooter-neutralChoice" : ""}`.trim()}>
             {dialogActions.map((action) => (
               <button
                 className="button secondary small"

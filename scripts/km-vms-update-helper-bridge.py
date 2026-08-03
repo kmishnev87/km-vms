@@ -1633,6 +1633,31 @@ def prepare_legacy_adopted_slot(
     return slot_id
 
 
+def bind_legacy_adopted_slot_as_active(
+    *,
+    app_dir: Path,
+    slot_id: str,
+    engine: Any,
+) -> None:
+    """Make the exact adopted legacy runtime the activation baseline."""
+
+    try:
+        active = engine.read_active_slot(app_dir)
+        if active is None:
+            engine.atomic_switch_pointer(app_dir, slot_id)
+            active = engine.read_active_slot(app_dir)
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "active_pointer_switch_failed"),
+            "The adopted pre-update release could not become the active runtime baseline.",
+        ) from exc
+    if active is None or active[0] != slot_id:
+        raise BridgeError(
+            "activation_previous_binding_mismatch",
+            "The adopted pre-update release is not the active runtime baseline.",
+        )
+
+
 def _compose_image_refs(
     compose: Sequence[str],
     *,
@@ -3750,6 +3775,11 @@ def handoff(args: argparse.Namespace) -> int:
             target_source_dir=target_source_dir,
             request_id=request_id,
             installed_identity=installed_identity,
+        )
+        bind_legacy_adopted_slot_as_active(
+            app_dir=app_dir,
+            slot_id=slot_result,
+            engine=engine,
         )
         handoff_kind = "legacy_adoption"
     print("schema_handoff=PASS")

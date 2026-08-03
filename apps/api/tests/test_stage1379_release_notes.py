@@ -223,6 +223,48 @@ def test_schema_identity_accepts_known_optional_notes_only(
         schema_update_control.target_identity(request)
 
 
+def test_schema_identity_accepts_only_the_exact_trusted_slot_pair(
+    tmp_path: Path,
+    monkeypatch,
+):
+    identity_path = tmp_path / ".km-vms-release.json"
+    monkeypatch.setattr(schema_update_control, "RELEASE_PATH", identity_path)
+    request = {"source": {"commit": COMMIT}}
+
+    identity_path.write_text(
+        json.dumps(
+            _identity(
+                installed_by="slot_engine",
+                metadata_source="trusted_release_slot",
+            )
+        ),
+        encoding="utf-8",
+    )
+    assert schema_update_control.target_identity(request) == (
+        "0.8.6",
+        COMMIT,
+    )
+
+    for installed_by, metadata_source in (
+        ("slot_engine", "official_update"),
+        ("in_app_helper", "trusted_release_slot"),
+    ):
+        identity_path.write_text(
+            json.dumps(
+                _identity(
+                    installed_by=installed_by,
+                    metadata_source=metadata_source,
+                )
+            ),
+            encoding="utf-8",
+        )
+        with pytest.raises(
+            schema_update_control.SchemaControlError,
+            match="release_identity_contract_invalid",
+        ):
+            schema_update_control.target_identity(request)
+
+
 def test_identity_builder_copies_only_allowlisted_descriptor_notes(
     tmp_path: Path,
 ):

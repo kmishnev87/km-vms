@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
+import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
 import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
 import { apiFetch, apiFetchBlob, clearAuthToken, forbiddenMessage } from "../../lib/api";
 import { LanguageSelect, normalizeLocale, persistLocale, translateText } from "../../lib/i18n";
@@ -821,6 +822,7 @@ const TEXT = {
     edit: "Изменить",
     deactivate: "Отключить",
     activate: "Включить",
+    delete: "Удалить",
     create: "Создать",
     update: "Сохранить",
     close: "Закрыть",
@@ -1509,6 +1511,7 @@ const TEXT = {
     edit: "Edit",
     deactivate: "Disable",
     activate: "Enable",
+    delete: "Delete",
     create: "Create",
     update: "Save",
     close: "Close",
@@ -1563,6 +1566,10 @@ const TEXT = {
 };
 
 const ZH_TEXT_OVERRIDES = {
+  edit: "编辑",
+  deactivate: "停用",
+  activate: "启用",
+  delete: "删除",
   maintenance: "维护",
   maintenanceText: "更新与维护：数据库、迁移、恢复和报告。",
   maintenanceOverview: "维护概览",
@@ -4228,14 +4235,14 @@ export default function SettingsPage() {
                         </td>
                         <td>
                           <div className="settingsUserActions">
-                            <button className="settingsUserIconButton" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)} title="Изменить" aria-label="Изменить">
-                              {"\u270e"}
+                            <button className="settingsUserIconButton" onClick={() => openEditUser(user)} disabled={userBusy || !(userCanBeManaged(currentUser, user) || user.id === currentUser?.id)} title={t.edit} aria-label={t.edit}>
+                              <EditIcon />
                             </button>
-                            <button className="settingsUserIconButton" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id || user.role === "owner"} title={user.is_active ? "Отключить" : "Включить"} aria-label={user.is_active ? "Отключить" : "Включить"}>
-                              {user.is_active ? "\u23fb" : "\u2713"}
+                            <button className="settingsUserIconButton" onClick={() => toggleUserActive(user)} disabled={userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id || user.role === "owner"} title={user.is_active ? t.deactivate : t.activate} aria-label={user.is_active ? t.deactivate : t.activate}>
+                              {user.is_active ? <PowerIcon /> : <CheckIcon />}
                             </button>
-                            <button className="settingsUserIconButton danger" onClick={() => requestDeleteUser(user)} disabled={userBusy || !userCanBeDeleted(currentUser, user, users)} title="Удалить" aria-label="Удалить">
-                              {"\ud83d\uddd1"}
+                            <button className="settingsUserIconButton danger" onClick={() => requestDeleteUser(user)} disabled={userBusy || !userCanBeDeleted(currentUser, user, users)} title={t.delete} aria-label={t.delete}>
+                              <TrashIcon />
                             </button>
                           </div>
                         </td>
@@ -4874,6 +4881,8 @@ export default function SettingsPage() {
         <OperationDialog
           dialog={diagnosticChoiceOpen ? {
             id: "diagnostic-archive-choice",
+            presentation: "neutral-choice",
+            tone: "neutral",
             title: t.diagnosticArchiveQuestion,
             message: t.diagnosticArchiveMessage,
             overlayClassName: "settingsDiagnosticDialogOverlay",

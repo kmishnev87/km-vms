@@ -3553,6 +3553,14 @@ a.appIllustratedAction:focus-visible {
   max-height: min(640px, calc(100vh - 40px));
 }
 
+.operationFeedbackDialog-neutralChoice {
+  width: min(620px, 100%);
+}
+
+.operationFeedbackDialog-neutral {
+  border-top-color: #94a3b8;
+}
+
 .operationFeedbackDialog-success {
   border-top-color: #16a34a;
 }
@@ -3652,6 +3660,32 @@ a.appIllustratedAction:focus-visible {
   font-weight: 400;
 }
 
+.operationFeedbackDescriptions-neutralChoice {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.operationFeedbackDescriptions-neutralChoice p {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-height: 96px;
+  padding: 12px;
+  border: 1px solid #dbe3ed;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.operationFeedbackDescriptions-neutralChoice strong {
+  color: #1e293b;
+  font-size: 14px;
+}
+
+.operationFeedbackDescriptions-neutralChoice span {
+  color: #64748b;
+  font-size: 13px;
+}
+
 .operationFeedbackList {
   display: grid;
   gap: 6px;
@@ -3693,6 +3727,26 @@ a.appIllustratedAction:focus-visible {
   justify-content: flex-end;
   flex-wrap: wrap;
   border-top: 1px solid #e5eaf0;
+}
+
+.operationFeedbackFooter-neutralChoice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.operationFeedbackFooter-neutralChoice .button {
+  width: 100%;
+  min-height: 38px;
+}
+
+.compactActionIcon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .operationFeedbackBusy {
@@ -4541,10 +4595,23 @@ a.appIllustratedAction:focus-visible {
 }
 
 .storageIntegrityDialogFooter {
-  justify-content: flex-end;
+  justify-content: space-between;
   flex-wrap: wrap;
   border-top: 1px solid #e5e7eb;
   background: #fbfcfe;
+}
+
+.storageIntegrityDialogPrimaryActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.storageIntegrityDialogFooter .button {
+  min-height: 38px;
+  white-space: nowrap;
 }
 
 @media (max-width: 760px) {
@@ -4605,7 +4672,12 @@ a.appIllustratedAction:focus-visible {
   }
 
   .storageIntegrityDialogFooter .button {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
+  }
+
+  .storageIntegrityDialogPrimaryActions {
+    flex: 0 0 auto;
+    margin-left: auto;
   }
 }
 

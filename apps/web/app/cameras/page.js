@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Layout from "../../components/Layout";
+import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
 import { apiFetch } from "../../lib/api";
@@ -603,7 +604,6 @@ export default function CamerasPage() {
     setEditingCameraId(null);
     setForm(initialForm);
     setError("");
-    setDeleteNotice("");
     setTestResult(null);
     setOnvifDiscovery(null);
     setOnvifData(null);
@@ -1142,7 +1142,7 @@ export default function CamerasPage() {
         </div>
       </div>
 
-      <OperatorProblemBanners domains={["cameras", "recorder"]} className="pageWarnings" limit={4} />
+      <OperatorProblemBanners domains={["cameras", "recorder"]} className="pageWarnings cameraPageWarnings" limit={4} />
 
       {error && !showEditor ? <div className="badge err" style={{ marginBottom: 14 }}>{error}</div> : null}
       {deleteWarning && !showEditor ? <div className="badge warn" style={{ marginBottom: 14 }}>{deleteWarning}</div> : null}
@@ -1176,13 +1176,13 @@ export default function CamerasPage() {
                       </div>
                       <div className="cameraTileActions">
                         <button className="cameraTileIconButton" onClick={() => openEdit(camera)} title={copy.edit} aria-label={copy.edit}>
-                          {"\u270e"}
+                          <EditIcon />
                         </button>
                         <button className="cameraTileIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? copy.disable : copy.enable} aria-label={camera.enabled ? copy.disable : copy.enable}>
-                          {camera.enabled ? "\u23fb" : "\u2713"}
+                          {camera.enabled ? <PowerIcon /> : <CheckIcon />}
                         </button>
                         <button className="cameraTileIconButton danger" onClick={() => openDeleteModal(camera)} title={copy.delete} aria-label={copy.delete}>
-                          {"\ud83d\uddd1"}
+                          <TrashIcon />
                         </button>
                       </div>
                     </div>
@@ -1209,13 +1209,13 @@ export default function CamerasPage() {
                     <div className="cameraSecondary" title={`${copy.folder}: ${camera.storage_folder_name}`}>{copy.folder}: {camera.storage_folder_name}</div>
                     <div className="cameraActions">
                       <button className="cameraIconButton" onClick={() => openEdit(camera)} title={copy.edit} aria-label={copy.edit}>
-                        {"\u270e"}
+                        <EditIcon />
                       </button>
                       <button className="cameraIconButton" onClick={() => toggleCamera(camera)} title={camera.enabled ? copy.disable : copy.enable} aria-label={camera.enabled ? copy.disable : copy.enable}>
-                        {camera.enabled ? "\u23fb" : "\u2713"}
+                        {camera.enabled ? <PowerIcon /> : <CheckIcon />}
                       </button>
                       <button className="cameraIconButton danger" onClick={() => openDeleteModal(camera)} title={copy.delete} aria-label={copy.delete}>
-                        {"\ud83d\uddd1"}
+                        <TrashIcon />
                       </button>
                     </div>
                   </div>

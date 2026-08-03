@@ -6,6 +6,7 @@ import { OperationDialog, OperationToast } from "./OperationFeedback";
 import { apiFetch, apiFetchBlob, forbiddenMessage } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { useI18n } from "../lib/i18n";
+import { safeMetadataRows } from "../lib/settingsPageHelpers";
 import {
   AUDIT_CATEGORIES,
   AUDIT_LIMIT,
@@ -130,10 +131,9 @@ export function SecurityJournalEntry() {
   }
 
   return (
-    <section className="settingsSecurityModalSection">
-      <div className="settingsSecurityModalSectionHead">
-        <h2>{t("securityJournal.title")}</h2>
-        <span>{t("securityJournal.subtitle")}</span>
+    <section className="settingsSecurityModalSection auditEntrySurface">
+      <div className="settingsSecurityModalSectionHead auditEntrySectionHead">
+        <h2>{t("securityJournal.contentTitle")}</h2>
       </div>
 
       {(parsed.unsupported.length || parsed.invalid.length) ? (
@@ -191,19 +191,35 @@ export function SecurityJournalEntry() {
       ) : items.length ? (
         <>
           <div className="settingsAuditList">
-            {items.map((event) => (
-              <article className={`settingsAuditItem severity-${event.severity || "info"} category-${event.category || "system"}`} key={event.id}>
-                <div className="settingsAuditMeta">
-                  <time>{formatTimestamp(event.created_at_system || event.created_at, locale)}</time>
-                  <span>{event.actor_username || t("securityJournal.systemActor")}</span>
-                  <span>{localizedLabel("category", event.category, locale)}</span>
-                  <span>{localizedLabel("severity", event.severity, locale)}</span>
-                  <span>{auditTarget(event, t)}</span>
-                </div>
-                <div className="settingsAuditMessage">{auditMessage(event, locale)}</div>
-                <div className="settingsAuditEventType">{t("securityJournal.eventType")}: {event.event_type}</div>
-              </article>
-            ))}
+            {items.map((event) => {
+              const metadataRows = safeMetadataRows(event.metadata);
+              return (
+                <article className={`settingsAuditItem severity-${event.severity || "info"} category-${event.category || "system"}`} key={event.id}>
+                  <div className="settingsAuditMeta">
+                    <time>{formatTimestamp(event.created_at_system || event.created_at, locale)}</time>
+                    <span>{event.actor_username || t("securityJournal.systemActor")}</span>
+                    <span>{localizedLabel("category", event.category, locale)}</span>
+                    <span>{localizedLabel("severity", event.severity, locale)}</span>
+                    <span>{auditTarget(event, t)}</span>
+                  </div>
+                  <div className="settingsAuditMessage">{auditMessage(event, locale)}</div>
+                  <div className="settingsAuditEventType">{t("securityJournal.eventType")}: {event.event_type}</div>
+                  {metadataRows.length ? (
+                    <details className="settingsAuditMetadata">
+                      <summary>{t("securityJournal.metadata")}</summary>
+                      <dl>
+                        {metadataRows.map((row) => (
+                          <div key={row.key}>
+                            <dt>{row.key}</dt>
+                            <dd>{row.value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </details>
+                  ) : null}
+                </article>
+              );
+            })}
           </div>
           {hasMore ? (
             <button type="button" className="button secondary small settingsAuditLoadMore" onClick={() => loadEvents(offset)} disabled={busy}>
@@ -279,37 +295,46 @@ export function DiagnosticsEntry() {
   }
 
   return (
-    <section className="settingsSecurityModalSection">
-      <div className="settingsSecurityModalSectionHead">
-        <h2>{t("diagnosticsEntry.title")}</h2>
-        <span>{t("diagnosticsEntry.subtitle")}</span>
+    <section className="settingsSecurityModalSection auditEntrySurface">
+      <div className="settingsSecurityModalSectionHead auditEntrySectionHead">
+        <h2>{t("diagnosticsEntry.contentTitle")}</h2>
       </div>
 
-      <div className="settingsActions">
-        <button type="button" className="button secondary small" onClick={() => setArchiveChoiceOpen(true)} disabled={Boolean(busy)}>
-          {busy.startsWith("archive-") ? t("diagnosticsEntry.running") : t("diagnosticsEntry.createArchive")}
-        </button>
-      </div>
+      <div className="diagnosticsEntryGrid">
+        <section className="diagnosticsEntryCard">
+          <div>
+            <h3>{t("diagnosticsEntry.archiveSectionTitle")}</h3>
+            <p>{t("diagnosticsEntry.safeContent")}</p>
+          </div>
+          <button type="button" className="button secondary small" onClick={() => setArchiveChoiceOpen(true)} disabled={Boolean(busy)}>
+            {busy.startsWith("archive-") ? t("diagnosticsEntry.running") : t("diagnosticsEntry.createArchive")}
+          </button>
+        </section>
 
-      <div className="settingsSecurityModalSectionHead">
-        <h3>{t("diagnosticsEntry.bugReport")}</h3>
-        <span>{t("diagnosticsEntry.safeContent")}</span>
+        <section className="diagnosticsEntryCard">
+          <div>
+            <h3>{t("diagnosticsEntry.bugReport")}</h3>
+            <p>{t("diagnosticsEntry.bugReportHint")}</p>
+          </div>
+          <textarea
+            className="input settingsBugReportTextarea"
+            value={bugText}
+            onChange={(event) => setBugText(event.target.value.slice(0, 10000))}
+            placeholder={t("diagnosticsEntry.bugReportPlaceholder")}
+            disabled={Boolean(busy)}
+          />
+          <button type="button" className="button small settingsSecurityModalButton" onClick={createBugReport} disabled={Boolean(busy) || !bugText.trim()}>
+            {busy === "bug-report" ? t("diagnosticsEntry.running") : t("diagnosticsEntry.createBugReport")}
+          </button>
+        </section>
       </div>
-      <textarea
-        className="input settingsBugReportTextarea"
-        value={bugText}
-        onChange={(event) => setBugText(event.target.value.slice(0, 10000))}
-        placeholder={t("diagnosticsEntry.bugReportPlaceholder")}
-        disabled={Boolean(busy)}
-      />
-      <button type="button" className="button small settingsSecurityModalButton" onClick={createBugReport} disabled={Boolean(busy) || !bugText.trim()}>
-        {busy === "bug-report" ? t("diagnosticsEntry.running") : t("diagnosticsEntry.createBugReport")}
-      </button>
       {error ? <div className="settingsJournalEmpty error">{error}</div> : null}
       <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
       <OperationDialog
         dialog={archiveChoiceOpen ? {
           id: "diagnostics-entry-archive-choice",
+          presentation: "neutral-choice",
+          tone: "neutral",
           title: t("diagnosticsEntry.archiveChoiceTitle"),
           message: t("diagnosticsEntry.archiveChoiceMessage"),
           descriptions: [

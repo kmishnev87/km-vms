@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.8",
-  "tag": "v0.8.8",
-  "title": "KM VMS 0.8.8 — Restore-Safe Archive Integrity, First-Run Storage Convergence and Unified Maintenance UX",
+  "version": "0.8.9",
+  "tag": "v0.8.9",
+  "title": "KM VMS 0.8.9 — Legacy Update Slot Recovery and Operator UI Consistency",
   "title_i18n": {
-    "en": "KM VMS 0.8.8 — Restore-Safe Archive Integrity, First-Run Storage Convergence and Unified Maintenance UX",
-    "ru": "KM VMS 0.8.8 — безопасная целостность после восстановления, надёжный первый запуск и единый интерфейс обслуживания",
-    "zh-CN": "KM VMS 0.8.8 — 恢复后的安全完整性、首次运行存储收敛与统一维护体验"
+    "en": "KM VMS 0.8.9 — Legacy Update Slot Recovery and Operator UI Consistency",
+    "ru": "KM VMS 0.8.9 — восстановление update-slot для старых установок и единый операторский интерфейс",
+    "zh-CN": "KM VMS 0.8.9 — 旧版更新槽恢复与操作界面一致性"
   },
-  "summary": "Prevents database restore from reviving stale archive-integrity actions, makes custom first-run storage activation converge safely across restarts without breaking multi-root mounts, and finalizes clear Maintenance, backup and archive-check feedback.",
+  "summary": "Lets legacy installations without an active pointer enter the release-slot path safely, accepts only the exact trusted staged-slot identity, and unifies diagnostics, camera/user actions, integrity controls and localized system time across desktop and mobile.",
   "summary_i18n": {
-    "en": "Prevents database restore from reviving stale archive-integrity actions, makes custom first-run storage activation converge safely across restarts without breaking multi-root mounts, and finalizes clear Maintenance, backup and archive-check feedback.",
-    "ru": "Не позволяет восстановлению БД возвращать устаревшие действия проверки архива, безопасно доводит выбранное при первом запуске хранилище до рабочего состояния после перезапусков без поломки multi-root и завершает понятную обратную связь в обслуживании, резервных копиях и проверке архива.",
-    "zh-CN": "防止数据库恢复重新激活过期的归档完整性操作，使自定义首次运行存储在重启后安全收敛且不破坏多根挂载，并完善维护、备份和归档检查的清晰反馈。"
+    "en": "Lets legacy installations without an active pointer enter the release-slot path safely, accepts only the exact trusted staged-slot identity, and unifies diagnostics, camera/user actions, integrity controls and localized system time across desktop and mobile.",
+    "ru": "Позволяет старым установкам без active pointer безопасно перейти к release-slot, принимает только точную доверенную identity подготовленного слота и унифицирует диагностику, действия камер и пользователей, управление целостностью и локализованное системное время на desktop и mobile.",
+    "zh-CN": "使缺少活动指针的旧安装能够安全进入发布槽流程，仅接受精确的可信暂存槽身份，并统一桌面与移动端的诊断、摄像机和用户操作、完整性控制以及本地化系统时间。"
   },
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.8",
+  "source_ref": "v0.8.9",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -26,45 +26,37 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Recovers backup create, check and delete operations after page reload and reports full validation only when availability, integrity, compatibility and trial restore all pass.",
-    "Uses consistent accessible action icons and stable alignment for Maintenance and Settings across supported languages, desktop and mobile layouts.",
-    "Reports the actual manual update-check outcome instead of a generic completion message.",
-    "Shows truthful archive-integrity progress and current findings, keeps stale restored results out of active problem counts, and opens details directly from the problem total.",
-    "Allows safe missing-file remediation for confirmed failed recorder segments while preserving root, active-write and changed-file guards.",
-    "Invalidates stale integrity work after database restore and schedules one idempotent fresh scan only after the source or rollback result is terminal.",
-    "Applies the first-run volume and folder consistently to environment, runtime manifest and Compose while preserving stable container paths and existing non-default roots.",
-    "Makes first-run configuration recovery durable and restart-convergent, retaining recovery copies until all three configuration files are verified consistent."
+    "Binds a prepared adopted release slot as active when a legacy installation has no active pointer, without overwriting a concurrent different binding.",
+    "Accepts only the exact slot_engine and trusted_release_slot pair during non-terminal update identity validation and keeps mixed pairs blocked.",
+    "Repairs the Add camera editor, preserves unrelated delete warnings, and gives camera actions compact accessible SVG icons.",
+    "Removes duplicate diagnostics and security headings and presents both diagnostic archive choices neutrally across desktop, tablet and mobile.",
+    "Uses localized compact SVG user actions, content-sized status chips, and localized system-status time.",
+    "Keeps archive-integrity controls compact and consistently ordered, including one-row mobile actions, and adds camera-local warning spacing."
   ],
   "changelog_i18n": {
     "en": [
-      "Recovers backup create, check and delete operations after page reload and reports full validation only when availability, integrity, compatibility and trial restore all pass.",
-      "Uses consistent accessible action icons and stable alignment for Maintenance and Settings across supported languages, desktop and mobile layouts.",
-      "Reports the actual manual update-check outcome instead of a generic completion message.",
-      "Shows truthful archive-integrity progress and current findings, keeps stale restored results out of active problem counts, and opens details directly from the problem total.",
-      "Allows safe missing-file remediation for confirmed failed recorder segments while preserving root, active-write and changed-file guards.",
-      "Invalidates stale integrity work after database restore and schedules one idempotent fresh scan only after the source or rollback result is terminal.",
-      "Applies the first-run volume and folder consistently to environment, runtime manifest and Compose while preserving stable container paths and existing non-default roots.",
-      "Makes first-run configuration recovery durable and restart-convergent, retaining recovery copies until all three configuration files are verified consistent."
+      "Binds a prepared adopted release slot as active when a legacy installation has no active pointer, without overwriting a concurrent different binding.",
+      "Accepts only the exact slot_engine and trusted_release_slot pair during non-terminal update identity validation and keeps mixed pairs blocked.",
+      "Repairs the Add camera editor, preserves unrelated delete warnings, and gives camera actions compact accessible SVG icons.",
+      "Removes duplicate diagnostics and security headings and presents both diagnostic archive choices neutrally across desktop, tablet and mobile.",
+      "Uses localized compact SVG user actions, content-sized status chips, and localized system-status time.",
+      "Keeps archive-integrity controls compact and consistently ordered, including one-row mobile actions, and adds camera-local warning spacing."
     ],
     "ru": [
-      "Операции с резервными копиями восстанавливаются после перезагрузки страницы; полная проверка заявляется только при успешном прохождении всех четырёх этапов.",
-      "В обслуживании и настройках используются единые доступные иконки действий и стабильное выравнивание во всех поддерживаемых языках, на desktop и mobile.",
-      "После ручной проверки обновления показывается фактический результат, а не общее сообщение о завершении.",
-      "Проверка целостности честно показывает текущий прогресс и находки, не считает устаревшие результаты активными проблемами и открывает детали по числу проблем.",
-      "Подтверждённые отсутствующие файлы failed-записей Recorder можно безопасно согласовать с сохранением проверок корня, активной записи и изменения файла.",
-      "После восстановления БД устаревшая работа по целостности инвалидируется, а новая идемпотентная проверка ставится ровно после terminal-результата исходной БД или отката.",
-      "Выбранные при первом запуске том и папка согласованно применяются к окружению, runtime manifest и Compose без изменения стабильных container paths и существующих non-default roots.",
-      "Восстановление конфигурации первого запуска переживает перезапуск и хранит recovery-копии до подтверждения согласованности всех трёх конфигурационных файлов."
+      "Подготовленный adopted release slot становится активным, если у старой установки нет active pointer, без перезаписи одновременно появившейся другой привязки.",
+      "Нетерминальная проверка update identity принимает только точную пару slot_engine и trusted_release_slot, а смешанные пары остаются заблокированными.",
+      "Исправлено открытие формы добавления камеры, сохранены несвязанные предупреждения удаления, а действия камер переведены на компактные доступные SVG-иконки.",
+      "Убраны дублирующиеся заголовки диагностики и безопасности; оба выбора диагностического архива нейтрально оформлены на desktop, tablet и mobile.",
+      "Действия пользователей используют локализованные компактные SVG-иконки, статус не растягивается, а системное время показывается в локальном формате.",
+      "Действия проверки целостности компактны и упорядочены одинаково, включая одну строку на mobile; предупреждения камер получили локальный отступ."
     ],
     "zh-CN": [
-      "页面重新加载后可恢复备份创建、检查和删除操作，并且仅在可用性、完整性、兼容性和试恢复全部通过时才报告完整验证成功。",
-      "维护和设置在所有支持的语言、桌面和移动布局中使用统一且可访问的操作图标与稳定对齐。",
-      "手动检查更新后显示实际结果，而不是通用的完成消息。",
-      "归档完整性检查如实显示当前进度和发现，不再把恢复出的过期结果计为活动问题，并可直接点击问题总数查看详情。",
-      "在保留根目录、活动写入和文件变更保护的同时，可安全协调 Recorder 已确认失败记录的缺失文件。",
-      "数据库恢复后会使过期的完整性工作失效，并仅在源数据库或回滚结果进入终态后安排一次幂等的新检查。",
-      "首次运行选择的卷和文件夹会一致应用到环境、运行时清单和生成的 Compose 配置，同时保留稳定的容器路径及现有非默认根。",
-      "首次运行配置恢复可跨重启收敛，并在三个配置文件全部验证一致之前保留恢复副本。"
+      "旧安装缺少活动指针时，将已准备的接管发布槽绑定为活动槽，同时不会覆盖并发出现的其他绑定。",
+      "非终态更新身份校验仅接受 slot_engine 与 trusted_release_slot 的精确组合，混合组合仍会被阻止。",
+      "修复添加摄像机编辑器，保留无关的删除警告，并将摄像机操作统一为紧凑且无障碍的 SVG 图标。",
+      "移除诊断与安全页面的重复标题，并在桌面、平板和移动端以中性样式呈现两种诊断归档选择。",
+      "用户操作采用本地化紧凑 SVG 图标，状态标签按内容宽度显示，系统状态时间采用本地格式。",
+      "归档完整性操作保持紧凑且顺序一致，包括移动端单行按钮，并为摄像机警告增加页面局部间距。"
     ]
   }
 }

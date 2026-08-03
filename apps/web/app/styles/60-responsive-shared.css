@@ -559,6 +559,17 @@
     width: 100%;
   }
 
+  .storageIntegrityDialogFooter .button {
+    width: auto;
+    flex: 0 0 auto;
+  }
+
+  .storageIntegrityDialogPrimaryActions {
+    width: auto;
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+
   .recordingsActions .button {
     width: auto;
   }
@@ -867,6 +878,19 @@
 
   .operationFeedbackSummary {
     grid-template-columns: 1fr;
+  }
+
+  .operationFeedbackDescriptions-neutralChoice,
+  .operationFeedbackFooter-neutralChoice {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnosticsEntryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .diagnosticsEntryCard {
+    min-height: 0;
   }
 
   .operationFeedbackFooter .button {
