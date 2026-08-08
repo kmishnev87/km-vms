@@ -34,6 +34,52 @@ def _write_json(path: Path, payload: dict) -> None:
     )
 
 
+def test_refresh_records_target_validation_failure_before_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_dir = tmp_path / "app"
+    (app_dir / "data/update-control").mkdir(parents=True)
+    request_id = "update-" + ("a" * 32)
+    expected_image_id = "sha256:" + ("b" * 64)
+    args = SimpleNamespace(
+        app_dir=str(app_dir),
+        project_name="fixture",
+        helper_image="fixture-helper:target",
+        request_id=request_id,
+        expected_image_id=expected_image_id,
+        timeout_seconds=30,
+        target_slot="release-" + TARGET_COMMIT,
+    )
+    monkeypatch.setattr(bridge, "require_app_dir", lambda _value: app_dir)
+    monkeypatch.setattr(bridge, "bridge_source_root", lambda: app_dir)
+    monkeypatch.setattr(
+        bridge,
+        "load_slot_engine",
+        lambda _root: (_ for _ in ()).throw(
+            bridge.BridgeError(
+                "slot_mutable",
+                "Published release slot is not immutable.",
+            )
+        ),
+    )
+
+    with pytest.raises(bridge.BridgeError) as captured:
+        bridge.refresh(args)
+
+    assert captured.value.code == "slot_mutable"
+    receipt = json.loads(
+        (
+            app_dir
+            / "data/update-control/update-helper-refresh.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert receipt["request_id"] == request_id
+    assert receipt["expected_image_id"] == expected_image_id
+    assert receipt["status"] == "failed"
+    assert receipt["message"] == "slot_mutable"
+
+
 def test_reused_adopted_slot_ignores_only_historical_request_digests(
     tmp_path: Path,
 ) -> None:

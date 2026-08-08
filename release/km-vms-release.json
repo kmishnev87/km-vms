@@ -1,24 +1,24 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.9",
-  "tag": "v0.8.9",
-  "title": "KM VMS 0.8.9 — Legacy Update Slot Recovery and Operator UI Consistency",
+  "version": "0.8.10",
+  "tag": "v0.8.10",
+  "title": "KM VMS 0.8.10 — Update State Convergence and Responsive Web/Mobile Layout",
   "title_i18n": {
-    "en": "KM VMS 0.8.9 — Legacy Update Slot Recovery and Operator UI Consistency",
-    "ru": "KM VMS 0.8.9 — восстановление update-slot для старых установок и единый операторский интерфейс",
-    "zh-CN": "KM VMS 0.8.9 — 旧版更新槽恢复与操作界面一致性"
+    "en": "KM VMS 0.8.10 — Update State Convergence and Responsive Web/Mobile Layout",
+    "ru": "KM VMS 0.8.10 — сходимость состояний обновления и адаптивный web/mobile-интерфейс",
+    "zh-CN": "KM VMS 0.8.10 — 更新状态收敛与响应式网页/移动布局"
   },
-  "summary": "Lets legacy installations without an active pointer enter the release-slot path safely, accepts only the exact trusted staged-slot identity, and unifies diagnostics, camera/user actions, integrity controls and localized system time across desktop and mobile.",
+  "summary": "Converges supported legacy and staged update states without duplicate target downloads, reports truthful bounded progress, cleans failed pre-activation staging safely, completes the update-helper handoff, and presents Records as usable mobile cards while preserving desktop behavior.",
   "summary_i18n": {
-    "en": "Lets legacy installations without an active pointer enter the release-slot path safely, accepts only the exact trusted staged-slot identity, and unifies diagnostics, camera/user actions, integrity controls and localized system time across desktop and mobile.",
-    "ru": "Позволяет старым установкам без active pointer безопасно перейти к release-slot, принимает только точную доверенную identity подготовленного слота и унифицирует диагностику, действия камер и пользователей, управление целостностью и локализованное системное время на desktop и mobile.",
-    "zh-CN": "使缺少活动指针的旧安装能够安全进入发布槽流程，仅接受精确的可信暂存槽身份，并统一桌面与移动端的诊断、摄像机和用户操作、完整性控制以及本地化系统时间。"
+    "en": "Converges supported legacy and staged update states without duplicate target downloads, reports truthful bounded progress, cleans failed pre-activation staging safely, completes the update-helper handoff, and presents Records as usable mobile cards while preserving desktop behavior.",
+    "ru": "Сводит поддерживаемые старые и slot-based состояния обновления без повторного скачивания target, показывает правдивый ограниченный прогресс, безопасно очищает неудачную подготовку до активации, завершает передачу управления update-helper и показывает записи удобными мобильными карточками без изменения desktop-поведения.",
+    "zh-CN": "在不重复下载目标源码的情况下收敛受支持的旧版与发布槽更新状态，显示真实且有边界的进度，安全清理激活前失败的暂存内容，完成更新助手交接，并在保留桌面行为的同时将录像显示为易用的移动卡片。"
   },
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.9",
+  "source_ref": "v0.8.10",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -26,37 +26,37 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Binds a prepared adopted release slot as active when a legacy installation has no active pointer, without overwriting a concurrent different binding.",
-    "Accepts only the exact slot_engine and trusted_release_slot pair during non-terminal update identity validation and keeps mixed pairs blocked.",
-    "Repairs the Add camera editor, preserves unrelated delete warnings, and gives camera actions compact accessible SVG icons.",
-    "Removes duplicate diagnostics and security headings and presents both diagnostic archive choices neutrally across desktop, tablet and mobile.",
-    "Uses localized compact SVG user actions, content-sized status chips, and localized system-status time.",
-    "Keeps archive-integrity controls compact and consistently ordered, including one-row mobile actions, and adds camera-local warning spacing."
+    "Adopts clean installations without an active pointer into the release-slot flow while keeping real neighboring bind and security drift blocked.",
+    "Downloads the target source once per in-app apply attempt and reports only factual bounded progress or an honest indeterminate phase.",
+    "Removes only the exact failed pre-journal staging request, permits a safe retry, and records a durable update-helper handoff without mutating the immutable release slot.",
+    "Accepts only the verified semantic schema-v8 shapes observed on clean and upgraded installations while unknown database drift remains fail-closed.",
+    "Reflows Records into readable mobile cards with selection, sorting and existing actions, without horizontal page overflow or desktop-table changes.",
+    "Validates the main web routes at desktop and phone widths and leaves intentional Live and Chronology workspaces unchanged when no blocking page-level defect is present."
   ],
   "changelog_i18n": {
     "en": [
-      "Binds a prepared adopted release slot as active when a legacy installation has no active pointer, without overwriting a concurrent different binding.",
-      "Accepts only the exact slot_engine and trusted_release_slot pair during non-terminal update identity validation and keeps mixed pairs blocked.",
-      "Repairs the Add camera editor, preserves unrelated delete warnings, and gives camera actions compact accessible SVG icons.",
-      "Removes duplicate diagnostics and security headings and presents both diagnostic archive choices neutrally across desktop, tablet and mobile.",
-      "Uses localized compact SVG user actions, content-sized status chips, and localized system-status time.",
-      "Keeps archive-integrity controls compact and consistently ordered, including one-row mobile actions, and adds camera-local warning spacing."
+      "Adopts clean installations without an active pointer into the release-slot flow while keeping real neighboring bind and security drift blocked.",
+      "Downloads the target source once per in-app apply attempt and reports only factual bounded progress or an honest indeterminate phase.",
+      "Removes only the exact failed pre-journal staging request, permits a safe retry, and records a durable update-helper handoff without mutating the immutable release slot.",
+      "Accepts only the verified semantic schema-v8 shapes observed on clean and upgraded installations while unknown database drift remains fail-closed.",
+      "Reflows Records into readable mobile cards with selection, sorting and existing actions, without horizontal page overflow or desktop-table changes.",
+      "Validates the main web routes at desktop and phone widths and leaves intentional Live and Chronology workspaces unchanged when no blocking page-level defect is present."
     ],
     "ru": [
-      "Подготовленный adopted release slot становится активным, если у старой установки нет active pointer, без перезаписи одновременно появившейся другой привязки.",
-      "Нетерминальная проверка update identity принимает только точную пару slot_engine и trusted_release_slot, а смешанные пары остаются заблокированными.",
-      "Исправлено открытие формы добавления камеры, сохранены несвязанные предупреждения удаления, а действия камер переведены на компактные доступные SVG-иконки.",
-      "Убраны дублирующиеся заголовки диагностики и безопасности; оба выбора диагностического архива нейтрально оформлены на desktop, tablet и mobile.",
-      "Действия пользователей используют локализованные компактные SVG-иконки, статус не растягивается, а системное время показывается в локальном формате.",
-      "Действия проверки целостности компактны и упорядочены одинаково, включая одну строку на mobile; предупреждения камер получили локальный отступ."
+      "Чистая установка без active pointer безопасно принимается в release-slot flow, а реальный соседний bind/security drift по-прежнему блокируется.",
+      "Одна in-app apply-попытка скачивает target source один раз и показывает только фактический ограниченный прогресс либо честную фазу без процента.",
+      "Удаляется точная неудачная pre-journal staging-попытка; разрешён безопасный retry, а передача update-helper фиксируется без изменения immutable release slot.",
+      "Разрешены только проверенные семантические формы schema v8 для чистых и обновлённых установок, а неизвестный drift БД остаётся fail-closed.",
+      "На телефоне «Записи» перестраиваются в читаемые карточки с выбором, сортировкой и существующими действиями без горизонтального overflow и без изменения desktop-таблицы.",
+      "Основные web-маршруты проверены на desktop и phone; предусмотренные рабочие области Live и Хронологии не менялись при отсутствии блокирующего page-level дефекта."
     ],
     "zh-CN": [
-      "旧安装缺少活动指针时，将已准备的接管发布槽绑定为活动槽，同时不会覆盖并发出现的其他绑定。",
-      "非终态更新身份校验仅接受 slot_engine 与 trusted_release_slot 的精确组合，混合组合仍会被阻止。",
-      "修复添加摄像机编辑器，保留无关的删除警告，并将摄像机操作统一为紧凑且无障碍的 SVG 图标。",
-      "移除诊断与安全页面的重复标题，并在桌面、平板和移动端以中性样式呈现两种诊断归档选择。",
-      "用户操作采用本地化紧凑 SVG 图标，状态标签按内容宽度显示，系统状态时间采用本地格式。",
-      "归档完整性操作保持紧凑且顺序一致，包括移动端单行按钮，并为摄像机警告增加页面局部间距。"
+      "缺少活动指针的全新安装可安全接入发布槽流程，同时真实的相邻绑定或安全漂移仍会被阻止。",
+      "每次应用内更新只下载一次目标源码，并且仅显示真实的有界进度，或诚实显示无百分比的执行阶段。",
+      "只清理精确匹配的日志前失败暂存请求，允许安全重试，并在不修改不可变发布槽的情况下持久记录更新助手交接。",
+      "仅接受在全新和升级安装中验证过的 schema v8 语义形态，未知数据库漂移仍保持失败关闭。",
+      "移动端录像页面改为可读卡片，保留选择、排序和现有操作，不产生页面横向溢出，也不改变桌面表格。",
+      "主要网页路由已在桌面和手机宽度下验证；未发现阻塞性页面级缺陷时，保留 Live 与时间轴的既有工作区行为。"
     ]
   }
 }

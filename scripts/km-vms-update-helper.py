@@ -975,6 +975,10 @@ def base_status(
         "status": status,
         "phase": phase,
         "current_step": phase,
+        "progress_percent": None,
+        "progress_current": None,
+        "progress_total": None,
+        "progress_unit": None,
         "started_at": request["requested_at"],
         "updated_at": now,
         "finished_at": None,
@@ -1024,10 +1028,48 @@ def read_progress(request_id: str | None = None) -> dict[str, Any] | None:
         phase = None
     if status not in RUNNING:
         status = None
+    progress_percent = payload.get("progress_percent")
+    progress_current = payload.get("progress_current")
+    progress_total = payload.get("progress_total")
+    progress_unit = payload.get("progress_unit")
+    progress_fields = {
+        "progress_percent": None,
+        "progress_current": None,
+        "progress_total": None,
+        "progress_unit": None,
+    }
+    if any(
+        value is not None
+        for value in (
+            progress_percent,
+            progress_current,
+            progress_total,
+            progress_unit,
+        )
+    ):
+        valid_progress = (
+            type(progress_percent) is int
+            and type(progress_current) is int
+            and type(progress_total) is int
+            and 0 <= progress_percent <= 100
+            and 0 <= progress_current <= progress_total
+            and progress_total > 0
+            and progress_unit in {"bytes", "items"}
+            and progress_percent
+            == (progress_current * 100 // progress_total)
+        )
+        if valid_progress:
+            progress_fields = {
+                "progress_percent": progress_percent,
+                "progress_current": progress_current,
+                "progress_total": progress_total,
+                "progress_unit": progress_unit,
+            }
     return {
         "current_step": current_step,
         "phase": phase,
         "status": status,
+        **progress_fields,
     }
 
 
@@ -1305,6 +1347,20 @@ def classify_apply_failure(update_dir: Path, stderr: str) -> HelperError:
         return HelperError(
             "compose_config_failed",
             "Docker Compose configuration validation failed.",
+        )
+    if failed_phase in {
+        "init",
+        "validate_app_dir",
+        "compose_detection",
+        "acquire",
+        "extract",
+        "validate_source_tree",
+        "preflight_preservation",
+        "permission_preflight",
+    }:
+        return HelperError(
+            "preflight_failed",
+            "Update preflight failed.",
         )
     if failed_phase == "schema_preflight":
         safe_category = _allowlisted_preflight_failure_category(
@@ -1684,34 +1740,14 @@ def run_update(request: dict[str, Any]) -> int:
             steps_for("preflight"),
         ),
     )
-    dry = run_child_with_progress(
-        [*command, "--dry-run"],
-        request,
-        update_dir,
-        env,
-        timeout_seconds=1800,
-        default_step="preflight",
-        status_value="preflight",
-    )
-    if dry.returncode != 0:
-        raise classify_preflight_failure(dry.stderr.strip())
-    write_json(
-        STATUS_FILE,
-        base_status(
-            request,
-            "applying",
-            "acquire_source",
-            steps_for("acquire_source"),
-        ),
-    )
     applied = run_child_with_progress(
         command,
         request,
         update_dir,
         env,
         timeout_seconds=7200,
-        default_step="acquire_source",
-        status_value="applying",
+        default_step="preflight",
+        status_value="preflight",
     )
     journal = activation_journal(request["request_id"])
     if journal:
@@ -1831,6 +1867,14 @@ def run_child_with_progress(
                     steps_for(step),
                 )
                 status_payload["current_step"] = step
+                if progress:
+                    for field in (
+                        "progress_percent",
+                        "progress_current",
+                        "progress_total",
+                        "progress_unit",
+                    ):
+                        status_payload[field] = progress.get(field)
                 write_json(STATUS_FILE, status_payload)
                 time.sleep(POLL_SECONDS)
         stderr_tail = read_stderr_tail(stderr_path)

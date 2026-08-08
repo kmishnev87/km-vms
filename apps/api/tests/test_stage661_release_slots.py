@@ -295,6 +295,112 @@ def _finalize_adopted(app: Path, *, request_id: str) -> dict:
     )
 
 
+def test_first_adoption_normalizes_only_exact_future_product_binds(
+    tmp_path: Path,
+) -> None:
+    app = _stable_app(tmp_path, legacy=True)
+    request_id = "update-" + ("6" * 32)
+    staged = slots.stage_adopted(
+        app,
+        request_id=request_id,
+        declared_version="0.7.18",
+        declared_commit=LEGACY_COMMIT,
+    )
+    runtime = slots.prepare_adopted_runtime_override(
+        app,
+        request_id=request_id,
+        services=SERVICES,
+    )
+    candidate_source = Path(staged["source_path"])
+    final_source = (
+        app / "data/update-runtime/slots" / staged["slot_id"] / "source"
+    )
+    current_contract = {
+        "services": {
+            "api": {
+                "build": {"context": str(app)},
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": str(app / "release"),
+                        "target": "/app/release",
+                        "read_only": True,
+                    },
+                    {
+                        "type": "bind",
+                        "source": str(app / "data/previews"),
+                        "target": "/storage/previews",
+                    },
+                ],
+            },
+            "nginx": {
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": str(app / "deploy/nginx/default.conf"),
+                        "target": "/etc/nginx/conf.d/default.conf",
+                        "read_only": True,
+                    }
+                ]
+            },
+        }
+    }
+    slot_contract = json.loads(json.dumps(current_contract))
+    slot_contract["services"]["api"]["build"]["context"] = str(
+        candidate_source
+    )
+    slot_contract["services"]["api"]["volumes"][0]["source"] = str(
+        final_source / "release"
+    )
+    slot_contract["services"]["nginx"]["volumes"][0]["source"] = str(
+        final_source / "deploy/nginx/default.conf"
+    )
+
+    normalized_current = bridge._normalize_current_compose_contract(
+        current_contract,
+        app_dir=app,
+        source_dir=app,
+        request_id=request_id,
+    )
+    normalized_slot = bridge._normalize_current_compose_contract(
+        slot_contract,
+        app_dir=app,
+        source_dir=candidate_source,
+        request_id=request_id,
+        adopted_final_source=final_source,
+    )
+    assert normalized_slot == normalized_current
+
+    changed_data_bind = json.loads(json.dumps(slot_contract))
+    changed_data_bind["services"]["api"]["volumes"][1]["source"] = str(
+        app / "data/other-previews"
+    )
+    assert (
+        bridge._normalize_current_compose_contract(
+            changed_data_bind,
+            app_dir=app,
+            source_dir=candidate_source,
+            request_id=request_id,
+            adopted_final_source=final_source,
+        )
+        != normalized_current
+    )
+
+    finalized = slots.finalize_candidate(
+        app,
+        request_id=request_id,
+        compose_evidence=_compose_evidence(
+            services=SERVICES,
+            runtime_digest=runtime["sha256"],
+            suffix="b",
+        ),
+        image_evidence=_image_evidence(staged["slot_id"], target=False),
+        health_evidence=_health(),
+    )
+    assert finalized["status"] == "published"
+    assert Path(finalized["slot_path"]).is_dir()
+
+
 def test_trusted_target_id_is_server_derived_and_partial_never_publishes(
     tmp_path: Path,
 ) -> None:
@@ -708,6 +814,60 @@ def test_terminal_request_staging_cleanup_is_exact_and_bounded(
         request_id=request_id,
         terminal_evidence=True,
     )
+
+
+def test_failed_pre_journal_cleanup_preserves_slots_and_allows_retry(
+    tmp_path: Path,
+) -> None:
+    app = _stable_app(tmp_path, legacy=True)
+    adopted = _finalize_adopted(
+        app,
+        request_id="update-" + ("4" * 32),
+    )
+    slots.atomic_switch_pointer(app, adopted["slot_id"])
+    layout = slots.ensure_layout(app)
+    request_id = "update-" + ("5" * 32)
+    other_request_id = "update-" + ("6" * 32)
+    _write(layout["staging"] / request_id / "candidate/partial.txt")
+    _write(layout["staging"] / other_request_id / "candidate/keep.txt")
+
+    cleaned = slots.cleanup_failed_pre_journal_staging(
+        app,
+        request_id=request_id,
+        failed_request_evidence=True,
+    )
+    assert cleaned["status"] == "removed"
+    assert cleaned["removed"] is True
+    assert not (layout["staging"] / request_id).exists()
+    assert (
+        layout["staging"] / other_request_id / "candidate/keep.txt"
+    ).is_file()
+    assert Path(adopted["slot_path"]).is_dir()
+    assert slots.read_active_slot(app)[0] == adopted["slot_id"]
+
+    repeated = slots.cleanup_failed_pre_journal_staging(
+        app,
+        request_id=request_id,
+        failed_request_evidence=True,
+    )
+    assert repeated["status"] == "absent"
+    assert repeated["removed"] is False
+
+    target = tmp_path / "retry-target"
+    _source_fixture(
+        target,
+        commit=COMMIT_A,
+        version=VERSION,
+        trusted=True,
+    )
+    retry = slots.stage_target(
+        app,
+        target,
+        request_id=request_id,
+        trusted_commit=COMMIT_A,
+        declared_version=VERSION,
+    )
+    assert retry["status"] == "staged"
 
 
 def test_terminal_activation_allows_one_later_generation(

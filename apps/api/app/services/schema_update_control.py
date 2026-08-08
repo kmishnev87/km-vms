@@ -321,6 +321,23 @@ TARGET_SHAPE_FINGERPRINT = (
     "18055105892ae40bff200d32fa6a898d"
     "18ffbde340c164d6585c3c893f4f501a"
 )
+# Exact, semantically validated schema-v8 shapes observed after accepted
+# product evolution.  The first is an upgraded installation whose retired
+# ``system_name`` column remains harmlessly present; the second is a current
+# fresh installation.  Both also preserve the two legitimate control-table
+# construction paths (migration DDL versus fresh SQLAlchemy create_all).
+# Unknown fingerprints remain fail-closed.
+TARGET_SHAPE_FINGERPRINT_ALTERNATES = frozenset(
+    {
+        "8a7612da03dd8c67a922cb9d84fe942b"
+        "1944b5f672884ef287ca36e779a6e6a1",
+        "5e405c116697beba3d4546dffb20ae79"
+        "2a09a1bd1562d7efe35c0658b1361c36",
+    }
+)
+TARGET_SHAPE_FINGERPRINTS = frozenset(
+    {TARGET_SHAPE_FINGERPRINT, *TARGET_SHAPE_FINGERPRINT_ALTERNATES}
+)
 
 
 CONTROL_DDL = """
@@ -2848,24 +2865,21 @@ def expected_source_lineage(
     )
     if not primary_shape:
         raise SchemaControlError("source_shape_evidence_missing")
-    expected_shapes = frozenset(
-        {primary_shape}
-        | (
-            set()
-            if same_target
-            else set(
-                SOURCE_SHAPE_FINGERPRINT_ALTERNATES.get(
-                    installed_version,
-                    frozenset(),
-                )
+    expected_shapes = {primary_shape}
+    if expected_schema_version == TARGET_SCHEMA_VERSION:
+        expected_shapes.update(TARGET_SHAPE_FINGERPRINT_ALTERNATES)
+    if not same_target:
+        expected_shapes.update(
+            SOURCE_SHAPE_FINGERPRINT_ALTERNATES.get(
+                installed_version,
+                frozenset(),
             )
         )
-    )
     return (
         installed_version,
         installed_commit,
         expected_schema_version,
-        expected_shapes,
+        frozenset(expected_shapes),
     )
 
 
@@ -4377,9 +4391,15 @@ def release_schema_lock(db: Session) -> None:
 
 def target_shape_is_exact(db: Session) -> tuple[bool, str]:
     actual = database_shape_fingerprint(db)
-    if not re.fullmatch(r"[0-9a-f]{64}", TARGET_SHAPE_FINGERPRINT):
+    if (
+        not TARGET_SHAPE_FINGERPRINTS
+        or any(
+            not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+            for fingerprint in TARGET_SHAPE_FINGERPRINTS
+        )
+    ):
         raise SchemaControlError("target_shape_evidence_missing")
-    return actual == TARGET_SHAPE_FINGERPRINT, actual
+    return actual in TARGET_SHAPE_FINGERPRINTS, actual
 
 
 def classify_retry(

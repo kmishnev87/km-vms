@@ -214,6 +214,31 @@ export function maintenanceStatusText(status, t) {
   return labels[key] || labels.unknown || t.maintenanceStatusUnknown || "Unknown";
 }
 
+export function updateApplyProgressText(applyStatus, t) {
+  const phase = maintenanceStatusText(
+    applyStatus?.current_step || applyStatus?.phase || applyStatus?.status,
+    t,
+  );
+  const percent = applyStatus?.progress_percent;
+  const current = applyStatus?.progress_current;
+  const total = applyStatus?.progress_total;
+  const unit = applyStatus?.progress_unit;
+  const exactProgress = (
+    Number.isInteger(percent)
+    && Number.isInteger(current)
+    && Number.isInteger(total)
+    && percent >= 0
+    && percent <= 100
+    && current >= 0
+    && total > 0
+    && current <= total
+    && ["bytes", "items"].includes(unit)
+    && percent === Math.floor((current * 100) / total)
+  );
+  if (exactProgress) return `${phase} — ${percent}%`;
+  return `${phase} — ${t.updateApplyProgressIndeterminate || "In progress…"}`;
+}
+
 export function maintenanceStatusClass(status) {
   if (["ok", "current", "available", "adopted", "already_adopted", "complete", "completed", "valid", "verified", "drift_known_safe", "draft_known_safe", "update_available"].includes(status)) return "ok";
   if (["blocked", "no_artifacts", "not_configured", "failed", "failed_rolled_back", "cancelled", "stalled"].includes(status)) return "blocked";
@@ -890,7 +915,11 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const recoverySummary = liveCheckFailedWithCandidate
     ? (t.updateApplyRecoveryLiveCheckFailedWithSnapshot || updateApplyRecoveryText("provider_unavailable", applyStatus, t))
     : updateApplyRecoveryText(recoveryStatus, applyStatus, t);
-  const summary = failed || liveCheckFailedWithCandidate || stateUnknown ? recoverySummary : (t.updateApplySummaries?.[headlineKey] || recoverySummary);
+  const summary = failed || liveCheckFailedWithCandidate || stateUnknown
+    ? recoverySummary
+    : running
+      ? updateApplyProgressText(applyStatus, t)
+      : (t.updateApplySummaries?.[headlineKey] || recoverySummary);
   const updateResult = presentedTerminalSuccess
     ? (t.updateApplyResults?.completedVerified || headline)
     : t.updateApplyResults?.[headlineKey] || headline;

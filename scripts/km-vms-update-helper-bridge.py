@@ -1014,17 +1014,66 @@ def _normalize_current_compose_contract(
     app_dir: Path,
     source_dir: Path,
     request_id: str,
+    adopted_final_source: Path | None = None,
+    service_name: str | None = None,
 ) -> Any:
     if isinstance(value, dict):
-        return {
-            key: _normalize_current_compose_contract(
-                item,
-                app_dir=app_dir,
-                source_dir=source_dir,
-                request_id=request_id,
-            )
-            for key, item in value.items()
-        }
+        normalized_value = value
+        if service_name and adopted_final_source is not None:
+            target = value.get("target")
+            source = value.get("source")
+            expected_relative = {
+                "schema-update": {
+                    "/app/release": "release",
+                    "/app/.km-vms-release.json": ".km-vms-release.json",
+                    "/app/.km-vms-source.json": ".km-vms-source.json",
+                },
+                "api": {
+                    "/app/release": "release",
+                    "/app/.km-vms-release.json": ".km-vms-release.json",
+                    "/app/.km-vms-source.json": ".km-vms-source.json",
+                },
+                "nginx": {
+                    "/etc/nginx/conf.d/default.conf": "deploy/nginx/default.conf",
+                    "/etc/nginx/update-recovery.html": "deploy/nginx/update-recovery.html",
+                },
+            }.get(service_name, {}).get(target)
+            if (
+                value.get("type") == "bind"
+                and isinstance(source, str)
+                and expected_relative is not None
+                and Path(source).is_absolute()
+                and Path(source).resolve()
+                == (adopted_final_source / expected_relative).resolve()
+            ):
+                normalized_value = {
+                    **value,
+                    "source": str((app_dir / expected_relative).resolve()),
+                }
+        result: dict[str, Any] = {}
+        for key, item in normalized_value.items():
+            if service_name is None and key == "services" and isinstance(item, dict):
+                result[key] = {
+                    name: _normalize_current_compose_contract(
+                        service,
+                        app_dir=app_dir,
+                        source_dir=source_dir,
+                        request_id=request_id,
+                        adopted_final_source=adopted_final_source,
+                        service_name=name,
+                    )
+                    for name, service in item.items()
+                }
+            else:
+                result[key] = _normalize_current_compose_contract(
+                    item,
+                    app_dir=app_dir,
+                    source_dir=source_dir,
+                    request_id=request_id,
+                    adopted_final_source=adopted_final_source,
+                    service_name=service_name,
+                )
+        return result
     if isinstance(value, list):
         return [
             _normalize_current_compose_contract(
@@ -1032,6 +1081,8 @@ def _normalize_current_compose_contract(
                 app_dir=app_dir,
                 source_dir=source_dir,
                 request_id=request_id,
+                adopted_final_source=adopted_final_source,
+                service_name=service_name,
             )
             for item in value
         ]
@@ -1051,6 +1102,7 @@ def _current_compose_security_contract(
     app_dir: Path,
     source_dir: Path,
     request_id: str,
+    adopted_final_source: Path | None = None,
 ) -> dict[str, Any]:
     rendered = run_command(
         [*compose, "config", "--format", "json"],
@@ -1075,6 +1127,7 @@ def _current_compose_security_contract(
         app_dir=app_dir,
         source_dir=source_dir,
         request_id=request_id,
+        adopted_final_source=adopted_final_source,
     )
 
 
@@ -1562,6 +1615,12 @@ def prepare_legacy_adopted_slot(
             app_dir=app_dir,
             source_dir=source_path,
             request_id=request_id,
+            adopted_final_source=(
+                app_dir
+                / "data/update-runtime/slots"
+                / slot_id
+                / "source"
+            ),
         )
         if slot_security_contract != current_security_contract:
             raise BridgeError(
@@ -4115,6 +4174,7 @@ def schedule_refresh(
         "--entrypoint",
         "python3",
         expected_image_id,
+        "-B",
         str(script_path),
         "refresh",
         "--app-dir",
@@ -4466,28 +4526,6 @@ def refresh(args: argparse.Namespace) -> int:
     expected_image_id = require_image_id(args.expected_image_id)
     timeout_seconds = require_timeout(args.timeout_seconds)
     target_slot = str(getattr(args, "target_slot", None) or "") or None
-    engine = load_slot_engine(bridge_source_root()) if target_slot else None
-    if target_slot is not None:
-        try:
-            target_slot = engine.require_slot_id(target_slot, target=True)
-            journal = engine.read_activation_journal(app_dir)
-            active = engine.read_active_slot(app_dir)
-        except Exception as exc:
-            raise BridgeError(
-                getattr(exc, "code", "activation_journal_invalid"),
-                "Target helper handoff evidence is invalid.",
-            ) from exc
-        if (
-            journal["request_id"] != request_id
-            or journal["phase"] != "completed"
-            or journal["target"]["slot_id"] != target_slot
-            or active is None
-            or active[0] != target_slot
-        ):
-            raise BridgeError(
-                "helper_handoff_conflict",
-                "Target helper handoff does not match completed activation.",
-            )
     control_dir = app_dir / "data/update-control"
     receipt_file = control_dir / "update-helper-refresh.json"
     write_receipt(
@@ -4497,7 +4535,30 @@ def refresh(args: argparse.Namespace) -> int:
         expected_image_id=expected_image_id,
         message="Waiting for exact terminal update completion.",
     )
+    engine = None
     try:
+        if target_slot is not None:
+            try:
+                engine = load_slot_engine(bridge_source_root())
+                target_slot = engine.require_slot_id(target_slot, target=True)
+                journal = engine.read_activation_journal(app_dir)
+                active = engine.read_active_slot(app_dir)
+            except Exception as exc:
+                raise BridgeError(
+                    getattr(exc, "code", "activation_journal_invalid"),
+                    "Target helper handoff evidence is invalid.",
+                ) from exc
+            if (
+                journal["request_id"] != request_id
+                or journal["phase"] != "completed"
+                or journal["target"]["slot_id"] != target_slot
+                or active is None
+                or active[0] != target_slot
+            ):
+                raise BridgeError(
+                    "helper_handoff_conflict",
+                    "Target helper handoff does not match completed activation.",
+                )
         ensure_docker_runtime()
         helper_lease = acquire_helper_transition_lease(control_dir)
         try:

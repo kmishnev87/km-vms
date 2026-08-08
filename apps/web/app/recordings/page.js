@@ -1424,6 +1424,27 @@ export default function RecordingsPage() {
       </div>
 
       <div className="card recordingsTableCard">
+        <div className="recordingsMobileControls">
+          {canDelete ? (
+            <label className="recordingsMobileSelectAll">
+              <input
+                type="checkbox"
+                checked={allVisibleSelected}
+                onChange={toggleSelectAll}
+                aria-label={t.pickAllPage}
+              />
+              <span>{t.pickAllPage}</span>
+            </label>
+          ) : <span />}
+          <button
+            className={`recordingsMobileSortButton ${sortBy === SORT_OPTIONS.size_bytes.key ? "active" : ""}`}
+            onClick={() => handleSort(SORT_OPTIONS.size_bytes.key)}
+            type="button"
+          >
+            <span>{t.size}</span>
+            <span aria-hidden="true">{sortBy === SORT_OPTIONS.size_bytes.key ? (sortDir === "asc" ? ICONS.up : ICONS.down) : ICONS.sort}</span>
+          </button>
+        </div>
         <div className="recordingsTableWrap">
           <table className="table recordingsTable">
             <colgroup>
@@ -1476,9 +1497,9 @@ export default function RecordingsPage() {
                       />
                     ) : null}
                   </td>
-                  <td className="recordingsCameraCell">{item.camera}</td>
+                  <td className="recordingsCameraCell" data-label={t.camera}>{item.camera}</td>
                   <td className="recordingsSpacerCell" aria-hidden="true"></td>
-                  <td className="recordingsFilenameCell">
+                  <td className="recordingsFilenameCell" data-label={t.file}>
                     {isRecordingAvailable(item) ? (
                       <button
                         className="linkButton recordingsFileLink"
@@ -1494,11 +1515,11 @@ export default function RecordingsPage() {
                       </div>
                     )}
                   </td>
-                  <td className="recordingsDateCell">
+                  <td className="recordingsDateCell" data-label={t.createdAt}>
                     {item.started_at_system ? renderRecordingsTableDateTime(item.started_at_system, productTimezone) : (item.created_at || "-")}
                   </td>
-                  <td className="recordingsSizeCell">{item.size_human}</td>
-                  <td>
+                  <td className="recordingsSizeCell" data-label={t.size}>{item.size_human}</td>
+                  <td className="recordingsActionsCell" data-label={t.actions}>
                     <div className="recordingsActions">
                       <button
                         className="recordingsIconButton"

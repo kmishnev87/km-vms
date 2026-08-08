@@ -49,6 +49,9 @@ SLOT_ACTIVATION_RESULT=""
 PREVIOUS_SLOT_ID=""
 TARGET_SLOT_ID=""
 FAILURE_CATEGORY=""
+UPDATE_SUCCEEDED=0
+STAGING_CLEANUP_ATTEMPTED=0
+STAGING_CLEANUP_STATUS="not_applicable"
 
 usage() {
   cat <<'EOF'
@@ -112,6 +115,26 @@ write_helper_progress() {
   [ -n "$UPDATE_PROGRESS_FILE" ] || return 0
   status="${1:-running}"
   message="${2:-}"
+  progress_percent="${3:-}"
+  progress_current="${4:-}"
+  progress_total="${5:-}"
+  progress_unit="${6:-}"
+  progress_valid=0
+  case "$progress_percent:$progress_current:$progress_total:$progress_unit" in
+    *[!0-9:bytesitems]*) ;;
+    *)
+      if [ -n "$progress_percent" ] && [ -n "$progress_current" ] && [ -n "$progress_total" ] && \
+        [ "$progress_percent" -ge 0 ] 2>/dev/null && [ "$progress_percent" -le 100 ] 2>/dev/null && \
+        [ "$progress_current" -ge 0 ] 2>/dev/null && [ "$progress_total" -gt 0 ] 2>/dev/null && \
+        [ "$progress_current" -le "$progress_total" ] 2>/dev/null && \
+        { [ "$progress_unit" = "bytes" ] || [ "$progress_unit" = "items" ]; }; then
+        expected_percent=$((progress_current * 100 / progress_total))
+        if [ "$expected_percent" -eq "$progress_percent" ]; then
+          progress_valid=1
+        fi
+      fi
+      ;;
+  esac
   now=$(metadata_time)
   step=$(progress_step_name "$PHASE")
   tmp_progress="$UPDATE_PROGRESS_FILE.tmp.$$"
@@ -124,7 +147,18 @@ write_helper_progress() {
     printf '  "current_step": "%s",\n' "$(json_escape "$step")"
     printf '  "updated_at": "%s",\n' "$(json_escape "$now")"
     printf '  "request_id": "%s",\n' "$(json_escape "${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}")"
-    printf '  "message": "%s"\n' "$(json_escape "$message")"
+    printf '  "message": "%s",\n' "$(json_escape "$message")"
+    if [ "$progress_valid" = "1" ]; then
+      printf '  "progress_percent": %s,\n' "$progress_percent"
+      printf '  "progress_current": %s,\n' "$progress_current"
+      printf '  "progress_total": %s,\n' "$progress_total"
+      printf '  "progress_unit": "%s"\n' "$progress_unit"
+    else
+      printf '  "progress_percent": null,\n'
+      printf '  "progress_current": null,\n'
+      printf '  "progress_total": null,\n'
+      printf '  "progress_unit": null\n'
+    fi
     printf '}\n'
   } > "$tmp_progress" 2>/dev/null || return 0
   mv "$tmp_progress" "$UPDATE_PROGRESS_FILE" 2>/dev/null || true
@@ -201,9 +235,36 @@ write_update_metadata() {
     printf '    "before_activation": "the active source remains unchanged while the trusted target is prepared",\n'
     printf '    "after_activation": "failed target health or identity restores the exact captured previous release",\n'
     printf '    "operator_guidance": "review the bounded activation result before retrying"\n'
-    printf '  }\n'
+    printf '  },\n'
+    printf '  "staging_cleanup_status": "%s"\n' "$(json_escape "$STAGING_CLEANUP_STATUS")"
     printf '}\n'
   } > "$metadata"
+}
+
+attempt_failed_staging_cleanup() {
+  [ "$STAGING_CLEANUP_ATTEMPTED" = "0" ] || return 0
+  STAGING_CLEANUP_ATTEMPTED=1
+  [ "$DRY_RUN" != "1" ] || return 0
+  request_id="${KM_VMS_UPDATE_CONTROL_REQUEST_ID:-}"
+  [ -n "$request_id" ] || return 0
+  [ -n "$TMP_ROOT" ] || return 0
+  slot_tool="$TMP_ROOT/source/scripts/km-vms-release-slots.py"
+  [ -f "$slot_tool" ] && [ ! -L "$slot_tool" ] || return 0
+  cleanup_output="$TMP_ROOT/failed-staging-cleanup.json"
+  cleanup_error="$TMP_ROOT/failed-staging-cleanup.err"
+  if python3 "$slot_tool" cleanup-failed-staging \
+    --app-dir "$APP_DIR" \
+    --request-id "$request_id" >"$cleanup_output" 2>"$cleanup_error"; then
+    STAGING_CLEANUP_STATUS=$(
+      sed -n 's/.*"status":"\([a-z_]*\)".*/\1/p' "$cleanup_output" |
+        tail -n 1
+    )
+    [ -n "$STAGING_CLEANUP_STATUS" ] || STAGING_CLEANUP_STATUS="completed"
+    return 0
+  fi
+  STAGING_CLEANUP_STATUS="failed"
+  printf '%s\n' 'WARNING [staging_cleanup_failed]: Failed request staging could not be removed automatically.' >&2
+  return 0
 }
 
 fail() {
@@ -235,6 +296,7 @@ fail() {
     esac
   fi
   if [ "$DRY_RUN" != "1" ] && [ -n "$APP_DIR" ] && [ -d "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
+    attempt_failed_staging_cleanup
     write_update_metadata "failed" "$message" 2>/dev/null || true
   fi
   exit 1
@@ -265,6 +327,9 @@ apply_generated_archive_roots_compose_if_needed() {
 }
 
 cleanup() {
+  if [ "$UPDATE_SUCCEEDED" != "1" ]; then
+    attempt_failed_staging_cleanup 2>/dev/null || true
+  fi
   clear_github_token 2>/dev/null || true
   if [ "$LOCK_HELD" = "1" ] && [ -n "$LOCK_DIR" ] && [ -d "$LOCK_DIR" ]; then
     rm -f "$LOCK_DIR/pid" "$LOCK_DIR/started_at" 2>/dev/null || true
@@ -531,15 +596,64 @@ http_download() {
   output="$2"
   require_download_client
   if [ "$DOWNLOAD_CLIENT" = "curl" ]; then
+    headers="$TMP_ROOT/download-headers.$$"
+    : > "$headers"
     if [ -n "$GITHUB_TOKEN_CONFIG" ]; then
-      curl -fsSL --config "$GITHUB_TOKEN_CONFIG" "$url" -o "$output" || return 1
+      curl -fsSL --config "$GITHUB_TOKEN_CONFIG" "$url" -o "$output" --dump-header "$headers" &
     else
-      curl -fsSL "$url" -o "$output" || return 1
+      curl -fsSL "$url" -o "$output" --dump-header "$headers" &
     fi
-    return 0
+    download_pid=$!
+    while kill -0 "$download_pid" 2>/dev/null; do
+      publish_download_progress "$headers" "$output"
+      sleep 1
+    done
+    download_status=0
+    wait "$download_pid" || download_status=$?
+    if [ "$download_status" -eq 0 ]; then
+      publish_download_progress "$headers" "$output"
+    fi
+    rm -f "$headers"
+    [ "$download_status" -eq 0 ]
+    return $?
   fi
   [ -z "$GITHUB_TOKEN_CONFIG" ] || fail "Private GitHub update requires curl for secure token handling."
   wget -qO "$output" "$url" || return 1
+}
+
+download_content_length() {
+  headers="$1"
+  [ -f "$headers" ] || return 1
+  tr -d '\r' < "$headers" |
+    sed -n 's/^[Cc]ontent-[Ll]ength:[[:space:]]*\([0-9][0-9]*\)[[:space:]]*$/\1/p' |
+    tail -n 1
+}
+
+publish_download_progress() {
+  headers="$1"
+  output="$2"
+  total=$(download_content_length "$headers" 2>/dev/null || true)
+  case "$total" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  [ "$total" -gt 0 ] 2>/dev/null || return 0
+  if [ -f "$output" ]; then
+    current=$(wc -c < "$output" | tr -d '[:space:]')
+  else
+    current=0
+  fi
+  case "$current" in
+    ''|*[!0-9]*) return 0 ;;
+  esac
+  [ "$current" -le "$total" ] 2>/dev/null || current="$total"
+  percent=$((current * 100 / total))
+  write_helper_progress \
+    "running" \
+    "Acquiring trusted source archive." \
+    "$percent" \
+    "$current" \
+    "$total" \
+    "bytes"
 }
 
 github_api_text() {
@@ -1517,6 +1631,7 @@ postflight_preservation
 PHASE="metadata_write"
 write_helper_progress "running" "Writing successful update metadata."
 write_update_metadata "success" ""
+UPDATE_SUCCEEDED=1
 PHASE="cleanup"
 write_helper_progress "completed" "Update completed."
 info "KM VMS staged activation completed."

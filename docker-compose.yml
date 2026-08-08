@@ -58,7 +58,7 @@ services:
       - >-
         script="$${KM_VMS_BOOTSTRAP_APP_DIR}/data/update-runtime/active/scripts/km-vms-update-helper-bridge.py";
         [ -f "$$script" ] || script="$${KM_VMS_BOOTSTRAP_APP_DIR}/scripts/km-vms-update-helper-bridge.py";
-        exec python3 "$$script" bootstrap
+        exec python3 -B "$$script" bootstrap
     volumes:
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}:${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}
       - /var/run/docker.sock:/var/run/docker.sock
@@ -357,7 +357,7 @@ services:
       - >-
         script=/host-app/data/update-runtime/active/scripts/km-vms-update-helper.py;
         [ -f "$$script" ] || script=/host-app/scripts/km-vms-update-helper.py;
-        exec python3 "$$script"
+        exec python3 -B "$$script"
     volumes:
       - ${KM_VMS_HOST_APP_DIR:-.}:/host-app
       - ${KM_VMS_HOST_APP_DIR:-.}:${KM_VMS_HOST_APP_DIR:-/host-app}

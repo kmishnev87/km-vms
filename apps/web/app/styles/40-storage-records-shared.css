@@ -1884,6 +1884,10 @@
   padding: 12px;
 }
 
+.recordingsMobileControls {
+  display: none;
+}
+
 .recordingsTableWrap {
   overflow-x: auto;
   overflow-y: visible;

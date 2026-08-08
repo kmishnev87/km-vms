@@ -782,48 +782,182 @@
 }
 
 @media (max-width: 640px) {
+  .recordingsMobileControls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 10px;
+    padding: 0 2px;
+  }
+
+  .recordingsMobileSelectAll {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: #475569;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .recordingsMobileSelectAll input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
+  }
+
+  .recordingsMobileSortButton {
+    min-height: 36px;
+    padding: 0 12px;
+    border: 1px solid #dbe3ef;
+    border-radius: 10px;
+    background: #fff;
+    color: #475569;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+  }
+
+  .recordingsMobileSortButton.active {
+    border-color: #bfdbfe;
+    color: #1d4ed8;
+    background: #eff6ff;
+  }
+
+  .recordingsTableWrap {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+  }
+
   .recordingsTable {
-    min-width: 760px;
+    display: block;
+    width: 100%;
+    min-width: 0;
+    table-layout: auto;
   }
 
-  .recordingsTable th,
-  .recordingsTable td {
-    padding: 9px 6px;
-    font-size: 12px;
+  .recordingsTable thead,
+  .recordingsTable colgroup {
+    display: none;
   }
 
-  .recordingsSelectCol {
-    width: 34px;
+  .recordingsTable tbody {
+    display: grid;
+    gap: 10px;
   }
 
-  .recordingsCameraCol {
-    width: 145px;
+  .recordingsTable tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 10px 12px;
+    padding: 12px;
+    border: 1px solid #dbe3ef;
+    border-radius: 14px;
+    background: #fff;
   }
 
-  .recordingsSpacerCol {
-    width: 10px;
+  .recordingsTable tbody td {
+    display: flex;
+    min-width: 0;
+    max-width: none;
+    padding: 0;
+    border: 0;
+    white-space: normal;
+    font-size: 13px;
   }
 
-  .recordingsFileCol {
-    width: 260px;
+  .recordingsTable tbody td[data-label] {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
   }
 
-  .recordingsDateCol {
-    width: 132px;
+  .recordingsTable tbody td[data-label]::before {
+    content: attr(data-label);
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 700;
   }
 
-  .recordingsSizeCol {
-    width: 76px;
+  .recordingsTable tbody td:first-child {
+    grid-column: 2;
+    grid-row: 1;
+    align-items: flex-start;
+    justify-content: flex-end;
   }
 
-  .recordingsActionsCol {
-    width: 96px;
+  .recordingsTable tbody td:first-child input {
+    width: 18px;
+    height: 18px;
+    margin: 0;
   }
 
-  .recordingsIconButton {
-    width: 27px;
-    min-width: 27px;
-    height: 27px;
+  .recordingsTable .recordingsCameraCell {
+    grid-column: 1;
+    grid-row: 1;
+    overflow: visible;
+    font-weight: 700;
+    text-overflow: clip;
+  }
+
+  .recordingsTable .recordingsSpacerCell {
+    display: none;
+  }
+
+  .recordingsTable .recordingsFilenameCell {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .recordingsTable .recordingsFileLink,
+  .recordingsTable .recordingsFilenameCell > div > div:first-child {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-align: left;
+  }
+
+  .recordingsTable td.recordingsDateCell,
+  .recordingsTable td.recordingsSizeCell {
+    text-align: left;
+  }
+
+  .recordingsTable .recordingsDateTime {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    row-gap: 4px;
+    white-space: normal;
+  }
+
+  .recordingsTable .recordingsActionsCell {
+    grid-column: 1 / -1;
+    align-items: stretch;
+    padding-top: 2px;
+    border-top: 1px solid #eef2f7;
+  }
+
+  .recordingsTable .recordingsActions {
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  .recordingsTable .recordingsIconButton {
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+  }
+
+  .recordingsTable .recordingsEmptyCell {
+    grid-column: 1 / -1;
+    display: block;
+    padding: 20px 10px;
+    text-align: center;
   }
 
   .chronologyTimelineAxisLabel {

@@ -369,6 +369,78 @@ def test_update_helper_classifies_health_check_failure_from_metadata(tmp_path):
     )
 
 
+def test_update_progress_schema_accepts_only_exact_bounded_values(
+    tmp_path: Path,
+) -> None:
+    helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
+    spec = importlib.util.spec_from_file_location(
+        "km_vms_update_helper_progress_contract",
+        helper_path,
+    )
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    helper.PROGRESS_FILE = tmp_path / "update-progress.json"
+    request_id = "update-" + ("a" * 32)
+
+    def read(values: dict) -> dict:
+        helper.PROGRESS_FILE.write_text(
+            json.dumps(
+                {
+                    "status": "running",
+                    "phase": "acquire",
+                    "current_step": "acquire_source",
+                    "request_id": request_id,
+                    **values,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return helper.read_progress(request_id)
+
+    for percent in (0, 42, 100):
+        progress = read(
+            {
+                "progress_percent": percent,
+                "progress_current": percent,
+                "progress_total": 100,
+                "progress_unit": "bytes",
+            }
+        )
+        assert progress["progress_percent"] == percent
+
+    assert read({})["progress_percent"] is None
+    for invalid in (
+        {
+            "progress_percent": -1,
+            "progress_current": 0,
+            "progress_total": 100,
+            "progress_unit": "bytes",
+        },
+        {
+            "progress_percent": 101,
+            "progress_current": 100,
+            "progress_total": 100,
+            "progress_unit": "bytes",
+        },
+        {
+            "progress_percent": float("inf"),
+            "progress_current": 1,
+            "progress_total": 2,
+            "progress_unit": "bytes",
+        },
+        {
+            "progress_percent": 50,
+            "progress_current": 42,
+            "progress_total": 100,
+            "progress_unit": "bytes",
+        },
+    ):
+        progress = read(invalid)
+        assert progress["progress_percent"] is None
+        assert progress["progress_current"] is None
+
+
 def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tmp_path, monkeypatch):
     helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
     spec = importlib.util.spec_from_file_location("km_vms_update_helper_pin_contract", helper_path)
@@ -452,6 +524,8 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
 
     assert helper.run_update(request) == 0
     assert published and published[0][1]["status"] == "completed"
+    assert len(commands) == 1
+    assert "--dry-run" not in commands[0]
     assert commands[0][:6] == [
         "sh",
         str(active_source_dir / "scripts" / "update.sh"),
@@ -546,7 +620,7 @@ def test_update_helper_uses_container_compose_override_not_host_only_path(tmp_pa
 
     assert helper.run_update(request) == 0
     assert published and published[0][1]["status"] == "completed"
-    assert seen_compose_values == ["docker-compose", "docker-compose"]
+    assert seen_compose_values == ["docker-compose"]
 
 
 def test_update_helper_rejects_commit_mismatch_after_success(tmp_path):
@@ -1169,6 +1243,12 @@ def test_update_helper_bridge_uses_bounded_json_and_exact_target_image_activatio
         "/data/update-runtime/active/scripts/"
         "km-vms-update-helper-bridge.py"
     ) in compose
+    assert 'exec python3 -B "$$script" bootstrap' in compose
+    assert 'exec python3 -B "$$script"' in compose
+    assert (
+        'expected_image_id,\n        "-B",\n        str(script_path),'
+        in bridge
+    )
 
 
 def test_rebuild_resets_one_shots_and_does_not_retry_terminal_schema_failure():

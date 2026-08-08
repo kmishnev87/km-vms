@@ -2406,6 +2406,42 @@ def cleanup_request_staging(
     return True
 
 
+def cleanup_failed_pre_journal_staging(
+    app_dir: Path,
+    *,
+    request_id: str,
+    failed_request_evidence: bool = False,
+) -> dict[str, Any]:
+    """Remove only one failed request's staging before activation begins."""
+
+    app_dir = resolve_app_dir(app_dir)
+    request_id = require_request_id(request_id)
+    if failed_request_evidence is not True:
+        raise SlotError(
+            "cleanup_failure_evidence_required",
+            "Failed request staging cleanup requires terminal failure evidence.",
+        )
+    journal = read_activation_journal(app_dir, missing_ok=True)
+    if journal is not None and journal.get("request_id") == request_id:
+        return {
+            "schema_version": RUNTIME_SCHEMA_VERSION,
+            "request_id": request_id,
+            "status": "activation_started",
+            "removed": False,
+        }
+    removed = cleanup_request_staging(
+        app_dir,
+        request_id=request_id,
+        terminal_evidence=True,
+    )
+    return {
+        "schema_version": RUNTIME_SCHEMA_VERSION,
+        "request_id": request_id,
+        "status": "removed" if removed else "absent",
+        "removed": removed,
+    }
+
+
 def _load_evidence_file(path_value: str) -> dict[str, Any]:
     path = Path(path_value)
     if not path.is_absolute():
@@ -2447,6 +2483,10 @@ def _build_parser() -> argparse.ArgumentParser:
     finalize_parser.add_argument("--compose-evidence-file", required=True)
     finalize_parser.add_argument("--image-evidence-file", required=True)
     finalize_parser.add_argument("--health-evidence-file")
+
+    cleanup_failed_parser = subparsers.add_parser("cleanup-failed-staging")
+    cleanup_failed_parser.add_argument("--app-dir", required=True)
+    cleanup_failed_parser.add_argument("--request-id", required=True)
 
     inspect_parser = subparsers.add_parser("inspect")
     inspect_parser.add_argument("--app-dir", required=True)
@@ -2498,6 +2538,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if args.health_evidence_file
                     else None
                 ),
+            )
+        elif args.command == "cleanup-failed-staging":
+            result = cleanup_failed_pre_journal_staging(
+                Path(args.app_dir),
+                request_id=args.request_id,
+                failed_request_evidence=True,
             )
         elif args.command == "inspect":
             app_dir = resolve_app_dir(args.app_dir)

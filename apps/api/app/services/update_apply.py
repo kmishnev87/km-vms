@@ -853,6 +853,10 @@ def _base_status(
         "status": status_value,
         "phase": phase,
         "current_step": phase,
+        "progress_percent": None,
+        "progress_current": None,
+        "progress_total": None,
+        "progress_unit": None,
         "started_at": None,
         "updated_at": _iso(),
         "finished_at": None,
@@ -888,6 +892,35 @@ def _base_status(
             "last": None,
             "max_items": MAX_HISTORY_ITEMS,
         },
+    }
+
+
+def _safe_progress(payload: dict[str, Any]) -> dict[str, Any]:
+    percent = payload.get("progress_percent")
+    current = payload.get("progress_current")
+    total = payload.get("progress_total")
+    unit = payload.get("progress_unit")
+    if (
+        type(percent) is int
+        and type(current) is int
+        and type(total) is int
+        and 0 <= percent <= 100
+        and 0 <= current <= total
+        and total > 0
+        and unit in {"bytes", "items"}
+        and percent == current * 100 // total
+    ):
+        return {
+            "progress_percent": percent,
+            "progress_current": current,
+            "progress_total": total,
+            "progress_unit": unit,
+        }
+    return {
+        "progress_percent": None,
+        "progress_current": None,
+        "progress_total": None,
+        "progress_unit": None,
     }
 
 
@@ -1174,6 +1207,7 @@ def _sanitize_status_payload() -> tuple[dict[str, Any], str]:
             "last_apply_summary": history["last"],
         }
     )
+    result.update(_safe_progress(payload))
     started = _parse_iso(result["started_at"])
     updated = _parse_iso(result["updated_at"])
     now = _utcnow()

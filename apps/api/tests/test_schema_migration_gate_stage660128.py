@@ -31,6 +31,55 @@ REGISTRY = "5" * 64
 PLAN = "6" * 64
 
 
+def test_current_schema_v8_accepts_only_verified_exact_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for fingerprint in control.TARGET_SHAPE_FINGERPRINTS:
+        monkeypatch.setattr(
+            control,
+            "database_shape_fingerprint",
+            lambda _db, value=fingerprint: value,
+        )
+        assert control.target_shape_is_exact(object()) == (
+            True,
+            fingerprint,
+        )
+
+    unknown = "f" * 64
+    assert unknown not in control.TARGET_SHAPE_FINGERPRINTS
+    monkeypatch.setattr(
+        control,
+        "database_shape_fingerprint",
+        lambda _db: unknown,
+    )
+    assert control.target_shape_is_exact(object()) == (False, unknown)
+
+
+def test_same_target_lineage_includes_verified_schema_v8_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        control,
+        "_source_identity_payload",
+        lambda: {
+            "request_id": REQUEST_ID,
+            "installed_version": "0.8.9",
+            "installed_commit": TARGET_COMMIT,
+        },
+    )
+
+    _version, _commit, schema_version, shapes = (
+        control.expected_source_lineage(
+            request_id=REQUEST_ID,
+            target_release="0.8.9",
+            target_commit=TARGET_COMMIT,
+        )
+    )
+
+    assert schema_version == control.TARGET_SCHEMA_VERSION
+    assert shapes == control.TARGET_SHAPE_FINGERPRINTS
+
+
 def test_pipeline_holds_one_lock_while_running_all_phases(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

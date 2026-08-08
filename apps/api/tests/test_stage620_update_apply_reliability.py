@@ -70,6 +70,28 @@ def test_stage620_helper_uses_popen_polling_and_progress_heartbeat():
     assert "steps_for" in text
 
 
+def test_stage620_public_progress_projection_is_bounded_and_consistent():
+    for percent in (0, 42, 100):
+        assert update_apply_module._safe_progress(
+            {
+                "progress_percent": percent,
+                "progress_current": percent,
+                "progress_total": 100,
+                "progress_unit": "bytes",
+            }
+        )["progress_percent"] == percent
+
+    for payload in (
+        {"progress_percent": -1, "progress_current": 0, "progress_total": 100, "progress_unit": "bytes"},
+        {"progress_percent": 101, "progress_current": 100, "progress_total": 100, "progress_unit": "bytes"},
+        {"progress_percent": float("nan"), "progress_current": 1, "progress_total": 2, "progress_unit": "bytes"},
+        {"progress_percent": 50, "progress_current": 42, "progress_total": 100, "progress_unit": "bytes"},
+    ):
+        sanitized = update_apply_module._safe_progress(payload)
+        assert sanitized["progress_percent"] is None
+        assert sanitized["progress_total"] is None
+
+
 def test_stage621_helper_large_stderr_does_not_deadlock_and_returns_tail(tmp_path, monkeypatch):
     helper = load_update_helper_module()
     control = tmp_path / "control"
