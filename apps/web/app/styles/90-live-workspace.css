@@ -466,7 +466,7 @@
   border-radius: 8px;
   background: #000000;
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
-  touch-action: none;
+  touch-action: pan-y;
 }
 
 .liveWorkspaceTile.fullscreen {
@@ -593,6 +593,12 @@
   flex: 1 1 auto;
   min-height: 0;
   background: #000000;
+  touch-action: pan-y;
+}
+
+.liveWorkspaceTile.fullscreen .videoZoomPanSurface,
+.liveWorkspaceTileVideo:fullscreen .videoZoomPanSurface {
+  touch-action: none;
 }
 
 .liveWorkspaceTileVideo:fullscreen {
@@ -712,6 +718,15 @@
 
   .liveWorkspaceCanvas {
     height: 720px;
+  }
+}
+
+@media (max-width: 640px) {
+  .liveWorkspaceCameraList {
+    --live-camera-scroll-gutter: 22px;
+    width: 100%;
+    box-sizing: border-box;
+    padding-inline-end: var(--live-camera-scroll-gutter);
   }
 }
 

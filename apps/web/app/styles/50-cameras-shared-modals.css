@@ -49,12 +49,13 @@
   width: 100%;
   overflow: hidden;
   background: #000000;
-  touch-action: none;
+  touch-action: pan-y;
   user-select: none;
   cursor: zoom-in;
 }
 
 .videoZoomPanSurface.isZoomed {
+  touch-action: none;
   cursor: grab;
 }
 
@@ -395,6 +396,10 @@
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
+}
+
+.recordingVideoFrame:fullscreen .videoZoomPanSurface {
+  touch-action: none;
 }
 
 .cameraPageWarnings {

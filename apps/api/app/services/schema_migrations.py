@@ -1839,7 +1839,7 @@ def _stage660128_universal_schema_apply(db: Session) -> dict[str, Any]:
     }
 
 
-def _stage660128_universal_schema_verify(db: Session) -> dict[str, Any]:
+def _stage660128_target_schema_shape_verify(db: Session) -> dict[str, Any]:
     inspector = inspect(db.connection())
     actual_tables = set(inspector.get_table_names())
     missing_tables = sorted(STAGE660128_TARGET_TABLES - actual_tables)
@@ -1875,14 +1875,21 @@ def _stage660128_universal_schema_verify(db: Session) -> dict[str, Any]:
         )
         if default not in {None, ""}:
             raise RuntimeError("stage660128_retention_default_mismatch")
+    return {
+        "status": "verified",
+        "table_count": len(actual_tables),
+        "semantic_shape_verified": True,
+    }
+
+
+def _stage660128_universal_schema_verify(db: Session) -> dict[str, Any]:
+    result = _stage660128_target_schema_shape_verify(db)
     active_counts = _stage660128_active_operation_counts(db)
     if any(active_counts.values()):
         raise RuntimeError("stage660128_active_operation_reappeared")
     return {
-        "status": "verified",
-        "table_count": len(actual_tables),
+        **result,
         "active_operation_counts": active_counts,
-        "semantic_shape_verified": True,
     }
 
 
@@ -1895,7 +1902,10 @@ def validate_stage660128_target_schema(db: Session) -> dict[str, Any]:
         or state.status not in SAFE_STATUSES
     ):
         raise RuntimeError("stage660128_target_schema_state_invalid")
-    return _stage660128_universal_schema_verify(db)
+    # Runtime operations are recovered by workers that start after init_db().
+    # Requiring quiescence here creates a boot deadlock after an interrupted
+    # operation. Migration preflight/verify retains the strict zero-active gate.
+    return _stage660128_target_schema_shape_verify(db)
 
 
 STAGE660128_UNIVERSAL_SCHEMA_MIGRATION = MigrationDefinition(

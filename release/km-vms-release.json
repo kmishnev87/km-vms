@@ -1,24 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.10",
-  "tag": "v0.8.10",
-  "title": "KM VMS 0.8.10 — Update State Convergence and Responsive Web/Mobile Layout",
-  "title_i18n": {
-    "en": "KM VMS 0.8.10 — Update State Convergence and Responsive Web/Mobile Layout",
-    "ru": "KM VMS 0.8.10 — сходимость состояний обновления и адаптивный web/mobile-интерфейс",
-    "zh-CN": "KM VMS 0.8.10 — 更新状态收敛与响应式网页/移动布局"
-  },
-  "summary": "Converges supported legacy and staged update states without duplicate target downloads, reports truthful bounded progress, cleans failed pre-activation staging safely, completes the update-helper handoff, and presents Records as usable mobile cards while preserving desktop behavior.",
-  "summary_i18n": {
-    "en": "Converges supported legacy and staged update states without duplicate target downloads, reports truthful bounded progress, cleans failed pre-activation staging safely, completes the update-helper handoff, and presents Records as usable mobile cards while preserving desktop behavior.",
-    "ru": "Сводит поддерживаемые старые и slot-based состояния обновления без повторного скачивания target, показывает правдивый ограниченный прогресс, безопасно очищает неудачную подготовку до активации, завершает передачу управления update-helper и показывает записи удобными мобильными карточками без изменения desktop-поведения.",
-    "zh-CN": "在不重复下载目标源码的情况下收敛受支持的旧版与发布槽更新状态，显示真实且有边界的进度，安全清理激活前失败的暂存内容，完成更新助手交接，并在保留桌面行为的同时将录像显示为易用的移动卡片。"
-  },
+  "version": "0.8.11",
+  "tag": "v0.8.11",
+  "title": "Archive Integrity Convergence, Update Recovery and Touch Interaction Reliability",
+  "summary": "Converges expired archive-integrity remediation state, recovers startup and release-slot updates from supported interrupted states, and makes touch zoom, pan, scrolling and double-tap ownership predictable across Live, Chronology and Records.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.10",
+  "source_ref": "v0.8.11",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -26,37 +16,47 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Adopts clean installations without an active pointer into the release-slot flow while keeping real neighboring bind and security drift blocked.",
-    "Downloads the target source once per in-app apply attempt and reports only factual bounded progress or an honest indeterminate phase.",
-    "Removes only the exact failed pre-journal staging request, permits a safe retry, and records a durable update-helper handoff without mutating the immutable release slot.",
-    "Accepts only the verified semantic schema-v8 shapes observed on clean and upgraded installations while unknown database drift remains fail-closed.",
-    "Reflows Records into readable mobile cards with selection, sorting and existing actions, without horizontal page overflow or desktop-table changes.",
-    "Validates the main web routes at desktop and phone widths and leaves intentional Live and Chronology workspaces unchanged when no blocking page-level defect is present."
+    "Converges the exact expired unbound archive-integrity operation without accepting unrelated scope or weakening remediation identity.",
+    "Validates the target database shape at startup while leaving active-operation recovery to workers, avoiding an interrupted-operation boot deadlock.",
+    "Removes only validated legacy Python cache entries from an active release slot before slot verification so supported updates can continue.",
+    "Unifies pinch zoom and one-finger pan across Live, Chronology and Records, with bounded transforms and Records background-scroll locking.",
+    "Routes touch double taps by owner and zone so sidebar add, fullscreen and seek actions do not trigger one another.",
+    "Adds a mobile camera-list scroll gutter while preserving existing desktop mouse zoom, pan and playback controls."
   ],
+  "title_i18n": {
+    "en": "Archive Integrity Convergence, Update Recovery and Touch Interaction Reliability",
+    "ru": "Сходимость целостности архива, восстановление обновлений и надёжность сенсорного управления",
+    "zh-CN": "归档完整性收敛、更新恢复与触控交互可靠性"
+  },
+  "summary_i18n": {
+    "en": "Converges expired archive-integrity remediation state, recovers startup and release-slot updates from supported interrupted states, and makes touch zoom, pan, scrolling and double-tap ownership predictable across Live, Chronology and Records.",
+    "ru": "Сводит просроченные состояния исправления целостности архива, восстанавливает запуск и release-slot обновления из поддерживаемых прерванных состояний и делает сенсорные zoom, pan, прокрутку и владение двойным тапом предсказуемыми в Онлайн, Хронологии и Записях.",
+    "zh-CN": "收敛过期的归档完整性修复状态，从受支持的中断状态恢复启动与发布槽更新，并使实时、时间轴和录像中的触控缩放、平移、滚动及双击归属保持可预测。"
+  },
   "changelog_i18n": {
     "en": [
-      "Adopts clean installations without an active pointer into the release-slot flow while keeping real neighboring bind and security drift blocked.",
-      "Downloads the target source once per in-app apply attempt and reports only factual bounded progress or an honest indeterminate phase.",
-      "Removes only the exact failed pre-journal staging request, permits a safe retry, and records a durable update-helper handoff without mutating the immutable release slot.",
-      "Accepts only the verified semantic schema-v8 shapes observed on clean and upgraded installations while unknown database drift remains fail-closed.",
-      "Reflows Records into readable mobile cards with selection, sorting and existing actions, without horizontal page overflow or desktop-table changes.",
-      "Validates the main web routes at desktop and phone widths and leaves intentional Live and Chronology workspaces unchanged when no blocking page-level defect is present."
+      "Converges the exact expired unbound archive-integrity operation without accepting unrelated scope or weakening remediation identity.",
+      "Validates the target database shape at startup while leaving active-operation recovery to workers, avoiding an interrupted-operation boot deadlock.",
+      "Removes only validated legacy Python cache entries from an active release slot before slot verification so supported updates can continue.",
+      "Unifies pinch zoom and one-finger pan across Live, Chronology and Records, with bounded transforms and Records background-scroll locking.",
+      "Routes touch double taps by owner and zone so sidebar add, fullscreen and seek actions do not trigger one another.",
+      "Adds a mobile camera-list scroll gutter while preserving existing desktop mouse zoom, pan and playback controls."
     ],
     "ru": [
-      "Чистая установка без active pointer безопасно принимается в release-slot flow, а реальный соседний bind/security drift по-прежнему блокируется.",
-      "Одна in-app apply-попытка скачивает target source один раз и показывает только фактический ограниченный прогресс либо честную фазу без процента.",
-      "Удаляется точная неудачная pre-journal staging-попытка; разрешён безопасный retry, а передача update-helper фиксируется без изменения immutable release slot.",
-      "Разрешены только проверенные семантические формы schema v8 для чистых и обновлённых установок, а неизвестный drift БД остаётся fail-closed.",
-      "На телефоне «Записи» перестраиваются в читаемые карточки с выбором, сортировкой и существующими действиями без горизонтального overflow и без изменения desktop-таблицы.",
-      "Основные web-маршруты проверены на desktop и phone; предусмотренные рабочие области Live и Хронологии не менялись при отсутствии блокирующего page-level дефекта."
+      "Точно сводит просроченную непривязанную операцию целостности архива, не принимая чужой scope и не ослабляя identity исправления.",
+      "При запуске проверяет форму целевой БД, оставляя восстановление активных операций workers, и устраняет boot deadlock после прерывания.",
+      "Перед проверкой active release slot удаляет только подтверждённые legacy Python cache-файлы, чтобы поддерживаемое обновление могло продолжиться.",
+      "Объединяет pinch zoom и pan одним пальцем в Онлайн, Хронологии и Записях, ограничивает transform и блокирует фоновую прокрутку Записей.",
+      "Разделяет touch double tap по владельцу и зоне, чтобы добавление камеры, fullscreen и перемотка не запускали друг друга.",
+      "Добавляет мобильную область прокрутки списка камер и сохраняет существующие desktop mouse zoom, pan и playback controls."
     ],
     "zh-CN": [
-      "缺少活动指针的全新安装可安全接入发布槽流程，同时真实的相邻绑定或安全漂移仍会被阻止。",
-      "每次应用内更新只下载一次目标源码，并且仅显示真实的有界进度，或诚实显示无百分比的执行阶段。",
-      "只清理精确匹配的日志前失败暂存请求，允许安全重试，并在不修改不可变发布槽的情况下持久记录更新助手交接。",
-      "仅接受在全新和升级安装中验证过的 schema v8 语义形态，未知数据库漂移仍保持失败关闭。",
-      "移动端录像页面改为可读卡片，保留选择、排序和现有操作，不产生页面横向溢出，也不改变桌面表格。",
-      "主要网页路由已在桌面和手机宽度下验证；未发现阻塞性页面级缺陷时，保留 Live 与时间轴的既有工作区行为。"
+      "精确收敛过期且未绑定的归档完整性操作，不接受无关作用域，也不削弱修复身份校验。",
+      "启动时验证目标数据库形态，将活动操作恢复留给工作进程，避免中断操作导致启动死锁。",
+      "在验证活动发布槽前仅删除已确认的旧版 Python 缓存条目，使受支持的更新能够继续。",
+      "统一实时、时间轴和录像中的双指缩放与单指平移，限制变换并锁定录像查看时的背景滚动。",
+      "按所有者和区域路由触控双击，避免添加摄像机、全屏与跳转操作相互触发。",
+      "为移动端摄像机列表增加独立滚动区域，同时保留桌面鼠标缩放、平移和播放控件。"
     ]
   }
 }

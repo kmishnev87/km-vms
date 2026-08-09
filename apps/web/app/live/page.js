@@ -8,6 +8,10 @@ import TilePlayer from "../../components/TilePlayer";
 import { apiFetch } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import {
+  consumeTouchDoubleTapSuppressionToken,
+  createTouchDoubleTapSuppressionToken,
+} from "../../lib/videoZoomPanCore";
+import {
   LIVE_CAMERA_DROP_MIME,
   LIVE_CAMERA_STREAM_DROP_MIME,
   SIDEBAR_CAMERA_REORDER_MIME,
@@ -237,6 +241,7 @@ export default function LivePage() {
   const lastBackendLayoutPayloadRef = useRef("");
   const sidebarPointerDragRef = useRef(null);
   const lastSidebarTapRef = useRef(null);
+  const sidebarTouchDoubleTapSuppressionRef = useRef(null);
   const lastTileTapRef = useRef(null);
   const tileFullscreenReturnStateRef = useRef(null);
   const [cameras, setCameras] = useState([]);
@@ -581,6 +586,26 @@ export default function LivePage() {
     setSidebarDragPreview(null);
   }
 
+  function cancelSidebarPointerDrag() {
+    lastSidebarTapRef.current = null;
+    clearSidebarPointerDrag();
+  }
+
+  function consumeSidebarTouchDoubleClick(event, cameraId) {
+    const nativeEvent = event?.nativeEvent || event;
+    const point = { x: Number(nativeEvent?.clientX || 0), y: Number(nativeEvent?.clientY || 0) };
+    const suppression = consumeTouchDoubleTapSuppressionToken(
+      sidebarTouchDoubleTapSuppressionRef.current,
+      { time: Date.now(), point, ownerKey: String(cameraId) }
+    );
+    if (!suppression.consumed) return false;
+    sidebarTouchDoubleTapSuppressionRef.current = suppression.nextToken;
+    event.preventDefault();
+    event.stopPropagation();
+    nativeEvent?.stopImmediatePropagation?.();
+    return true;
+  }
+
   function sidebarCameraRowFromPoint(clientX, clientY) {
     const node = document.elementFromPoint(clientX, clientY);
     return node?.closest?.("[data-sidebar-camera-row]") || null;
@@ -601,6 +626,9 @@ export default function LivePage() {
     if (event.button !== 0) return;
     if (event.target?.closest?.("button, select, input, textarea, a")) return;
     if (event.pointerType !== "mouse") event.preventDefault();
+    if (event.pointerType === "mouse" && !event.nativeEvent?.sourceCapabilities?.firesTouchEvents) {
+      sidebarTouchDoubleTapSuppressionRef.current = null;
+    }
     sidebarPointerDragRef.current = {
       pointerId: event.pointerId,
       cameraId: String(camera.id),
@@ -622,6 +650,7 @@ export default function LivePage() {
 
     if (!state.active) {
       state.active = true;
+      lastSidebarTapRef.current = null;
       setDraggedSidebarCameraId(state.cameraId);
     }
 
@@ -652,6 +681,7 @@ export default function LivePage() {
     event.currentTarget?.releasePointerCapture?.(event.pointerId);
 
     if (state.active) {
+      lastSidebarTapRef.current = null;
       if (isPointInsideWorkspace(event.clientX, event.clientY)) {
         addTile(state.cameraId, state.stream, event.clientX, event.clientY);
       } else {
@@ -676,6 +706,11 @@ export default function LivePage() {
       pointerDistance(previous.point, point) <= DOUBLE_TAP_DISTANCE_PX
     ) {
       lastSidebarTapRef.current = null;
+      sidebarTouchDoubleTapSuppressionRef.current = createTouchDoubleTapSuppressionToken({
+        ownerKey: String(cameraId),
+        time: now,
+        point,
+      });
       addTileFromSidebar(cameraId, stream);
       return;
     }
@@ -756,16 +791,6 @@ export default function LivePage() {
     if (event.pointerType === "mouse" || event.pointerType === "touch") return;
     event.stopPropagation();
     handleTileSurfaceTap(tileId, { x: event.clientX, y: event.clientY });
-  }
-
-  function handleTileSurfaceTouchEnd(event, tileId) {
-    if (event.target?.closest?.("button, select, input, textarea, a")) return;
-    if (dragState || resizeState) return;
-    const touch = event.changedTouches?.[0];
-    if (!touch) return;
-    event.preventDefault();
-    event.stopPropagation();
-    handleTileSurfaceTap(tileId, { x: touch.clientX, y: touch.clientY });
   }
 
   function startMove(event, tile) {
@@ -1019,9 +1044,10 @@ export default function LivePage() {
                   onPointerDown={(event) => startSidebarPointerDrag(event, camera, initialStream)}
                   onPointerMove={updateSidebarPointerDrag}
                   onPointerUp={(event) => finishSidebarPointerDrag(event, camera.id, initialStream)}
-                  onPointerCancel={clearSidebarPointerDrag}
+                  onPointerCancel={cancelSidebarPointerDrag}
                   onDoubleClick={(event) => {
                     if (event.target?.closest?.("button, select, input, textarea, a")) return;
+                    if (consumeSidebarTouchDoubleClick(event, camera.id)) return;
                     event.preventDefault();
                     addTileFromSidebar(camera.id, initialStream);
                   }}
@@ -1033,7 +1059,7 @@ export default function LivePage() {
                     event.dataTransfer.effectAllowed = "copyMove";
                   }}
                   onDragEnd={() => {
-                    clearSidebarPointerDrag();
+                    cancelSidebarPointerDrag();
                   }}
                   onDragOver={(event) => {
                     if (!event.dataTransfer.types.includes(SIDEBAR_CAMERA_REORDER_MIME)) return;
@@ -1117,9 +1143,8 @@ export default function LivePage() {
                 }}
                 onPointerDown={(event) => startMove(event, tile)}
                 onPointerUpCapture={(event) => handleTileSurfacePointerUp(event, tile.id)}
-                onTouchEndCapture={(event) => handleTileSurfaceTouchEnd(event, tile.id)}
                 onDoubleClickCapture={(event) => {
-                  if (event.target?.closest?.("button, select, input, textarea, a")) return;
+                  if (event.target?.closest?.("button, select, input, textarea, a, [data-video-zoom-surface]")) return;
                   event.stopPropagation();
                   toggleTileFullscreen(tile.id);
                 }}
@@ -1182,10 +1207,6 @@ export default function LivePage() {
                   className="liveWorkspaceTileVideo"
                   data-live-tile-video-id={tile.id}
                   onPointerUp={(event) => handleTileSurfacePointerUp(event, tile.id)}
-                  onDoubleClick={(event) => {
-                    event.stopPropagation();
-                    toggleTileFullscreen(tile.id);
-                  }}
                 >
                   {camera ? (
                     <TilePlayer
@@ -1202,6 +1223,8 @@ export default function LivePage() {
                           tone: "warning",
                         });
                       }}
+                      onDesktopDoubleClick={() => toggleTileFullscreen(tile.id)}
+                      onTouchDoubleTap={() => toggleTileFullscreen(tile.id)}
                     />
                   ) : (
                     <div className="liveWorkspaceMissing">{TEXT.unavailable}</div>

@@ -149,6 +149,32 @@ def _stable_app(tmp_path: Path, *, legacy: bool = False) -> Path:
     return app
 
 
+def _inject_legacy_python_cache(
+    slot_root: Path,
+    *,
+    entry_kind: str = "pyc",
+) -> Path:
+    parent = slot_root / "source/scripts"
+    parent_mode = stat.S_IMODE(parent.lstat().st_mode)
+    os.chmod(parent, parent_mode | stat.S_IWUSR | stat.S_IXUSR)
+    try:
+        cache = parent / "__pycache__"
+        cache.mkdir()
+        if entry_kind == "pyc":
+            _write(cache / "km-vms-release-slots.cpython-312.pyc", "bytecode\n")
+        elif entry_kind == "text":
+            _write(cache / "unexpected.txt", "unexpected\n")
+        elif entry_kind == "nested":
+            (cache / "nested").mkdir()
+        elif entry_kind == "symlink":
+            (cache / "escape.pyc").symlink_to(parent / "install.sh")
+        else:
+            raise AssertionError(f"unknown cache fixture: {entry_kind}")
+        return cache
+    finally:
+        os.chmod(parent, parent_mode)
+
+
 def test_target_slot_excludes_runtime_secrets_but_keeps_product_code(
     tmp_path: Path,
 ) -> None:
@@ -478,6 +504,83 @@ def test_target_publication_is_immutable_and_has_no_mutable_role(
         slot_root,
         expected_slot_id=f"release-{COMMIT_A}",
     ) == manifest
+
+
+def test_active_slot_converges_exact_legacy_python_cache_then_revalidates(
+    tmp_path: Path,
+) -> None:
+    app = _stable_app(tmp_path)
+    source = tmp_path / "target"
+    _source_fixture(source, commit=COMMIT_A, version=VERSION, trusted=True)
+    result = _finalize_target(
+        app,
+        source,
+        request_id="update-" + ("7" * 32),
+        commit=COMMIT_A,
+    )
+    slot_root = Path(result["slot_path"])
+    slots.atomic_switch_pointer(app, result["slot_id"])
+    manifest_before = (slot_root / slots.MANIFEST_NAME).read_bytes()
+    cache = _inject_legacy_python_cache(slot_root)
+
+    first = slots.read_active_slot(app)
+    second = slots.read_active_slot(app)
+
+    assert first == second
+    assert first is not None and first[0] == result["slot_id"]
+    assert not cache.exists()
+    assert (slot_root / slots.MANIFEST_NAME).read_bytes() == manifest_before
+    assert slots.validate_slot(slot_root, expected_slot_id=result["slot_id"]) == result["manifest"]
+
+
+@pytest.mark.parametrize("entry_kind", ("text", "nested", "symlink"))
+def test_active_slot_rejects_unsafe_legacy_python_cache_without_removing_it(
+    tmp_path: Path,
+    entry_kind: str,
+) -> None:
+    app = _stable_app(tmp_path)
+    source = tmp_path / f"target-{entry_kind}"
+    _source_fixture(source, commit=COMMIT_A, version=VERSION, trusted=True)
+    result = _finalize_target(
+        app,
+        source,
+        request_id="update-" + ({"text": "8", "nested": "9", "symlink": "a"}[entry_kind] * 32),
+        commit=COMMIT_A,
+    )
+    slot_root = Path(result["slot_path"])
+    slots.atomic_switch_pointer(app, result["slot_id"])
+    cache = _inject_legacy_python_cache(slot_root, entry_kind=entry_kind)
+
+    with pytest.raises(slots.SlotError, match="Legacy Python cache") as captured:
+        slots.read_active_slot(app)
+
+    assert captured.value.code == "slot_legacy_cache_unsafe"
+    assert cache.exists()
+
+
+def test_active_slot_cache_cleanup_does_not_hide_other_mutable_product_code(
+    tmp_path: Path,
+) -> None:
+    app = _stable_app(tmp_path)
+    source = tmp_path / "target"
+    _source_fixture(source, commit=COMMIT_A, version=VERSION, trusted=True)
+    result = _finalize_target(
+        app,
+        source,
+        request_id="update-" + ("b" * 32),
+        commit=COMMIT_A,
+    )
+    slot_root = Path(result["slot_path"])
+    slots.atomic_switch_pointer(app, result["slot_id"])
+    cache = _inject_legacy_python_cache(slot_root)
+    product_file = slot_root / "source/apps/api/app.py"
+    os.chmod(product_file, stat.S_IMODE(product_file.lstat().st_mode) | stat.S_IWUSR)
+
+    with pytest.raises(slots.SlotError) as captured:
+        slots.read_active_slot(app)
+
+    assert captured.value.code == "slot_mutable"
+    assert not cache.exists()
 
 
 def test_legacy_source_becomes_exact_adopted_slot_and_new_requests_reuse_it(

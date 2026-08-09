@@ -24,7 +24,11 @@ for (const source of [livePage, chronologyPage, liveCss, chronologyCss]) {
 
 assert.match(livePage, /function addTileFromSidebar\(cameraId, stream\)/);
 assert.match(livePage, /data-touch-add-path="double-tap-card"/);
-assert.match(livePage, /onDoubleClick=\{\(event\) => \{\s*if \(event\.target\?\.closest\?\.\("button, select, input, textarea, a"\)\) return;\s*event\.preventDefault\(\);\s*addTileFromSidebar\(camera\.id, initialStream\);/s);
+assert.match(livePage, /function consumeSidebarTouchDoubleClick\(event, cameraId\)/);
+assert.match(livePage, /if \(consumeSidebarTouchDoubleClick\(event, camera\.id\)\) return;/);
+assert.match(livePage, /onPointerCancel=\{cancelSidebarPointerDrag\}/);
+assert.match(livePage, /createTouchDoubleTapSuppressionToken\(\{/);
+assert.match(livePage, /lastSidebarTapRef\.current = null;/);
 assert.match(livePage, /function startSidebarPointerDrag\(event, camera, stream\)/);
 assert.match(livePage, /function updateSidebarPointerDrag\(event\)/);
 assert.match(livePage, /function finishSidebarPointerDrag\(event, cameraId, stream\)/);
@@ -42,7 +46,11 @@ assert.match(livePage, /event\.dataTransfer\.setData\(SIDEBAR_CAMERA_REORDER_MIM
 
 assert.match(chronologyPage, /function addTileFromSidebar\(cameraId\)/);
 assert.match(chronologyPage, /data-touch-add-path="double-tap-card"/);
-assert.match(chronologyPage, /onDoubleClick=\{\(event\) => \{\s*if \(event\.target\?\.closest\?\.\("button, select, input, textarea, a"\)\) return;\s*event\.preventDefault\(\);\s*addTileFromSidebar\(camera\.id\);/s);
+assert.match(chronologyPage, /function consumeSidebarTouchDoubleClick\(event, cameraId\)/);
+assert.match(chronologyPage, /if \(consumeSidebarTouchDoubleClick\(event, camera\.id\)\) return;/);
+assert.match(chronologyPage, /onPointerCancel=\{cancelSidebarPointerDrag\}/);
+assert.match(chronologyPage, /createTouchDoubleTapSuppressionToken\(\{/);
+assert.match(chronologyPage, /lastSidebarTapRef\.current = null;/);
 assert.match(chronologyPage, /function startSidebarPointerDrag\(event, camera\)/);
 assert.match(chronologyPage, /function updateSidebarPointerDrag\(event\)/);
 assert.match(chronologyPage, /function finishSidebarPointerDrag\(event, cameraId\)/);
@@ -56,6 +64,9 @@ assert.match(chronologyPage, /event\.dataTransfer\.setData\(CHRONOLOGY_CAMERA_DR
 assert.match(chronologyPage, /event\.dataTransfer\.setData\(SIDEBAR_CAMERA_REORDER_MIME, String\(camera\.id\)\)/);
 
 for (const source of [livePage, chronologyPage]) {
+  assert.match(source, /consumeTouchDoubleTapSuppressionToken/);
+  assert.match(source, /if \(!suppression\.consumed\) return false;/);
+  assert.doesNotMatch(source, /if \(!touchGenerated && !tokenMatches\) return false;/);
   assert.match(source, /setPointerCapture\?\.\(event\.pointerId\)/);
   assert.match(source, /releasePointerCapture\?\.\(event\.pointerId\)/);
   assert.match(source, /window\.addEventListener\("pointermove"/);
@@ -77,11 +88,12 @@ assert.match(livePage, /const returnState = tileFullscreenReturnStateRef\.curren
 assert.match(livePage, /if \(event\.target\?\.closest\?\.\("button, select, input, textarea, a"\)\) return;\s*if \(dragState \|\| resizeState\) return;\s*if \(event\.pointerType === "mouse" \|\| event\.pointerType === "touch"\) return;\s*event\.stopPropagation\(\);/s);
 assert.match(livePage, /if \(event\.pointerType === "mouse" && event\.buttons === 0\) \{\s*setDragState\(null\);\s*return;\s*\}/s);
 assert.match(livePage, /onPointerUpCapture=\{\(event\) => handleTileSurfacePointerUp\(event, tile\.id\)\}/);
-assert.match(livePage, /onTouchEndCapture=\{\(event\) => handleTileSurfaceTouchEnd\(event, tile\.id\)\}/);
-assert.match(livePage, /function handleTileSurfaceTouchEnd\(event, tileId\)/);
+assert.doesNotMatch(livePage, /onTouchEndCapture=/);
+assert.doesNotMatch(livePage, /function handleTileSurfaceTouchEnd/);
 assert.match(livePage, /onDoubleClickCapture=\{\(event\) => \{/);
 assert.match(livePage, /onPointerUp=\{\(event\) => handleTileSurfacePointerUp\(event, tile\.id\)\}/);
-assert.match(livePage, /onDoubleClick=\{\(event\) => \{\s*event\.stopPropagation\(\);\s*toggleTileFullscreen\(tile\.id\);/s);
+assert.match(livePage, /onDesktopDoubleClick=\{\(\) => toggleTileFullscreen\(tile\.id\)\}/);
+assert.match(livePage, /onTouchDoubleTap=\{\(\) => toggleTileFullscreen\(tile\.id\)\}/);
 assert.match(livePage, /requestFullscreen\?\.\(\)/);
 assert.match(livePage, /event\.target\?\.closest\?\.\("\[data-live-tile-video-id\], button, select, input, textarea, a"\)/);
 
@@ -95,11 +107,14 @@ assert.match(chronologyPage, /if \(returnState\?\.isSystemFullscreen\) \{\s*setI
 assert.match(chronologyPage, /if \(event\.target\?\.closest\?\.\("button, select, input, textarea, a"\)\) return;\s*if \(dragState \|\| resizeState\) return;\s*if \(event\.pointerType === "mouse" \|\| event\.pointerType === "touch"\) return;\s*event\.stopPropagation\(\);/s);
 assert.match(chronologyPage, /if \(event\.pointerType === "mouse" && event\.buttons === 0\) \{\s*setDragState\(null\);\s*return;\s*\}/s);
 assert.match(chronologyPage, /onPointerUpCapture=\{\(event\) => handleTileSurfacePointerUp\(event, tile\.id\)\}/);
-assert.match(chronologyPage, /onTouchEndCapture=\{\(event\) => handleTileSurfaceTouchEnd\(event, tile\.id\)\}/);
-assert.match(chronologyPage, /function handleTileSurfaceTouchEnd\(event, tileId\)/);
+assert.doesNotMatch(chronologyPage, /onTouchEndCapture=/);
+assert.doesNotMatch(chronologyPage, /function handleTileSurfaceTouchEnd/);
 assert.match(chronologyPage, /onDoubleClickCapture=\{async \(event\) => \{/);
 assert.match(chronologyPage, /onPointerUp=\{\(event\) => handleTileSurfacePointerUp\(event, tile\.id\)\}/);
-assert.match(chronologyPage, /onDoubleClick=\{async \(event\) => \{\s*event\.stopPropagation\(\);\s*await toggleTileFullscreen\(tile\.id\);/s);
+assert.match(chronologyPage, /onDesktopDoubleClick=\{\(\) => toggleTileFullscreen\(tile\.id\)\}/);
+assert.match(chronologyPage, /onTouchDoubleTap=\{\(\{ zone \}\) => handleTileVideoTouchDoubleTap\(tile\.id, zone\)\}/);
+assert.match(chronologyPage, /if \(zone === "left"\) \{\s*seekBySeconds\(-10\);/s);
+assert.match(chronologyPage, /if \(zone === "right"\) \{\s*seekBySeconds\(10\);/s);
 assert.match(chronologyPage, /requestFullscreen\?\.\(\)/);
 assert.match(chronologyPage, /event\.target\?\.closest\?\.\("\[data-chronology-tile-video-id\], button, select, input, textarea, a"\)/);
 
@@ -114,13 +129,19 @@ assert.doesNotMatch(timeline, /onMouseDown=/);
 
 assert.match(liveCss, /\.liveWorkspaceCameraItem\[data-sidebar-pointer-drag-mode="workspace"\]/);
 assert.match(liveCss, /\.liveWorkspaceCameraItem[\s\S]*touch-action: none/);
+assert.match(liveCss, /@media \(max-width: 640px\) \{[\s\S]*?\.liveWorkspaceCameraList \{[\s\S]*?--live-camera-scroll-gutter: 22px;[\s\S]*?padding-inline-end: var\(--live-camera-scroll-gutter\);/);
 assert.match(liveCss, /\.liveWorkspaceSidebarDragGhost[\s\S]*position: fixed/);
 assert.match(liveCss, /\.liveWorkspaceTileVideo:fullscreen/);
 assert.match(liveCss, /touch-action: none/);
+assert.match(liveCss, /\.liveWorkspaceTile \{[\s\S]*?touch-action: pan-y;/);
+assert.match(liveCss, /\.liveWorkspaceTileVideo \{[\s\S]*?touch-action: pan-y;/);
 assert.match(liveCss, /touch-action: manipulation/);
 assert.match(chronologyCss, /\.chronologyCameraItem\[data-sidebar-pointer-drag-mode="workspace"\]/);
 assert.match(chronologyCss, /\.chronologyCameraItem[\s\S]*touch-action: none/);
+assert.match(chronologyCss, /@media \(max-width: 640px\) \{[\s\S]*?\.chronologyCameraList \{[\s\S]*?--chronology-camera-scroll-gutter: 22px;[\s\S]*?padding-inline-end: var\(--chronology-camera-scroll-gutter\);/);
 assert.match(chronologyCss, /\.chronologySidebarDragGhost[\s\S]*position: fixed/);
 assert.match(chronologyCss, /\.chronologyShell\.systemFullscreen \.chronologyTimelineWrap \.chronologyTimelineBody[\s\S]*background: linear-gradient/);
 assert.match(chronologyCss, /touch-action: none/);
+assert.match(chronologyCss, /\.chronologyTile \{[\s\S]*?touch-action: pan-y;/);
+assert.match(chronologyCss, /\.chronologyTileVideo \{[\s\S]*?touch-action: pan-y;/);
 assert.match(timelineCss, /\.chronologyTimelineBody[\s\S]*touch-action: pan-y/);

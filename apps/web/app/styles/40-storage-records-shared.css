@@ -2414,6 +2414,15 @@ a.appIllustratedAction:focus-visible {
   padding: 20px;
 }
 
+.recordingsViewerBackdrop,
+.recordingsViewerBackdrop .modal {
+  overscroll-behavior: contain;
+}
+
+.recordingsViewerBackdrop .modal {
+  -webkit-overflow-scrolling: touch;
+}
+
 .modal {
   width: min(980px, 100%);
   max-height: calc(100vh - 40px);

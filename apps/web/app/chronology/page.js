@@ -22,6 +22,10 @@ import {
 import { productLocalInputToApi } from "../../lib/timezone";
 import { useI18n } from "../../lib/i18n";
 import {
+  consumeTouchDoubleTapSuppressionToken,
+  createTouchDoubleTapSuppressionToken,
+} from "../../lib/videoZoomPanCore";
+import {
   CHRONOLOGY_CAMERA_DROP_MIME,
   SIDEBAR_CAMERA_REORDER_MIME,
   mergeSidebarCameraOrder,
@@ -350,6 +354,7 @@ export default function ChronologyPage() {
   const downloadChooserRef = useRef(null);
   const sidebarPointerDragRef = useRef(null);
   const lastSidebarTapRef = useRef(null);
+  const sidebarTouchDoubleTapSuppressionRef = useRef(null);
   const lastTileTapRef = useRef(null);
   const tileFullscreenReturnStateRef = useRef(null);
 
@@ -976,6 +981,26 @@ export default function ChronologyPage() {
     setSidebarDragPreview(null);
   }
 
+  function cancelSidebarPointerDrag() {
+    lastSidebarTapRef.current = null;
+    clearSidebarPointerDrag();
+  }
+
+  function consumeSidebarTouchDoubleClick(event, cameraId) {
+    const nativeEvent = event?.nativeEvent || event;
+    const point = { x: Number(nativeEvent?.clientX || 0), y: Number(nativeEvent?.clientY || 0) };
+    const suppression = consumeTouchDoubleTapSuppressionToken(
+      sidebarTouchDoubleTapSuppressionRef.current,
+      { time: Date.now(), point, ownerKey: String(cameraId) }
+    );
+    if (!suppression.consumed) return false;
+    sidebarTouchDoubleTapSuppressionRef.current = suppression.nextToken;
+    event.preventDefault();
+    event.stopPropagation();
+    nativeEvent?.stopImmediatePropagation?.();
+    return true;
+  }
+
   function sidebarCameraRowFromPoint(clientX, clientY) {
     const node = document.elementFromPoint(clientX, clientY);
     return node?.closest?.("[data-sidebar-camera-row]") || null;
@@ -996,6 +1021,9 @@ export default function ChronologyPage() {
     if (event.button !== 0) return;
     if (event.target?.closest?.("button, select, input, textarea, a")) return;
     if (event.pointerType !== "mouse") event.preventDefault();
+    if (event.pointerType === "mouse" && !event.nativeEvent?.sourceCapabilities?.firesTouchEvents) {
+      sidebarTouchDoubleTapSuppressionRef.current = null;
+    }
     sidebarPointerDragRef.current = {
       pointerId: event.pointerId,
       cameraId: String(camera.id),
@@ -1016,6 +1044,7 @@ export default function ChronologyPage() {
 
     if (!state.active) {
       state.active = true;
+      lastSidebarTapRef.current = null;
       setDraggedSidebarCameraId(state.cameraId);
     }
 
@@ -1046,6 +1075,7 @@ export default function ChronologyPage() {
     event.currentTarget?.releasePointerCapture?.(event.pointerId);
 
     if (state.active) {
+      lastSidebarTapRef.current = null;
       if (isPointInsideWorkspace(event.clientX, event.clientY)) {
         addTile(state.cameraId, event.clientX, event.clientY);
       } else {
@@ -1070,6 +1100,11 @@ export default function ChronologyPage() {
       pointerDistance(previous.point, point) <= DOUBLE_TAP_DISTANCE_PX
     ) {
       lastSidebarTapRef.current = null;
+      sidebarTouchDoubleTapSuppressionRef.current = createTouchDoubleTapSuppressionToken({
+        ownerKey: String(cameraId),
+        time: now,
+        point,
+      });
       addTileFromSidebar(cameraId);
       return;
     }
@@ -1161,6 +1196,18 @@ export default function ChronologyPage() {
     }
   }
 
+  function handleTileVideoTouchDoubleTap(tileId, zone) {
+    if (zone === "left") {
+      seekBySeconds(-10);
+      return;
+    }
+    if (zone === "right") {
+      seekBySeconds(10);
+      return;
+    }
+    toggleTileFullscreen(tileId);
+  }
+
   function handleTileSurfaceTap(tileId, point) {
     const now = Date.now();
     const previous = lastTileTapRef.current;
@@ -1182,16 +1229,6 @@ export default function ChronologyPage() {
     if (event.pointerType === "mouse" || event.pointerType === "touch") return;
     event.stopPropagation();
     handleTileSurfaceTap(tileId, { x: event.clientX, y: event.clientY });
-  }
-
-  function handleTileSurfaceTouchEnd(event, tileId) {
-    if (event.target?.closest?.("button, select, input, textarea, a")) return;
-    if (dragState || resizeState) return;
-    const touch = event.changedTouches?.[0];
-    if (!touch) return;
-    event.preventDefault();
-    event.stopPropagation();
-    handleTileSurfaceTap(tileId, { x: touch.clientX, y: touch.clientY });
   }
 
   useEffect(() => {
@@ -1943,9 +1980,10 @@ export default function ChronologyPage() {
                 onPointerDown={(event) => startSidebarPointerDrag(event, camera)}
                 onPointerMove={updateSidebarPointerDrag}
                 onPointerUp={(event) => finishSidebarPointerDrag(event, camera.id)}
-                onPointerCancel={clearSidebarPointerDrag}
+                onPointerCancel={cancelSidebarPointerDrag}
                 onDoubleClick={(event) => {
                   if (event.target?.closest?.("button, select, input, textarea, a")) return;
+                  if (consumeSidebarTouchDoubleClick(event, camera.id)) return;
                   event.preventDefault();
                   addTileFromSidebar(camera.id);
                 }}
@@ -1956,7 +1994,7 @@ export default function ChronologyPage() {
                   event.dataTransfer.effectAllowed = "copyMove";
                 }}
                 onDragEnd={() => {
-                  clearSidebarPointerDrag();
+                  cancelSidebarPointerDrag();
                 }}
                 onDragOver={(event) => {
                   if (!event.dataTransfer.types.includes(SIDEBAR_CAMERA_REORDER_MIME)) return;
@@ -2179,9 +2217,8 @@ export default function ChronologyPage() {
                   }}
                   onPointerDown={(event) => startMove(event, tile)}
                   onPointerUpCapture={(event) => handleTileSurfacePointerUp(event, tile.id)}
-                  onTouchEndCapture={(event) => handleTileSurfaceTouchEnd(event, tile.id)}
                   onDoubleClickCapture={async (event) => {
-                    if (event.target?.closest?.("button, select, input, textarea, a")) return;
+                    if (event.target?.closest?.("button, select, input, textarea, a, [data-video-zoom-surface]")) return;
                     event.stopPropagation();
                     await toggleTileFullscreen(tile.id);
                   }}
@@ -2211,10 +2248,6 @@ export default function ChronologyPage() {
                       if (fullscreenTileId === tile.id) revealFullscreenControls(true);
                     }}
                     onPointerUp={(event) => handleTileSurfacePointerUp(event, tile.id)}
-                    onDoubleClick={async (event) => {
-                      event.stopPropagation();
-                      await toggleTileFullscreen(tile.id);
-                    }}
                   >
                     {camera ? (
                       <ArchiveTilePlayer
@@ -2230,6 +2263,8 @@ export default function ChronologyPage() {
                         }}
                         tileId={tile.id}
                         onTilePlaybackState={handleTilePlaybackState}
+                        onDesktopDoubleClick={() => toggleTileFullscreen(tile.id)}
+                        onTouchDoubleTap={({ zone }) => handleTileVideoTouchDoubleTap(tile.id, zone)}
                       />
                     ) : (
                       <div className="chronologyMissing">{TEXT.missing}</div>

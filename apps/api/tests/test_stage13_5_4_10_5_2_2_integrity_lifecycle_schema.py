@@ -43,8 +43,10 @@ from app.services.schema_migrations import (
     STAGE660128_V6_TO_V7_FINALIZATION_ID,
     MigrationRegistry,
     SchemaMigrationBlocked,
+    _stage660128_universal_schema_verify,
     build_migration_plan,
     execute_migration_plan,
+    validate_stage660128_target_schema,
 )
 from app.services.schema_versioning import (
     CURRENT_BASELINE_ID,
@@ -1182,6 +1184,80 @@ def test_postgresql_existing_exact_candidate_expiry_before_binding_blocks_same_o
     assert mutation_calls["count"] == 0
 
 
+def test_postgresql_expired_unbound_global_candidate_blocks_without_mutation(
+    stage410522_postgres,
+    monkeypatch,
+):
+    ctx = stage410522_postgres
+    prepared = _add_prepared_plan(ctx, label="expired-global-candidate")
+    operation_id = _claim_then_crash(ctx, prepared, monkeypatch)
+    plan = ctx.db.get(ArchiveIntegrityRemediationPlan, prepared.plan_id)
+    operation = ctx.db.get(StorageOperation, operation_id)
+    plan.expires_at = datetime.utcnow() - timedelta(seconds=1)
+    operation.scope = {
+        "global": True,
+        "physical_volume_ids": [],
+        "root_ids": [],
+        "camera_ids": [],
+        "segment_ids": [],
+    }
+    ctx.db.add_all((plan, operation))
+    ctx.db.commit()
+    mutation_calls = _forbid_remediation_mutations(monkeypatch)
+
+    assert remediation.recover_pending_remediation_once(ctx.db) is True
+    _assert_blocked_convergence(
+        ctx,
+        prepared,
+        operation_id,
+        "archive_integrity_apply_expired_before_binding",
+    )
+    assert mutation_calls["count"] == 0
+
+
+@pytest.mark.parametrize("mismatch", ("domain", "non_global_scope", "live_plan"))
+def test_postgresql_global_scope_exception_remains_fail_closed(
+    stage410522_postgres,
+    monkeypatch,
+    mismatch,
+):
+    ctx = stage410522_postgres
+    prepared = _add_prepared_plan(ctx, label=f"global-rejected-{mismatch}")
+    operation_id = _claim_then_crash(ctx, prepared, monkeypatch)
+    plan = ctx.db.get(ArchiveIntegrityRemediationPlan, prepared.plan_id)
+    operation = ctx.db.get(StorageOperation, operation_id)
+    plan.expires_at = datetime.utcnow() - timedelta(seconds=1)
+    operation.scope = {
+        "global": True,
+        "physical_volume_ids": [],
+        "root_ids": [],
+        "camera_ids": [],
+        "segment_ids": [],
+    }
+    if mismatch == "domain":
+        operation.domain_ref = None
+    elif mismatch == "non_global_scope":
+        operation.scope = {
+            "global": False,
+            "physical_volume_ids": [],
+            "root_ids": ["different-root"],
+            "camera_ids": [],
+            "segment_ids": [],
+        }
+    else:
+        plan.expires_at = datetime.utcnow() + timedelta(minutes=5)
+        operation.lease_expires_at = datetime.utcnow() + timedelta(minutes=5)
+    ctx.db.add_all((plan, operation))
+    ctx.db.commit()
+    mutation_calls = _forbid_remediation_mutations(monkeypatch)
+
+    assert remediation.recover_pending_remediation_once(ctx.db) is False
+    ctx.db.expire_all()
+    assert ctx.db.get(ArchiveIntegrityRemediationPlan, prepared.plan_id).apply_operation_id is None
+    assert ctx.db.get(StorageOperation, operation_id).status == "running"
+    assert mutation_calls["count"] == 0
+
+
 def test_postgresql_reclaim_expiry_with_restored_context_blocks_before_binding(
     stage410522_postgres,
     monkeypatch,
@@ -1288,6 +1364,26 @@ def _seed_schema_truth(ctx, *, version: int, baseline: str = CURRENT_BASELINE_ID
         )
     )
     ctx.db.commit()
+
+
+def test_postgresql_runtime_startup_shape_allows_active_operation_but_migration_verify_blocks(
+    stage410522_postgres,
+    monkeypatch,
+):
+    ctx = stage410522_postgres
+    prepared = _add_prepared_plan(ctx, label="startup-active-operation")
+    _claim_then_crash(ctx, prepared, monkeypatch)
+    _seed_schema_truth(ctx, version=8)
+    # This legacy table is bootstrap-owned rather than SQLAlchemy-model-owned.
+    ctx.db.execute(text("CREATE TABLE recorder_runtime_status (id INTEGER PRIMARY KEY)"))
+    ctx.db.commit()
+
+    startup = validate_stage660128_target_schema(ctx.db)
+    assert startup["status"] == "verified"
+    assert startup["semantic_shape_verified"] is True
+
+    with pytest.raises(RuntimeError, match="stage660128_active_operation_reappeared"):
+        _stage660128_universal_schema_verify(ctx.db)
 
 
 def _force_v6_schema(ctx) -> None:

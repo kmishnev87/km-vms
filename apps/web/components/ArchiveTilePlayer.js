@@ -19,6 +19,8 @@ export default function ArchiveTilePlayer({
   coordination = null,
   tileId = "",
   onTilePlaybackState,
+  onDesktopDoubleClick,
+  onTouchDoubleTap,
 }) {
   const unavailableText = playback?.availabilityStatus === "root_unavailable"
     ? "Том архива сейчас недоступен"
@@ -157,19 +159,6 @@ export default function ArchiveTilePlayer({
     return (
       `/api/chronology/file?${params.toString()}`
     );
-  }
-
-  function toggleFullscreen() {
-    if (!allowFullscreen) return;
-
-    const el = wrapRef.current;
-    if (!el) return;
-
-    if (!document.fullscreenElement) {
-      el.requestFullscreen?.().catch(() => {});
-    } else {
-      document.exitFullscreen?.().catch(() => {});
-    }
   }
 
   async function handleUnsupportedDownload() {
@@ -485,7 +474,11 @@ export default function ArchiveTilePlayer({
     function handleFullscreenChange() {
       const fullscreenElement = document.fullscreenElement;
       const wrap = wrapRef.current;
-      setIsFullscreen(Boolean(fullscreenElement && (fullscreenElement === wrap || wrap?.contains(fullscreenElement))));
+      setIsFullscreen(Boolean(fullscreenElement && (
+        fullscreenElement === wrap ||
+        fullscreenElement.contains?.(wrap) ||
+        wrap?.contains(fullscreenElement)
+      )));
       setCanvasFrame((prev) => ({ ...prev, ready: false, reason: "fullscreen-change", error: "" }));
     }
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -558,7 +551,6 @@ export default function ArchiveTilePlayer({
     <div
       ref={wrapRef}
       className={`archiveVideoWrap ${compactCanvasRequested ? "compactVideoCanvasRequested" : ""} ${nativeVideoSuppressed ? "compactVideoCanvasActive" : ""}`}
-      onDoubleClick={allowFullscreen ? toggleFullscreen : undefined}
       title={allowFullscreen ? "Двойной клик для полноэкранного режима" : undefined}
       data-highres-adaptive={nativeVideoSuppressed ? "true" : "false"}
       data-natural-resolution={`${naturalResolution.width}x${naturalResolution.height}`}
@@ -588,6 +580,8 @@ export default function ArchiveTilePlayer({
         className="archiveVideoZoomSurface"
         context="chronology"
         sourceKey={playback?.playbackKey || "empty"}
+        onDesktopDoubleClick={onDesktopDoubleClick}
+        onTouchDoubleTap={onTouchDoubleTap}
       >
         <video
           key={playback?.playbackKey || "empty"}

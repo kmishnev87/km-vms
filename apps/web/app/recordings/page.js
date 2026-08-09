@@ -28,8 +28,6 @@ import { formatProductDateTime, productDateFilterParam, productDateTimeInputValu
 
 const DEFAULT_PAGE_SIZE = 30;
 const PAGE_SIZE_OPTIONS = [15, 30, 50, 100];
-const DOUBLE_TAP_MS = 330;
-const DOUBLE_TAP_DISTANCE_PX = 28;
 const TEXT = {
   title: "\u0417\u0430\u043f\u0438\u0441\u0438",
   subtitle: "\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440, \u0441\u043a\u0430\u0447\u0438\u0432\u0430\u043d\u0438\u0435 \u0438 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 \u0430\u0440\u0445\u0438\u0432\u0430",
@@ -149,10 +147,6 @@ function toDateTimeInputParts(dateValue) {
   if (!Number.isFinite(dt.getTime())) return "";
   const pad2 = (n) => String(n).padStart(2, "0");
   return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}:${pad2(dt.getSeconds())}`;
-}
-
-function pointerDistance(a, b) {
-  return Math.hypot(Number(a.x || 0) - Number(b.x || 0), Number(a.y || 0) - Number(b.y || 0));
 }
 
 function defaultClipRange(selectedDate, exportLimits) {
@@ -580,7 +574,6 @@ export default function RecordingsPage() {
   const viewerVideoRef = useRef(null);
   const viewerRestoreStateRef = useRef(null);
   const viewerRefreshInFlightRef = useRef(false);
-  const viewerLastTapRef = useRef(null);
   const canDelete = canDeleteRecordings(currentUser);
   const canExport = canExportRecordings(currentUser);
 
@@ -788,6 +781,53 @@ export default function RecordingsPage() {
   );
 
   useEffect(() => {
+    if (!viewerOpen || typeof document === "undefined" || typeof window === "undefined") return undefined;
+    const root = document.documentElement;
+    const body = document.body;
+    const scrollX = Number(window.scrollX || 0);
+    const scrollY = Number(window.scrollY || 0);
+    const previous = {
+      rootOverflow: root.style.overflow,
+      rootOverscrollBehavior: root.style.overscrollBehavior,
+      bodyPosition: body.style.position,
+      bodyTop: body.style.top,
+      bodyLeft: body.style.left,
+      bodyRight: body.style.right,
+      bodyWidth: body.style.width,
+      bodyOverflow: body.style.overflow,
+      bodyOverscrollBehavior: body.style.overscrollBehavior,
+      bodyPaddingRight: body.style.paddingRight,
+    };
+    const scrollbarGap = Math.max(0, Number(window.innerWidth || 0) - Number(root.clientWidth || 0));
+    const currentPaddingRight = Number.parseFloat(window.getComputedStyle(body).paddingRight || "0") || 0;
+
+    root.style.overflow = "hidden";
+    root.style.overscrollBehavior = "none";
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = `-${scrollX}px`;
+    body.style.right = "0";
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+    body.style.overscrollBehavior = "none";
+    if (scrollbarGap > 0) body.style.paddingRight = `${currentPaddingRight + scrollbarGap}px`;
+
+    return () => {
+      root.style.overflow = previous.rootOverflow;
+      root.style.overscrollBehavior = previous.rootOverscrollBehavior;
+      body.style.position = previous.bodyPosition;
+      body.style.top = previous.bodyTop;
+      body.style.left = previous.bodyLeft;
+      body.style.right = previous.bodyRight;
+      body.style.width = previous.bodyWidth;
+      body.style.overflow = previous.bodyOverflow;
+      body.style.overscrollBehavior = previous.bodyOverscrollBehavior;
+      body.style.paddingRight = previous.bodyPaddingRight;
+      window.scrollTo(scrollX, scrollY);
+    };
+  }, [viewerOpen]);
+
+  useEffect(() => {
     if (!viewerOpen) return;
     const el = viewerFrameRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -806,9 +846,12 @@ export default function RecordingsPage() {
     if (!viewerOpen) return;
     function handleFullscreenChange() {
       const fullscreenElement = document.fullscreenElement;
-      const video = viewerVideoRef.current;
       const frame = viewerFrameRef.current;
-      setViewerFullscreen(Boolean(fullscreenElement && (fullscreenElement === video || fullscreenElement === frame || frame?.contains(fullscreenElement))));
+      setViewerFullscreen(Boolean(fullscreenElement && (
+        fullscreenElement === frame ||
+        fullscreenElement.contains?.(frame) ||
+        frame?.contains(fullscreenElement)
+      )));
     }
     document.addEventListener("fullscreenchange", handleFullscreenChange);
     handleFullscreenChange();
@@ -985,25 +1028,30 @@ export default function RecordingsPage() {
     await frame.requestFullscreen?.().catch(() => {});
   }
 
-  function handleViewerSurfacePointerUp(event) {
-    if (event.pointerType !== "touch") return;
-    if (event.target?.closest?.("button, select, input, textarea, a")) return;
-    const scale = Number(event.currentTarget?.querySelector?.("[data-video-zoom-surface]")?.getAttribute("data-video-zoom-scale") || 1);
-    if (scale > 1.001) return;
+  function seekViewerBySeconds(seconds) {
+    const video = viewerVideoRef.current;
+    if (!video) return;
+    const current = Math.max(0, Number(video.currentTime || 0));
+    const duration = Number(video.duration || 0);
+    const upperBound = Number.isFinite(duration) && duration > 0
+      ? Math.max(0, duration - 0.01)
+      : Number.POSITIVE_INFINITY;
+    const target = Math.min(upperBound, Math.max(0, current + Number(seconds || 0)));
+    try {
+      video.currentTime = target;
+    } catch (_) {}
+  }
 
-    const now = Date.now();
-    const point = { x: Number(event.clientX || 0), y: Number(event.clientY || 0) };
-    const previous = viewerLastTapRef.current;
-    viewerLastTapRef.current = { time: now, point };
-
-    if (
-      previous &&
-      now - previous.time <= DOUBLE_TAP_MS &&
-      pointerDistance(previous.point, point) <= DOUBLE_TAP_DISTANCE_PX
-    ) {
-      viewerLastTapRef.current = null;
-      toggleViewerFrameFullscreen(event);
+  function handleViewerTouchDoubleTap({ zone, event }) {
+    if (zone === "left") {
+      seekViewerBySeconds(-10);
+      return;
     }
+    if (zone === "right") {
+      seekViewerBySeconds(10);
+      return;
+    }
+    toggleViewerFrameFullscreen(event);
   }
 
   async function refreshViewerUrlAfterMediaError() {
@@ -1625,7 +1673,7 @@ export default function RecordingsPage() {
       </div>
 
       {viewerOpen ? (
-        <div className="modalBackdrop">
+        <div className="modalBackdrop recordingsViewerBackdrop" data-recordings-viewer-open="true">
           <div className="modal modalWide" onClick={(e) => e.stopPropagation()}>
             <div className="modalHeader">
               <h2 style={{ margin: 0 }}>{t.viewRecord}</h2>
@@ -1664,13 +1712,13 @@ export default function RecordingsPage() {
                 data-first-frame-drawn="false"
                 data-canvas-draw-error=""
                 data-fullscreen={viewerFullscreen ? "true" : "false"}
-                onPointerUpCapture={handleViewerSurfacePointerUp}
-                onDoubleClickCapture={toggleViewerFrameFullscreen}
               >
                 <VideoZoomPanSurface
                   className="recordingVideoZoomSurface"
                   context="records"
                   sourceKey={viewerUrl}
+                  onDesktopDoubleClick={toggleViewerFrameFullscreen}
+                  onTouchDoubleTap={handleViewerTouchDoubleTap}
                 >
                   <video
                     key={viewerUrl}

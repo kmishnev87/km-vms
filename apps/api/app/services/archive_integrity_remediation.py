@@ -1577,16 +1577,28 @@ def _validate_apply_operation_candidate(
     action: dict[str, Any],
     scope: dict[str, Any],
     allow_terminal: bool,
+    allow_expired_unbound_global_scope: bool = False,
 ) -> None:
     request_identity, idempotency_key = _apply_operation_identity(plan)
     expected_fingerprint = request_fingerprint(request_identity)
+    stored_scope = canonical_operation_scope(operation.scope)
+    expected_scope = normalize_operation_scope(scope)
+    conservative_global_scope = bool(
+        allow_expired_unbound_global_scope
+        and str(operation.domain_ref or "") == str(plan.id)
+        and stored_scope.get("global") is True
+        and not stored_scope.get("physical_volume_ids")
+        and not stored_scope.get("root_ids")
+        and not stored_scope.get("camera_ids")
+        and not stored_scope.get("segment_ids")
+    )
     if not (
         str(operation.actor_key) == str(plan.actor_key)
         and str(operation.operation_type) == str(action["operation_type"])
         and str(operation.idempotency_key) == str(idempotency_key)
         and str(operation.request_fingerprint) == str(expected_fingerprint)
         and operation.domain_ref in {None, str(plan.id)}
-        and canonical_operation_scope(operation.scope) == normalize_operation_scope(scope)
+        and (stored_scope == expected_scope or conservative_global_scope)
     ):
         raise StorageOperationContractError("archive_integrity_unbound_apply_operation_mismatch")
     if not allow_terminal and str(operation.status) in TERMINAL_OPERATION_STATUSES:
@@ -1659,6 +1671,7 @@ def _converge_exact_unbound_pre_mutation(
         action=action,
         scope=durable_scope,
         allow_terminal=False,
+        allow_expired_unbound_global_scope=(disposition == "expired"),
     )
     _assert_exact_pre_mutation_evidence(db, plan=plan, candidate=operation)
 
@@ -1675,6 +1688,7 @@ def _converge_exact_unbound_pre_mutation(
             operation_id=str(operation.id),
             claimed=claimed,
             actor=actor,
+            allow_expired_unbound_global_scope=True,
         )
         if binding.get("state") != "terminal":
             raise StorageOperationContractError("archive_integrity_expired_binding_not_terminal")
@@ -1762,6 +1776,7 @@ def _bind_apply_operation(
     operation_id: str,
     claimed: dict[str, Any] | None,
     actor: Any,
+    allow_expired_unbound_global_scope: bool = False,
 ) -> dict[str, Any]:
     plan = (
         db.query(ArchiveIntegrityRemediationPlan)
@@ -1790,6 +1805,7 @@ def _bind_apply_operation(
         action=action,
         scope=durable_scope,
         allow_terminal=False,
+        allow_expired_unbound_global_scope=allow_expired_unbound_global_scope,
     )
     item = _assert_exact_pre_mutation_evidence(db, plan=plan, candidate=operation)
     now = database_now(db)
@@ -1908,15 +1924,20 @@ def _coordinated_apply_claim(
 
         if existing_candidate is not None:
             item, finding, action, durable_scope = _durable_apply_context(db, plan)
+            candidate_expired = bool(
+                plan.expires_at is not None
+                and plan.expires_at <= database_now(db)
+            )
             _validate_apply_operation_candidate(
                 plan,
                 existing_candidate,
                 action=action,
                 scope=durable_scope,
                 allow_terminal=False,
+                allow_expired_unbound_global_scope=candidate_expired,
             )
             _assert_exact_pre_mutation_evidence(db, plan=plan, candidate=existing_candidate)
-            if plan.expires_at <= database_now(db):
+            if candidate_expired:
                 result = _converge_exact_unbound_pre_mutation(
                     db,
                     plan_id=str(plan.id),

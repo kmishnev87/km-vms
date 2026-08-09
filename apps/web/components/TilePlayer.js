@@ -53,6 +53,8 @@ export default function TilePlayer({
   audioRequestId = 0,
   onAudioStatusChange,
   onAudioPlaybackBlocked,
+  onDesktopDoubleClick,
+  onTouchDoubleTap,
 }) {
   const videoRef = useRef(null);
   const wrapRef = useRef(null);
@@ -215,17 +217,6 @@ export default function TilePlayer({
     }
   }
 
-  function toggleFullscreen() {
-    const el = wrapRef.current;
-    if (!el) return;
-
-    if (!document.fullscreenElement) {
-      el.requestFullscreen?.().catch(() => {});
-    } else {
-      document.exitFullscreen?.().catch(() => {});
-    }
-  }
-
   useEffect(() => {
     const el = wrapRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -245,7 +236,11 @@ export default function TilePlayer({
     function handleFullscreenChange() {
       const fullscreenElement = document.fullscreenElement;
       const wrap = wrapRef.current;
-      setIsFullscreen(Boolean(fullscreenElement && (fullscreenElement === wrap || wrap?.contains(fullscreenElement))));
+      setIsFullscreen(Boolean(fullscreenElement && (
+        fullscreenElement === wrap ||
+        fullscreenElement.contains?.(wrap) ||
+        wrap?.contains(fullscreenElement)
+      )));
       setCanvasFrame((prev) => ({ ...prev, ready: false, reason: "fullscreen-change", error: "" }));
     }
     document.addEventListener("fullscreenchange", handleFullscreenChange);
@@ -674,7 +669,6 @@ export default function TilePlayer({
     <div
       ref={wrapRef}
       className={`liveVideoWrap ${compactCanvasRequested ? "compactVideoCanvasRequested" : ""} ${nativeVideoSuppressed ? "compactVideoCanvasActive" : ""}`}
-      onDoubleClick={toggleFullscreen}
       title={TEXT.doubleClick}
       data-render-context="live"
       data-renderer={nativeVideoSuppressed ? "canvas" : "native"}
@@ -698,6 +692,8 @@ export default function TilePlayer({
         className="liveVideoZoomSurface"
         context="live"
         sourceKey={`${cameraId || ""}:${stream || ""}`}
+        onDesktopDoubleClick={onDesktopDoubleClick}
+        onTouchDoubleTap={onTouchDoubleTap}
       >
         <video
           ref={videoRef}

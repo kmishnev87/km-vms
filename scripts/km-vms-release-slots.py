@@ -195,6 +195,7 @@ ACTIVATION_TRANSITIONS = {
 MAX_INVENTORY_ENTRIES = 200_000
 MAX_INVENTORY_BYTES = 4 * 1024 * 1024 * 1024
 MAX_JSON_BYTES = 1024 * 1024
+MAX_LEGACY_PYTHON_CACHE_ENTRIES = 10_000
 
 
 def _source_path_excluded(relative: Path) -> bool:
@@ -1468,6 +1469,171 @@ def _validate_slot_read_only(slot_root: Path) -> None:
         raise SlotError("slot_mutable", "Published release slot is not immutable.")
 
 
+def _same_filesystem_object(path: Path, expected: os.stat_result) -> os.stat_result:
+    try:
+        current = path.lstat()
+    except OSError as exc:
+        raise SlotError(
+            "slot_legacy_cache_changed",
+            "Legacy Python cache changed during safe convergence.",
+        ) from exc
+    if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+        raise SlotError(
+            "slot_legacy_cache_changed",
+            "Legacy Python cache changed during safe convergence.",
+        )
+    return current
+
+
+def _legacy_python_cache_plan(slot_root: Path, *, expected_slot_id: str) -> list[dict[str, Any]]:
+    if slot_root.is_symlink() or not slot_root.is_dir() or slot_root.name != expected_slot_id:
+        raise SlotError("slot_path_invalid", "Release slot path is unsafe.")
+    manifest = read_json(slot_root / MANIFEST_NAME)
+    assert manifest is not None
+    validate_manifest(manifest, expected_slot_id=expected_slot_id)
+    source_root = slot_root / SOURCE_DIR_NAME
+    try:
+        source_info = source_root.lstat()
+    except OSError as exc:
+        raise SlotError("slot_path_invalid", "Release slot source is unavailable.") from exc
+    if stat.S_ISLNK(source_info.st_mode) or not stat.S_ISDIR(source_info.st_mode):
+        raise SlotError("slot_path_invalid", "Release slot source is unsafe.")
+
+    plan: list[dict[str, Any]] = []
+    scanned = 0
+    cache_entries = 0
+    for current, dirnames, filenames in os.walk(
+        source_root,
+        topdown=True,
+        followlinks=False,
+    ):
+        scanned += len(dirnames) + len(filenames)
+        if scanned > MAX_INVENTORY_ENTRIES:
+            raise SlotError(
+                "slot_inventory_too_large",
+                "Release slot source inventory exceeds the bounded limit.",
+            )
+        current_path = Path(current)
+        if "__pycache__" in filenames:
+            raise SlotError(
+                "slot_legacy_cache_unsafe",
+                "Legacy Python cache path is not a directory.",
+            )
+        descend: list[str] = []
+        for name in dirnames:
+            path = current_path / name
+            info = path.lstat()
+            if name != "__pycache__":
+                if not stat.S_ISLNK(info.st_mode):
+                    descend.append(name)
+                continue
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+                raise SlotError(
+                    "slot_legacy_cache_unsafe",
+                    "Legacy Python cache contains an unsafe filesystem object.",
+                )
+            files: list[tuple[Path, os.stat_result]] = []
+            try:
+                with os.scandir(path) as iterator:
+                    entries = list(iterator)
+            except OSError as exc:
+                raise SlotError(
+                    "slot_legacy_cache_unsafe",
+                    "Legacy Python cache cannot be inspected safely.",
+                ) from exc
+            cache_entries += len(entries)
+            if cache_entries > MAX_LEGACY_PYTHON_CACHE_ENTRIES:
+                raise SlotError(
+                    "slot_legacy_cache_too_large",
+                    "Legacy Python cache exceeds the bounded cleanup limit.",
+                )
+            for entry in entries:
+                entry_path = path / entry.name
+                entry_info = entry_path.lstat()
+                if (
+                    not entry.name.endswith(".pyc")
+                    or stat.S_ISLNK(entry_info.st_mode)
+                    or not stat.S_ISREG(entry_info.st_mode)
+                ):
+                    raise SlotError(
+                        "slot_legacy_cache_unsafe",
+                        "Legacy Python cache contains an unexpected entry.",
+                    )
+                files.append((entry_path, entry_info))
+            plan.append(
+                {
+                    "path": path,
+                    "info": info,
+                    "parent": current_path,
+                    "parent_info": current_path.lstat(),
+                    "files": files,
+                }
+            )
+        dirnames[:] = descend
+    return plan
+
+
+def _converge_active_slot_legacy_python_cache(
+    slot_root: Path,
+    *,
+    expected_slot_id: str,
+) -> int:
+    """Remove only legacy interpreter caches excluded from slot identity."""
+    plan = _legacy_python_cache_plan(
+        slot_root,
+        expected_slot_id=expected_slot_id,
+    )
+    removed = 0
+    for item in plan:
+        cache_path = item["path"]
+        parent_path = item["parent"]
+        cache_info = _same_filesystem_object(cache_path, item["info"])
+        parent_info = _same_filesystem_object(parent_path, item["parent_info"])
+        if not stat.S_ISDIR(cache_info.st_mode) or not stat.S_ISDIR(parent_info.st_mode):
+            raise SlotError(
+                "slot_legacy_cache_changed",
+                "Legacy Python cache changed during safe convergence.",
+            )
+        cache_mode = stat.S_IMODE(cache_info.st_mode)
+        parent_mode = stat.S_IMODE(parent_info.st_mode)
+        try:
+            os.chmod(parent_path, parent_mode | stat.S_IWUSR | stat.S_IXUSR)
+            os.chmod(cache_path, cache_mode | stat.S_IWUSR | stat.S_IXUSR)
+            for file_path, file_info in item["files"]:
+                current = _same_filesystem_object(file_path, file_info)
+                if not stat.S_ISREG(current.st_mode):
+                    raise SlotError(
+                        "slot_legacy_cache_changed",
+                        "Legacy Python cache changed during safe convergence.",
+                    )
+                file_path.unlink()
+                removed += 1
+            cache_path.rmdir()
+        except SlotError:
+            raise
+        except OSError as exc:
+            raise SlotError(
+                "slot_legacy_cache_cleanup_failed",
+                "Legacy Python cache could not be removed safely.",
+            ) from exc
+        finally:
+            try:
+                if cache_path.exists() and not cache_path.is_symlink():
+                    os.chmod(cache_path, cache_mode)
+            except OSError:
+                pass
+            try:
+                current_parent = parent_path.lstat()
+                if (
+                    not stat.S_ISLNK(current_parent.st_mode)
+                    and stat.S_ISDIR(current_parent.st_mode)
+                ):
+                    os.chmod(parent_path, parent_mode)
+            except OSError:
+                pass
+    return removed
+
+
 def _make_tree_owner_writable(slot_root: Path) -> None:
     try:
         for current, dirnames, filenames in os.walk(
@@ -2044,7 +2210,12 @@ def read_active_slot(app_dir: Path) -> tuple[str, Path] | None:
     expected = (layout["slots"] / slot_id / SOURCE_DIR_NAME).resolve(strict=True)
     if resolved != expected:
         raise SlotError("active_pointer_invalid", "Active release pointer escaped its slot.")
-    validate_slot(layout["slots"] / slot_id, expected_slot_id=slot_id)
+    slot_root = layout["slots"] / slot_id
+    _converge_active_slot_legacy_python_cache(
+        slot_root,
+        expected_slot_id=slot_id,
+    )
+    validate_slot(slot_root, expected_slot_id=slot_id)
     return slot_id, resolved
 
 

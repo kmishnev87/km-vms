@@ -788,7 +788,7 @@
   border-radius: 8px;
   background: #000000;
   box-shadow: 0 16px 34px rgba(0, 0, 0, 0.28);
-  touch-action: none;
+  touch-action: pan-y;
 }
 
 .chronologyTileBar {
@@ -859,6 +859,12 @@
   min-height: 0;
   background: #000000;
   overflow: hidden;
+  touch-action: pan-y;
+}
+
+.chronologyTile.fullscreen .videoZoomPanSurface,
+.chronologyTileVideo:fullscreen .videoZoomPanSurface {
+  touch-action: none;
 }
 
 .chronologyTile.fullscreen .chronologyTileVideo {
@@ -1122,5 +1128,14 @@
     height: 32px;
     min-width: 36px;
     padding: 0 9px;
+  }
+}
+
+@media (max-width: 640px) {
+  .chronologyCameraList {
+    --chronology-camera-scroll-gutter: 22px;
+    width: 100%;
+    box-sizing: border-box;
+    padding-inline-end: var(--chronology-camera-scroll-gutter);
   }
 }
