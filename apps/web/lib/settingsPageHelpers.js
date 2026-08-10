@@ -636,6 +636,7 @@ function updateApplyReleaseValue(updateStatus, key) {
   const installed = updateStatus?.installed_build || updateStatus?.installed || {};
   if (key === "currentVersion") return installedRelease.version || installed.app_version || updateStatus?.installed?.installed_version || "-";
   if (key === "availableVersion") return availableRelease.version || latest.version || latest.latest_version || "-";
+  if (key === "publishedAt") return availableRelease.published_at || latest.published_at || "";
   if (key === "title") return availableRelease.title || latest.title || installedRelease.title || latest.release_notes_summary || "-";
   if (key === "summary") return availableRelease.summary || latest.release_notes_summary || installedRelease.summary || "";
   if (key === "installedAt") return installedRelease.installed_at || installed.installed_at || "";
@@ -847,7 +848,6 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const canApply = Boolean((updateStatus?.can_apply_from_ui || freshTrustedCandidateAvailable) && !lastKnownRunning && !applyStatus?.is_stale && !stateUnknown && !context.unresolvedSubmission);
   const lastSummary = applyStatus?.last_apply_summary || null;
   const currentVersion = updateApplyReleaseValue(updateStatus, "currentVersion");
-  const availableVersion = updateApplyReleaseValue(updateStatus, "availableVersion");
   const targetCommit = updateApplyReleaseValue(updateStatus, "targetCommit") || applyStatus?.expected_commit || applyStatus?.source?.commit || "";
   const installedCommit = applyStatus?.installed_commit || updateApplyReleaseValue(updateStatus, "installedCommit");
   const operationExpectedCommit = applyStatus?.expected_commit || lastSummary?.expected_commit || "";
@@ -870,6 +870,13 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const terminalVerificationIncomplete = effective === "completed" && !terminalSuccess;
   const current = status === "current" && !canApply && !running;
   const available = status === "update_available" && canApply;
+  const hasAvailableRelease = Boolean(available || liveCheckFailedWithCandidate);
+  const availableVersion = hasAvailableRelease
+    ? updateApplyReleaseValue(updateStatus, "availableVersion")
+    : "";
+  const publishedAtValue = hasAvailableRelease
+    ? updateApplyReleaseValue(updateStatus, "publishedAt")
+    : "";
   const suppressUpdateCheckBlocker = lastKnownRunning && Boolean(context.applyError || running);
   const helperFailure = isUpdateApplyAttentionState(normalizedEffective) && normalizedEffective !== "reconnecting";
   const updateCheckFailure = !suppressUpdateCheckBlocker && !stateUnknown && (
@@ -963,6 +970,7 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     updateResult,
     currentVersion,
     availableVersion,
+    publishedAt: publishedAtValue ? formatApplyDate(publishedAtValue, lang) : "",
     releaseTitle: localizedReleaseValue(updateStatus, "title", t, lang),
     releaseSummary: releaseNotes.summary,
     releaseChangelog: releaseNotes.changelog,

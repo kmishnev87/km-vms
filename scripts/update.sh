@@ -21,6 +21,11 @@ GITHUB_TOKEN_CONFIG=""
 GITHUB_TOKEN_SOURCE="none"
 DOWNLOAD_CLIENT=""
 SOURCE_COMMIT_SHA=""
+TRUSTED_COMMIT_SHA=""
+DOWNLOAD_ATTEMPTS=0
+DOWNLOAD_FAILURE_CATEGORY=""
+DOWNLOAD_MAX_ATTEMPTS=3
+DOWNLOAD_MAX_RETRY_DELAY_SECONDS=20
 PHASE="init"
 OVERLAY_STARTED=0
 UPDATED_PATHS=""
@@ -64,6 +69,7 @@ Options:
   --github-repo <repo>     GitHub repository as owner/name for tarball acquisition.
   --branch <branch>        Git branch/tag/ref. Default: main.
   --ref <ref>              Alias for --branch.
+  --trusted-commit <sha>   Exact trusted 40-hex commit supplied by the in-app helper.
   --github-private         Require a GitHub token for source acquisition.
   --github-token-file      Read GitHub token from a local file.
   --github-token-env       Read GitHub token from the named environment variable.
@@ -215,6 +221,7 @@ write_update_metadata() {
     printf '  "compose_source": "%s",\n' "$(json_escape "${COMPOSE_SOURCE:-unknown}")"
     printf '  "updated_paths_summary": "%s",\n' "$(json_escape "$UPDATED_PATHS")"
     printf '  "preserved_paths_summary": "%s",\n' "$(json_escape "$PRESERVED_PATHS")"
+    printf '  "source_acquisition_attempts": %s,\n' "${DOWNLOAD_ATTEMPTS:-0}"
     printf '  "validation_summary": {\n'
     printf '    "app_dir": "checked",\n'
     printf '    "source_tree": "checked",\n'
@@ -380,6 +387,11 @@ while [ "$#" -gt 0 ]; do
       BRANCH="$2"
       shift 2
       ;;
+    --trusted-commit)
+      [ "$#" -ge 2 ] || fail "--trusted-commit requires a value"
+      TRUSTED_COMMIT_SHA="$2"
+      shift 2
+      ;;
     --github-private)
       GITHUB_PRIVATE=1
       shift
@@ -424,6 +436,18 @@ validate_ref() {
   case "$value" in
     *[\;\|\&\`\>\<\(\)]*|*'$('*|*'$'*|*"	"*) fail "Git ref contains unsafe characters." ;;
   esac
+}
+
+validate_trusted_commit() {
+  [ -n "$TRUSTED_COMMIT_SHA" ] || return 0
+  TRUSTED_COMMIT_SHA=$(printf '%s' "$TRUSTED_COMMIT_SHA" | tr 'A-F' 'a-f')
+  printf '%s' "$TRUSTED_COMMIT_SHA" | grep -Eq '^[0-9a-f]{40}$' ||
+    fail "Trusted commit must be an exact 40-hex SHA."
+  normalized_ref=$(printf '%s' "$BRANCH" | tr 'A-F' 'a-f')
+  [ "$normalized_ref" = "$TRUSTED_COMMIT_SHA" ] ||
+    fail "Trusted commit must match the exact update ref."
+  BRANCH="$TRUSTED_COMMIT_SHA"
+  SOURCE_COMMIT_SHA="$TRUSTED_COMMIT_SHA"
 }
 
 resolve_app_dir() {
@@ -595,30 +619,186 @@ http_download() {
   url="$1"
   output="$2"
   require_download_client
-  if [ "$DOWNLOAD_CLIENT" = "curl" ]; then
-    headers="$TMP_ROOT/download-headers.$$"
+  DOWNLOAD_ATTEMPTS=0
+  DOWNLOAD_FAILURE_CATEGORY="source_acquisition_failed"
+  attempt=1
+  while [ "$attempt" -le "$DOWNLOAD_MAX_ATTEMPTS" ]; do
+    DOWNLOAD_ATTEMPTS="$attempt"
+    headers="$TMP_ROOT/download-headers.$$.${attempt}"
+    errors="$TMP_ROOT/download-errors.$$.${attempt}"
+    rm -f "$output" "$headers" "$errors"
     : > "$headers"
-    if [ -n "$GITHUB_TOKEN_CONFIG" ]; then
-      curl -fsSL --config "$GITHUB_TOKEN_CONFIG" "$url" -o "$output" --dump-header "$headers" &
-    else
-      curl -fsSL "$url" -o "$output" --dump-header "$headers" &
-    fi
-    download_pid=$!
-    while kill -0 "$download_pid" 2>/dev/null; do
-      publish_download_progress "$headers" "$output"
-      sleep 1
-    done
+    : > "$errors"
+    write_helper_progress "running" "Acquiring trusted source archive (attempt $attempt/$DOWNLOAD_MAX_ATTEMPTS)."
+
     download_status=0
-    wait "$download_pid" || download_status=$?
+    if [ "$DOWNLOAD_CLIENT" = "curl" ]; then
+      if [ -n "$GITHUB_TOKEN_CONFIG" ]; then
+        curl -sSL --config "$GITHUB_TOKEN_CONFIG" "$url" -o "$output" --dump-header "$headers" 2>"$errors" &
+      else
+        curl -sSL "$url" -o "$output" --dump-header "$headers" 2>"$errors" &
+      fi
+      download_pid=$!
+      while kill -0 "$download_pid" 2>/dev/null; do
+        publish_download_progress "$headers" "$output"
+        sleep 1
+      done
+      wait "$download_pid" || download_status=$?
+    else
+      [ -z "$GITHUB_TOKEN_CONFIG" ] || fail "Private GitHub update requires curl for secure token handling."
+      wget --server-response -qO "$output" "$url" 2>"$headers" || download_status=$?
+    fi
+
+    http_status=$(download_http_status "$headers" 2>/dev/null || true)
+    if [ "$download_status" -eq 0 ]; then
+      case "$http_status" in
+        2??) ;;
+        *) download_status=22 ;;
+      esac
+    fi
+
     if [ "$download_status" -eq 0 ]; then
       publish_download_progress "$headers" "$output"
+      rm -f "$headers" "$errors"
+      DOWNLOAD_FAILURE_CATEGORY=""
+      return 0
     fi
-    rm -f "$headers"
-    [ "$download_status" -eq 0 ]
-    return $?
+
+    retry_delay=$(download_retry_delay "$headers" "$attempt" 2>/dev/null || true)
+    retryable=0
+    rate_limited=0
+    case "$http_status" in
+      408|5??) retryable=1 ;;
+      429)
+        retryable=1
+        rate_limited=1
+        ;;
+      403)
+        if download_headers_show_rate_limit "$headers"; then
+          retryable=1
+          rate_limited=1
+        elif download_body_shows_secondary_rate_limit "$output"; then
+          retryable=1
+          rate_limited=1
+          retry_delay=$((DOWNLOAD_MAX_RETRY_DELAY_SECONDS + 1))
+        fi
+        ;;
+      401|404) retryable=0 ;;
+      *)
+        case "$download_status" in
+          4|5|6|7|18|28|35|52|55|56|92) retryable=1 ;;
+        esac
+        ;;
+    esac
+
+    rm -f "$output" "$headers" "$errors"
+    if [ "$rate_limited" = "1" ]; then
+      DOWNLOAD_FAILURE_CATEGORY="source_temporarily_unavailable"
+    elif [ "$retryable" = "1" ]; then
+      DOWNLOAD_FAILURE_CATEGORY="source_acquisition_failed"
+    else
+      DOWNLOAD_FAILURE_CATEGORY="source_acquisition_failed"
+      return 1
+    fi
+    [ "$retryable" = "1" ] || return 1
+    [ "$attempt" -lt "$DOWNLOAD_MAX_ATTEMPTS" ] || return 1
+    case "$retry_delay" in
+      ''|*[!0-9]*) retry_delay=$((attempt * 2)) ;;
+    esac
+    if [ "$retry_delay" -gt "$DOWNLOAD_MAX_RETRY_DELAY_SECONDS" ] 2>/dev/null; then
+      DOWNLOAD_FAILURE_CATEGORY="source_temporarily_unavailable"
+      return 1
+    fi
+    if [ "$retry_delay" -gt 0 ] 2>/dev/null; then
+      sleep "$retry_delay"
+    fi
+    attempt=$((attempt + 1))
+  done
+  return 1
+}
+
+download_http_status() {
+  headers="$1"
+  [ -f "$headers" ] || return 1
+  tr -d '\r' < "$headers" |
+    awk '/^[[:space:]]*HTTP\/[0-9.]+ [0-9][0-9][0-9]/{value=$2} END{if(value) print value}'
+}
+
+download_header_value() {
+  headers="$1"
+  header_name="$2"
+  [ -f "$headers" ] || return 1
+  tr -d '\r' < "$headers" |
+    awk -F: -v wanted="$header_name" '
+      {
+        name=$1
+        sub(/^[[:space:]]*/, "", name)
+      }
+      tolower(name) == tolower(wanted) {
+        sub(/^[^:]*:[[:space:]]*/, "", $0)
+        value=$0
+      }
+      END { if (value != "") print value }
+    '
+}
+
+download_headers_show_rate_limit() {
+  headers="$1"
+  retry_after=$(download_header_value "$headers" "retry-after" 2>/dev/null || true)
+  remaining=$(download_header_value "$headers" "x-ratelimit-remaining" 2>/dev/null || true)
+  [ -n "$retry_after" ] || [ "$remaining" = "0" ]
+}
+
+download_body_shows_secondary_rate_limit() {
+  body="$1"
+  [ -f "$body" ] || return 1
+  body_size=$(wc -c < "$body" 2>/dev/null || printf 0)
+  case "$body_size" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$body_size" -gt 0 ] 2>/dev/null || return 1
+  [ "$body_size" -le 65536 ] 2>/dev/null || return 1
+  python3 - "$body" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+except (OSError, UnicodeError, json.JSONDecodeError):
+    raise SystemExit(1)
+
+if not isinstance(payload, dict):
+    raise SystemExit(1)
+message = payload.get("message")
+if not isinstance(message, str) or "secondary rate limit" not in message.casefold():
+    raise SystemExit(1)
+PY
+}
+
+download_retry_delay() {
+  headers="$1"
+  attempt="$2"
+  retry_after=$(download_header_value "$headers" "retry-after" 2>/dev/null || true)
+  case "$retry_after" in
+    ''|*[!0-9]*) ;;
+    *) printf '%s\n' "$retry_after"; return 0 ;;
+  esac
+  remaining=$(download_header_value "$headers" "x-ratelimit-remaining" 2>/dev/null || true)
+  reset_at=$(download_header_value "$headers" "x-ratelimit-reset" 2>/dev/null || true)
+  if [ "$remaining" = "0" ]; then
+    case "$reset_at" in
+      ''|*[!0-9]*) ;;
+      *)
+        now=$(date +%s 2>/dev/null || printf 0)
+        delay=$((reset_at - now))
+        [ "$delay" -gt 0 ] 2>/dev/null || delay=0
+        printf '%s\n' "$delay"
+        return 0
+        ;;
+    esac
   fi
-  [ -z "$GITHUB_TOKEN_CONFIG" ] || fail "Private GitHub update requires curl for secure token handling."
-  wget -qO "$output" "$url" || return 1
+  printf '%s\n' $((attempt * 2))
 }
 
 download_content_length() {
@@ -709,6 +889,7 @@ acquire_source() {
   [ -n "$GITHUB_REPO" ] || fail "GitHub repo is required. Pass --github-repo owner/name or KM_VMS_GITHUB_REPO."
   GITHUB_REPO=$(validate_github_repo "$GITHUB_REPO")
   validate_ref "$BRANCH"
+  validate_trusted_commit
   command_exists mktemp || fail "mktemp is required."
   TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/km-vms-update.XXXXXX")
   mkdir -p "$TMP_ROOT/source"
@@ -717,9 +898,15 @@ acquire_source() {
   archive="$TMP_ROOT/source.tar.gz"
   tarball_url="https://api.github.com/repos/$GITHUB_REPO/tarball/$BRANCH"
   if ! http_download "$tarball_url" "$archive"; then
-    fail "GitHub tarball acquisition failed. If the repository is private, rerun with --github-private and a secure token source."
+    FAILURE_CATEGORY="${DOWNLOAD_FAILURE_CATEGORY:-source_acquisition_failed}"
+    if [ "$FAILURE_CATEGORY" = "source_temporarily_unavailable" ]; then
+      fail "Trusted source is temporarily unavailable after $DOWNLOAD_ATTEMPTS bounded attempt(s). Retry later."
+    fi
+    fail "Trusted source acquisition failed after $DOWNLOAD_ATTEMPTS bounded attempt(s). Verify source access before retrying."
   fi
-  resolve_github_commit_sha
+  if [ -z "$TRUSTED_COMMIT_SHA" ]; then
+    resolve_github_commit_sha
+  fi
   PHASE="extract"
   write_helper_progress "running" "Extracting trusted source archive."
   safe_extract_tarball "$archive" "$TMP_ROOT/source"

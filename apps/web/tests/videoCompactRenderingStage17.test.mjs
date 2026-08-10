@@ -124,6 +124,13 @@ test("V4 renderer lifecycle forbids V3 premature native suppression", () => {
   assert.equal(canvas.includes("getContext(\"2d\", { alpha: false })"), true);
   assert.equal(canvas.includes("onFrameState"), true);
   assert.equal(canvas.includes("draw-exception"), true);
+  assert.equal(canvas.includes("lastReportRef"), true);
+  assert.equal(canvas.includes("lastCanvasFactsRef"), true);
+  assert.match(canvas, /if \(lastReportRef\.current === signature\) return;/);
+  for (const source of [tile, archive]) {
+    assert.match(source, /setCanvasFrame\(\(previous\) =>/);
+    assert.equal(source.includes("onZoomActiveChange={setZoomActive}"), true);
+  }
 });
 
 test("forbidden backend preview/transcode markers are absent from touched web files", () => {

@@ -6,6 +6,7 @@ import {
   DEFAULT_VIDEO_ZOOM_STATE,
   VIDEO_ZOOM_MAX,
   clampPan,
+  containedMediaRect,
   consumeTouchDoubleTapSuppressionToken,
   createTouchDoubleTapSuppressionToken,
   createVideoTouchGestureState,
@@ -360,6 +361,16 @@ test("touch double-tap zones and matching boundaries are deterministic", () => {
   );
 });
 
+test("touch double-tap zones use the visible contained media, not letterbox space", () => {
+  const visible = containedMediaRect({ width: 1000, height: 500 }, 800, 600);
+  assert.equal(Math.round(visible.left), 167);
+  assert.equal(Math.round(visible.width), 667);
+  assert.equal(touchDoubleTapZone({ x: 399, y: 250 }, visible), "left");
+  assert.equal(touchDoubleTapZone({ x: 400, y: 250 }, visible), "center");
+  assert.equal(touchDoubleTapZone({ x: 599, y: 250 }, visible), "center");
+  assert.equal(touchDoubleTapZone({ x: 600, y: 250 }, visible), "right");
+});
+
 test("Live, Chronology and Records use the shared zoom surface without permanent zoom controls", () => {
   const livePlayer = read("components/TilePlayer.js");
   const archivePlayer = read("components/ArchiveTilePlayer.js");
@@ -404,6 +415,9 @@ test("Live, Chronology and Records use the shared zoom surface without permanent
   assert.equal(surface.includes("transitionVideoTouchGesture"), true);
   assert.equal(surface.includes("data-video-touch-owner"), true);
   assert.equal(surface.includes("touchDoubleTapSuppressionRef"), true);
+  assert.equal(surface.includes("ownedSecondTouchTapRef"), true);
+  assert.match(surface, /isTouchDoubleTap\(lastTouchTapRef\.current,[\s\S]*?stopHandledGesture\(event\)/);
+  assert.equal(surface.includes("visibleMediaRect(element)"), true);
   assert.equal(surface.includes("consumeTouchDoubleTapSuppressionToken"), true);
   assert.match(surface, /if \(!suppression\.consumed\) return false;/);
   assert.doesNotMatch(surface, /if \(!touchGenerated && !tokenMatches\) return false;/);
@@ -439,6 +453,17 @@ test("closed-stage interaction markers remain protected", () => {
     assert.equal(source.includes("nativeVideoSuppressed"), true);
     assert.equal(source.includes("data-canvas-ready"), true);
     assert.equal(source.includes("data-first-frame-drawn"), true);
+    assert.equal(source.includes("onZoomActiveChange={setZoomActive}"), true);
+    assert.equal(source.includes("!zoomActive && renderState.renderer === \"canvas\""), true);
   }
   assert.equal(canvas.includes("requestVideoFrameCallback"), true);
+});
+
+test("mobile Live and Chronology sidebars share a 32px scroll gutter and header edge", () => {
+  const liveCss = read("app/styles/90-live-workspace.css");
+  const chronologyCss = read("app/styles/100-chronology-workspace.css");
+  assert.match(liveCss, /--live-camera-scroll-gutter:\s*32px/);
+  assert.match(liveCss, /\.liveWorkspacePanelHeader,\s*\n\s*\.liveWorkspaceCameraList/);
+  assert.match(chronologyCss, /--chronology-camera-scroll-gutter:\s*32px/);
+  assert.match(chronologyCss, /\.chronologyPanelHeader,\s*\n\s*\.chronologyCameraList/);
 });

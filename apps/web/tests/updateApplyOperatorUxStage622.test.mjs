@@ -126,6 +126,10 @@ assert.equal(css.includes(".settingsUpdateApplyProgressRule"), false);
 assert.equal(settingsPage.includes("{t.updateApplyLastState}"), false);
 assert.match(cssRule(".settingsUpdateApplySummaryGrid"), /grid-template-columns: minmax\(0, 1fr\)/);
 assert.equal(settingsPage.includes("updateApplyOperator.releaseChangelog.map"), true);
+assert.match(
+  settingsPage,
+  /updateApplyInstalledVersion[\s\S]*?updateApplyAvailableVersion[\s\S]*?updateApplyPublishedAt[\s\S]*?releaseTitle/,
+);
 
 assert.equal(updateApplyRecoveryText("provider_unavailable", {}, t), "Provider-specific recovery");
 assert.equal(updateApplyRecoveryText("trusted_snapshot_stale", {}, t), "Refresh-required recovery");
@@ -174,6 +178,7 @@ const available = updateApplyOperatorModel(
     installed_release: { version: "0.7.3", commit: "a".repeat(40) },
     available_release: {
       version: "0.7.4",
+      published_at: "2026-07-31T08:00:00Z",
       title: "Long release title that should wrap inside the panel without clipping or raw hash noise",
       summary: "Operator UX redesign.",
       commit: "b".repeat(40),
@@ -188,8 +193,26 @@ assert.equal(available.headline, "Update available");
 assert.equal(available.severity, "warning");
 assert.equal(available.canApply, true);
 assert.equal(available.showApplyButton, true);
+assert.equal(available.availableVersion, "0.7.4");
+assert.notEqual(available.publishedAt, "");
 assert.equal(available.targetCommitShort, "bbbbbbbbbbbb...");
 assert.equal(available.timeline.every((step) => step.status === "idle"), true);
+
+const availableWithoutPublishedDate = updateApplyOperatorModel(
+  {
+    status: "update_available",
+    can_apply_from_ui: true,
+    comparison: { status: "update_available" },
+    installed_release: { version: "0.7.3", commit: "a".repeat(40) },
+    available_release: { version: "0.7.4", commit: "b".repeat(40) },
+  },
+  { status: "idle" },
+  t,
+  "en",
+);
+assert.equal(availableWithoutPublishedDate.availableVersion, "0.7.4");
+assert.equal(availableWithoutPublishedDate.publishedAt, "");
+assert.equal(current.availableVersion, "");
 
 const providerUnavailable = updateApplyOperatorModel(
   {

@@ -75,6 +75,7 @@ export default function TilePlayer({
   const [viewerRect, setViewerRect] = useState({ width: 0, height: 0 });
   const [readyState, setReadyState] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [zoomActive, setZoomActive] = useState(false);
   const [canvasFrame, setCanvasFrame] = useState({
     ready: false,
     generation: "",
@@ -108,7 +109,7 @@ export default function TilePlayer({
       inputAudioSampleRate: item?.input_audio_sample_rate || null,
     });
   }
-  const compactCanvasRequested = renderState.renderer === "canvas" && readyState >= 2;
+  const compactCanvasRequested = !zoomActive && renderState.renderer === "canvas" && readyState >= 2;
   const canvasGeneration = [
     cameraId || "",
     stream || "",
@@ -125,12 +126,20 @@ export default function TilePlayer({
     !canvasFrame.error;
 
   const handleCanvasFrameState = useCallback((next) => {
-    setCanvasFrame({
+    const nextFrame = {
       ready: Boolean(next?.ready),
       generation: String(next?.generation || ""),
       reason: next?.reason || "",
       error: next?.error || "",
-    });
+    };
+    setCanvasFrame((previous) => (
+      previous.ready === nextFrame.ready
+      && previous.generation === nextFrame.generation
+      && previous.reason === nextFrame.reason
+      && previous.error === nextFrame.error
+        ? previous
+        : nextFrame
+    ));
   }, []);
 
   function applyNaturalResolution(width, height, source) {
@@ -694,6 +703,7 @@ export default function TilePlayer({
         sourceKey={`${cameraId || ""}:${stream || ""}`}
         onDesktopDoubleClick={onDesktopDoubleClick}
         onTouchDoubleTap={onTouchDoubleTap}
+        onZoomActiveChange={setZoomActive}
       >
         <video
           ref={videoRef}

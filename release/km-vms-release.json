@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.11",
-  "tag": "v0.8.11",
-  "title": "Archive Integrity Convergence, Update Recovery and Touch Interaction Reliability",
-  "summary": "Converges expired archive-integrity remediation state, recovers startup and release-slot updates from supported interrupted states, and makes touch zoom, pan, scrolling and double-tap ownership predictable across Live, Chronology and Records.",
+  "version": "0.8.12",
+  "tag": "v0.8.12",
+  "title": "Touch Interaction Reliability, Update Acquisition Resilience and Maintenance Release Truth",
+  "summary": "Improves touch zoom, pan and mobile camera-list interaction, makes in-app source acquisition bounded and truthful during transient GitHub failures, and shows installed, available and published release facts in Maintenance.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.11",
+  "source_ref": "v0.8.12",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,47 +16,43 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Converges the exact expired unbound archive-integrity operation without accepting unrelated scope or weakening remediation identity.",
-    "Validates the target database shape at startup while leaving active-operation recovery to workers, avoiding an interrupted-operation boot deadlock.",
-    "Removes only validated legacy Python cache entries from an active release slot before slot verification so supported updates can continue.",
-    "Unifies pinch zoom and one-finger pan across Live, Chronology and Records, with bounded transforms and Records background-scroll locking.",
-    "Routes touch double taps by owner and zone so sidebar add, fullscreen and seek actions do not trigger one another.",
-    "Adds a mobile camera-list scroll gutter while preserving existing desktop mouse zoom, pan and playback controls."
+    "Routes Records double taps by the visible video area so the central zone toggles fullscreen without also seeking, while side zones remain dedicated to seek.",
+    "Uses the native video surface while Live or Chronology is zoomed, preventing compact-renderer frame churn from degrading one-finger pan on slower touch devices.",
+    "Aligns the mobile camera-list scroll gutter and action boundary so scrolling does not compete with camera-card drag and add gestures.",
+    "Downloads the exact trusted commit once, cleans partial attempts, and provides bounded retry or retry-later guidance for transient and GitHub rate-limit failures.",
+    "Shows the installed version together with the available version and publication date in Maintenance whenever a trusted update candidate exists."
   ],
   "title_i18n": {
-    "en": "Archive Integrity Convergence, Update Recovery and Touch Interaction Reliability",
-    "ru": "Сходимость целостности архива, восстановление обновлений и надёжность сенсорного управления",
-    "zh-CN": "归档完整性收敛、更新恢复与触控交互可靠性"
+    "en": "Touch Interaction Reliability, Update Acquisition Resilience and Maintenance Release Truth",
+    "ru": "Надёжность сенсорного управления, загрузки обновлений и сведений о релизе",
+    "zh-CN": "触控交互可靠性、更新获取韧性与维护页发布信息"
   },
   "summary_i18n": {
-    "en": "Converges expired archive-integrity remediation state, recovers startup and release-slot updates from supported interrupted states, and makes touch zoom, pan, scrolling and double-tap ownership predictable across Live, Chronology and Records.",
-    "ru": "Сводит просроченные состояния исправления целостности архива, восстанавливает запуск и release-slot обновления из поддерживаемых прерванных состояний и делает сенсорные zoom, pan, прокрутку и владение двойным тапом предсказуемыми в Онлайн, Хронологии и Записях.",
-    "zh-CN": "收敛过期的归档完整性修复状态，从受支持的中断状态恢复启动与发布槽更新，并使实时、时间轴和录像中的触控缩放、平移、滚动及双击归属保持可预测。"
+    "en": "Improves touch zoom, pan and mobile camera-list interaction, makes in-app source acquisition bounded and truthful during transient GitHub failures, and shows installed, available and published release facts in Maintenance.",
+    "ru": "Улучшает сенсорные zoom, pan и работу с мобильным списком камер, делает загрузку обновления ограниченной и правдивой при временных сбоях GitHub и показывает в Обслуживании установленную, доступную и опубликованную версии.",
+    "zh-CN": "改进触控缩放、平移和移动端摄像机列表交互，在 GitHub 临时故障时提供有限且真实的应用内更新获取，并在维护页显示已安装、可用及发布时间信息。"
   },
   "changelog_i18n": {
     "en": [
-      "Converges the exact expired unbound archive-integrity operation without accepting unrelated scope or weakening remediation identity.",
-      "Validates the target database shape at startup while leaving active-operation recovery to workers, avoiding an interrupted-operation boot deadlock.",
-      "Removes only validated legacy Python cache entries from an active release slot before slot verification so supported updates can continue.",
-      "Unifies pinch zoom and one-finger pan across Live, Chronology and Records, with bounded transforms and Records background-scroll locking.",
-      "Routes touch double taps by owner and zone so sidebar add, fullscreen and seek actions do not trigger one another.",
-      "Adds a mobile camera-list scroll gutter while preserving existing desktop mouse zoom, pan and playback controls."
+      "Routes Records double taps by the visible video area so the central zone toggles fullscreen without also seeking, while side zones remain dedicated to seek.",
+      "Uses the native video surface while Live or Chronology is zoomed, preventing compact-renderer frame churn from degrading one-finger pan on slower touch devices.",
+      "Aligns the mobile camera-list scroll gutter and action boundary so scrolling does not compete with camera-card drag and add gestures.",
+      "Downloads the exact trusted commit once, cleans partial attempts, and provides bounded retry or retry-later guidance for transient and GitHub rate-limit failures.",
+      "Shows the installed version together with the available version and publication date in Maintenance whenever a trusted update candidate exists."
     ],
     "ru": [
-      "Точно сводит просроченную непривязанную операцию целостности архива, не принимая чужой scope и не ослабляя identity исправления.",
-      "При запуске проверяет форму целевой БД, оставляя восстановление активных операций workers, и устраняет boot deadlock после прерывания.",
-      "Перед проверкой active release slot удаляет только подтверждённые legacy Python cache-файлы, чтобы поддерживаемое обновление могло продолжиться.",
-      "Объединяет pinch zoom и pan одним пальцем в Онлайн, Хронологии и Записях, ограничивает transform и блокирует фоновую прокрутку Записей.",
-      "Разделяет touch double tap по владельцу и зоне, чтобы добавление камеры, fullscreen и перемотка не запускали друг друга.",
-      "Добавляет мобильную область прокрутки списка камер и сохраняет существующие desktop mouse zoom, pan и playback controls."
+      "Распределяет двойной тап в Записях по видимой области видео: центральная зона переключает fullscreen без одновременной перемотки, а боковые зоны отвечают только за перемотку.",
+      "При zoom в Онлайн и Хронологии использует native video, чтобы покадровая работа compact renderer не ухудшала pan одним пальцем на медленных touch-устройствах.",
+      "Выравнивает мобильную область прокрутки списка камер и границу действий, чтобы прокрутка не конфликтовала с переносом и добавлением карточки камеры.",
+      "Загружает точный доверенный commit один раз, очищает частичные попытки и даёт ограниченный retry либо действие «повторить позже» при временных сбоях GitHub.",
+      "Показывает в Обслуживании установленную версию, доступную версию и дату публикации при наличии доверенного кандидата обновления."
     ],
     "zh-CN": [
-      "精确收敛过期且未绑定的归档完整性操作，不接受无关作用域，也不削弱修复身份校验。",
-      "启动时验证目标数据库形态，将活动操作恢复留给工作进程，避免中断操作导致启动死锁。",
-      "在验证活动发布槽前仅删除已确认的旧版 Python 缓存条目，使受支持的更新能够继续。",
-      "统一实时、时间轴和录像中的双指缩放与单指平移，限制变换并锁定录像查看时的背景滚动。",
-      "按所有者和区域路由触控双击，避免添加摄像机、全屏与跳转操作相互触发。",
-      "为移动端摄像机列表增加独立滚动区域，同时保留桌面鼠标缩放、平移和播放控件。"
+      "按可见视频区域处理录像双击：中央区域只切换全屏，左右区域只负责跳转，避免两个动作同时触发。",
+      "实时或时间轴画面缩放时使用原生视频表面，避免紧凑渲染器逐帧更新影响较慢触控设备上的单指平移。",
+      "对齐移动端摄像机列表的滚动留白与操作边界，避免滚动同摄像机卡片拖动或添加手势竞争。",
+      "通过单一成功下载路径获取精确可信提交，清理不完整尝试，并在临时故障或 GitHub 限流时执行有限重试或明确提示稍后重试。",
+      "存在可信更新候选时，在维护页同时显示已安装版本、可用版本和发布时间。"
     ]
   }
 }

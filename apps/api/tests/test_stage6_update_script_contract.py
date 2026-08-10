@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import importlib.util
 import json
+import pytest
 from types import SimpleNamespace
 from pathlib import Path
 
@@ -121,10 +122,15 @@ def _write_update_shell_fixture(tmp_path: Path, *, compose_function: str, commit
             [
                 "#!/usr/bin/env sh",
                 "case \"$*\" in */commits/main*) printf '{\\n  \"sha\": \"" + commit + "\"\\n}\\n'; exit 0 ;; esac",
+                'output=""',
+                'headers=""',
                 "for arg in \"$@\"; do",
-                "  if [ \"$prev\" = \"-o\" ]; then cp '" + str(tarball) + "' \"$arg\"; exit 0; fi",
+                '  [ "$prev" = "-o" ] && output="$arg"',
+                '  [ "$prev" = "--dump-header" ] && headers="$arg"',
                 "  prev=\"$arg\"",
                 "done",
+                "cp '" + str(tarball) + "' \"$output\"",
+                "printf 'HTTP/1.1 200 OK\\r\\n\\r\\n' > \"$headers\"",
                 "exit 0",
             ]
         )
@@ -133,6 +139,86 @@ def _write_update_shell_fixture(tmp_path: Path, *, compose_function: str, commit
     )
     os.chmod(bin_dir / "curl", 0o755)
     return app, source, bin_dir
+
+
+def _write_acquisition_curl_fixture(
+    bin_dir: Path,
+    tarball: Path,
+    state_dir: Path,
+) -> None:
+    curl = bin_dir / "curl"
+    curl.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env sh",
+                f"state_dir='{state_dir}'",
+                f"tarball='{tarball}'",
+                'count_file="$state_dir/count"',
+                'count=$(cat "$count_file" 2>/dev/null || printf 0)',
+                'count=$((count + 1))',
+                'printf "%s\\n" "$count" > "$count_file"',
+                'output=""',
+                'headers=""',
+                'url=""',
+                'previous=""',
+                'for argument in "$@"; do',
+                '  [ "$previous" = "-o" ] && output="$argument"',
+                '  [ "$previous" = "--dump-header" ] && headers="$argument"',
+                '  case "$argument" in https://*) url="$argument" ;; esac',
+                '  previous="$argument"',
+                'done',
+                'printf "%s\\n" "$url" >> "$state_dir/urls"',
+                'if [ "$count" -gt 1 ]; then',
+                '  [ -e "$output" ] && printf dirty > "$state_dir/partial-state" || printf clean > "$state_dir/partial-state"',
+                'fi',
+                'mode=${FAKE_CURL_MODE:-success}',
+                'case "$mode:$count" in',
+                '  transient_then_success:1)',
+                '    printf partial > "$output"',
+                "    printf 'HTTP/1.1 503 Service Unavailable\\r\\nRetry-After: 0\\r\\n\\r\\n' > \"$headers\"",
+                '    exit 22',
+                '    ;;',
+                '  rate_limit_then_success:1)',
+                '    printf limited > "$output"',
+                "    printf 'HTTP/1.1 403 Forbidden\\r\\nRetry-After: 0\\r\\nX-RateLimit-Remaining: 0\\r\\n\\r\\n' > \"$headers\"",
+                '    exit 22',
+                '    ;;',
+                '  exhausted:*)',
+                '    printf partial > "$output"',
+                "    printf 'HTTP/1.1 503 Service Unavailable\\r\\nRetry-After: 0\\r\\n\\r\\n' > \"$headers\"",
+                '    exit 22',
+                '    ;;',
+                '  permanent:*)',
+                "    printf 'HTTP/1.1 404 Not Found\\r\\n\\r\\n' > \"$headers\"",
+                '    exit 22',
+                '    ;;',
+                '  long_rate_limit:*)',
+                "    printf 'HTTP/1.1 403 Forbidden\\r\\nRetry-After: 60\\r\\nX-RateLimit-Remaining: 0\\r\\n\\r\\n' > \"$headers\"",
+                '    exit 22',
+                '    ;;',
+                '  secondary_rate_limit_body:*)',
+                "    printf '%s' '{\"message\":\"You have exceeded a secondary rate limit. Please wait before retrying.\",\"documentation_url\":\"https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api\"}' > \"$output\"",
+                "    printf 'HTTP/1.1 403 Forbidden\\r\\nX-RateLimit-Remaining: 42\\r\\nContent-Type: application/json\\r\\n\\r\\n' > \"$headers\"",
+                '    exit 0',
+                '    ;;',
+                '  ordinary_403_body:*)',
+                "    printf '%s' '{\"message\":\"Resource not accessible by integration\"}' > \"$output\"",
+                "    printf 'HTTP/1.1 403 Forbidden\\r\\nX-RateLimit-Remaining: 42\\r\\nContent-Type: application/json\\r\\n\\r\\n' > \"$headers\"",
+                '    exit 0',
+                '    ;;',
+                'esac',
+                "printf 'HTTP/1.1 200 OK\\r\\n\\r\\n' > \"$headers\"",
+                'cp "$tarball" "$output"',
+                'exit 0',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    os.chmod(curl, 0o755)
+    docker = bin_dir / "docker"
+    docker.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+    os.chmod(docker, 0o755)
 
 
 def test_update_script_exists_and_exposes_terminal_contract():
@@ -535,6 +621,8 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
         expected,
     ]
     assert "main" not in commands[0]
+    trusted_index = commands[0].index("--trusted-commit")
+    assert commands[0][trusted_index + 1] == expected
     status = published[0][1]
     assert status["status"] == "completed"
     assert status["commit_verified"] is True
@@ -545,6 +633,132 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
         "api_visible": True,
         "commit_verified": True,
     }
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_returncode", "expected_attempts", "expected_category"),
+    [
+        ("transient_then_success", 0, 2, None),
+        ("rate_limit_then_success", 0, 2, None),
+        ("exhausted", 1, 3, "source_acquisition_failed"),
+        ("permanent", 1, 1, "source_acquisition_failed"),
+        ("long_rate_limit", 1, 1, "source_temporarily_unavailable"),
+        ("secondary_rate_limit_body", 1, 1, "source_temporarily_unavailable"),
+        ("ordinary_403_body", 1, 1, "source_acquisition_failed"),
+        ("success", 0, 1, None),
+    ],
+)
+def test_in_app_exact_commit_acquisition_is_bounded_and_sanitized(
+    tmp_path: Path,
+    mode: str,
+    expected_returncode: int,
+    expected_attempts: int,
+    expected_category: str | None,
+) -> None:
+    commit = "c" * 40
+    compose_function = (
+        "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }\n"
+        "km_vms_compose_cmd() { :; }"
+    )
+    app, _source, bin_dir = _write_update_shell_fixture(
+        tmp_path,
+        compose_function=compose_function,
+        commit=commit,
+    )
+    state_dir = tmp_path / "curl-state"
+    state_dir.mkdir()
+    _write_acquisition_curl_fixture(
+        bin_dir,
+        tmp_path / "source.tar.gz",
+        state_dir,
+    )
+    command = [
+        "sh",
+        "scripts/update.sh",
+        "--github-repo",
+        "owner/repo",
+        "--branch",
+        commit,
+        "--trusted-commit",
+        commit,
+    ]
+    if expected_returncode == 0:
+        command.append("--dry-run")
+    result = subprocess.run(
+        command,
+        cwd=app,
+        env={
+            **os.environ,
+            "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+            "FAKE_CURL_MODE": mode,
+        },
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode == expected_returncode
+    assert int((state_dir / "count").read_text().strip()) == expected_attempts
+    urls = (state_dir / "urls").read_text(encoding="utf-8").splitlines()
+    assert len(urls) == expected_attempts
+    assert all("/commits/" not in url for url in urls)
+    assert all(url.endswith(f"/tarball/{commit}") for url in urls)
+    assert "Authorization:" not in result.stdout + result.stderr
+    assert "partial" not in result.stdout + result.stderr
+    assert "secondary rate limit" not in (result.stdout + result.stderr).casefold()
+    if expected_attempts > 1:
+        assert (state_dir / "partial-state").read_text() == "clean"
+
+    metadata_path = app / ".km-vms-update.json"
+    if expected_category is None:
+        assert not metadata_path.exists()
+        assert "Dry-run complete" in result.stdout
+    else:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        assert metadata["failed_phase"] == "acquire"
+        assert metadata["error_category"] == expected_category
+        assert metadata["source_acquisition_attempts"] == expected_attempts
+        assert metadata["error_message"] in {
+            f"Trusted source acquisition failed after {expected_attempts} bounded attempt(s). Verify source access before retrying.",
+            f"Trusted source is temporarily unavailable after {expected_attempts} bounded attempt(s). Retry later.",
+        }
+
+
+def test_update_helper_preserves_safe_acquisition_failure_categories(tmp_path: Path) -> None:
+    helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
+    spec = importlib.util.spec_from_file_location(
+        "km_vms_update_helper_acquisition_contract",
+        helper_path,
+    )
+    assert spec is not None and spec.loader is not None
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+
+    for category in (
+        "source_acquisition_failed",
+        "source_temporarily_unavailable",
+    ):
+        (tmp_path / ".km-vms-update.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "failed_phase": "acquire",
+                    "error_category": category,
+                    "source_acquisition_attempts": 3,
+                    "error_message": "/private/raw/body",
+                }
+            ),
+            encoding="utf-8",
+        )
+        failure = helper.classify_apply_failure(
+            tmp_path,
+            "/private/raw/stderr",
+        )
+        assert failure.category == category
+        assert failure.phase == "acquire_source"
+        assert failure.diagnostics["source_acquisition_attempts"] == 3
+        assert "/private" not in str(failure)
 
 
 def test_update_helper_uses_container_compose_override_not_host_only_path(tmp_path, monkeypatch):
@@ -877,7 +1091,7 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
         tarball = Path(tmp) / "source.tar.gz"
         subprocess.run(["tar", "-czf", str(tarball), "-C", str(source.parent), source.name], check=True)
         (bin_dir / "curl").write_text(
-            "#!/usr/bin/env sh\ncp '" + str(tarball) + "' \"$4\"\n",
+            "#!/usr/bin/env sh\ncp '" + str(tarball) + "' \"$4\"\nprintf 'HTTP/1.1 200 OK\\r\\n\\r\\n' > \"$6\"\n",
             encoding="utf-8",
         )
         os.chmod(bin_dir / "curl", 0o755)
@@ -989,10 +1203,15 @@ def test_update_dry_run_never_copies_acquired_source_into_stable_app():
                 [
                     "#!/usr/bin/env sh",
                     "case \"$*\" in */commits/main*) printf '{\\n  \"sha\": \"" + ("b" * 40) + "\"\\n}\\n'; exit 0 ;; esac",
+                    'output=""',
+                    'headers=""',
                     "for arg in \"$@\"; do",
-                    "  if [ \"$prev\" = \"-o\" ]; then cp '" + str(tarball) + "' \"$arg\"; exit 0; fi",
+                    '  [ "$prev" = "-o" ] && output="$arg"',
+                    '  [ "$prev" = "--dump-header" ] && headers="$arg"',
                     "  prev=\"$arg\"",
                     "done",
+                    "cp '" + str(tarball) + "' \"$output\"",
+                    "printf 'HTTP/1.1 200 OK\\r\\n\\r\\n' > \"$headers\"",
                     "exit 0",
                 ]
             )

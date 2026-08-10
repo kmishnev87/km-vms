@@ -722,8 +722,12 @@
 }
 
 @media (max-width: 640px) {
+  .liveWorkspaceCameraPanel {
+    --live-camera-scroll-gutter: 32px;
+  }
+
+  .liveWorkspacePanelHeader,
   .liveWorkspaceCameraList {
-    --live-camera-scroll-gutter: 22px;
     width: 100%;
     box-sizing: border-box;
     padding-inline-end: var(--live-camera-scroll-gutter);

@@ -5,6 +5,7 @@ import {
   DEFAULT_VIDEO_ZOOM_STATE,
   VIDEO_ZOOM_MAX,
   clampPan,
+  containedMediaRect,
   consumeTouchDoubleTapSuppressionToken,
   createTouchDoubleTapSuppressionToken,
   createVideoTouchGestureState,
@@ -47,6 +48,7 @@ export default function VideoZoomPanSurface({
   maxZoom = VIDEO_ZOOM_MAX,
   onDesktopDoubleClick,
   onTouchDoubleTap,
+  onZoomActiveChange,
 }) {
   const surfaceRef = useRef(null);
   const stateRef = useRef({ ...DEFAULT_VIDEO_ZOOM_STATE });
@@ -55,13 +57,29 @@ export default function VideoZoomPanSurface({
   const touchGestureRef = useRef(createVideoTouchGestureState());
   const lastTouchTapRef = useRef(null);
   const touchDoubleTapSuppressionRef = useRef(null);
+  const ownedSecondTouchTapRef = useRef(null);
+  const zoomActiveRef = useRef(false);
+  const onZoomActiveChangeRef = useRef(onZoomActiveChange);
   const styledFullscreenMediaRef = useRef(null);
   const [fullscreenMedia, setFullscreenMedia] = useState(null);
   const [zoomState, setZoomState] = useState({ ...DEFAULT_VIDEO_ZOOM_STATE });
 
+  onZoomActiveChangeRef.current = onZoomActiveChange;
+
   function commitState(next) {
     stateRef.current = next;
-    setZoomState(next);
+    const active = Number(next?.scale || 1) > 1.001;
+    if (zoomActiveRef.current !== active) {
+      zoomActiveRef.current = active;
+      onZoomActiveChangeRef.current?.(active);
+    }
+    setZoomState((previous) => (
+      previous.scale === next.scale
+      && previous.panX === next.panX
+      && previous.panY === next.panY
+        ? previous
+        : next
+    ));
   }
 
   useEffect(() => {
@@ -70,8 +88,13 @@ export default function VideoZoomPanSurface({
     touchGestureRef.current = createVideoTouchGestureState();
     lastTouchTapRef.current = null;
     touchDoubleTapSuppressionRef.current = null;
+    ownedSecondTouchTapRef.current = null;
     commitState({ ...DEFAULT_VIDEO_ZOOM_STATE });
   }, [sourceKey]);
+
+  useEffect(() => () => {
+    if (zoomActiveRef.current) onZoomActiveChangeRef.current?.(false);
+  }, []);
 
   function consumeTouchCompatibilityDoubleClick(event) {
     const nativeEvent = event?.nativeEvent || event;
@@ -215,6 +238,15 @@ export default function VideoZoomPanSurface({
     stopHandledGesture(event);
   }
 
+  function visibleMediaRect(element) {
+    const media = element?.matches?.("video")
+      ? element
+      : element?.querySelector?.("video");
+    const mediaWidth = Number(media?.videoWidth || 0);
+    const mediaHeight = Number(media?.videoHeight || 0);
+    return containedMediaRect(rectFor(element), mediaWidth, mediaHeight);
+  }
+
   function handlePointerDown(event) {
     if (event.target?.closest?.("button, select, input, textarea, a")) return;
     const element = gestureElement();
@@ -231,14 +263,22 @@ export default function VideoZoomPanSurface({
     }
     if (pointer.pointerType !== "touch") return;
 
+    const now = Date.now();
     const transition = transitionVideoTouchGesture(touchGestureRef.current, {
       type: "down",
       pointerId: pointer.id,
       point: { x: pointer.clientX, y: pointer.clientY },
-      time: Date.now(),
+      time: now,
       panEnabled: stateRef.current.scale > 1.001,
     });
     touchGestureRef.current = transition.state;
+    if (isTouchDoubleTap(lastTouchTapRef.current, {
+      time: now,
+      point: { x: pointer.clientX, y: pointer.clientY },
+    })) {
+      ownedSecondTouchTapRef.current = pointer.id;
+      stopHandledGesture(event);
+    }
     if (transition.invalidatedTap) lastTouchTapRef.current = null;
     if (transition.startedPinch) {
       startPinch(event, transition.state.activePointerIds.slice(0, 2));
@@ -340,6 +380,7 @@ export default function VideoZoomPanSurface({
         };
         const previous = lastTouchTapRef.current;
         if (isTouchDoubleTap(previous, tap)) {
+          ownedSecondTouchTapRef.current = null;
           lastTouchTapRef.current = null;
           touchDoubleTapSuppressionRef.current = createTouchDoubleTapSuppressionToken({
             time: now,
@@ -350,7 +391,7 @@ export default function VideoZoomPanSurface({
           onTouchDoubleTap?.({
             event,
             point: tap.localPoint,
-            zone: touchDoubleTapZone(tap.localPoint, rectFor(element)),
+            zone: touchDoubleTapZone(tap.localPoint, visibleMediaRect(element)),
           });
           stopHandledGesture(event);
         } else {
@@ -359,6 +400,9 @@ export default function VideoZoomPanSurface({
       } else if (transition.consumeEvent) {
         lastTouchTapRef.current = null;
         stopHandledGesture(event);
+      }
+      if (ownedSecondTouchTapRef.current === pointer.id) {
+        ownedSecondTouchTapRef.current = null;
       }
       try {
         event.currentTarget?.releasePointerCapture?.(event.pointerId);

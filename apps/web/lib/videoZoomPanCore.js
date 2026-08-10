@@ -135,10 +135,30 @@ export function zoomFromPinch(
 
 export function touchDoubleTapZone(point, rect) {
   const width = Math.max(1, finiteNumber(rect?.width, 1));
-  const ratio = clamp(finiteNumber(point?.x, width / 2) / width, 0, 1);
+  const left = finiteNumber(rect?.left, 0);
+  const ratio = clamp((finiteNumber(point?.x, left + width / 2) - left) / width, 0, 1);
   if (ratio < 0.35) return "left";
   if (ratio < 0.65) return "center";
   return "right";
+}
+
+export function containedMediaRect(containerRect, mediaWidth, mediaHeight) {
+  const width = Math.max(1, finiteNumber(containerRect?.width, 1));
+  const height = Math.max(1, finiteNumber(containerRect?.height, 1));
+  const sourceWidth = Math.max(0, finiteNumber(mediaWidth, 0));
+  const sourceHeight = Math.max(0, finiteNumber(mediaHeight, 0));
+  if (!sourceWidth || !sourceHeight) {
+    return { left: 0, top: 0, width, height };
+  }
+  const scale = Math.min(width / sourceWidth, height / sourceHeight);
+  const renderedWidth = sourceWidth * scale;
+  const renderedHeight = sourceHeight * scale;
+  return {
+    left: (width - renderedWidth) / 2,
+    top: (height - renderedHeight) / 2,
+    width: renderedWidth,
+    height: renderedHeight,
+  };
 }
 
 export function isTouchDoubleTap(

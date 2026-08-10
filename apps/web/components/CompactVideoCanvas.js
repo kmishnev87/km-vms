@@ -32,11 +32,15 @@ export default function CompactVideoCanvas({
   const scratchRef = useRef([]);
   const planRef = useRef(null);
   const readyRef = useRef(false);
+  const lastReportRef = useRef("");
+  const lastCanvasFactsRef = useRef("");
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const video = videoRef?.current;
     readyRef.current = false;
+    lastReportRef.current = "";
+    lastCanvasFactsRef.current = "";
     onFrameState?.({
       ready: false,
       generation,
@@ -60,7 +64,21 @@ export default function CompactVideoCanvas({
 
     function report(next) {
       if (cancelled) return;
-      onFrameState?.({ generation, ...next });
+      const payload = { generation, ...next };
+      const signature = JSON.stringify({
+        ready: Boolean(payload.ready),
+        generation: String(payload.generation || ""),
+        reason: String(payload.reason || ""),
+        error: String(payload.error || ""),
+        passCount: Number(payload.plan?.passCount || 0),
+        backingScale: Number(payload.plan?.backingScale || 1),
+        qualityPath: String(payload.plan?.qualityPath || ""),
+        canvas: `${payload.plan?.canvas?.width || 0}x${payload.plan?.canvas?.height || 0}`,
+        target: `${payload.plan?.target?.width || 0}x${payload.plan?.target?.height || 0}`,
+      });
+      if (lastReportRef.current === signature) return;
+      lastReportRef.current = signature;
+      onFrameState?.(payload);
     }
 
     function getScratch(index, width, height) {
@@ -72,6 +90,18 @@ export default function CompactVideoCanvas({
 
     function setCanvasFacts(plan, state = {}) {
       planRef.current = plan;
+      const signature = JSON.stringify({
+        passCount: Number(plan.passCount || 0),
+        backingScale: Number(plan.backingScale || 1),
+        qualityPath: String(plan.qualityPath || ""),
+        canvas: `${canvas.width}x${canvas.height}`,
+        target: `${plan.target?.width || 0}x${plan.target?.height || 0}`,
+        generation: String(generation || ""),
+        ready: Boolean(state.ready),
+        error: String(state.error || ""),
+      });
+      if (lastCanvasFactsRef.current === signature) return;
+      lastCanvasFactsRef.current = signature;
       canvas.dataset.compactPassCount = String(plan.passCount || 0);
       canvas.dataset.compactBackingScale = String(plan.backingScale || 1);
       canvas.dataset.compactQualityPath = plan.qualityPath || "";

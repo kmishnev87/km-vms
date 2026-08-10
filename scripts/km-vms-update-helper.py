@@ -201,6 +201,9 @@ APPLY_FRESHNESS_KEYS = {
 }
 TERMINAL_SUMMARY_KEYS = {"status", "finished_at", "error_category"}
 SAFE_PREFLIGHT_FAILURE_CATEGORIES = frozenset({"slot_adoption_conflict"})
+SAFE_ACQUISITION_FAILURE_CATEGORIES = frozenset(
+    {"source_acquisition_failed", "source_temporarily_unavailable"}
+)
 SAFE_FAILURE_LINE_RE = re.compile(
     r"^ERROR \[([a-z][a-z0-9_]*)\]:[^\r\n]*$"
 )
@@ -836,6 +839,8 @@ def error_payload(category: str) -> dict[str, str]:
         "helper_host_app_dir_invalid": "Update helper application directory is invalid.",
         "helper_host_app_dir_unmounted": "Update helper application directory is unavailable.",
         "preflight_failed": "Update preflight failed.",
+        "source_acquisition_failed": "Trusted update source acquisition failed.",
+        "source_temporarily_unavailable": "Trusted update source is temporarily unavailable.",
         "slot_adoption_conflict": "The preserved previous release no longer matches the current installation.",
         "compose_config_failed": "Docker Compose configuration validation failed.",
         "jellyfin_ffmpeg_repo_unavailable": "External FFmpeg repository was unavailable during image build.",
@@ -871,6 +876,10 @@ def error_payload(category: str) -> dict[str, str]:
         operator_action = (
             "Verify the installed source and runtime state before retrying."
         )
+    elif category == "source_temporarily_unavailable":
+        operator_action = "Wait briefly, then run the update again."
+    elif category == "source_acquisition_failed":
+        operator_action = "Verify access to the trusted release source, then retry."
     else:
         operator_action = (
             "Review update status and retry only after the cause is resolved."
@@ -1348,11 +1357,35 @@ def classify_apply_failure(update_dir: Path, stderr: str) -> HelperError:
             "compose_config_failed",
             "Docker Compose configuration validation failed.",
         )
+    if failed_phase == "acquire":
+        metadata_category = (
+            metadata.get("error_category")
+            if isinstance(metadata, dict)
+            else None
+        )
+        category = (
+            str(metadata_category)
+            if metadata_category in SAFE_ACQUISITION_FAILURE_CATEGORIES
+            else "preflight_failed"
+        )
+        attempts = (
+            metadata.get("source_acquisition_attempts")
+            if isinstance(metadata, dict)
+            else None
+        )
+        diagnostics = {}
+        if type(attempts) is int and 1 <= attempts <= 3:
+            diagnostics["source_acquisition_attempts"] = attempts
+        return HelperError(
+            category,
+            error_payload(category)["message"],
+            phase="acquire_source",
+            diagnostics=diagnostics,
+        )
     if failed_phase in {
         "init",
         "validate_app_dir",
         "compose_detection",
-        "acquire",
         "extract",
         "validate_source_tree",
         "preflight_preservation",
@@ -1719,6 +1752,8 @@ def run_update(request: dict[str, Any]) -> int:
         source["repo"],
         "--branch",
         source["apply_ref"],
+        "--trusted-commit",
+        source["commit"],
         "--yes",
     ]
     if (
@@ -3725,6 +3760,11 @@ def main() -> int:
                             exc.diagnostics["installed_commit"],
                             40,
                         )
+                    source_attempts = exc.diagnostics.get(
+                        "source_acquisition_attempts"
+                    )
+                    if type(source_attempts) is int and 1 <= source_attempts <= 3:
+                        failed["source_acquisition_attempts"] = source_attempts
                     failed["finished_at"] = failed["updated_at"]
                     try:
                         publish_terminal(request, failed)

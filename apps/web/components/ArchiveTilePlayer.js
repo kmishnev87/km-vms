@@ -40,6 +40,7 @@ export default function ArchiveTilePlayer({
   const [naturalResolution, setNaturalResolution] = useState({ width: 0, height: 0, source: "missing" });
   const [viewerRect, setViewerRect] = useState({ width: 0, height: 0 });
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [zoomActive, setZoomActive] = useState(false);
   const [readyState, setReadyState] = useState(0);
   const [canvasFrame, setCanvasFrame] = useState({
     ready: false,
@@ -59,7 +60,7 @@ export default function ArchiveTilePlayer({
     isFullscreen,
     sourceHighResolution: true,
   });
-  const compactCanvasRequested = renderState.renderer === "canvas" && readyState >= 2;
+  const compactCanvasRequested = !zoomActive && renderState.renderer === "canvas" && readyState >= 2;
   const canvasGeneration = [
     playback?.playbackKey || "empty",
     naturalResolution.width,
@@ -75,12 +76,20 @@ export default function ArchiveTilePlayer({
     !canvasFrame.error;
 
   const handleCanvasFrameState = useCallback((next) => {
-    setCanvasFrame({
+    const nextFrame = {
       ready: Boolean(next?.ready),
       generation: String(next?.generation || ""),
       reason: next?.reason || "",
       error: next?.error || "",
-    });
+    };
+    setCanvasFrame((previous) => (
+      previous.ready === nextFrame.ready
+      && previous.generation === nextFrame.generation
+      && previous.reason === nextFrame.reason
+      && previous.error === nextFrame.error
+        ? previous
+        : nextFrame
+    ));
   }, []);
 
   const reportTileState = useCallback(
@@ -582,6 +591,7 @@ export default function ArchiveTilePlayer({
         sourceKey={playback?.playbackKey || "empty"}
         onDesktopDoubleClick={onDesktopDoubleClick}
         onTouchDoubleTap={onTouchDoubleTap}
+        onZoomActiveChange={setZoomActive}
       >
         <video
           key={playback?.playbackKey || "empty"}

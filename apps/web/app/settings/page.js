@@ -491,6 +491,9 @@ const TEXT = {
     maintenanceMessageFallback: "Статус получен, подробности недоступны.",
     maintenanceActionFallback: "Действие сейчас недоступно. Проверьте состояние системы и повторите позже.",
     updateApplyTitle: "Обновление KM VMS",
+    updateApplyInstalledVersion: "Установлена",
+    updateApplyAvailableVersion: "Доступна",
+    updateApplyPublishedAt: "Опубликована",
     updateApplyCheck: "Проверить обновление",
     updateApplyStart: "Обновить KM VMS",
     updateApplyConfirm: "Установить доступное обновление KM VMS?",
@@ -1181,6 +1184,9 @@ const TEXT = {
     maintenanceMessageFallback: "Status received; details are unavailable.",
     maintenanceActionFallback: "The action is currently unavailable. Check system status and try again later.",
     updateApplyTitle: "KM VMS update",
+    updateApplyInstalledVersion: "Installed",
+    updateApplyAvailableVersion: "Available",
+    updateApplyPublishedAt: "Published",
     updateApplyCheck: "Check update",
     updateApplyStart: "Update KM VMS",
     updateApplyConfirm: "Install the available KM VMS update?",
@@ -1853,7 +1859,10 @@ const ZH_TEXT_OVERRIDES = {
   },
   maintenanceMessageFallback: "已收到状态，详细信息不可用。",
   maintenanceActionFallback: "该操作当前不可用。请检查系统状态后重试。",
-  updateApplyTitle: "KM VMS 更新",
+    updateApplyTitle: "KM VMS 更新",
+    updateApplyInstalledVersion: "已安装",
+    updateApplyAvailableVersion: "可用版本",
+    updateApplyPublishedAt: "发布时间",
   updateApplyCheck: "检查更新",
   updateApplyStart: "更新 KM VMS",
   updateApplyConfirm: "安装可用的 KM VMS 更新？",
@@ -4464,9 +4473,21 @@ export default function SettingsPage() {
                       <div className="settingsUpdateApplyRelease">
                         <dl>
                           <div>
-                            <dt>{t.maintenanceLabels.current}</dt>
+                            <dt>{t.updateApplyInstalledVersion}</dt>
                             <dd>{updateApplyOperator.currentVersion}</dd>
                           </div>
+                          {updateApplyOperator.availableVersion ? (
+                            <div>
+                              <dt>{t.updateApplyAvailableVersion}</dt>
+                              <dd>{updateApplyOperator.availableVersion}</dd>
+                            </div>
+                          ) : null}
+                          {updateApplyOperator.publishedAt ? (
+                            <div>
+                              <dt>{t.updateApplyPublishedAt}</dt>
+                              <dd>{updateApplyOperator.publishedAt}</dd>
+                            </div>
+                          ) : null}
                           <div>
                             <dt>{t.maintenanceLastUpdate}</dt>
                             <dd>{updateApplyOperator.installedAt}</dd>

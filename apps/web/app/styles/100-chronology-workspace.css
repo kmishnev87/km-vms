@@ -1132,8 +1132,12 @@
 }
 
 @media (max-width: 640px) {
+  .chronologyCameraPanel {
+    --chronology-camera-scroll-gutter: 32px;
+  }
+
+  .chronologyPanelHeader,
   .chronologyCameraList {
-    --chronology-camera-scroll-gutter: 22px;
     width: 100%;
     box-sizing: border-box;
     padding-inline-end: var(--chronology-camera-scroll-gutter);
