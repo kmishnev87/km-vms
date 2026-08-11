@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.13",
-  "tag": "v0.8.13",
-  "title": "Repository Large-File Decomposition for Localization, Settings, Storage and Cameras",
-  "summary": "Decomposes the largest localization, Settings, Storage integrity and camera ONVIF modules into focused owners while preserving existing routes, UI behavior, permissions and update, backup and restore contracts.",
+  "version": "0.8.14",
+  "tag": "v0.8.14",
+  "title": "Persistent E2E Smoke Pack Foundation",
+  "summary": "Adds a reusable, non-destructive browser smoke pack for core KM VMS routes with fail-closed working-NAS targeting, mandatory API response checks, safe credential transport, and sanitized desktop and mobile evidence.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.13",
+  "source_ref": "v0.8.14",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,43 +16,43 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Splits localization dictionaries into dedicated English, Russian, Chinese and shared legacy modules while preserving locale lookup behavior.",
-    "Extracts update-apply and shared Settings presentation helpers behind the existing public facades.",
-    "Extracts Storage archive-integrity presentation and action helpers behind the existing public facade.",
-    "Moves camera connection and onboarding helpers plus ONVIF route families into dedicated backend modules without API contract changes.",
-    "Separates the Settings Maintenance controller and state from its presentation surface while preserving existing maintenance behavior."
+    "Adds a repository-owned POSIX runner that resolves the active working-NAS loopback port and rejects external origins or unsafe output paths.",
+    "Adds a Playwright scenario for unauthenticated redirect, UI login, 11 core routes in desktop and mobile viewports, and UI logout.",
+    "Requires every route-specific initial API response and fails on missing, timed-out, or HTTP 400-and-higher mandatory responses.",
+    "Produces sanitized JSON and screenshot evidence with fail-safe whole-page redaction, including setup or error pages.",
+    "Keeps real credentials out of Docker process arguments and adds deterministic endpoint, response, and whole-page redaction self-checks."
   ],
   "title_i18n": {
-    "en": "Repository Large-File Decomposition for Localization, Settings, Storage and Cameras",
-    "ru": "Декомпозиция крупных файлов локализации, настроек, хранилища и камер",
-    "zh-CN": "本地化、设置、存储与摄像机大型文件拆分"
+    "en": "Persistent E2E Smoke Pack Foundation",
+    "ru": "Постоянный базовый набор сквозных smoke-проверок",
+    "zh-CN": "持久化端到端冒烟测试基础"
   },
   "summary_i18n": {
-    "en": "Decomposes the largest localization, Settings, Storage integrity and camera ONVIF modules into focused owners while preserving existing routes, UI behavior, permissions and update, backup and restore contracts.",
-    "ru": "Разделяет крупнейшие модули локализации, настроек, целостности хранилища и ONVIF камер на самостоятельные части, сохраняя маршруты, интерфейс, права и контракты обновления, копирования и восстановления.",
-    "zh-CN": "将本地化、设置、存储完整性和摄像机 ONVIF 的大型模块拆分为职责清晰的组件，同时保持现有路由、界面行为、权限以及更新、备份和恢复契约。"
+    "en": "Adds a reusable, non-destructive browser smoke pack for core KM VMS routes with fail-closed working-NAS targeting, mandatory API response checks, safe credential transport, and sanitized desktop and mobile evidence.",
+    "ru": "Добавляет переиспользуемый безопасный browser smoke-набор для основных маршрутов KM VMS: с fail-closed привязкой к рабочему NAS, проверкой обязательных API-ответов, безопасной передачей учётных данных и обезличенными доказательствами для компьютера и мобильных экранов.",
+    "zh-CN": "新增可复用、非破坏性的浏览器冒烟测试，覆盖 KM VMS 核心页面；它采用工作 NAS 回环地址的故障关闭校验、必需 API 响应检查、安全凭据传递，以及桌面端和移动端的脱敏证据。"
   },
   "changelog_i18n": {
     "en": [
-      "Splits localization dictionaries into dedicated English, Russian, Chinese and shared legacy modules while preserving locale lookup behavior.",
-      "Extracts update-apply and shared Settings presentation helpers behind the existing public facades.",
-      "Extracts Storage archive-integrity presentation and action helpers behind the existing public facade.",
-      "Moves camera connection and onboarding helpers plus ONVIF route families into dedicated backend modules without API contract changes.",
-      "Separates the Settings Maintenance controller and state from its presentation surface while preserving existing maintenance behavior."
+      "Adds a repository-owned POSIX runner that resolves the active working-NAS loopback port and rejects external origins or unsafe output paths.",
+      "Adds a Playwright scenario for unauthenticated redirect, UI login, 11 core routes in desktop and mobile viewports, and UI logout.",
+      "Requires every route-specific initial API response and fails on missing, timed-out, or HTTP 400-and-higher mandatory responses.",
+      "Produces sanitized JSON and screenshot evidence with fail-safe whole-page redaction, including setup or error pages.",
+      "Keeps real credentials out of Docker process arguments and adds deterministic endpoint, response, and whole-page redaction self-checks."
     ],
     "ru": [
-      "Словари локализации разделены на английский, русский, китайский и общий legacy-модуль без изменения поиска переводов.",
-      "Логика применения обновлений и общие presentation helpers настроек вынесены за существующие публичные фасады.",
-      "Presentation и action helpers проверки целостности архива вынесены за существующий публичный фасад хранилища.",
-      "Подключение камер, onboarding и семейства ONVIF-маршрутов вынесены в отдельные backend-модули без изменения API.",
-      "Controller и состояние раздела «Обслуживание» отделены от presentation surface без изменения поведения обслуживания."
+      "Добавлен repo-owned POSIX runner, который определяет loopback-порт рабочего NAS и отклоняет внешние адреса и небезопасные output-пути.",
+      "Добавлен Playwright-сценарий: редирект без авторизации, UI-вход, 11 основных маршрутов в desktop/mobile viewport и UI-выход.",
+      "Проверяются обязательные initial API-ответы каждого маршрута; отсутствие, timeout или HTTP 400 и выше завершают smoke с ошибкой.",
+      "Создаются обезличенные JSON и screenshots с fail-safe маскированием всей страницы, включая setup- и error-экраны.",
+      "Реальные credentials убраны из аргументов Docker-процесса; добавлены deterministic self-checks endpoint, response и whole-page redaction."
     ],
     "zh-CN": [
-      "将本地化词典拆分为英语、俄语、中文及共享旧版模块，同时保持现有翻译查找行为。",
-      "将更新应用逻辑和设置页共享展示辅助函数提取到现有公共门面之后。",
-      "将存储归档完整性的展示与操作辅助函数提取到现有公共门面之后。",
-      "将摄像机连接、引导逻辑和 ONVIF 路由族移入独立后端模块，不改变 API 契约。",
-      "将设置维护页的控制器和状态与展示界面分离，同时保持现有维护行为。"
+      "新增仓库内 POSIX 运行器，可自动识别工作 NAS 的实际回环端口，并拒绝外部地址和不安全的输出路径。",
+      "新增 Playwright 场景，验证未登录重定向、界面登录、11 个核心路由的桌面端与移动端布局，以及界面退出。",
+      "校验每个路由必需的初始 API 响应；缺失、超时或 HTTP 400 及以上状态都会使测试失败。",
+      "生成经过脱敏的 JSON 和截图证据，并对整个页面实施故障安全遮罩，包括设置或错误页面。",
+      "Docker 启动时不再把真实凭据写入进程参数，并加入端点清理、响应分类和全页面遮罩的确定性自检。"
     ]
   }
 }
