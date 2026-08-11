@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.12",
-  "tag": "v0.8.12",
-  "title": "Touch Interaction Reliability, Update Acquisition Resilience and Maintenance Release Truth",
-  "summary": "Improves touch zoom, pan and mobile camera-list interaction, makes in-app source acquisition bounded and truthful during transient GitHub failures, and shows installed, available and published release facts in Maintenance.",
+  "version": "0.8.13",
+  "tag": "v0.8.13",
+  "title": "Repository Large-File Decomposition for Localization, Settings, Storage and Cameras",
+  "summary": "Decomposes the largest localization, Settings, Storage integrity and camera ONVIF modules into focused owners while preserving existing routes, UI behavior, permissions and update, backup and restore contracts.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.12",
+  "source_ref": "v0.8.13",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,43 +16,43 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Routes Records double taps by the visible video area so the central zone toggles fullscreen without also seeking, while side zones remain dedicated to seek.",
-    "Uses the native video surface while Live or Chronology is zoomed, preventing compact-renderer frame churn from degrading one-finger pan on slower touch devices.",
-    "Aligns the mobile camera-list scroll gutter and action boundary so scrolling does not compete with camera-card drag and add gestures.",
-    "Downloads the exact trusted commit once, cleans partial attempts, and provides bounded retry or retry-later guidance for transient and GitHub rate-limit failures.",
-    "Shows the installed version together with the available version and publication date in Maintenance whenever a trusted update candidate exists."
+    "Splits localization dictionaries into dedicated English, Russian, Chinese and shared legacy modules while preserving locale lookup behavior.",
+    "Extracts update-apply and shared Settings presentation helpers behind the existing public facades.",
+    "Extracts Storage archive-integrity presentation and action helpers behind the existing public facade.",
+    "Moves camera connection and onboarding helpers plus ONVIF route families into dedicated backend modules without API contract changes.",
+    "Separates the Settings Maintenance controller and state from its presentation surface while preserving existing maintenance behavior."
   ],
   "title_i18n": {
-    "en": "Touch Interaction Reliability, Update Acquisition Resilience and Maintenance Release Truth",
-    "ru": "Надёжность сенсорного управления, загрузки обновлений и сведений о релизе",
-    "zh-CN": "触控交互可靠性、更新获取韧性与维护页发布信息"
+    "en": "Repository Large-File Decomposition for Localization, Settings, Storage and Cameras",
+    "ru": "Декомпозиция крупных файлов локализации, настроек, хранилища и камер",
+    "zh-CN": "本地化、设置、存储与摄像机大型文件拆分"
   },
   "summary_i18n": {
-    "en": "Improves touch zoom, pan and mobile camera-list interaction, makes in-app source acquisition bounded and truthful during transient GitHub failures, and shows installed, available and published release facts in Maintenance.",
-    "ru": "Улучшает сенсорные zoom, pan и работу с мобильным списком камер, делает загрузку обновления ограниченной и правдивой при временных сбоях GitHub и показывает в Обслуживании установленную, доступную и опубликованную версии.",
-    "zh-CN": "改进触控缩放、平移和移动端摄像机列表交互，在 GitHub 临时故障时提供有限且真实的应用内更新获取，并在维护页显示已安装、可用及发布时间信息。"
+    "en": "Decomposes the largest localization, Settings, Storage integrity and camera ONVIF modules into focused owners while preserving existing routes, UI behavior, permissions and update, backup and restore contracts.",
+    "ru": "Разделяет крупнейшие модули локализации, настроек, целостности хранилища и ONVIF камер на самостоятельные части, сохраняя маршруты, интерфейс, права и контракты обновления, копирования и восстановления.",
+    "zh-CN": "将本地化、设置、存储完整性和摄像机 ONVIF 的大型模块拆分为职责清晰的组件，同时保持现有路由、界面行为、权限以及更新、备份和恢复契约。"
   },
   "changelog_i18n": {
     "en": [
-      "Routes Records double taps by the visible video area so the central zone toggles fullscreen without also seeking, while side zones remain dedicated to seek.",
-      "Uses the native video surface while Live or Chronology is zoomed, preventing compact-renderer frame churn from degrading one-finger pan on slower touch devices.",
-      "Aligns the mobile camera-list scroll gutter and action boundary so scrolling does not compete with camera-card drag and add gestures.",
-      "Downloads the exact trusted commit once, cleans partial attempts, and provides bounded retry or retry-later guidance for transient and GitHub rate-limit failures.",
-      "Shows the installed version together with the available version and publication date in Maintenance whenever a trusted update candidate exists."
+      "Splits localization dictionaries into dedicated English, Russian, Chinese and shared legacy modules while preserving locale lookup behavior.",
+      "Extracts update-apply and shared Settings presentation helpers behind the existing public facades.",
+      "Extracts Storage archive-integrity presentation and action helpers behind the existing public facade.",
+      "Moves camera connection and onboarding helpers plus ONVIF route families into dedicated backend modules without API contract changes.",
+      "Separates the Settings Maintenance controller and state from its presentation surface while preserving existing maintenance behavior."
     ],
     "ru": [
-      "Распределяет двойной тап в Записях по видимой области видео: центральная зона переключает fullscreen без одновременной перемотки, а боковые зоны отвечают только за перемотку.",
-      "При zoom в Онлайн и Хронологии использует native video, чтобы покадровая работа compact renderer не ухудшала pan одним пальцем на медленных touch-устройствах.",
-      "Выравнивает мобильную область прокрутки списка камер и границу действий, чтобы прокрутка не конфликтовала с переносом и добавлением карточки камеры.",
-      "Загружает точный доверенный commit один раз, очищает частичные попытки и даёт ограниченный retry либо действие «повторить позже» при временных сбоях GitHub.",
-      "Показывает в Обслуживании установленную версию, доступную версию и дату публикации при наличии доверенного кандидата обновления."
+      "Словари локализации разделены на английский, русский, китайский и общий legacy-модуль без изменения поиска переводов.",
+      "Логика применения обновлений и общие presentation helpers настроек вынесены за существующие публичные фасады.",
+      "Presentation и action helpers проверки целостности архива вынесены за существующий публичный фасад хранилища.",
+      "Подключение камер, onboarding и семейства ONVIF-маршрутов вынесены в отдельные backend-модули без изменения API.",
+      "Controller и состояние раздела «Обслуживание» отделены от presentation surface без изменения поведения обслуживания."
     ],
     "zh-CN": [
-      "按可见视频区域处理录像双击：中央区域只切换全屏，左右区域只负责跳转，避免两个动作同时触发。",
-      "实时或时间轴画面缩放时使用原生视频表面，避免紧凑渲染器逐帧更新影响较慢触控设备上的单指平移。",
-      "对齐移动端摄像机列表的滚动留白与操作边界，避免滚动同摄像机卡片拖动或添加手势竞争。",
-      "通过单一成功下载路径获取精确可信提交，清理不完整尝试，并在临时故障或 GitHub 限流时执行有限重试或明确提示稍后重试。",
-      "存在可信更新候选时，在维护页同时显示已安装版本、可用版本和发布时间。"
+      "将本地化词典拆分为英语、俄语、中文及共享旧版模块，同时保持现有翻译查找行为。",
+      "将更新应用逻辑和设置页共享展示辅助函数提取到现有公共门面之后。",
+      "将存储归档完整性的展示与操作辅助函数提取到现有公共门面之后。",
+      "将摄像机连接、引导逻辑和 ONVIF 路由族移入独立后端模块，不改变 API 契约。",
+      "将设置维护页的控制器和状态与展示界面分离，同时保持现有维护行为。"
     ]
   }
 }

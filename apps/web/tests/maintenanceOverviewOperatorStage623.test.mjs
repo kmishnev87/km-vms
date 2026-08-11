@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
-const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "utf8");
+const settingsPage = readSettingsMaintenanceSources();
 const settingsHelpers = fs.readFileSync(resolve(webRoot, "lib/settingsPageHelpers.js"), "utf8");
 const operationFeedback = fs.readFileSync(resolve(webRoot, "components/OperationFeedback.js"), "utf8");
 const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");

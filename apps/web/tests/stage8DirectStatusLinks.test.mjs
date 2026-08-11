@@ -1,3 +1,4 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -14,7 +15,7 @@ const problemBanners = read("components/OperatorProblemBanners.js");
 const dashboard = read("app/page.js");
 const api = read("lib/api.js");
 const routePermissions = read("lib/routePermissions.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 
 for (const route of [
   "app/security-journal/page.js",

@@ -1,20 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import vm from "node:vm";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (relative) => fs.readFileSync(resolve(__dirname, "..", relative), "utf8");
-const helpers = read("lib/storageOperations.js")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
-const context = {};
-vm.runInNewContext(
-  `${helpers}
-this.storageTopHealthModel = storageTopHealthModel;`,
-  context
-);
+const context = storageOperations;
 
 const healthyFacts = {
   operations: { status: "available" },

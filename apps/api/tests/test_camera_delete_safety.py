@@ -20,6 +20,8 @@ from app.models.recording import RecordingJob, RecordingSegment
 from app.models.storage_operation import StorageOperation
 from app.models.user import User
 import app.routers.cameras as cameras_module
+import app.routers.camera_connection_helpers as connection_helpers_module
+import app.routers.camera_onvif_routes as onvif_routes_module
 from app.routers.cameras import (
     delete_camera,
     list_cameras,
@@ -687,11 +689,11 @@ def test_deleted_camera_id_cannot_reuse_credentials_for_test_or_onvif(db, monkey
     def fail_if_network_is_used(*args, **kwargs):
         raise AssertionError("deleted camera credentials must not reach network helpers")
 
-    monkeypatch.setattr(cameras_module, "decrypt_text", fail_if_password_is_decrypted)
+    monkeypatch.setattr(connection_helpers_module, "decrypt_text", fail_if_password_is_decrypted)
     monkeypatch.setattr(cameras_module.subprocess, "run", fail_if_network_is_used)
-    monkeypatch.setattr(cameras_module, "fetch_onvif_profiles", fail_if_network_is_used)
-    monkeypatch.setattr(cameras_module, "get_onvif_profile_config", fail_if_network_is_used)
-    monkeypatch.setattr(cameras_module, "update_onvif_profile", fail_if_network_is_used)
+    monkeypatch.setattr(onvif_routes_module, "fetch_onvif_profiles", fail_if_network_is_used)
+    monkeypatch.setattr(onvif_routes_module, "get_onvif_profile_config", fail_if_network_is_used)
+    monkeypatch.setattr(onvif_routes_module, "update_onvif_profile", fail_if_network_is_used)
 
     deleted_payload = {
         "camera_id": camera_id,

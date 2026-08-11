@@ -5,10 +5,11 @@ import { fileURLToPath } from "node:url";
 import {
   updateApplyOperatorModel,
 } from "../lib/settingsPageHelpers.js";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
-const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "utf8");
+const settingsPage = readSettingsMaintenanceSources();
 const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
 const stageCss = css.slice(css.indexOf("/* Stage 13.7.11:"));
 
@@ -154,7 +155,7 @@ const supportButtonCount = (supportMarkup.match(/<button\b/g) || []).length;
 
 assert.equal(supportButtonCount, 1);
 assert.equal(supportMarkup.includes("downloadMaintenanceReport"), false);
-assert.equal(supportMarkup.includes("setDiagnosticChoiceOpen(true)"), true);
+assert.equal(supportMarkup.includes("onOpenDiagnosticChoice"), true);
 assert.equal(supportMarkup.includes("viewMaintenanceReport"), false);
 assert.equal(settingsPage.includes('id: "diagnostic-archive-choice"'), true);
 assert.equal(settingsPage.includes('overlayClassName: "settingsDiagnosticDialogOverlay"'), true);

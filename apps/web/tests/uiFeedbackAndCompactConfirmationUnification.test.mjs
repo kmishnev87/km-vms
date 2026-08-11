@@ -1,3 +1,5 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -12,7 +14,7 @@ const sharedCss = read("app/styles/40-storage-records-shared.css");
 const responsiveCss = read("app/styles/60-responsive-shared.css");
 const settingsCss = read("app/styles/20-settings-maintenance.css");
 const camerasCss = read("app/styles/50-cameras-shared-modals.css");
-const settings = read("app/settings/page.js");
+const settings = readSettingsMaintenanceSources();
 const cameras = read("app/cameras/page.js");
 const live = read("app/live/page.js");
 const chronology = read("app/chronology/page.js");
@@ -20,7 +22,7 @@ const recordings = read("app/recordings/page.js");
 const storage = read("app/storage/page.js");
 const login = read("app/login/page.js");
 const diagnostics = read("components/AuditDiagnosticsEntries.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 
 const toastSource = feedback.slice(feedback.indexOf("export function OperationToast"));
 assert.match(toastSource, /window\.setTimeout\(\(\) => onCloseRef\.current\?\.\(\), 2500\)/);

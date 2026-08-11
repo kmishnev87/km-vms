@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
@@ -70,7 +71,7 @@ const dynamicClassSources = [
   read("app/recordings/page.js"),
   read("app/storage/page.js"),
   read("app/system-status/page.js"),
-  read("app/settings/page.js"),
+  readSettingsMaintenanceSources(),
 ].join("\n");
 
 for (const dynamicSelector of [

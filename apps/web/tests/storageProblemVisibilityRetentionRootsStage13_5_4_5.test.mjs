@@ -1,3 +1,4 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -7,7 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (file) => fs.readFileSync(resolve(__dirname, "..", file), "utf8");
 
 const page = read("app/storage/page.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 const css = read("app/styles/40-storage-records-shared.css");
 
 assert.match(page, /\/storage\/archive-roots\/discovery/, "archive root add flow must use NAS/root discovery");
@@ -25,12 +26,12 @@ const operations = page.slice(
   page.indexOf("const archiveManagementGroups"),
   page.indexOf("const historyDialog")
 );
-assert.match(operations, /title: copy\.retentionRules/, "retention policy/status remains visible");
+assert.match(operations, /title: copy\.archiveManagementRetentionTitle/, "retention policy/status remains visible");
 const retentionRow = operations.slice(operations.indexOf('id: "retention"'), operations.indexOf('id: "auto-free"'));
 assert.doesNotMatch(retentionRow, /retentionPlanShort|retentionConfirmed|retentionDeleteShort|dry-run/, "manual retention controls must not be primary operations");
 
-assert.match(operations, /title: copy\.integrityCheck/, "archive integrity must be a visible product row");
-assert.match(operations, /onClick=\{openIntegrityDialog\}/, "archive findings must open the complete integrity flow");
+assert.match(operations, /title: copy\.archiveManagementIntegrityTitle/, "archive integrity must be a visible product row");
+assert.match(operations, /onClick=\{\(\) => openIntegrityDialog\(\)\}/, "archive findings must open the complete integrity flow");
 assert.match(page, /\/storage\/integrity\/scans\/\$\{encodeURIComponent\(scanId\)\}\/findings\?limit=50/, "integrity findings are loaded through the bounded endpoint");
 assert.match(page, /archiveIntegrityFindingPresentation/, "problem findings use sanitized presentation fields");
 assert.match(page, /archiveIntegrityActionContract/, "problem findings expose only typed executable actions");

@@ -1,3 +1,4 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -8,7 +9,7 @@ const read = (file) => fs.readFileSync(resolve(__dirname, "..", file), "utf8");
 
 const storagePage = read("app/storage/page.js");
 const settingsPage = read("app/settings/page.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 const storageHelpers = read("lib/storageOperations.js");
 
 for (const required of [
@@ -40,8 +41,10 @@ assert.doesNotMatch(storagePage, /storageSourceLabel\(storageContract\.archive_p
 assert.doesNotMatch(storagePage, /storageOpsSupportDetails/, "the obsolete page-level support block stays removed");
 assert.match(storagePage, /<ArchiveManagementCenter/, "archive scenarios are composed into one management center");
 assert.match(storagePage, /<OperationDialog dialog=\{historyDialog\}/, "bounded operation history is opened in a modal");
-assert.match(storagePage, /healthActionText\(topHealth, copy\)/, "primary action is reason-prioritized");
-assert.match(storagePage, /accessRightsModel\(pathHealth, language\)/, "read/write access is combined before primary rendering");
+assert.match(storagePage, /healthReasonText\(topHealth, recording, copy\)/, "health explanation is reason-prioritized");
+assert.match(storagePage, /<p>\{healthReason\}<\/p>/, "reason-prioritized health explanation is rendered");
+assert.match(storagePage, /recordingState\(operations, pathHealth, policy, copy\)/, "read/write access is combined into the current archive-access state");
+assert.match(storagePage, /label=\{copy\.archiveAccess\}\s+value=\{recording\.label\}/, "combined archive-access state is rendered in the overview");
 assert.match(storagePage, /archiveRootPath\(root, archivePathText\)/, "archive root paths are mapped before display");
 assert.match(storagePage, /\/storage\/archive-roots\/discovery/, "archive root flow discovers NAS roots before selection");
 assert.match(storagePage, /storageOpsRootForm-product/, "archive root primary flow is a product selection form");

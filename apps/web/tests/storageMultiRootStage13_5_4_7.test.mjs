@@ -1,3 +1,4 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -11,7 +12,7 @@ const recordingsPage = read("app/recordings/page.js");
 const chronologyPage = read("app/chronology/page.js");
 const archiveTilePlayer = read("components/ArchiveTilePlayer.js");
 const api = read("lib/api.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 
 const rootsSection = storagePage.slice(
   storagePage.indexOf("<Section title={copy.archiveRoots}"),

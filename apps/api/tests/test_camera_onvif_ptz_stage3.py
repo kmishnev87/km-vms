@@ -8,6 +8,7 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.routers.cameras as cameras_module
+import app.routers.camera_onvif_routes as onvif_routes_module
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS
 from app.models.camera import Camera
 from app.routers.cameras import onvif_ptz_capabilities, onvif_ptz_command
@@ -119,7 +120,7 @@ def test_deleted_camera_is_rejected_safely():
 
 
 def test_missing_credentials_are_rejected_safely(monkeypatch):
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: None)
+    monkeypatch.setattr(onvif_routes_module, "decrypt_text", lambda value: None)
 
     with pytest.raises(HTTPException) as exc:
         onvif_ptz_capabilities(31, db=FakeDb(camera()), current_user=user())
@@ -130,9 +131,9 @@ def test_missing_credentials_are_rejected_safely(monkeypatch):
 
 
 def test_fake_onvif_ptz_capabilities_are_sanitized(monkeypatch):
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "camera-pass")
+    monkeypatch.setattr(onvif_routes_module, "decrypt_text", lambda value: "camera-pass")
     monkeypatch.setattr(
-        cameras_module,
+        onvif_routes_module,
         "get_onvif_ptz_capabilities",
         lambda **kwargs: {
             "ok": True,
@@ -185,7 +186,7 @@ def test_command_validator_allowlist_and_bounds():
 
 
 def test_command_validation_only_never_implies_physical_execution(monkeypatch):
-    monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: None)
+    monkeypatch.setattr(onvif_routes_module, "create_event", lambda **kwargs: None)
 
     result = onvif_ptz_command(
         31,
@@ -202,7 +203,7 @@ def test_command_validation_only_never_implies_physical_execution(monkeypatch):
 
 
 def test_command_rejects_non_onvif_when_execution_is_requested(monkeypatch):
-    monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: None)
+    monkeypatch.setattr(onvif_routes_module, "create_event", lambda **kwargs: None)
 
     with pytest.raises(HTTPException) as exc:
         onvif_ptz_command(
@@ -218,10 +219,10 @@ def test_command_rejects_non_onvif_when_execution_is_requested(monkeypatch):
 
 
 def test_command_dry_run_response_is_secret_free(monkeypatch):
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "camera-pass")
-    monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: None)
+    monkeypatch.setattr(onvif_routes_module, "decrypt_text", lambda value: "camera-pass")
+    monkeypatch.setattr(onvif_routes_module, "create_event", lambda **kwargs: None)
     monkeypatch.setattr(
-        cameras_module,
+        onvif_routes_module,
         "execute_onvif_ptz_command",
         lambda **kwargs: {
             "ok": True,

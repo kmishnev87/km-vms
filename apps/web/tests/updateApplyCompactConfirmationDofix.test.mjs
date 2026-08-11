@@ -2,17 +2,22 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  readSettingsMaintenanceSourceFiles,
+  readSettingsMaintenanceSources,
+} from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const pageSource = fs.readFileSync(resolve(__dirname, "../app/settings/page.js"), "utf8");
+const pageSource = readSettingsMaintenanceSources();
+const { controllerSource, surfaceSource } = readSettingsMaintenanceSourceFiles();
 const cssSource = fs.readFileSync(resolve(__dirname, "../app/styles/20-settings-maintenance.css"), "utf8");
 const operationFeedbackSource = fs.readFileSync(resolve(__dirname, "../components/OperationFeedback.js"), "utf8");
 
-const updateDialogMarker = pageSource.indexOf('id: "update-apply-confirm"');
-const dialogStart = pageSource.lastIndexOf("<OperationDialog", updateDialogMarker);
-const dialogEnd = pageSource.indexOf("/>", dialogStart) + 2;
+const updateDialogMarker = surfaceSource.indexOf('id: "update-apply-confirm"');
+const dialogStart = surfaceSource.lastIndexOf("<OperationDialog", updateDialogMarker);
+const dialogEnd = surfaceSource.indexOf("/>", dialogStart) + 2;
 assert.ok(updateDialogMarker >= 0 && dialogStart >= 0 && dialogEnd > dialogStart);
-const dialogSource = pageSource.slice(dialogStart, dialogEnd);
+const dialogSource = surfaceSource.slice(dialogStart, dialogEnd);
 
 assert.equal(dialogSource.includes('presentation: "compact-confirmation"'), true);
 assert.equal(dialogSource.includes('overlayClassName: "settingsUpdateApplyDialogOverlay"'), true);
@@ -27,10 +32,10 @@ assert.equal(dialogSource.includes("onConfirm: confirmUpdateApply"), true);
 assert.equal(pageSource.includes("previewUpdateApplyDialog"), false);
 assert.equal(pageSource.includes("updateApplyTest"), false);
 
-const confirmStart = pageSource.indexOf("async function confirmUpdateApply");
-const confirmEnd = pageSource.indexOf("async function submitUserModal", confirmStart);
+const confirmStart = controllerSource.indexOf("async function confirmUpdateApply");
+const confirmEnd = controllerSource.indexOf("function updateCurrentRestorePhrase", confirmStart);
 assert.ok(confirmStart >= 0 && confirmEnd > confirmStart);
-const confirmSource = pageSource.slice(confirmStart, confirmEnd);
+const confirmSource = controllerSource.slice(confirmStart, confirmEnd);
 
 assert.ok(
   confirmSource.indexOf("setUpdateApplyDialog(null)") <
@@ -44,10 +49,10 @@ assert.equal(confirmSource.includes("setMaintenanceActionResult"), true);
 assert.equal(confirmSource.includes("displayReason: message"), true);
 assert.equal(confirmSource.includes("showToast"), true);
 
-const safeErrorStart = pageSource.indexOf("function safeUpdateLaunchError");
-const safeErrorEnd = pageSource.indexOf("function commitUpdateApplyPending", safeErrorStart);
+const safeErrorStart = controllerSource.indexOf("function safeUpdateLaunchError");
+const safeErrorEnd = controllerSource.indexOf("function commitUpdateApplyPending", safeErrorStart);
 assert.ok(safeErrorStart >= 0 && safeErrorEnd > safeErrorStart);
-const safeErrorSource = pageSource.slice(safeErrorStart, safeErrorEnd);
+const safeErrorSource = controllerSource.slice(safeErrorStart, safeErrorEnd);
 assert.equal(safeErrorSource.includes('"update_already_running"'), true);
 assert.equal(safeErrorSource.includes('"update_admission_unknown"'), false);
 assert.equal(safeErrorSource.includes("error?.message"), false);

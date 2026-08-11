@@ -2,25 +2,27 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  readSettingsMaintenanceSourceFiles,
+  readSettingsMaintenanceSources,
+} from "./helpers/readSettingsMaintenanceSources.mjs";
 
 
 const webRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const page = fs.readFileSync(
-  resolve(webRoot, "app/settings/page.js"),
-  "utf8",
-);
+const page = readSettingsMaintenanceSources();
+const { controllerSource, surfaceSource } = readSettingsMaintenanceSourceFiles();
 const css = fs.readFileSync(
   resolve(webRoot, "app/styles/20-settings-maintenance.css"),
   "utf8",
 );
-const restoreStart = page.indexOf(
+const restoreStart = controllerSource.indexOf(
   "async function requestCurrentDatabaseRestore",
 );
-const restoreEnd = page.indexOf(
+const restoreEnd = controllerSource.indexOf(
   "function backupOperationFallback",
   restoreStart,
 );
-const restoreFlow = page.slice(restoreStart, restoreEnd);
+const restoreFlow = controllerSource.slice(restoreStart, restoreEnd);
 const dialogStart = page.indexOf(
   "id: `current-db-restore-",
 );
@@ -74,15 +76,15 @@ assert.match(
   page,
   /\["completed", "blocked", "failed_rolled_back", "failed_recovery_required"\]/,
 );
-assert.match(restoreFlow, /currentRestoreTerminal\(status\)/);
+assert.match(surfaceSource, /currentRestoreTerminal\(status\)/);
 assert.match(page, /current_database_restored|maintenanceCurrentRestoreRolledBack/);
 assert.match(page, /maintenanceCurrentRestoreRecoveryRequired/);
-assert.match(restoreFlow, /currentRestoreFailedPhase\(status\)/);
+assert.match(surfaceSource, /currentRestoreFailedPhase\(status\)/);
 assert.match(page, /status\?\.failed_phase/);
 assert.match(page, /automatic_rollback_api_recovery_failed:\s*"services_starting"/);
 assert.match(page, /automatic_rollback_recorder_recovery_failed:\s*"post_restore_check"/);
-assert.match(restoreFlow, /state === "failed"[\s\S]*?"!"/);
-assert.match(restoreFlow, /resultState === "rolled-back"[\s\S]*?"↩"/);
+assert.match(surfaceSource, /state === "failed"[\s\S]*?"!"/);
+assert.match(surfaceSource, /resultState === "rolled-back"[\s\S]*?"↩"/);
 
 assert.match(dialog, /settingsCurrentRestoreDialogOverlay/);
 assert.match(dialog, /maintenanceCurrentRestoreChanges/);

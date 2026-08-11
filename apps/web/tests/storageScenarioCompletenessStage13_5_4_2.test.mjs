@@ -1,28 +1,16 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (file) => fs.readFileSync(resolve(__dirname, "..", file), "utf8");
-const storageSource = read("lib/storageOperations.js")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
 const storagePage = read("app/storage/page.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 
-const context = {};
-vm.runInNewContext(
-  `${storageSource}
-this.humanBlockerReason = humanBlockerReason;
-this.storageTopHealthModel = storageTopHealthModel;
-this.retentionOperationPresentation = retentionOperationPresentation;
-this.integrityOperationPresentation = integrityOperationPresentation;
-this.migrationScenarioModel = migrationScenarioModel;
-this.archiveRootScenarioModel = archiveRootScenarioModel;`,
-  context
-);
+const context = storageOperations;
 
 assert.match(
   context.storageTopHealthModel({

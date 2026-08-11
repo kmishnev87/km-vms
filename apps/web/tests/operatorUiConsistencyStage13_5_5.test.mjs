@@ -1,3 +1,4 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -14,7 +15,7 @@ const cameras = read("app/cameras/page.js");
 const settings = read("app/settings/page.js");
 const storage = read("app/storage/page.js");
 const systemStatus = read("app/system-status/page.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 const settingsCss = read("app/styles/20-settings-maintenance.css");
 const sharedCss = read("app/styles/40-storage-records-shared.css");
 const camerasCss = read("app/styles/50-cameras-shared-modals.css");

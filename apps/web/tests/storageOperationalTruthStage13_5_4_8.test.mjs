@@ -1,19 +1,11 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import vm from "node:vm";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const helperSource = fs
-  .readFileSync(resolve(__dirname, "../lib/storageOperations.js"), "utf8")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
-const context = {};
-vm.runInNewContext(
-  `${helperSource}\nthis.activationProgressModel = activationProgressModel;\nthis.discoveryStateModel = discoveryStateModel;`,
-  context
-);
+const context = storageOperations;
 
 const completedWithoutEvidence = context.activationProgressModel({ status: "completed", completed_steps: [] });
 assert.equal(completedWithoutEvidence.steps.every((step) => step.done === false), true, "overall completed must not fabricate step completion");

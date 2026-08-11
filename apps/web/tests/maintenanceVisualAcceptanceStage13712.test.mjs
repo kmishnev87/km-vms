@@ -6,10 +6,11 @@ import {
   maintenanceBackupOperationResultText,
   updateApplyOperatorModel,
 } from "../lib/settingsPageHelpers.js";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
-const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "utf8");
+const settingsPage = readSettingsMaintenanceSources();
 const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
 const responsiveCss = fs.readFileSync(resolve(webRoot, "app/styles/60-responsive-shared.css"), "utf8");
 const stageCss = css.slice(css.indexOf("/* Stage 13.7.11:"));
@@ -96,7 +97,7 @@ const supportStart = settingsPage.indexOf('<section className="settingsMaintenan
 const supportEnd = settingsPage.indexOf("</section>", supportStart);
 const supportActions = settingsPage.slice(supportStart, supportEnd);
 assert.equal((supportActions.match(/settingsMaintenanceSupportActionButton/g) || []).length, 1);
-assert.equal(supportActions.includes("setDiagnosticChoiceOpen(true)"), true);
+assert.equal(supportActions.includes("onOpenDiagnosticChoice"), true);
 assert.equal(supportActions.includes("setMaintenanceWarningsOpen"), false);
 assert.match(settingsPage, /settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned/);
 assert.match(settingsPage, /settingsMaintenanceBackupLatestRow/);

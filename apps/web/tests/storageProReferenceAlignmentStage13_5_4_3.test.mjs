@@ -1,28 +1,21 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (file) => fs.readFileSync(resolve(__dirname, "..", file), "utf8");
 const storagePage = read("app/storage/page.js");
-const storageSource = read("lib/storageOperations.js")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
-const i18n = read("lib/i18n.js");
+const storageSource = read("lib/storageOperations.js");
+const i18n = readI18nSource();
 const settingsPage = read("app/settings/page.js");
 
-const context = {};
-vm.runInNewContext(
-  `${storageSource}
-this.storageTopHealthModel = storageTopHealthModel;
-this.accessRightsModel = accessRightsModel;`,
-  context
-);
+const context = storageOperations;
 
 for (const required of [
-  "copy.primaryAction",
+  "copy.archiveAccess",
   "copy.refresh",
   "copy.total",
   "copy.used",
@@ -41,10 +34,10 @@ const rootsStart = storagePage.indexOf("<Section title={copy.archiveRoots}");
 const managementStart = storagePage.indexOf("<ArchiveManagementCenter", rootsStart);
 assert.ok(rootsStart > 0, "archive roots section exists");
 assert.ok(managementStart > rootsStart, "full-width archive management follows archive roots");
-assert.match(storagePage, /title: copy\.retentionRules/);
-assert.match(storagePage, /title: copy\.integrityCheck/);
-assert.match(storagePage, /title: copy\.archiveMigration/);
-assert.match(storagePage, /title: copy\.autoFreeSpace/);
+assert.match(storagePage, /title: copy\.archiveManagementRetentionTitle/);
+assert.match(storagePage, /title: copy\.archiveManagementIntegrityTitle/);
+assert.match(storagePage, /title: copy\.archiveManagementMigrationTitle/);
+assert.match(storagePage, /title: copy\.archiveManagementAutoFreeTitle/);
 assert.match(storagePage, /<ArchivePolicySwitch[\s\S]*onChange=\{requestAutoFreeSpace\}/, "auto-free-space lives inside unified archive management");
 
 for (const scattered of [
@@ -68,10 +61,9 @@ const primaryRender = storagePage.slice(primaryRenderStart, storagePage.indexOf(
 assert.doesNotMatch(primaryRender, /namespace|host_bind_env|Default archive|active_recording_jobs|raw JSON/i);
 assert.match(primaryRender, /archiveRootPath\(root, archivePathText\)/, "archive roots show human archive paths");
 
-assert.match(storagePage, /accessRightsModel\(pathHealth, language\)/);
 assert.match(storagePage, /recordingState\(operations, pathHealth, policy, copy\)/);
+assert.match(storagePage, /label=\{copy\.archiveAccess\}\s+value=\{recording\.label\}/);
 assert.doesNotMatch(storagePage, /pathHealth\.available === false \? copy\.availabilityNeedsCheck : copy\.availabilityConfirmed/);
-assert.equal(context.accessRightsModel({}).label, "Права на чтение и запись: не проверены");
 const unknownHealth = context.storageTopHealthModel({ operations: { status: "available" }, capacity: { total_bytes: 100 }, pathHealth: {} });
 assert.equal(unknownHealth.status, "unknown");
 

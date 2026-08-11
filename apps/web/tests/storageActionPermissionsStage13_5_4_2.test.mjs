@@ -3,22 +3,12 @@ import fs from "node:fs";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const routePermissionsSource = fs.readFileSync(resolve(__dirname, "../lib/routePermissions.js"), "utf8");
 const storagePage = fs.readFileSync(resolve(__dirname, "../app/storage/page.js"), "utf8");
-const storageSource = fs
-  .readFileSync(resolve(__dirname, "../lib/storageOperations.js"), "utf8")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
-
-const storageContext = {};
-vm.runInNewContext(
-  `${storageSource}
-this.STORAGE_ACTION_PERMISSIONS = STORAGE_ACTION_PERMISSIONS;
-this.actionPermissionState = actionPermissionState;`,
-  storageContext
-);
+const storageContext = storageOperations;
 
 const routeContext = {};
 vm.runInNewContext(

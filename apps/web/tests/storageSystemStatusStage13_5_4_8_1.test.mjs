@@ -1,8 +1,10 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
@@ -51,15 +53,7 @@ for (const user of [operator, viewer]) {
 }
 assert.equal(warningContext.runtimeStatusUserIdentity({ permissions: ["run_diagnostics"] }), "authorized-user");
 
-const storageHelperSource = read("lib/storageOperations.js")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
-const storageContext = {};
-vm.runInNewContext(
-  `${storageHelperSource}
-this.discoveryHeaderStatusModel = discoveryHeaderStatusModel;`,
-  storageContext
-);
+const storageContext = storageOperations;
 
 assert.equal(storageContext.discoveryHeaderStatusModel(null).state, "not_checked");
 assert.equal(storageContext.discoveryHeaderStatusModel({ freshness: "refreshing" }).state, "refreshing");
@@ -84,12 +78,12 @@ assert.equal(layout.indexOf("<SystemHealthIndicator") < layout.indexOf('href="/s
 const storagePage = read("app/storage/page.js");
 const storageCss = read("app/styles/40-storage-records-shared.css");
 const responsiveCss = read("app/styles/60-responsive-shared.css");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 
 assert.doesNotMatch(storagePage, /storageOpsArchiveSummary|accessRightsSummary|copy\.archiveRootLocation|copy\.accessRights/);
 assert.doesNotMatch(storageCss, /storageOpsArchiveSummary/);
 assert.doesNotMatch(responsiveCss, /storageOpsArchiveSummary/);
-for (const retained of ["archivePathText", "accessRightsModel", "pathHealth", "storageContract", "archiveRootPath"]) {
+for (const retained of ["archivePathText", "recordingState", "pathHealth", "storageContract", "archiveRootPath"]) {
   assert.match(storagePage, new RegExp(`\\b${retained}\\b`), `${retained} remains an authoritative consumer`);
 }
 

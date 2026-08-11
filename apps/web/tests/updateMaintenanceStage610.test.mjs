@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path, { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readSettingsPageHelperSource } from "./helpers/readSettingsPageHelperSources.mjs";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const repoRoot = resolve(webRoot, "../..");
-const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "utf8");
-const settingsHelpers = fs.readFileSync(resolve(webRoot, "lib/settingsPageHelpers.js"), "utf8");
+const settingsPage = readSettingsMaintenanceSources();
+const settingsHelpers = readSettingsPageHelperSource();
 const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
 
 function walkFiles(root) {

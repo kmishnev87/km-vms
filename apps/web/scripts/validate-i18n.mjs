@@ -1,23 +1,10 @@
 import fs from "node:fs";
 import vm from "node:vm";
 
+import { DICTIONARIES } from "../lib/i18n/dictionaries.js";
+
 const sourcePath = new URL("../lib/i18n.js", import.meta.url);
 const source = fs.readFileSync(sourcePath, "utf8");
-
-function extractConstObject(name) {
-  const marker = `export const ${name} = `;
-  const start = source.indexOf(marker);
-  if (start < 0) throw new Error(`${name} export not found`);
-  const objectStart = source.indexOf("{", start);
-  let depth = 0;
-  for (let index = objectStart; index < source.length; index += 1) {
-    const char = source[index];
-    if (char === "{") depth += 1;
-    if (char === "}") depth -= 1;
-    if (depth === 0) return source.slice(objectStart, index + 1);
-  }
-  throw new Error(`${name} object end not found`);
-}
 
 function extractConstArray(name) {
   const marker = `export const ${name} = `;
@@ -36,7 +23,7 @@ function extractConstArray(name) {
 
 const context = {};
 vm.createContext(context);
-vm.runInContext(`SUPPORTED_LOCALES = ${extractConstArray("SUPPORTED_LOCALES")}; DICTIONARIES = ${extractConstObject("DICTIONARIES")};`, context);
+vm.runInContext(`SUPPORTED_LOCALES = ${extractConstArray("SUPPORTED_LOCALES")};`, context);
 
 const supported = context.SUPPORTED_LOCALES.map((item) => item.code);
 const expected = ["ru", "en", "zh-CN"];
@@ -44,7 +31,7 @@ const errors = [];
 
 for (const locale of expected) {
   if (!supported.includes(locale)) errors.push(`missing supported locale ${locale}`);
-  if (!context.DICTIONARIES[locale]) errors.push(`missing dictionary ${locale}`);
+  if (!DICTIONARIES[locale]) errors.push(`missing dictionary ${locale}`);
 }
 
 function flatten(source, prefix = "") {
@@ -56,12 +43,12 @@ function flatten(source, prefix = "") {
   });
 }
 
-const reference = new Map(flatten(context.DICTIONARIES.ru));
+const reference = new Map(flatten(DICTIONARIES.ru));
 const placeholderPattern = new RegExp("TODO|TBD|FIXME|\\?\\?\\?|undefined|null|\\uFFFD", "i");
 const placeholderValuePattern = /^(MISSING|TODO|TBD|FIXME)$/i;
 
 for (const locale of expected) {
-  const dictionary = new Map(flatten(context.DICTIONARIES[locale]));
+  const dictionary = new Map(flatten(DICTIONARIES[locale]));
   for (const [key, value] of reference.entries()) {
     if (!dictionary.has(key)) {
       errors.push(`${locale} missing ${key}`);

@@ -1,3 +1,4 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -28,7 +29,7 @@ const systemStatus = read("app/system-status/page.js");
 const apk = read("app/apk/page.js");
 const api = read("lib/api.js");
 const routePermissions = read("lib/routePermissions.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 const css = readEffectiveCss("app/globals.css");
 
 for (const asset of [

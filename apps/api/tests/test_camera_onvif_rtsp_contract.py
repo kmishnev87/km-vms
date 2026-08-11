@@ -4,6 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.routers.cameras as cameras_module
+import app.routers.camera_onvif_routes as onvif_routes_module
 from app.models.camera import Camera
 from app.routers.cameras import assemble_rtsp_url, build_test_url, onvif_profiles, safe_onvif_error
 from app.services.onvif_service import (
@@ -154,8 +155,8 @@ def test_onvif_profiles_uses_saved_rtsp_reachable_endpoint_without_payload_value
         captured.update(kwargs)
         return {"profiles": [], "rtsp_reachable": {"host": kwargs["rtsp_host"], "port": kwargs["rtsp_port"]}}
 
-    original = cameras_module.fetch_onvif_profiles
-    cameras_module.fetch_onvif_profiles = fake_fetch_onvif_profiles
+    original = onvif_routes_module.fetch_onvif_profiles
+    onvif_routes_module.fetch_onvif_profiles = fake_fetch_onvif_profiles
     try:
         result = onvif_profiles(
             {"camera_id": camera.id, "username": "operator", "password": "camera-pass"},
@@ -163,7 +164,7 @@ def test_onvif_profiles_uses_saved_rtsp_reachable_endpoint_without_payload_value
             current_user=object(),
         )
     finally:
-        cameras_module.fetch_onvif_profiles = original
+        onvif_routes_module.fetch_onvif_profiles = original
 
     assert result["ok"] is True
     assert captured["host"] == "onvif.example.test"

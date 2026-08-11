@@ -1,10 +1,11 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = process.cwd().endsWith("apps/web") ? process.cwd() : join(process.cwd(), "apps/web");
 const cameraPage = readFileSync(join(root, "app/cameras/page.js"), "utf8");
-const i18n = readFileSync(join(root, "lib/i18n.js"), "utf8");
+const i18n = readI18nSource();
 
 const staleCondition = 'if (jobState === "recording" && staleCurrentSegment)';
 const healthyCondition = 'if (jobState === "recording" && confirmedRecording && !currentFailure)';

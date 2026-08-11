@@ -1,26 +1,17 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import vm from "node:vm";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (file) => fs.readFileSync(resolve(__dirname, "..", file), "utf8");
 const storagePage = read("app/storage/page.js");
 const storageCss = read("app/styles/40-storage-records-shared.css");
 const responsiveCss = read("app/styles/60-responsive-shared.css");
-const i18n = read("lib/i18n.js");
-const storageSource = read("lib/storageOperations.js")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
-
-const context = {};
-vm.runInNewContext(
-  `${storageSource}
-this.storageTopHealthModel = storageTopHealthModel;
-this.archiveRootScenarioModel = archiveRootScenarioModel;`,
-  context
-);
+const i18n = readI18nSource();
+const context = storageOperations;
 
 for (const pathHealth of [{ readable: true, writable: true }, { readable: true, writable: true, available: null }]) {
   const health = context.storageTopHealthModel({
@@ -59,7 +50,7 @@ const primaryEnd = storagePage.indexOf("<ArchiveIntegrityDialog", primaryStart);
 const primary = storagePage.slice(primaryStart, primaryEnd);
 assert.doesNotMatch(primary, /copy\.source\b|copy\.accessExplanation|copy\.dockerPath|copy\.ownershipBoundary|metadata|метаданн|кандидат|candidate/i);
 assert.match(storagePage, /copy\.healthReasonAvailability/);
-assert.match(storagePage, /copy\.actionCheckArchive/);
+assert.match(storagePage, /copy\.integrityCheckArchive/);
 
 const operationsStart = storagePage.indexOf("const archiveManagementGroups");
 const operationsEnd = storagePage.indexOf("const historyDialog", operationsStart);

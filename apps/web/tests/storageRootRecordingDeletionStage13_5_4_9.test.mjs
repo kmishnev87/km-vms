@@ -1,3 +1,4 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -12,7 +13,7 @@ const feedback = read("components/OperationFeedback.js");
 const storageHelpers = read("lib/storageOperations.js");
 const storageCss = read("app/styles/40-storage-records-shared.css");
 const responsiveCss = read("app/styles/60-responsive-shared.css");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 
 assert.doesNotMatch(recordingsPage, /window\.confirm/, "recording deletion never uses a browser-native confirm");
 assert.match(recordingsPage, /\/recordings\/deletion-plans/);

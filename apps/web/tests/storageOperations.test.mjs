@@ -1,19 +1,7 @@
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import vm from "node:vm";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
+import * as storageOperations from "../lib/storageOperations.js";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const source = fs
-  .readFileSync(resolve(__dirname, "../lib/storageOperations.js"), "utf8")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
-const context = {};
-vm.runInNewContext(
-  `${source}\nthis.formatBytes = formatBytes;\nthis.formatPercent = formatPercent;\nthis.statusLabel = statusLabel;\nthis.lowDiskPolicyText = lowDiskPolicyText;\nthis.humanBlockerReason = humanBlockerReason;\nthis.factLabel = factLabel;\nthis.factTone = factTone;\nthis.accessRightsModel = accessRightsModel;\nthis.freeSpaceTone = freeSpaceTone;\nthis.normalizeReconciliationSummary = normalizeReconciliationSummary;\nthis.primaryStorageActionText = primaryStorageActionText;\nthis.cameraStorageRows = cameraStorageRows;`,
-  context
-);
+const context = storageOperations;
 
 assert.equal(context.formatBytes(0), "0 B");
 assert.equal(context.formatBytes(1536), "1.5 KB");

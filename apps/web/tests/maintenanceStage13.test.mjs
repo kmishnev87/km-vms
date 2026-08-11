@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const settingsPage = fs.readFileSync(resolve(__dirname, "../app/settings/page.js"), "utf8");
+const settingsPage = readSettingsMaintenanceSources();
 const settingsHelpers = fs.readFileSync(resolve(__dirname, "../lib/settingsPageHelpers.js"), "utf8");
 
 function read(relative) {
@@ -36,7 +37,7 @@ function extractBlockAfter(marker) {
 
 assert.equal(settingsPage.includes('apiFetch("/system/maintenance/overview")'), true);
 assert.equal(settingsPage.includes('apiFetch("/system/upgrade/report")'), false);
-assert.equal(settingsPage.includes('apiFetchBlob("/system/upgrade/report")'), true);
+assert.equal(settingsPage.includes('apiFetchBlob(`/settings/logs/archive?mode=${encodeURIComponent(mode)}`)'), true);
 assert.equal(settingsPage.includes("MAINTENANCE_DRY_RUN_ENDPOINTS"), true);
 assert.equal(settingsHelpers.includes("MAINTENANCE_DRY_RUN_ENDPOINTS"), true);
 assert.equal(settingsHelpers.includes("/system/db-adoption/dry-run"), true);
@@ -108,7 +109,9 @@ assert.equal(maintenanceDetailRows.includes("t.maintenanceLabels"), true);
 assert.equal(settingsPage.includes('className="settingsMaintenanceReportPreview"'), false);
 assert.equal(settingsPage.includes("viewMaintenanceReport"), false);
 assert.equal(settingsPage.includes("maintenanceReportView"), false);
-assert.equal(settingsPage.includes("downloadMaintenanceReport"), true);
+assert.equal(settingsPage.includes("downloadMaintenanceReport"), false);
+assert.equal(settingsPage.includes('downloadLogArchive("normal")'), true);
+assert.equal(settingsPage.includes('downloadLogArchive("extended")'), true);
 
 assert.equal(css.includes(".settingsMaintenanceModal"), true);
 assert.equal(css.includes(".settingsMaintenanceList"), true);

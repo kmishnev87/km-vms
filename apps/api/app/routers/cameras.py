@@ -4,42 +4,63 @@ import shutil
 import subprocess
 import json
 import time
-import hashlib
 from datetime import datetime
 from uuid import uuid4
-from urllib.parse import quote, urlparse
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.permissions import user_has_permission
-from app.core.sanitization import redact_text
 from app.core.security import encrypt_text, decrypt_text
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
+from app.routers.camera_connection_helpers import (
+    ONVIF_PROBE_PROOFS,
+    PROOF_TTL_SECONDS,
+    RTSP_TEST_PROOFS,
+    apply_profile_assignments,
+    assemble_rtsp_url,
+    build_test_url,
+    get_camera_credentials,
+    has_valid_onboarding_proof,
+    onvif_error_code,
+    parse_bounded_int,
+    parse_port,
+    profile_matches_stream,
+    register_onvif_probe_proof,
+    register_rtsp_test_proof,
+    register_validation_proof,
+    require_save_gate,
+    safe_int,
+    safe_onvif_error,
+    safe_preview_token,
+    saved_stream_path,
+    store_has_valid_proof,
+    validation_fingerprint,
+)
+from app.routers.camera_onvif_routes import (
+    get_active_camera_or_404,
+    onvif_discover,
+    onvif_health,
+    onvif_health_check,
+    onvif_probe,
+    onvif_profile_config,
+    onvif_profiles,
+    onvif_ptz_capabilities,
+    onvif_ptz_command,
+    router as onvif_router,
+    run_bounded_read_only_check,
+    safe_camera_onvif_credentials,
+    update_onvif_profile_route,
+)
 from app.routers.deps import FORBIDDEN_DETAIL, get_current_user, require_permission
 from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
-from app.services.onvif_service import (
-    build_onvif_health_contract,
-    check_onvif_events_feasibility,
-    discover_onvif_devices,
-    execute_onvif_ptz_command,
-    fetch_onvif_profiles,
-    get_onvif_profile_config,
-    get_onvif_ptz_capabilities,
-    probe_onvif_device,
-    rtsp_path_from_uri,
-    update_onvif_profile,
-    validate_ptz_command_payload,
-    ptz_validation_response,
-    ptz_command_limits,
-)
 from app.services.recording_retention import EXECUTION_POLICY_MANUAL_COMPLETE, execute_segments, preview_segments
 from app.services.retention_automation import advance_retention_signal
 from app.services.storage_operation_conflicts import (
@@ -56,14 +77,12 @@ from app.services.storage_operations_foundation import StorageOperationContractE
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 viewer_router = APIRouter(prefix="/viewer/cameras", tags=["viewer-cameras"])
+router.include_router(onvif_router)
 
 CAMERA_DELETE_FILES_REASON = "camera_delete_with_files"
 CAMERA_DELETE_NO_FILES_BLOCK_REASON = "recordings_exist_delete_files_false_requires_safe_policy"
 CAMERA_DELETE_UNSAFE_WITH_FILES_REASON = "camera_delete_with_files_requires_all_segments_safe"
 CAMERA_DELETE_NO_PERMISSION_REASON = "delete_recordings_permission_missing"
-PROOF_TTL_SECONDS = 15 * 60
-ONVIF_PROBE_PROOFS: dict[str, dict] = {}
-RTSP_TEST_PROOFS: dict[str, dict] = {}
 CONNECTION_SENSITIVE_FIELDS = {
     "protocol",
     "host",
@@ -90,140 +109,6 @@ SECRET_METADATA_FIELDS = {
 }
 
 
-def safe_onvif_error(exc: Exception) -> str:
-    text = redact_text(str(exc) if exc else "")
-    lower = text.lower()
-    if "auth" in lower or "401" in lower or "forbidden" in lower:
-        return "ONVIF service is reachable, but authentication failed. Check camera ONVIF credentials."
-    if "connection refused" in lower or "failed to establish" in lower or "newconnectionerror" in lower:
-        return "ONVIF service is not reachable on the selected host and port."
-    if "timeout" in lower or "timed out" in lower:
-        return "ONVIF service did not respond in time. Check ONVIF host, port, and network access."
-    if len(text) > 180 or "traceback" in lower or "envelope" in lower or "soap" in lower:
-        return "ONVIF operation failed. Check camera ONVIF service, permissions, and profile support."
-    return text or "ONVIF operation failed."
-
-
-def onvif_error_code(exc: Exception) -> str:
-    text = redact_text(str(exc) if exc else "").lower()
-    if "auth" in text or "401" in text or "forbidden" in text:
-        return "wrong_credentials"
-    if "timeout" in text or "timed out" in text:
-        return "timeout"
-    if "connection refused" in text:
-        return "wrong_port_or_service_unavailable"
-    if "failed to establish" in text or "newconnectionerror" in text or "unreachable" in text:
-        return "wrong_ip_or_unreachable"
-    if "media service" in text:
-        return "media_service_unavailable"
-    if "profile" in text:
-        return "profiles_unavailable"
-    if "stream" in text:
-        return "stream_uri_unavailable"
-    if "wsdl" in text or "onvif" in text:
-        return "unsupported_onvif"
-    return "unknown_safe_error"
-
-
-def validation_fingerprint(payload: dict) -> dict:
-    protocol = str(payload.get("protocol") or "rtsp").lower()
-    rtsp_host = payload.get("rtsp_host") or (payload.get("host") if protocol == "onvif" else None)
-    rtsp_port = payload.get("rtsp_port") or (554 if protocol == "onvif" else None)
-    password = str(payload.get("password") or "")
-    return {
-        "protocol": protocol,
-        "host": str(payload.get("host") or ""),
-        "port": safe_int(payload.get("port"), 80 if protocol == "onvif" else 554),
-        "rtsp_host": str(rtsp_host or ""),
-        "rtsp_port": safe_int(rtsp_port, 0),
-        "username": str(payload.get("username") or ""),
-        "password_sha256": hashlib.sha256(password.encode("utf-8")).hexdigest() if password else "",
-        "rtsp_main_url": str(payload.get("rtsp_main_url") or ""),
-        "rtsp_sub_url": str(payload.get("rtsp_sub_url") or ""),
-        "rtsp_transport": str(payload.get("rtsp_transport") or ""),
-        "onvif_path": str(payload.get("onvif_path") or ""),
-        "onvif_profile_token": str(payload.get("onvif_profile_token") or ""),
-        "onvif_channel_id": str(payload.get("onvif_channel_id") or ""),
-        "default_live_stream": str(payload.get("default_live_stream") or ""),
-        "default_record_stream": str(payload.get("default_record_stream") or ""),
-    }
-
-
-def register_validation_proof(store: dict[str, dict], payload: dict) -> str:
-    token = uuid4().hex
-    store[token] = {"created_at": time.time(), "fingerprint": validation_fingerprint(payload)}
-    return token
-
-
-def register_onvif_probe_proof(payload: dict) -> str:
-    return register_validation_proof(ONVIF_PROBE_PROOFS, payload)
-
-
-def register_rtsp_test_proof(payload: dict) -> str:
-    return register_validation_proof(RTSP_TEST_PROOFS, payload)
-
-
-def store_has_valid_proof(store: dict[str, dict], token: str | None, payload: dict) -> bool:
-    proof = store.get(token or "")
-    if not proof:
-        return False
-    if time.time() - float(proof.get("created_at") or 0) > PROOF_TTL_SECONDS:
-        store.pop(token or "", None)
-        return False
-    return proof.get("fingerprint") == validation_fingerprint(payload)
-
-
-def has_valid_onboarding_proof(payload: dict) -> bool:
-    validation_token = safe_preview_token(payload.get("validation_token"))
-    if store_has_valid_proof(RTSP_TEST_PROOFS, validation_token, payload):
-        return True
-    token = safe_preview_token(payload.get("onvif_probe_token"))
-    return store_has_valid_proof(ONVIF_PROBE_PROOFS, token, payload)
-
-
-def require_save_gate(payload: dict, *, connection_sensitive_change: bool) -> bool:
-    if not connection_sensitive_change:
-        return False
-    if has_valid_onboarding_proof(payload):
-        return False
-    if bool(payload.get("manual_confirm_unverified")):
-        return True
-    raise HTTPException(
-        status_code=status.HTTP_409_CONFLICT,
-        detail={
-            "code": "camera_validation_required",
-            "message": "Camera connection must be tested/probed before saving, or explicitly saved as unverified.",
-            "manual_confirm_available": True,
-        },
-    )
-
-
-def safe_int(value, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
-
-
-def parse_bounded_int(value, *, field: str, default: int, minimum: int, maximum: int) -> int:
-    if value in (None, ""):
-        return default
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail={"code": f"invalid_{field}", "message": f"{field} must be an integer."})
-    if parsed < minimum or parsed > maximum:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": f"{field}_out_of_range", "message": f"{field} must be between {minimum} and {maximum}."},
-        )
-    return parsed
-
-
-def parse_port(value, *, field: str, default: int) -> int:
-    return parse_bounded_int(value, field=field, default=default, minimum=1, maximum=65535)
-
-
 def safe_changed_metadata(changed: dict) -> dict:
     safe = {}
     for key, value in changed.items():
@@ -235,613 +120,6 @@ def safe_changed_metadata(changed: dict) -> dict:
         else:
             safe[key] = value
     return safe
-
-
-def assemble_rtsp_url(
-    host: str | None,
-    port: int | None,
-    username: str | None,
-    password: str | None,
-    value: str | None,
-) -> str | None:
-    if not value:
-        return None
-
-    value = str(value).strip()
-    if not value:
-        return None
-
-    if value.lower().startswith("rtsp://"):
-        return value
-
-    if not host:
-        return value
-
-    path = value if value.startswith("/") else f"/{value}"
-    auth = ""
-    if username and password:
-        auth = f"{quote(str(username), safe='')}:{quote(str(password), safe='')}@"
-    elif username:
-        auth = f"{quote(str(username), safe='')}@"
-
-    port_part = f":{int(port)}" if port else ""
-    return f"rtsp://{auth}{host}{port_part}{path}"
-
-
-def get_camera_credentials(
-    db: Session,
-    payload: dict,
-):
-    camera = None
-    camera_id = payload.get("camera_id")
-    username = payload.get("username")
-    password = payload.get("password")
-    host = payload.get("host")
-    port = payload.get("port")
-    rtsp_host = payload.get("rtsp_host")
-    rtsp_port = payload.get("rtsp_port")
-
-    if camera_id is not None and str(camera_id).strip() != "":
-        try:
-            active_camera_id = int(camera_id)
-        except (TypeError, ValueError):
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "invalid_camera_id", "message": "Camera id is invalid."},
-            )
-
-        camera = (
-            db.query(Camera)
-            .filter(Camera.id == active_camera_id, Camera.deleted_at.is_(None))
-            .first()
-        )
-        if not camera:
-            raise HTTPException(
-                status_code=404,
-                detail={"code": "camera_not_active", "message": "Camera was not found or is no longer active."},
-            )
-        if not host:
-            host = camera.host
-        if not port:
-            port = camera.port
-        if not username:
-            username = camera.username
-        if not password:
-            password = decrypt_text(camera.password_encrypted)
-        if not rtsp_host:
-            rtsp_host = camera.rtsp_reachable_host
-        if not rtsp_port:
-            rtsp_port = camera.rtsp_reachable_port
-
-    return {
-        "camera_id": camera_id,
-        "camera": camera,
-        "host": host,
-        "port": port,
-        "rtsp_host": rtsp_host,
-        "rtsp_port": rtsp_port,
-        "username": username,
-        "password": password,
-    }
-
-
-def saved_stream_path(value: str | None) -> str | None:
-    if not value:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    if text.lower().startswith("rtsp://"):
-        return rtsp_path_from_uri(text)
-    return text if text.startswith("/") else f"/{text}"
-
-
-def profile_matches_stream(profile: dict, saved_value: str | None) -> bool:
-    saved_path = saved_stream_path(saved_value)
-    if not saved_path:
-        return False
-    profile_path = saved_stream_path(profile.get("stream_path") or profile.get("stream_uri"))
-    return bool(profile_path and profile_path == saved_path)
-
-
-def apply_profile_assignments(data: dict, camera: Camera | None) -> dict:
-    if not camera:
-        return data
-
-    main_token = str(camera.onvif_profile_token or "")
-    main_path = camera.rtsp_main_url
-    sub_path = camera.rtsp_sub_url
-    assignments = {
-        "main": {"profile_token": main_token or None, "stream_path": saved_stream_path(main_path)},
-        "sub": {"profile_token": None, "stream_path": saved_stream_path(sub_path)},
-        "default_live_stream": camera.default_live_stream,
-        "default_record_stream": camera.default_record_stream,
-    }
-
-    for profile in data.get("profiles") or []:
-        roles = []
-        token = str(profile.get("token") or "")
-        if (main_token and token == main_token) or profile_matches_stream(profile, main_path):
-            roles.append("main")
-            assignments["main"]["profile_token"] = token or assignments["main"]["profile_token"]
-        if profile_matches_stream(profile, sub_path):
-            roles.append("sub")
-            assignments["sub"]["profile_token"] = token or assignments["sub"]["profile_token"]
-        profile["assigned_roles"] = roles
-        profile["assigned_role"] = "_".join(roles) if roles else "unknown"
-
-    data["assignments"] = assignments
-    return data
-
-
-def get_active_camera_or_404(db: Session, camera_id: int) -> Camera:
-    camera = db.query(Camera).filter(Camera.id == int(camera_id), Camera.deleted_at.is_(None)).first()
-    if not camera:
-        raise HTTPException(status_code=404, detail={"code": "camera_not_active", "message": "Camera was not found or is no longer active."})
-    return camera
-
-
-def safe_camera_onvif_credentials(camera: Camera) -> dict:
-    if str(camera.protocol or "").lower() != "onvif":
-        return {
-            "ok": True,
-            "supported": False,
-            "source": "not_onvif",
-            "can_pan_tilt": False,
-            "can_zoom": False,
-            "can_stop": False,
-            "can_presets": False,
-            "limits": ptz_command_limits(),
-            "warnings": ["camera_protocol_is_not_onvif"],
-            "unsupported_reasons": ["not_onvif"],
-            "raw_secret_exposed": False,
-        }
-    password = decrypt_text(camera.password_encrypted)
-    if not camera.host or not camera.port or not camera.username or not password:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "camera_onvif_credentials_required",
-                "message": "ONVIF camera host, port, username and password are required for camera controls.",
-            },
-        )
-    return {
-        "host": camera.host,
-        "port": int(camera.port or 80),
-        "username": camera.username,
-        "password": password,
-    }
-
-
-def run_bounded_read_only_check(callable_obj, *, timeout_seconds: int = 8, **kwargs):
-    executor = ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(callable_obj, **kwargs)
-    try:
-        return future.result(timeout=timeout_seconds)
-    except FutureTimeout:
-        future.cancel()
-        raise TimeoutError("onvif_health_check_timeout")
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
-
-
-def build_test_url(payload: dict, db: Session | None = None) -> str | None:
-    protocol = str(payload.get("protocol") or "rtsp").lower()
-    rtsp_main_url = payload.get("rtsp_main_url")
-    rtsp_sub_url = payload.get("rtsp_sub_url")
-    if protocol == "rtsp":
-        host = payload.get("host")
-        port = payload.get("port") or 554
-    else:
-        host = payload.get("rtsp_host") or payload.get("host")
-        port = payload.get("rtsp_port") or 554
-    username = payload.get("username")
-    password = payload.get("password")
-
-    if db is not None:
-        creds = get_camera_credentials(db, payload)
-        if protocol == "rtsp":
-            host = creds["host"] or host
-            port = creds["port"] or port
-        else:
-            host = payload.get("rtsp_host") or creds["rtsp_host"] or host
-            port = payload.get("rtsp_port") or creds["rtsp_port"] or port
-        username = creds["username"] or username
-        password = creds["password"] or password
-        camera = creds.get("camera")
-        if camera is not None:
-            rtsp_main_url = rtsp_main_url if rtsp_main_url not in (None, "") else camera.rtsp_main_url
-            rtsp_sub_url = rtsp_sub_url if rtsp_sub_url not in (None, "") else camera.rtsp_sub_url
-
-    return (
-        assemble_rtsp_url(
-            host,
-            port,
-            username,
-            password,
-            rtsp_main_url,
-        )
-        or
-        assemble_rtsp_url(
-            host,
-            port,
-            username,
-            password,
-            rtsp_sub_url,
-        )
-    )
-
-
-@router.post("/onvif/profiles")
-def onvif_profiles(
-    payload: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("manage_cameras")),
-):
-    creds = get_camera_credentials(db, payload)
-
-    host = creds["host"]
-    port = creds["port"] or 80
-    username = creds["username"]
-    password = creds["password"]
-
-    if not host or not username or not password:
-        raise HTTPException(status_code=400, detail="Для ONVIF нужны host, username, password")
-
-    try:
-        data = fetch_onvif_profiles(
-            host=str(host),
-            port=int(port),
-            username=str(username),
-            password=str(password),
-            rtsp_host=str(creds["rtsp_host"] or host),
-            rtsp_port=int(creds["rtsp_port"] or 554),
-        )
-        data = apply_profile_assignments(data, creds.get("camera"))
-        return {
-            "ok": True,
-            **data,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=safe_onvif_error(e))
-
-
-@router.post("/onvif/discover")
-def onvif_discover(
-    payload: dict | None = None,
-    current_user: User = Depends(require_permission("manage_cameras")),
-):
-    timeout = parse_bounded_int((payload or {}).get("timeout_seconds"), field="timeout_seconds", default=5, minimum=1, maximum=10)
-    return discover_onvif_devices(timeout_seconds=timeout)
-
-
-@router.post("/onvif/probe")
-def onvif_probe(
-    payload: dict,
-    current_user: User = Depends(require_permission("manage_cameras")),
-):
-    host = str(payload.get("host") or "").strip()
-    port = parse_port(payload.get("port"), field="port", default=80)
-    rtsp_host = str(payload.get("rtsp_host") or host).strip()
-    rtsp_port = parse_port(payload.get("rtsp_port"), field="rtsp_port", default=554)
-    timeout = parse_bounded_int(payload.get("timeout_seconds"), field="timeout_seconds", default=5, minimum=1, maximum=10)
-    if not host:
-        raise HTTPException(status_code=400, detail={"code": "host_required", "message": "ONVIF host is required."})
-
-    request_payload = {
-        "protocol": "onvif",
-        "host": host,
-        "port": port,
-        "rtsp_host": rtsp_host,
-        "rtsp_port": rtsp_port,
-        "username": payload.get("username"),
-        "password": payload.get("password") or "",
-    }
-    try:
-        executor = ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(
-            probe_onvif_device,
-            host=host,
-            port=port,
-            username=payload.get("username") or "",
-            password=payload.get("password") or "",
-            rtsp_host=rtsp_host,
-            rtsp_port=rtsp_port,
-            timeout_seconds=timeout,
-        )
-        try:
-            result = future.result(timeout=timeout)
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-        result["onvif_probe_token"] = register_onvif_probe_proof(request_payload)
-        return result
-    except FutureTimeout:
-        raise HTTPException(status_code=400, detail={"code": "timeout", "message": "ONVIF service did not respond in time.", "raw_secret_exposed": False})
-    except Exception as exc:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": onvif_error_code(exc),
-                "message": safe_onvif_error(exc),
-                "raw_secret_exposed": False,
-            },
-        )
-
-
-@router.post("/onvif/profile_config")
-def onvif_profile_config(
-    payload: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("manage_cameras")),
-):
-    creds = get_camera_credentials(db, payload)
-    if not creds["host"] or not creds["username"] or not creds["password"] or not payload.get("profile_token"):
-        raise HTTPException(status_code=400, detail="ONVIF profile settings require host, credentials, and profile token.")
-
-    try:
-        return get_onvif_profile_config(
-            host=str(creds["host"]),
-            port=int(creds["port"] or 80),
-            username=str(creds["username"]),
-            password=str(creds["password"]),
-            profile_token=str(payload["profile_token"]),
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=safe_onvif_error(e))
-
-
-@router.post("/onvif/update_profile")
-def update_onvif_profile_route(
-    payload: dict,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("manage_cameras")),
-):
-    creds = get_camera_credentials(db, payload)
-    if not creds["host"] or not creds["username"] or not creds["password"] or not payload.get("profile_token"):
-        raise HTTPException(status_code=400, detail="ONVIF profile update requires host, credentials, and profile token.")
-
-    try:
-        return update_onvif_profile(
-            host=str(creds["host"]),
-            port=int(creds["port"] or 80),
-            username=str(creds["username"]),
-            password=str(creds["password"]),
-            profile_token=str(payload["profile_token"]),
-            config=payload["config"],
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=safe_onvif_error(e))
-
-
-@router.get("/{camera_id}/onvif/ptz/capabilities")
-def onvif_ptz_capabilities(
-    camera_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("manage_cameras")),
-):
-    camera = get_active_camera_or_404(db, camera_id)
-    creds = safe_camera_onvif_credentials(camera)
-    if creds.get("source") == "not_onvif":
-        return {
-            "camera_id": camera.id,
-            "camera_name": camera.name,
-            **creds,
-        }
-    try:
-        result = get_onvif_ptz_capabilities(**creds)
-        return {
-            "camera_id": camera.id,
-            "camera_name": camera.name,
-            **result,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        return {
-            "camera_id": camera.id,
-            "camera_name": camera.name,
-            "ok": True,
-            "supported": False,
-            "source": "unreachable",
-            "can_pan_tilt": False,
-            "can_zoom": False,
-            "can_stop": False,
-            "can_presets": False,
-            "limits": ptz_command_limits(),
-            "warnings": [onvif_error_code(e)],
-            "unsupported_reasons": ["onvif_ptz_capability_check_failed"],
-            "message": safe_onvif_error(e),
-            "raw_secret_exposed": False,
-        }
-
-
-@router.post("/{camera_id}/onvif/ptz/command")
-def onvif_ptz_command(
-    camera_id: int,
-    payload: dict,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("manage_cameras")),
-):
-    camera = get_active_camera_or_404(db, camera_id)
-    try:
-        command = validate_ptz_command_payload(payload)
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail={"code": str(e), "message": "PTZ command payload is invalid."},
-        )
-
-    if command["validation_only"]:
-        result = ptz_validation_response(command)
-    else:
-        creds = safe_camera_onvif_credentials(camera)
-        if creds.get("source") == "not_onvif":
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "camera_not_onvif", "message": "PTZ commands require an ONVIF camera."},
-            )
-        try:
-            result = execute_onvif_ptz_command(**creds, payload=payload)
-        except ValueError as e:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": str(e), "message": "PTZ command payload is invalid."},
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": onvif_error_code(e), "message": safe_onvif_error(e)},
-            )
-
-    create_event(
-        db=db,
-        actor=current_user,
-        category="cameras",
-        event_type="cameras.ptz_command",
-        message_ru=f"{current_user.username} проверил PTZ команду для камеры {camera.name}",
-        message_en=f"{current_user.username} validated PTZ command for camera {camera.name}",
-        target_type="camera",
-        target_id=camera.id,
-        target_name=camera.name,
-        ip_address=request_ip(request),
-        user_agent=request_user_agent(request),
-        metadata={
-            "action": result.get("action"),
-            "execution_mode": result.get("execution_mode"),
-            "executed": bool(result.get("executed")),
-            "physical_camera_mutated": bool(result.get("physical_camera_mutated")),
-            "duration_seconds": result.get("duration_seconds"),
-        },
-    )
-    return {
-        "camera_id": camera.id,
-        "camera_name": camera.name,
-        **result,
-    }
-
-
-@router.get("/{camera_id}/onvif/health")
-def onvif_health(
-    camera_id: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("manage_cameras")),
-):
-    camera = get_active_camera_or_404(db, camera_id)
-    return build_onvif_health_contract(camera, check_performed=False)
-
-
-@router.post("/{camera_id}/onvif/health/check")
-def onvif_health_check(
-    camera_id: int,
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_permission("manage_cameras")),
-):
-    camera = get_active_camera_or_404(db, camera_id)
-    checked_at = datetime.utcnow().isoformat() + "Z"
-    profiles_result = None
-    ptz_result = None
-    events_result = None
-    check_status = "not_checked"
-    reason_codes: list[str] = []
-
-    if str(camera.protocol or "").lower() != "onvif":
-        result = build_onvif_health_contract(camera, check_performed=True, checked_at=checked_at)
-        check_status = "unsupported"
-        reason_codes = ["not_onvif"]
-    else:
-        password = decrypt_text(camera.password_encrypted)
-        if not camera.host or not camera.port or not camera.username or not password:
-            result = build_onvif_health_contract(camera, password=None, check_performed=True, checked_at=checked_at)
-            check_status = "misconfigured"
-            reason_codes = ["onvif_credentials_required"]
-        else:
-            try:
-                profiles_result = run_bounded_read_only_check(
-                    fetch_onvif_profiles,
-                    host=str(camera.host),
-                    port=int(camera.port or 80),
-                    username=str(camera.username),
-                    password=str(password),
-                    rtsp_host=str(camera.rtsp_reachable_host or camera.host),
-                    rtsp_port=int(camera.rtsp_reachable_port or 554),
-                )
-                check_status = "reachable"
-            except Exception as exc:
-                reason_codes.append(onvif_error_code(exc))
-                profiles_result = None
-                check_status = "unreachable"
-
-            try:
-                ptz_result = run_bounded_read_only_check(
-                    get_onvif_ptz_capabilities,
-                    host=str(camera.host),
-                    port=int(camera.port or 80),
-                    username=str(camera.username),
-                    password=str(password),
-                )
-            except Exception as exc:
-                reason_codes.append(onvif_error_code(exc))
-                ptz_result = {
-                    "supported": False,
-                    "source": "unknown",
-                    "unsupported_reasons": ["ptz_check_failed"],
-                    "raw_secret_exposed": False,
-                }
-
-            try:
-                events_result = run_bounded_read_only_check(
-                    check_onvif_events_feasibility,
-                    host=str(camera.host),
-                    port=int(camera.port or 80),
-                    username=str(camera.username),
-                    password=str(password),
-                )
-            except Exception as exc:
-                reason_codes.append(onvif_error_code(exc))
-                events_result = {
-                    "events_supported": False,
-                    "events_status": "unknown",
-                    "reason_codes": ["events_feasibility_check_failed"],
-                    "limitations": ["feasibility_only_no_subscription_started"],
-                    "raw_secret_exposed": False,
-                }
-
-            result = build_onvif_health_contract(
-                camera,
-                password=password,
-                profiles_result=profiles_result,
-                ptz_result=ptz_result,
-                events_result=events_result,
-                check_performed=True,
-                checked_at=checked_at,
-            )
-            if reason_codes:
-                result["warnings"] = sorted(set(result.get("warnings", [])) | set(reason_codes))
-
-    create_event(
-        db=db,
-        actor=current_user,
-        category="cameras",
-        event_type="cameras.onvif_health_check",
-        message_ru=f"{current_user.username} выполнил ONVIF health check для камеры {camera.name}",
-        message_en=f"{current_user.username} ran ONVIF health check for camera {camera.name}",
-        target_type="camera",
-        target_id=camera.id,
-        target_name=camera.name,
-        ip_address=request_ip(request),
-        user_agent=request_user_agent(request),
-        metadata={
-            "check_type": "onvif_health",
-            "status": check_status,
-            "reason_codes": sorted(set(reason_codes)),
-            "domains_checked": sorted(result.get("compatibility_matrix", {}).keys()),
-            "redaction_status": "sanitized",
-            "raw_secret_exposed": False,
-        },
-    )
-    return result
 
 
 @router.get("", response_model=list[CameraResponse])
@@ -1067,17 +345,6 @@ def safe_rtsp_display_path(input_url: str | None) -> str:
         return path or "RTSP path указан"
     except Exception:
         return "RTSP path указан"
-
-
-def safe_preview_token(value: str | None) -> str | None:
-    if not value:
-        return None
-    token = str(value).strip()
-    if not token:
-        return None
-    if all(ch.isalnum() or ch in {"-", "_"} for ch in token):
-        return token
-    return None
 
 
 def ensure_static_preview_permissions(path: Path, *, include_file: bool = False) -> None:

@@ -1,9 +1,10 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import vm from "node:vm";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
@@ -11,20 +12,12 @@ const repoRoot = resolve(webRoot, "..", "..");
 const read = (relative) => fs.readFileSync(resolve(webRoot, relative), "utf8");
 const page = read("app/storage/page.js");
 const center = read("components/storage/ArchiveManagementCenter.js");
-const helpers = read("lib/storageOperations.js")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
 const css = read("app/styles/40-storage-records-shared.css");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 const routes = read("lib/routePermissions.js");
 const backendHistory = fs.readFileSync(resolve(repoRoot, "apps/api/app/services/storage_monitoring.py"), "utf8");
 
-const context = {};
-vm.runInNewContext(
-  `${helpers}
-this.archiveIntegrityFindingPresentation = archiveIntegrityFindingPresentation;`,
-  context
-);
+const context = storageOperations;
 
 const overview = page.slice(page.indexOf("<section className={`storageOpsOverview"), page.indexOf("{refreshWarning ?"));
 assert.equal((overview.match(/<TopMetric/g) || []).length, 3);

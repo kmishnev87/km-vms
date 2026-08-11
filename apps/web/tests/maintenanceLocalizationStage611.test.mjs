@@ -7,10 +7,11 @@ import {
   maintenanceStatusText,
   updateApplyErrorMessages,
 } from "../lib/settingsPageHelpers.js";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
-const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "utf8");
+const settingsPage = readSettingsMaintenanceSources();
 
 const dictionaries = {
   ru: {

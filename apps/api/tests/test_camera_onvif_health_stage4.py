@@ -8,6 +8,7 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.routers.cameras as cameras_module
+import app.routers.camera_onvif_routes as onvif_routes_module
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS
 from app.models.camera import Camera
 from app.routers.cameras import onvif_health, onvif_health_check
@@ -121,8 +122,8 @@ def test_health_deleted_camera_rejected_safely():
 
 
 def test_health_check_missing_credentials_returns_misconfigured(monkeypatch):
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: None)
-    monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: None)
+    monkeypatch.setattr(onvif_routes_module, "decrypt_text", lambda value: None)
+    monkeypatch.setattr(onvif_routes_module, "create_event", lambda **kwargs: None)
 
     result = onvif_health_check(41, request=request(), db=FakeDb(camera()), current_user=user())
 
@@ -134,11 +135,11 @@ def test_health_check_missing_credentials_returns_misconfigured(monkeypatch):
 
 
 def test_unreachable_onvif_maps_to_safe_reason_code(monkeypatch):
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "camera-pass")
-    monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: None)
-    monkeypatch.setattr(cameras_module, "fetch_onvif_profiles", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("timeout camera-pass raw SOAP")))
-    monkeypatch.setattr(cameras_module, "get_onvif_ptz_capabilities", lambda **kwargs: {"supported": False, "unsupported_reasons": ["ptz_check_failed"], "raw_secret_exposed": False})
-    monkeypatch.setattr(cameras_module, "check_onvif_events_feasibility", lambda **kwargs: {"events_supported": False, "events_status": "unknown", "reason_codes": ["events_feasibility_check_failed"], "limitations": [], "raw_secret_exposed": False})
+    monkeypatch.setattr(onvif_routes_module, "decrypt_text", lambda value: "camera-pass")
+    monkeypatch.setattr(onvif_routes_module, "create_event", lambda **kwargs: None)
+    monkeypatch.setattr(onvif_routes_module, "fetch_onvif_profiles", lambda **kwargs: (_ for _ in ()).throw(RuntimeError("timeout camera-pass raw SOAP")))
+    monkeypatch.setattr(onvif_routes_module, "get_onvif_ptz_capabilities", lambda **kwargs: {"supported": False, "unsupported_reasons": ["ptz_check_failed"], "raw_secret_exposed": False})
+    monkeypatch.setattr(onvif_routes_module, "check_onvif_events_feasibility", lambda **kwargs: {"events_supported": False, "events_status": "unknown", "reason_codes": ["events_feasibility_check_failed"], "limitations": [], "raw_secret_exposed": False})
 
     result = onvif_health_check(41, request=request(), db=FakeDb(camera()), current_user=user())
 
@@ -150,10 +151,10 @@ def test_unreachable_onvif_maps_to_safe_reason_code(monkeypatch):
 
 
 def test_fake_onvif_profiles_ptz_events_return_normalized_matrix(monkeypatch):
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "camera-pass")
-    monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: None)
+    monkeypatch.setattr(onvif_routes_module, "decrypt_text", lambda value: "camera-pass")
+    monkeypatch.setattr(onvif_routes_module, "create_event", lambda **kwargs: None)
     monkeypatch.setattr(
-        cameras_module,
+        onvif_routes_module,
         "fetch_onvif_profiles",
         lambda **kwargs: {
             "profiles": [
@@ -163,7 +164,7 @@ def test_fake_onvif_profiles_ptz_events_return_normalized_matrix(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        cameras_module,
+        onvif_routes_module,
         "get_onvif_ptz_capabilities",
         lambda **kwargs: {
             "supported": True,
@@ -175,7 +176,7 @@ def test_fake_onvif_profiles_ptz_events_return_normalized_matrix(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        cameras_module,
+        onvif_routes_module,
         "check_onvif_events_feasibility",
         lambda **kwargs: {
             "events_supported": True,

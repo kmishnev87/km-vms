@@ -15,9 +15,10 @@ import {
   updateApplyReconnectTiming,
   updateApplyTransportPhase,
 } from "../lib/settingsPageHelpers.js";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const pageSource = fs.readFileSync(resolve(__dirname, "../app/settings/page.js"), "utf8");
+const pageSource = readSettingsMaintenanceSources();
 const cssSource = fs.readFileSync(resolve(__dirname, "../app/styles/20-settings-maintenance.css"), "utf8");
 assert.equal(UPDATE_APPLY_PENDING_STORAGE_KEY, "km_vms_update_apply_pending_v1");
 
@@ -324,7 +325,8 @@ assert.equal(pageSource.includes("submission_proof"), false);
 assert.equal(pageSource.includes("/system/update/apply/reconciliation/"), false);
 assert.equal((pageSource.match(/apiFetch\("\/system\/update\/apply"/g) || []).length, 1);
 assert.equal(pageSource.includes("settingsUpdateApplySupport"), false);
-assert.equal(pageSource.includes('inert={updateApplyDialog ? true : undefined}'), true);
+assert.match(pageSource, /maintenanceChildDialogOpen = Boolean\([\s\S]{0,180}updateApplyDialog[\s\S]{0,180}\)/);
+assert.equal(pageSource.includes('inert={maintenanceChildDialogOpen ? true : undefined}'), true);
 assert.match(pageSource, /import \{[^}]*OperationDialog[^}]*OperationToast[^}]*\} from "\.\.\/\.\.\/components\/OperationFeedback"/);
 assert.equal(pageSource.includes("<OperationDialog"), true);
 assert.equal(pageSource.includes("updateApplyDialogElementRef"), false);

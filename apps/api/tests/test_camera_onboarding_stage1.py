@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import app.routers.cameras as cameras_module
+import app.routers.camera_onvif_routes as onvif_routes_module
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS
 from app.models.camera import Camera
 from app.routers.cameras import (
@@ -106,7 +107,7 @@ def test_discovery_endpoint_returns_stable_sanitized_shape(monkeypatch):
             "timeout_seconds": timeout_seconds,
         }
 
-    monkeypatch.setattr(cameras_module, "discover_onvif_devices", fake_discover)
+    monkeypatch.setattr(onvif_routes_module, "discover_onvif_devices", fake_discover)
     result = onvif_discover({"timeout_seconds": 3}, current_user=user())
 
     assert result["ok"] is True
@@ -117,7 +118,7 @@ def test_discovery_endpoint_returns_stable_sanitized_shape(monkeypatch):
 
 def test_discovery_endpoint_handles_unsupported_runtime(monkeypatch):
     monkeypatch.setattr(
-        cameras_module,
+        onvif_routes_module,
         "discover_onvif_devices",
         lambda timeout_seconds=5: {
             "ok": True,
@@ -149,7 +150,7 @@ def test_probe_success_returns_safe_summary_and_registers_proof(monkeypatch):
             "profiles": [{"token": "main", "rtsp_ready": True}],
         }
 
-    monkeypatch.setattr(cameras_module, "probe_onvif_device", fake_probe)
+    monkeypatch.setattr(onvif_routes_module, "probe_onvif_device", fake_probe)
     payload = {
         "host": "onvif.example.test",
         "port": 20003,

@@ -18,6 +18,7 @@ from app.services.schema_migrations import (
     PRODUCTION_MIGRATIONS,
     STAGE4101_STORAGE_FOUNDATION_MIGRATION,
     STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,
+    STAGE660128_UNIVERSAL_SCHEMA_MIGRATION,
     migration_definition_fingerprint,
 )
 from app.services import schema_update_control as control
@@ -29,6 +30,15 @@ TRANSITION_ID = "migration-attempt-" + ("3" * 32)
 TARGET_COMMIT = "4" * 40
 REGISTRY = "5" * 64
 PLAN = "6" * 64
+
+
+def test_published_universal_schema_v8_fingerprint_is_immutable() -> None:
+    migration = STAGE660128_UNIVERSAL_SCHEMA_MIGRATION
+    assert migration.migration_id == "stage660128_universal_skipped_release_schema_v8"
+    # Do not update this value for a refactor; a changed definition needs a new migration id.
+    assert migration_definition_fingerprint(migration) == (
+        "997c36101dc217a0355e0308cf146b947feca0c882b7b07a3b912b4db982004a"
+    )
 
 
 def test_current_schema_v8_accepts_only_verified_exact_shapes(

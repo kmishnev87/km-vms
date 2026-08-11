@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
@@ -111,7 +112,7 @@ for (const [icon, requiredGeometry] of [
 }
 
 const storagePage = readText("app/storage/page.js");
-const settingsPage = readText("app/settings/page.js");
+const settingsPage = readSettingsMaintenanceSources();
 const center = readText("components/storage/ArchiveManagementCenter.js");
 const storageCss = readText("app/styles/40-storage-records-shared.css");
 const settingsCss = readText("app/styles/20-settings-maintenance.css");
@@ -137,7 +138,8 @@ const settingsCards = settingsPage.slice(settingsCardsStart, settingsCardsEnd);
 assert.equal((settingsCards.match(/\/assets\/icons\/ui\/open\.png/g) || []).length, 3);
 assert.equal((settingsCards.match(/appIllustratedAction/g) || []).length, 3);
 assert.match(settingsCards, /onClick=\{\(\) => setSecurityModalOpen\(true\)\}/);
-assert.match(settingsCards, /ref=\{maintenanceTriggerRef\}/);
+assert.match(settingsCards, /ref=\{maintenanceController\.maintenanceTriggerRef\}/);
+assert.match(settingsCards, /onClick=\{maintenanceController\.openMaintenanceModal\}/);
 assert.match(settingsCards, /onClick=\{openUsersModal\}/);
 assert.doesNotMatch(settingsCards, />\s*\{t\.open\}\s*</);
 assert.match(settingsCss, /\.settingsRowControlMeta\s*\{[\s\S]*justify-items:\s*center;/);
@@ -156,7 +158,7 @@ const supportEnd = settingsPage.indexOf("</div>", supportStart);
 const supportActions = settingsPage.slice(supportStart, supportEnd);
 assert.equal((supportActions.match(/settingsMaintenanceSupportActionButton/g) || []).length, 1);
 assert.match(supportActions, /download-report\.svg/);
-assert.match(supportActions, /setDiagnosticChoiceOpen\(true\)/);
+assert.match(supportActions, /onOpenDiagnosticChoice/);
 assert.match(settingsCss, /\.settingsMaintenanceSupportActions\s*\{[\s\S]*grid-template-columns:\s*40px;[\s\S]*width:\s*40px;[\s\S]*min-width:\s*40px;/);
 assert.match(settingsCss, /\.settingsMaintenanceSupportActions \.settingsMaintenanceSupportActionButton\s*\{[\s\S]*width:\s*40px;[\s\S]*height:\s*40px;/);
 

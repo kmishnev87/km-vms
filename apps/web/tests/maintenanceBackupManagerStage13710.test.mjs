@@ -17,10 +17,11 @@ import {
   restoreBackupOperationPending,
   sanitizeBackupOperationPending,
 } from "../lib/settingsPageHelpers.js";
+import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanceSources.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
-const settingsPage = fs.readFileSync(resolve(webRoot, "app/settings/page.js"), "utf8");
+const settingsPage = readSettingsMaintenanceSources();
 const settingsCss = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
 
 assert.equal(settingsPage.includes("settingsMaintenanceBackupManager"), true);

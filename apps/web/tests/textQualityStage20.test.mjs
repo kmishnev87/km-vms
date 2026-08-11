@@ -60,12 +60,12 @@ const mojibakeFragments = [
 
 const requiredRuText = [
   {
-    file: "apps/web/lib/i18n.js",
+    file: "apps/web/lib/i18n/ru.js",
     text: 'eyebrow: "СОСТОЯНИЕ СИСТЕМЫ"',
     reason: "RU System Status eyebrow must not render as System Health.",
   },
   {
-    file: "apps/web/lib/i18n.js",
+    file: "apps/web/lib/i18n/ru.js",
     text: 'retention: "Хранение записей"',
     reason: "RU Storage retention heading must be Russian on the Storage page.",
   },
@@ -83,16 +83,16 @@ const requiredRuText = [
 
 const ruVisibleOffenders = [
   {
-    file: "apps/web/lib/i18n.js",
-    segmentStart: "  ru: {",
-    segmentEnd: "  en: {",
+    file: "apps/web/lib/i18n/ru.js",
+    segmentStart: "export const ruDictionary = {",
+    segmentEnd: "ruDictionary.setup = {",
     pattern: /eyebrow:\s*"System Health"/,
     reason: "System Status RU eyebrow was the known visible offender.",
   },
   {
-    file: "apps/web/lib/i18n.js",
-    segmentStart: "    storagePage: {",
-    segmentEnd: "  en: {",
+    file: "apps/web/lib/i18n/ru.js",
+    segmentStart: "  storagePage: {",
+    segmentEnd: "ruDictionary.setup = {",
     pattern: /retentionWorkflow:\s*"Retention workflow"|retention-кандидатов|owned записи|metadata-проверки|opt-in|metadata\/status|legacy archive file|Stage 2|orphan\/foreign\/unknown\/pre-metadata/,
     reason: "Storage RU retention copy must not expose known hybrid English remnants.",
   },

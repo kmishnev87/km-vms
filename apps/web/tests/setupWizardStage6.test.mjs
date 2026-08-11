@@ -1,3 +1,4 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -7,7 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (file) => fs.readFileSync(resolve(__dirname, "..", file), "utf8");
 
 const setupPage = read("app/setup/page.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 
 assert.equal((setupPage.match(/<LanguageSelect/g) || []).length, 1, "setup wizard renders exactly one language selector");
 assert.match(setupPage, /manualPathSupported/, "setup wizard supports manual root fallback");

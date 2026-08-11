@@ -1,3 +1,4 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -12,7 +13,7 @@ const routePermissions = read("lib/routePermissions.js");
 const component = read("components/AuditDiagnosticsEntries.js");
 const securityPage = read("app/security-journal/page.js");
 const diagnosticsPage = read("app/diagnostics/page.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 const systemStatusPage = read("app/system-status/page.js");
 const problemBanners = read("components/OperatorProblemBanners.js");
 const dashboard = read("app/page.js");

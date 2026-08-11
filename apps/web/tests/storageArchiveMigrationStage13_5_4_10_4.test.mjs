@@ -1,21 +1,14 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import vm from "node:vm";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
+import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (relative) => fs.readFileSync(resolve(__dirname, "..", relative), "utf8");
-const helpers = read("lib/storageOperations.js")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
-const context = {};
-vm.runInNewContext(
-  `${helpers}
-this.migrationScenarioModel = migrationScenarioModel;
-this.humanBlockerReason = humanBlockerReason;`,
-  context
-);
+const context = storageOperations;
 
 const allowed = { allowed: true, reason: "" };
 const denied = { allowed: false, reason: "human permission reason" };
@@ -196,7 +189,7 @@ const page = read("app/storage/page.js");
 const layout = read("components/Layout.js");
 const css = read("app/styles/40-storage-records-shared.css");
 const responsive = read("app/styles/60-responsive-shared.css");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 const migrationDialogSource = page.slice(page.indexOf("function ArchiveMigrationDialog"), page.indexOf("export default function StorageOperationsPage"));
 const etaFormatterSource = page.slice(
   page.indexOf("function migrationEtaText"),

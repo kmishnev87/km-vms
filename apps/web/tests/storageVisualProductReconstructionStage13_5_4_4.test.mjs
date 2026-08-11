@@ -1,27 +1,18 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const read = (file) => fs.readFileSync(resolve(__dirname, "..", file), "utf8");
 const storagePage = read("app/storage/page.js");
 const storageCss = read("app/styles/40-storage-records-shared.css");
 const responsiveCss = read("app/styles/60-responsive-shared.css");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 const settingsPage = read("app/settings/page.js");
-const storageSource = read("lib/storageOperations.js")
-  .replaceAll("export const ", "const ")
-  .replaceAll("export function ", "function ");
-
-const context = {};
-vm.runInNewContext(
-  `${storageSource}
-this.storageTopHealthModel = storageTopHealthModel;
-this.primaryStorageActionText = primaryStorageActionText;`,
-  context
-);
+const context = storageOperations;
 
 for (const pathHealth of [
   { readable: true, writable: true, available: undefined },
@@ -53,10 +44,10 @@ assert.doesNotMatch(primary, /archiveRootSummary/);
 const operationsStart = storagePage.indexOf("const archiveManagementGroups");
 const operationsEnd = storagePage.indexOf("const historyDialog", operationsStart);
 const operations = storagePage.slice(operationsStart, operationsEnd);
-assert.match(operations, /copy\.retentionRules/);
-assert.match(operations, /copy\.autoFreeSpace/);
-assert.match(operations, /copy\.integrityCheck/);
-assert.match(operations, /copy\.archiveMigration/);
+assert.match(operations, /copy\.archiveManagementRetentionTitle/);
+assert.match(operations, /copy\.archiveManagementAutoFreeTitle/);
+assert.match(operations, /copy\.archiveManagementIntegrityTitle/);
+assert.match(operations, /copy\.archiveManagementMigrationTitle/);
 assert.match(operations, /<ArchivePolicySwitch/);
 assert.match(operations, /onChange=\{requestAutoFreeSpace\}/);
 assert.doesNotMatch(operations, /<summary>\{copy\.technicalDetails\}<\/summary>/);

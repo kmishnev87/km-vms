@@ -1,3 +1,4 @@
+import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -50,7 +51,7 @@ for (const invalid of [
 }
 
 const storagePage = read("app/storage/page.js");
-const i18n = read("lib/i18n.js");
+const i18n = readI18nSource();
 assert.match(storagePage, /archiveRootCleanupCapabilityModel\(detail\)/);
 assert.match(storagePage, /id: `root-delete-running-\$\{root\.id\}`/);
 assert.match(storagePage, /busy: true,[\s\S]*?dismissible: false/);
