@@ -1939,6 +1939,120 @@ STAGE660128_UNIVERSAL_SCHEMA_MIGRATION = MigrationDefinition(
 )
 
 
+STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION_ID = (
+    "stage13721_camera_sub_profile_token_schema_v9"
+)
+
+
+def _stage13721_camera_sub_profile_preflight(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if (
+        state is None
+        or state.schema_version != 8
+        or state.baseline_id != CURRENT_BASELINE_ID
+        or state.status not in SAFE_STATUSES
+    ):
+        raise RuntimeError("stage13721_source_schema_state_invalid")
+    _stage660128_target_schema_shape_verify(db)
+    inspector = inspect(db.connection())
+    columns = {
+        str(column.get("name") or ""): column
+        for column in inspector.get_columns("cameras")
+    }
+    existing = columns.get("onvif_sub_profile_token")
+    if existing is not None and existing.get("nullable") is not True:
+        raise RuntimeError("stage13721_sub_profile_token_not_nullable")
+    return {
+        "status": "ready",
+        "column_present": existing is not None,
+        "camera_row_count": int(db.execute(text("SELECT COUNT(*) FROM cameras")).scalar_one() or 0),
+    }
+
+
+def _stage13721_camera_sub_profile_apply(db: Session) -> dict[str, Any]:
+    inspector = inspect(db.connection())
+    columns = {str(column.get("name") or "") for column in inspector.get_columns("cameras")}
+    if "onvif_sub_profile_token" not in columns:
+        db.execute(
+            text(
+                "ALTER TABLE cameras ADD COLUMN "
+                "onvif_sub_profile_token VARCHAR(255) NULL"
+            )
+        )
+        added = True
+    else:
+        added = False
+    return {"status": "applied", "column_added": added}
+
+
+def _stage13721_v9_target_schema_shape_verify(db: Session) -> dict[str, Any]:
+    historical_shape = _stage660128_target_schema_shape_verify(db)
+    inspector = inspect(db.connection())
+    column = next(
+        (
+            item
+            for item in inspector.get_columns("cameras")
+            if str(item.get("name") or "") == "onvif_sub_profile_token"
+        ),
+        None,
+    )
+    if column is None:
+        raise RuntimeError("stage13721_sub_profile_token_missing")
+    if column.get("nullable") is not True:
+        raise RuntimeError("stage13721_sub_profile_token_not_nullable")
+    column_type = str(column.get("type") or "").upper()
+    if "VARCHAR" not in column_type or "255" not in column_type:
+        raise RuntimeError("stage13721_sub_profile_token_type_mismatch")
+    return {
+        **historical_shape,
+        "status": "verified",
+        "schema_version": 9,
+        "onvif_sub_profile_token": "nullable_varchar_255",
+    }
+
+
+def _stage13721_camera_sub_profile_verify(db: Session) -> dict[str, Any]:
+    return _stage13721_v9_target_schema_shape_verify(db)
+
+
+def validate_current_target_schema(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if (
+        state is None
+        or state.schema_version != CURRENT_SCHEMA_VERSION
+        or state.baseline_id != CURRENT_BASELINE_ID
+        or state.status not in SAFE_STATUSES
+    ):
+        raise RuntimeError("current_target_schema_state_invalid")
+    return _stage13721_v9_target_schema_shape_verify(db)
+
+
+STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION = MigrationDefinition(
+    migration_id=STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION_ID,
+    from_version=8,
+    to_version=9,
+    description="Add nullable ONVIF Sub profile identity to cameras.",
+    risk=RISK_ADDITIVE_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage13721_camera_sub_profile_preflight,
+    apply=_stage13721_camera_sub_profile_apply,
+    verify=_stage13721_camera_sub_profile_verify,
+    safe_failure_summary="Camera Sub profile identity migration failed safely.",
+    rollback_note=(
+        "The nullable additive column is compatible with the previous runtime; "
+        "automatic schema downgrade is not required."
+    ),
+    definition_material={
+        "source_schema_version": 8,
+        "target_schema_version": 9,
+        "table": "cameras",
+        "column": "onvif_sub_profile_token",
+        "ddl": "VARCHAR(255) NULL",
+        "existing_rows_preserved": True,
+    },
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
@@ -1948,6 +2062,7 @@ PRODUCTION_MIGRATIONS = MigrationRegistry(
         STAGE4104_ARCHIVE_MIGRATION,
         STAGE660128_V6_TO_V7_FINALIZATION,
         STAGE660128_UNIVERSAL_SCHEMA_MIGRATION,
+        STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION,
     ),
     published_variants=(
         STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,

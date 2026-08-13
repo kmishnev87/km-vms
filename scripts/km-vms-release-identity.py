@@ -12,6 +12,7 @@ from typing import Any
 
 LOCALES = {"en", "ru", "zh-CN"}
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+INITIAL_SLOT_RE = re.compile(r"^initial-[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9._-]+)?$")
 TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -183,6 +184,20 @@ def build_identity(args: argparse.Namespace) -> dict[str, Any]:
         "metadata_status": metadata_status,
         "metadata_source": metadata_source,
     }
+    identity_mode = str(args.identity_mode or "").strip()
+    slot_kind = str(args.slot_kind or "").strip()
+    slot_id = str(args.slot_id or "").strip().lower()
+    if identity_mode or slot_kind or slot_id:
+        if (
+            identity_mode != "inventory_bound"
+            or slot_kind != "initial_install_snapshot"
+            or not INITIAL_SLOT_RE.fullmatch(slot_id)
+            or commit
+        ):
+            fail("inventory-bound initial identity is invalid")
+        identity["identity_mode"] = identity_mode
+        identity["slot_kind"] = slot_kind
+        identity["slot_id"] = slot_id
     for field, max_length in (("title", 160), ("summary", 800)):
         if field not in descriptor:
             continue
@@ -227,6 +242,9 @@ def main() -> None:
     parser.add_argument("--installed-by", required=True)
     parser.add_argument("--metadata-status", required=True)
     parser.add_argument("--metadata-source", required=True)
+    parser.add_argument("--identity-mode", default="")
+    parser.add_argument("--slot-kind", default="")
+    parser.add_argument("--slot-id", default="")
     args = parser.parse_args()
     print(
         json.dumps(

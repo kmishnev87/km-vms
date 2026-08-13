@@ -44,6 +44,7 @@ def existing_shape(*, missing_setup=False, recorder_runtime=True, nullable_camer
                 "rtsp_host": {"nullable": True},
                 "rtsp_port": {"nullable": True},
                 "deleted_at": {"nullable": True},
+                "onvif_sub_profile_token": {"nullable": True},
             }
         },
         "system_settings": {"columns": {"id": {"nullable": False}}},

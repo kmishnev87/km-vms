@@ -4,7 +4,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-postgres
-    restart: unless-stopped
+    restart: always
     environment:
       POSTGRES_DB: vms
       POSTGRES_USER: vms
@@ -23,7 +23,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-redis
-    restart: unless-stopped
+    restart: always
     command: ["redis-server", "--appendonly", "yes"]
     environment:
       TZ: ${TZ:-Asia/Yekaterinburg}
@@ -56,9 +56,11 @@ services:
       - sh
       - -c
       - >-
-        script="$${KM_VMS_BOOTSTRAP_APP_DIR}/data/update-runtime/active/scripts/km-vms-update-helper-bridge.py";
-        [ -f "$$script" ] || script="$${KM_VMS_BOOTSTRAP_APP_DIR}/scripts/km-vms-update-helper-bridge.py";
-        exec python3 -B "$$script" bootstrap
+        exec python3 -B
+        "$${KM_VMS_BOOTSTRAP_APP_DIR}/data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+        run-role update-helper-bootstrap
+        --app-dir "$${KM_VMS_BOOTSTRAP_APP_DIR}"
+        --project-name "$${KM_VMS_BOOTSTRAP_PROJECT_NAME}"
     volumes:
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}:${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}
       - /var/run/docker.sock:/var/run/docker.sock
@@ -70,7 +72,7 @@ services:
       context: ./apps/update-control-plane
       dockerfile: Dockerfile
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-update-status-reader
-    restart: unless-stopped
+    restart: always
     depends_on:
       update-retry-admission:
         condition: service_healthy
@@ -106,7 +108,7 @@ services:
       context: ./apps/update-control-plane
       dockerfile: Dockerfile
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-update-retry-admission
-    restart: unless-stopped
+    restart: always
     environment:
       TZ: ${TZ:-Asia/Yekaterinburg}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
@@ -188,7 +190,7 @@ services:
       context: ./apps/api
       dockerfile: Dockerfile
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-api
-    restart: unless-stopped
+    restart: always
     depends_on:
       postgres:
         condition: service_healthy
@@ -216,6 +218,7 @@ services:
       KMVMS_UPDATE_MANIFEST_PATH: ${KMVMS_UPDATE_MANIFEST_PATH:-}
       KMVMS_UPDATE_CHANNEL_ID: ${KMVMS_UPDATE_CHANNEL_ID:-stable}
       KMVMS_UPDATE_HELPER_ENABLED: "true"
+      KMVMS_INSTALLED_SLOT_PROJECTION_FILE: /installed-slot/installed-slot.json
       KMVMS_UPDATE_SOURCE_PRIVATE: ${KMVMS_UPDATE_SOURCE_PRIVATE:-false}
       KMVMS_UPDATE_TOKEN_CONFIGURED: ${KMVMS_UPDATE_TOKEN_CONFIGURED:-false}
       KMVMS_DB_BACKUP_ROOT: ${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}
@@ -245,6 +248,7 @@ services:
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/restore-control:/restore-control
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/restore-public:/restore-public
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/maintenance-control:/maintenance-control
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-runtime/installed-projection:/installed-slot:ro
       - ./release:/app/release:ro
       - ./.km-vms-release.json:/app/.km-vms-release.json:ro
       - ./.km-vms-source.json:/app/.km-vms-source.json:ro
@@ -309,7 +313,7 @@ services:
   setup-helper:
     image: docker:27-cli
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-setup-helper
-    restart: unless-stopped
+    restart: always
     depends_on:
       api:
         condition: service_started
@@ -321,11 +325,9 @@ services:
       - sh
       - -c
       - |
-        helper="$${KM_VMS_SETUP_APP_DIR}/data/update-runtime/active/scripts/km-vms-setup-activation-helper.sh"
-        if [ ! -f "$$helper" ]; then
-          helper="$${KM_VMS_SETUP_APP_DIR}/scripts/km-vms-setup-activation-helper.sh"
-        fi
-        exec sh "$$helper"
+        exec sh
+        "$${KM_VMS_SETUP_APP_DIR}/data/update-runtime/bootstrap/current/km-vms-bootstrap-dispatch.sh"
+        setup-helper "$${KM_VMS_SETUP_APP_DIR}"
     volumes:
       - ${KM_VMS_HOST_APP_DIR:-.}:${KM_VMS_HOST_APP_DIR:-/host-app}
       - /var/run/docker.sock:/var/run/docker.sock
@@ -338,7 +340,7 @@ services:
       context: ./apps/update-helper
       dockerfile: Dockerfile
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-update-helper
-    restart: unless-stopped
+    restart: always
     working_dir: /host-app
     environment:
       TZ: ${TZ:-Asia/Yekaterinburg}
@@ -355,9 +357,11 @@ services:
       - sh
       - -c
       - >-
-        script=/host-app/data/update-runtime/active/scripts/km-vms-update-helper.py;
-        [ -f "$$script" ] || script=/host-app/scripts/km-vms-update-helper.py;
-        exec python3 -B "$$script"
+        exec python3 -B
+        /host-app/data/update-runtime/bootstrap/current/km-vms-bootstrap.py
+        run-role update-helper
+        --app-dir /host-app
+        --project-name "$${KM_VMS_PROJECT_NAME}"
     volumes:
       - ${KM_VMS_HOST_APP_DIR:-.}:/host-app
       - ${KM_VMS_HOST_APP_DIR:-.}:${KM_VMS_HOST_APP_DIR:-/host-app}
@@ -371,7 +375,7 @@ services:
       context: ./apps/recorder
       dockerfile: Dockerfile
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-recorder
-    restart: unless-stopped
+    restart: always
     depends_on:
       api:
         condition: service_healthy
@@ -397,7 +401,7 @@ services:
       context: ./apps/web
       dockerfile: Dockerfile
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-web
-    restart: unless-stopped
+    restart: always
     depends_on:
       update-status-reader:
         condition: service_healthy
@@ -410,7 +414,7 @@ services:
   nginx:
     image: nginx:1.27-alpine
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-nginx
-    restart: unless-stopped
+    restart: always
     depends_on:
       web:
         condition: service_started

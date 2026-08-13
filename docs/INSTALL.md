@@ -75,6 +75,8 @@ The installer also records non-secret provenance files:
 - `.km-vms-source.json`: GitHub repo/ref and commit SHA when available, or source-dir / git-clone provenance without secrets;
 - `.km-vms-release.json`: installed public release identity, version, title, summary, source repo/ref and commit SHA without secrets.
 
+Before the first persistent Compose start, the installer materializes the acquired candidate as an immutable inventory-bound `initial-*` release slot, publishes the verified `active` pointer, and installs the minimal stable bootstrap bundle. A local or explicit `--source-dir` install is not presented as an official GitHub commit: its identity is bound to the final source inventory and slot manifest instead. The derived installed-slot projection is stored outside immutable source and contains no secrets.
+
 ## Storage Discovery And Selection
 
 Stage 2 adds host-side storage discovery for setup mode. The installer runs:
@@ -92,7 +94,7 @@ After choosing storage in setup mode, KM VMS now queues activation automatically
 `km-vms-storage-apply.sh` still updates only `SURVEILLANCE_ROOT` in `.env`, writes a non-secret `data/install-control/storage-apply-status.json` status, validates compose config, and reports `applied_restart_required` until the restart helper verifies the active mount. It does not print `.env`, regenerate secrets, create users/settings, delete DB/volumes/archive data, run `docker compose down -v`, or run `docker system prune`.
 
 Restart diagnostics:
-- validate config first: `KM_VMS_DOCKER_COMPOSE="docker compose" sh scripts/km-vms-restart.sh --app-dir "$HOME/km-vms" --project-name km-vms`;
+- validate config first: `KM_VMS_DOCKER_COMPOSE="docker compose" sh "$HOME/km-vms/data/update-runtime/bootstrap/current/km-vms-restart.sh" --app-dir "$HOME/km-vms" --project-name km-vms`;
 - missing `.env`, missing storage selection, Docker unreachable, bad compose override, invalid project name, unwritable selected storage and failed compose config are reported as explicit errors;
 - previous Git HEAD may be recorded in service artifacts as diagnostic context only;
 - full backup/restore/rollback belongs to the future Database / Backup / Upgrade Safety PRO chapter. For now, do not use `down -v`, do not prune Docker, and do not delete production DB, volumes, archive roots or recordings.
@@ -123,39 +125,44 @@ The installer does not create or ship a default admin password. If an older depl
 Use the safe restart helper:
 
 ```sh
-sh scripts/km-vms-restart.sh --app-dir "$HOME/km-vms"
+sh "$HOME/km-vms/data/update-runtime/bootstrap/current/km-vms-restart.sh" --app-dir "$HOME/km-vms"
 ```
 
-The helper validates compose files, reuses existing `.env`, does not regenerate secrets, does not wipe database/storage, and does not create owner/settings.
+The helper validates compose files, reuses existing `.env`, does not regenerate secrets, does not wipe database/storage, and does not create owner/settings. Normal restart resolves the verified active slot through the stable bootstrap dispatcher; it does not fall back to executing a full product tree from the stable app root. Persistent services use `restart: always`; one-shot bootstrap/schema/restore jobs use `restart: no`. During a proven nonterminal schema migration or current-database restore, only the API and recorder writers are temporarily fenced with `restart: no` until the existing recovery owner publishes a safe terminal state.
 
 ## Terminal Update
 
 Installed KM VMS instances can be updated in place from a GitHub tarball without requiring `git` on the NAS/server:
 
 ```sh
-cd "$HOME/km-vms"
-sh scripts/update.sh --branch v0.7.2 --yes
+sh "$HOME/km-vms/data/update-runtime/bootstrap/current/km-vms-update-launcher.sh" \
+  --app-dir "$HOME/km-vms" --branch vX.Y.Z --yes
 ```
 
 Run a non-mutating plan first:
 
 ```sh
-cd "$HOME/km-vms"
-sh scripts/update.sh --branch v0.7.2 --dry-run
+sh "$HOME/km-vms/data/update-runtime/bootstrap/current/km-vms-update-launcher.sh" \
+  --app-dir "$HOME/km-vms" --branch vX.Y.Z --dry-run
 ```
 
-The public default repository is `kmishnev87/km-vms`, so the normal install/update path does not require a GitHub token. Normal product releases use immutable semantic tags such as `v0.7.2`; moving `main` is a development/bootstrap source, not the authoritative update channel for regular users. Pass `--github-repo OWNER/REPO` only for forks, mirrors or private deployments.
+The stable launcher validates the current bootstrap bundle, resolves the exact active immutable release without repairing or resuming an earlier activation, and delegates to that release's `update.sh`. It fails closed when active/journal evidence is unresolved; the full stable-root source is not an update authority.
+
+The public default repository is `kmishnev87/km-vms`, so the normal install/update path does not require a GitHub token. Normal product releases use immutable semantic tags such as `vX.Y.Z`; moving `main` is a development/bootstrap source, not the authoritative update channel for regular users. Pass `--github-repo OWNER/REPO` only for forks, mirrors or private deployments.
 
 For a private GitHub repository, use one of the secure token paths:
 
 ```sh
 KM_VMS_GITHUB_TOKEN_FILE=/path/to/read-only-token \
-  sh scripts/update.sh --github-repo OWNER/REPO --branch main --github-private --yes
+  sh "$HOME/km-vms/data/update-runtime/bootstrap/current/km-vms-update-launcher.sh" \
+    --app-dir "$HOME/km-vms" --github-repo OWNER/REPO --branch main --github-private --yes
 
 KM_VMS_GITHUB_TOKEN=... \
-  sh scripts/update.sh --github-repo OWNER/REPO --branch main --github-private --yes
+  sh "$HOME/km-vms/data/update-runtime/bootstrap/current/km-vms-update-launcher.sh" \
+    --app-dir "$HOME/km-vms" --github-repo OWNER/REPO --branch main --github-private --yes
 
-sh scripts/update.sh \
+sh "$HOME/km-vms/data/update-runtime/bootstrap/current/km-vms-update-launcher.sh" \
+  --app-dir "$HOME/km-vms" \
   --github-repo OWNER/REPO \
   --branch main \
   --github-private \
@@ -165,11 +172,11 @@ sh scripts/update.sh \
 
 The token is used only for GitHub API requests and must be read-only for repository contents. The updater does not print the token, does not embed it in URLs, and does not write it to `.km-vms-update.json`, `.km-vms-source.json`, reports or logs.
 
-The updater overlays only product source/configuration paths: `apps/`, `deploy/`, `docs/`, `release/`, `scripts/`, compose files, `.dockerignore`, `.gitignore`, and `.env.example`. It preserves `.env`, `.env.*`, `data/`, PostgreSQL/Redis data, previews, exports, install-control files, selected storage roots and recordings. It validates the app directory, validates the downloaded source tree, rejects path traversal and symlinks in the update source, reuses `scripts/km-vms-compose-common.sh`, runs compose config validation, then runs `up -d --build`.
+The updater prepares validated product source and exact immutable images in a new release slot before activation. It preserves stable `.env`, `data/`, PostgreSQL/Redis state, previews, exports, install-control files, selected storage roots and recordings outside release slots. It validates the downloaded source tree, rejects path traversal and unsafe symlinks, validates the final Compose plan including the generated archive-roots and stable lifecycle overrides, and then atomically switches the verified `active` pointer.
 
-The updater must not run `down -v`, `docker system prune`, delete Docker volumes, regenerate secrets, change the selected storage path, create users/settings, or automatically run database migrations. If a future release needs explicit migration orchestration, use the dedicated migration/update stage instead of treating `update.sh` as a hidden migrator.
+The updater must not run `down -v`, `docker system prune`, delete Docker volumes, regenerate secrets, change the selected storage path, or create users/settings. Schema work is admitted only through the explicit migration gate and durable writer-isolation contract; it is not an implicit side effect of copying source files.
 
-The rollback is not implemented in Stage 6.0.7. If the update fails before the overlay phase, app source files are not changed. If it fails after overlay starts, source files may be partially updated; fix the reported failed phase and rerun the same update, or restore from an external backup if the app cannot recover. The updater writes sanitized status to `.km-vms-update.json` and refreshes `.km-vms-release.json` from `release/km-vms-release.json`.
+If target health or release identity fails, activation returns to the exact captured previous slot without claiming a database rollback. The durable activation journal and stable bootstrap converge the same target/previous decision after helper, container, Docker daemon, or host restart. A missing or corrupt `active` pointer is repaired only from verified terminal journal evidence; nonterminal or contradictory evidence fails closed and delegates to the existing convergence owner instead of executing root source.
 
 The read-only update status and release manifest check API is available through protected owner/admin endpoints. The in-app apply helper uses the same bounded update mechanism and must pin apply to trusted release evidence. Public available-update discovery prefers semantic Git tags and resolves the tag to immutable commit evidence before enabling apply. If GitHub, tags, release metadata or commit evidence are unavailable, update apply remains disabled and the status/check response reports a sanitized provider warning.
 

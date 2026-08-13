@@ -1,6 +1,7 @@
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import importlib.util
 import json
@@ -16,6 +17,20 @@ def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def _write_stable_runtime_fixture(root: Path) -> None:
+    if not (root / ".env").exists():
+        (root / ".env").write_text(
+            "COMPOSE_PROJECT_NAME=kmvmsfixture\n",
+            encoding="utf-8",
+        )
+    bootstrap = (
+        root
+        / "data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+    )
+    bootstrap.parent.mkdir(parents=True, exist_ok=True)
+    bootstrap.write_text("# stable bootstrap fixture\n", encoding="utf-8")
+
+
 PERMISSION_EXECUTABLE_FIXTURE_FILES = (
     "scripts/install.sh",
     "scripts/km-vms-adopt-release-identity.sh",
@@ -25,6 +40,7 @@ PERMISSION_EXECUTABLE_FIXTURE_FILES = (
     "scripts/km-vms-publish-github-release.sh",
     "scripts/km-vms-release-cycle.sh",
     "scripts/km-vms-restart.sh",
+    "scripts/km-vms-update-launcher.sh",
     "scripts/km-vms-setup-activation-helper.sh",
     "scripts/km-vms-storage-apply.sh",
     "scripts/km-vms-storage-discovery.sh",
@@ -115,6 +131,7 @@ def _write_update_shell_fixture(tmp_path: Path, *, compose_function: str, commit
     (app / "scripts/update.sh").write_text(script, encoding="utf-8")
     (app / ".env").write_text("HTTP_PORT=18183\nCOMPOSE_PROJECT_NAME=kmvmsfixture\n", encoding="utf-8")
     (app / "data").mkdir()
+    _write_stable_runtime_fixture(app)
     tarball = tmp_path / "source.tar.gz"
     subprocess.run(["tar", "-czf", str(tarball), "-C", str(source.parent), source.name], check=True)
     (bin_dir / "curl").write_text(
@@ -235,6 +252,11 @@ def test_update_script_exists_and_exposes_terminal_contract():
         check=True,
     )
     assert "KM VMS terminal update" in help_result.stdout
+    assert (
+        "data/update-runtime/bootstrap/current/km-vms-update-launcher.sh"
+        in help_result.stdout
+    )
+    assert "sh scripts/update.sh" not in help_result.stdout
 
     for required in (
         "--github-repo <repo>",
@@ -258,10 +280,114 @@ def test_update_script_exists_and_exposes_terminal_contract():
         assert required in script
 
 
+def test_operator_help_uses_canonical_stable_bootstrap_entries():
+    restart_result = subprocess.run(
+        ["sh", str(ROOT / "scripts/km-vms-restart.sh"), "--help"],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    assert (
+        "data/update-runtime/bootstrap/current/km-vms-restart.sh"
+        in restart_result.stdout
+    )
+    assert "sh scripts/km-vms-restart.sh" not in restart_result.stdout
+
+
+def test_canonical_update_launcher_help_does_not_advertise_root_entry(
+    tmp_path: Path,
+) -> None:
+    app = tmp_path / "app"
+    bundle = app / "data/update-runtime/bootstrap/bundles/fixture"
+    slot_id = "release-" + ("a" * 40)
+    source = app / "data/update-runtime/slots" / slot_id / "source"
+    bundle.mkdir(parents=True)
+    source.joinpath("scripts").mkdir(parents=True)
+    (app / ".env").write_text(
+        "COMPOSE_PROJECT_NAME=fixture\n",
+        encoding="utf-8",
+    )
+    launcher = bundle / "km-vms-update-launcher.sh"
+    launcher.write_text(
+        read("scripts/km-vms-update-launcher.sh"),
+        encoding="utf-8",
+    )
+    (bundle / "km-vms-bootstrap.py").write_text(
+        "import os\nprint(os.environ['KM_VMS_TEST_ACTIVE_SOURCE'])\n",
+        encoding="utf-8",
+    )
+    source.joinpath("scripts/update.sh").write_text(
+        read("scripts/update.sh"),
+        encoding="utf-8",
+    )
+    current = app / "data/update-runtime/bootstrap/current"
+    current.symlink_to("bundles/fixture")
+    environment = os.environ.copy()
+    environment["KM_VMS_TEST_ACTIVE_SOURCE"] = str(source)
+    result = subprocess.run(
+        ["sh", str(current / launcher.name), "--app-dir", str(app), "--help"],
+        cwd=app,
+        env=environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert (
+        "data/update-runtime/bootstrap/current/km-vms-update-launcher.sh"
+        in result.stdout
+    )
+    assert "sh scripts/update.sh" not in result.stdout
+
+
+def test_restart_exposes_detected_vendor_docker_to_stable_bootstrap(
+    tmp_path: Path,
+) -> None:
+    vendor = tmp_path / "vendor"
+    vendor.mkdir()
+    for name in ("docker", "docker-compose"):
+        executable = vendor / name
+        executable.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+        os.chmod(executable, 0o755)
+    restart = read("scripts/km-vms-restart.sh")
+    detect_body = restart.split("detect_compose() {", 1)[1].split(
+        "\n}\n",
+        1,
+    )[0]
+    probe = (
+        "set -eu\n"
+        "DOCKER_COMPOSE_BIN=$1\n"
+        "fail() { printf '%s\\n' \"$*\" >&2; exit 1; }\n"
+        "km_vms_detect_compose() { COMPOSE_BIN=$1; return 0; }\n"
+        f"detect_compose() {{{detect_body}\n}}\n"
+        "detect_compose\n"
+        '"$KM_VMS_TEST_PYTHON" -c \'import subprocess; '
+        "subprocess.run([\"docker\", \"version\"], check=True)'\n"
+    )
+    result = subprocess.run(
+        ["sh", "-c", probe, "vendor-probe", str(vendor / "docker-compose")],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": "/usr/bin:/bin",
+            "KM_VMS_TEST_PYTHON": sys.executable,
+        },
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
 def test_update_script_reuses_compose_helper_and_github_tarball_without_git_requirement():
     script = read("scripts/update.sh")
 
-    assert ". \"$APP_DIR/scripts/km-vms-compose-common.sh\"" in script
+    assert '. "$product_source/scripts/km-vms-compose-common.sh"' in script
+    assert '. "$APP_DIR/scripts/km-vms-compose-common.sh"' not in script
     assert "km_vms_detect_compose" in script
     assert 'if [ -x "$compose_bin_dir/docker" ]; then' in script
     assert 'PATH="$compose_bin_dir:$PATH"' in script
@@ -317,11 +443,12 @@ def test_update_helper_requires_mounted_host_app_dir_for_compose(tmp_path):
     (app_dir / "scripts").mkdir(parents=True)
     (app_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     (app_dir / "scripts" / "update.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+    _write_stable_runtime_fixture(app_dir)
     helper.HOST_APP_DIR = app_dir
     assert helper.compose_app_dir() == app_dir
 
 
-def test_update_helper_resolves_update_script_from_canonical_active_source(tmp_path):
+def test_update_helper_resolves_update_script_from_canonical_active_source(tmp_path, monkeypatch):
     helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
     spec = importlib.util.spec_from_file_location(
         "km_vms_update_helper_active_source_contract",
@@ -346,8 +473,7 @@ def test_update_helper_resolves_update_script_from_canonical_active_source(tmp_p
         "services: {}\n",
         encoding="utf-8",
     )
-
-    assert helper.resolve_update_source_dir(app_dir) == app_dir
+    _write_stable_runtime_fixture(app_dir)
 
     slot_id = f"release-{'a' * 40}"
     slot_root = app_dir / "data" / "update-runtime" / "slots" / slot_id
@@ -367,6 +493,17 @@ def test_update_helper_resolves_update_script_from_canonical_active_source(tmp_p
     )
     active = app_dir / "data" / "update-runtime" / "active"
     active.symlink_to(f"slots/{slot_id}/source")
+
+    monkeypatch.setattr(
+        helper.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=json.dumps({"source_path": str(source_dir)}) + "\n",
+            stderr="",
+        ),
+    )
 
     assert helper.resolve_update_source_dir(app_dir) == source_dir
 
@@ -540,6 +677,7 @@ def test_update_helper_uses_trusted_commit_as_apply_ref_and_verifies_metadata(tm
     control_dir.mkdir(parents=True)
     (app_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     (app_dir / "scripts" / "update.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+    _write_stable_runtime_fixture(app_dir)
     helper.HOST_APP_DIR = app_dir
     helper.STATUS_FILE = control_dir / "update-status.json"
     active_source_dir = (
@@ -761,7 +899,7 @@ def test_update_helper_preserves_safe_acquisition_failure_categories(tmp_path: P
         assert "/private" not in str(failure)
 
 
-def test_update_helper_uses_container_compose_override_not_host_only_path(tmp_path, monkeypatch):
+def test_update_helper_drops_unavailable_container_and_host_compose_overrides(tmp_path, monkeypatch):
     helper_path = ROOT / "scripts" / "km-vms-update-helper.py"
     spec = importlib.util.spec_from_file_location("km_vms_update_helper_compose_env_contract", helper_path)
     assert spec is not None and spec.loader is not None
@@ -774,6 +912,7 @@ def test_update_helper_uses_container_compose_override_not_host_only_path(tmp_pa
     control_dir.mkdir(parents=True)
     (app_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
     (app_dir / "scripts" / "update.sh").write_text("#!/usr/bin/env sh\n", encoding="utf-8")
+    _write_stable_runtime_fixture(app_dir)
     helper.HOST_APP_DIR = app_dir
     helper.STATUS_FILE = control_dir / "update-status.json"
     helper.PROGRESS_FILE = control_dir / "update-progress.json"
@@ -787,6 +926,7 @@ def test_update_helper_uses_container_compose_override_not_host_only_path(tmp_pa
     seen_compose_values = []
     monkeypatch.setenv("KM_VMS_DOCKER_COMPOSE", "/Volume1/@apps/DockerEngine/dockerd/bin/docker-compose")
     monkeypatch.setenv("KM_VMS_UPDATE_HELPER_DOCKER_COMPOSE", "docker-compose")
+    monkeypatch.setattr(helper.shutil, "which", lambda _command: None)
 
     def fake_run_child(command, request_arg, update_dir, env, **kwargs):
         seen_compose_values.append(env.get("KM_VMS_DOCKER_COMPOSE"))
@@ -834,7 +974,7 @@ def test_update_helper_uses_container_compose_override_not_host_only_path(tmp_pa
 
     assert helper.run_update(request) == 0
     assert published and published[0][1]["status"] == "completed"
-    assert seen_compose_values == ["docker-compose"]
+    assert seen_compose_values == [None]
 
 
 def test_update_helper_rejects_commit_mismatch_after_success(tmp_path):
@@ -1087,6 +1227,7 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
         (app / ".env").write_text("HTTP_PORT=18181\nCOMPOSE_PROJECT_NAME=kmvmsfixture\n", encoding="utf-8")
         (app / "data/postgres").mkdir(parents=True)
         (app / "data/sentinel.txt").write_text("keep\n", encoding="utf-8")
+        _write_stable_runtime_fixture(app)
 
         tarball = Path(tmp) / "source.tar.gz"
         subprocess.run(["tar", "-czf", str(tarball), "-C", str(source.parent), source.name], check=True)
@@ -1164,6 +1305,7 @@ def test_update_dry_run_never_copies_acquired_source_into_stable_app():
         (app / ".env").write_text("HTTP_PORT=18182\nCOMPOSE_PROJECT_NAME=kmvmsfixture\n", encoding="utf-8")
         (app / "data/previews").mkdir(parents=True)
         (app / "data/sentinel.txt").write_text("keep\n", encoding="utf-8")
+        _write_stable_runtime_fixture(app)
 
         dangerous_files = (
             "apps/.env",
@@ -1269,7 +1411,8 @@ def test_update_slot_runtime_verifies_api_identity_before_commit():
     assert "_api_visible_release_identity(" in verify_block
     assert "_api_visible_identity_digest(" in verify_block
     assert '"metadata_status": "complete"' in verify_block
-    assert '"identity_validity": "valid"' in verify_block
+    assert '"identity_validity": (' in verify_block
+    assert '"inventory_bound" if initial_identity else "valid"' in verify_block
     assert "verify_slot_runtime(" in commit_block
     assert '"completed"' in commit_block
 
@@ -1314,8 +1457,9 @@ def test_docs_describe_terminal_update_without_future_stage_claims():
     for required in (
         "## Terminal Update",
         "curl -fsSL https://raw.githubusercontent.com/kmishnev87/km-vms/main/scripts/install.sh",
-        "sh scripts/update.sh --branch v0.7.2 --yes",
-        "sh scripts/update.sh --branch v0.7.2 --dry-run",
+        "bootstrap/current/km-vms-update-launcher.sh",
+        '--app-dir "$HOME/km-vms" --branch vX.Y.Z --yes',
+        '--app-dir "$HOME/km-vms" --branch vX.Y.Z --dry-run',
         "sh scripts/km-vms-release-cycle.sh --check",
         "git tag -a vX.Y.Z",
         ".km-vms-release.json",
@@ -1323,7 +1467,7 @@ def test_docs_describe_terminal_update_without_future_stage_claims():
         "KM_VMS_GITHUB_TOKEN",
         ".env",
         "data/",
-        "rollback is not implemented",
+        "activation returns to the exact captured previous slot",
         "bounded in-app apply orchestration",
         "dedicated `update-helper` service",
     ):
@@ -1333,18 +1477,21 @@ def test_docs_describe_terminal_update_without_future_stage_claims():
     assert "docker system prune" in docs
     assert "delete Docker volumes" in docs
     assert "automatically runs database migrations" not in docs
+    assert "sh scripts/update.sh" not in docs
+    assert "sh scripts/km-vms-restart.sh" not in docs
 
 
 def test_update_permission_bridge_separates_existing_and_target_gates_without_state_reset():
     script = read("scripts/update.sh")
+    bridge = read("scripts/km-vms-update-helper-bridge.py")
 
-    assert "Preparing target permission inspection runtime" in script
-    assert 'docker build -t "$UPDATE_BOOTSTRAP_IMAGE" "$TMP_ROOT/source/apps/update-helper"' in script
-    assert "run_trusted_permission_gate existing --fix" in script
-    assert "run_trusted_permission_gate target --fix" in script
-    assert "compose_with_archive_roots build update-helper" in script
-    assert "km-vms-update-helper-bridge.py" in script
-    assert "--require-request-id" in script
+    assert '--contract source --check --app-dir "$PRODUCT_SOURCE_DIR"' in script
+    assert '--contract stable-runtime --fix --app-dir "$APP_DIR"' in script
+    assert '--contract source --check --app-dir "$TMP_ROOT/source"' in script
+    assert "install_stable_bootstrap_for_handoff" in bridge
+    assert "stable-prebootstrap" in bridge
+    assert "stable-runtime" in bridge
+    assert "--preflight-existing" not in script[script.index("preflight_permission_policy()") : script.index("apply_permission_policy()")]
     assert script.count('UPDATE_HELPER_IMAGE_PREPARED=0') == 1
     assert script.count('UPDATE_HELPER_REFRESH_SCHEDULED=0') == 1
 
@@ -1413,17 +1560,19 @@ def test_schema_candidate_preserves_backup_and_multi_root_mount_contract():
     assert "/storage/backups/db" in schema_service
 
 
-def test_permission_gate_existing_contract_does_not_require_target_only_files():
+def test_permission_gate_splits_source_stable_and_bounded_legacy_contracts():
     gate = read("scripts/km-vms-permission-gate.sh")
 
-    assert 'CONTRACT="target"' in gate
+    assert 'CONTRACT="source"' in gate
     assert "--preflight-existing" in gate
-    assert 'CONTRACT="existing"' in gate
+    assert 'CONTRACT="legacy"' in gate
+    assert "source|stable-prebootstrap|stable-runtime|legacy" in gate
     assert "TARGET_ONLY_PRIVILEGED_FILES=" in gate
     assert "scripts/km-vms-permission-gate.sh" in gate
     assert "scripts/km-vms-update-helper-bridge.py" in gate
     assert "scripts/km-vms-release-slots.py" in gate
-    assert 'if [ "$CONTRACT" = "existing" ]' in gate
+    assert 'if [ "$CONTRACT" = "source" ] || [ "$CONTRACT" = "legacy" ]' in gate
+    assert 'if [ "$CONTRACT" = "stable-runtime" ]' in gate
     assert "permission_contract=%s" in gate
 
 
@@ -1455,15 +1604,16 @@ def test_update_helper_bridge_uses_bounded_json_and_exact_target_image_activatio
     assert 'check=False,' in bridge[bridge.index("def run_target_permission_gate"):schedule_call]
     assert '"permission_gate=PASS"' in bridge
     assert (
-        "/host-app/data/update-runtime/active/scripts/"
-        "km-vms-update-helper.py"
+        "/host-app/data/update-runtime/bootstrap/current/"
+        "km-vms-bootstrap.py"
     ) in compose
+    assert "run-role update-helper" in compose
     assert (
         "/data/update-runtime/active/scripts/"
         "km-vms-update-helper-bridge.py"
-    ) in compose
-    assert 'exec python3 -B "$$script" bootstrap' in compose
-    assert 'exec python3 -B "$$script"' in compose
+    ) not in compose
+    assert "run-role update-helper-bootstrap" in compose
+    assert "km-vms-bootstrap-dispatch.sh" in compose
     assert (
         'expected_image_id,\n        "-B",\n        str(script_path),'
         in bridge

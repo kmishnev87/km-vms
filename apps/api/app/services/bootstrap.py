@@ -8,7 +8,7 @@ from app.models import SystemSettings, User
 from app.services.audit_log import create_event
 from app.services.schema_migrations import (
     validate_schema_migrations_pre_bootstrap,
-    validate_stage660128_target_schema,
+    validate_current_target_schema,
 )
 from app.services.schema_versioning import (
     ensure_schema_version_state,
@@ -38,7 +38,7 @@ def init_db() -> None:
                 pre_bootstrap_shape=pre_bootstrap_shape,
             )
     with Session(engine) as db:
-        validate_stage660128_target_schema(db)
+        validate_current_target_schema(db)
     post_bootstrap_shape = inspect_schema_shape(engine)
     if (
         not fresh_install

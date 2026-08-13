@@ -3,7 +3,17 @@ set -eu
 
 APP_DIR=$(CDPATH= cd -- "${KM_VMS_SETUP_APP_DIR:-/host-app}" && pwd -P)
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-SOURCE_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
+SOURCE_DIR_INPUT="${KM_VMS_SETUP_PRODUCT_SOURCE_DIR:-$SCRIPT_DIR/..}"
+SOURCE_DIR=$(CDPATH= cd -- "$SOURCE_DIR_INPUT" && pwd -P)
+OPERATOR_SCRIPTS_DIR="${KM_VMS_OPERATOR_SCRIPTS_DIR:-$SOURCE_DIR/scripts}"
+OPERATOR_SCRIPTS_DIR=$(CDPATH= cd -- "$OPERATOR_SCRIPTS_DIR" && pwd -P)
+case "$OPERATOR_SCRIPTS_DIR" in
+  "$APP_DIR"/*) ;;
+  *)
+    printf '%s\n' "setup operator scripts escaped stable APP_DIR" >&2
+    exit 1
+    ;;
+esac
 case "$SOURCE_DIR" in
   "$APP_DIR") SOURCE_CONTAINER_DIR="/host-app" ;;
   "$APP_DIR"/*)
@@ -149,7 +159,7 @@ initial_runtime_verified() {
 run_initial_recovery_action() {
   action="$1"
   request_value="$2"
-  sh "$SOURCE_DIR/scripts/km-vms-storage-apply.sh" \
+  sh "$OPERATOR_SCRIPTS_DIR/km-vms-storage-apply.sh" \
     --app-dir "$APP_DIR" \
     "$action" "$request_value"
 }
@@ -766,7 +776,7 @@ while :; do
     continue
   fi
 
-  if ! sh "$SOURCE_DIR/scripts/km-vms-restart.sh" --app-dir "$APP_DIR" --verify-storage-selection $restart_mode >"$RESTART_OUT" 2>"$RESTART_ERR"; then
+  if ! sh "$OPERATOR_SCRIPTS_DIR/km-vms-restart.sh" --app-dir "$APP_DIR" --verify-storage-selection $restart_mode >"$RESTART_OUT" 2>"$RESTART_ERR"; then
     if [ "$initial_activation" = "1" ] && initial_configuration_published "$request_id" && [ "$attempt_count" -lt "$MAX_INITIAL_ACTIVATION_ATTEMPTS" ]; then
       request_tmp="$REQUEST_FILE.tmp.$$"
       {

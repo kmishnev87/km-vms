@@ -36,6 +36,12 @@ SLOTS_RELATIVE = RUNTIME_RELATIVE / "slots"
 STAGING_RELATIVE = RUNTIME_RELATIVE / "staging"
 ACTIVE_RELATIVE = RUNTIME_RELATIVE / "active"
 JOURNAL_RELATIVE = Path("data/update-control/activation-journal.json")
+INITIAL_MATERIALIZATION_RELATIVE = Path(
+    "data/install-control/initial-slot-materialization.json"
+)
+INSTALLED_PROJECTION_RELATIVE = (
+    RUNTIME_RELATIVE / "installed-projection/installed-slot.json"
+)
 MANIFEST_NAME = "slot-manifest.json"
 CANDIDATE_NAME = "candidate-state.json"
 RUNTIME_OVERRIDE_NAME = "docker-compose.runtime-override.yml"
@@ -64,7 +70,12 @@ TRUSTED_REQUIRED_SOURCE_PATHS = (
     "deploy/nginx/default.conf",
     "release/km-vms-release.json",
     "scripts/install.sh",
+    "scripts/km-vms-bootstrap.py",
+    "scripts/km-vms-bootstrap-dispatch.sh",
     "scripts/km-vms-compose-common.sh",
+    "scripts/km-vms-restart.sh",
+    "scripts/km-vms-storage-apply.sh",
+    "scripts/km-vms-setup-activation-helper.sh",
     "scripts/km-vms-permission-gate.sh",
     "scripts/km-vms-release-identity.py",
     "scripts/km-vms-update-helper-bridge.py",
@@ -140,8 +151,9 @@ SERVICE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 TRUSTED_SLOT_RE = re.compile(r"^release-[0-9a-f]{40}$")
 ADOPTED_SLOT_RE = re.compile(r"^adopted-[0-9a-f]{64}$")
+INITIAL_SLOT_RE = re.compile(r"^initial-[0-9a-f]{64}$")
 SLOT_RE = re.compile(
-    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64})$"
+    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})$"
 )
 MACHINE_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
 RELEASE_NOTE_LOCALES = frozenset({"en", "ru", "zh-CN"})
@@ -434,6 +446,52 @@ def adopted_slot_id(inventory_digest: str) -> str:
     if not DIGEST_RE.fullmatch(normalized):
         raise SlotError("inventory_digest_invalid", "Adopted inventory digest is invalid.")
     return f"adopted-{normalized}"
+
+
+def initial_slot_id(nonce: str) -> str:
+    normalized = str(nonce or "").lower()
+    if not DIGEST_RE.fullmatch(normalized):
+        raise SlotError("initial_nonce_invalid", "Initial install nonce is invalid.")
+    return f"initial-{normalized}"
+
+
+def prepare_initial_slot_id(app_dir: Path) -> str:
+    """Create or reuse the durable, installer-owned initial slot identity."""
+
+    app_dir = resolve_app_dir(app_dir)
+    path = app_dir / INITIAL_MATERIALIZATION_RELATIVE
+    _ensure_plain_directory(path.parent)
+    existing = read_json(path, missing_ok=True)
+    if existing is not None:
+        if (
+            set(existing)
+            != {"schema_version", "document_type", "nonce", "slot_id", "created_at"}
+            or existing.get("schema_version") != 1
+            or existing.get("document_type") != "initial_slot_materialization"
+            or type(existing.get("nonce")) is not str
+            or type(existing.get("slot_id")) is not str
+            or initial_slot_id(existing["nonce"]) != existing["slot_id"]
+            or type(existing.get("created_at")) is not str
+            or not existing["created_at"]
+        ):
+            raise SlotError(
+                "initial_materialization_invalid",
+                "Initial install materialization evidence is invalid.",
+            )
+        return existing["slot_id"]
+    nonce = uuid.uuid4().hex + uuid.uuid4().hex
+    slot_id = initial_slot_id(nonce)
+    atomic_write_json(
+        path,
+        {
+            "schema_version": 1,
+            "document_type": "initial_slot_materialization",
+            "nonce": nonce,
+            "slot_id": slot_id,
+            "created_at": utc_now(),
+        },
+    )
+    return slot_id
 
 
 def require_slot_id(value: str, *, target: bool = False) -> str:
@@ -1032,6 +1090,120 @@ def stage_adopted(
     }
 
 
+def stage_initial(
+    app_dir: Path,
+    source_dir: Path,
+    *,
+    request_id: str,
+    declared_version: str,
+) -> dict[str, Any]:
+    """Materialize one non-circular inventory-bound fresh-install slot."""
+
+    app_dir = resolve_app_dir(app_dir)
+    layout = ensure_layout(app_dir)
+    request_id = require_request_id(request_id)
+    if not VERSION_RE.fullmatch(str(declared_version or "")):
+        raise SlotError("release_version_invalid", "Initial release version is invalid.")
+    slot_id = prepare_initial_slot_id(app_dir)
+    source_input = Path(source_dir)
+    try:
+        source_info = source_input.lstat()
+        source_dir = source_input.resolve(strict=True)
+    except OSError as exc:
+        raise SlotError(
+            "initial_source_invalid",
+            "Initial product source is unavailable.",
+        ) from exc
+    if stat.S_ISLNK(source_info.st_mode) or not source_dir.is_dir():
+        raise SlotError("initial_source_invalid", "Initial product source is unsafe.")
+    identity = read_json(source_dir / ".km-vms-release.json")
+    assert identity is not None
+    if (
+        identity.get("schema_version") != 1
+        or identity.get("product") != "KM VMS"
+        or identity.get("version") != declared_version
+        or identity.get("commit_sha") is not None
+        or identity.get("identity_mode") != "inventory_bound"
+        or identity.get("slot_kind") != "initial_install_snapshot"
+        or identity.get("slot_id") != slot_id
+        or "source_inventory_sha256" in identity
+        or "manifest_sha256" in identity
+    ):
+        raise SlotError(
+            "initial_identity_invalid",
+            "Initial source identity is incomplete or circular.",
+        )
+    final_path = layout["slots"] / slot_id
+    if final_path.exists():
+        manifest = validate_slot(final_path, expected_slot_id=slot_id)
+        if (
+            manifest["kind"] != "initial_install_snapshot"
+            or manifest["declared_identity"]
+            != {"version": declared_version, "commit": None}
+        ):
+            raise SlotError(
+                "slot_conflict",
+                "Existing initial slot contradicts this installation.",
+            )
+        return {
+            "status": "reused",
+            "slot_id": slot_id,
+            "slot_path": str(final_path),
+            "source_path": str(final_path / SOURCE_DIR_NAME),
+            "inventory": manifest["source_inventory"],
+            "manifest": manifest,
+        }
+
+    candidate_root = _candidate_root(layout, request_id)
+    _remove_candidate(candidate_root, layout["staging"])
+    candidate_source = candidate_root / SOURCE_DIR_NAME
+    candidate_root.mkdir(parents=True, mode=0o700)
+    try:
+        source_before = product_inventory(
+            source_dir,
+            required_paths=TRUSTED_REQUIRED_SOURCE_PATHS,
+        )
+        _copy_product_source(source_dir, candidate_source)
+        source_after = product_inventory(
+            source_dir,
+            required_paths=TRUSTED_REQUIRED_SOURCE_PATHS,
+        )
+        copied = product_inventory(
+            candidate_source,
+            required_paths=TRUSTED_REQUIRED_SOURCE_PATHS,
+        )
+        if source_before != source_after or source_before != copied:
+            raise SlotError(
+                "source_changed_during_materialization",
+                "Initial source changed while it was being materialized.",
+            )
+        candidate = {
+            "schema_version": CANDIDATE_SCHEMA_VERSION,
+            "kind": "initial_install_snapshot",
+            "request_id": request_id,
+            "slot_id": slot_id,
+            "declared_identity": {
+                "version": declared_version,
+                "commit": None,
+            },
+            "official_source_match": False,
+            "source_inventory": copied,
+            "prepared_at": utc_now(),
+        }
+        atomic_write_json(candidate_root / CANDIDATE_NAME, candidate)
+        _fsync_directory(candidate_root)
+    except Exception:
+        _remove_candidate(candidate_root, layout["staging"])
+        raise
+    return {
+        "status": "staged",
+        "slot_id": slot_id,
+        "candidate_path": str(candidate_root),
+        "source_path": str(candidate_source),
+        "inventory": copied,
+    }
+
+
 def validate_compose_services(value: Any) -> list[str]:
     if (
         type(value) is not list
@@ -1325,7 +1497,11 @@ def validate_manifest(value: Any, *, expected_slot_id: str | None = None) -> dic
         or set(value) != expected
         or value.get("schema_version") != MANIFEST_SCHEMA_VERSION
         or value.get("kind")
-        not in {"trusted_release", "adopted_pre_update_snapshot"}
+        not in {
+            "trusted_release",
+            "adopted_pre_update_snapshot",
+            "initial_install_snapshot",
+        }
         or type(value.get("slot_id")) is not str
         or not SLOT_RE.fullmatch(value["slot_id"])
         or (expected_slot_id is not None and value["slot_id"] != expected_slot_id)
@@ -1333,8 +1509,15 @@ def validate_manifest(value: Any, *, expected_slot_id: str | None = None) -> dic
         or set(value["declared_identity"]) != {"version", "commit"}
         or type(value["declared_identity"].get("version")) is not str
         or not VERSION_RE.fullmatch(value["declared_identity"]["version"])
-        or type(value["declared_identity"].get("commit")) is not str
-        or not COMMIT_RE.fullmatch(value["declared_identity"]["commit"])
+        or (
+            value["declared_identity"].get("commit") is not None
+            and (
+                type(value["declared_identity"]["commit"]) is not str
+                or not COMMIT_RE.fullmatch(
+                    value["declared_identity"]["commit"]
+                )
+            )
+        )
         or type(value.get("official_source_match")) is not bool
         or type(value.get("source_inventory")) is not dict
         or set(value["source_inventory"])
@@ -1361,7 +1544,7 @@ def validate_manifest(value: Any, *, expected_slot_id: str | None = None) -> dic
         ):
             raise SlotError("slot_manifest_invalid", "Trusted release manifest is contradictory.")
         required_images = TARGET_REQUIRED_IMAGE_SERVICES
-    else:
+    elif value["kind"] == "adopted_pre_update_snapshot":
         if (
             not ADOPTED_SLOT_RE.fullmatch(value["slot_id"])
             or value["slot_id"].removeprefix("adopted-")
@@ -1371,14 +1554,29 @@ def validate_manifest(value: Any, *, expected_slot_id: str | None = None) -> dic
             raise SlotError("slot_manifest_invalid", "Adopted snapshot manifest is contradictory.")
         validate_health_evidence(value.get("pre_update_health"))
         required_images = ADOPTED_REQUIRED_IMAGE_SERVICES
+    else:
+        if (
+            not INITIAL_SLOT_RE.fullmatch(value["slot_id"])
+            or value["declared_identity"]["commit"] is not None
+            or value["official_source_match"] is not False
+            or value.get("pre_update_health") is not None
+        ):
+            raise SlotError(
+                "slot_manifest_invalid",
+                "Initial install manifest is contradictory.",
+            )
+        required_images = TARGET_REQUIRED_IMAGE_SERVICES
     compose = validate_compose_evidence(value.get("compose_evidence"))
-    if value["kind"] == "trusted_release":
+    if value["kind"] in {"trusted_release", "initial_install_snapshot"}:
         if compose["runtime_override_sha256"] is not None:
             raise SlotError(
                 "slot_manifest_invalid",
-                "Trusted target slot has an unexpected legacy runtime override.",
+                "Non-legacy slot has an unexpected runtime override.",
             )
-    elif compose["runtime_override_sha256"] is None:
+    elif (
+        value["kind"] == "adopted_pre_update_snapshot"
+        and compose["runtime_override_sha256"] is None
+    ):
         raise SlotError(
             "slot_manifest_invalid",
             "Adopted snapshot lacks its stable-root runtime override evidence.",
@@ -1396,7 +1594,7 @@ def validate_manifest(value: Any, *, expected_slot_id: str | None = None) -> dic
                 "Release slot image evidence is not namespaced by its immutable slot ID.",
             )
         if (
-            value["kind"] == "trusted_release"
+            value["kind"] in {"trusted_release", "initial_install_snapshot"}
             and service in TARGET_BUILT_IMAGE_SERVICES
             and not item["source_image_ref"].endswith(f":{value['slot_id']}")
         ):
@@ -1676,9 +1874,9 @@ def validate_slot(slot_root: Path, *, expected_slot_id: str | None = None) -> di
     assert manifest is not None
     manifest = validate_manifest(manifest, expected_slot_id=slot_id)
     required_paths = (
-        TRUSTED_REQUIRED_SOURCE_PATHS
-        if manifest["kind"] == "trusted_release"
-        else LEGACY_REQUIRED_SOURCE_PATHS
+        LEGACY_REQUIRED_SOURCE_PATHS
+        if manifest["kind"] == "adopted_pre_update_snapshot"
+        else TRUSTED_REQUIRED_SOURCE_PATHS
     )
     inventory = product_inventory(
         slot_root / SOURCE_DIR_NAME,
@@ -1711,7 +1909,7 @@ def validate_slot(slot_root: Path, *, expected_slot_id: str | None = None) -> di
     elif runtime_override.exists() or runtime_override.is_symlink():
         raise SlotError(
             "runtime_override_invalid",
-            "Trusted release slot contains an unexpected runtime override.",
+            "Non-legacy slot contains an unexpected runtime override.",
         )
     _validate_slot_read_only(slot_root)
     return manifest
@@ -1750,13 +1948,17 @@ def finalize_candidate(
         or type(candidate.get("slot_id")) is not str
         or not SLOT_RE.fullmatch(candidate["slot_id"])
         or candidate.get("kind")
-        not in {"trusted_release", "adopted_pre_update_snapshot"}
+        not in {
+            "trusted_release",
+            "adopted_pre_update_snapshot",
+            "initial_install_snapshot",
+        }
     ):
         raise SlotError("candidate_invalid", "Prepared release candidate is invalid.")
     required_paths = (
-        TRUSTED_REQUIRED_SOURCE_PATHS
-        if candidate.get("kind") == "trusted_release"
-        else LEGACY_REQUIRED_SOURCE_PATHS
+        LEGACY_REQUIRED_SOURCE_PATHS
+        if candidate.get("kind") == "adopted_pre_update_snapshot"
+        else TRUSTED_REQUIRED_SOURCE_PATHS
     )
     observed_inventory = product_inventory(
         candidate_root / SOURCE_DIR_NAME,
@@ -1791,7 +1993,10 @@ def finalize_candidate(
             )
     else:
         if health_evidence is not None:
-            raise SlotError("health_evidence_invalid", "Target slot cannot claim pre-update health.")
+            raise SlotError(
+                "health_evidence_invalid",
+                "Non-legacy slot cannot claim pre-update health.",
+            )
         if (
             compose["runtime_override_sha256"] is not None
             or (candidate_root / RUNTIME_OVERRIDE_NAME).exists()
@@ -1799,7 +2004,7 @@ def finalize_candidate(
         ):
             raise SlotError(
                 "runtime_override_invalid",
-                "Trusted target cannot contain a legacy runtime override.",
+                "Non-legacy slot cannot contain a runtime override.",
             )
         health = None
     manifest = validate_manifest(
@@ -1939,12 +2144,21 @@ def validate_activation_slot_binding(value: Any) -> dict[str, Any]:
         or type(value.get("slot_id")) is not str
         or not SLOT_RE.fullmatch(value["slot_id"])
         or value.get("kind")
-        not in {"trusted_release", "adopted_pre_update_snapshot"}
+        not in {
+            "trusted_release",
+            "adopted_pre_update_snapshot",
+            "initial_install_snapshot",
+        }
         or type(value.get("official_source_match")) is not bool
         or type(value.get("version")) is not str
         or not VERSION_RE.fullmatch(value["version"])
-        or type(value.get("commit")) is not str
-        or not COMMIT_RE.fullmatch(value["commit"])
+        or (
+            value.get("commit") is not None
+            and (
+                type(value["commit"]) is not str
+                or not COMMIT_RE.fullmatch(value["commit"])
+            )
+        )
         or any(
             type(value.get(key)) is not str
             or not DIGEST_RE.fullmatch(value[key])
@@ -1982,12 +2196,167 @@ def validate_activation_slot_binding(value: Any) -> dict[str, Any]:
             not ADOPTED_SLOT_RE.fullmatch(value["slot_id"])
             or value["official_source_match"] is not False
         )
+    ) or (
+        value["kind"] == "initial_install_snapshot"
+        and (
+            not INITIAL_SLOT_RE.fullmatch(value["slot_id"])
+            or value["official_source_match"] is not False
+            or value["commit"] is not None
+        )
     ):
         raise SlotError(
             "activation_slot_binding_invalid",
             "Activation slot binding contradicts slot identity.",
         )
     return json.loads(json.dumps(value))
+
+
+def publish_installed_slot_projection(
+    app_dir: Path,
+    *,
+    binding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Publish sanitized, derived installed-slot evidence outside source inventory."""
+
+    app_dir = resolve_app_dir(app_dir)
+    active = read_active_slot(app_dir)
+    if active is None:
+        raise SlotError(
+            "installed_projection_unavailable",
+            "An active slot is required before publishing installed evidence.",
+        )
+    slot_id, _source = active
+    manifest = validate_slot(
+        ensure_layout(app_dir)["slots"] / slot_id,
+        expected_slot_id=slot_id,
+    )
+    base_binding = build_activation_slot_binding(app_dir, slot_id)
+    if binding is None:
+        binding = base_binding
+    else:
+        binding = validate_activation_slot_binding(binding)
+        stable_keys = set(base_binding) - {
+            "compose_plan_sha256",
+            "archive_override_sha256",
+        }
+        if (
+            binding["slot_id"] != slot_id
+            or any(binding[key] != base_binding[key] for key in stable_keys)
+        ):
+            raise SlotError(
+                "installed_projection_binding_invalid",
+                "Installed-slot projection binding contradicts the active slot.",
+            )
+    identity_mode = (
+        "inventory_bound"
+        if manifest["kind"] == "initial_install_snapshot"
+        else "trusted_release"
+        if manifest["kind"] == "trusted_release"
+        else "adopted_inventory"
+    )
+    payload = {
+        "schema_version": 1,
+        "document_type": "installed_slot_projection",
+        "slot_id": slot_id,
+        "kind": manifest["kind"],
+        "identity_mode": identity_mode,
+        "version": manifest["declared_identity"]["version"],
+        "commit": manifest["declared_identity"]["commit"],
+        "inventory_sha256": manifest["source_inventory"]["sha256"],
+        "manifest_sha256": _payload_digest(manifest),
+        "active_slot_id": slot_id,
+        "binding": binding,
+        "published_at": utc_now(),
+    }
+    path = app_dir / INSTALLED_PROJECTION_RELATIVE
+    _ensure_plain_directory(path.parent)
+    atomic_write_json(path, payload)
+    try:
+        path.chmod(0o444)
+    except OSError as exc:
+        raise SlotError(
+            "installed_projection_publish_failed",
+            "Installed-slot projection permissions could not be finalized.",
+        ) from exc
+    return payload
+
+
+def validate_installed_slot_projection(
+    app_dir: Path,
+    *,
+    require_active: bool = True,
+) -> dict[str, Any]:
+    app_dir = resolve_app_dir(app_dir)
+    path = app_dir / INSTALLED_PROJECTION_RELATIVE
+    payload = read_json(path)
+    assert payload is not None
+    expected = {
+        "schema_version",
+        "document_type",
+        "slot_id",
+        "kind",
+        "identity_mode",
+        "version",
+        "commit",
+        "inventory_sha256",
+        "manifest_sha256",
+        "active_slot_id",
+        "binding",
+        "published_at",
+    }
+    if (
+        set(payload) != expected
+        or payload.get("schema_version") != 1
+        or payload.get("document_type") != "installed_slot_projection"
+        or type(payload.get("slot_id")) is not str
+        or not SLOT_RE.fullmatch(payload["slot_id"])
+        or payload.get("active_slot_id") != payload["slot_id"]
+        or type(payload.get("published_at")) is not str
+        or not payload["published_at"]
+    ):
+        raise SlotError(
+            "installed_projection_invalid",
+            "Installed-slot projection is invalid.",
+        )
+    binding = validate_activation_slot_binding(payload.get("binding"))
+    if binding["slot_id"] != payload["slot_id"]:
+        raise SlotError(
+            "installed_projection_invalid",
+            "Installed-slot projection binding is contradictory.",
+        )
+    manifest = validate_slot(
+        ensure_layout(app_dir)["slots"] / payload["slot_id"],
+        expected_slot_id=payload["slot_id"],
+    )
+    expected_mode = (
+        "inventory_bound"
+        if manifest["kind"] == "initial_install_snapshot"
+        else "trusted_release"
+        if manifest["kind"] == "trusted_release"
+        else "adopted_inventory"
+    )
+    if (
+        payload["kind"] != manifest["kind"]
+        or payload["identity_mode"] != expected_mode
+        or payload["version"] != manifest["declared_identity"]["version"]
+        or payload["commit"] != manifest["declared_identity"]["commit"]
+        or payload["inventory_sha256"] != manifest["source_inventory"]["sha256"]
+        or payload["manifest_sha256"] != _payload_digest(manifest)
+        or binding["manifest_sha256"] != payload["manifest_sha256"]
+        or binding["inventory_sha256"] != payload["inventory_sha256"]
+    ):
+        raise SlotError(
+            "installed_projection_stale",
+            "Installed-slot projection no longer matches its immutable slot.",
+        )
+    if require_active:
+        active = read_active_slot(app_dir)
+        if active is None or active[0] != payload["slot_id"]:
+            raise SlotError(
+                "installed_projection_stale",
+                "Installed-slot projection does not match the active pointer.",
+            )
+    return json.loads(json.dumps(payload))
 
 
 def validate_activation_journal(value: Any) -> dict[str, Any]:
@@ -2643,6 +3012,15 @@ def _build_parser() -> argparse.ArgumentParser:
     stage_adopted_parser.add_argument("--declared-version", required=True)
     stage_adopted_parser.add_argument("--declared-commit", required=True)
 
+    initial_id_parser = subparsers.add_parser("prepare-initial-id")
+    initial_id_parser.add_argument("--app-dir", required=True)
+
+    stage_initial_parser = subparsers.add_parser("stage-initial")
+    stage_initial_parser.add_argument("--app-dir", required=True)
+    stage_initial_parser.add_argument("--source-dir", required=True)
+    stage_initial_parser.add_argument("--request-id", required=True)
+    stage_initial_parser.add_argument("--declared-version", required=True)
+
     runtime_parser = subparsers.add_parser("prepare-adopted-runtime")
     runtime_parser.add_argument("--app-dir", required=True)
     runtime_parser.add_argument("--request-id", required=True)
@@ -2665,6 +3043,17 @@ def _build_parser() -> argparse.ArgumentParser:
     resolve_parser.add_argument("--app-dir", required=True)
     resolve_path_parser = subparsers.add_parser("resolve-active-path")
     resolve_path_parser.add_argument("--app-dir", required=True)
+    switch_parser = subparsers.add_parser("switch-active")
+    switch_parser.add_argument("--app-dir", required=True)
+    switch_parser.add_argument("--slot-id", required=True)
+    publish_projection_parser = subparsers.add_parser(
+        "publish-installed-projection"
+    )
+    publish_projection_parser.add_argument("--app-dir", required=True)
+    validate_projection_parser = subparsers.add_parser(
+        "validate-installed-projection"
+    )
+    validate_projection_parser.add_argument("--app-dir", required=True)
     return parser
 
 
@@ -2685,6 +3074,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 request_id=args.request_id,
                 declared_version=args.declared_version,
                 declared_commit=args.declared_commit,
+            )
+        elif args.command == "prepare-initial-id":
+            app_dir = resolve_app_dir(args.app_dir)
+            result = {
+                "schema_version": RUNTIME_SCHEMA_VERSION,
+                "slot_id": prepare_initial_slot_id(app_dir),
+            }
+        elif args.command == "stage-initial":
+            result = stage_initial(
+                Path(args.app_dir),
+                Path(args.source_dir),
+                request_id=args.request_id,
+                declared_version=args.declared_version,
             )
         elif args.command == "prepare-adopted-runtime":
             service_payload = _load_evidence_file(args.services_file)
@@ -2741,24 +3143,42 @@ def main(argv: Sequence[str] | None = None) -> int:
             app_dir = resolve_app_dir(args.app_dir)
             active = read_active_slot(app_dir)
             if active is None:
-                result = {
-                    "schema_version": RUNTIME_SCHEMA_VERSION,
-                    "mode": "legacy_root",
-                    "slot_id": None,
-                    "source_path": str(app_dir),
-                }
-            else:
-                result = {
-                    "schema_version": RUNTIME_SCHEMA_VERSION,
-                    "mode": "release_slot",
-                    "slot_id": active[0],
-                    "source_path": str(active[1]),
-                }
+                raise SlotError(
+                    "active_pointer_missing",
+                    "No canonical active release slot is selected.",
+                )
+            result = {
+                "schema_version": RUNTIME_SCHEMA_VERSION,
+                "mode": "release_slot",
+                "slot_id": active[0],
+                "source_path": str(active[1]),
+            }
         elif args.command == "resolve-active-path":
             app_dir = resolve_app_dir(args.app_dir)
             active = read_active_slot(app_dir)
-            print(str(active[1] if active else app_dir))
+            if active is None:
+                raise SlotError(
+                    "active_pointer_missing",
+                    "No canonical active release slot is selected.",
+                )
+            print(str(active[1]))
             return 0
+        elif args.command == "switch-active":
+            app_dir = resolve_app_dir(args.app_dir)
+            source = atomic_switch_pointer(app_dir, args.slot_id)
+            result = {
+                "schema_version": RUNTIME_SCHEMA_VERSION,
+                "slot_id": require_slot_id(args.slot_id),
+                "source_path": str(source),
+            }
+        elif args.command == "publish-installed-projection":
+            result = publish_installed_slot_projection(
+                Path(args.app_dir)
+            )
+        elif args.command == "validate-installed-projection":
+            result = validate_installed_slot_projection(
+                Path(args.app_dir)
+            )
         else:
             raise SlotError("command_invalid", "Unsupported release-slot command.")
     except SlotError as exc:

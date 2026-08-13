@@ -134,8 +134,6 @@ def test_public_endpoint_allowlist_is_intentional_and_minimal():
         ("GET", "/health"),
         ("GET", "/"),
         ("GET", "/system/status"),
-        ("GET", "/previews/camera-previews/{camera_id}.jpg"),
-        ("GET", "/previews/camera-tests/{token}.jpg"),
         ("POST", "/setup"),
         ("POST", "/setup/storage/preview"),
         ("POST", "/setup/storage/validate"),
@@ -144,6 +142,8 @@ def test_public_endpoint_allowlist_is_intentional_and_minimal():
         ("GET", "/setup/storage/status"),
         ("POST", "/auth/login"),
     }
+    assert decision("/previews/camera-previews/{camera_id}.jpg", "GET").decision == "manage_cameras"
+    assert decision("/previews/camera-tests/{token}.jpg", "GET").decision == "manage_cameras"
     for item in ENDPOINT_PERMISSIONS:
         if item.decision == PUBLIC:
             enforcement = item.enforcement.lower()

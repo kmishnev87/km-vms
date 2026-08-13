@@ -142,6 +142,18 @@ km_vms_compose_version() {
   fi
 }
 
+km_vms_compose_bound_cmd() {
+  if [ -n "${KM_VMS_COMPOSE_SLOT_ID:-}" ]; then
+    (
+      KM_VMS_RELEASE_IMAGE_TAG="$KM_VMS_COMPOSE_SLOT_ID"
+      export KM_VMS_RELEASE_IMAGE_TAG
+      km_vms_compose_cmd "$@"
+    )
+    return $?
+  fi
+  km_vms_compose_cmd "$@"
+}
+
 km_vms_resolve_product_source() {
   stable_app_dir="$1"
   [ -n "$stable_app_dir" ] ||
@@ -152,8 +164,7 @@ km_vms_resolve_product_source() {
   esac
   active_pointer="$stable_app_dir/data/update-runtime/active"
   if [ ! -e "$active_pointer" ] && [ ! -L "$active_pointer" ]; then
-    printf '%s\n' "$stable_app_dir"
-    return 0
+    km_vms_compose_fail "Canonical active KM VMS release pointer is missing."
   fi
   [ -L "$active_pointer" ] ||
     km_vms_compose_fail "Active KM VMS release pointer is not a symlink."
@@ -162,7 +173,7 @@ km_vms_resolve_product_source() {
   pointer_target=$(readlink "$active_pointer") ||
     km_vms_compose_fail "Active KM VMS release pointer cannot be read."
   printf '%s\n' "$pointer_target" |
-    grep -Eq '^slots/(release-[0-9a-f]{40}|adopted-[0-9a-f]{64})/source$' ||
+    grep -Eq '^slots/(release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})/source$' ||
     km_vms_compose_fail "Active KM VMS release pointer is outside its bounded slot layout."
   slot_id=$(printf '%s\n' "$pointer_target" | cut -d/ -f2)
   slot_root="$stable_app_dir/data/update-runtime/slots/$slot_id"
@@ -177,6 +188,67 @@ km_vms_resolve_product_source() {
   printf '%s\n' "$resolved"
 }
 
+km_vms_lifecycle_override() {
+  stable_app_dir="$1"
+  bundle="$stable_app_dir/data/update-runtime/bootstrap/current"
+  if [ "${KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE:-0}" = "1" ] &&
+     [ ! -e "$bundle" ] && [ ! -L "$bundle" ]; then
+    printf '\n'
+    return 0
+  fi
+  [ -L "$bundle" ] && [ -d "$bundle" ] ||
+    km_vms_compose_fail "Stable KM VMS bootstrap bundle is unavailable."
+  [ -f "$bundle/bootstrap-files.sha256" ] &&
+    [ ! -L "$bundle/bootstrap-files.sha256" ] ||
+    km_vms_compose_fail "Stable KM VMS bootstrap checksums are unavailable."
+  km_vms_command_exists sha256sum ||
+    km_vms_compose_fail "sha256sum is required to verify the stable KM VMS bootstrap."
+  (cd "$bundle" && sha256sum -c bootstrap-files.sha256 >/dev/null 2>&1) ||
+    km_vms_compose_fail "Stable KM VMS bootstrap digest verification failed."
+  lifecycle="$bundle/docker-compose.lifecycle.yml"
+  [ -f "$lifecycle" ] && [ ! -L "$lifecycle" ] ||
+    km_vms_compose_fail "Stable KM VMS lifecycle override is unavailable."
+  printf '%s\n' "$lifecycle"
+}
+
+km_vms_slot_image_override() {
+  stable_app_dir="$1"
+  bootstrap="$stable_app_dir/data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+  [ -f "$bootstrap" ] && [ ! -L "$bootstrap" ] ||
+    km_vms_compose_fail "Stable KM VMS bootstrap authority is unavailable."
+  project_name="${KM_VMS_PROJECT_NAME:-${PROJECT_NAME:-}}"
+  if [ -z "$project_name" ]; then
+    project_name=$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' "$stable_app_dir/.env" | tail -n 1)
+  fi
+  printf '%s\n' "$project_name" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$' ||
+    km_vms_compose_fail "Stable KM VMS Compose project identity is invalid."
+  if km_vms_command_exists python3; then
+    image_override=$(python3 -B "$bootstrap" image-override-path \
+      --app-dir "$stable_app_dir" --project-name "$project_name") ||
+      km_vms_compose_fail "Immutable slot image override could not be materialized."
+  else
+    km_vms_command_exists docker ||
+      km_vms_compose_fail "Python or Docker is required to materialize immutable slot images."
+    helper_ids=$(docker ps -q \
+      --filter "label=com.docker.compose.project=$project_name" \
+      --filter "label=com.docker.compose.service=update-helper")
+    [ "$(printf '%s\n' "$helper_ids" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" ] ||
+      km_vms_compose_fail "Canonical update-helper owner is unavailable."
+    helper_id=$(printf '%s\n' "$helper_ids" | sed -n '1p')
+    image_override=$(docker exec "$helper_id" python3 -B \
+      /host-app/data/update-runtime/bootstrap/current/km-vms-bootstrap.py \
+      image-override-path --app-dir /host-app --project-name "$project_name") ||
+      km_vms_compose_fail "Immutable slot image override could not be materialized."
+  fi
+  case "$image_override" in
+    "$stable_app_dir"/data/update-runtime/derived-compose/*-images.yml) ;;
+    *) km_vms_compose_fail "Immutable slot image override escaped stable runtime." ;;
+  esac
+  [ -f "$image_override" ] && [ ! -L "$image_override" ] ||
+    km_vms_compose_fail "Immutable slot image override is unsafe."
+  printf '%s\n' "$image_override"
+}
+
 km_vms_compose_for_source() {
   stable_app_dir="$1"
   source_dir="$2"
@@ -186,44 +258,105 @@ km_vms_compose_for_source() {
   [ -f "$source_dir/docker-compose.yml" ] ||
     km_vms_compose_fail "KM VMS product source has no docker-compose.yml."
   archive_override="$stable_app_dir/data/install-control/docker-compose.archive-roots.yml"
+  lifecycle_override=$(km_vms_lifecycle_override "$stable_app_dir")
   slot_runtime_override=""
+  slot_image_override=""
+  KM_VMS_COMPOSE_SLOT_ID=""
   case "$source_dir" in
     "$stable_app_dir"/data/update-runtime/slots/*/source)
+      KM_VMS_COMPOSE_SLOT_ID=${source_dir#"$stable_app_dir/data/update-runtime/slots/"}
+      KM_VMS_COMPOSE_SLOT_ID=${KM_VMS_COMPOSE_SLOT_ID%%/*}
+      printf '%s\n' "$KM_VMS_COMPOSE_SLOT_ID" |
+        grep -Eq '^(release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})$' ||
+        km_vms_compose_fail "KM VMS release-slot image identity is invalid."
       possible_runtime_override="$(dirname "$source_dir")/docker-compose.runtime-override.yml"
       if [ -e "$possible_runtime_override" ] || [ -L "$possible_runtime_override" ]; then
         [ -f "$possible_runtime_override" ] && [ ! -L "$possible_runtime_override" ] ||
           km_vms_compose_fail "Release-slot runtime Compose override is unsafe."
         slot_runtime_override="$possible_runtime_override"
       fi
+      slot_image_override=$(km_vms_slot_image_override "$stable_app_dir")
       ;;
   esac
-  if [ -n "$slot_runtime_override" ] && [ -f "$archive_override" ]; then
-    km_vms_compose_cmd \
+  if [ -n "$slot_image_override" ] && [ -n "$slot_runtime_override" ] && [ -f "$archive_override" ] && [ -n "$lifecycle_override" ]; then
+    km_vms_compose_bound_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      -f "$slot_runtime_override" \
+      -f "$slot_image_override" \
+      -f "$archive_override" \
+      -f "$lifecycle_override" \
+      "$@"
+  elif [ -n "$slot_image_override" ] && [ -n "$slot_runtime_override" ] && [ -n "$lifecycle_override" ]; then
+    km_vms_compose_bound_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      -f "$slot_runtime_override" \
+      -f "$slot_image_override" \
+      -f "$lifecycle_override" \
+      "$@"
+  elif [ -n "$slot_image_override" ] && [ -f "$archive_override" ] && [ -n "$lifecycle_override" ]; then
+    km_vms_compose_bound_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      -f "$slot_image_override" \
+      -f "$archive_override" \
+      -f "$lifecycle_override" \
+      "$@"
+  elif [ -n "$slot_image_override" ] && [ -n "$lifecycle_override" ]; then
+    km_vms_compose_bound_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      -f "$slot_image_override" \
+      -f "$lifecycle_override" \
+      "$@"
+  elif [ -n "$slot_runtime_override" ] && [ -f "$archive_override" ] && [ -n "$lifecycle_override" ]; then
+    km_vms_compose_bound_cmd \
       --env-file "$stable_app_dir/.env" \
       --project-directory "$source_dir" \
       -f "$source_dir/docker-compose.yml" \
       -f "$slot_runtime_override" \
       -f "$archive_override" \
+      -f "$lifecycle_override" \
       "$@"
+  elif [ -n "$slot_runtime_override" ] && [ -n "$lifecycle_override" ]; then
+    km_vms_compose_bound_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      -f "$slot_runtime_override" \
+      -f "$lifecycle_override" \
+      "$@"
+  elif [ -f "$archive_override" ] && [ -n "$lifecycle_override" ]; then
+    km_vms_compose_bound_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      -f "$archive_override" \
+      -f "$lifecycle_override" \
+      "$@"
+  elif [ -n "$lifecycle_override" ]; then
+    km_vms_compose_bound_cmd \
+      --env-file "$stable_app_dir/.env" \
+      --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" \
+      -f "$lifecycle_override" \
+      "$@"
+  elif [ -n "$slot_runtime_override" ] && [ -f "$archive_override" ]; then
+    km_vms_compose_bound_cmd --env-file "$stable_app_dir/.env" --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" -f "$slot_runtime_override" -f "$archive_override" "$@"
   elif [ -n "$slot_runtime_override" ]; then
-    km_vms_compose_cmd \
-      --env-file "$stable_app_dir/.env" \
-      --project-directory "$source_dir" \
-      -f "$source_dir/docker-compose.yml" \
-      -f "$slot_runtime_override" \
-      "$@"
+    km_vms_compose_bound_cmd --env-file "$stable_app_dir/.env" --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" -f "$slot_runtime_override" "$@"
   elif [ -f "$archive_override" ]; then
-    km_vms_compose_cmd \
-      --env-file "$stable_app_dir/.env" \
-      --project-directory "$source_dir" \
-      -f "$source_dir/docker-compose.yml" \
-      -f "$archive_override" \
-      "$@"
+    km_vms_compose_bound_cmd --env-file "$stable_app_dir/.env" --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" -f "$archive_override" "$@"
   else
-    km_vms_compose_cmd \
-      --env-file "$stable_app_dir/.env" \
-      --project-directory "$source_dir" \
-      -f "$source_dir/docker-compose.yml" \
-      "$@"
+    km_vms_compose_bound_cmd --env-file "$stable_app_dir/.env" --project-directory "$source_dir" \
+      -f "$source_dir/docker-compose.yml" "$@"
   fi
 }

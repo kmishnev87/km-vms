@@ -123,6 +123,11 @@ def _source_fixture(
             "scripts/km-vms-release-identity.py",
             "scripts/km-vms-update-helper-bridge.py",
             "scripts/km-vms-release-slots.py",
+            "scripts/km-vms-bootstrap.py",
+            "scripts/km-vms-bootstrap-dispatch.sh",
+            "scripts/km-vms-restart.sh",
+            "scripts/km-vms-storage-apply.sh",
+            "scripts/km-vms-setup-activation-helper.sh",
         ):
             _write(root / relative, mode=0o755)
 
@@ -1088,7 +1093,7 @@ def test_stage_b_exposes_no_activation_cli_and_stable_compose_paths() -> None:
     assert "activation_cli_enabled" in MODULE_PATH.read_text(encoding="utf-8")
 
 
-def test_posix_resolver_handles_legacy_root_and_one_complete_active_slot(
+def test_posix_resolver_rejects_legacy_root_and_accepts_complete_active_slot(
     tmp_path: Path,
 ) -> None:
     app = _stable_app(tmp_path)
@@ -1110,8 +1115,8 @@ def test_posix_resolver_handles_legacy_root_and_one_complete_active_slot(
         )
 
     legacy = resolve()
-    assert legacy.returncode == 0, legacy.stderr
-    assert legacy.stdout.strip() == str(app)
+    assert legacy.returncode != 0
+    assert "active" in legacy.stderr.lower()
 
     source = tmp_path / "target-resolver"
     _source_fixture(source, commit=COMMIT_A, version=VERSION, trusted=True)

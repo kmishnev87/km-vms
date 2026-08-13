@@ -31,7 +31,7 @@ def _evidence(artifact_id: str) -> dict:
     return {
         "artifact_id": artifact_id,
         "artifact_created_at": NOW,
-        "artifact_schema_version": 8,
+        "artifact_schema_version": 9,
         "db_backend": "postgresql",
         "file_size": 1024,
         "integrity_verified": True,
@@ -178,7 +178,7 @@ def test_current_restore_public_contract_is_bounded_and_consistent() -> None:
         "artifact": {
             "artifact_id": ARTIFACT_A,
             "artifact_created_at": NOW,
-            "artifact_schema_version": 8,
+            "artifact_schema_version": 9,
             "db_backend": "postgresql",
         },
         "pre_restore_backup_id": ARTIFACT_B,

@@ -31,6 +31,8 @@ SOURCE_PROVENANCE_KIND="github-tarball"
 GITHUB_TOKEN=""
 GITHUB_TOKEN_CONFIG=""
 GITHUB_TOKEN_SOURCE="none"
+INSTALL_IDENTITY_MODE="trusted_release"
+INITIAL_SLOT_ID=""
 
 usage() {
   cat <<'EOF'
@@ -241,8 +243,15 @@ load_compose_common() {
 apply_permission_policy() {
   gate="$APP_DIR/scripts/km-vms-permission-gate.sh"
   [ -f "$gate" ] || fail "Project acquisition is incomplete: scripts/km-vms-permission-gate.sh is missing."
-  sh "$gate" --fix --app-dir "$APP_DIR" ||
+  sh "$gate" --contract source --fix --app-dir "$APP_DIR" ||
     fail "Product-source permission hardening failed."
+}
+
+apply_stable_permission_policy() {
+  contract="$1"
+  gate="$APP_DIR/scripts/km-vms-permission-gate.sh"
+  sh "$gate" --contract "$contract" --fix --app-dir "$APP_DIR" ||
+    fail "Stable install permission contract failed: $contract"
 }
 
 validate_github_repo() {
@@ -445,6 +454,15 @@ compose_cmd() {
 
 check_docker() {
   detect_compose
+  case "$COMPOSE_BIN" in
+    */*)
+      compose_bin_dir=$(dirname "$COMPOSE_BIN")
+      if [ -x "$compose_bin_dir/docker" ]; then
+        PATH="$compose_bin_dir:$PATH"
+        export PATH
+      fi
+      ;;
+  esac
   if km_vms_command_exists docker; then
     docker version >/dev/null 2>&1 || fail "Docker is not reachable for the current user."
     docker info >/dev/null 2>&1 || fail "Docker daemon is not reachable for the current user."
@@ -598,17 +616,36 @@ write_release_identity() {
     fail "Project acquisition is incomplete: scripts/km-vms-release-identity.py is missing."
   (
     cd "$APP_DIR"
-    release_identity_python \
-      scripts/km-vms-release-identity.py \
-      --descriptor release/km-vms-release.json \
-      --commit "$SOURCE_COMMIT_SHA" \
-      --installed-at "$installed_at" \
-      --installed-by install \
-      --metadata-status "$(if [ -n "$SOURCE_COMMIT_SHA" ]; then printf complete; else printf partial; fi)" \
-      --metadata-source official_install
+    if [ "$INSTALL_IDENTITY_MODE" = "inventory_bound" ]; then
+      release_identity_python \
+        scripts/km-vms-release-identity.py \
+        --descriptor release/km-vms-release.json \
+        --installed-at "$installed_at" \
+        --installed-by install \
+        --metadata-status complete \
+        --metadata-source initial_inventory_install \
+        --identity-mode inventory_bound \
+        --slot-kind initial_install_snapshot \
+        --slot-id "$INITIAL_SLOT_ID"
+    else
+      release_identity_python \
+        scripts/km-vms-release-identity.py \
+        --descriptor release/km-vms-release.json \
+        --commit "$SOURCE_COMMIT_SHA" \
+        --installed-at "$installed_at" \
+        --installed-by install \
+        --metadata-status complete \
+        --metadata-source official_install
+    fi
   ) > "$tmp_identity" ||
     fail "Cannot write release identity."
   mv "$tmp_identity" "$identity"
+}
+
+release_descriptor_value() {
+  key="$1"
+  sed -n "s/^[[:space:]]*\"$key\"[[:space:]]*:[[:space:]]*\"\(.*\)\"[[:space:]]*,\{0,1\}[[:space:]]*$/\1/p" \
+    "$APP_DIR/release/km-vms-release.json" | head -n 1
 }
 
 validate_source_dir() {
@@ -826,11 +863,11 @@ print_plan
 write_env
 write_metadata
 write_source_provenance
-write_release_identity
 [ -f "$APP_DIR/scripts/km-vms-release-slots.py" ] &&
   [ ! -L "$APP_DIR/scripts/km-vms-release-slots.py" ] ||
   fail "Project acquisition is incomplete: scripts/km-vms-release-slots.py is missing."
 for slot_dir in \
+  "$APP_DIR/data/update-control" \
   "$APP_DIR/data/update-runtime" \
   "$APP_DIR/data/update-runtime/slots" \
   "$APP_DIR/data/update-runtime/staging"; do
@@ -842,8 +879,74 @@ for slot_dir in \
       fail "Cannot prepare the stable release-slot layout."
   fi
 done
+km_vms_command_exists python3 ||
+  fail "python3 is required to materialize the canonical initial release slot."
+request_id=$(python3 -c 'import uuid; print("terminal-" + uuid.uuid4().hex)') ||
+  fail "Cannot create initial materialization request identity."
+version=$(release_descriptor_value version)
+[ -n "$version" ] || fail "Release descriptor version is unavailable."
+if [ "$SOURCE_MODE" = "github-tarball" ] && [ -n "$SOURCE_COMMIT_SHA" ]; then
+  INSTALL_IDENTITY_MODE="trusted_release"
+else
+  INSTALL_IDENTITY_MODE="inventory_bound"
+  INITIAL_SLOT_ID=$(
+    python3 -B "$APP_DIR/scripts/km-vms-release-slots.py" \
+      prepare-initial-id --app-dir "$APP_DIR" |
+      python3 -c 'import json,sys; print(json.load(sys.stdin)["slot_id"])'
+  ) || fail "Cannot create durable initial slot identity."
+fi
+write_release_identity
+apply_stable_permission_policy stable-prebootstrap
 sh "$APP_DIR/scripts/km-vms-storage-discovery.sh" --app-dir "$APP_DIR" >/dev/null
+
+if [ "$INSTALL_IDENTITY_MODE" = "trusted_release" ]; then
+  slot_output=$(
+    KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE=1 \
+    KM_VMS_DOCKER_COMPOSE="$COMPOSE_BIN" \
+    KM_VMS_DOCKER_COMPOSE_KIND="$COMPOSE_KIND" \
+    python3 -B "$APP_DIR/scripts/km-vms-update-helper-bridge.py" \
+      prepare-target \
+      --app-dir "$APP_DIR" \
+      --target-source-dir "$APP_DIR" \
+      --request-id "$request_id" \
+      --trusted-commit "$SOURCE_COMMIT_SHA" \
+      --declared-version "$version" \
+      --project-name "$PROJECT_NAME"
+  ) || fail "Trusted initial release slot could not be prepared."
+  INITIAL_SLOT_ID=$(printf '%s\n' "$slot_output" | sed -n 's/^target_slot=//p' | tail -n 1)
+else
+  slot_output=$(
+    KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE=1 \
+    KM_VMS_DOCKER_COMPOSE="$COMPOSE_BIN" \
+    KM_VMS_DOCKER_COMPOSE_KIND="$COMPOSE_KIND" \
+    python3 -B "$APP_DIR/scripts/km-vms-update-helper-bridge.py" \
+      prepare-initial \
+      --app-dir "$APP_DIR" \
+      --source-dir "$APP_DIR" \
+      --request-id "$request_id" \
+      --declared-version "$version" \
+      --project-name "$PROJECT_NAME"
+  ) || fail "Inventory-bound initial release slot could not be prepared."
+  prepared_slot=$(printf '%s\n' "$slot_output" | sed -n 's/^initial_slot=//p' | tail -n 1)
+  [ "$prepared_slot" = "$INITIAL_SLOT_ID" ] ||
+    fail "Prepared initial slot identity is contradictory."
+fi
+
+python3 -B "$APP_DIR/scripts/km-vms-release-slots.py" \
+  switch-active --app-dir "$APP_DIR" --slot-id "$INITIAL_SLOT_ID" >/dev/null ||
+  fail "Cannot activate the initial release slot."
 PRODUCT_SOURCE=$(km_vms_resolve_product_source "$APP_DIR")
+python3 -B "$PRODUCT_SOURCE/scripts/km-vms-bootstrap.py" \
+  install-bundle --app-dir "$APP_DIR" --source-dir "$PRODUCT_SOURCE" >/dev/null ||
+  fail "Cannot install the stable bootstrap bundle."
+KM_VMS_DOCKER_COMPOSE="$COMPOSE_BIN" \
+KM_VMS_DOCKER_COMPOSE_KIND="$COMPOSE_KIND" \
+python3 -B "$PRODUCT_SOURCE/scripts/km-vms-update-helper-bridge.py" \
+  publish-installed-projection \
+  --app-dir "$APP_DIR" \
+  --project-name "$PROJECT_NAME" >/dev/null ||
+  fail "Cannot publish installed-slot evidence."
+apply_stable_permission_policy stable-runtime
 
 (
   cd "$APP_DIR"
@@ -852,11 +955,16 @@ PRODUCT_SOURCE=$(km_vms_resolve_product_source "$APP_DIR")
 
 (
   cd "$APP_DIR"
-  km_vms_compose_for_source "$APP_DIR" "$PRODUCT_SOURCE" up -d --build
+  km_vms_compose_for_source "$APP_DIR" "$PRODUCT_SOURCE" up -d --no-build
 )
+
+python3 -B "$APP_DIR/data/update-runtime/bootstrap/current/km-vms-bootstrap.py" \
+  reconcile-policies --app-dir "$APP_DIR" --project-name "$PROJECT_NAME" >/dev/null ||
+  fail "Container restart policies did not converge."
 
 info "KM VMS setup mode is starting."
 info "Local setup URL: http://localhost:$HTTP_PORT/setup"
 lan_hint
 info "Next step: open the setup URL and create the first owner account."
-info "Safe restart after setup: sh $APP_DIR/scripts/km-vms-restart.sh --app-dir $APP_DIR"
+info "Safe restart after setup: sh $APP_DIR/data/update-runtime/bootstrap/current/km-vms-restart.sh --app-dir $APP_DIR"
+info "Terminal update: sh $APP_DIR/data/update-runtime/bootstrap/current/km-vms-update-launcher.sh --app-dir $APP_DIR --branch vX.Y.Z --yes"

@@ -174,7 +174,7 @@ def test_stage1379_prepare_invalidates_old_notes_until_new_payload_is_written(
         "schema_version": 1,
         "product": "KM VMS",
         "tag_commits": {"0.1.0": "a" * 40},
-        "schema_versions": {"0.1.0": 1},
+        "schema_versions": {"0.1.0": 9},
         "shape_fingerprints": {"0.1.0": "b" * 64},
         "shape_alternates": {},
     }
@@ -285,6 +285,32 @@ def test_stage1379_prepare_invalidates_old_notes_until_new_payload_is_written(
     )
     assert accepted.returncode == 0, accepted.stderr
     assert "release-cycle check PASS" in accepted.stdout
+
+    rejected_lineage = json.loads(
+        (tmp_path / "release/km-vms-update-lineage.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    latest = list(rejected_lineage["schema_versions"])[-1]
+    rejected_lineage["schema_versions"][latest] = 10
+    (tmp_path / "release/km-vms-update-lineage.json").write_text(
+        json.dumps(rejected_lineage),
+        encoding="utf-8",
+    )
+    rejected = subprocess.run(
+        [
+            "sh",
+            "scripts/km-vms-release-cycle.sh",
+            "--check",
+            "--allow-dirty",
+        ],
+        cwd=tmp_path,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert rejected.returncode != 0
+    assert "update lineage evidence is invalid" in rejected.stderr
 
 
 def test_stage613_release_cycle_script_rejects_unsafe_and_equal_versions(tmp_path):

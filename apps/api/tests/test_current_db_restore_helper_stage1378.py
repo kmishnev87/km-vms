@@ -47,7 +47,11 @@ def _isolate_post_restore_integrity_side_effects(
     )
 
 
-def _request(*, state: str = "claimed") -> dict:
+def _request(
+    *,
+    state: str = "claimed",
+    artifact_schema_version: int = 9,
+) -> dict:
     return {
         "schema": helper.RESTORE_REQUEST_SCHEMA,
         "operation_id": "restore-" + ("a" * 32),
@@ -64,7 +68,7 @@ def _request(*, state: str = "claimed") -> dict:
         "artifact": {
             "artifact_id": ARTIFACT_A,
             "artifact_created_at": "2026-07-29T11:00:00Z",
-            "artifact_schema_version": 8,
+            "artifact_schema_version": artifact_schema_version,
             "db_backend": "postgresql",
             "file_size": 1024,
             "fingerprint": "c" * 64,
@@ -121,10 +125,23 @@ def _successful_executor(
 
 def test_restore_request_contract_rejects_extra_control_fields() -> None:
     request = _request()
+    assert helper.CURRENT_PRODUCT_DB_SCHEMA_VERSION == 9
     assert helper.validate_restore_request(request) == request
     assert helper.validate_restore_request(
         {**request, "database_url": "postgresql://forbidden"}
     ) is None
+
+
+@pytest.mark.parametrize("schema_version", (8, 10))
+def test_restore_request_contract_rejects_non_current_schema(
+    schema_version: int,
+) -> None:
+    assert (
+        helper.validate_restore_request(
+            _request(artifact_schema_version=schema_version)
+        )
+        is None
+    )
 
 
 def test_stop_proof_rejects_partially_running_writers(

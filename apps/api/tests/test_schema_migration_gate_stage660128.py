@@ -41,7 +41,7 @@ def test_published_universal_schema_v8_fingerprint_is_immutable() -> None:
     )
 
 
-def test_current_schema_v8_accepts_only_verified_exact_shapes(
+def test_current_schema_v9_accepts_only_verified_exact_shapes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for fingerprint in control.TARGET_SHAPE_FINGERPRINTS:
@@ -65,7 +65,15 @@ def test_current_schema_v8_accepts_only_verified_exact_shapes(
     assert control.target_shape_is_exact(object()) == (False, unknown)
 
 
-def test_same_target_lineage_includes_verified_schema_v8_shapes(
+def test_schema_v9_exact_fingerprints_match_three_validated_paths() -> None:
+    assert control.TARGET_SHAPE_FINGERPRINTS == {
+        "ecc7ccf61e781477ceec853414d0b4ff90da7f45b4a73052885db4a57093fdcb",
+        "5a0e8ab16dc61c99ed6a5842d54d4e6a0599bfcdaf7e03a24b30c51316060c7e",
+        "16c571428596280b75779606006b2871af828b9d634c6a9faee6c41701892477",
+    }
+
+
+def test_same_target_lineage_includes_verified_schema_v9_shapes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -162,11 +170,11 @@ def test_pipeline_holds_one_lock_while_running_all_phases(
     ]
 
 
-def test_exact_schema_v8_preflight_is_read_only_noop(
+def test_exact_current_schema_preflight_is_read_only_noop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     context = _context()
-    context.source_schema_version = 8
+    context.source_schema_version = control.TARGET_SCHEMA_VERSION
     events: list[str] = []
     monkeypatch.setattr(
         pipeline,
@@ -209,9 +217,9 @@ def test_safe_backup_failure_retries_without_duplicate_mutation(
     context = _context()
     summary = {
         "source_schema_version": 1,
-        "target_schema_version": 8,
+        "target_schema_version": control.TARGET_SCHEMA_VERSION,
         "migration_required": True,
-        "migration_count": 7,
+        "migration_count": len(PRODUCTION_MIGRATIONS.migrations),
         "migration_ids": [
             migration.migration_id
             for migration in PRODUCTION_MIGRATIONS.migrations
@@ -305,9 +313,9 @@ def test_failure_before_first_real_mutation_keeps_marker_false(
     context = _context()
     summary = {
         "source_schema_version": 1,
-        "target_schema_version": 8,
+        "target_schema_version": control.TARGET_SCHEMA_VERSION,
         "migration_required": True,
-        "migration_count": 7,
+        "migration_count": len(PRODUCTION_MIGRATIONS.migrations),
         "migration_ids": [
             migration.migration_id
             for migration in PRODUCTION_MIGRATIONS.migrations
@@ -461,7 +469,7 @@ def _receipt(*, resumable: bool) -> dict:
         "admission_attempt_id": ADMISSION_ID,
         "target_version": "0.7.25",
         "target_commit": TARGET_COMMIT,
-        "target_schema_version": 8,
+        "target_schema_version": control.TARGET_SCHEMA_VERSION,
         "registry_fingerprint": REGISTRY,
         "plan_fingerprint": PLAN,
         "fencing_generation": 7,
@@ -766,7 +774,7 @@ def test_published_schema_v8_history_from_v0727_is_accepted(
     context.installed_version = "0.7.27"
 
     with _lineage_session() as db:
-        for migration in PRODUCTION_MIGRATIONS.migrations:
+        for migration in PRODUCTION_MIGRATIONS.path(1, 8):
             db.add(
                 SchemaMigrationHistory(
                     migration_id=migration.migration_id,

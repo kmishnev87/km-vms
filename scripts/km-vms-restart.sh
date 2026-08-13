@@ -13,7 +13,8 @@ usage() {
 KM VMS safe restart helper
 
 Usage:
-  sh scripts/km-vms-restart.sh --app-dir <path> [--project-name <name>] [--verify-storage-selection] [--initial-setup] [--help]
+  sh <app-dir>/data/update-runtime/bootstrap/current/km-vms-restart.sh \
+    --app-dir <app-dir> [--project-name <name>] [--verify-storage-selection] [--initial-setup] [--help]
 
 Environment equivalents:
   KM_VMS_APP_DIR, KM_VMS_PROJECT_NAME, KM_VMS_DOCKER_COMPOSE.
@@ -82,8 +83,55 @@ read_control_value() {
   return 1
 }
 
+read_env_value() {
+  key="$1"
+  sed -n "s/^$key=//p" "$APP_DIR/.env" | tail -n 1
+}
+
+bootstrap_command() {
+  bootstrap="$APP_DIR/data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+  [ -f "$bootstrap" ] || fail "Stable bootstrap authority is unavailable."
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -B "$bootstrap" "$@"
+    return $?
+  fi
+  command -v docker >/dev/null 2>&1 ||
+    fail "Canonical maintenance check is unavailable."
+  helper_id=$(docker ps -q \
+    --filter "label=com.docker.compose.project=$PROJECT_NAME" \
+    --filter "label=com.docker.compose.service=update-helper" | head -n 2)
+  [ "$(printf '%s\n' "$helper_id" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" ] ||
+    fail "Canonical maintenance check owner is unavailable."
+  docker exec "$helper_id" python3 -B "$bootstrap" "$@"
+}
+
+writer_isolation_state() {
+  set +e
+  output=$(bootstrap_command writer-isolation --app-dir "$APP_DIR" 2>/dev/null)
+  status=$?
+  set -e
+  if [ "$status" = "0" ] && [ "$output" = "inactive" ]; then
+    printf 'inactive\n'
+    return 0
+  fi
+  if [ "$status" = "75" ] && [ "$output" = "active" ]; then
+    printf 'active\n'
+    return 0
+  fi
+  fail "Canonical maintenance writer-isolation evidence is unavailable."
+}
+
 detect_compose() {
   km_vms_detect_compose "$DOCKER_COMPOSE_BIN" || fail "Docker Compose was not found. Checked KM_VMS_DOCKER_COMPOSE, PATH docker compose/docker-compose, and known NAS vendor paths."
+  case "$COMPOSE_BIN" in
+    */*)
+      compose_bin_dir=$(dirname "$COMPOSE_BIN")
+      if [ -x "$compose_bin_dir/docker" ]; then
+        PATH="$compose_bin_dir:$PATH"
+        export PATH
+      fi
+      ;;
+  esac
 }
 
 compose_cmd() {
@@ -115,12 +163,28 @@ apply_generated_archive_roots_compose_if_needed() {
     return 0
   fi
   wait_for_archive_roots_compose_file || return 0
+  [ "$WRITER_ISOLATION" != "active" ] ||
+    fail "maintenance_writer_isolation_active"
   compose_with_archive_roots "$@" config >/dev/null
   compose_with_archive_roots "$@" up -d --no-deps --force-recreate api
 }
 
 reconcile_persistent_services() {
+  if [ "$WRITER_ISOLATION" = "active" ]; then
+    compose_with_archive_roots "$@" up -d --no-deps \
+      postgres \
+      redis \
+      update-status-reader \
+      update-retry-admission \
+      web \
+      nginx \
+      setup-helper \
+      update-helper
+    return 0
+  fi
   compose_with_archive_roots "$@" up -d --no-deps \
+    postgres \
+    redis \
     update-status-reader \
     update-retry-admission \
     api \
@@ -270,7 +334,6 @@ done
 [ "$INITIAL_SETUP" = "0" ] || [ "$VERIFY_STORAGE_SELECTION" = "1" ] || fail "--initial-setup requires --verify-storage-selection"
 APP_DIR=$(normalize_path "$APP_DIR")
 [ -f "$APP_DIR/.env" ] || fail ".env not found in app dir: $APP_DIR"
-SOURCE_DIR=$(km_vms_resolve_product_source "$APP_DIR")
 SELECTION_FILE="$APP_DIR/data/install-control/storage-selection.json"
 SELECTION_CONTROL_FILE="$APP_DIR/data/install-control/storage-selection.control"
 STATUS_FILE="$APP_DIR/data/install-control/storage-apply-status.json"
@@ -282,7 +345,25 @@ set --
 if [ -n "$PROJECT_NAME" ]; then
   PROJECT_NAME=$(safe_project_name "$PROJECT_NAME")
   set -- "$@" --project-name "$PROJECT_NAME"
+else
+  PROJECT_NAME=$(safe_project_name "$(read_env_value COMPOSE_PROJECT_NAME)")
 fi
+
+SOURCE_DIR=$(bootstrap_command resolve-path \
+  --app-dir "$APP_DIR" \
+  --project-name "$PROJECT_NAME" \
+  --repair) || fail "Canonical release authority could not be resolved."
+case "$SOURCE_DIR" in
+  "$APP_DIR"/data/update-runtime/slots/*/source) ;;
+  *) fail "Canonical release authority escaped the slot layout." ;;
+esac
+
+WRITER_ISOLATION=$(writer_isolation_state)
+bootstrap_command reconcile-policies \
+  --app-dir "$APP_DIR" --project-name "$PROJECT_NAME" >/dev/null ||
+  fail "Container restart policies could not be reconciled."
+[ "$WRITER_ISOLATION" != "active" ] || [ "$VERIFY_STORAGE_SELECTION" = "0" ] ||
+  fail "maintenance_writer_isolation_active"
 
 (
   cd "$APP_DIR"
@@ -299,6 +380,10 @@ fi
     apply_generated_archive_roots_compose_if_needed "$archive_roots_compose_was_present" "$@"
   fi
 )
+
+bootstrap_command reconcile-policies \
+  --app-dir "$APP_DIR" --project-name "$PROJECT_NAME" >/dev/null ||
+  fail "Container restart policies could not be verified."
 
 if [ "$VERIFY_STORAGE_SELECTION" = "1" ]; then
   verify_storage_selection

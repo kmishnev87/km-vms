@@ -52,11 +52,15 @@ def onvif_error_code(exc: Exception) -> str:
     return "unknown_safe_error"
 
 
-def validation_fingerprint(payload: dict) -> dict:
+def _password_fingerprint(payload: dict) -> str:
+    password = str(payload.get("password") or "")
+    return hashlib.sha256(password.encode("utf-8")).hexdigest() if password else ""
+
+
+def management_fingerprint(payload: dict) -> dict:
     protocol = str(payload.get("protocol") or "rtsp").lower()
     rtsp_host = payload.get("rtsp_host") or (payload.get("host") if protocol == "onvif" else None)
     rtsp_port = payload.get("rtsp_port") or (554 if protocol == "onvif" else None)
-    password = str(payload.get("password") or "")
     return {
         "protocol": protocol,
         "host": str(payload.get("host") or ""),
@@ -64,30 +68,88 @@ def validation_fingerprint(payload: dict) -> dict:
         "rtsp_host": str(rtsp_host or ""),
         "rtsp_port": safe_int(rtsp_port, 0),
         "username": str(payload.get("username") or ""),
-        "password_sha256": hashlib.sha256(password.encode("utf-8")).hexdigest() if password else "",
-        "rtsp_main_url": str(payload.get("rtsp_main_url") or ""),
-        "rtsp_sub_url": str(payload.get("rtsp_sub_url") or ""),
-        "rtsp_transport": str(payload.get("rtsp_transport") or ""),
-        "onvif_path": str(payload.get("onvif_path") or ""),
-        "onvif_profile_token": str(payload.get("onvif_profile_token") or ""),
-        "onvif_channel_id": str(payload.get("onvif_channel_id") or ""),
-        "default_live_stream": str(payload.get("default_live_stream") or ""),
-        "default_record_stream": str(payload.get("default_record_stream") or ""),
+        "password_sha256": _password_fingerprint(payload),
+        "onvif_path": saved_stream_path(payload.get("onvif_path")),
     }
 
 
-def register_validation_proof(store: dict[str, dict], payload: dict) -> str:
+def normalize_stream_role(value: str | None) -> str | None:
+    role = str(value or "").strip().lower()
+    return role if role in {"main", "sub"} else None
+
+
+def stream_role_fingerprint(payload: dict, role: str) -> dict:
+    normalized_role = normalize_stream_role(role)
+    if normalized_role is None:
+        raise ValueError("stream role must be main or sub")
+    protocol = str(payload.get("protocol") or "rtsp").lower()
+    host = payload.get("rtsp_host") if protocol == "onvif" else payload.get("host")
+    if not host and protocol == "onvif":
+        host = payload.get("host")
+    port = payload.get("rtsp_port") if protocol == "onvif" else payload.get("port")
+    if not port:
+        port = 554
+    path_key = f"rtsp_{normalized_role}_url"
+    token_key = "onvif_profile_token" if normalized_role == "main" else "onvif_sub_profile_token"
+    return {
+        "role": normalized_role,
+        "protocol": protocol,
+        "rtsp_host": str(host or ""),
+        "rtsp_port": safe_int(port, 554),
+        "rtsp_transport": str(payload.get("rtsp_transport") or ""),
+        "username": str(payload.get("username") or ""),
+        "password_sha256": _password_fingerprint(payload),
+        "stream_path": saved_stream_path(payload.get(path_key)),
+        "profile_token": str(payload.get(token_key) or ""),
+        "onvif_channel_id": str(payload.get("onvif_channel_id") or ""),
+    }
+
+
+def validation_fingerprint(payload: dict) -> dict:
+    """Legacy aggregate fingerprint retained for compatibility-focused callers."""
+    return {
+        "management": management_fingerprint(payload),
+        "main": stream_role_fingerprint(payload, "main"),
+        "sub": stream_role_fingerprint(payload, "sub"),
+    }
+
+
+def register_validation_proof(
+    store: dict[str, dict],
+    payload: dict,
+    *,
+    fingerprint: dict | None = None,
+    proof_type: str = "legacy",
+    role: str | None = None,
+) -> str:
     token = uuid4().hex
-    store[token] = {"created_at": time.time(), "fingerprint": validation_fingerprint(payload)}
+    store[token] = {
+        "created_at": time.time(),
+        "fingerprint": fingerprint if fingerprint is not None else validation_fingerprint(payload),
+        "proof_type": proof_type,
+        "role": role,
+    }
     return token
 
 
 def register_onvif_probe_proof(payload: dict) -> str:
-    return register_validation_proof(ONVIF_PROBE_PROOFS, payload)
+    return register_validation_proof(
+        ONVIF_PROBE_PROOFS,
+        payload,
+        fingerprint=management_fingerprint(payload),
+        proof_type="onvif_management",
+    )
 
 
-def register_rtsp_test_proof(payload: dict) -> str:
-    return register_validation_proof(RTSP_TEST_PROOFS, payload)
+def register_rtsp_test_proof(payload: dict, role: str | None = None) -> str:
+    normalized_role = normalize_stream_role(role or payload.get("stream_role")) or "main"
+    return register_validation_proof(
+        RTSP_TEST_PROOFS,
+        payload,
+        fingerprint=stream_role_fingerprint(payload, normalized_role),
+        proof_type="rtsp_exact_role",
+        role=normalized_role,
+    )
 
 
 def store_has_valid_proof(store: dict[str, dict], token: str | None, payload: dict) -> bool:
@@ -100,12 +162,61 @@ def store_has_valid_proof(store: dict[str, dict], token: str | None, payload: di
     return proof.get("fingerprint") == validation_fingerprint(payload)
 
 
+def store_has_valid_management_proof(token: str | None, payload: dict) -> bool:
+    proof = ONVIF_PROBE_PROOFS.get(token or "")
+    if not _proof_is_fresh(ONVIF_PROBE_PROOFS, token, proof):
+        return False
+    return (
+        proof.get("proof_type") == "onvif_management"
+        and proof.get("fingerprint") == management_fingerprint(payload)
+    )
+
+
+def _proof_is_fresh(store: dict[str, dict], token: str | None, proof: dict | None) -> bool:
+    if not proof:
+        return False
+    if time.time() - float(proof.get("created_at") or 0) > PROOF_TTL_SECONDS:
+        store.pop(token or "", None)
+        return False
+    return True
+
+
+def store_has_valid_stream_proof(token: str | None, payload: dict, role: str) -> bool:
+    normalized_role = normalize_stream_role(role)
+    proof = RTSP_TEST_PROOFS.get(token or "")
+    if normalized_role is None or not _proof_is_fresh(RTSP_TEST_PROOFS, token, proof):
+        return False
+    return (
+        proof.get("proof_type") == "rtsp_exact_role"
+        and proof.get("role") == normalized_role
+        and proof.get("fingerprint") == stream_role_fingerprint(payload, normalized_role)
+    )
+
+
+def required_stream_roles(payload: dict) -> tuple[str, ...]:
+    roles = []
+    if saved_stream_path(payload.get("rtsp_main_url")):
+        roles.append("main")
+    if saved_stream_path(payload.get("rtsp_sub_url")):
+        roles.append("sub")
+    return tuple(roles)
+
+
 def has_valid_onboarding_proof(payload: dict) -> bool:
-    validation_token = safe_preview_token(payload.get("validation_token"))
-    if store_has_valid_proof(RTSP_TEST_PROOFS, validation_token, payload):
+    roles = required_stream_roles(payload)
+    if not roles:
+        return False
+    main_token = safe_preview_token(
+        payload.get("main_validation_token") or payload.get("validation_token")
+    )
+    sub_token = safe_preview_token(payload.get("sub_validation_token"))
+    role_tokens = {"main": main_token, "sub": sub_token}
+    if not all(store_has_valid_stream_proof(role_tokens[role], payload, role) for role in roles):
+        return False
+    if str(payload.get("protocol") or "rtsp").lower() != "onvif":
         return True
-    token = safe_preview_token(payload.get("onvif_probe_token"))
-    return store_has_valid_proof(ONVIF_PROBE_PROOFS, token, payload)
+    probe_token = safe_preview_token(payload.get("onvif_probe_token"))
+    return store_has_valid_management_proof(probe_token, payload)
 
 
 def require_save_gate(payload: dict, *, connection_sensitive_change: bool) -> bool:
@@ -239,6 +350,55 @@ def get_camera_credentials(
     }
 
 
+def resolve_test_connection_payload(db: Session, payload: dict) -> dict:
+    """Resolve a test request to the same final connection truth used by save."""
+    resolved = dict(payload)
+    creds = get_camera_credentials(db, payload)
+    camera = creds.get("camera")
+    if camera is not None:
+        for field in (
+            "protocol",
+            "host",
+            "port",
+            "rtsp_main_url",
+            "rtsp_sub_url",
+            "rtsp_host",
+            "rtsp_port",
+            "rtsp_transport",
+            "onvif_path",
+            "onvif_profile_token",
+            "onvif_sub_profile_token",
+            "onvif_channel_id",
+            "default_live_stream",
+            "default_record_stream",
+        ):
+            if resolved.get(field) in (None, ""):
+                resolved[field] = getattr(camera, field, None)
+    resolved["host"] = creds.get("host") or resolved.get("host")
+    resolved["port"] = creds.get("port") or resolved.get("port")
+    resolved["rtsp_host"] = creds.get("rtsp_host") or resolved.get("rtsp_host")
+    resolved["rtsp_port"] = creds.get("rtsp_port") or resolved.get("rtsp_port")
+    resolved["username"] = creds.get("username") or resolved.get("username")
+    resolved["password"] = creds.get("password") or resolved.get("password") or ""
+    protocol = str(resolved.get("protocol") or "rtsp").lower()
+    if protocol == "onvif":
+        stream_host = resolved.get("rtsp_host") or resolved.get("host")
+        stream_port = resolved.get("rtsp_port") or 554
+    else:
+        stream_host = resolved.get("host")
+        stream_port = resolved.get("port") or 554
+    for role in ("main", "sub"):
+        key = f"rtsp_{role}_url"
+        resolved[key] = assemble_rtsp_url(
+            stream_host,
+            stream_port,
+            resolved.get("username"),
+            resolved.get("password"),
+            saved_stream_path(resolved.get(key)),
+        )
+    return resolved
+
+
 def saved_stream_path(value: str | None) -> str | None:
     if not value:
         return None
@@ -263,11 +423,12 @@ def apply_profile_assignments(data: dict, camera: Camera | None) -> dict:
         return data
 
     main_token = str(camera.onvif_profile_token or "")
+    sub_token = str(camera.onvif_sub_profile_token or "")
     main_path = camera.rtsp_main_url
     sub_path = camera.rtsp_sub_url
     assignments = {
         "main": {"profile_token": main_token or None, "stream_path": saved_stream_path(main_path)},
-        "sub": {"profile_token": None, "stream_path": saved_stream_path(sub_path)},
+        "sub": {"profile_token": sub_token or None, "stream_path": saved_stream_path(sub_path)},
         "default_live_stream": camera.default_live_stream,
         "default_record_stream": camera.default_record_stream,
     }
@@ -275,10 +436,10 @@ def apply_profile_assignments(data: dict, camera: Camera | None) -> dict:
     for profile in data.get("profiles") or []:
         roles = []
         token = str(profile.get("token") or "")
-        if (main_token and token == main_token) or profile_matches_stream(profile, main_path):
+        if (main_token and token == main_token) or (not main_token and profile_matches_stream(profile, main_path)):
             roles.append("main")
             assignments["main"]["profile_token"] = token or assignments["main"]["profile_token"]
-        if profile_matches_stream(profile, sub_path):
+        if (sub_token and token == sub_token) or (not sub_token and profile_matches_stream(profile, sub_path)):
             roles.append("sub")
             assignments["sub"]["profile_token"] = token or assignments["sub"]["profile_token"]
         profile["assigned_roles"] = roles
@@ -288,7 +449,14 @@ def apply_profile_assignments(data: dict, camera: Camera | None) -> dict:
     return data
 
 
-def build_test_url(payload: dict, db: Session | None = None) -> str | None:
+def build_test_url(
+    payload: dict,
+    db: Session | None = None,
+    *,
+    role: str | None = None,
+) -> str | None:
+    if db is not None:
+        payload = resolve_test_connection_payload(db, payload)
     protocol = str(payload.get("protocol") or "rtsp").lower()
     rtsp_main_url = payload.get("rtsp_main_url")
     rtsp_sub_url = payload.get("rtsp_sub_url")
@@ -301,37 +469,15 @@ def build_test_url(payload: dict, db: Session | None = None) -> str | None:
     username = payload.get("username")
     password = payload.get("password")
 
-    if db is not None:
-        creds = get_camera_credentials(db, payload)
-        if protocol == "rtsp":
-            host = creds["host"] or host
-            port = creds["port"] or port
-        else:
-            host = payload.get("rtsp_host") or creds["rtsp_host"] or host
-            port = payload.get("rtsp_port") or creds["rtsp_port"] or port
-        username = creds["username"] or username
-        password = creds["password"] or password
-        camera = creds.get("camera")
-        if camera is not None:
-            rtsp_main_url = rtsp_main_url if rtsp_main_url not in (None, "") else camera.rtsp_main_url
-            rtsp_sub_url = rtsp_sub_url if rtsp_sub_url not in (None, "") else camera.rtsp_sub_url
+    selected_role = normalize_stream_role(role or payload.get("stream_role"))
+    if selected_role:
+        selected_value = rtsp_main_url if selected_role == "main" else rtsp_sub_url
+        return assemble_rtsp_url(host, port, username, password, selected_value)
 
-    return (
-        assemble_rtsp_url(
-            host,
-            port,
-            username,
-            password,
-            rtsp_main_url,
-        )
-        or
-        assemble_rtsp_url(
-            host,
-            port,
-            username,
-            password,
-            rtsp_sub_url,
-        )
+    # Compatibility for older callers that did not name a role. New Cameras UI
+    # always supplies an exact role and never crosses over to the other stream.
+    return assemble_rtsp_url(host, port, username, password, rtsp_main_url) or assemble_rtsp_url(
+        host, port, username, password, rtsp_sub_url
     )
 
 

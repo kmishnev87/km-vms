@@ -6,7 +6,6 @@ import json
 import time
 from datetime import datetime
 from uuid import uuid4
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
@@ -31,10 +30,12 @@ from app.routers.camera_connection_helpers import (
     parse_bounded_int,
     parse_port,
     profile_matches_stream,
+    normalize_stream_role,
     register_onvif_probe_proof,
     register_rtsp_test_proof,
     register_validation_proof,
     require_save_gate,
+    resolve_test_connection_payload,
     safe_int,
     safe_onvif_error,
     safe_preview_token,
@@ -58,7 +59,13 @@ from app.routers.camera_onvif_routes import (
     update_onvif_profile_route,
 )
 from app.routers.deps import FORBIDDEN_DETAIL, get_current_user, require_permission
-from app.schemas.camera import CameraCreate, CameraResponse, CameraUpdate
+from app.schemas.camera import (
+    CameraCreate,
+    CameraResponse,
+    CameraUpdate,
+    restore_rtsp_management_value,
+    safe_rtsp_management_value,
+)
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.recording_retention import EXECUTION_POLICY_MANUAL_COMPLETE, execute_segments, preview_segments
@@ -96,6 +103,7 @@ CONNECTION_SENSITIVE_FIELDS = {
     "rtsp_transport",
     "onvif_path",
     "onvif_profile_token",
+    "onvif_sub_profile_token",
     "onvif_channel_id",
 }
 SECRET_METADATA_FIELDS = {
@@ -174,11 +182,21 @@ def test_camera(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    input_url = build_test_url(payload, db=db)
+    requested_role_value = payload.get("stream_role")
+    requested_role = normalize_stream_role(requested_role_value)
+    if requested_role_value not in (None, "") and requested_role is None:
+        raise HTTPException(status_code=422, detail="stream_role must be main or sub.")
+    resolved_payload = resolve_test_connection_payload(db, payload)
+    input_url = build_test_url(resolved_payload, role=requested_role)
     if not input_url:
-        raise HTTPException(status_code=400, detail="Укажите RTSP path или URL для проверки камеры.")
+        role_label = requested_role or "selected"
+        raise HTTPException(status_code=400, detail=f"RTSP path for {role_label} stream is required.")
 
-    transport = payload.get("rtsp_transport") or "tcp"
+    tested_role = requested_role or (
+        "main" if saved_stream_path(resolved_payload.get("rtsp_main_url")) else "sub"
+    )
+
+    transport = resolved_payload.get("rtsp_transport") or "tcp"
 
     cmd = [
         "ffprobe",
@@ -214,7 +232,7 @@ def test_camera(
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
     preview_path, preview_url, preview_token = test_preview_destination(payload)
     preview_ok = capture_camera_preview(input_url, transport, preview_path)
-    validation_token = register_rtsp_test_proof(payload)
+    validation_token = register_rtsp_test_proof(resolved_payload, tested_role)
 
     return {
         "ok": True,
@@ -223,6 +241,13 @@ def test_camera(
         "preview_url": preview_url if preview_ok else None,
         "preview_token": preview_token if preview_ok and preview_token else None,
         "validation_token": validation_token,
+        "tested_role": tested_role,
+        "stream_identity": {
+            "role": tested_role,
+            "path": safe_rtsp_management_value(
+                resolved_payload.get(f"rtsp_{tested_role}_url")
+            ),
+        },
         "preview_ok": preview_ok,
         "preview_message": None if preview_ok else "Соединение установлено, но кадр превью получить не удалось.",
         "video": {
@@ -256,11 +281,6 @@ def create_camera(
     if existing:
         raise HTTPException(status_code=400, detail="Камера с таким именем уже существует")
 
-    payload_dict = payload.model_dump()
-    manual_unverified = require_save_gate(payload_dict, connection_sensitive_change=True)
-    folder_name = build_unique_folder_name(db, payload.name)
-    ensure_camera_folder(folder_name)
-
     rtsp_host = payload.rtsp_host or payload.host
     rtsp_port = payload.rtsp_port or 554
     if str(payload.protocol or "rtsp").lower() == "rtsp":
@@ -272,15 +292,27 @@ def create_camera(
         rtsp_port,
         payload.username,
         payload.password,
-        payload.rtsp_main_url,
+        saved_stream_path(payload.rtsp_main_url),
     )
     rtsp_sub_url = assemble_rtsp_url(
         rtsp_host,
         rtsp_port,
         payload.username,
         payload.password,
-        payload.rtsp_sub_url,
+        saved_stream_path(payload.rtsp_sub_url),
     )
+
+    payload_dict = payload.model_dump()
+    final_connection_payload = {
+        **payload_dict,
+        "rtsp_host": rtsp_host if str(payload.protocol or "rtsp").lower() == "onvif" else None,
+        "rtsp_port": rtsp_port if str(payload.protocol or "rtsp").lower() == "onvif" else None,
+        "rtsp_main_url": rtsp_main_url,
+        "rtsp_sub_url": rtsp_sub_url,
+    }
+    manual_unverified = require_save_gate(final_connection_payload, connection_sensitive_change=True)
+    folder_name = build_unique_folder_name(db, payload.name)
+    ensure_camera_folder(folder_name)
 
     camera = Camera(
         name=payload.name,
@@ -298,6 +330,7 @@ def create_camera(
         rtsp_transport=payload.rtsp_transport,
         onvif_path=payload.onvif_path,
         onvif_profile_token=payload.onvif_profile_token,
+        onvif_sub_profile_token=payload.onvif_sub_profile_token,
         onvif_channel_id=payload.onvif_channel_id,
         recording_mode=payload.recording_mode,
         default_live_stream=payload.default_live_stream,
@@ -339,12 +372,7 @@ def create_camera(
 def safe_rtsp_display_path(input_url: str | None) -> str:
     if not input_url:
         return "RTSP path указан"
-    try:
-        parsed = urlparse(input_url)
-        path = f"{parsed.path or ''}{('?' + parsed.query) if parsed.query else ''}"
-        return path or "RTSP path указан"
-    except Exception:
-        return "RTSP path указан"
+    return safe_rtsp_management_value(input_url) or "RTSP path указан"
 
 
 def ensure_static_preview_permissions(path: Path, *, include_file: bool = False) -> None:
@@ -694,6 +722,8 @@ def update_camera(
     data = dict(raw_payload)
     preview_token = data.pop("preview_token", None)
     validation_token = data.pop("validation_token", None)
+    main_validation_token = data.pop("main_validation_token", None)
+    sub_validation_token = data.pop("sub_validation_token", None)
     onvif_probe_token = data.pop("onvif_probe_token", None)
     manual_confirm_unverified = bool(data.pop("manual_confirm_unverified", False))
 
@@ -719,23 +749,26 @@ def update_camera(
         host_for_rtsp = next_rtsp_host
         port_for_rtsp = next_rtsp_port
 
-    if "rtsp_main_url" in data and data["rtsp_main_url"] is not None:
-        data["rtsp_main_url"] = assemble_rtsp_url(
-            host_for_rtsp,
-            port_for_rtsp,
-            username_for_rtsp,
-            password_for_rtsp,
-            data["rtsp_main_url"],
-        )
-
-    if "rtsp_sub_url" in data and data["rtsp_sub_url"] is not None:
-        data["rtsp_sub_url"] = assemble_rtsp_url(
-            host_for_rtsp,
-            port_for_rtsp,
-            username_for_rtsp,
-            password_for_rtsp,
-            data["rtsp_sub_url"],
-        )
+    submitted_main = data.get("rtsp_main_url", camera.rtsp_main_url)
+    submitted_sub = data.get("rtsp_sub_url", camera.rtsp_sub_url)
+    data["rtsp_main_url"] = assemble_rtsp_url(
+        host_for_rtsp,
+        port_for_rtsp,
+        username_for_rtsp,
+        password_for_rtsp,
+        saved_stream_path(
+            restore_rtsp_management_value(submitted_main, camera.rtsp_main_url)
+        ),
+    )
+    data["rtsp_sub_url"] = assemble_rtsp_url(
+        host_for_rtsp,
+        port_for_rtsp,
+        username_for_rtsp,
+        password_for_rtsp,
+        saved_stream_path(
+            restore_rtsp_management_value(submitted_sub, camera.rtsp_sub_url)
+        ),
+    )
 
     if "password" in data and data["password"]:
         camera.password_encrypted = encrypt_text(data.pop("password"))
@@ -756,6 +789,7 @@ def update_camera(
         "rtsp_transport": camera.rtsp_transport,
         "onvif_path": camera.onvif_path,
         "onvif_profile_token": camera.onvif_profile_token,
+        "onvif_sub_profile_token": camera.onvif_sub_profile_token,
         "onvif_channel_id": camera.onvif_channel_id,
         "recording_mode": camera.recording_mode,
         "default_live_stream": camera.default_live_stream,
@@ -773,9 +807,11 @@ def update_camera(
     connection_sensitive_change = any(old_values.get(key) != proposed_values.get(key) for key in CONNECTION_SENSITIVE_FIELDS if key != "password")
     connection_sensitive_change = connection_sensitive_change or bool(payload.password)
     gate_payload = {
-        **raw_payload,
-        "password": payload.password or "",
+        **proposed_values,
+        "password": password_for_rtsp or "",
         "validation_token": validation_token,
+        "main_validation_token": main_validation_token,
+        "sub_validation_token": sub_validation_token,
         "onvif_probe_token": onvif_probe_token,
         "manual_confirm_unverified": manual_confirm_unverified,
     }

@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -28,7 +29,7 @@ DEFAULT_POLL_SECONDS = 2
 PERMISSION_GATE_TIMEOUT_SECONDS = 300
 
 REQUEST_ID_RE = re.compile(
-    r"^(?:update|stage609)-[0-9a-f]{32}$",
+    r"^(?:update|stage609|terminal)-[0-9a-f]{32}$",
     re.IGNORECASE,
 )
 PROJECT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
@@ -37,7 +38,7 @@ IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{12,64}$")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 SLOT_ID_RE = re.compile(
-    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64})$",
+    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})$",
     re.IGNORECASE,
 )
 ARCHIVE_RUNTIME_TARGET_RE = re.compile(
@@ -74,8 +75,8 @@ TARGET_EVIDENCE_SERVICES = (
     "schema-update",
 )
 ACTIVATION_RUNTIME_SERVICES = (
-    "update-status-reader",
     "update-retry-admission",
+    "update-status-reader",
     "api",
     "recorder",
     "web",
@@ -90,6 +91,27 @@ REQUEST_SCOPED_COMPOSE_EVIDENCE_FIELDS = frozenset(
     }
 )
 REQUEST_ID_COMPOSE_TOKEN = "${KM_VMS_UPDATE_CONTROL_REQUEST_ID}"
+
+
+def inventory_bound_source_token(slot_id: str, inventory_sha256: str) -> str:
+    """Return a non-official 40-hex compatibility token for schema records."""
+
+    if not re.fullmatch(r"initial-[0-9a-f]{64}", str(slot_id or "")):
+        raise BridgeError(
+            "inventory_bound_identity_invalid",
+            "Inventory-bound initial slot identity is invalid.",
+        )
+    if not re.fullmatch(r"[0-9a-f]{64}", str(inventory_sha256 or "")):
+        raise BridgeError(
+            "inventory_bound_identity_invalid",
+            "Inventory-bound source inventory identity is invalid.",
+        )
+    return hashlib.sha256(
+        (
+            "km-vms-inventory-bound-source-v1\0"
+            f"{slot_id}\0{inventory_sha256}"
+        ).encode("ascii")
+    ).hexdigest()[:40]
 
 LEGACY_HISTORICAL_REQUEST_FIELDS = {
     "schema_version",
@@ -144,6 +166,7 @@ NORMALIZED_REQUEST_FIELDS = {
 
 UPDATE_LINEAGE_FILENAME = "km-vms-update-lineage.json"
 UPDATE_LINEAGE_MAX_BYTES = 128 * 1024
+CURRENT_PRODUCT_DB_SCHEMA_VERSION = 9
 
 
 def load_update_lineage() -> dict[str, Any]:
@@ -224,7 +247,7 @@ def load_update_lineage() -> dict[str, Any]:
             or commit != commit.lower()
             or type(schema_version) is not int
             or schema_version < 1
-            or schema_version > 8
+            or schema_version > CURRENT_PRODUCT_DB_SCHEMA_VERSION
             or type(shape) is not str
             or not re.fullmatch(r"[0-9a-f]{64}", shape)
             or type(alternates) is not list
@@ -667,6 +690,10 @@ def capture_installed_source_identity(
     source_identity = read_json_object(
         installed_root / ".km-vms-source.json"
     )
+    installed_release_identity = read_json_object(
+        installed_root / ".km-vms-release.json",
+        missing_ok=True,
+    )
     release_root = target_source_dir or app_dir
     release_identity = read_json_object(
         release_root / "release/km-vms-release.json"
@@ -741,6 +768,30 @@ def capture_installed_source_identity(
     release_version = str(release_identity.get("version") or "")
     installed_commit = str(source_identity.get("commit_sha") or "").lower()
     installed_repo = str(source_identity.get("github_repo") or "")
+    initial_identity = bool(
+        isinstance(installed_release_identity, dict)
+        and
+        installed_release_identity.get("identity_mode") == "inventory_bound"
+        and installed_release_identity.get("slot_kind")
+        == "initial_install_snapshot"
+        and installed_release_identity.get("commit_sha") is None
+        and re.fullmatch(
+            r"initial-[0-9a-f]{64}",
+            str(installed_release_identity.get("slot_id") or ""),
+        )
+    )
+    initial_projection: dict[str, Any] | None = None
+    if initial_identity:
+        try:
+            installed_engine = load_slot_engine(installed_root)
+            initial_projection = installed_engine.validate_installed_slot_projection(
+                app_dir
+            )
+        except Exception as exc:
+            raise BridgeError(
+                getattr(exc, "code", "installed_projection_invalid"),
+                "Inventory-bound installed-slot evidence is invalid.",
+            ) from exc
     if (
         type(request.get("schema_version")) is not int
         or request.get("schema_version") not in {1, 2}
@@ -772,25 +823,52 @@ def capture_installed_source_identity(
                 or release_commit != target_commit
             )
         )
-        or installed_repo.lower() != "kmishnev87/km-vms"
         or type(source_identity.get("schema_version")) is not int
         or source_identity["schema_version"] != 1
-        or not COMMIT_SHA_RE.fullmatch(installed_commit)
+        or (
+            not initial_identity
+            and (
+                installed_repo.lower() != "kmishnev87/km-vms"
+                or not COMMIT_SHA_RE.fullmatch(installed_commit)
+            )
+        )
+        or (
+            initial_identity
+            and (
+                initial_projection is None
+                or initial_projection.get("slot_id")
+                != installed_release_identity.get("slot_id")
+                or initial_projection.get("version")
+                != installed_release_identity.get("version")
+            )
+        )
     ):
         raise BridgeError(
             "source_handoff_invalid",
             "Installed and target source identities cannot be bound safely.",
         )
-    installed_version = next(
-        (
-            version
-            for version, commit in SOURCE_TAG_COMMITS.items()
-            if commit == installed_commit
-        ),
-        None,
-    )
-    if installed_version is None and installed_commit == target_commit:
-        installed_version = release_version
+    initial_inventory_sha256: str | None = None
+    if initial_identity:
+        installed_version = str(installed_release_identity.get("version") or "")
+        initial_inventory_sha256 = str(
+            (initial_projection or {}).get("inventory_sha256") or ""
+        ).lower()
+        installed_commit_value = inventory_bound_source_token(
+            str(installed_release_identity.get("slot_id") or ""),
+            initial_inventory_sha256,
+        )
+    else:
+        installed_version = next(
+            (
+                version
+                for version, commit in SOURCE_TAG_COMMITS.items()
+                if commit == installed_commit
+            ),
+            None,
+        )
+        if installed_version is None and installed_commit == target_commit:
+            installed_version = release_version
+        installed_commit_value = installed_commit
     if installed_version is None:
         raise BridgeError(
             "installed_source_unsupported",
@@ -807,7 +885,16 @@ def capture_installed_source_identity(
         "schema_version": 1,
         "request_id": request_id.lower(),
         "installed_version": installed_version,
-        "installed_commit": installed_commit,
+        "installed_commit": installed_commit_value,
+        "identity_mode": (
+            "inventory_bound" if initial_identity else "trusted_release"
+        ),
+        "slot_id": (
+            installed_release_identity.get("slot_id")
+            if initial_identity
+            else None
+        ),
+        "inventory_sha256": initial_inventory_sha256,
         "recorded_at": utcnow(),
     }
     identity_path = control_dir / "pre-overlay-source-identity.json"
@@ -818,10 +905,17 @@ def capture_installed_source_identity(
             "request_id",
             "installed_version",
             "installed_commit",
+            "identity_mode",
+            "slot_id",
+            "inventory_sha256",
             "recorded_at",
         }
         existing_version = str(existing.get("installed_version") or "")
-        existing_commit = str(existing.get("installed_commit") or "").lower()
+        existing_commit = (
+            str(existing.get("installed_commit") or "").lower()
+            if existing.get("installed_commit") is not None
+            else None
+        )
         lineage_commit = SOURCE_TAG_COMMITS.get(existing_version)
         existing_lineage_valid = (
             lineage_commit == existing_commit
@@ -831,6 +925,23 @@ def capture_installed_source_identity(
                 and existing_commit == target_commit
             )
         )
+        if existing.get("identity_mode") == "inventory_bound":
+            existing_inventory = str(
+                existing.get("inventory_sha256") or ""
+            ).lower()
+            existing_slot = str(existing.get("slot_id") or "")
+            existing_lineage_valid = bool(
+                isinstance(existing_commit, str)
+                and existing_commit
+                == inventory_bound_source_token(
+                    existing_slot,
+                    existing_inventory,
+                )
+                and existing_slot
+                == str(installed_release_identity.get("slot_id") or "")
+                and existing_inventory == initial_inventory_sha256
+                and existing_version
+            )
         existing_family_valid = (
             request_id.lower().startswith("stage609-")
             == (existing_version in {"0.7.2", "0.7.3"})
@@ -841,7 +952,19 @@ def capture_installed_source_identity(
             or existing.get("request_id") != request_id.lower()
             or not isinstance(existing.get("recorded_at"), str)
             or not existing.get("recorded_at")
-            or not COMMIT_SHA_RE.fullmatch(existing_commit)
+            or (
+                existing.get("identity_mode") == "trusted_release"
+                and not COMMIT_SHA_RE.fullmatch(str(existing_commit or ""))
+            )
+            or (
+                existing.get("identity_mode") == "trusted_release"
+                and (
+                    existing.get("slot_id") is not None
+                    or existing.get("inventory_sha256") is not None
+                )
+            )
+            or existing.get("identity_mode")
+            not in {"trusted_release", "inventory_bound"}
             or not existing_lineage_valid
             or not existing_family_valid
         ):
@@ -856,7 +979,16 @@ def capture_installed_source_identity(
     if existing_request is not None:
         if (
             existing_request.get("request_id") == request_id
-            and existing_request != request
+            and (
+                set(existing_request) != set(request)
+                or type(existing_request.get("requested_at")) is not str
+                or not existing_request["requested_at"]
+                or any(
+                    existing_request.get(field) != request.get(field)
+                    for field in request
+                    if field != "requested_at"
+                )
+            )
         ):
             raise BridgeError(
                 "source_handoff_request_conflict",
@@ -911,6 +1043,67 @@ def load_slot_engine(source_dir: Path):
             "Release-slot activation engine is invalid.",
         ) from exc
     return module
+
+
+def load_stable_bootstrap(app_dir: Path):
+    module_path = (
+        app_dir
+        / "data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+    )
+    if module_path.is_symlink() or not module_path.is_file():
+        raise BridgeError(
+            "stable_bootstrap_missing",
+            "Stable bootstrap authority is unavailable.",
+        )
+    spec = importlib.util.spec_from_file_location(
+        "km_vms_stable_bootstrap_runtime",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        raise BridgeError(
+            "stable_bootstrap_invalid",
+            "Stable bootstrap authority cannot be loaded.",
+        )
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "stable_bootstrap_invalid"),
+            "Stable bootstrap authority is invalid.",
+        ) from exc
+    return module
+
+
+def set_writer_policy_fence(
+    app_dir: Path,
+    project_name: str,
+    *,
+    enabled: bool,
+) -> None:
+    bootstrap = load_stable_bootstrap(app_dir)
+    try:
+        bootstrap.set_writer_fence(
+            app_dir,
+            project_name,
+            enabled=enabled,
+        )
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "writer_fence_failed"),
+            "Database-writer restart policy could not be fenced safely.",
+        ) from exc
+
+
+def writer_policy_fence_active(app_dir: Path) -> bool:
+    bootstrap = load_stable_bootstrap(app_dir)
+    try:
+        return bool(bootstrap.writer_isolation_active(app_dir))
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "writer_fence_evidence_invalid"),
+            "Database-writer isolation evidence is unavailable.",
+        ) from exc
 
 
 def _parse_command_json(
@@ -990,19 +1183,29 @@ def _normalized_compose_digest(
     normalized = rendered.replace("\r\n", "\n")
     source_text = str(source_dir.resolve())
     app_text = str(app_dir.resolve())
+    mapped_source_text = str(
+        mapped_compose_project_directory(app_dir, source_dir)
+    )
+    mapped_app_text = str(
+        mapped_compose_project_directory(app_dir, app_dir)
+    )
     if source_text == app_text:
         replacements = [
             (source_text, "${KM_VMS_STABLE_LEGACY_SOURCE}"),
+            (mapped_source_text, "${KM_VMS_STABLE_LEGACY_SOURCE}"),
         ]
     else:
-        replacements = sorted(
-            [
-                (source_text, "${KM_VMS_PRODUCT_SOURCE}"),
-                (app_text, "${KM_VMS_STABLE_APP_DIR}"),
-            ],
-            key=lambda item: len(item[0]),
-            reverse=True,
-        )
+        replacements = [
+            (source_text, "${KM_VMS_PRODUCT_SOURCE}"),
+            (mapped_source_text, "${KM_VMS_PRODUCT_SOURCE}"),
+            (app_text, "${KM_VMS_STABLE_APP_DIR}"),
+            (mapped_app_text, "${KM_VMS_STABLE_APP_DIR}"),
+        ]
+    replacements = sorted(
+        set(replacements),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
     for observed, token in replacements:
         normalized = normalized.replace(observed, token)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
@@ -1091,8 +1294,21 @@ def _normalize_current_compose_contract(
     normalized = value
     source_text = str(source_dir.resolve())
     app_text = str(app_dir.resolve())
+    mapped_source_text = str(
+        mapped_compose_project_directory(app_dir, source_dir)
+    )
+    mapped_app_text = str(
+        mapped_compose_project_directory(app_dir, app_dir)
+    )
     if source_text != app_text:
-        normalized = normalized.replace(source_text, app_text)
+        for observed in sorted(
+            {source_text, mapped_source_text},
+            key=len,
+            reverse=True,
+        ):
+            normalized = normalized.replace(observed, app_text)
+    if mapped_app_text != app_text:
+        normalized = normalized.replace(mapped_app_text, app_text)
     return normalized.replace(request_id, REQUEST_ID_COMPOSE_TOKEN)
 
 
@@ -1112,11 +1328,67 @@ def _current_compose_security_contract(
     )
     try:
         payload = json.loads(rendered.stdout)
-    except json.JSONDecodeError as exc:
-        raise BridgeError(
-            "slot_compose_evidence_failed",
-            "Current Compose security contract is invalid.",
-        ) from exc
+    except json.JSONDecodeError:
+        # TerraMaster Compose 2.25 can accept ``--format json`` yet emit its
+        # canonical YAML.  Compare a path-normalized digest of that complete
+        # output instead of weakening the adoption check or requiring a host
+        # YAML package that is not portable to every supported NAS.
+        normalized = rendered.stdout.replace("\r\n", "\n")
+        if (
+            not normalized.strip()
+            or "\x00" in normalized
+            or "\nservices:\n" not in f"\n{normalized}"
+        ):
+            raise BridgeError(
+                "slot_compose_evidence_failed",
+                "Current Compose security contract is invalid.",
+            )
+        app_text = str(app_dir.resolve())
+        mapped_app_text = str(
+            mapped_compose_project_directory(app_dir, app_dir)
+        )
+        replacements: set[str] = {mapped_app_text}
+        if source_dir.resolve() != app_dir.resolve():
+            replacements.update(
+                {
+                    str(source_dir.resolve()),
+                    str(
+                        mapped_compose_project_directory(
+                            app_dir,
+                            source_dir,
+                        )
+                    ),
+                }
+            )
+        if adopted_final_source is not None:
+            replacements.update(
+                {
+                    str(adopted_final_source.resolve()),
+                    str(
+                        mapped_compose_project_directory(
+                            app_dir,
+                            adopted_final_source,
+                        )
+                    ),
+                }
+            )
+        for observed in sorted(
+            (item for item in replacements if item != app_text),
+            key=len,
+            reverse=True,
+        ):
+            normalized = normalized.replace(observed, app_text)
+        normalized = normalized.replace(
+            request_id,
+            REQUEST_ID_COMPOSE_TOKEN,
+        )
+        return {
+            "schema_version": 1,
+            "format": "canonical_yaml_sha256",
+            "sha256": hashlib.sha256(
+                normalized.encode("utf-8")
+            ).hexdigest(),
+        }
     if type(payload) is not dict or type(payload.get("services")) is not dict:
         raise BridgeError(
             "slot_compose_evidence_failed",
@@ -1353,7 +1625,7 @@ def preserve_slot_images(
         or type(services) is not dict
         or not services
         or not re.fullmatch(
-            r"(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64})",
+            r"(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})",
             slot_id,
         )
     ):
@@ -1732,7 +2004,50 @@ def _compose_image_refs(
     try:
         payload = json.loads(result.stdout)
         services = payload["services"]
-    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+    except json.JSONDecodeError:
+        # TerraMaster's standalone Compose 2.25 advertises --format json but
+        # can still emit canonical YAML.  Parse only the immediate service
+        # names and image scalars needed for immutable image evidence.
+        services = {}
+        in_services = False
+        current_service = ""
+        for line in result.stdout.replace("\r\n", "\n").splitlines():
+            if line == "services:":
+                in_services = True
+                current_service = ""
+                continue
+            if not in_services:
+                continue
+            if line and not line.startswith(" "):
+                break
+            service_match = re.fullmatch(
+                r"  ([a-z][a-z0-9_-]{0,62}):",
+                line,
+            )
+            if service_match:
+                current_service = service_match.group(1)
+                if current_service in services:
+                    raise BridgeError(
+                        "slot_compose_evidence_failed",
+                        "Target Compose image plan is ambiguous.",
+                    )
+                services[current_service] = {}
+                continue
+            image_match = re.fullmatch(r"    image: (.+)", line)
+            if image_match and current_service:
+                image = image_match.group(1).strip()
+                if (
+                    not image
+                    or any(character.isspace() for character in image)
+                    or any(character in image for character in "\x00\r\n")
+                    or "image" in services[current_service]
+                ):
+                    raise BridgeError(
+                        "slot_compose_evidence_failed",
+                        "Target Compose image plan is invalid.",
+                    )
+                services[current_service]["image"] = image
+    except (KeyError, TypeError) as exc:
         raise BridgeError(
             "slot_compose_evidence_failed",
             "Target Compose image plan is invalid.",
@@ -1845,6 +2160,59 @@ def slot_environment(project_name: str, slot_id: str) -> dict[str, str]:
     return env
 
 
+def mapped_compose_project_directory(
+    app_dir: Path,
+    source_dir: Path,
+) -> Path:
+    """Map a helper-container source path to the daemon's host namespace.
+
+    Compose reads ``-f`` files through the helper container, but relative bind
+    sources are interpreted by the Docker daemon.  The stable app root is
+    mounted at ``/host-app`` and its exact host path is supplied separately;
+    only the project-directory namespace needs translation.
+    """
+
+    raw_host_root = str(
+        os.getenv("KM_VMS_UPDATE_HOST_APP_DIR") or ""
+    ).strip()
+    if not raw_host_root:
+        return source_dir
+    host_root = Path(raw_host_root)
+    if not host_root.is_absolute() or host_root == Path("/"):
+        raise BridgeError(
+            "host_app_binding_invalid",
+            "Update-helper host app binding is invalid.",
+        )
+    try:
+        env_lines = (app_dir / ".env").read_text(
+            encoding="utf-8",
+            errors="strict",
+        ).splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise BridgeError(
+            "host_app_binding_invalid",
+            "Installed host app binding is unavailable.",
+        ) from exc
+    declared = [
+        line.split("=", 1)[1].strip()
+        for line in env_lines
+        if line.startswith("KM_VMS_HOST_APP_DIR=")
+    ]
+    if declared != [raw_host_root]:
+        raise BridgeError(
+            "host_app_binding_invalid",
+            "Update-helper host app binding contradicts installed state.",
+        )
+    try:
+        relative = source_dir.resolve().relative_to(app_dir.resolve())
+    except (OSError, ValueError) as exc:
+        raise BridgeError(
+            "host_app_binding_invalid",
+            "Compose product source escaped the stable app binding.",
+        ) from exc
+    return host_root / relative
+
+
 def write_slot_image_override(
     destination: Path,
     manifest: dict[str, Any],
@@ -1926,6 +2294,10 @@ def slot_compose(
         app_dir,
         project_name,
         source_dir=source_dir,
+        project_directory=mapped_compose_project_directory(
+            app_dir,
+            source_dir,
+        ),
         image_override=image_override,
         include_archive_override=True,
     )
@@ -2067,6 +2439,44 @@ def _api_visible_release_identity(
     return payload
 
 
+def probe_slot_http(
+    compose: Sequence[str],
+    *,
+    env: dict[str, str],
+) -> None:
+    """Probe service DNS from inside the Compose network, not the NAS host."""
+
+    result = run_command(
+        [
+            *compose,
+            "exec",
+            "-T",
+            "api",
+            "python3",
+            "-c",
+            (
+                "import urllib.request;"
+                "urls=('http://api:8000/health',"
+                "'http://nginx/api/health','http://web:3000/');"
+                "responses=[urllib.request.urlopen(url,timeout=5) "
+                "for url in urls];"
+                "assert all(200 <= response.status < 400 "
+                "for response in responses)"
+            ),
+        ],
+        timeout=20,
+        error_code="slot_runtime_unhealthy",
+        error_message="Release-slot HTTP readiness failed.",
+        check=False,
+        env=env,
+    )
+    if result.returncode != 0:
+        raise BridgeError(
+            "slot_runtime_unhealthy",
+            "Release-slot HTTP readiness failed.",
+        )
+
+
 def capture_slot_runtime_binding(
     app_dir: Path,
     project_name: str,
@@ -2151,52 +2561,45 @@ def capture_slot_runtime_binding(
             compose,
             env=env,
         )
+        initial_identity = manifest.get("kind") == "initial_install_snapshot"
+        expected_api_identity = {
+            "version": binding["version"],
+            "commit": binding["commit"],
+            "metadata_status": "complete",
+            "identity_validity": (
+                "inventory_bound" if initial_identity else "valid"
+            ),
+        }
         if (
             identity.get("metadata_status") != "complete"
             or str(identity.get("version") or "")
             != binding["version"]
-            or str(identity.get("commit_sha") or "").lower()
+            or (
+                identity.get("commit_sha").lower()
+                if isinstance(identity.get("commit_sha"), str)
+                else None
+            )
             != binding["commit"]
+            or (
+                initial_identity
+                and (
+                    identity.get("identity_mode") != "inventory_bound"
+                    or identity.get("slot_kind") != "initial_install_snapshot"
+                    or identity.get("slot_id") != binding["slot_id"]
+                )
+            )
             or _sha256_file(identity_path)
             != binding["api_identity_sha256"]
             or _api_visible_identity_digest(compose, env=env)
             != binding["api_identity_sha256"]
-            or api_identity
-            != {
-                "version": binding["version"],
-                "commit": binding["commit"],
-                "metadata_status": "complete",
-                "identity_validity": "valid",
-            }
+            or api_identity != expected_api_identity
         ):
             raise BridgeError(
                 "slot_runtime_identity_mismatch",
                 "Release-slot identity does not match API-visible identity.",
             )
         if require_http:
-            for url in (
-                "http://api:8000/health",
-                "http://nginx/api/health",
-                "http://web:3000/",
-            ):
-                result = run_command(
-                    [
-                        "curl",
-                        "-fsSL",
-                        "--max-time",
-                        "5",
-                        url,
-                    ],
-                    timeout=10,
-                    error_code="slot_runtime_unhealthy",
-                    error_message="Release-slot HTTP readiness failed.",
-                    check=False,
-                )
-                if result.returncode != 0:
-                    raise BridgeError(
-                        "slot_runtime_unhealthy",
-                        "Release-slot HTTP readiness failed.",
-                    )
+            probe_slot_http(compose, env=env)
         return binding
 
 
@@ -2238,13 +2641,215 @@ def verify_slot_runtime(
     )
 
 
+def _installed_container_prefix(app_dir: Path) -> str:
+    value = ""
+    try:
+        lines = (app_dir / ".env").read_text(
+            encoding="utf-8",
+            errors="strict",
+        ).splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise BridgeError(
+            "container_prefix_unavailable",
+            "Installed container prefix is unavailable.",
+        ) from exc
+    for line in lines:
+        if line.startswith("KM_VMS_CONTAINER_PREFIX="):
+            value = line.split("=", 1)[1].strip()
+            break
+    value = value or "vms"
+    if not PROJECT_NAME_RE.fullmatch(value):
+        raise BridgeError(
+            "container_prefix_invalid",
+            "Installed container prefix is invalid.",
+        )
+    return value
+
+
+def cleanup_interrupted_compose_recreates(
+    app_dir: Path,
+    project_name: str,
+    services: Sequence[str],
+) -> int:
+    """Remove only stopped Compose temporary duplicates after interruption."""
+
+    prefix = _installed_container_prefix(app_dir)
+    removed_count = 0
+    for service in services:
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,62}", service):
+            raise BridgeError(
+                "compose_recreate_evidence_invalid",
+                "Compose recovery service identity is invalid.",
+            )
+        listed = run_command(
+            [
+                "docker",
+                "ps",
+                "-aq",
+                "--filter",
+                f"label=com.docker.compose.project={project_name}",
+                "--filter",
+                f"label=com.docker.compose.service={service}",
+            ],
+            timeout=30,
+            error_code="compose_recreate_evidence_invalid",
+            error_message="Interrupted Compose recreate evidence is unavailable.",
+        )
+        ids = [
+            line.strip().lower()
+            for line in listed.stdout.splitlines()
+            if line.strip()
+        ]
+        if (
+            len(ids) > 8
+            or len(set(ids)) != len(ids)
+            or any(not CONTAINER_ID_RE.fullmatch(item) for item in ids)
+        ):
+            raise BridgeError(
+                "compose_recreate_evidence_invalid",
+                "Interrupted Compose recreate evidence is ambiguous.",
+            )
+        if not ids:
+            continue
+        inspected = run_command(
+            ["docker", "inspect", *ids],
+            timeout=30,
+            error_code="compose_recreate_evidence_invalid",
+            error_message="Interrupted Compose recreate evidence is unavailable.",
+        )
+        try:
+            rows = json.loads(inspected.stdout)
+        except (json.JSONDecodeError, RecursionError) as exc:
+            raise BridgeError(
+                "compose_recreate_evidence_invalid",
+                "Interrupted Compose recreate evidence is invalid.",
+            ) from exc
+        if type(rows) is not list or len(rows) != len(ids):
+            raise BridgeError(
+                "compose_recreate_evidence_invalid",
+                "Interrupted Compose recreate evidence is contradictory.",
+            )
+        canonical_name = f"{prefix}-{service}"
+        temporary_name = re.compile(
+            rf"^[0-9a-f]{{12,64}}_{re.escape(canonical_name)}$"
+        )
+        temporary_ids: list[str] = []
+        canonical_count = 0
+        for row in rows:
+            try:
+                container_id = str(row["Id"]).lower()
+                name = str(row["Name"]).removeprefix("/")
+                labels = row["Config"]["Labels"]
+                running = row["State"]["Running"]
+            except (KeyError, TypeError) as exc:
+                raise BridgeError(
+                    "compose_recreate_evidence_invalid",
+                    "Interrupted Compose recreate evidence is invalid.",
+                ) from exc
+            if (
+                not CONTAINER_ID_RE.fullmatch(container_id)
+                or type(labels) is not dict
+                or labels.get("com.docker.compose.project") != project_name
+                or labels.get("com.docker.compose.service") != service
+                or type(running) is not bool
+            ):
+                raise BridgeError(
+                    "compose_recreate_evidence_invalid",
+                    "Interrupted Compose recreate evidence escaped its project scope.",
+                )
+            if name == canonical_name:
+                canonical_count += 1
+                continue
+            if not temporary_name.fullmatch(name) or running:
+                raise BridgeError(
+                    "compose_recreate_evidence_invalid",
+                    "Interrupted Compose recreate duplicate is unsafe.",
+                )
+            temporary_ids.append(container_id)
+        if canonical_count > 1:
+            raise BridgeError(
+                "compose_recreate_evidence_invalid",
+                "Canonical Compose container identity is ambiguous.",
+            )
+        for container_id in temporary_ids:
+            run_command(
+                ["docker", "rm", container_id],
+                timeout=30,
+                error_code="compose_recreate_cleanup_failed",
+                error_message="A stopped Compose recreate duplicate could not be removed.",
+            )
+            removed_count += 1
+    return removed_count
+
+
+def wait_compose_service_ready(
+    compose: Sequence[str],
+    service: str,
+    *,
+    env: dict[str, str],
+    timeout_seconds: int = 180,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            container_id = _compose_container_id(
+                compose,
+                service,
+                env=env,
+            )
+            inspected = run_command(
+                ["docker", "inspect", container_id],
+                timeout=30,
+                error_code="slot_runtime_evidence_failed",
+                error_message="Release-slot service readiness is unavailable.",
+            )
+            row = json.loads(inspected.stdout)[0]
+            state = row["State"]
+            if type(state) is not dict:
+                raise KeyError("State")
+            if state.get("Running") is True:
+                health = state.get("Health")
+                if health is None or (
+                    type(health) is dict
+                    and health.get("Status") == "healthy"
+                ):
+                    return
+                if (
+                    type(health) is dict
+                    and health.get("Status") == "unhealthy"
+                ):
+                    raise BridgeError(
+                        "slot_runtime_unhealthy",
+                        "A release-slot service reported an unhealthy state.",
+                    )
+            if state.get("Status") in {"dead", "exited", "removing"}:
+                raise BridgeError(
+                    "slot_runtime_unhealthy",
+                    "A release-slot service stopped during convergence.",
+                )
+        except (IndexError, KeyError, TypeError, json.JSONDecodeError):
+            pass
+        time.sleep(1)
+    raise BridgeError(
+        "slot_runtime_unhealthy",
+        "A release-slot service did not become ready in time.",
+    )
+
+
 def reconcile_slot_runtime(
     app_dir: Path,
     project_name: str,
     slot_id: str,
     *,
     engine: Any,
+    allow_writer_isolation: bool = False,
 ) -> None:
+    writer_fenced = writer_policy_fence_active(app_dir)
+    if writer_fenced and not allow_writer_isolation:
+        raise BridgeError(
+            "maintenance_writer_isolation_active",
+            "Database writers cannot be started outside maintenance recovery.",
+        )
     with tempfile.TemporaryDirectory(
         prefix="km-vms-slot-reconcile-",
     ) as temporary:
@@ -2261,21 +2866,83 @@ def reconcile_slot_runtime(
             for service in ACTIVATION_RUNTIME_SERVICES
             if service in manifest["compose_evidence"]["services"]
         ]
-        run_command(
-            [
+        cleanup_interrupted_compose_recreates(
+            app_dir,
+            project_name,
+            services,
+        )
+        for service in services:
+            start_command = [
                 *compose,
                 "up",
                 "-d",
                 "--no-build",
                 "--no-deps",
                 "--force-recreate",
-                *services,
-            ],
-            timeout=600,
-            error_code="slot_runtime_start_failed",
-            error_message="Release-slot core services could not be started.",
-            env=env,
-        )
+                service,
+            ]
+            started = run_command(
+                start_command,
+                timeout=600,
+                error_code="slot_runtime_start_failed",
+                error_message="A release-slot service could not be started.",
+                env=env,
+                check=False,
+            )
+            if started.returncode == 0:
+                try:
+                    wait_compose_service_ready(
+                        compose,
+                        service,
+                        env=env,
+                    )
+                except BridgeError:
+                    cleanup_interrupted_compose_recreates(
+                        app_dir,
+                        project_name,
+                        services,
+                    )
+                    raise
+                continue
+            recovered_duplicates = cleanup_interrupted_compose_recreates(
+                app_dir,
+                project_name,
+                [service],
+            )
+            if recovered_duplicates <= 0:
+                raise BridgeError(
+                    "slot_runtime_start_failed",
+                    "A release-slot service could not be started.",
+                )
+            run_command(
+                start_command,
+                timeout=600,
+                error_code="slot_runtime_start_failed",
+                error_message="A release-slot service could not be started after bounded Compose recovery.",
+                env=env,
+            )
+            try:
+                wait_compose_service_ready(
+                    compose,
+                    service,
+                    env=env,
+                )
+            except BridgeError:
+                cleanup_interrupted_compose_recreates(
+                    app_dir,
+                    project_name,
+                    services,
+                )
+                raise
+        if writer_fenced:
+            # Compose materializes the normal terminal policy.  While the
+            # canonical recovery owner is still non-terminal, restore the
+            # verified temporary fence immediately after the explicit start.
+            set_writer_policy_fence(
+                app_dir,
+                project_name,
+                enabled=True,
+            )
 
 
 def stop_slot_schema_writers(
@@ -2285,6 +2952,14 @@ def stop_slot_schema_writers(
     *,
     engine: Any,
 ) -> None:
+    # The durable activation journal is already in `quiescing`.  Fence exact
+    # Compose-labelled writers before the intentional stop so a daemon restart
+    # cannot bring them back ahead of schema recovery.
+    set_writer_policy_fence(
+        app_dir,
+        project_name,
+        enabled=True,
+    )
     with tempfile.TemporaryDirectory(
         prefix="km-vms-slot-quiesce-",
     ) as temporary:
@@ -2303,6 +2978,26 @@ def stop_slot_schema_writers(
             error_message="Database writers could not be paused for migration.",
             env=env,
         )
+    for service in ("api", "recorder"):
+        result = run_command(
+            [
+                "docker",
+                "ps",
+                "-q",
+                "--filter",
+                f"label=com.docker.compose.project={project_name}",
+                "--filter",
+                f"label=com.docker.compose.service={service}",
+            ],
+            timeout=30,
+            error_code="slot_quiesce_verify_failed",
+            error_message="Database-writer isolation could not be verified.",
+        )
+        if result.stdout.strip():
+            raise BridgeError(
+                "slot_quiesce_verify_failed",
+                "A database writer remained running after isolation.",
+            )
 
 
 def write_activation_progress(
@@ -2528,6 +3223,35 @@ def transition_journal(
         ) from exc
 
 
+@contextmanager
+def activation_convergence_lease(app_dir: Path):
+    """Serialize all owners of the existing activation state machine."""
+
+    control_dir = app_dir / "data/update-control"
+    try:
+        control_dir.mkdir(parents=True, exist_ok=True)
+        lease_path = control_dir / "activation-convergence.lock"
+        stream = lease_path.open("a+", encoding="utf-8")
+        os.chmod(lease_path, 0o600)
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+    except OSError as exc:
+        try:
+            stream.close()
+        except (NameError, OSError):
+            pass
+        raise BridgeError(
+            "activation_lease_unavailable",
+            "Activation convergence lease is unavailable.",
+        ) from exc
+    try:
+        yield
+    finally:
+        try:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            stream.close()
+
+
 def block_activation(
     engine: Any,
     app_dir: Path,
@@ -2597,6 +3321,7 @@ def rollback_activation(
             project_name,
             previous["slot_id"],
             engine=engine,
+            allow_writer_isolation=True,
         )
         verify_slot_runtime(
             app_dir,
@@ -2614,6 +3339,15 @@ def rollback_activation(
             rollback_trigger=trigger,
             failure_category=trigger,
         )
+        set_writer_policy_fence(
+            app_dir,
+            project_name,
+            enabled=False,
+        )
+        engine.publish_installed_slot_projection(
+            app_dir,
+            binding=previous,
+        )
         attempt_terminal_release_cleanup(
             engine,
             app_dir,
@@ -2621,12 +3355,22 @@ def rollback_activation(
             terminal,
         )
         return terminal
-    except Exception:
+    except Exception as exc:
+        failure_code = str(
+            getattr(exc, "code", "rollback_verification_failed")
+        )
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", failure_code):
+            failure_code = "rollback_verification_failed"
+        print(
+            f"rollback_failure={failure_code}",
+            file=sys.stderr,
+            flush=True,
+        )
         return block_activation(
             engine,
             app_dir,
             request_id,
-            "rollback_verification_failed",
+            failure_code,
             rollback_trigger=trigger,
         )
 
@@ -2654,6 +3398,7 @@ def block_after_restoring_previous(
             project_name,
             journal["previous"]["slot_id"],
             engine=engine,
+            allow_writer_isolation=True,
         )
         verify_slot_runtime(
             app_dir,
@@ -2669,12 +3414,22 @@ def block_after_restoring_previous(
             journal["request_id"],
             "previous_recovery_failed",
         )
-    return block_activation(
+    terminal = block_activation(
         engine,
         app_dir,
         journal["request_id"],
         category,
     )
+    set_writer_policy_fence(
+        app_dir,
+        project_name,
+        enabled=False,
+    )
+    engine.publish_installed_slot_projection(
+        app_dir,
+        binding=journal["previous"],
+    )
+    return terminal
 
 
 def cleanup_unprotected_slot_images(
@@ -2879,7 +3634,23 @@ def converge_activation(
                 "Activation journal belongs to another request.",
             )
         phase = journal["phase"]
-        if phase in {"completed", "failed_rolled_back", "blocked"}:
+        if phase in {"completed", "failed_rolled_back"}:
+            set_writer_policy_fence(
+                app_dir,
+                project_name,
+                enabled=False,
+            )
+            selected = (
+                journal["target"]
+                if phase == "completed"
+                else journal["previous"]
+            )
+            engine.publish_installed_slot_projection(
+                app_dir,
+                binding=selected,
+            )
+            return journal
+        if phase == "blocked":
             return journal
         previous = journal["previous"]
         target = journal["target"]
@@ -3121,6 +3892,7 @@ def converge_activation(
                     project_name,
                     target["slot_id"],
                     engine=engine,
+                    allow_writer_isolation=True,
                 )
                 verify_slot_runtime(
                     app_dir,
@@ -3185,6 +3957,15 @@ def converge_activation(
                 request_id,
                 "completed",
                 target_verified=True,
+            )
+            set_writer_policy_fence(
+                app_dir,
+                project_name,
+                enabled=False,
+            )
+            engine.publish_installed_slot_projection(
+                app_dir,
+                binding=target,
             )
             try:
                 if terminal_owner:
@@ -3275,7 +4056,7 @@ def converge_activation(
     )
 
 
-def activate_or_resume(args: argparse.Namespace) -> int:
+def _activate_or_resume(args: argparse.Namespace) -> int:
     app_dir = require_app_dir(args.app_dir)
     project_name = require_project_name(args.project_name)
     request_id = require_request_id(args.request_id)
@@ -3475,6 +4256,12 @@ def activate_or_resume(args: argparse.Namespace) -> int:
         )
     )
     return 0
+
+
+def activate_or_resume(args: argparse.Namespace) -> int:
+    app_dir = require_app_dir(args.app_dir)
+    with activation_convergence_lease(app_dir):
+        return _activate_or_resume(args)
 
 
 def prepare_trusted_target_slot(args: argparse.Namespace) -> int:
@@ -3734,6 +4521,369 @@ def prepare_trusted_target_slot(args: argparse.Namespace) -> int:
     return 0
 
 
+def prepare_initial_install_slot(args: argparse.Namespace) -> int:
+    """Build/finalize an inventory-bound fresh-install slot without activation."""
+
+    app_dir = require_app_dir(args.app_dir)
+    source_input = Path(args.source_dir)
+    try:
+        source_input.lstat()
+        source_dir = source_input.resolve(strict=True)
+    except OSError as exc:
+        raise BridgeError(
+            "initial_source_invalid",
+            "Initial source is unavailable.",
+        ) from exc
+    if source_input.is_symlink() or not source_dir.is_dir():
+        raise BridgeError("initial_source_invalid", "Initial source is unsafe.")
+    request_id = require_request_id(args.request_id)
+    declared_version = str(args.declared_version or "")
+    project_name = require_project_name(args.project_name)
+    slot_tool = source_dir / "scripts/km-vms-release-slots.py"
+    if slot_tool.is_symlink() or not slot_tool.is_file():
+        raise BridgeError("slot_engine_missing", "Initial source has no slot engine.")
+    stage_payload = _parse_command_json(
+        run_command(
+            [
+                "python3",
+                str(slot_tool),
+                "stage-initial",
+                "--app-dir",
+                str(app_dir),
+                "--source-dir",
+                str(source_dir),
+                "--request-id",
+                request_id,
+                "--declared-version",
+                declared_version,
+            ],
+            timeout=300,
+            error_code="slot_initial_stage_failed",
+            error_message="Initial source could not be materialized.",
+        ),
+        error_code="slot_initial_stage_failed",
+        error_message="Initial source returned invalid staging evidence.",
+    )
+    slot_id = str(stage_payload.get("slot_id") or "")
+    if not re.fullmatch(r"initial-[0-9a-f]{64}", slot_id):
+        raise BridgeError("slot_initial_stage_failed", "Initial slot identity is invalid.")
+    if stage_payload.get("status") == "reused":
+        manifest = stage_payload.get("manifest")
+        if type(manifest) is not dict:
+            raise BridgeError("slot_initial_stage_failed", "Reused initial slot has no manifest.")
+        verify_immutable_images(manifest.get("image_evidence", {}))
+        print("initial_slot_prepare=REUSED")
+        print(f"initial_slot={slot_id}")
+        return 0
+    if stage_payload.get("status") != "staged":
+        raise BridgeError("slot_initial_stage_failed", "Initial slot did not reach staged state.")
+    staged_source = Path(str(stage_payload.get("source_path") or ""))
+    if not staged_source.is_absolute() or not staged_source.is_dir():
+        raise BridgeError("slot_initial_stage_failed", "Initial staged source path is invalid.")
+
+    target_env = os.environ.copy()
+    target_env["COMPOSE_PROJECT_NAME"] = project_name
+    target_env["KM_VMS_RELEASE_IMAGE_TAG"] = slot_id
+    target_env["KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE"] = "1"
+    previous_prebootstrap = os.environ.get("KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE")
+    os.environ["KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE"] = "1"
+    try:
+        compose = compose_base(
+            app_dir,
+            project_name,
+            source_dir=staged_source,
+            include_archive_override=True,
+        )
+    finally:
+        if previous_prebootstrap is None:
+            os.environ.pop("KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE", None)
+        else:
+            os.environ["KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE"] = previous_prebootstrap
+    config = run_command(
+        [*compose, "config"],
+        timeout=60,
+        error_code="slot_compose_evidence_failed",
+        error_message="Initial Compose plan could not be validated.",
+        env=target_env,
+    )
+    services = _compose_services(compose, env=target_env)
+    if not set(TARGET_EVIDENCE_SERVICES).issubset(services):
+        raise BridgeError("slot_compose_evidence_failed", "Initial Compose plan lacks a required service.")
+    image_refs = _compose_image_refs(compose, env=target_env)
+    run_command(
+        [*compose, "build", *TARGET_BUILD_SERVICES],
+        timeout=3600,
+        error_code="slot_initial_build_failed",
+        error_message="Initial images could not be built.",
+        env=target_env,
+    )
+    nginx_ref = image_refs.get("nginx")
+    if not nginx_ref:
+        raise BridgeError("slot_image_evidence_missing", "Initial Nginx image plan is incomplete.")
+    if run_command(
+        ["docker", "image", "inspect", "--format", "{{.Id}}", nginx_ref],
+        timeout=30,
+        error_code="slot_initial_pull_failed",
+        error_message="Initial Nginx image could not be inspected.",
+        check=False,
+    ).returncode != 0:
+        run_command(
+            [*compose, "pull", "nginx"],
+            timeout=600,
+            error_code="slot_initial_pull_failed",
+            error_message="Initial Nginx image could not be prepared.",
+            env=target_env,
+        )
+    raw_images: dict[str, Any] = {"schema_version": 1, "services": {}}
+    for service in TARGET_EVIDENCE_SERVICES:
+        image_ref = image_refs.get(service)
+        if not image_ref:
+            raise BridgeError("slot_image_evidence_missing", "Initial image plan is incomplete.")
+        if service != "nginx" and not image_ref.endswith(f":{slot_id}"):
+            raise BridgeError("slot_image_evidence_failed", "Initial built image used a mutable tag.")
+        raw_images["services"][service] = {
+            "image_id": _image_id_for_ref(image_ref),
+            "source_image_ref": image_ref,
+        }
+    image_evidence = preserve_slot_images(
+        raw_images,
+        project_name=project_name,
+        slot_id=slot_id,
+    )
+    archive_attached, archive_digest = _archive_override_evidence(app_dir)
+    plan_digest = _normalized_compose_digest(
+        config.stdout,
+        app_dir=app_dir,
+        source_dir=staged_source,
+    )
+    compose_evidence = {
+        "schema_version": 1,
+        "project_name": project_name,
+        "project_directory": "source",
+        "captured_plan_sha256": plan_digest,
+        "slot_plan_sha256": plan_digest,
+        "archive_override_attached": archive_attached,
+        "archive_override_sha256": archive_digest,
+        "runtime_override_sha256": None,
+        "shared_root_contract": "stable_app_dir_v1",
+        "services": services,
+    }
+    evidence_root = app_dir / "data/update-runtime/staging"
+    with tempfile.TemporaryDirectory(prefix=".initial-evidence-", dir=evidence_root) as temporary:
+        temporary_root = Path(temporary)
+        compose_path = temporary_root / "compose.json"
+        image_path = temporary_root / "images.json"
+        atomic_write_json(compose_path, compose_evidence)
+        atomic_write_json(image_path, image_evidence)
+        finalized = _parse_command_json(
+            run_command(
+                [
+                    "python3",
+                    str(slot_tool),
+                    "finalize",
+                    "--app-dir",
+                    str(app_dir),
+                    "--request-id",
+                    request_id,
+                    "--compose-evidence-file",
+                    str(compose_path),
+                    "--image-evidence-file",
+                    str(image_path),
+                ],
+                timeout=300,
+                error_code="slot_initial_finalize_failed",
+                error_message="Initial slot could not be finalized.",
+            ),
+            error_code="slot_initial_finalize_failed",
+            error_message="Initial slot returned invalid final evidence.",
+        )
+    if finalized.get("slot_id") != slot_id or finalized.get("status") not in {"published", "reused"}:
+        raise BridgeError("slot_initial_finalize_failed", "Initial final evidence is contradictory.")
+    print("initial_slot_prepare=PASS")
+    print(f"initial_slot={slot_id}")
+    return 0
+
+
+def publish_current_installed_projection(args: argparse.Namespace) -> int:
+    """Publish active-slot evidence using the final canonical Compose plan."""
+
+    app_dir = require_app_dir(args.app_dir)
+    project_name = require_project_name(args.project_name)
+    bootstrap = load_stable_bootstrap(app_dir)
+    try:
+        slot_id, source_dir, _manifest = bootstrap.resolve_authority(
+            app_dir,
+            project_name=project_name,
+            repair=False,
+        )
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "installed_projection_authority_invalid"),
+            "Installed-slot projection authority is unavailable.",
+        ) from exc
+    engine = load_slot_engine(source_dir)
+    with tempfile.TemporaryDirectory(
+        prefix="km-vms-installed-projection-",
+    ) as temporary:
+        compose, env, selected_source, _slot_manifest = slot_compose(
+            app_dir,
+            project_name,
+            slot_id,
+            engine=engine,
+            override_root=Path(temporary),
+            with_image_override=False,
+        )
+        config = run_command(
+            [*compose, "config"],
+            timeout=60,
+            error_code="installed_projection_compose_failed",
+            error_message="Final installed Compose plan is unavailable.",
+            env=env,
+        )
+        plan_digest = _normalized_compose_digest(
+            config.stdout,
+            app_dir=app_dir,
+            source_dir=selected_source,
+        )
+        _attached, archive_digest = _archive_override_evidence(app_dir)
+        try:
+            binding = engine.build_activation_slot_binding(
+                app_dir,
+                slot_id,
+                compose_plan_sha256=plan_digest,
+                archive_override_sha256=archive_digest,
+            )
+            binding["archive_override_sha256"] = archive_digest
+            binding = engine.validate_activation_slot_binding(binding)
+            projection = engine.publish_installed_slot_projection(
+                app_dir,
+                binding=binding,
+            )
+        except Exception as exc:
+            raise BridgeError(
+                getattr(exc, "code", "installed_projection_publish_failed"),
+                "Installed-slot projection could not be published.",
+            ) from exc
+    print("installed_projection=PASS")
+    print(f"installed_projection_slot={projection['slot_id']}")
+    print(f"installed_projection_compose_sha256={plan_digest}")
+    return 0
+
+
+def _run_permission_contract(
+    gate: Path,
+    root: Path,
+    *,
+    contract: str,
+    action: str,
+    compatibility: bool = False,
+) -> None:
+    if gate.is_symlink() or not gate.is_file():
+        raise BridgeError(
+            "permission_gate_missing",
+            "Required permission authority is unavailable.",
+        )
+    try:
+        gate_text = gate.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeError) as exc:
+        raise BridgeError(
+            "permission_gate_invalid",
+            "Required permission authority cannot be inspected.",
+        ) from exc
+    command = ["sh", str(gate)]
+    if "--contract" in gate_text:
+        command.extend(["--contract", contract])
+    elif not compatibility:
+        raise BridgeError(
+            "permission_contract_unsupported",
+            "Required permission contract is unavailable.",
+        )
+    elif contract == "legacy":
+        command.append("--preflight-existing")
+    command.extend([f"--{action}", "--app-dir", str(root)])
+    result = run_command(
+        command,
+        timeout=PERMISSION_GATE_TIMEOUT_SECONDS,
+        error_code="permission_contract_failed",
+        error_message="Permission contract verification failed.",
+        check=False,
+    )
+    if result.returncode != 0 or "permission_gate=PASS" not in result.stdout:
+        raise BridgeError(
+            "permission_contract_failed",
+            "Permission contract verification failed.",
+        )
+
+
+def install_stable_bootstrap_for_handoff(
+    app_dir: Path,
+    target_source_dir: Path,
+    *,
+    engine: Any,
+    active_source: Path | None,
+) -> Any:
+    """Perform the bounded pre-emergency-to-stable-bootstrap migration."""
+
+    target_gate = target_source_dir / "scripts/km-vms-permission-gate.sh"
+    _run_permission_contract(
+        target_gate,
+        target_source_dir,
+        contract="source",
+        action="check",
+    )
+    if active_source is not None:
+        current_gate = active_source / "scripts/km-vms-permission-gate.sh"
+        _run_permission_contract(
+            current_gate,
+            active_source,
+            contract="source",
+            action="check",
+            compatibility=True,
+        )
+    else:
+        legacy_gate = app_dir / "scripts/km-vms-permission-gate.sh"
+        _run_permission_contract(
+            legacy_gate,
+            app_dir,
+            contract="legacy",
+            action="check",
+            compatibility=True,
+        )
+    try:
+        engine.ensure_layout(app_dir)
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "slot_layout_invalid"),
+            "Canonical slot layout could not be prepared.",
+        ) from exc
+    _run_permission_contract(
+        target_gate,
+        app_dir,
+        contract="stable-prebootstrap",
+        action="fix",
+    )
+    bootstrap_path = target_source_dir / "scripts/km-vms-bootstrap.py"
+    spec = importlib.util.spec_from_file_location(
+        "km_vms_target_bootstrap_installer",
+        bootstrap_path,
+    )
+    if spec is None or spec.loader is None:
+        raise BridgeError(
+            "stable_bootstrap_invalid",
+            "Target stable bootstrap cannot be loaded.",
+        )
+    bootstrap = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(bootstrap)
+        bootstrap.install_bundle(app_dir, target_source_dir)
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "stable_bootstrap_install_failed"),
+            "Stable bootstrap migration failed.",
+        ) from exc
+    return bootstrap
+
+
 def handoff(args: argparse.Namespace) -> int:
     """Bind one admitted request to its exact current release."""
 
@@ -3760,7 +4910,6 @@ def handoff(args: argparse.Namespace) -> int:
             "The staged target source is unavailable or incomplete.",
         )
     request_id = require_request_id(args.request_id)
-    archive_override_changed = normalize_archive_roots_override(app_dir)
     engine = load_slot_engine(target_source_dir)
     try:
         active = engine.read_active_slot(app_dir)
@@ -3769,6 +4918,13 @@ def handoff(args: argparse.Namespace) -> int:
             getattr(exc, "code", "active_pointer_invalid"),
             "Active release pointer is invalid.",
         ) from exc
+    bootstrap = install_stable_bootstrap_for_handoff(
+        app_dir,
+        target_source_dir,
+        engine=engine,
+        active_source=(active[1] if active is not None else None),
+    )
+    archive_override_changed = normalize_archive_roots_override(app_dir)
     terminal_request: dict[str, Any] | None = None
     if bool(getattr(args, "terminal", False)):
         trusted_commit = str(
@@ -3812,7 +4968,7 @@ def handoff(args: argparse.Namespace) -> int:
             str(getattr(args, "project_name", None) or "").strip()
             or os.getenv("KM_VMS_PROJECT_NAME", "").strip()
         )
-        capture_slot_runtime_binding(
+        previous_binding = capture_slot_runtime_binding(
             app_dir,
             project_name,
             previous_slot_id,
@@ -3840,7 +4996,41 @@ def handoff(args: argparse.Namespace) -> int:
             slot_id=slot_result,
             engine=engine,
         )
+        previous_binding = capture_slot_runtime_binding(
+            app_dir,
+            require_project_name(
+                str(getattr(args, "project_name", None) or "").strip()
+                or os.getenv("KM_VMS_PROJECT_NAME", "").strip()
+            ),
+            slot_result,
+            engine=engine,
+            require_http=True,
+            require_helper_image=True,
+        )
         handoff_kind = "legacy_adoption"
+    try:
+        engine.publish_installed_slot_projection(
+            app_dir,
+            binding=previous_binding,
+        )
+        _run_permission_contract(
+            target_source_dir / "scripts/km-vms-permission-gate.sh",
+            app_dir,
+            contract="stable-runtime",
+            action="fix",
+        )
+        bootstrap.reconcile_restart_policies(
+            app_dir,
+            require_project_name(
+                str(getattr(args, "project_name", None) or "").strip()
+                or os.getenv("KM_VMS_PROJECT_NAME", "").strip()
+            ),
+        )
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "stable_runtime_migration_failed"),
+            "Stable runtime migration did not converge.",
+        ) from exc
     print("schema_handoff=PASS")
     print(f"schema_handoff_request_id={request_id}")
     print(
@@ -4091,21 +5281,47 @@ def validate_receipt_binding(receipt_file: Path, request_id: str, expected_image
 
 
 def run_target_permission_gate(app_dir: Path) -> None:
-    gate = app_dir / "scripts/km-vms-permission-gate.sh"
-    for action, error_code, error_message in (
+    bootstrap = load_stable_bootstrap(app_dir)
+    try:
+        _slot_id, source_dir, _manifest = bootstrap.resolve_authority(
+            app_dir,
+            repair=False,
+        )
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "target_authority_invalid"),
+            "Canonical target authority is unavailable.",
+        ) from exc
+    gate = source_dir / "scripts/km-vms-permission-gate.sh"
+    if gate.is_symlink() or not gate.is_file():
+        raise BridgeError(
+            "target_permission_gate_missing",
+            "Canonical target permission gate is unavailable.",
+        )
+    for contract, inspected_root, error_code, error_message in (
         (
-            "--fix",
-            "target_permission_fix_failed",
-            "Target product permissions could not be normalized after the legacy overlay.",
+            "source",
+            source_dir,
+            "target_permission_check_failed",
+            "Immutable target source permissions failed verification.",
         ),
         (
-            "--check",
-            "target_permission_check_failed",
-            "Target product permissions failed the post-overlay verification.",
+            "stable-runtime",
+            app_dir,
+            "stable_permission_check_failed",
+            "Stable runtime permissions failed verification.",
         ),
     ):
         result = run_command(
-            ["sh", str(gate), action, "--app-dir", str(app_dir)],
+            [
+                "sh",
+                str(gate),
+                "--contract",
+                contract,
+                "--check",
+                "--app-dir",
+                str(inspected_root),
+            ],
             timeout=PERMISSION_GATE_TIMEOUT_SECONDS,
             error_code=error_code,
             error_message=error_message,
@@ -4116,9 +5332,9 @@ def run_target_permission_gate(app_dir: Path) -> None:
         output_lines = set(result.stdout.splitlines())
         required_lines = {
             "permission_gate=PASS",
-            f"permission_action={action.removeprefix('--')}",
-            f"permission_app_dir={app_dir}",
-            "permission_contract=target",
+            "permission_action=check",
+            f"permission_app_dir={inspected_root}",
+            f"permission_contract={contract}",
         }
         if not required_lines.issubset(output_lines):
             raise BridgeError(
@@ -4289,7 +5505,7 @@ def bootstrap(args: argparse.Namespace) -> int:
         timeout_seconds=timeout_seconds,
     )
     print("permission_gate=PASS")
-    print("permission_contract=target")
+    print("permission_contract=source+stable-runtime")
     print("update_helper_bootstrap=PASS" if result == "scheduled" else "update_helper_bootstrap=ALREADY_SCHEDULED")
     print(f"update_helper_request_id={request_id}")
     print(f"update_helper_expected_image_id={expected_image_id}")
@@ -4349,6 +5565,7 @@ def compose_base(
     project_name: str,
     *,
     source_dir: Path | None = None,
+    project_directory: Path | None = None,
     runtime_override: Path | None = None,
     image_override: Path | None = None,
     include_archive_override: bool = True,
@@ -4359,12 +5576,18 @@ def compose_base(
             "slot_compose_evidence_failed",
             "Compose product source is unavailable or unsafe.",
         )
+    compose_project_directory = project_directory or source
+    if not compose_project_directory.is_absolute():
+        raise BridgeError(
+            "slot_compose_evidence_failed",
+            "Compose project directory must be absolute.",
+        )
     command = [
         *docker_compose_command(),
         "--env-file",
         str(app_dir / ".env"),
         "--project-directory",
-        str(source),
+        str(compose_project_directory),
         "-f",
         str(source / "docker-compose.yml"),
         "-p",
@@ -4410,6 +5633,39 @@ def compose_base(
                 "Generated archive-roots Compose override is unsafe.",
             )
         command.extend(["-f", str(archive_override)])
+    bootstrap_script = (
+        app_dir
+        / "data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+    )
+    if (
+        os.getenv("KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE") == "1"
+        and not bootstrap_script.exists()
+    ):
+        return command
+    if bootstrap_script.is_symlink() or not bootstrap_script.is_file():
+        raise BridgeError(
+            "stable_bootstrap_missing",
+            "Stable bootstrap authority is unavailable.",
+        )
+    spec = importlib.util.spec_from_file_location(
+        "km_vms_bridge_bootstrap",
+        bootstrap_script,
+    )
+    if spec is None or spec.loader is None:
+        raise BridgeError(
+            "stable_bootstrap_invalid",
+            "Stable bootstrap authority cannot be loaded.",
+        )
+    bootstrap = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(bootstrap)
+        lifecycle = bootstrap.lifecycle_override_path(app_dir)
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "stable_bootstrap_invalid"),
+            "Stable lifecycle override is invalid.",
+        ) from exc
+    command.extend(["-f", str(lifecycle)])
     return command
 
 
@@ -4652,6 +5908,27 @@ def build_parser() -> argparse.ArgumentParser:
     target_parser.add_argument("--declared-version", required=True)
     target_parser.add_argument("--project-name", required=True)
     target_parser.set_defaults(handler=prepare_trusted_target_slot)
+
+    initial_parser = subparsers.add_parser(
+        "prepare-initial",
+        help="prepare one inventory-bound fresh-install slot",
+    )
+    initial_parser.add_argument("--app-dir", required=True)
+    initial_parser.add_argument("--source-dir", required=True)
+    initial_parser.add_argument("--request-id", required=True)
+    initial_parser.add_argument("--declared-version", required=True)
+    initial_parser.add_argument("--project-name", required=True)
+    initial_parser.set_defaults(handler=prepare_initial_install_slot)
+
+    projection_parser = subparsers.add_parser(
+        "publish-installed-projection",
+        help="publish active-slot evidence using the final Compose plan",
+    )
+    projection_parser.add_argument("--app-dir", required=True)
+    projection_parser.add_argument("--project-name", required=True)
+    projection_parser.set_defaults(
+        handler=publish_current_installed_projection
+    )
 
     activate_parser = subparsers.add_parser(
         "activate-target",

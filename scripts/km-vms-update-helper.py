@@ -3,12 +3,14 @@ from __future__ import annotations
 
 import json
 import hashlib
+import importlib.util
 import os
 import re
 import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -57,6 +59,7 @@ RESTORE_RECEIPT_DIR = RESTORE_CONTROL_DIR / "receipts"
 POLL_SECONDS = int(os.getenv("KM_VMS_UPDATE_HELPER_POLL_SECONDS") or "2")
 MAX_CONTROL_BYTES = 64 * 1024
 REQUEST_SCHEMA_VERSION = 3
+CURRENT_PRODUCT_DB_SCHEMA_VERSION = 9
 REQUEST_DOCUMENT_TYPE = "update_apply_request"
 REQUEST_STATES = {"admitted", "claimed", "terminal"}
 TERMINAL = {
@@ -108,7 +111,7 @@ MIGRATION_ATTEMPT_RE = re.compile(
 )
 MACHINE_CODE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 SLOT_ID_RE = re.compile(
-    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64})$"
+    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})$"
 )
 VERSION_TEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -370,8 +373,18 @@ def activation_journal(
         or not SLOT_ID_RE.fullmatch(
             str(previous.get("slot_id") or "")
         )
-        or not COMMIT_SHA_RE.fullmatch(
-            str(previous.get("commit") or "")
+        or (
+            str(previous.get("slot_id") or "").startswith("initial-")
+            and (
+                previous.get("commit") is not None
+                or previous.get("kind") != "initial_install_snapshot"
+            )
+        )
+        or (
+            not str(previous.get("slot_id") or "").startswith("initial-")
+            and not COMMIT_SHA_RE.fullmatch(
+                str(previous.get("commit") or "")
+            )
         )
         or not VERSION_TEXT_RE.fullmatch(
             str(previous.get("version") or "")
@@ -444,7 +457,11 @@ def activation_journal(
         "phase": phase,
         "previous_slot": previous["slot_id"],
         "previous_version": str(previous["version"]),
-        "previous_commit": str(previous["commit"]).lower(),
+        "previous_commit": (
+            str(previous["commit"]).lower()
+            if previous.get("commit") is not None
+            else None
+        ),
         "target_slot": target["slot_id"],
         "target_version": str(target["version"]),
         "target_commit": str(target["commit"]).lower(),
@@ -1253,8 +1270,12 @@ def compose_app_dir() -> Path:
             "KM_VMS_UPDATE_HOST_APP_DIR must be absolute.",
         )
     if (
-        not (HOST_APP_DIR / "docker-compose.yml").is_file()
-        or not (HOST_APP_DIR / "scripts" / "update.sh").is_file()
+        not (HOST_APP_DIR / ".env").is_file()
+        or not (HOST_APP_DIR / "data").is_dir()
+        or not (
+            HOST_APP_DIR
+            / "data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+        ).is_file()
     ):
         raise HelperError(
             "helper_host_app_dir_unmounted",
@@ -1263,9 +1284,58 @@ def compose_app_dir() -> Path:
     return HOST_APP_DIR
 
 
+def load_stable_bootstrap():
+    stable_dir = compose_app_dir()
+    module_path = (
+        stable_dir
+        / "data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+    )
+    if module_path.is_symlink() or not module_path.is_file():
+        raise HelperError(
+            "stable_bootstrap_missing",
+            "Stable bootstrap authority is unavailable.",
+        )
+    spec = importlib.util.spec_from_file_location(
+        "km_vms_restore_bootstrap_runtime",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        raise HelperError(
+            "stable_bootstrap_invalid",
+            "Stable bootstrap authority cannot be loaded.",
+        )
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise HelperError(
+            getattr(exc, "code", "stable_bootstrap_invalid"),
+            "Stable bootstrap authority is invalid.",
+        ) from exc
+    return stable_dir, module
+
+
+def set_restore_writer_fence(*, enabled: bool) -> None:
+    stable_dir, bootstrap = load_stable_bootstrap()
+    try:
+        bootstrap.set_writer_fence(
+            stable_dir,
+            str(os.getenv("KM_VMS_PROJECT_NAME") or "tnas-vms"),
+            enabled=enabled,
+        )
+    except Exception as exc:
+        raise HelperError(
+            getattr(exc, "code", "restore_writer_fence_failed"),
+            "Restore writer restart policy could not be fenced safely.",
+        ) from exc
+
+
 def resolve_update_source_dir(app_dir: Path) -> Path:
-    common = app_dir / "scripts" / "km-vms-compose-common.sh"
-    if not common.is_file() or common.is_symlink():
+    bootstrap = (
+        app_dir
+        / "data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+    )
+    if not bootstrap.is_file() or bootstrap.is_symlink():
         raise HelperError(
             "helper_active_source_resolver_missing",
             "Active release source resolver is unavailable.",
@@ -1273,12 +1343,15 @@ def resolve_update_source_dir(app_dir: Path) -> Path:
     try:
         resolved = subprocess.run(
             [
-                "sh",
-                "-c",
-                '. "$1"; km_vms_resolve_product_source "$2"',
-                "km-vms-active-source-resolver",
-                str(common),
+                "python3",
+                "-B",
+                str(bootstrap),
+                "resolve",
+                "--app-dir",
                 str(app_dir),
+                "--project-name",
+                str(os.getenv("KM_VMS_PROJECT_NAME") or ""),
+                "--repair",
             ],
             cwd=app_dir,
             env=os.environ.copy(),
@@ -1293,7 +1366,10 @@ def resolve_update_source_dir(app_dir: Path) -> Path:
             "helper_active_source_resolver_failed",
             "Active release source could not be resolved.",
         ) from exc
-    source_text = resolved.stdout.strip()
+    try:
+        source_text = str(json.loads(resolved.stdout).get("source_path") or "")
+    except (TypeError, json.JSONDecodeError):
+        source_text = ""
     if (
         resolved.returncode != 0
         or not source_text
@@ -1327,11 +1403,17 @@ def update_child_env(request: dict[str, Any]) -> dict[str, str]:
         "KM_VMS_UPDATE_HELPER_DOCKER_COMPOSE",
         "",
     ).strip()
-    if helper_compose:
+    helper_executable = (
+        "docker" if helper_compose == "docker compose" else helper_compose
+    )
+    if helper_compose and shutil.which(helper_executable) is not None:
         env["KM_VMS_DOCKER_COMPOSE"] = helper_compose
     else:
         inherited = env.get("KM_VMS_DOCKER_COMPOSE", "").strip()
-        if inherited.startswith("/") and not Path(inherited).exists():
+        inherited_executable = (
+            "docker" if inherited == "docker compose" else inherited
+        )
+        if inherited and shutil.which(inherited_executable) is None:
             env.pop("KM_VMS_DOCKER_COMPOSE", None)
     return env
 
@@ -2007,7 +2089,8 @@ def validate_restore_request(value: Any) -> dict[str, Any] | None:
         or not RESTORE_ARTIFACT_ID_RE.fullmatch(
             artifact["artifact_id"]
         )
-        or artifact.get("artifact_schema_version") != 8
+        or artifact.get("artifact_schema_version")
+        != CURRENT_PRODUCT_DB_SCHEMA_VERSION
         or artifact.get("db_backend") != "postgresql"
         or not isinstance(artifact.get("file_size"), int)
         or artifact["file_size"] < 1
@@ -2365,6 +2448,17 @@ def finish_restore_request(
         )
     except HelperError:
         pass
+    if result in {"completed", "failed_rolled_back", "blocked"}:
+        try:
+            set_restore_writer_fence(enabled=False)
+        except HelperError as exc:
+            # The safe terminal DB outcome is already durable.  Leaving the
+            # containers at restart=no is fail-safe; stable startup
+            # reconciliation will retry the normal policy convergence.
+            print(
+                f"WARNING [{exc.category}]: {exc}",
+                file=sys.stderr,
+            )
 
 
 def reconcile_restore_terminal_projection() -> None:
@@ -3123,6 +3217,7 @@ def wait_for_service(
 
 
 def stop_restore_writers() -> None:
+    set_restore_writer_fence(enabled=True)
     try:
         restore_compose_command(
             "stop",
@@ -3490,11 +3585,11 @@ def run_current_restore(request: dict[str, Any]) -> None:
         )
         writers_isolation_attempted = True
         current_phase = "writers_paused"
-        stop_restore_writers()
         publish_restore_phase(
             request,
             phase="writers_paused",
         )
+        stop_restore_writers()
         current_phase = "pre_restore_backup"
         backup = run_restore_executor(
             request,

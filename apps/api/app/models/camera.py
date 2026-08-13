@@ -33,6 +33,7 @@ class Camera(Base):
 
     onvif_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     onvif_profile_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    onvif_sub_profile_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
     onvif_channel_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     recording_mode: Mapped[str] = mapped_column(String(50), default="always")

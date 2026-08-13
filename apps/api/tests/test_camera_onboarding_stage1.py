@@ -1,4 +1,5 @@
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,11 +12,17 @@ import app.routers.cameras as cameras_module
 import app.routers.camera_onvif_routes as onvif_routes_module
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS
 from app.models.camera import Camera
+from app.schemas.camera import (
+    CameraResponse,
+    restore_rtsp_management_value,
+    safe_rtsp_management_value,
+)
 from app.routers.cameras import (
     has_valid_onboarding_proof,
     onvif_discover,
     onvif_error_code,
     onvif_probe,
+    register_onvif_probe_proof,
     register_rtsp_test_proof,
     require_save_gate,
     safe_onvif_error,
@@ -80,6 +87,7 @@ def camera(**overrides):
         "rtsp_transport": "tcp",
         "onvif_path": None,
         "onvif_profile_token": "main",
+        "onvif_sub_profile_token": None,
         "onvif_channel_id": None,
         "recording_mode": "always",
         "default_live_stream": "main",
@@ -166,7 +174,7 @@ def test_probe_success_returns_safe_summary_and_registers_proof(monkeypatch):
     assert result["rtsp_reachable"]["host"] == "rtsp.example.test"
     assert result["onvif_probe_token"]
     assert "camera-" + "pass" not in str(result)
-    assert has_valid_onboarding_proof({**payload, "protocol": "onvif", "onvif_probe_token": result["onvif_probe_token"]})
+    assert has_valid_onboarding_proof({**payload, "protocol": "onvif", "onvif_probe_token": result["onvif_probe_token"]}) is False
 
 
 @pytest.mark.parametrize(
@@ -213,6 +221,81 @@ def test_rtsp_host_and_port_fallback_from_legacy_urls():
     assert cam.rtsp_reachable_port == 1554
 
 
+def test_camera_management_response_strips_rtsp_authority_and_query_secrets():
+    cam = camera(
+        rtsp_main_url="rtsp://operator:sentinel-pass@rtsp.example.test:1554/main?channel=1&token=sentinel-token",
+        rtsp_sub_url="rtsp://operator:sentinel-pass@rtsp.example.test:1554/sub?channel=1&subtype=1",
+    )
+    cam.created_at = datetime.utcnow()
+    cam.updated_at = datetime.utcnow()
+
+    payload = CameraResponse.model_validate(cam).model_dump()
+
+    rendered = str(payload)
+    assert payload["rtsp_main_url"] == "/main?channel=1&token=redacted"
+    assert payload["rtsp_sub_url"] == "/sub?channel=1&subtype=1"
+    assert "sentinel-pass" not in rendered
+    assert "sentinel-token" not in rendered
+    assert "operator@" not in rendered
+
+
+def test_safe_rtsp_projection_redacts_relative_query_and_restores_it_for_edit_save():
+    stored = "rtsp://operator:sentinel-pass@rtsp.example.test:1554/main?channel=1&token=sentinel-token"
+    projected = safe_rtsp_management_value(stored)
+
+    assert projected == "/main?channel=1&token=redacted"
+    assert restore_rtsp_management_value(projected, stored) == stored
+    changed = restore_rtsp_management_value(
+        "/main?channel=2&token=redacted",
+        stored,
+    )
+    assert changed == "/main?channel=2&token=sentinel-token"
+    assert safe_rtsp_management_value("/sub?secret=sentinel&channel=3") == (
+        "/sub?secret=redacted&channel=3"
+    )
+
+
+def test_exact_camera_test_uses_resolved_transport_and_returns_secret_safe_identity(monkeypatch):
+    cam = camera(
+        rtsp_transport="udp",
+        rtsp_main_url=(
+            "rtsp://operator:old-pass@rtsp.example.test:10003/live"
+            "?channel=1&token=sentinel-token"
+        ),
+    )
+    observed = {}
+
+    def fake_run(command, **_kwargs):
+        observed["command"] = command
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"streams":[{"codec_type":"video","codec_name":"h264"}],"format":{}}',
+        )
+
+    monkeypatch.setattr(cameras_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(cameras_module, "capture_camera_preview", lambda *_args: False)
+
+    result = cameras_module.test_camera(
+        {
+            "camera_id": cam.id,
+            "stream_role": "main",
+            "password": "old-pass",
+        },
+        db=FakeDb(cam),
+        current_user=user(),
+    )
+
+    assert result["tested_role"] == "main"
+    assert result["transport"] == "udp"
+    assert result["stream_identity"] == {
+        "role": "main",
+        "path": "/live?channel=1&token=redacted",
+    }
+    assert result["display_path"] == "/live?channel=1&token=redacted"
+    assert "sentinel-token" not in str(result)
+    assert observed["command"][observed["command"].index("-rtsp_transport") + 1] == "udp"
+
+
 def test_update_non_connection_change_does_not_require_validation(monkeypatch):
     cam = camera()
     events = []
@@ -252,7 +335,7 @@ def test_update_onvif_final_payload_validation_token_allows_verified_save(monkey
         "host": "onvif.example.test",
         "port": 20003,
         "username": "operator",
-        "password": "",
+        "password": "old-pass",
         "rtsp_main_url": "/main-final",
         "rtsp_sub_url": "/sub-final",
         "rtsp_host": "rtsp.example.test",
@@ -260,15 +343,20 @@ def test_update_onvif_final_payload_validation_token_allows_verified_save(monkey
         "rtsp_transport": "tcp",
         "onvif_path": "",
         "onvif_profile_token": "main-final",
+        "onvif_sub_profile_token": "sub-final",
         "onvif_channel_id": "",
         "default_live_stream": "sub",
         "default_record_stream": "main",
     }
-    token = register_rtsp_test_proof(final_payload)
+    main_token = register_rtsp_test_proof(final_payload, "main")
+    sub_token = register_rtsp_test_proof(final_payload, "sub")
+    probe_token = register_onvif_probe_proof(final_payload)
 
     payload = cameras_module.CameraUpdate(
         **{key: value for key, value in final_payload.items() if key != "password"},
-        validation_token=token,
+        main_validation_token=main_token,
+        sub_validation_token=sub_token,
+        onvif_probe_token=probe_token,
         manual_confirm_unverified=False,
     )
     result = update_camera(cam.id, payload, request=request(), db=FakeDb(cam), current_user=user())
@@ -288,7 +376,7 @@ def test_update_onvif_changed_after_test_requires_new_proof(monkeypatch):
         "host": "onvif.example.test",
         "port": 20003,
         "username": "operator",
-        "password": "",
+        "password": "old-pass",
         "rtsp_main_url": "/main-final",
         "rtsp_sub_url": "/sub-final",
         "rtsp_host": "rtsp.example.test",
@@ -296,15 +384,23 @@ def test_update_onvif_changed_after_test_requires_new_proof(monkeypatch):
         "rtsp_transport": "tcp",
         "onvif_path": "",
         "onvif_profile_token": "main-final",
+        "onvif_sub_profile_token": "sub-final",
         "onvif_channel_id": "",
         "default_live_stream": "sub",
         "default_record_stream": "main",
     }
-    token = register_rtsp_test_proof(final_payload)
+    main_token = register_rtsp_test_proof(final_payload, "main")
+    sub_token = register_rtsp_test_proof(final_payload, "sub")
+    probe_token = register_onvif_probe_proof(final_payload)
 
     changed_payload = {key: value for key, value in final_payload.items() if key != "password"}
     changed_payload["rtsp_main_url"] = "/changed-after-test"
-    payload = cameras_module.CameraUpdate(**changed_payload, validation_token=token)
+    payload = cameras_module.CameraUpdate(
+        **changed_payload,
+        main_validation_token=main_token,
+        sub_validation_token=sub_token,
+        onvif_probe_token=probe_token,
+    )
     with pytest.raises(HTTPException) as exc:
         update_camera(cam.id, payload, request=request(), db=FakeDb(cam), current_user=user())
 
@@ -326,20 +422,30 @@ def test_validation_proof_covers_stream_transport_and_onvif_fields():
         "rtsp_transport": "tcp",
         "onvif_path": "/onvif/device_service",
         "onvif_profile_token": "main",
+        "onvif_sub_profile_token": "sub",
         "onvif_channel_id": "channel-a",
         "default_live_stream": "sub",
         "default_record_stream": "main",
     }
-    token = register_rtsp_test_proof(payload)
+    main_token = register_rtsp_test_proof(payload, "main")
+    sub_token = register_rtsp_test_proof(payload, "sub")
+    probe_token = register_onvif_probe_proof(payload)
+    proofs = {
+        "main_validation_token": main_token,
+        "sub_validation_token": sub_token,
+        "onvif_probe_token": probe_token,
+    }
 
-    assert has_valid_onboarding_proof({**payload, "validation_token": token}) is True
-    assert has_valid_onboarding_proof({**payload, "validation_token": token, "rtsp_main_url": "/changed"}) is False
-    assert has_valid_onboarding_proof({**payload, "validation_token": token, "rtsp_host": "other.example.test"}) is False
-    assert has_valid_onboarding_proof({**payload, "validation_token": token, "rtsp_port": 10004}) is False
-    assert has_valid_onboarding_proof({**payload, "validation_token": token, "rtsp_transport": "udp"}) is False
-    assert has_valid_onboarding_proof({**payload, "validation_token": token, "onvif_path": "/other"}) is False
-    assert has_valid_onboarding_proof({**payload, "validation_token": token, "onvif_profile_token": "sub"}) is False
-    assert has_valid_onboarding_proof({**payload, "validation_token": token, "onvif_channel_id": "channel-b"}) is False
+    assert has_valid_onboarding_proof({**payload, **proofs}) is True
+    assert has_valid_onboarding_proof({**payload, **proofs, "name": "metadata-only"}) is True
+    assert has_valid_onboarding_proof({**payload, **proofs, "rtsp_main_url": "/changed"}) is False
+    assert has_valid_onboarding_proof({**payload, **proofs, "rtsp_host": "other.example.test"}) is False
+    assert has_valid_onboarding_proof({**payload, **proofs, "rtsp_port": 10004}) is False
+    assert has_valid_onboarding_proof({**payload, **proofs, "rtsp_transport": "udp"}) is False
+    assert has_valid_onboarding_proof({**payload, **proofs, "onvif_path": "/other"}) is False
+    assert has_valid_onboarding_proof({**payload, **proofs, "onvif_profile_token": "changed-main"}) is False
+    assert has_valid_onboarding_proof({**payload, **proofs, "onvif_sub_profile_token": "changed-sub"}) is False
+    assert has_valid_onboarding_proof({**payload, **proofs, "onvif_channel_id": "channel-b"}) is False
 
 
 def test_preview_token_file_alone_does_not_satisfy_save_gate():

@@ -1129,14 +1129,19 @@
   color: #0f172a;
 }
 
-.cameraProfileHead span:first-child {
+.cameraProfileNameLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cameraProfileName {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: normal;
-  display: -webkit-box;
-  -webkit-line-clamp: 1;
-  -webkit-box-orient: vertical;
+  white-space: nowrap;
   line-height: 1.2;
 }
 
@@ -1144,7 +1149,8 @@
   display: inline-flex;
   align-items: center;
   min-height: 16px;
-  margin-left: 6px;
+  flex: 0 0 auto;
+  margin-left: 0;
   padding: 1px 5px;
   border-radius: 999px;
   font-size: 10px;

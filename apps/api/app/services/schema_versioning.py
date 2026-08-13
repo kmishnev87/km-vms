@@ -13,7 +13,7 @@ from app.core.version import APP_BUILD_VERSION, APP_VERSION
 from app.models.schema_version import SchemaMigrationHistory, SchemaVersionState
 
 
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 CURRENT_BASELINE_ID = "chapter06_stage4_baseline"
 CURRENT_MIGRATION_ID = f"{CURRENT_BASELINE_ID}_schema_v{CURRENT_SCHEMA_VERSION}"
 CURRENT_STATE_ID = "current"
@@ -69,7 +69,9 @@ KNOWN_OPTIONAL_MISSING_TABLES = {
     "archive_migration_items",
 }
 KNOWN_CAMERA_NULLABLE_DRIFT_COLUMNS = {"segment_minutes", "retention_days", "storage_quota_gb"}
-KNOWN_SAFE_MISSING_COLUMNS = {"cameras": {"rtsp_host", "rtsp_port", "deleted_at"}}
+KNOWN_SAFE_MISSING_COLUMNS = {
+    "cameras": {"rtsp_host", "rtsp_port", "deleted_at", "onvif_sub_profile_token"}
+}
 SAFE_STATUSES = {"current", "adopted_baseline", "drift_known_safe"}
 BLOCKED_STATUSES = {"unknown", "future_version", "downgrade_blocked", "drift_blocked", "adoption_failed"}
 METADATA_INCOMPLETE_STATUS = "metadata_incomplete"

@@ -43,6 +43,7 @@ PREVIOUS_RUNTIME_COMPATIBLE_MIGRATION_IDS = frozenset(
         "stage13_5_4_10_5_2_2_integrity_item_state_width_v7",
         "stage660128_remediation_safe_schema_v6_to_v7",
         "stage660128_universal_skipped_release_schema_v8",
+        "stage13721_camera_sub_profile_token_schema_v9",
     }
 )
 

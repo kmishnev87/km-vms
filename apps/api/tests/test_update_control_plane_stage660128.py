@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -65,6 +66,10 @@ def _bind(tmp_path: Path) -> None:
         public / "update-failure-plane.signed.json"
     )
     control.HELPER_STATUS = raw / "update-status.json"
+    control.UPDATE_REQUEST = raw / "update-request.json"
+    control.RETRY_ADMISSION = (
+        raw / "update-retry-admission.signed.json"
+    )
 
 
 def _write_signed(path: Path, payload: dict) -> None:
@@ -107,7 +112,7 @@ def _stage(state: str, *, retryable: bool = False) -> dict:
         "admission_attempt_id": ATTEMPT_ID,
         "target_version": "0.7.25",
         "target_commit": TARGET_COMMIT,
-        "target_schema_version": 8,
+        "target_schema_version": 9,
         "registry_fingerprint": REGISTRY,
         "plan_fingerprint": PLAN,
         "fencing_generation": 1,
@@ -134,7 +139,7 @@ def _bootstrap() -> dict:
         "admission_attempt_id": ATTEMPT_ID,
         "target_release": "0.7.25",
         "target_commit": TARGET_COMMIT,
-        "target_schema_version": 8,
+        "target_schema_version": 9,
         "installed_version": "0.7.18",
         "installed_commit": "a" * 40,
         "source_schema_version": 1,
@@ -159,6 +164,29 @@ def _helper(status: str) -> dict:
     }
 
 
+def _original_request() -> dict:
+    return {
+        "schema_version": 1,
+        "request_id": REQUEST_ID,
+        "requested_at": _utc(-1),
+        "requested_by": {"user_id": "1", "role": "owner"},
+        "intent": "apply_update",
+        "confirmed": True,
+        "source": {
+            "kind": "github-release",
+            "channel": "stable",
+            "version": "0.7.25",
+            "commit": TARGET_COMMIT,
+            "apply_ref": TARGET_COMMIT,
+            "ref": "v0.7.25",
+            "repo": "kmishnev87/km-vms",
+            "source_type": "release",
+        },
+        "preflight_required": True,
+        "status_path": "data/update-control/update-status.json",
+    }
+
+
 def _arrange_retryable_gate_failure(tmp_path: Path) -> None:
     _bind(tmp_path)
     control.JWT_SECRET = "stage660128-control-plane-test-secret"
@@ -170,6 +198,15 @@ def _arrange_retryable_gate_failure(tmp_path: Path) -> None:
         control.GATE_RECEIPT,
         _stage("failed", retryable=True),
     )
+
+
+def _failed_contract(tmp_path: Path) -> dict:
+    _arrange_retryable_gate_failure(tmp_path)
+    _write_json(control.HELPER_STATUS, _helper("failed"))
+    contract = control.controller_contract()
+    assert contract is not None
+    assert contract["target_schema_version"] == 9
+    return contract
 
 
 def test_stage_failure_remains_publicly_nonterminal_until_helper_stops(
@@ -208,6 +245,105 @@ def test_exact_retryable_failure_publishes_after_helper_stops(
     apply_payload = control.legacy_apply_payload(contract)
     assert apply_payload["status"] == "failed"
     assert apply_payload["retryable"] is True
+
+
+@pytest.mark.parametrize("schema_version", (8, 10))
+def test_failure_and_stage_contracts_reject_non_current_schema(
+    tmp_path: Path,
+    schema_version: int,
+) -> None:
+    contract = _failed_contract(tmp_path)
+    invalid_failure = {
+        **contract,
+        "target_schema_version": schema_version,
+    }
+    with pytest.raises(
+        control.ContractError,
+        match="failure_contract_schema_target_invalid",
+    ):
+        control.validate_failure_contract(invalid_failure)
+
+    invalid_stage = {
+        **_stage("completed"),
+        "target_schema_version": schema_version,
+    }
+    with pytest.raises(
+        control.ContractError,
+        match="stage_receipt_schema_target_invalid",
+    ):
+        control.validate_stage_receipt(invalid_stage, auth=_auth())
+
+
+def test_schema9_retry_admission_reconciles_idempotent_replay(
+    tmp_path: Path,
+) -> None:
+    contract = _failed_contract(tmp_path)
+    _write_json(control.UPDATE_REQUEST, _original_request())
+    body = {
+        "confirm": True,
+        "expected_manifest_version": contract["target_version"],
+        "expected_manifest_commit": contract["target_commit"],
+    }
+
+    first = control.create_retry(
+        contract,
+        contract["actor_subject"],
+        body,
+    )
+    replay = control.create_retry(
+        contract,
+        contract["actor_subject"],
+        body,
+    )
+
+    assert first["accepted"] is True
+    assert first["idempotent_replay"] is False
+    assert replay == {
+        **first,
+        "idempotent_replay": True,
+    }
+    admission = control.read_signed(
+        control.RETRY_ADMISSION,
+        required=True,
+    )
+    assert admission is not None
+    assert admission["target_schema_version"] == 9
+
+
+@pytest.mark.parametrize("schema_version", (8, 10))
+def test_retry_admission_rejects_persisted_non_current_schema(
+    tmp_path: Path,
+    schema_version: int,
+) -> None:
+    contract = _failed_contract(tmp_path)
+    _write_json(control.UPDATE_REQUEST, _original_request())
+    body = {
+        "confirm": True,
+        "expected_manifest_version": contract["target_version"],
+        "expected_manifest_commit": contract["target_commit"],
+    }
+    control.create_retry(
+        contract,
+        contract["actor_subject"],
+        body,
+    )
+    admission = control.read_signed(
+        control.RETRY_ADMISSION,
+        required=True,
+    )
+    assert admission is not None
+    admission["target_schema_version"] = schema_version
+    _write_signed(control.RETRY_ADMISSION, admission)
+
+    with pytest.raises(
+        control.ContractError,
+        match="retry_admission_identity_invalid",
+    ):
+        control.create_retry(
+            contract,
+            contract["actor_subject"],
+            body,
+        )
 
 
 def test_combined_controller_retry_role_starts_projection_before_http(
@@ -269,3 +405,40 @@ def test_compose_preserves_read_only_status_and_mutation_boundary() -> None:
         "${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-public:/update-public"
         in controller_retry
     )
+
+
+def test_current_product_schema_is_synchronized_across_active_consumers() -> None:
+    root = Path(__file__).resolve().parents[3]
+    consumers = {
+        "api": (
+            root / "apps/api/app/services/schema_versioning.py",
+            r"^CURRENT_SCHEMA_VERSION\s*=\s*(\d+)\s*$",
+        ),
+        "control_plane": (
+            root / "apps/update-control-plane/control_plane.py",
+            r"^CURRENT_PRODUCT_DB_SCHEMA_VERSION\s*=\s*(\d+)\s*$",
+        ),
+        "restore_helper": (
+            root / "scripts/km-vms-update-helper.py",
+            r"^CURRENT_PRODUCT_DB_SCHEMA_VERSION\s*=\s*(\d+)\s*$",
+        ),
+        "lineage_bridge": (
+            root / "scripts/km-vms-update-helper-bridge.py",
+            r"^CURRENT_PRODUCT_DB_SCHEMA_VERSION\s*=\s*(\d+)\s*$",
+        ),
+        "release_cycle": (
+            root / "scripts/km-vms-release-cycle.sh",
+            r"^CURRENT_PRODUCT_DB_SCHEMA_VERSION\s*=\s*(\d+)\s*$",
+        ),
+    }
+    versions: dict[str, int] = {}
+    for name, (path, pattern) in consumers.items():
+        match = re.search(
+            pattern,
+            path.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+        assert match is not None, name
+        versions[name] = int(match.group(1))
+
+    assert versions == {name: 9 for name in consumers}

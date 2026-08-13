@@ -567,6 +567,10 @@ def test_legacy_handoff_binds_adopted_slot_as_active_before_returning(
         def atomic_switch_pointer(self, _app_dir: Path, slot_id: str):
             self.active = slot_id
 
+        def publish_installed_slot_projection(self, _app_dir: Path, *, binding):
+            assert self.active == adopted_slot
+            assert binding["slot_id"] == adopted_slot
+
     engine = Engine()
     monkeypatch.setattr(bridge, "require_app_dir", lambda _value: tmp_path)
     monkeypatch.setattr(
@@ -575,6 +579,23 @@ def test_legacy_handoff_binds_adopted_slot_as_active_before_returning(
         lambda _app_dir: False,
     )
     monkeypatch.setattr(bridge, "load_slot_engine", lambda _source: engine)
+    monkeypatch.setattr(
+        bridge,
+        "install_stable_bootstrap_for_handoff",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            reconcile_restart_policies=lambda *_a, **_k: None,
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_run_permission_contract",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        bridge,
+        "capture_slot_runtime_binding",
+        lambda _app, _project, slot_id, **_kwargs: {"slot_id": slot_id},
+    )
     monkeypatch.setattr(
         bridge,
         "capture_installed_source_identity",
@@ -707,6 +728,41 @@ def test_bridge_prefers_candidate_lineage_over_stale_installed_cwd(
     assert result.stdout.strip() == lineage["tag_commits"][latest_version]
 
 
+def test_bridge_lineage_accepts_historical_schemas_through_9_and_rejects_10(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    versions = [f"0.{schema_version}.0" for schema_version in range(1, 10)]
+    lineage = {
+        "schema_version": 1,
+        "product": "KM VMS",
+        "tag_commits": {
+            version: f"{index:040x}"
+            for index, version in enumerate(versions, start=1)
+        },
+        "schema_versions": {
+            version: schema_version
+            for schema_version, version in enumerate(versions, start=1)
+        },
+        "shape_fingerprints": {
+            version: f"{index:064x}"
+            for index, version in enumerate(versions, start=1)
+        },
+        "shape_alternates": {},
+    }
+    lineage_path = tmp_path / "km-vms-update-lineage.json"
+    _write_json(lineage_path, lineage)
+    monkeypatch.setenv("KMVMS_UPDATE_LINEAGE_FILE", str(lineage_path))
+
+    accepted = bridge.load_update_lineage()
+    assert accepted["schema_versions"][versions[-1]] == 9
+
+    lineage["schema_versions"][versions[-1]] = 10
+    _write_json(lineage_path, lineage)
+    with pytest.raises(RuntimeError, match="update_lineage_entry_invalid"):
+        bridge.load_update_lineage()
+
+
 def test_post_overlay_bootstrap_rejects_tampered_pre_overlay_identity(
     tmp_path: Path,
 ) -> None:
@@ -802,7 +858,9 @@ def test_archive_override_moves_recovery_mount_to_single_schema_runner(
 
 def test_slot_compose_uses_stable_env_exact_source_and_both_overrides(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE", "1")
     app = tmp_path / "app"
     # Use a normal bounded source path; the exact slot ID is validated by the
     # slot owner, while compose_base only assembles already-resolved paths.

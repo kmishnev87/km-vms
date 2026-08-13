@@ -18,7 +18,7 @@ from app.services.schema_migrations import (
     STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION,
     execute_migration_plan,
     migration_definition_fingerprint,
-    validate_stage660128_target_schema,
+    validate_current_target_schema,
 )
 from app.services.schema_update_control import (
     GATE_RECEIPT_PATH,
@@ -37,6 +37,7 @@ from app.services.schema_update_control import (
     stable_failure_reason,
     start_attempt,
     target_shape_is_exact,
+    TARGET_SCHEMA_VERSION,
     transition_attempt_id,
     update_control_state,
     validate_released_source_history,
@@ -191,7 +192,7 @@ def _validate_released_history_lineage(
     if (
         version is None
         or version < context.source_schema_version
-        or version > 8
+        or version > TARGET_SCHEMA_VERSION
     ):
         raise SchemaControlError("migration_history_version_invalid")
     expected_target_path = PRODUCTION_MIGRATIONS.path(
@@ -471,9 +472,9 @@ def main(
                 version = current_schema_version(db)
                 if version is None:
                     raise SchemaControlError("schema_gate_version_missing")
-                if version == 8:
+                if version == TARGET_SCHEMA_VERSION:
                     break
-                path = PRODUCTION_MIGRATIONS.path(version, 8)
+                path = PRODUCTION_MIGRATIONS.path(version, TARGET_SCHEMA_VERSION)
                 if not path:
                     raise SchemaControlError("schema_gate_path_missing")
                 active_migration = path[0]
@@ -632,7 +633,7 @@ def main(
                 active_migration = None
                 committed = False
 
-            validate_stage660128_target_schema(db)
+            validate_current_target_schema(db)
             exact, target_shape = target_shape_is_exact(db)
             if not exact:
                 raise SchemaControlError(
@@ -658,7 +659,7 @@ def main(
                 summary="Automatic database preparation completed.",
                 operator_action="Wait for target service verification.",
                 details={
-                    "target_schema_version": 8,
+                    "target_schema_version": TARGET_SCHEMA_VERSION,
                     "target_shape_fingerprint": target_shape,
                     "reconciled_attempt_count": reconciled_count,
                     **legacy_history_evidence,

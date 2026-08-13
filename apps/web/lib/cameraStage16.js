@@ -40,45 +40,44 @@ export function normalizeCameraPort(value) {
   return parsed;
 }
 
-export function isRtspPortManualOverrideForEdit(onvifPort, rtspPort) {
-  const normalizedRtspPort = normalizeCameraPort(rtspPort);
-  if (!normalizedRtspPort) return false;
-  const normalizedOnvifPort = normalizeCameraPort(onvifPort);
-  return Boolean(normalizedOnvifPort && normalizedRtspPort !== normalizedOnvifPort);
-}
-
 export function applyCameraFormPatch(prev, key, value, sensitiveFields = new Set()) {
   const next = {
     ...prev,
     [key]: value,
     ...(sensitiveFields.has(key)
-      ? { preview_token: null, validation_token: null, onvif_probe_token: null, manual_confirm_unverified: false }
+      ? { preview_token: null, manual_confirm_unverified: false }
       : {}),
   };
 
-  if (key === "rtsp_port") {
-    next.rtsp_port_manually_set = true;
+  const protocol = key === "protocol" ? value : prev.protocol;
+  const managementFields = new Set(["protocol", "host", "port", "username", "password", "onvif_path"]);
+  const sharedStreamFields = new Set(["protocol", "rtsp_host", "rtsp_port", "rtsp_transport", "username", "password", "onvif_channel_id"]);
+  if (protocol === "rtsp") {
+    sharedStreamFields.add("host");
+    sharedStreamFields.add("port");
+  } else {
+    managementFields.add("rtsp_host");
+    managementFields.add("rtsp_port");
   }
-
+  if (managementFields.has(key)) {
+    next.onvif_probe_token = null;
+  }
+  if (sharedStreamFields.has(key)) {
+    next.main_validation_token = null;
+    next.sub_validation_token = null;
+    next.validation_token = null;
+  }
+  if (key === "rtsp_main_url" || key === "onvif_profile_token") {
+    next.main_validation_token = null;
+    next.validation_token = null;
+  }
+  if (key === "rtsp_sub_url" || key === "onvif_sub_profile_token") {
+    next.sub_validation_token = null;
+  }
   if (key === "protocol" && value === "onvif") {
-    next.rtsp_host = prev.host || "";
-    if (!prev.rtsp_port_manually_set) {
-      next.rtsp_port = prev.rtsp_port || prev.port || 554;
-    }
-  }
-
-  if (prev.protocol === "onvif" && key === "host" && (!prev.rtsp_host || prev.rtsp_host === prev.host)) {
-    next.rtsp_host = value;
-  }
-
-  if ((prev.protocol === "onvif" || next.protocol === "onvif") && key === "port" && !prev.rtsp_port_manually_set) {
-    next.rtsp_port = value || prev.rtsp_port || 554;
+    next.rtsp_host = prev.rtsp_host || prev.host || "";
+    next.rtsp_port = normalizeCameraPort(prev.rtsp_port) || 554;
   }
 
   return next;
-}
-
-export function smartRtspPort(prev, fallback) {
-  if (prev?.rtsp_port_manually_set) return prev.rtsp_port || 554;
-  return fallback || prev?.rtsp_port || prev?.port || 554;
 }

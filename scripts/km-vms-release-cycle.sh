@@ -89,6 +89,7 @@ SENSITIVE_RE = re.compile(
 )
 RELEASE_NOTE_LOCALES = {"en", "ru", "zh-CN"}
 MAX_PATCH_VERSION = 29
+CURRENT_PRODUCT_DB_SCHEMA_VERSION = 9
 VERSION_FILES = [
     Path("apps/api/app/core/version.py"),
     Path("apps/web/package.json"),
@@ -291,7 +292,7 @@ def validate_update_lineage() -> dict:
             or not isinstance(commit, str)
             or not re.fullmatch(r"[0-9a-f]{40}", commit)
             or type(schema_version) is not int
-            or not 1 <= schema_version <= 8
+            or not 1 <= schema_version <= CURRENT_PRODUCT_DB_SCHEMA_VERSION
             or not isinstance(shape, str)
             or not re.fullmatch(r"[0-9a-f]{64}", shape)
             or not isinstance(variants, list)

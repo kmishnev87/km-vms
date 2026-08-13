@@ -53,7 +53,7 @@ def load_bridge():
 def update_context(*, request: dict | None = None) -> control.UpdateContext:
     installed_version = "0.7.27"
     installed_commit = control.SOURCE_TAG_COMMITS[installed_version]
-    source_shape = control.TARGET_SHAPE_FINGERPRINT
+    source_shape = control.SOURCE_SHAPE_FINGERPRINTS[installed_version]
     return control.UpdateContext(
         request=request or {},
         request_id=NEW_REQUEST_ID,
@@ -138,7 +138,7 @@ def test_one_canonical_lineage_drives_api_and_bridge():
     for version in ("0.7.25", "0.7.26", "0.7.27"):
         assert (
             control.SOURCE_SHAPE_FINGERPRINTS[version]
-            == control.TARGET_SHAPE_FINGERPRINT
+            == payload["shape_fingerprints"][version]
         )
         commit = payload["tag_commits"][version]
         assert commit not in (
@@ -275,12 +275,15 @@ def test_completed_rollover_rebinds_every_control_field_and_increments_generatio
     assert update["source_schema_version"] == 8
     assert update["target_release"] == "0.7.28"
     assert update["target_commit"] == TARGET_COMMIT
-    assert update["target_schema_version"] == 8
+    assert (
+        update["target_schema_version"]
+        == control.TARGET_SCHEMA_VERSION
+    )
     assert update["registry_fingerprint"] == control.REGISTRY_FINGERPRINT
     assert update["plan_fingerprint"] == context.plan_fingerprint
     assert (
         update["source_shape_fingerprint"]
-        == control.TARGET_SHAPE_FINGERPRINT
+        == control.SOURCE_SHAPE_FINGERPRINTS["0.7.27"]
     )
     assert (
         update["control_definition_fingerprint"]
@@ -423,7 +426,7 @@ def _stage_receipt(
         "admission_attempt_id": context.admission_attempt_id,
         "target_version": context.target_release,
         "target_commit": context.target_commit,
-        "target_schema_version": 8,
+        "target_schema_version": control.TARGET_SCHEMA_VERSION,
         "registry_fingerprint": context.registry_fingerprint,
         "plan_fingerprint": context.plan_fingerprint,
         "fencing_generation": generation,
@@ -705,6 +708,67 @@ def test_completed_previous_generation_history_is_preserved_but_tampering_fails(
             current,
             attempts,
         )
+
+
+def test_inventory_bound_migration_reaches_terminal_restart_validation():
+    slot_id = "initial-" + ("a" * 64)
+    inventory = "b" * 64
+    installed_commit = control.inventory_bound_source_token(
+        slot_id,
+        inventory,
+    )
+    installed_version = "0.7.18"
+    target_release = "0.7.27"
+    target_commit = control.SOURCE_TAG_COMMITS[target_release]
+    source_shape = control.SOURCE_SHAPE_FINGERPRINTS[installed_version]
+    plan = control.plan_fingerprint(
+        installed_version=installed_version,
+        installed_commit=installed_commit,
+        source_schema_version=1,
+        source_shape_fingerprint=source_shape,
+        target_release=target_release,
+        target_commit=target_commit,
+    )
+    attempts = _historical_attempts()
+    for attempt in attempts:
+        attempt.installed_commit = installed_commit
+        attempt.plan_fingerprint = plan
+        attempt.details = {
+            "source_identity": {
+                "identity_mode": "inventory_bound",
+                "slot_id": slot_id,
+                "inventory_sha256": inventory,
+            }
+        }
+    terminal = SimpleNamespace(
+        id=control.CURRENT_STATE_ID,
+        state="completed",
+        target_schema_version=control.TARGET_SCHEMA_VERSION,
+        registry_fingerprint=control.REGISTRY_FINGERPRINT,
+        control_definition_fingerprint=(
+            control.CONTROL_DEFINITION_FINGERPRINT
+        ),
+        installed_version=installed_version,
+        installed_commit=installed_commit,
+        source_schema_version=1,
+        source_shape_fingerprint=source_shape,
+        target_release=target_release,
+        target_commit=target_commit,
+        plan_fingerprint=plan,
+        request_id=OLD_REQUEST_ID,
+        owner_attempt_id=OLD_ADMISSION_ID,
+        fencing_generation=1,
+    )
+
+    validated = control._validate_terminal_control(
+        [terminal],
+        attempts,
+    )
+    control._validate_migrated_target_history(
+        _history_rows(),
+        validated,
+        attempts,
+    )
 
 
 @pytest.fixture

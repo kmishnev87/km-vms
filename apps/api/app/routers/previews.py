@@ -1,10 +1,12 @@
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
 from app.core.config import settings
+from app.models.user import User
+from app.routers.deps import require_permission
 
 router = APIRouter(prefix="/previews", tags=["previews"])
 
@@ -30,12 +32,18 @@ def _preview_file_response(path: Path) -> FileResponse:
 
 
 @router.get("/camera-previews/{camera_id}.jpg")
-def camera_preview(camera_id: int):
+def camera_preview(
+    camera_id: int,
+    current_user: User = Depends(require_permission("manage_cameras")),
+):
     return _preview_file_response(settings.camera_preview_path(camera_id))
 
 
 @router.get("/camera-tests/{token}.jpg")
-def camera_test_preview(token: str):
+def camera_test_preview(
+    token: str,
+    current_user: User = Depends(require_permission("manage_cameras")),
+):
     if not _TEST_PREVIEW_RE.fullmatch(token):
         raise HTTPException(status_code=404, detail="Preview not found")
     return _preview_file_response(settings.camera_test_preview_path(token))

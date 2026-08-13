@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Layout from "../../components/Layout";
+import AuthenticatedPreviewImage from "../../components/AuthenticatedPreviewImage";
 import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
@@ -10,9 +11,7 @@ import { useCurrentUser } from "../../lib/currentUser";
 import {
   applyCameraFormPatch,
   loadCamerasViewMode,
-  isRtspPortManualOverrideForEdit,
   saveCamerasViewMode,
-  smartRtspPort,
 } from "../../lib/cameraStage16";
 import { useI18n, useLocaleText } from "../../lib/i18n";
 
@@ -28,10 +27,10 @@ const initialForm = {
   rtsp_sub_url: "",
   rtsp_host: "",
   rtsp_port: 554,
-  rtsp_port_manually_set: false,
   rtsp_transport: "tcp",
   onvif_path: "",
   onvif_profile_token: "",
+  onvif_sub_profile_token: "",
   onvif_channel_id: "",
   recording_mode: "always",
   default_live_stream: "main",
@@ -41,6 +40,8 @@ const initialForm = {
   storage_quota_gb: 50,
   preview_token: null,
   validation_token: null,
+  main_validation_token: null,
+  sub_validation_token: null,
   onvif_probe_token: null,
   manual_confirm_unverified: false,
 };
@@ -68,6 +69,7 @@ const PREVIEW_SENSITIVE_FIELDS = new Set([
   "rtsp_transport",
   "onvif_path",
   "onvif_profile_token",
+  "onvif_sub_profile_token",
   "onvif_channel_id",
 ]);
 
@@ -230,17 +232,7 @@ function profileRole(profile, data) {
   const token = profile?.token || "";
   if (token && token === data?.suggested_main_profile_token) return "main";
   if (token && token === data?.suggested_sub_profile_token) return "sub";
-
-  const name = profileNameText(profile);
-  if (/(main|primary|stream1|profile1|high)/.test(name)) return "main";
-  if (/(sub|secondary|stream2|profile2|low)/.test(name)) return "sub";
-
-  const profiles = data?.profiles || [];
-  if (profiles.length > 1) {
-    const maxPixels = Math.max(...profiles.map(profilePixels));
-    if (profilePixels(profile) && profilePixels(profile) < maxPixels) return "sub";
-  }
-  return "main";
+  return "unknown";
 }
 
 function profileConfigWarning(profile, copy = {}) {
@@ -329,7 +321,6 @@ function cameraPayloadFromForm(source, editingCameraId) {
     retention_days: Number(normalizedSource.retention_days),
     storage_quota_gb: Number(normalizedSource.storage_quota_gb),
   };
-  delete payload.rtsp_port_manually_set;
   if (protocol === "onvif") {
     payload.rtsp_host = rtspReachableHost(normalizedSource);
     payload.rtsp_port = rtspReachablePort(normalizedSource);
@@ -614,8 +605,7 @@ export default function CamerasPage() {
   }
 
   function openEdit(camera) {
-    const explicitEditRtspPort = camera.rtsp_port;
-    const editRtspPort = camera.rtsp_reachable_port || rtspPortFromValue(camera.rtsp_main_url || camera.rtsp_sub_url || "") || 554;
+    const editRtspPort = camera.rtsp_port || rtspPortFromValue(camera.rtsp_main_url || camera.rtsp_sub_url || "") || 554;
     setEditorMode("edit");
     setEditingCameraId(camera.id);
     setForm(normalizeCameraStreamDefaults({
@@ -630,10 +620,10 @@ export default function CamerasPage() {
       rtsp_sub_url: prettyRtspValue(camera.rtsp_sub_url || ""),
       rtsp_host: camera.rtsp_reachable_host || rtspHostFromValue(camera.rtsp_main_url || camera.rtsp_sub_url || "") || camera.host || "",
       rtsp_port: editRtspPort,
-      rtsp_port_manually_set: isRtspPortManualOverrideForEdit(camera.port, explicitEditRtspPort),
       rtsp_transport: camera.rtsp_transport || "tcp",
       onvif_path: camera.onvif_path || "",
       onvif_profile_token: camera.onvif_profile_token || "",
+      onvif_sub_profile_token: camera.onvif_sub_profile_token || "",
       onvif_channel_id: camera.onvif_channel_id || "",
       recording_mode: camera.recording_mode || "always",
       default_live_stream: camera.default_live_stream || "sub",
@@ -642,6 +632,8 @@ export default function CamerasPage() {
       retention_days: camera.retention_days || 30,
       storage_quota_gb: camera.storage_quota_gb || 50,
       validation_token: null,
+      main_validation_token: null,
+      sub_validation_token: null,
       onvif_probe_token: null,
       manual_confirm_unverified: false,
     }));
@@ -667,12 +659,15 @@ export default function CamerasPage() {
     setDeleteFiles(false);
   }
 
-  async function runTest(formOverride = form) {
+  async function runTest(streamRole = "main", formOverride = form) {
     setError("");
     setTesting(true);
     setTestResult(null);
     try {
-      const payload = cameraPayloadFromForm(formOverride, editingCameraId);
+      const payload = {
+        ...cameraPayloadFromForm(formOverride, editingCameraId),
+        stream_role: streamRole,
+      };
       const result = await apiFetch("/cameras/test", {
         method: "POST",
         body: JSON.stringify(payload),
@@ -682,10 +677,15 @@ export default function CamerasPage() {
       setForm((prev) => ({
         ...prev,
         preview_token: result.preview_token || prev.preview_token,
-        validation_token: result.validation_token || prev.validation_token,
+        validation_token: streamRole === "main" ? (result.validation_token || prev.validation_token) : prev.validation_token,
+        main_validation_token: streamRole === "main" ? (result.validation_token || null) : prev.main_validation_token,
+        sub_validation_token: streamRole === "sub" ? (result.validation_token || null) : prev.sub_validation_token,
         manual_confirm_unverified: false,
       }));
-      updateProfileProbeState(formOverride.onvif_profile_token || selectedOnvifProfileToken, result);
+      const testedToken = streamRole === "sub"
+        ? formOverride.onvif_sub_profile_token
+        : formOverride.onvif_profile_token;
+      updateProfileProbeState(testedToken || selectedOnvifProfileToken, result);
       return result;
     } catch (err) {
       setError(normalizeCameraError(err.message, copy));
@@ -718,30 +718,11 @@ export default function CamerasPage() {
       });
       setOnvifData(result);
       const mainToken = result.suggested_main_profile_token || result.profiles?.[0]?.token || "";
-      const subToken = result.suggested_sub_profile_token || "";
-      const mainProfile = profileByToken(result, mainToken);
-      const subProfile = profileByToken(result, subToken);
-      const nextForm = normalizeCameraStreamDefaults({
-        ...form,
-        rtsp_host: result.rtsp_reachable?.host || rtspReachableHost(form),
-        rtsp_port: smartRtspPort(form, result.rtsp_reachable?.port || rtspReachablePort(form)),
-        onvif_profile_token: mainToken,
-        rtsp_main_url: mainProfile?.stream_path || prettyRtspValue(mainProfile?.stream_uri || form.rtsp_main_url),
-        rtsp_sub_url: subProfile?.stream_path || prettyRtspValue(subProfile?.stream_uri || form.rtsp_sub_url),
-        default_record_stream: "main",
-        default_live_stream: subProfile ? "sub" : form.default_live_stream,
-      });
-      setForm(nextForm);
       setSelectedOnvifProfileToken(mainToken);
       if (mainToken) {
         await loadOnvifProfileConfig(mainToken);
       }
-      if (mainProfile?.rtsp_ready && nextForm.rtsp_host && nextForm.rtsp_main_url) {
-        await runTest(nextForm);
-        setOnvifStatus(copy.mainSelectedChecked);
-      } else {
-        setOnvifStatus(copy.profilesLoadedNeedRtsp);
-      }
+      setOnvifStatus(copy.profilesLoadedNeedRtsp);
     } catch (err) {
       setError(normalizeCameraError(err.message, copy));
       setOnvifData(null);
@@ -780,10 +761,12 @@ export default function CamerasPage() {
       host: candidate.host || prev.host,
       port: candidate.port || prev.port || 80,
       onvif_path: candidate.xaddr_path || prev.onvif_path || "",
-      rtsp_host: candidate.host || prev.rtsp_host || "",
-      rtsp_port: smartRtspPort(prev, candidate.port || prev.port || 554),
+      rtsp_host: prev.rtsp_host || candidate.host || "",
+      rtsp_port: Number(prev.rtsp_port || 554),
       preview_token: null,
       validation_token: null,
+      main_validation_token: null,
+      sub_validation_token: null,
       onvif_probe_token: null,
       manual_confirm_unverified: false,
     }));
@@ -798,6 +781,8 @@ export default function CamerasPage() {
       const payload = {
         host: form.host,
         port: Number(form.port || 80),
+        camera_id: editingCameraId || null,
+        onvif_path: form.onvif_path,
         rtsp_host: rtspReachableHost(form),
         rtsp_port: rtspReachablePort(form),
         username: form.username,
@@ -811,18 +796,8 @@ export default function CamerasPage() {
       });
       setOnvifData(result);
       const mainToken = result.suggested_main_profile_token || result.profiles?.[0]?.token || "";
-      const subToken = result.suggested_sub_profile_token || "";
-      const mainProfile = profileByToken(result, mainToken);
-      const subProfile = profileByToken(result, subToken);
-      setForm((prev) => normalizeCameraStreamDefaults({
+      setForm((prev) => ({
         ...prev,
-        rtsp_host: result.rtsp_reachable?.host || rtspReachableHost(prev),
-        rtsp_port: smartRtspPort(prev, result.rtsp_reachable?.port || rtspReachablePort(prev)),
-        onvif_profile_token: mainToken || prev.onvif_profile_token,
-        rtsp_main_url: mainProfile?.stream_path || prev.rtsp_main_url,
-        rtsp_sub_url: subProfile?.stream_path || prev.rtsp_sub_url,
-        default_record_stream: "main",
-        default_live_stream: subProfile ? "sub" : prev.default_live_stream,
         onvif_probe_token: result.onvif_probe_token || null,
         manual_confirm_unverified: false,
       }));
@@ -846,7 +821,7 @@ export default function CamerasPage() {
       default_record_stream: "main",
       preview_token: null,
       validation_token: null,
-      onvif_probe_token: null,
+      main_validation_token: null,
       manual_confirm_unverified: false,
     }));
     setTestResult(null);
@@ -863,11 +838,10 @@ export default function CamerasPage() {
     setForm((prev) => normalizeCameraStreamDefaults({
       ...prev,
       rtsp_sub_url: profileStreamValue(profile),
-      onvif_profile_token: prev.onvif_profile_token || token,
+      onvif_sub_profile_token: token,
       default_live_stream: "sub",
       preview_token: null,
-      validation_token: null,
-      onvif_probe_token: null,
+      sub_validation_token: null,
       manual_confirm_unverified: false,
     }));
     setTestResult(null);
@@ -1061,10 +1035,18 @@ export default function CamerasPage() {
   const onvifProfiles = onvifData?.profiles || [];
   const selectedOnvifProfile = profileByToken(onvifData, selectedOnvifProfileToken || form.onvif_profile_token);
   const assignedMainProfile = onvifProfiles.find((profile) => (
-    profile.token === form.onvif_profile_token || profileMatchesStream(profile, form.rtsp_main_url)
+    (form.onvif_profile_token && profile.token === form.onvif_profile_token)
+    || (!form.onvif_profile_token && profileMatchesStream(profile, form.rtsp_main_url))
   )) || null;
-  const assignedSubProfile = onvifProfiles.find((profile) => profileMatchesStream(profile, form.rtsp_sub_url)) || null;
-  const hasVerifiedCameraPayload = Boolean(form.validation_token && testResult?.ok);
+  const assignedSubProfile = onvifProfiles.find((profile) => (
+    (form.onvif_sub_profile_token && profile.token === form.onvif_sub_profile_token)
+    || (!form.onvif_sub_profile_token && profileMatchesStream(profile, form.rtsp_sub_url))
+  )) || null;
+  const mainProofReady = !form.rtsp_main_url || Boolean(form.main_validation_token || form.validation_token);
+  const subProofReady = !form.rtsp_sub_url || Boolean(form.sub_validation_token);
+  const managementProofReady = form.protocol !== "onvif" || Boolean(form.onvif_probe_token);
+  const hasConfiguredStream = Boolean(form.rtsp_main_url || form.rtsp_sub_url);
+  const hasVerifiedCameraPayload = Boolean(hasConfiguredStream && mainProofReady && subProofReady && managementProofReady);
   const showManualUnverifiedBypass = !hasVerifiedCameraPayload && (form.protocol === "onvif" || editorMode === "create");
 
   function renderProfileSettingSlot(slot) {
@@ -1163,7 +1145,10 @@ export default function CamerasPage() {
                 <article className="cameraTileCard" key={camera.id}>
                   <div className="cameraTilePreview">
                     {camera.preview_url ? (
-                      <img src={camera.preview_url} alt="" />
+                      <AuthenticatedPreviewImage
+                        src={camera.preview_url}
+                        fallback={<div className="cameraTilePreviewEmpty">{copy.noFrame}</div>}
+                      />
                     ) : (
                       <div className="cameraTilePreviewEmpty">{copy.noFrame}</div>
                     )}
@@ -1222,7 +1207,10 @@ export default function CamerasPage() {
 
                   <div className="cameraPreviewField" aria-label={copy.cameraFrame}>
                     {camera.preview_url ? (
-                      <img src={camera.preview_url} alt="" />
+                      <AuthenticatedPreviewImage
+                        src={camera.preview_url}
+                        fallback={<div className="cameraPreviewPlaceholder">{copy.noFrame}</div>}
+                      />
                     ) : (
                       <div className="cameraPreviewPlaceholder">{copy.noFrame}</div>
                     )}
@@ -1443,8 +1431,11 @@ export default function CamerasPage() {
                   <h3>{copy.previewTest}</h3>
                 </div>
                 <div className="toolbar cameraPreviewActions">
-                  <button className="button secondary small" onClick={() => runTest()} disabled={testing}>
-                    {copy.test}
+                  <button className="button secondary small" onClick={() => runTest("main")} disabled={testing || !form.rtsp_main_url}>
+                    {copy.testMain}
+                  </button>
+                  <button className="button secondary small" onClick={() => runTest("sub")} disabled={testing || !form.rtsp_sub_url}>
+                    {copy.testSub}
                   </button>
                   {form.protocol === "onvif" ? (
                     <button className="button secondary small" onClick={loadOnvifProfiles} disabled={onvifBusy}>
@@ -1456,12 +1447,17 @@ export default function CamerasPage() {
                 <div className="cameraTestResult">
                   <div className="cameraTestPreview">
                     {testResult.preview_url ? (
-                      <img src={`${testResult.preview_url}?v=${Date.now()}`} alt="" />
+                      <AuthenticatedPreviewImage
+                        src={testResult.preview_url}
+                        fallback={<div className="cameraPreviewPlaceholder">{copy.frameUnavailable}</div>}
+                      />
                     ) : (
                       <div className="cameraPreviewPlaceholder">{copy.frameUnavailable}</div>
                     )}
                   </div>
-                  <div className="cameraTestStatus">{copy.testOk}</div>
+                  <div className="cameraTestStatus">
+                    {testResult.tested_role === "sub" ? copy.testSubOk : copy.testMainOk}
+                  </div>
                   <div className="cameraTestDetails">
                     <div><strong>{copy.path}:</strong> <span className="cameraTestPath">{testResult.display_path || copy.rtspPathProvided}</span></div>
                     <div><strong>{copy.transport}:</strong> {testResult.transport}</div>
@@ -1487,9 +1483,12 @@ export default function CamerasPage() {
                     <div className="cameraProfileGrid">
                     {onvifProfiles.map((profile) => {
                       const isMain = form.onvif_profile_token === profile.token;
-                      const isSub = profileMatchesStream(profile, form.rtsp_sub_url);
+                      const isSub = form.onvif_sub_profile_token
+                        ? form.onvif_sub_profile_token === profile.token
+                        : profileMatchesStream(profile, form.rtsp_sub_url);
                       const displayName = profileDisplayName(profile, copy);
                       const tokenLabel = profile.token && profile.token !== displayName ? profile.token : "";
+                      const suggestedRole = profileRole(profile, onvifData);
                       return (
                       <div
                         key={profile.token}
@@ -1502,11 +1501,13 @@ export default function CamerasPage() {
                         <div className="cameraProfileChoice" aria-hidden="true"></div>
                         <div className="cameraProfileBody">
                           <div className="cameraProfileHead">
-                            <span title={displayName}>
-                              {displayName}
+                            <div className="cameraProfileNameLine">
+                              <span className="cameraProfileName" title={displayName}>{displayName}</span>
                               {isMain ? <em className="cameraProfileBadge main">Main</em> : null}
                               {isSub ? <em className="cameraProfileBadge sub">Sub</em> : null}
-                            </span>
+                              {!isMain && suggestedRole === "main" ? <em className="cameraProfileBadge main">{copy.recommendedMain}</em> : null}
+                              {!isSub && suggestedRole === "sub" ? <em className="cameraProfileBadge sub">{copy.recommendedSub}</em> : null}
+                            </div>
                             {tokenLabel ? <span title={tokenLabel}>{tokenLabel}</span> : null}
                           </div>
                           <div className="cameraProfileMeta">

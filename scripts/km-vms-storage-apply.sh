@@ -241,14 +241,26 @@ detect_compose() {
 }
 
 compose_config_check() {
-  [ -f "$APP_DIR/docker-compose.yml" ] || return 0
-  if detect_compose; then
-    if [ -f "$ARCHIVE_ROOTS_COMPOSE_FILE" ]; then
-      (cd "$APP_DIR" && km_vms_compose_cmd --env-file "$ENV_FILE" -f "$APP_DIR/docker-compose.yml" -f "$ARCHIVE_ROOTS_COMPOSE_FILE" config >/dev/null)
-    else
-      (cd "$APP_DIR" && km_vms_compose_cmd --env-file "$ENV_FILE" -f "$APP_DIR/docker-compose.yml" config >/dev/null)
-    fi
+  if ! detect_compose; then
+    printf 'ERROR: Docker Compose is unavailable; storage Compose configuration was not validated.\n' >&2
+    return 1
   fi
+  active_pointer="$APP_DIR/data/update-runtime/active"
+  if [ -e "$active_pointer" ] || [ -L "$active_pointer" ]; then
+    product_source=$(km_vms_resolve_product_source "$APP_DIR")
+    (cd "$APP_DIR" && km_vms_compose_for_source "$APP_DIR" "$product_source" config >/dev/null)
+    return 0
+  fi
+  [ "$INITIAL_SETUP" = "1" ] ||
+    fail "canonical active release is required for storage Compose validation"
+  product_source=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
+  [ -f "$product_source/docker-compose.yml" ] ||
+    fail "explicit installation source is missing docker-compose.yml"
+  (
+    cd "$APP_DIR"
+    KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE=1 \
+      km_vms_compose_for_source "$APP_DIR" "$product_source" config >/dev/null
+  )
 }
 
 while [ "$#" -gt 0 ]; do

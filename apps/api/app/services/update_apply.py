@@ -103,7 +103,7 @@ GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GIT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/@+-]{0,119}$")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 SLOT_ID_RE = re.compile(
-    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64})$"
+    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})$"
 )
 REQUEST_ID_RE = re.compile(r"^update-[0-9a-f]{32}$", re.IGNORECASE)
 LEGACY_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:@+-]{0,79}$")
@@ -1845,6 +1845,12 @@ def _installed_matches_snapshot(snapshot: dict[str, Any]) -> bool:
         and (expected_git_head or None) == (installed.git_head or None)
         and (fingerprint.get("identity_validity") or None)
         == (installed.identity_validity or None)
+        and (fingerprint.get("slot_id") or None)
+        == (installed.slot_id or None)
+        and (fingerprint.get("identity_mode") or None)
+        == (installed.identity_mode or None)
+        and bool(fingerprint.get("installed_projection_valid"))
+        is bool(installed.installed_projection_valid)
     )
 
 

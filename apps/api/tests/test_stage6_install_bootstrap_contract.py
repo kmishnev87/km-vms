@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 
@@ -97,21 +98,22 @@ def test_setup_activation_helper_is_bounded_runtime_storage_helper():
     update_helper_section = compose.split("  update-helper:", 1)[1].split("  recorder:", 1)[0]
     assert "/var/run/docker.sock:/var/run/docker.sock" in bootstrap_section
     assert 'restart: "no"' in bootstrap_section
-    assert "km-vms-update-helper-bridge.py" in bootstrap_section
+    assert "bootstrap/current/km-vms-bootstrap.py" in bootstrap_section
+    assert "run-role update-helper-bootstrap" in bootstrap_section
     assert "network_mode: none" in bootstrap_section
     assert "KM_VMS_BOOTSTRAP_HELPER_IMAGE" in bootstrap_section
     assert "update-helper-bootstrap" in api_section
     assert "service_completed_successfully" in api_section
     assert "/var/run/docker.sock:/var/run/docker.sock" not in api_section
-    assert "restart: unless-stopped" in helper_section
+    assert "restart: always" in helper_section
     assert "/var/run/docker.sock:/var/run/docker.sock" in helper_section
     assert (
-        "data/update-runtime/active/scripts/"
-        "km-vms-setup-activation-helper.sh"
+        "data/update-runtime/bootstrap/current/"
+        "km-vms-bootstrap-dispatch.sh"
         in helper_section
     )
     assert (
-        "scripts/km-vms-setup-activation-helper.sh"
+        "setup-helper"
         in helper_section
     )
     assert "SOURCE_CONTAINER_DIR" in helper
@@ -131,18 +133,19 @@ def test_setup_activation_helper_is_bounded_runtime_storage_helper():
         in helper
     )
     assert (
-        'sh "$SOURCE_CONTAINER_DIR/scripts/'
+        'sh "$OPERATOR_SCRIPTS_DIR/'
         'km-vms-storage-apply.sh"'
         in helper
     )
     assert (
-        'sh "$SOURCE_DIR/scripts/km-vms-restart.sh"'
+        'sh "$OPERATOR_SCRIPTS_DIR/km-vms-restart.sh"'
         in helper
     )
     assert "sh /host-app/scripts/km-vms-" not in helper
     assert "/var/run/docker.sock:/var/run/docker.sock" in update_helper_section
     assert "ports:" not in update_helper_section
-    assert "km-vms-update-helper.py" in update_helper_section
+    assert "bootstrap/current/km-vms-bootstrap.py" in update_helper_section
+    assert "run-role update-helper" in update_helper_section
     assert "working_dir: /host-app" in update_helper_section
     assert "KM_VMS_UPDATE_APP_DIR: /host-app" in update_helper_section
     assert "KM_VMS_UPDATE_HOST_APP_DIR" in update_helper_section
@@ -153,6 +156,12 @@ def test_setup_activation_helper_is_bounded_runtime_storage_helper():
     )
     assert "python3 is required for the release-slot layout foundation" not in script
     assert '"$APP_DIR/data/update-runtime/slots"' in script
+    assert script.count('KM_VMS_DOCKER_COMPOSE="$COMPOSE_BIN"') >= 3
+    assert script.count('KM_VMS_DOCKER_COMPOSE_KIND="$COMPOSE_KIND"') >= 3
+    assert 'if [ -x "$compose_bin_dir/docker" ]; then' in script
+    assert 'PATH="$compose_bin_dir:$PATH"' in script
+    assert 'km_vms_compose_for_source "$APP_DIR" "$PRODUCT_SOURCE" up -d --no-build' in script
+    assert 'km_vms_compose_for_source "$APP_DIR" "$PRODUCT_SOURCE" up -d --build' not in script
     assert "read_control_value" in helper
     assert "read_control_value" in storage_apply
     assert "read_control_value" in restart
@@ -180,6 +189,145 @@ def test_setup_activation_helper_is_bounded_runtime_storage_helper():
     ):
         assert old_json_sed not in helper
         assert old_json_sed not in storage_apply
+
+
+def _storage_apply_compose_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
+    helper_dir = tmp_path / "helper"
+    helper_dir.mkdir()
+    helper = helper_dir / "km-vms-storage-apply.sh"
+    helper.write_text(read("scripts/km-vms-storage-apply.sh"), encoding="utf-8")
+    helper.chmod(0o755)
+    helper_dir.joinpath("km-vms-compose-common.sh").write_text(
+        """#!/usr/bin/env sh
+km_vms_detect_compose() {
+  [ "${KM_VMS_TEST_COMPOSE_AVAILABLE:-0}" = "1" ] || return 1
+  COMPOSE_KIND=standalone
+  COMPOSE_BIN="$KM_VMS_TEST_COMPOSE_BIN"
+}
+km_vms_resolve_product_source() {
+  printf '%s\\n' "$1/data/update-runtime/slots/release-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/source"
+}
+km_vms_compose_for_source() {
+  stable_dir="$1"
+  source_dir="$2"
+  shift 2
+  {
+    printf 'stable=%s\\n' "$stable_dir"
+    printf 'source=%s\\n' "$source_dir"
+    for argument in "$@"; do printf 'arg=%s\\n' "$argument"; done
+  } > "$KM_VMS_TEST_COMPOSE_TRACE"
+  "$COMPOSE_BIN" "$@"
+}
+""",
+        encoding="utf-8",
+    )
+
+    app = tmp_path / "app"
+    control = app / "data/install-control"
+    active = app / "data/update-runtime/active"
+    active.mkdir(parents=True)
+    control.mkdir(parents=True, exist_ok=True)
+    app.joinpath(".env").write_text(
+        "SURVEILLANCE_ROOT=/old/archive\nSECRET=never-print\n",
+        encoding="utf-8",
+    )
+    control.joinpath("storage-apply-status.json").write_text(
+        '{"status":"previous"}\n', encoding="utf-8"
+    )
+
+    storage_base = Path("/mnt/data")
+    storage_base.mkdir(parents=True, exist_ok=True)
+    storage_parent = Path(tempfile.mkdtemp(prefix="km-vms-storage-", dir=storage_base))
+    selected = storage_parent / "archive"
+    control.joinpath("storage-selection.control").write_text(
+        "\n".join(
+            (
+                "schema_version=1",
+                f"selected_host_path={selected}",
+                f"selected_mount_path={storage_parent}",
+                "folder_name=archive",
+                "apply_status=activation_requested",
+                "activation_request_id=storage-compose-fixture",
+                "operation_id=storage-compose-fixture",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    trace = tmp_path / "compose.trace"
+    compose = tmp_path / "fake-compose"
+    compose.write_text(
+        "#!/usr/bin/env sh\n[ \"${1:-}\" = config ] || exit 91\nexit 0\n",
+        encoding="utf-8",
+    )
+    compose.chmod(0o755)
+    return helper, app, storage_parent, trace
+
+
+def test_storage_apply_rolls_back_when_compose_is_unavailable(tmp_path: Path) -> None:
+    helper, app, storage_parent, trace = _storage_apply_compose_fixture(tmp_path)
+    env_before = app.joinpath(".env").read_bytes()
+    status = app / "data/install-control/storage-apply-status.json"
+    status_before = status.read_bytes()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "KM_VMS_TEST_COMPOSE_AVAILABLE": "0",
+            "KM_VMS_TEST_COMPOSE_BIN": str(tmp_path / "fake-compose"),
+            "KM_VMS_TEST_COMPOSE_TRACE": str(trace),
+        }
+    )
+    try:
+        result = subprocess.run(
+            ["sh", str(helper), "--app-dir", str(app)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        assert result.returncode != 0
+        assert "Docker Compose is unavailable" in result.stderr
+        assert app.joinpath(".env").read_bytes() == env_before
+        assert status.read_bytes() == status_before
+        assert not trace.exists()
+        assert "SECRET=never-print" not in result.stdout
+        assert "SECRET=never-print" not in result.stderr
+    finally:
+        shutil.rmtree(storage_parent)
+
+
+def test_storage_apply_validates_canonical_active_compose_layers(tmp_path: Path) -> None:
+    helper, app, storage_parent, trace = _storage_apply_compose_fixture(tmp_path)
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "KM_VMS_TEST_COMPOSE_AVAILABLE": "1",
+            "KM_VMS_TEST_COMPOSE_BIN": str(tmp_path / "fake-compose"),
+            "KM_VMS_TEST_COMPOSE_TRACE": str(trace),
+        }
+    )
+    try:
+        result = subprocess.run(
+            ["sh", str(helper), "--app-dir", str(app)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        assert result.returncode == 0, result.stderr
+        observed = trace.read_text(encoding="utf-8")
+        assert f"stable={app}\n" in observed
+        assert (
+            f"source={app}/data/update-runtime/slots/"
+            "release-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/source\n"
+            in observed
+        )
+        assert "arg=config\n" in observed
+        assert '"status": "applied_restart_required"' in (
+            app / "data/install-control/storage-apply-status.json"
+        ).read_text(encoding="utf-8")
+    finally:
+        shutil.rmtree(storage_parent)
 
 
 def test_initial_storage_recovery_restores_complete_configuration_set(

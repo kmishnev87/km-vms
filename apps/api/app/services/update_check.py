@@ -102,6 +102,10 @@ class UpdateInstalledState:
     git_head: str | None
     legacy_source_commit: str | None
     legacy_update_commit: str | None
+    slot_id: str | None = None
+    slot_kind: str | None = None
+    identity_mode: str | None = None
+    installed_projection_valid: bool = False
     warnings: list[UpdateMetadataWarning] = field(default_factory=list)
 
 
@@ -374,6 +378,63 @@ def _release_descriptor_path(root: Path | None = None) -> Path:
     return (root or _app_root()) / RELEASE_DESCRIPTOR_RELATIVE
 
 
+def _installed_slot_projection_path() -> Path:
+    return Path(
+        os.getenv("KMVMS_INSTALLED_SLOT_PROJECTION_FILE")
+        or "/installed-slot/installed-slot.json"
+    )
+
+
+def _validated_initial_projection(
+    release: dict[str, Any],
+) -> dict[str, Any] | None:
+    payload, validity = _read_json_file(_installed_slot_projection_path())
+    if validity != "valid" or payload is None:
+        return None
+    slot_id = release.get("slot_id")
+    binding = payload.get("binding")
+    digest = re.compile(r"^[0-9a-f]{64}$")
+    if (
+        set(payload)
+        != {
+            "schema_version",
+            "document_type",
+            "slot_id",
+            "kind",
+            "identity_mode",
+            "version",
+            "commit",
+            "inventory_sha256",
+            "manifest_sha256",
+            "active_slot_id",
+            "binding",
+            "published_at",
+        }
+        or payload.get("schema_version") != 1
+        or payload.get("document_type") != "installed_slot_projection"
+        or payload.get("kind") != "initial_install_snapshot"
+        or payload.get("identity_mode") != "inventory_bound"
+        or payload.get("commit") is not None
+        or payload.get("slot_id") != slot_id
+        or payload.get("active_slot_id") != slot_id
+        or payload.get("version") != release.get("version")
+        or not isinstance(slot_id, str)
+        or not re.fullmatch(r"initial-[0-9a-f]{64}", slot_id)
+        or not isinstance(payload.get("inventory_sha256"), str)
+        or not digest.fullmatch(payload["inventory_sha256"])
+        or not isinstance(payload.get("manifest_sha256"), str)
+        or not digest.fullmatch(payload["manifest_sha256"])
+        or not isinstance(binding, dict)
+        or binding.get("slot_id") != slot_id
+        or binding.get("kind") != "initial_install_snapshot"
+        or binding.get("commit") is not None
+        or binding.get("inventory_sha256") != payload["inventory_sha256"]
+        or binding.get("manifest_sha256") != payload["manifest_sha256"]
+    ):
+        return None
+    return payload
+
+
 def _read_git_head(root: Path | None = None) -> str | None:
     base = root or _app_root()
     git_dir = base / ".git"
@@ -418,6 +479,29 @@ def read_installed_update_state(*, app_root: Path | None = None) -> UpdateInstal
     source = source_payload or {}
     update = update_payload or {}
     release = release_payload or {}
+    identity_mode = _safe_field(
+        "identity_mode", release.get("identity_mode"), max_length=40
+    )
+    slot_kind = _safe_field(
+        "slot_kind", release.get("slot_kind"), max_length=80
+    )
+    slot_id = _safe_field("slot_id", release.get("slot_id"), max_length=80)
+    initial_projection = (
+        _validated_initial_projection(release)
+        if identity_mode == "inventory_bound"
+        or slot_kind == "initial_install_snapshot"
+        or (slot_id or "").startswith("initial-")
+        else None
+    )
+    initial_identity_valid = bool(
+        release_validity == "valid"
+        and identity_mode == "inventory_bound"
+        and slot_kind == "initial_install_snapshot"
+        and isinstance(slot_id, str)
+        and re.fullmatch(r"initial-[0-9a-f]{64}", slot_id)
+        and release.get("commit_sha") is None
+        and initial_projection is not None
+    )
     source_schema = source.get("schema_version")
     update_schema = update.get("schema_version")
     release_schema = release.get("schema_version")
@@ -456,7 +540,29 @@ def read_installed_update_state(*, app_root: Path | None = None) -> UpdateInstal
     last_status = _safe_field("status", update.get("status"), max_length=40)
     last_failed_phase = _safe_field("failed_phase", update.get("failed_phase"), max_length=80)
     legacy_validity = "valid" if source_validity == "valid" and update_validity in {"valid", "missing"} else ("missing" if source_validity == "missing" and update_validity == "missing" else "invalid")
-    if release_validity == "valid" and release_metadata_status in {"precompose", "partial"}:
+    if (
+        release_validity == "valid"
+        and (
+            identity_mode == "inventory_bound"
+            or slot_kind == "initial_install_snapshot"
+            or (slot_id or "").startswith("initial-")
+        )
+        and not initial_identity_valid
+    ):
+        status = "identity_incomplete"
+        identity_validity = "invalid_inventory_bound"
+        warnings.append(
+            UpdateMetadataWarning(
+                "installed_slot_projection_invalid",
+                "Inventory-bound installed-slot evidence is missing or stale.",
+                severity="high",
+                field="installed-slot.json",
+            )
+        )
+    elif initial_identity_valid:
+        status = "known"
+        identity_validity = "inventory_bound"
+    elif release_validity == "valid" and release_metadata_status in {"precompose", "partial"}:
         status = "identity_incomplete"
         identity_validity = release_metadata_status
     elif release_validity == "valid" and commit and git_head and git_head.lower() != commit.lower():
@@ -544,6 +650,10 @@ def read_installed_update_state(*, app_root: Path | None = None) -> UpdateInstal
         git_head=git_head,
         legacy_source_commit=legacy_source_commit,
         legacy_update_commit=legacy_update_commit,
+        slot_id=slot_id,
+        slot_kind=slot_kind,
+        identity_mode=identity_mode,
+        installed_projection_valid=initial_projection is not None,
         warnings=warnings,
     )
 
@@ -1079,6 +1189,9 @@ def _trusted_apply_snapshot_from_payload(payload: dict[str, Any], *, now: dateti
             "git_head": _full_commit(installed.get("git_head")),
             "identity_validity": _safe_field("identity_validity", installed.get("identity_validity"), max_length=80),
             "release_metadata_status": _safe_field("release_metadata_status", installed.get("release_metadata_status"), max_length=80),
+            "slot_id": _safe_field("slot_id", installed.get("slot_id"), max_length=80),
+            "identity_mode": _safe_field("identity_mode", installed.get("identity_mode"), max_length=40),
+            "installed_projection_valid": installed.get("installed_projection_valid") is True,
         },
         "comparison": {
             "status": _safe_field("status", (payload.get("comparison") or {}).get("status") if isinstance(payload.get("comparison"), dict) else payload.get("status"), max_length=80),
@@ -1143,6 +1256,14 @@ def _installed_matches_snapshot(snapshot: dict[str, Any]) -> bool:
         return False
     if (fingerprint.get("identity_validity") or None) != (installed.identity_validity or None):
         return False
+    if (fingerprint.get("slot_id") or None) != (installed.slot_id or None):
+        return False
+    if (fingerprint.get("identity_mode") or None) != (installed.identity_mode or None):
+        return False
+    if bool(fingerprint.get("installed_projection_valid")) is not bool(
+        installed.installed_projection_valid
+    ):
+        return False
     return True
 
 
@@ -1162,6 +1283,11 @@ def _successful_check_matches_installed(
         == (_full_commit(installed.git_head) or None)
         and (previous.get("identity_validity") or None)
         == (installed.identity_validity or None)
+        and (previous.get("slot_id") or None) == (installed.slot_id or None)
+        and (previous.get("identity_mode") or None)
+        == (installed.identity_mode or None)
+        and bool(previous.get("installed_projection_valid"))
+        is bool(installed.installed_projection_valid)
     )
 
 
@@ -1289,6 +1415,18 @@ def _compare(installed: UpdateInstalledState, latest: UpdateManifestSummary) -> 
     if ordering == "same_version" and not latest.commit:
         warnings.append(_warning("commit_evidence_missing", "Version matches but commit evidence is unavailable."))
         return "current_or_unknown", blockers, warnings
+    if (
+        ordering == "same_version"
+        and latest.commit
+        and installed.identity_validity == "inventory_bound"
+    ):
+        warnings.append(
+            _warning(
+                "inventory_bound_same_version_not_canonicalized",
+                "Inventory-bound source requires a strictly newer trusted release before update apply.",
+            )
+        )
+        return "current_or_unknown", blockers, warnings
     if ordering == "same_version" and latest.commit:
         if installed.installed_commit and installed.installed_commit.lower() != latest.commit.lower():
             blockers.append(_blocker("commit_mismatch", "Installed release commit does not match the same-version release commit."))
@@ -1349,6 +1487,9 @@ def _result_payload(result: UpdateCheckResult) -> dict[str, Any]:
         "metadata_status": installed["release_metadata_status"] or installed["identity_validity"],
         "identity_validity": installed["identity_validity"],
         "metadata_source": installed["metadata_source"],
+        "slot_id": installed["slot_id"],
+        "slot_kind": installed["slot_kind"],
+        "identity_mode": installed["identity_mode"],
     }
     evidence = {
         "git_head": installed["git_head"],

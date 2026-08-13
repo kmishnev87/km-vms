@@ -39,7 +39,7 @@ def _public_status() -> dict:
         "artifact": {
             "artifact_id": ARTIFACT_A,
             "artifact_created_at": NOW,
-            "artifact_schema_version": 8,
+            "artifact_schema_version": 9,
             "db_backend": "postgresql",
         },
         "pre_restore_backup_id": ARTIFACT_B,
@@ -84,6 +84,7 @@ def test_reader_restore_status_is_actor_bound_and_redacted(
     assert "actor_subject" not in safe
     assert "schema" not in safe
     assert "raw_path" not in json.dumps(safe)
+    assert control.CURRENT_PRODUCT_DB_SCHEMA_VERSION == 9
 
     with pytest.raises(control.ContractError, match="foreign_actor_forbidden"):
         control.restore_public_status({"subject": "other"})
@@ -104,6 +105,30 @@ def test_reader_restore_status_is_actor_bound_and_redacted(
         ]
         == "failed_rolled_back"
     )
+
+
+@pytest.mark.parametrize("schema_version", (8, 10))
+def test_reader_restore_status_rejects_non_current_schema(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    schema_version: int,
+) -> None:
+    status_path = tmp_path / "restore-public" / "restore-status.json"
+    monkeypatch.setattr(control, "RESTORE_PUBLIC_STATUS", status_path)
+    monkeypatch.setattr(
+        control,
+        "bearer_subject",
+        lambda headers: headers["subject"],
+    )
+    payload = _public_status()
+    payload["artifact"]["artifact_schema_version"] = schema_version
+    _write(status_path, payload)
+
+    with pytest.raises(
+        control.ContractError,
+        match="restore_status_contract_invalid",
+    ):
+        control.restore_public_status({"subject": "owner"})
 
 
 def test_reader_restore_status_returns_authenticated_idle_before_first_operation(

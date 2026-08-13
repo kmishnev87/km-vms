@@ -135,12 +135,17 @@ def onvif_discover(
 @router.post("/onvif/probe")
 def onvif_probe(
     payload: dict,
+    db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("manage_cameras")),
 ):
-    host = str(payload.get("host") or "").strip()
-    port = parse_port(payload.get("port"), field="port", default=80)
-    rtsp_host = str(payload.get("rtsp_host") or host).strip()
-    rtsp_port = parse_port(payload.get("rtsp_port"), field="rtsp_port", default=554)
+    creds = get_camera_credentials(db, payload)
+    camera = creds.get("camera")
+    host = str(creds.get("host") or "").strip()
+    port = parse_port(creds.get("port"), field="port", default=80)
+    rtsp_host = str(creds.get("rtsp_host") or host).strip()
+    rtsp_port = parse_port(creds.get("rtsp_port"), field="rtsp_port", default=554)
+    username = creds.get("username") or ""
+    password = creds.get("password") or ""
     timeout = parse_bounded_int(payload.get("timeout_seconds"), field="timeout_seconds", default=5, minimum=1, maximum=10)
     if not host:
         raise HTTPException(status_code=400, detail={"code": "host_required", "message": "ONVIF host is required."})
@@ -151,8 +156,9 @@ def onvif_probe(
         "port": port,
         "rtsp_host": rtsp_host,
         "rtsp_port": rtsp_port,
-        "username": payload.get("username"),
-        "password": payload.get("password") or "",
+        "username": username,
+        "password": password,
+        "onvif_path": payload.get("onvif_path") or getattr(camera, "onvif_path", None),
     }
     try:
         executor = ThreadPoolExecutor(max_workers=1)
@@ -160,8 +166,8 @@ def onvif_probe(
             probe_onvif_device,
             host=host,
             port=port,
-            username=payload.get("username") or "",
-            password=payload.get("password") or "",
+            username=username,
+            password=password,
             rtsp_host=rtsp_host,
             rtsp_port=rtsp_port,
             timeout_seconds=timeout,

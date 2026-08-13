@@ -1,58 +1,37 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.14",
-  "tag": "v0.8.14",
-  "title": "Persistent E2E Smoke Pack Foundation",
-  "summary": "Adds a reusable, non-destructive browser smoke pack for core KM VMS routes with fail-closed working-NAS targeting, mandatory API response checks, safe credential transport, and sanitized desktop and mobile evidence.",
+  "version": "0.8.15",
+  "tag": "v0.8.15",
+  "title": "Camera Authority and Emergency Runtime Continuity",
+  "summary": "Completes exact camera connection, stream identity and authenticated preview authority, and reconstructs stable runtime continuity for install, update, restart, maintenance and recovery across supported NAS environments.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.14",
+  "source_ref": "v0.8.15",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
   "requires_backup": false,
   "requires_manual_action": false,
-  "requires_migration": false,
+  "requires_migration": true,
   "changelog": [
-    "Adds a repository-owned POSIX runner that resolves the active working-NAS loopback port and rejects external origins or unsafe output paths.",
-    "Adds a Playwright scenario for unauthenticated redirect, UI login, 11 core routes in desktop and mobile viewports, and UI logout.",
-    "Requires every route-specific initial API response and fails on missing, timed-out, or HTTP 400-and-higher mandatory responses.",
-    "Produces sanitized JSON and screenshot evidence with fail-safe whole-page redaction, including setup or error pages.",
-    "Keeps real credentials out of Docker process arguments and adds deterministic endpoint, response, and whole-page redaction self-checks."
+    "Adds first-class nullable ONVIF Sub-profile identity and exact Main/Sub selection, testing and persistence without changing manual RTSP cameras.",
+    "Separates camera management and RTSP authority, preserves explicit ports, and serves preview frames only through authenticated product access.",
+    "Adds an inventory-bound stable bootstrap and verified release-slot authority for clean install, update, restart and recovery.",
+    "Makes persistent services restart automatically while one-shot schema, bootstrap and restore jobs remain non-persistent and writer-fenced.",
+    "Removes legacy-root runtime fallback, adds bounded one-time adoption, and converges terminal update recovery to the exact target or previous slot.",
+    "Restores Maintenance with sanitized update-check presentation and hardens canonical restart, storage apply, migration and manual-update entry points.",
+    "Adds targeted camera, schema, restart, update and Maintenance regressions, including the real TerraMaster ordinary-SSH PATH boundary."
   ],
   "title_i18n": {
-    "en": "Persistent E2E Smoke Pack Foundation",
-    "ru": "Постоянный базовый набор сквозных smoke-проверок",
-    "zh-CN": "持久化端到端冒烟测试基础"
+    "en": "Camera Authority and Emergency Runtime Continuity",
+    "ru": "Управление камерами и аварийная устойчивость среды выполнения",
+    "zh-CN": "摄像机权限与紧急运行时连续性"
   },
   "summary_i18n": {
-    "en": "Adds a reusable, non-destructive browser smoke pack for core KM VMS routes with fail-closed working-NAS targeting, mandatory API response checks, safe credential transport, and sanitized desktop and mobile evidence.",
-    "ru": "Добавляет переиспользуемый безопасный browser smoke-набор для основных маршрутов KM VMS: с fail-closed привязкой к рабочему NAS, проверкой обязательных API-ответов, безопасной передачей учётных данных и обезличенными доказательствами для компьютера и мобильных экранов.",
-    "zh-CN": "新增可复用、非破坏性的浏览器冒烟测试，覆盖 KM VMS 核心页面；它采用工作 NAS 回环地址的故障关闭校验、必需 API 响应检查、安全凭据传递，以及桌面端和移动端的脱敏证据。"
-  },
-  "changelog_i18n": {
-    "en": [
-      "Adds a repository-owned POSIX runner that resolves the active working-NAS loopback port and rejects external origins or unsafe output paths.",
-      "Adds a Playwright scenario for unauthenticated redirect, UI login, 11 core routes in desktop and mobile viewports, and UI logout.",
-      "Requires every route-specific initial API response and fails on missing, timed-out, or HTTP 400-and-higher mandatory responses.",
-      "Produces sanitized JSON and screenshot evidence with fail-safe whole-page redaction, including setup or error pages.",
-      "Keeps real credentials out of Docker process arguments and adds deterministic endpoint, response, and whole-page redaction self-checks."
-    ],
-    "ru": [
-      "Добавлен repo-owned POSIX runner, который определяет loopback-порт рабочего NAS и отклоняет внешние адреса и небезопасные output-пути.",
-      "Добавлен Playwright-сценарий: редирект без авторизации, UI-вход, 11 основных маршрутов в desktop/mobile viewport и UI-выход.",
-      "Проверяются обязательные initial API-ответы каждого маршрута; отсутствие, timeout или HTTP 400 и выше завершают smoke с ошибкой.",
-      "Создаются обезличенные JSON и screenshots с fail-safe маскированием всей страницы, включая setup- и error-экраны.",
-      "Реальные credentials убраны из аргументов Docker-процесса; добавлены deterministic self-checks endpoint, response и whole-page redaction."
-    ],
-    "zh-CN": [
-      "新增仓库内 POSIX 运行器，可自动识别工作 NAS 的实际回环端口，并拒绝外部地址和不安全的输出路径。",
-      "新增 Playwright 场景，验证未登录重定向、界面登录、11 个核心路由的桌面端与移动端布局，以及界面退出。",
-      "校验每个路由必需的初始 API 响应；缺失、超时或 HTTP 400 及以上状态都会使测试失败。",
-      "生成经过脱敏的 JSON 和截图证据，并对整个页面实施故障安全遮罩，包括设置或错误页面。",
-      "Docker 启动时不再把真实凭据写入进程参数，并加入端点清理、响应分类和全页面遮罩的确定性自检。"
-    ]
+    "en": "Completes exact camera connection, stream identity and authenticated preview authority, and reconstructs stable runtime continuity for install, update, restart, maintenance and recovery across supported NAS environments.",
+    "ru": "Завершает точное подключение камер, идентификацию потоков и авторизованную выдачу предпросмотра, а также восстанавливает устойчивую работу установки, обновления, перезапуска, обслуживания и восстановления на поддерживаемых NAS.",
+    "zh-CN": "完成摄像机连接、码流身份和鉴权预览权限的精确控制，并重建适用于受支持 NAS 环境的安装、更新、重启、维护和恢复运行连续性。"
   }
 }

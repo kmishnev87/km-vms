@@ -49,6 +49,7 @@ SCHEMA_MIGRATION_REQUIRED=0
 SCHEMA_WRITERS_STOPPED=0
 SCHEMA_MUTATION_STARTED=0
 PRODUCT_SOURCE_DIR=""
+COMPOSE_COMMON_LOADED=0
 SLOT_AWARE_ACTIVATION=1
 SLOT_ACTIVATION_RESULT=""
 PREVIOUS_SLOT_ID=""
@@ -62,8 +63,9 @@ usage() {
   cat <<'EOF'
 KM VMS terminal update
 
-Usage:
-  sh scripts/update.sh --github-repo <owner/name> --branch <branch-or-ref> [options]
+Usage for an installed KM VMS system:
+  sh <app-dir>/data/update-runtime/bootstrap/current/km-vms-update-launcher.sh \
+    --app-dir <app-dir> --github-repo <owner/name> --branch <branch-or-ref> [options]
 
 Options:
   --github-repo <repo>     GitHub repository as owner/name for tarball acquisition.
@@ -279,34 +281,44 @@ fail() {
   refresh_schema_mutation_truth 2>/dev/null || true
   printf 'ERROR [%s]: %s\n' "$PHASE" "$message" >&2
   write_helper_progress "failed" "$message" 2>/dev/null || true
-  if [ "$SCHEMA_MUTATION_STARTED" = "1" ] && [ -n "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
+  if [ "$SCHEMA_MUTATION_STARTED" = "1" ] && [ "$COMPOSE_COMMON_LOADED" = "1" ]; then
     (
       cd "$APP_DIR"
       compose_with_archive_roots stop api recorder >/dev/null 2>&1
     ) || true
   fi
-  if [ "$SCHEMA_WRITERS_STOPPED" = "1" ] && [ "$SCHEMA_MUTATION_STARTED" != "1" ]; then
+  if [ "$SCHEMA_WRITERS_STOPPED" = "1" ] && [ "$SCHEMA_MUTATION_STARTED" != "1" ] && writer_start_allowed; then
     (
       cd "$APP_DIR"
       compose_with_archive_roots up -d api recorder >/dev/null 2>&1
     ) || true
     SCHEMA_WRITERS_STOPPED=0
   fi
-  if [ "$SCHEMA_MUTATION_STARTED" != "1" ] && [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] && [ -n "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
+  if [ "$SCHEMA_MUTATION_STARTED" != "1" ] && [ "${KM_VMS_UPDATE_HELPER_MODE:-0}" = "1" ] && [ "$COMPOSE_COMMON_LOADED" = "1" ]; then
     case "$PHASE" in
       rebuild_recreate|schema_update|health_check)
-        (
-          cd "$APP_DIR"
-          compose_with_archive_roots up -d postgres redis api recorder web nginx >/dev/null 2>&1
-        ) || true
+        if writer_start_allowed; then
+          (
+            cd "$APP_DIR"
+            compose_with_archive_roots up -d postgres redis api recorder web nginx >/dev/null 2>&1
+          ) || true
+        fi
         ;;
     esac
   fi
-  if [ "$DRY_RUN" != "1" ] && [ -n "$APP_DIR" ] && [ -d "$APP_DIR" ] && [ -f "$APP_DIR/docker-compose.yml" ]; then
+  if [ "$DRY_RUN" != "1" ] && [ -n "$APP_DIR" ] && [ -d "$APP_DIR" ]; then
     attempt_failed_staging_cleanup
     write_update_metadata "failed" "$message" 2>/dev/null || true
   fi
   exit 1
+}
+
+writer_start_allowed() {
+  [ -n "$APP_DIR" ] || return 1
+  bootstrap="$APP_DIR/data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+  [ -f "$bootstrap" ] && [ ! -L "$bootstrap" ] || return 1
+  output=$(python3 -B "$bootstrap" writer-isolation --app-dir "$APP_DIR" 2>/dev/null) || return 1
+  [ "$output" = "inactive" ]
 }
 
 compose_with_archive_roots() {
@@ -452,7 +464,7 @@ validate_trusted_commit() {
 
 resolve_app_dir() {
   cwd=$(pwd -P)
-  if [ -f "$cwd/docker-compose.yml" ] && [ -d "$cwd/apps/api" ] && [ -f "$cwd/scripts/update.sh" ]; then
+  if [ -f "$cwd/.env" ] && [ -d "$cwd/data" ]; then
     APP_DIR="$cwd"
     return
   fi
@@ -476,19 +488,21 @@ validate_app_dir() {
   write_helper_progress "running" "Validating installed app directory."
   resolve_app_dir
   is_dangerous_app_dir "$APP_DIR" && fail "Refusing dangerous app dir: $APP_DIR"
-  [ -f "$APP_DIR/docker-compose.yml" ] || fail "Missing docker-compose.yml in app dir."
-  [ -d "$APP_DIR/apps/api" ] || fail "Missing apps/api in app dir."
-  [ -d "$APP_DIR/apps/web" ] || fail "Missing apps/web in app dir."
-  [ -f "$APP_DIR/deploy/nginx/default.conf" ] || fail "Missing deploy/nginx/default.conf in app dir."
-  [ -f "$APP_DIR/scripts/km-vms-compose-common.sh" ] || fail "Missing compose helper in app dir."
   [ -f "$APP_DIR/.env" ] || fail "Missing .env; update.sh only updates installed instances."
+  [ -d "$APP_DIR/data/update-runtime" ] || fail "Missing canonical release runtime in app dir."
+  [ -f "$APP_DIR/data/update-runtime/bootstrap/current/km-vms-bootstrap.py" ] ||
+    fail "Missing stable bootstrap authority in app dir."
 }
 
 load_compose_common() {
   PHASE="compose_detection"
   write_helper_progress "running" "Detecting Docker Compose."
   # shellcheck disable=SC1090
-  . "$APP_DIR/scripts/km-vms-compose-common.sh"
+  product_source="${KM_VMS_PRODUCT_SOURCE_DIR:-$SCRIPT_DIR/..}"
+  [ -f "$product_source/scripts/km-vms-compose-common.sh" ] ||
+    fail "Canonical Compose helper is unavailable."
+  . "$product_source/scripts/km-vms-compose-common.sh"
+  COMPOSE_COMMON_LOADED=1
   km_vms_detect_compose "$DOCKER_COMPOSE_BIN" || fail "Docker Compose was not found. Checked KM_VMS_DOCKER_COMPOSE, PATH docker compose/docker-compose, and known NAS vendor paths."
   case "$COMPOSE_BIN" in
     */*)
@@ -1051,7 +1065,8 @@ helper_host_app_dir() {
     *) fail "KM_VMS_UPDATE_HOST_APP_DIR must be an absolute host path." ;;
   esac
   [ -d "$host_app_dir" ] || fail "Host app directory is not mounted inside update-helper: $host_app_dir"
-  [ -f "$host_app_dir/docker-compose.yml" ] || fail "Host app directory is missing docker-compose.yml."
+  [ -f "$host_app_dir/.env" ] || fail "Host app directory is missing .env."
+  [ -d "$host_app_dir/data" ] || fail "Host app directory is missing stable data."
   printf '%s\n' "$host_app_dir"
 }
 
@@ -1111,9 +1126,15 @@ run_trusted_permission_gate() {
 
 preflight_permission_policy() {
   PHASE="permission_preflight"
-  write_helper_progress "running" "Validating the existing product tree before target overlay."
-  run_trusted_permission_gate existing --fix ||
-    fail "Pre-overlay existing-tree permission validation failed."
+  write_helper_progress "running" "Validating selected source and stable runtime permissions."
+  current_gate="$PRODUCT_SOURCE_DIR/scripts/km-vms-permission-gate.sh"
+  [ -f "$current_gate" ] && [ ! -L "$current_gate" ] ||
+    fail "Selected source permission gate is unavailable."
+  sh "$current_gate" --contract source --check --app-dir "$PRODUCT_SOURCE_DIR" ||
+    fail "Selected source permission validation failed."
+  sh "$TMP_ROOT/source/scripts/km-vms-permission-gate.sh" \
+    --contract stable-runtime --fix --app-dir "$APP_DIR" ||
+    fail "Stable runtime permission validation failed."
 }
 
 apply_permission_policy() {
@@ -1127,7 +1148,7 @@ preflight_target_permission_policy() {
   PHASE="permission_preflight"
   write_helper_progress "running" "Validating the staged target critical permission chain."
   sh "$TMP_ROOT/source/scripts/km-vms-permission-gate.sh" \
-    --check --app-dir "$TMP_ROOT/source" ||
+    --contract source --check --app-dir "$TMP_ROOT/source" ||
     fail "Staged target permission validation failed."
 }
 
@@ -1169,7 +1190,7 @@ prepare_schema_handoff() {
     sed -n 's/^previous_slot=//p' "$handoff_output" | tail -n 1
   )
   printf '%s' "$PREVIOUS_SLOT_ID" |
-    grep -Eq '^(release-[0-9a-f]{40}|adopted-[0-9a-f]{64})$' ||
+    grep -Eq '^(release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})$' ||
     fail "Schema handoff returned no exact previous release slot."
 }
 
@@ -1491,7 +1512,7 @@ schedule_update_helper_recreate() {
   printf '%s' "$request_id" | grep -Eq '^update-[0-9a-fA-F]{32}$' ||
     fail "A canonical update request id is required for helper refresh handoff."
   host_app_dir=$(helper_host_app_dir)
-  bridge_script="$host_app_dir/scripts/km-vms-update-helper-bridge.py"
+  bridge_script="$host_app_dir/data/update-runtime/active/scripts/km-vms-update-helper-bridge.py"
   [ -f "$bridge_script" ] || fail "Target update-helper bridge is missing."
   bootstrap_output=$(
     cd "$APP_DIR"

@@ -44,6 +44,7 @@ MAX_DEPTH = 12
 MAX_WIDTH = 80
 MAX_KEY_LENGTH = 120
 MAX_TIMESTAMP_LENGTH = 80
+CURRENT_PRODUCT_DB_SCHEMA_VERSION = 9
 REQUEST_ID_RE = re.compile(r"^(?:update|stage609)-[0-9a-f]{32}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 SAFE_SUBJECT_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,100}$")
@@ -472,7 +473,8 @@ def validate_failure_contract(payload: dict[str, Any]) -> dict[str, Any]:
         raise ContractError("failure_contract_attempt_invalid")
     if (
         type(payload.get("target_schema_version")) is not int
-        or payload["target_schema_version"] != 8
+        or payload["target_schema_version"]
+        != CURRENT_PRODUCT_DB_SCHEMA_VERSION
     ):
         raise ContractError("failure_contract_schema_target_invalid")
     for key in ("registry_fingerprint", "plan_fingerprint"):
@@ -582,7 +584,8 @@ def validate_stage_receipt(
         raise ContractError("stage_receipt_binding_invalid")
     if (
         type(payload.get("target_schema_version")) is not int
-        or payload["target_schema_version"] != 8
+        or payload["target_schema_version"]
+        != CURRENT_PRODUCT_DB_SCHEMA_VERSION
     ):
         raise ContractError("stage_receipt_schema_target_invalid")
     for key in (
@@ -1267,7 +1270,8 @@ def create_retry(contract: dict[str, Any], subject: str, body: dict[str, Any]) -
             or not SAFE_SUBJECT_RE.fullmatch(prior_actor)
             or not re.fullmatch(r"[0-9a-f]{40}", prior_target_commit)
             or type(prior.get("target_schema_version")) is not int
-            or prior["target_schema_version"] != 8
+            or prior["target_schema_version"]
+            != CURRENT_PRODUCT_DB_SCHEMA_VERSION
             or type(prior.get("fencing_generation")) is not int
             or prior["fencing_generation"] < 0
             or type(prior.get("retry_request")) is not dict
@@ -1637,7 +1641,8 @@ def restore_public_status(headers: Any) -> dict[str, Any]:
             r"kmvms-db-\d{8}T\d{6}Z-[0-9a-f]{12}",
             str(artifact.get("artifact_id") or ""),
         )
-        or artifact.get("artifact_schema_version") != 8
+        or artifact.get("artifact_schema_version")
+        != CURRENT_PRODUCT_DB_SCHEMA_VERSION
         or artifact.get("db_backend") != "postgresql"
         or not isinstance(artifact.get("artifact_created_at"), str)
         or (

@@ -574,8 +574,8 @@ const expectedProtected = {
   "apps/web/components/OperationFeedback.js": "1e02f30c203481a788af6f79306f76991fa59dbcf86fb355605f355eaa87957b",
   "apps/web/lib/api.js": "c76e643fe17c6b65270df0631615902f03f4136e2f6823e9ab799d4ca417764c",
   "apps/web/lib/settingsPageHelpers.js": "adece850f2f049b7b535817c2fad8ec9cc7099d7abdfa0b52d129c909c1eee7c",
-  "apps/web/lib/settingsPageSharedHelpers.js": "bcb271da0388329ecdaadf5bd25369c16e674bb9b2aba5ee17d171103e5e2cfa",
-  "apps/web/lib/settingsUpdateApplyHelpers.js": "a15e7fd4339541d956cae40f667bc00db58b98b4e64799965b649e57e2751ea5"
+  "apps/web/lib/settingsPageSharedHelpers.js": "0b7f9df886faa2ff4c4893cae751c52de26c51e5b2665dc7903fc28eba82c755",
+  "apps/web/lib/settingsUpdateApplyHelpers.js": "98e3282455f9c8c50b7813eaabaac5fce90485facadc7c587a454d1557290247"
 };
 for (const [relative, expectedHash] of Object.entries(expectedProtected)) {
   const protectedSource = fs.readFileSync(resolve(repoRoot, relative));

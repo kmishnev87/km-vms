@@ -185,6 +185,9 @@ export function useSettingsMaintenanceController({
       ? t.updateApplyLocked
       : updateApplyButtonText(updateApplyStatus, t);
   const updateApplyErrors = updateApplyErrorMessages(updateApplyStatus?.error, t, lang);
+  const updatePeerCheckUnavailable = Boolean(
+    updateTransportErrors.update && !updateTransportErrors.apply,
+  );
   const maintenanceBackupOverview = useMemo(
     () => maintenanceBackupOverviewModel(maintenanceOverview, t, lang),
     [maintenanceOverview, t, lang],
@@ -1405,6 +1408,7 @@ export function useSettingsMaintenanceController({
     updateApplyAllowed,
     updateApplyPrimaryText,
     updateApplyErrors,
+    updatePeerCheckUnavailable,
     maintenanceBackupOverview,
     maintenanceBackupManager,
     maintenanceDatabase,

@@ -1,5 +1,6 @@
 from pathlib import Path
 import hashlib
+import re
 import time
 from urllib.parse import quote, urlparse, urlsplit, urlunparse, urlunsplit
 
@@ -292,12 +293,29 @@ def _profile_score(item: dict, prefer_sub: bool = False) -> tuple:
     height = int(video.get("height") or 0)
     fps = int(video.get("fps") or 0)
     pixels = width * height
-    main_hint = any(value in name for value in ("main", "primary", "stream1", "profile1", "high"))
-    sub_hint = any(value in name for value in ("sub", "secondary", "stream2", "profile2", "low"))
+    compact_name = re.sub(r"[^a-z0-9]+", "", name)
+    sub_hint = any(value in compact_name for value in ("sub", "secondary", "low", "stream2", "profile2"))
+    main_hint = not sub_hint and any(
+        value in compact_name for value in ("main", "primary", "high", "stream1", "profile1")
+    )
 
     if prefer_sub:
-        return (1 if sub_hint else 0, -pixels if pixels else 0, -fps if fps else 0, item.get("name") or "")
-    return (1 if main_hint else 0, pixels, fps, item.get("name") or "")
+        return (
+            1 if pixels else 0,
+            -pixels if pixels else 0,
+            -fps if fps else 0,
+            1 if sub_hint else 0,
+            -1 if main_hint else 0,
+            item.get("name") or "",
+        )
+    return (
+        1 if pixels else 0,
+        pixels,
+        fps,
+        1 if main_hint else 0,
+        -1 if sub_hint else 0,
+        item.get("name") or "",
+    )
 
 
 def _suggest_profiles(profiles: list[dict]) -> tuple[str | None, str | None]:
@@ -306,7 +324,7 @@ def _suggest_profiles(profiles: list[dict]) -> tuple[str | None, str | None]:
 
     main = max(profiles, key=lambda item: _profile_score(item, prefer_sub=False))
     if len(profiles) == 1:
-        return main.get("token"), main.get("token")
+        return main.get("token"), None
 
     sub_candidates = [item for item in profiles if item.get("token") != main.get("token")]
     sub = max(sub_candidates, key=lambda item: _profile_score(item, prefer_sub=True)) if sub_candidates else main

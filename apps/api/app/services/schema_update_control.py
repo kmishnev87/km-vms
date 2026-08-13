@@ -31,7 +31,7 @@ from app.services.schema_migrations import (
     migration_definition_fingerprint,
     migration_registry_fingerprint,
     preparation_definition_fingerprint,
-    validate_stage660128_target_schema,
+    validate_current_target_schema,
 )
 from app.services.schema_versioning import (
     CURRENT_BASELINE_ID,
@@ -61,7 +61,7 @@ JWT_SECRET = str(os.getenv("JWT_SECRET") or "")
 MAX_CONTROL_BYTES = 64 * 1024
 MAX_DETAILS_BYTES = 8 * 1024
 MAX_TIMESTAMP_LENGTH = 80
-TARGET_SCHEMA_VERSION = 8
+TARGET_SCHEMA_VERSION = 9
 REQUEST_RE = re.compile(r"^(?:update|stage609)-[0-9a-f]{32}$")
 ATTEMPT_RE = re.compile(r"^migration-attempt-[0-9a-f]{32}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
@@ -318,21 +318,20 @@ SOURCE_SHAPE_FINGERPRINT_ALTERNATES: dict[str, frozenset[str]] = {
     for version, values in _UPDATE_LINEAGE["shape_alternates"].items()
 }
 TARGET_SHAPE_FINGERPRINT = (
-    "18055105892ae40bff200d32fa6a898d"
-    "18ffbde340c164d6585c3c893f4f501a"
+    "ecc7ccf61e781477ceec853414d0b4ff"
+    "90da7f45b4a73052885db4a57093fdcb"
 )
-# Exact, semantically validated schema-v8 shapes observed after accepted
-# product evolution.  The first is an upgraded installation whose retired
-# ``system_name`` column remains harmlessly present; the second is a current
-# fresh installation.  Both also preserve the two legitimate control-table
-# construction paths (migration DDL versus fresh SQLAlchemy create_all).
+# Exact, semantically validated schema-v9 shapes obtained by applying only the
+# nullable Camera Sub-profile token migration to each accepted schema-v8 shape:
+# the published canonical target, an evolved installation retaining the
+# harmless retired ``system_name`` column, and the current fresh bootstrap.
 # Unknown fingerprints remain fail-closed.
 TARGET_SHAPE_FINGERPRINT_ALTERNATES = frozenset(
     {
-        "8a7612da03dd8c67a922cb9d84fe942b"
-        "1944b5f672884ef287ca36e779a6e6a1",
-        "5e405c116697beba3d4546dffb20ae79"
-        "2a09a1bd1562d7efe35c0658b1361c36",
+        "5a0e8ab16dc61c99ed6a5842d54d4e6a"
+        "0599bfcdaf7e03a24b30c51316060c7e",
+        "16c571428596280b75779606006b2871a"
+        "f828b9d634c6a9faee6c41701892477",
     }
 )
 TARGET_SHAPE_FINGERPRINTS = frozenset(
@@ -463,6 +462,9 @@ class UpdateContext:
     source_shape_fingerprint: str
     registry_fingerprint: str
     plan_fingerprint: str
+    source_identity_mode: str = "trusted_release"
+    source_slot_id: str | None = None
+    source_inventory_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1429,8 +1431,68 @@ def validate_released_source_history(
     }
 
 
+def _attempt_inventory_source_evidence(
+    attempt: SchemaMigrationAttempt,
+) -> tuple[str, str] | None:
+    details = getattr(attempt, "details", None)
+    if type(details) is not dict:
+        return None
+    identity = details.get("source_identity")
+    if type(identity) is not dict or set(identity) != {
+        "identity_mode",
+        "slot_id",
+        "inventory_sha256",
+    }:
+        return None
+    slot_id = identity.get("slot_id")
+    inventory_sha256 = identity.get("inventory_sha256")
+    installed_commit = str(getattr(attempt, "installed_commit", "") or "").lower()
+    if (
+        identity.get("identity_mode") != "inventory_bound"
+        or type(slot_id) is not str
+        or not re.fullmatch(r"initial-[0-9a-f]{64}", slot_id)
+        or type(inventory_sha256) is not str
+        or not re.fullmatch(r"[0-9a-f]{64}", inventory_sha256)
+        or installed_commit
+        != inventory_bound_source_token(slot_id, inventory_sha256)
+    ):
+        return None
+    return slot_id, inventory_sha256
+
+
+def _installed_source_identity_is_valid(
+    *,
+    installed_version: str,
+    installed_commit: str,
+    request_id: str,
+    fencing_generation: int,
+    attempts: list[SchemaMigrationAttempt],
+) -> bool:
+    expected_commit = SOURCE_TAG_COMMITS.get(installed_version)
+    if expected_commit == installed_commit:
+        return True
+    current_attempts = [
+        attempt
+        for attempt in attempts
+        if attempt.fencing_generation == fencing_generation
+        and attempt.request_id == request_id
+    ]
+    if not current_attempts or any(
+        str(attempt.installed_version or "") != installed_version
+        or str(attempt.installed_commit or "").lower() != installed_commit
+        for attempt in current_attempts
+    ):
+        return False
+    evidence = {
+        _attempt_inventory_source_evidence(attempt)
+        for attempt in current_attempts
+    }
+    return None not in evidence and len(evidence) == 1
+
+
 def _validate_terminal_control(
     controls: list[SchemaMigrationControl],
+    attempts: list[SchemaMigrationAttempt],
     *,
     expected_state: str = "completed",
 ) -> SchemaMigrationControl:
@@ -1443,7 +1505,6 @@ def _validate_terminal_control(
             "no_active_terminal_control_count_invalid"
         )
     row = controls[0]
-    expected_commit = SOURCE_TAG_COMMITS.get(row.installed_version)
     expected_schema = SOURCE_SCHEMA_VERSIONS.get(row.installed_version)
     expected_shapes = set(
         SOURCE_SHAPE_FINGERPRINT_ALTERNATES.get(
@@ -1474,8 +1535,13 @@ def _validate_terminal_control(
         )
         or row.control_definition_fingerprint
         != CONTROL_DEFINITION_FINGERPRINT
-        or expected_commit is None
-        or row.installed_commit.lower() != expected_commit
+        or not _installed_source_identity_is_valid(
+            installed_version=row.installed_version,
+            installed_commit=row.installed_commit.lower(),
+            request_id=row.request_id,
+            fencing_generation=int(row.fencing_generation),
+            attempts=attempts,
+        )
         or expected_schema != row.source_schema_version
         or row.source_shape_fingerprint not in expected_shapes
         or row.plan_fingerprint != expected_plan
@@ -1525,7 +1591,7 @@ def _validate_migrated_target_history(
             if (
                 baseline_count != 1
                 or not re.fullmatch(
-                    r"chapter06_stage4_baseline_schema_v[1-8]",
+                    r"chapter06_stage4_baseline_schema_v[1-9]",
                     row.migration_id,
                 )
                 or row.previous_version is not None
@@ -1613,7 +1679,7 @@ def _validate_migrated_target_history(
     }
     current_generation = int(control.fencing_generation)
     historical_groups: dict[
-        tuple[str, str, str, str, str, str],
+        tuple[str, str, str, str, str, str, str, str],
         list[SchemaMigrationAttempt],
     ] = {}
     for attempt in attempts:
@@ -1651,6 +1717,9 @@ def _validate_migrated_target_history(
                 attempt.admission_attempt_id
                 != control.owner_attempt_id
                 or attempt.request_id != control.request_id
+                or attempt.installed_version != control.installed_version
+                or str(attempt.installed_commit or "").lower()
+                != control.installed_commit.lower()
                 or attempt.target_release != control.target_release
                 or attempt.target_commit.lower()
                 != control.target_commit.lower()
@@ -1665,9 +1734,14 @@ def _validate_migrated_target_history(
             expected_installed_commit = SOURCE_TAG_COMMITS.get(
                 str(attempt.installed_version or "")
             )
+            inventory_source = _attempt_inventory_source_evidence(
+                attempt
+            )
             if (
-                expected_installed_commit is None
-                or attempt.installed_commit != expected_installed_commit
+                (
+                    attempt.installed_commit != expected_installed_commit
+                    and inventory_source is None
+                )
                 or not re.fullmatch(
                     r"[A-Za-z0-9][A-Za-z0-9._+-]{0,79}",
                     str(attempt.target_release or ""),
@@ -1690,6 +1764,7 @@ def _validate_migrated_target_history(
             binding = (
                 str(attempt.installed_version),
                 str(attempt.installed_commit),
+                *(inventory_source or ("", "")),
                 str(attempt.target_release),
                 str(attempt.target_commit).lower(),
                 str(attempt.registry_fingerprint),
@@ -1722,6 +1797,8 @@ def _validate_migrated_target_history(
         (
             installed_version,
             installed_commit,
+            _source_slot_id,
+            _source_inventory_sha256,
             target_release,
             target_commit,
             registry_fingerprint,
@@ -1839,6 +1916,7 @@ def validate_exact_target_noop(
     else:
         control = _validate_terminal_control(
             controls,
+            attempts,
             expected_state=expected_control_state,
         )
         _validate_migrated_target_history(
@@ -1847,7 +1925,7 @@ def validate_exact_target_noop(
             attempts,
         )
     try:
-        validate_stage660128_target_schema(db)
+        validate_current_target_schema(db)
     except Exception as exc:
         raise SchemaControlError(
             "no_active_target_semantic_validation_failed"
@@ -2797,6 +2875,9 @@ def _source_identity_payload() -> dict[str, Any]:
         "request_id",
         "installed_version",
         "installed_commit",
+        "identity_mode",
+        "slot_id",
+        "inventory_sha256",
         "recorded_at",
     }
     if (
@@ -2820,6 +2901,9 @@ def _source_identity_payload() -> dict[str, Any]:
         code="pre_overlay_identity_commit_invalid",
         max_length=40,
     )
+    identity_mode = payload.get("identity_mode")
+    slot_id = payload.get("slot_id")
+    inventory_sha256 = payload.get("inventory_sha256")
     if (
         not REQUEST_RE.fullmatch(request_id)
         or not re.fullmatch(r"[0-9a-f]{40}", installed_commit)
@@ -2829,8 +2913,68 @@ def _source_identity_payload() -> dict[str, Any]:
         )
     ):
         raise SchemaControlError("pre_overlay_identity_values_invalid")
+    if identity_mode == "trusted_release":
+        if slot_id is not None or inventory_sha256 is not None:
+            raise SchemaControlError("pre_overlay_identity_values_invalid")
+    elif identity_mode == "inventory_bound":
+        if (
+            type(slot_id) is not str
+            or not re.fullmatch(r"initial-[0-9a-f]{64}", slot_id)
+            or type(inventory_sha256) is not str
+            or not re.fullmatch(r"[0-9a-f]{64}", inventory_sha256)
+            or installed_commit
+            != inventory_bound_source_token(slot_id, inventory_sha256)
+        ):
+            raise SchemaControlError("pre_overlay_identity_values_invalid")
+    else:
+        raise SchemaControlError("pre_overlay_identity_values_invalid")
     parse_utc(payload.get("recorded_at"))
     return payload
+
+
+def inventory_bound_source_token(
+    slot_id: str,
+    inventory_sha256: str,
+) -> str:
+    """Mirror the bridge's non-official schema compatibility token."""
+
+    return hashlib.sha256(
+        (
+            "km-vms-inventory-bound-source-v1\0"
+            f"{slot_id}\0{inventory_sha256}"
+        ).encode("ascii")
+    ).hexdigest()[:40]
+
+
+def _update_context_identity_fields(
+    *,
+    request_id: str,
+    installed_version: str,
+    installed_commit: str,
+) -> dict[str, Any]:
+    payload = _source_identity_payload()
+    if (
+        payload.get("request_id") != request_id
+        or payload.get("installed_version") != installed_version
+        or payload.get("installed_commit") != installed_commit
+    ):
+        raise SchemaControlError(
+            "pre_overlay_identity_context_mismatch"
+        )
+    mode = payload.get("identity_mode", "trusted_release")
+    if mode == "inventory_bound":
+        return {
+            "source_identity_mode": mode,
+            "source_slot_id": payload.get("slot_id"),
+            "source_inventory_sha256": payload.get(
+                "inventory_sha256"
+            ),
+        }
+    return {
+        "source_identity_mode": "trusted_release",
+        "source_slot_id": None,
+        "source_inventory_sha256": None,
+    }
 
 
 def expected_source_lineage(
@@ -2842,15 +2986,27 @@ def expected_source_lineage(
     payload = _source_identity_payload()
     installed_version = payload["installed_version"]
     installed_commit = payload["installed_commit"]
+    inventory_bound = payload.get("identity_mode") == "inventory_bound"
     if payload.get("request_id") != request_id:
         raise SchemaControlError("pre_overlay_identity_request_mismatch")
     same_target = (
         installed_version == target_release
-        and installed_commit == target_commit
+        and (
+            installed_commit == target_commit
+            or inventory_bound
+        )
     )
     if not same_target and (
-        installed_version not in SOURCE_TAG_COMMITS
-        or SOURCE_TAG_COMMITS[installed_version] != installed_commit
+        installed_version not in SOURCE_SCHEMA_VERSIONS
+        or installed_version not in SOURCE_SHAPE_FINGERPRINTS
+        or (
+            not inventory_bound
+            and (
+                installed_version not in SOURCE_TAG_COMMITS
+                or SOURCE_TAG_COMMITS[installed_version]
+                != installed_commit
+            )
+        )
     ):
         raise SchemaControlError("installed_source_lineage_unsupported")
     expected_schema_version = (
@@ -3189,6 +3345,11 @@ def load_prebootstrap_update_context(
         source_shape_fingerprint=source_shape,
         registry_fingerprint=REGISTRY_FINGERPRINT,
         plan_fingerprint=fingerprint,
+        **_update_context_identity_fields(
+            request_id=request_id,
+            installed_version=installed_version,
+            installed_commit=installed_commit,
+        ),
     )
 
 
@@ -3475,6 +3636,11 @@ def load_existing_update_context(
         source_shape_fingerprint=str(row["source_shape_fingerprint"]),
         registry_fingerprint=REGISTRY_FINGERPRINT,
         plan_fingerprint=expected_plan,
+        **_update_context_identity_fields(
+            request_id=request_id,
+            installed_version=str(row["installed_version"]),
+            installed_commit=str(row["installed_commit"]).lower(),
+        ),
     )
 
 
@@ -3821,6 +3987,51 @@ def start_attempt(
         if not exact:
             raise SchemaControlError("migration_attempt_identity_mismatch")
         return attempt_id, str(existing.status)
+    source_identity_details: dict[str, Any] = {}
+    identity_mode = getattr(
+        context,
+        "source_identity_mode",
+        "trusted_release",
+    )
+    source_slot_id = getattr(context, "source_slot_id", None)
+    source_inventory_sha256 = getattr(
+        context,
+        "source_inventory_sha256",
+        None,
+    )
+    if identity_mode == "inventory_bound":
+        if (
+            type(source_slot_id) is not str
+            or not re.fullmatch(r"initial-[0-9a-f]{64}", source_slot_id)
+            or type(source_inventory_sha256) is not str
+            or not re.fullmatch(
+                r"[0-9a-f]{64}",
+                source_inventory_sha256,
+            )
+            or context.installed_commit
+            != inventory_bound_source_token(
+                source_slot_id,
+                source_inventory_sha256,
+            )
+        ):
+            raise SchemaControlError(
+                "inventory_source_attempt_evidence_invalid"
+            )
+        source_identity_details = {
+            "source_identity": {
+                "identity_mode": "inventory_bound",
+                "slot_id": source_slot_id,
+                "inventory_sha256": source_inventory_sha256,
+            }
+        }
+    elif (
+        identity_mode != "trusted_release"
+        or source_slot_id is not None
+        or source_inventory_sha256 is not None
+    ):
+        raise SchemaControlError(
+            "trusted_source_attempt_evidence_invalid"
+        )
     db.add(
         SchemaMigrationAttempt(
             attempt_id=attempt_id,
@@ -3845,7 +4056,7 @@ def start_attempt(
             failure_class=None,
             failure_summary=None,
             resumable=False,
-            details={},
+            details=source_identity_details,
         )
     )
     db.flush()
@@ -3865,6 +4076,21 @@ def finish_attempt(
 ) -> None:
     if status not in {"applied", "failed", "blocked", "interrupted"}:
         raise SchemaControlError("migration_attempt_terminal_status_invalid")
+    existing = db.get(SchemaMigrationAttempt, attempt_id)
+    persisted_details = (
+        getattr(existing, "details", {})
+        if existing is not None
+        else {}
+    )
+    if type(persisted_details) is not dict or type(details) is not dict:
+        raise SchemaControlError("migration_attempt_details_invalid")
+    merged_details = dict(persisted_details)
+    for key, value in details.items():
+        if key == "source_identity" and key in merged_details and merged_details[key] != value:
+            raise SchemaControlError(
+                "migration_attempt_source_identity_conflict"
+            )
+        merged_details[key] = value
     result = db.execute(
         text(
             """
@@ -3887,7 +4113,7 @@ def finish_attempt(
             "failure_class": (failure_class or "")[:96] or None,
             "failure_summary": (failure_summary or "")[:300] or None,
             "resumable": bool(resumable),
-            "details": bounded_details(details),
+            "details": bounded_details(merged_details),
             "attempt_id": attempt_id,
         },
     )

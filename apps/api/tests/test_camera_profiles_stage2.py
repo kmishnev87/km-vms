@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.models.camera import Camera
 from app.routers.cameras import apply_profile_assignments, assemble_rtsp_url, build_test_url
 from app.services.live_engine.ffmpeg import choose_input_url as live_choose_input_url
-from app.services.onvif_service import _profile_to_dict, rtsp_display_uri, rtsp_path_from_uri
+from app.services.onvif_service import _profile_to_dict, _suggest_profiles, rtsp_display_uri, rtsp_path_from_uri
 
 
 def obj(**kwargs):
@@ -69,6 +69,7 @@ def camera(**overrides):
         "rtsp_port": 1554,
         "rtsp_transport": "tcp",
         "onvif_profile_token": "main-token",
+        "onvif_sub_profile_token": "sub-token",
         "onvif_channel_id": None,
         "recording_mode": "always",
         "default_live_stream": "sub",
@@ -181,6 +182,45 @@ def test_camera_test_url_uses_saved_sub_stream_when_main_is_empty():
     cam = camera(rtsp_main_url=None, rtsp_sub_url="/sub")
 
     assert build_test_url({"camera_id": cam.id, "protocol": "onvif"}, db=FakeDb(cam)).endswith("/sub")
+
+
+def test_camera_test_url_exact_role_never_falls_back_to_other_stream():
+    cam = camera(rtsp_main_url="/main", rtsp_sub_url=None)
+
+    assert build_test_url({"camera_id": cam.id, "protocol": "onvif", "stream_role": "main"}, db=FakeDb(cam)).endswith("/main")
+    assert build_test_url({"camera_id": cam.id, "protocol": "onvif", "stream_role": "sub"}, db=FakeDb(cam)) is None
+
+
+def test_camera_test_url_normalizes_full_input_to_declared_final_endpoint():
+    url = build_test_url(
+        {
+            "protocol": "onvif",
+            "host": "management.example.test",
+            "port": 80,
+            "rtsp_host": "final.example.test",
+            "rtsp_port": 1554,
+            "username": "operator",
+            "password": "secret",
+            "rtsp_main_url": "rtsp://wrong.example.test:9554/main?channel=1",
+            "stream_role": "main",
+        },
+        db=FakeDb(None),
+    )
+
+    assert url.startswith("rtsp://operator:secret@final.example.test:1554/")
+    assert "wrong.example.test" not in url
+    assert url.endswith("/main?channel=1")
+
+
+def test_dahua_profile_recommendation_uses_video_truth_and_does_not_invent_sub():
+    profiles = [
+        {"token": "main-token", "name": "MainStream", "video": {"width": 3840, "height": 2160, "fps": 25}},
+        {"token": "sub-token", "name": "SubStream1", "video": {"width": 704, "height": 576, "fps": 15}},
+        {"token": "third-token", "name": "Profile3", "video": {"width": 1280, "height": 720, "fps": 20}},
+    ]
+
+    assert _suggest_profiles(profiles) == ("main-token", "sub-token")
+    assert _suggest_profiles([profiles[0]]) == ("main-token", None)
 
 
 def test_camera_test_url_missing_saved_streams_returns_none_safely():

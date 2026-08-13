@@ -293,6 +293,7 @@ export function SettingsMaintenanceModal({
     updateApplyAllowed,
     updateApplyPrimaryText,
     updateApplyErrors,
+    updatePeerCheckUnavailable,
     maintenanceBackupOverview,
     maintenanceBackupManager,
     maintenanceDatabase,
@@ -459,7 +460,7 @@ export function SettingsMaintenanceModal({
                   ) : null}
 
                   {updateApplyLaunchNotice ? <div className="settingsUpdateApplyNotice">{updateApplyLaunchNotice}</div> : null}
-                  {updateTransportErrors.update && !updateTransportErrors.apply ? (
+                  {updatePeerCheckUnavailable ? (
                     <div className="settingsUpdateApplyNotice">{t.updateApplyPeerCheckUnavailable}</div>
                   ) : null}
                   {updateApplyErrors.map((message) => <small className="settingsUpdateApplyError" key={message}>{message}</small>)}
