@@ -1,0 +1,116 @@
+{
+  "document_type": "km_vms_frozen_update_entry_fixture",
+  "files": [
+    {
+      "fixture_path": "scripts/km-vms-update-launcher.sh",
+      "git_blob": "ae325f6a8b810429f8842004c45dff75a96965e1",
+      "git_mode": "100755",
+      "original_path": "scripts/km-vms-update-launcher.sh",
+      "role": "terminal frozen launcher",
+      "sha256": "686528cc1e34cf8353d6a8abd997e9159ebcbc0fdf3844a568a0c727fe7ac498",
+      "size": 3226
+    },
+    {
+      "fixture_path": "scripts/update.sh",
+      "git_blob": "d3bc03664a62c6c36d8150b90cb53c4c92e17a54",
+      "git_mode": "100755",
+      "original_path": "scripts/update.sh",
+      "role": "shared frozen active updater",
+      "sha256": "ba870cc6785d720273d810df33fb5db100abc4d129140b64dc164601ee85706c",
+      "size": 68122
+    },
+    {
+      "fixture_path": "scripts/km-vms-update-helper.py",
+      "git_blob": "a955d63eddefcd3ca3330d7ecf578e04b0a3bc6f",
+      "git_mode": "100644",
+      "original_path": "scripts/km-vms-update-helper.py",
+      "role": "in-app frozen command owner",
+      "sha256": "673bdff316a1ee7f9d83983fc3186ddf1654eeda044dc60f2aacf75468a74aa1",
+      "size": 124115
+    },
+    {
+      "fixture_path": "scripts/km-vms-bootstrap.py",
+      "git_blob": "fe34ee0efa45d5d7734742719a2fb3a44a172b44",
+      "git_mode": "100755",
+      "original_path": "scripts/km-vms-bootstrap.py",
+      "role": "frozen active-source resolver",
+      "sha256": "7057232bff0de7bc475be460c4a6dff1b31c9737e281dbfdfc4f4ca865fbde8f",
+      "size": 41012
+    },
+    {
+      "fixture_path": "scripts/km-vms-release-slots.py",
+      "git_blob": "dac182b0301b1afa353ccd4c4d528bf08c9ff3ff",
+      "git_mode": "100755",
+      "original_path": "scripts/km-vms-release-slots.py",
+      "role": "frozen slot authority used by bootstrap",
+      "sha256": "92e371f17f5a0dc61dfae757e36bcc9f4f4ef0605e710f4fc5d91637cad72e95",
+      "size": 118184
+    },
+    {
+      "fixture_path": "scripts/km-vms-compose-common.sh",
+      "git_blob": "4838c8940c5ec2ea83e4cbe8e19c70c6681f7f9a",
+      "git_mode": "100755",
+      "original_path": "scripts/km-vms-compose-common.sh",
+      "role": "frozen updater Compose resolver",
+      "sha256": "85a7b7863dc533ea7bc7d552803d882657b38a40115a4ebb381c9ac8d3eb6010",
+      "size": 14597
+    },
+    {
+      "fixture_path": "scripts/km-vms-permission-gate.sh",
+      "git_blob": "284ac0a57120524c8ce5a11a1a71db1a68e46211",
+      "git_mode": "100755",
+      "original_path": "scripts/km-vms-permission-gate.sh",
+      "role": "frozen pre-handoff source gate",
+      "sha256": "2755d741714d6d632aadb96918c795d5772341dc56c764b12062f7baed9f31c9",
+      "size": 16243
+    },
+    {
+      "fixture_path": "scripts/km-vms-bootstrap-dispatch.sh",
+      "git_blob": "bbf4e68b1f205f906d079bc03272229b760fffb2",
+      "git_mode": "100755",
+      "original_path": "scripts/km-vms-bootstrap-dispatch.sh",
+      "role": "frozen bootstrap bundle dependency",
+      "sha256": "66d1a0cd3e899e748e5530fb096529e1033380dafe438edb4c1033231e2d84c9",
+      "size": 1882
+    },
+    {
+      "fixture_path": "scripts/km-vms-restart.sh",
+      "git_blob": "fa9fe475273b25a7b97b11ed6a1d61649ccb37c8",
+      "git_mode": "100755",
+      "original_path": "scripts/km-vms-restart.sh",
+      "role": "frozen bootstrap bundle dependency",
+      "sha256": "7c3512e5ab17d04aa5c5575de0f4e0a0b251687767a0afc766963d83bb123931",
+      "size": 12948
+    },
+    {
+      "fixture_path": "scripts/km-vms-storage-apply.sh",
+      "git_blob": "65116a989d25c1bc276a9728a29f9543a08c494d",
+      "git_mode": "100755",
+      "original_path": "scripts/km-vms-storage-apply.sh",
+      "role": "frozen bootstrap bundle dependency",
+      "sha256": "8a5d1ec028431350231a18da6c4203f2c33c32cbbeda90c106b483045cb3f350",
+      "size": 18798
+    },
+    {
+      "fixture_path": "scripts/km-vms-setup-activation-helper.sh",
+      "git_blob": "846f0cc24a4afe3fcb9d4b357aef4e9b7da7fa40",
+      "git_mode": "100755",
+      "original_path": "scripts/km-vms-setup-activation-helper.sh",
+      "role": "frozen bootstrap bundle dependency",
+      "sha256": "82d615ae1cd92ed0abf3dc8522bbce179982bd18bec1d8e31e547b506a2312e1",
+      "size": 41650
+    },
+    {
+      "fixture_path": "release/km-vms-release.json",
+      "git_blob": "93243da0df89380d9e3463f10cd6da175cc6bf6e",
+      "git_mode": "100644",
+      "original_path": "release/km-vms-release.json",
+      "role": "frozen published release identity",
+      "sha256": "6564f2ff5799054f1dc5be1f4a111b878bb2d44e8622613db0d41dfee16e2082",
+      "size": 2938
+    }
+  ],
+  "release_commit": "84206805ecc78043585388a39996cd732b373642",
+  "release_tag": "v0.8.15",
+  "schema_version": 1
+}

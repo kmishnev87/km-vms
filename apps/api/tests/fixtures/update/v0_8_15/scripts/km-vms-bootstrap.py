@@ -25,17 +25,6 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
-def _exec_module_without_bytecode(spec: Any, module: Any) -> None:
-    """Load runtime authority code without mutating its source directory."""
-
-    previous = sys.dont_write_bytecode
-    sys.dont_write_bytecode = True
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.dont_write_bytecode = previous
-
-
 BOOTSTRAP_SCHEMA_VERSION = 1
 BOOTSTRAP_RELATIVE = Path("data/update-runtime/bootstrap")
 BUNDLES_NAME = "bundles"
@@ -96,7 +85,7 @@ FENCED_ACTIVATION_PHASES = frozenset(
 FENCED_RESTORE_PHASES = frozenset(
     {"writers_paused", "restore_running", "services_starting", "post_restore_check"}
 )
-PROJECT_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
+PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 CONTAINER_RE = re.compile(r"^[0-9a-f]{12,64}$")
 RESTORE_OPERATION_RE = re.compile(r"^restore-[0-9a-f]{32}$")
@@ -395,236 +384,24 @@ def load_slot_engine(bundle_dir: Path | None = None) -> Any:
     if spec is None or spec.loader is None:
         raise BootstrapError("slot_engine_missing", "Canonical slot engine cannot be loaded.")
     module = importlib.util.module_from_spec(spec)
-    _exec_module_without_bytecode(spec, module)
+    spec.loader.exec_module(module)
     return module
 
 
-def _require_project_name(value: Any) -> str:
-    normalized = str(value or "").strip()
-    if not PROJECT_RE.fullmatch(normalized):
-        raise BootstrapError(
-            "project_identity_invalid",
-            "Compose project identity is invalid.",
-        )
-    return normalized
-
-
-def _read_env_project_name(app_dir: Path) -> str | None:
-    env_file = app_dir / ".env"
-    try:
-        info = env_file.lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-            raise BootstrapError(
-                "project_identity_invalid",
-                "Stable environment authority is unsafe.",
-            )
-        values = {
-            line.split("=", 1)[1].strip()
-            for line in env_file.read_text(encoding="utf-8").splitlines()
-            if line.startswith("COMPOSE_PROJECT_NAME=")
-            and line.split("=", 1)[1].strip()
-        }
-    except FileNotFoundError:
-        return None
-    except BootstrapError:
-        raise
-    except (OSError, UnicodeError) as exc:
-        raise BootstrapError(
-            "project_identity_invalid",
-            "Stable environment authority cannot be read.",
-        ) from exc
-    if len(values) > 1:
-        raise BootstrapError(
-            "project_identity_conflict",
-            "Stable environment contains contradictory Compose project identities.",
-        )
-    return _require_project_name(next(iter(values))) if values else None
-
-
-def _read_active_manifest_project_name(app_dir: Path) -> tuple[str | None, bool]:
-    pointer = app_dir / "data/update-runtime/active"
-    try:
-        info = pointer.lstat()
-    except FileNotFoundError:
-        return None, False
-    if not stat.S_ISLNK(info.st_mode):
-        raise BootstrapError(
-            "project_identity_active_invalid",
-            "Active release pointer is unsafe.",
-        )
-    target = os.readlink(pointer)
-    match = re.fullmatch(
-        r"slots/(release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})/source",
-        target,
-    )
-    if match is None:
-        raise BootstrapError(
-            "project_identity_active_invalid",
-            "Active release pointer is outside the bounded slot layout.",
-        )
-    slot_id = match.group(1)
-    slot_root = app_dir / "data/update-runtime/slots" / slot_id
-    source = slot_root / "source"
-    manifest_path = slot_root / "slot-manifest.json"
-    try:
-        source_info = source.lstat()
-        manifest_info = manifest_path.lstat()
-        expected_source = source.resolve(strict=True)
-        bounded_source = (
-            app_dir / "data/update-runtime/slots" / slot_id / "source"
-        ).resolve(strict=True)
-    except OSError as exc:
-        raise BootstrapError(
-            "project_identity_active_invalid",
-            "Active release evidence is unavailable.",
-        ) from exc
-    if (
-        stat.S_ISLNK(source_info.st_mode)
-        or not stat.S_ISDIR(source_info.st_mode)
-        or stat.S_ISLNK(manifest_info.st_mode)
-        or not stat.S_ISREG(manifest_info.st_mode)
-        or expected_source != bounded_source
-    ):
-        raise BootstrapError(
-            "project_identity_active_invalid",
-            "Active release evidence is unsafe.",
-        )
-    manifest = read_json(manifest_path)
-    assert manifest is not None
-    try:
-        engine = load_slot_engine()
-        manifest = engine.validate_manifest(
-            manifest,
-            expected_slot_id=slot_id,
-        )
-    except Exception as exc:
-        raise BootstrapError(
-            getattr(exc, "code", "project_identity_active_invalid"),
-            "Active release manifest is invalid.",
-        ) from exc
-    compose = manifest.get("compose_evidence")
-    value = compose.get("project_name") if isinstance(compose, dict) else None
-    if value is None:
-        return None, True
-    return _require_project_name(value), True
-
-
-def _read_install_receipt_project_name(app_dir: Path) -> str | None:
-    path = app_dir / ".km-vms-install.json"
-    try:
-        info = path.lstat()
-    except FileNotFoundError:
-        return None
-    try:
-        app_info = app_dir.lstat()
-    except OSError as exc:
-        raise BootstrapError(
-            "project_identity_receipt_invalid",
-            "Installation receipt owner cannot be verified.",
-        ) from exc
-    mode = stat.S_IMODE(info.st_mode)
-    if (
-        stat.S_ISLNK(info.st_mode)
-        or not stat.S_ISREG(info.st_mode)
-        or info.st_uid not in {0, app_info.st_uid}
-        or mode & 0o002
-        or mode & 0o7000
-    ):
-        raise BootstrapError(
-            "project_identity_receipt_invalid",
-            "Installation receipt permissions are unsafe.",
-        )
-    receipt = read_json(path)
-    assert receipt is not None
-    recorded_app_dir = receipt.get("app_dir")
-    if recorded_app_dir is not None:
-        try:
-            if Path(str(recorded_app_dir)).resolve(strict=True) != app_dir:
-                raise BootstrapError(
-                    "project_identity_receipt_invalid",
-                    "Installation receipt belongs to another app directory.",
-                )
-        except OSError as exc:
-            raise BootstrapError(
-                "project_identity_receipt_invalid",
-                "Installation receipt app directory is invalid.",
-            ) from exc
-    value = receipt.get("project_name")
-    if value is None:
-        return None
-    return _require_project_name(value)
-
-
-def _legacy_docker_project_name() -> str | None:
-    try:
-        result = subprocess.run(
-            [
-                "docker",
-                "ps",
-                "-a",
-                "--format",
-                '{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}',
-            ],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=15,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    if result.returncode != 0:
-        return None
-    projects: dict[str, set[str]] = {}
-    for line in result.stdout.splitlines():
-        project, separator, service = line.partition("\t")
-        project = project.strip()
-        service = service.strip()
-        if not separator or not PROJECT_RE.fullmatch(project) or not service:
-            continue
-        projects.setdefault(project, set()).add(service)
-    required = {"api", "web", "recorder", "postgres", "redis", "nginx"}
-    candidates = sorted(
-        project for project, services in projects.items() if required <= services
-    )
-    if len(candidates) > 1:
-        raise BootstrapError(
-            "project_identity_ambiguous",
-            "More than one complete legacy KM VMS Compose project is running.",
-        )
-    return candidates[0] if candidates else None
-
-
 def read_project_name(app_dir: Path, supplied: str | None = None) -> str:
-    app_dir = require_app_dir(app_dir)
-    evidence: dict[str, str] = {}
-    if str(supplied or "").strip():
-        evidence["supplied"] = _require_project_name(supplied)
-    env_value = _read_env_project_name(app_dir)
-    if env_value is not None:
-        evidence["environment"] = env_value
-    slot_value, active_present = _read_active_manifest_project_name(app_dir)
-    if slot_value is not None:
-        evidence["active_slot"] = slot_value
-    receipt_value = _read_install_receipt_project_name(app_dir)
-    if receipt_value is not None:
-        evidence["install_receipt"] = receipt_value
-    if not active_present:
-        label_value = _legacy_docker_project_name()
-        if label_value is not None:
-            evidence["legacy_container_labels"] = label_value
-    values = set(evidence.values())
-    if len(values) > 1:
-        raise BootstrapError(
-            "project_identity_conflict",
-            "Compose project identity authorities disagree.",
-        )
-    if not values:
-        raise BootstrapError(
-            "project_identity_missing",
-            "Compose project identity is unavailable.",
-        )
-    return next(iter(values))
+    value = str(supplied or "").strip()
+    if not value:
+        env_file = app_dir / ".env"
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                if line.startswith("COMPOSE_PROJECT_NAME="):
+                    value = line.split("=", 1)[1].strip()
+                    break
+        except OSError as exc:
+            raise BootstrapError("project_identity_missing", "Compose project identity is unavailable.") from exc
+    if not PROJECT_RE.fullmatch(value):
+        raise BootstrapError("project_identity_invalid", "Compose project identity is invalid.")
+    return value
 
 
 def _binding_matches(engine: Any, app_dir: Path, binding: dict[str, Any]) -> bool:
@@ -1078,7 +855,7 @@ def ensure_exact_helper(
     if spec is None or spec.loader is None:
         raise BootstrapError("helper_recovery_missing", "Selected helper recovery cannot be loaded.")
     bridge = importlib.util.module_from_spec(spec)
-    _exec_module_without_bytecode(spec, bridge)
+    spec.loader.exec_module(bridge)
     bundle, _bootstrap = validate_current_bundle(app_dir)
     engine = load_slot_engine(bundle)
     try:
@@ -1172,9 +949,6 @@ def build_parser() -> argparse.ArgumentParser:
     resolve_path.add_argument("--app-dir", required=True)
     resolve_path.add_argument("--project-name")
     resolve_path.add_argument("--repair", action="store_true")
-    project_name = subparsers.add_parser("resolve-project-name")
-    project_name.add_argument("--app-dir", required=True)
-    project_name.add_argument("--project-name")
     image_override = subparsers.add_parser("image-override-path")
     image_override.add_argument("--app-dir", required=True)
     image_override.add_argument("--project-name", required=True)
@@ -1217,9 +991,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repair=args.repair,
             )
             print(str(source))
-            return 0
-        elif args.command == "resolve-project-name":
-            print(read_project_name(Path(args.app_dir), args.project_name))
             return 0
         elif args.command == "image-override-path":
             path, _slot_id = materialize_slot_image_override(

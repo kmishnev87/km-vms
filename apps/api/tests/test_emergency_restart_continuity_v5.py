@@ -419,7 +419,12 @@ if "--repair" in sys.argv:
     raise SystemExit(90)
 if os.environ.get("KM_VMS_TEST_RESOLVER_MODE") != "valid":
     raise SystemExit(75)
-print(os.environ["KM_VMS_TEST_ACTIVE_SOURCE"])
+if sys.argv[1] == "resolve-project-name":
+    print("fixture")
+elif sys.argv[1] == "resolve-path":
+    print(os.environ["KM_VMS_TEST_ACTIVE_SOURCE"])
+else:
+    raise SystemExit(76)
 """,
         encoding="utf-8",
     )
@@ -524,6 +529,8 @@ def test_manual_update_launcher_dispatches_only_to_read_only_active_source(
         "resolve-path",
         "--app-dir",
         str(fixture["app"]),
+        "--project-name",
+        "fixture",
     ]
     assert not fixture["repair_marker"].exists()
     assert not fixture["root_marker"].exists()
@@ -860,14 +867,11 @@ def test_common_compose_includes_immutable_images_before_runtime_start() -> None
 
 def test_common_compose_accepts_explicit_project_for_legacy_env() -> None:
     common = (REPO_ROOT / "scripts/km-vms-compose-common.sh").read_text()
-    resolver = common.split("km_vms_slot_image_override()", 1)[1].split(
-        "km_vms_compose_for_source()",
-        1,
-    )[0]
-    assert 'project_name="${KM_VMS_PROJECT_NAME:-${PROJECT_NAME:-}}"' in resolver
-    assert resolver.index('project_name="${KM_VMS_PROJECT_NAME:-${PROJECT_NAME:-}}"') < resolver.index(
-        "COMPOSE_PROJECT_NAME="
-    )
+    assert "km_vms_resolve_project_name()" in common
+    compose_owner = common.split("km_vms_compose_for_source()", 1)[1]
+    assert 'project_name=$(km_vms_resolve_project_name' in compose_owner
+    assert 'set -- -p "$project_name" "$@"' in compose_owner
+    assert "Compose project identity contradicts stable authority" in compose_owner
 
 
 def test_inventory_bound_schema_token_is_not_a_fake_target_commit() -> None:

@@ -83,6 +83,11 @@ read_control_value() {
   return 1
 }
 
+read_env_value() {
+  key="$1"
+  sed -n "s/^$key=//p" "$APP_DIR/.env" | tail -n 1
+}
+
 bootstrap_command() {
   bootstrap="$APP_DIR/data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
   [ -f "$bootstrap" ] || fail "Stable bootstrap authority is unavailable."
@@ -338,18 +343,11 @@ detect_compose
 
 set --
 if [ -n "$PROJECT_NAME" ]; then
-  PROJECT_NAME=$(bootstrap_command resolve-project-name \
-    --app-dir "$APP_DIR" --project-name "$PROJECT_NAME") ||
-    fail "Canonical Compose project identity could not be resolved."
+  PROJECT_NAME=$(safe_project_name "$PROJECT_NAME")
+  set -- "$@" --project-name "$PROJECT_NAME"
 else
-  PROJECT_NAME=$(bootstrap_command resolve-project-name \
-    --app-dir "$APP_DIR") ||
-    fail "Canonical Compose project identity could not be resolved."
+  PROJECT_NAME=$(safe_project_name "$(read_env_value COMPOSE_PROJECT_NAME)")
 fi
-PROJECT_NAME=$(safe_project_name "$PROJECT_NAME")
-KM_VMS_PROJECT_NAME="$PROJECT_NAME"
-export KM_VMS_PROJECT_NAME
-set -- "$@" --project-name "$PROJECT_NAME"
 
 SOURCE_DIR=$(bootstrap_command resolve-path \
   --app-dir "$APP_DIR" \

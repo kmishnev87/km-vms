@@ -68,20 +68,7 @@ BOOTSTRAP="$CURRENT_BUNDLE/km-vms-bootstrap.py"
 command -v python3 >/dev/null 2>&1 ||
   fail "python3 is required for canonical terminal update resolution"
 
-if [ -n "${KM_VMS_PROJECT_NAME:-}" ]; then
-  PROJECT_NAME=$(python3 -B "$BOOTSTRAP" resolve-project-name \
-    --app-dir "$APP_DIR" --project-name "$KM_VMS_PROJECT_NAME") ||
-    fail "Compose project identity is contradictory; recover it before starting a new update"
-else
-  PROJECT_NAME=$(python3 -B "$BOOTSTRAP" resolve-project-name \
-    --app-dir "$APP_DIR") ||
-    fail "Compose project identity is unavailable; recover it before starting a new update"
-fi
-KM_VMS_PROJECT_NAME="$PROJECT_NAME"
-export KM_VMS_PROJECT_NAME
-
-SOURCE_DIR=$(python3 -B "$BOOTSTRAP" resolve-path \
-  --app-dir "$APP_DIR" --project-name "$PROJECT_NAME") ||
+SOURCE_DIR=$(python3 -B "$BOOTSTRAP" resolve-path --app-dir "$APP_DIR") ||
   fail "Canonical active release is unavailable; complete recovery before starting a new update"
 case "$SOURCE_DIR" in
   "$APP_DIR"/data/update-runtime/slots/*/source) ;;

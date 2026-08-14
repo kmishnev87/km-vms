@@ -1303,6 +1303,48 @@
   line-height: 1.35;
 }
 
+.cameraSettingsTruthActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cameraSettingsTruth {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  padding: 4px 10px;
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.cameraSettingsTruth.current,
+.cameraSettingsTruth.verified {
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.cameraSettingsTruth.changed {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #a16207;
+}
+
+.cameraSettingsTruth.mismatch,
+.cameraSettingsTruth.unavailable {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
 .cameraProfileSettingsSection {
   margin-top: 12px;
   padding: 14px 12px 12px;

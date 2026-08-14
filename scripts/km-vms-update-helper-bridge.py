@@ -19,6 +19,17 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
+def _exec_module_without_bytecode(spec: Any, module: Any) -> None:
+    """Load runtime authority code without mutating its source directory."""
+
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+
+
 MAX_CONTROL_BYTES = 64 * 1024
 MAX_LEGACY_ADMISSION_BYTES = 512 * 1024
 MAX_LEGACY_ADMISSION_ENTRIES = 256
@@ -73,6 +84,11 @@ TARGET_EVIDENCE_SERVICES = (
     *LEGACY_REQUIRED_IMAGE_SERVICES,
     *OPTIONAL_PERSISTENT_IMAGE_SERVICES,
     "schema-update",
+)
+ADOPTED_DEVELOPMENT_BUILD_SERVICES = frozenset(
+    service
+    for service in TARGET_BUILD_SERVICES
+    if service in {*LEGACY_REQUIRED_IMAGE_SERVICES, *OPTIONAL_PERSISTENT_IMAGE_SERVICES}
 )
 ACTIVATION_RUNTIME_SERVICES = (
     "update-retry-admission",
@@ -1036,7 +1052,7 @@ def load_slot_engine(source_dir: Path):
         )
     module = importlib.util.module_from_spec(spec)
     try:
-        spec.loader.exec_module(module)
+        _exec_module_without_bytecode(spec, module)
     except Exception as exc:
         raise BridgeError(
             "slot_engine_invalid",
@@ -1066,13 +1082,56 @@ def load_stable_bootstrap(app_dir: Path):
         )
     module = importlib.util.module_from_spec(spec)
     try:
-        spec.loader.exec_module(module)
+        _exec_module_without_bytecode(spec, module)
     except Exception as exc:
         raise BridgeError(
             getattr(exc, "code", "stable_bootstrap_invalid"),
             "Stable bootstrap authority is invalid.",
         ) from exc
     return module
+
+
+def load_source_bootstrap(source_dir: Path):
+    module_path = source_dir / "scripts/km-vms-bootstrap.py"
+    if module_path.is_symlink() or not module_path.is_file():
+        raise BridgeError(
+            "stable_bootstrap_missing",
+            "Target bootstrap authority is unavailable.",
+        )
+    spec = importlib.util.spec_from_file_location(
+        "km_vms_target_bootstrap_runtime",
+        module_path,
+    )
+    if spec is None or spec.loader is None:
+        raise BridgeError(
+            "stable_bootstrap_invalid",
+            "Target bootstrap authority cannot be loaded.",
+        )
+    module = importlib.util.module_from_spec(spec)
+    try:
+        _exec_module_without_bytecode(spec, module)
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "stable_bootstrap_invalid"),
+            "Target bootstrap authority is invalid.",
+        ) from exc
+    return module
+
+
+def resolve_stable_project_name(
+    app_dir: Path,
+    supplied: str | None = None,
+) -> str:
+    bootstrap = load_stable_bootstrap(app_dir)
+    try:
+        return require_project_name(
+            bootstrap.read_project_name(app_dir, supplied)
+        )
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "project_identity_invalid"),
+            "Compose project identity could not be resolved safely.",
+        ) from exc
 
 
 def set_writer_policy_fence(
@@ -1708,6 +1767,7 @@ def prepare_legacy_adopted_slot(
     target_source_dir: Path,
     request_id: str,
     installed_identity: dict[str, Any],
+    project_name: str,
 ) -> str:
     slot_tool = target_source_dir / "scripts/km-vms-release-slots.py"
     if slot_tool.is_symlink() or not slot_tool.is_file():
@@ -1715,9 +1775,7 @@ def prepare_legacy_adopted_slot(
             "slot_engine_missing",
             "Trusted target release has no release-slot engine.",
         )
-    project_name = require_project_name(
-        os.getenv("KM_VMS_PROJECT_NAME", "").strip()
-    )
+    project_name = require_project_name(project_name)
     (
         compose_evidence,
         captured_images,
@@ -1962,6 +2020,294 @@ def prepare_legacy_adopted_slot(
             "Final pre-update release slot evidence is contradictory.",
         )
     return slot_id
+
+
+def _adopted_development_build_services(values: Sequence[str]) -> list[str]:
+    services = sorted(set(values or []))
+    if (
+        not services
+        or len(services) != len(values or [])
+        or not set(services).issubset(ADOPTED_DEVELOPMENT_BUILD_SERVICES)
+    ):
+        raise BridgeError(
+            "adopted_development_services_invalid",
+            "Adopted development preparation requires unique supported build services.",
+        )
+    return services
+
+
+def prepare_adopted_development_slot(args: argparse.Namespace) -> int:
+    """Build and finalize one cumulative non-official development slot.
+
+    This is a bounded orchestration wrapper around the existing adopted-slot
+    stage/runtime/finalize owners.  It does not create a second slot format and
+    never accepts caller-supplied image evidence.
+    """
+
+    app_dir = require_app_dir(args.app_dir)
+    request_id = require_request_id(args.request_id)
+    declared_version = str(args.declared_version or "")
+    declared_commit = str(args.declared_commit or "").lower()
+    project_name = resolve_stable_project_name(
+        app_dir,
+        str(args.project_name or "").strip() or None,
+    )
+    build_services = _adopted_development_build_services(
+        args.build_service or []
+    )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,79}", declared_version):
+        raise BridgeError(
+            "installed_version_invalid",
+            "Installed release version is invalid.",
+        )
+    if not COMMIT_SHA_RE.fullmatch(declared_commit):
+        raise BridgeError(
+            "installed_commit_invalid",
+            "Installed release commit is invalid.",
+        )
+
+    slot_tool = app_dir / "scripts/km-vms-release-slots.py"
+    if slot_tool.is_symlink() or not slot_tool.is_file():
+        raise BridgeError(
+            "slot_engine_missing",
+            "Cumulative source has no canonical release-slot engine.",
+        )
+    (
+        captured_compose,
+        captured_images,
+        health_evidence,
+        current_security_contract,
+    ) = capture_pre_update_slot_evidence(
+        app_dir,
+        project_name=project_name,
+        request_id=request_id,
+    )
+    stage_payload = _parse_command_json(
+        run_command(
+            [
+                "python3",
+                str(slot_tool),
+                "stage-adopted",
+                "--app-dir",
+                str(app_dir),
+                "--request-id",
+                request_id,
+                "--declared-version",
+                declared_version,
+                "--declared-commit",
+                declared_commit,
+            ],
+            timeout=300,
+            error_code="slot_adoption_snapshot_failed",
+            error_message="Cumulative development source could not be materialized.",
+        ),
+        error_code="slot_adoption_snapshot_failed",
+        error_message="Cumulative development source returned invalid evidence.",
+    )
+    slot_id = str(stage_payload.get("slot_id") or "")
+    if not re.fullmatch(r"adopted-[0-9a-f]{64}", slot_id):
+        raise BridgeError(
+            "slot_adoption_snapshot_failed",
+            "Cumulative development slot identity is invalid.",
+        )
+    if stage_payload.get("status") == "reused":
+        manifest = stage_payload.get("manifest")
+        if type(manifest) is not dict:
+            raise BridgeError(
+                "slot_adoption_snapshot_failed",
+                "Reused development slot returned no immutable manifest.",
+            )
+        verify_immutable_images(manifest.get("image_evidence", {}))
+        image_services = manifest.get("image_evidence", {}).get("services", {})
+        if any(
+            not str(image_services.get(service, {}).get("source_image_ref") or "").endswith(
+                f":{slot_id}"
+            )
+            for service in build_services
+        ):
+            raise BridgeError(
+                "slot_adoption_conflict",
+                "Reused development slot lacks its exact built service evidence.",
+            )
+        print("adopted_development_prepare=REUSED")
+        print(f"adopted_development_slot={slot_id}")
+        print(f"built_services={','.join(build_services)}")
+        return 0
+    if stage_payload.get("status") != "staged":
+        raise BridgeError(
+            "slot_adoption_snapshot_failed",
+            "Cumulative development slot did not reach staged state.",
+        )
+    staged_source = Path(str(stage_payload.get("source_path") or ""))
+    if not staged_source.is_absolute() or not staged_source.is_dir():
+        raise BridgeError(
+            "slot_adoption_snapshot_failed",
+            "Cumulative development staged source path is invalid.",
+        )
+
+    evidence_root = app_dir / "data/update-runtime/staging"
+    with tempfile.TemporaryDirectory(
+        prefix=".adopted-development-evidence-",
+        dir=evidence_root,
+    ) as temporary:
+        evidence_dir = Path(temporary)
+        services_path = evidence_dir / "services.json"
+        compose_path = evidence_dir / "compose.json"
+        image_path = evidence_dir / "images.json"
+        health_path = evidence_dir / "health.json"
+        atomic_write_json(
+            services_path,
+            {"services": captured_compose["services"]},
+        )
+        runtime_payload = _parse_command_json(
+            run_command(
+                [
+                    "python3",
+                    str(slot_tool),
+                    "prepare-adopted-runtime",
+                    "--app-dir",
+                    str(app_dir),
+                    "--request-id",
+                    request_id,
+                    "--services-file",
+                    str(services_path),
+                ],
+                timeout=30,
+                error_code="slot_runtime_override_failed",
+                error_message="Development runtime override could not be prepared.",
+            ),
+            error_code="slot_runtime_override_failed",
+            error_message="Development runtime override returned invalid evidence.",
+        )
+        runtime_override = Path(str(runtime_payload.get("override_path") or ""))
+        runtime_digest = str(runtime_payload.get("sha256") or "")
+        if (
+            not runtime_override.is_absolute()
+            or runtime_override.is_symlink()
+            or not runtime_override.is_file()
+            or _sha256_file(runtime_override) != runtime_digest
+        ):
+            raise BridgeError(
+                "slot_runtime_override_failed",
+                "Development runtime override evidence is contradictory.",
+            )
+
+        target_env = os.environ.copy()
+        target_env["COMPOSE_PROJECT_NAME"] = project_name
+        target_env["KM_VMS_RELEASE_IMAGE_TAG"] = slot_id
+        compose = compose_base(
+            app_dir,
+            project_name,
+            source_dir=staged_source,
+            runtime_override=runtime_override,
+            include_archive_override=True,
+        )
+        config = run_command(
+            [*compose, "config"],
+            timeout=60,
+            error_code="slot_compose_evidence_failed",
+            error_message="Development slot Compose plan could not be validated.",
+            env=target_env,
+        )
+        services = _compose_services(compose, env=target_env)
+        if services != captured_compose["services"]:
+            raise BridgeError(
+                "slot_compose_evidence_failed",
+                "Development slot changed the current Compose service set.",
+            )
+        security_contract = _current_compose_security_contract(
+            compose,
+            app_dir=app_dir,
+            source_dir=staged_source,
+            request_id=request_id,
+            adopted_final_source=(
+                app_dir / "data/update-runtime/slots" / slot_id / "source"
+            ),
+        )
+        if security_contract != current_security_contract:
+            raise BridgeError(
+                "slot_adoption_conflict",
+                "Development slot changed the current Compose security contract.",
+            )
+        image_refs = _compose_image_refs(compose, env=target_env)
+        run_command(
+            [*compose, "build", *build_services],
+            timeout=3600,
+            error_code="slot_adoption_build_failed",
+            error_message="Development slot images could not be built.",
+            env=target_env,
+        )
+        raw_images = {
+            "schema_version": 1,
+            "services": {
+                service: dict(item)
+                for service, item in captured_images["services"].items()
+            },
+        }
+        for service in build_services:
+            image_ref = str(image_refs.get(service) or "")
+            if not image_ref.endswith(f":{slot_id}"):
+                raise BridgeError(
+                    "slot_image_evidence_failed",
+                    "A development service build used a mutable image tag.",
+                )
+            raw_images["services"][service] = {
+                "image_id": _image_id_for_ref(image_ref),
+                "source_image_ref": image_ref,
+            }
+        image_evidence = preserve_slot_images(
+            raw_images,
+            project_name=project_name,
+            slot_id=slot_id,
+        )
+        compose_evidence = {
+            **captured_compose,
+            "slot_plan_sha256": _normalized_compose_digest(
+                config.stdout,
+                app_dir=app_dir,
+                source_dir=staged_source,
+            ),
+            "runtime_override_sha256": runtime_digest,
+        }
+        atomic_write_json(compose_path, compose_evidence)
+        atomic_write_json(image_path, image_evidence)
+        atomic_write_json(health_path, health_evidence)
+        finalized = _parse_command_json(
+            run_command(
+                [
+                    "python3",
+                    str(slot_tool),
+                    "finalize",
+                    "--app-dir",
+                    str(app_dir),
+                    "--request-id",
+                    request_id,
+                    "--compose-evidence-file",
+                    str(compose_path),
+                    "--image-evidence-file",
+                    str(image_path),
+                    "--health-evidence-file",
+                    str(health_path),
+                ],
+                timeout=300,
+                error_code="slot_adoption_finalize_failed",
+                error_message="Development slot could not be finalized.",
+            ),
+            error_code="slot_adoption_finalize_failed",
+            error_message="Development slot returned invalid final evidence.",
+        )
+    if finalized.get("slot_id") != slot_id or finalized.get("status") not in {
+        "published",
+        "reused",
+    }:
+        raise BridgeError(
+            "slot_adoption_finalize_failed",
+            "Development slot final evidence is contradictory.",
+        )
+    print("adopted_development_prepare=PASS")
+    print(f"adopted_development_slot={slot_id}")
+    print(f"built_services={','.join(build_services)}")
+    return 0
 
 
 def bind_legacy_adopted_slot_as_active(
@@ -4058,7 +4404,10 @@ def converge_activation(
 
 def _activate_or_resume(args: argparse.Namespace) -> int:
     app_dir = require_app_dir(args.app_dir)
-    project_name = require_project_name(args.project_name)
+    project_name = resolve_stable_project_name(
+        app_dir,
+        str(args.project_name or "").strip() or None,
+    )
     request_id = require_request_id(args.request_id)
     engine = load_slot_engine(bridge_source_root())
     try:
@@ -4285,7 +4634,10 @@ def prepare_trusted_target_slot(args: argparse.Namespace) -> int:
     request_id = require_request_id(args.request_id)
     trusted_commit = str(args.trusted_commit or "").lower()
     declared_version = str(args.declared_version or "")
-    project_name = require_project_name(args.project_name)
+    project_name = resolve_stable_project_name(
+        app_dir,
+        str(args.project_name or "").strip() or None,
+    )
     if not COMMIT_SHA_RE.fullmatch(trusted_commit):
         raise BridgeError(
             "target_commit_invalid",
@@ -4708,7 +5060,10 @@ def publish_current_installed_projection(args: argparse.Namespace) -> int:
     """Publish active-slot evidence using the final canonical Compose plan."""
 
     app_dir = require_app_dir(args.app_dir)
-    project_name = require_project_name(args.project_name)
+    project_name = resolve_stable_project_name(
+        app_dir,
+        str(args.project_name or "").strip() or None,
+    )
     bootstrap = load_stable_bootstrap(app_dir)
     try:
         slot_id, source_dir, _manifest = bootstrap.resolve_authority(
@@ -4815,12 +5170,101 @@ def _run_permission_contract(
         )
 
 
+def _permission_gate_supports_contract(gate: Path) -> bool:
+    if gate.is_symlink() or not gate.is_file():
+        raise BridgeError(
+            "permission_gate_missing",
+            "Installed permission authority is unavailable.",
+        )
+    try:
+        return "--contract" in gate.read_text(
+            encoding="utf-8",
+            errors="strict",
+        )
+    except (OSError, UnicodeError) as exc:
+        raise BridgeError(
+            "permission_gate_invalid",
+            "Installed permission authority cannot be inspected.",
+        ) from exc
+
+
+def _installed_entry_supports_project_handoff(
+    app_dir: Path,
+) -> bool:
+    pointer = app_dir / "data/update-runtime/active"
+    update_script = app_dir / "scripts/update.sh"
+    try:
+        if pointer.is_symlink():
+            target = os.readlink(pointer)
+            if re.fullmatch(
+                r"slots/(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})/source",
+                target,
+            ):
+                update_script = app_dir / "data/update-runtime" / target / "scripts/update.sh"
+        if update_script.is_symlink() or not update_script.is_file():
+            return False
+        text = update_script.read_text(encoding="utf-8", errors="strict")
+    except (OSError, UnicodeError):
+        return False
+    return (
+        "resolved_project_name=" in text
+        and "KM_VMS_PROJECT_NAME=\"$PROJECT_NAME\"" in text
+    )
+
+
+def classify_installed_update_contract(
+    app_dir: Path,
+    active: tuple[str, Path] | None,
+    *,
+    engine: Any,
+) -> str:
+    projection_path = (
+        app_dir
+        / "data/update-runtime/installed-projection/installed-slot.json"
+    )
+    if active is None:
+        if projection_path.exists() or projection_path.is_symlink():
+            raise BridgeError(
+                "installed_contract_unknown",
+                "Legacy root contradicts installed-slot projection evidence.",
+            )
+        return "legacy_root"
+
+    slot_id, active_source = active
+    gate = active_source / "scripts/km-vms-permission-gate.sh"
+    family = (
+        "current_contract_slot"
+        if _permission_gate_supports_contract(gate)
+        else "pre_contract_slot"
+    )
+    if projection_path.exists() or projection_path.is_symlink():
+        try:
+            projection = engine.validate_installed_slot_projection(app_dir)
+        except Exception as exc:
+            raise BridgeError(
+                getattr(exc, "code", "installed_projection_invalid"),
+                "Installed-slot projection contradicts the active slot.",
+            ) from exc
+        if projection.get("slot_id") != slot_id:
+            raise BridgeError(
+                "installed_projection_invalid",
+                "Installed-slot projection contradicts the active slot.",
+            )
+    elif family == "current_contract_slot":
+        raise BridgeError(
+            "installed_projection_missing",
+            "Current update contract requires installed-slot projection evidence.",
+        )
+    return family
+
+
 def install_stable_bootstrap_for_handoff(
     app_dir: Path,
     target_source_dir: Path,
     *,
     engine: Any,
     active_source: Path | None,
+    contract_family: str,
 ) -> Any:
     """Perform the bounded pre-emergency-to-stable-bootstrap migration."""
 
@@ -4831,7 +5275,7 @@ def install_stable_bootstrap_for_handoff(
         contract="source",
         action="check",
     )
-    if active_source is not None:
+    if contract_family == "current_contract_slot" and active_source is not None:
         current_gate = active_source / "scripts/km-vms-permission-gate.sh"
         _run_permission_contract(
             current_gate,
@@ -4840,7 +5284,14 @@ def install_stable_bootstrap_for_handoff(
             action="check",
             compatibility=True,
         )
-    else:
+    elif contract_family == "pre_contract_slot" and active_source is not None:
+        # The immutable slot manifest/source identity is the bounded authority
+        # for this family.  Its historical gate may require owner-write access,
+        # so invoking it would either fail or force mutation of immutable source.
+        _permission_gate_supports_contract(
+            active_source / "scripts/km-vms-permission-gate.sh"
+        )
+    elif contract_family == "legacy_root" and active_source is None:
         legacy_gate = app_dir / "scripts/km-vms-permission-gate.sh"
         _run_permission_contract(
             legacy_gate,
@@ -4848,6 +5299,11 @@ def install_stable_bootstrap_for_handoff(
             contract="legacy",
             action="check",
             compatibility=True,
+        )
+    else:
+        raise BridgeError(
+            "installed_contract_unknown",
+            "Installed update contract cannot be classified safely.",
         )
     try:
         engine.ensure_layout(app_dir)
@@ -4862,19 +5318,8 @@ def install_stable_bootstrap_for_handoff(
         contract="stable-prebootstrap",
         action="fix",
     )
-    bootstrap_path = target_source_dir / "scripts/km-vms-bootstrap.py"
-    spec = importlib.util.spec_from_file_location(
-        "km_vms_target_bootstrap_installer",
-        bootstrap_path,
-    )
-    if spec is None or spec.loader is None:
-        raise BridgeError(
-            "stable_bootstrap_invalid",
-            "Target stable bootstrap cannot be loaded.",
-        )
-    bootstrap = importlib.util.module_from_spec(spec)
+    bootstrap = load_source_bootstrap(target_source_dir)
     try:
-        spec.loader.exec_module(bootstrap)
         bootstrap.install_bundle(app_dir, target_source_dir)
     except Exception as exc:
         raise BridgeError(
@@ -4910,6 +5355,31 @@ def handoff(args: argparse.Namespace) -> int:
             "The staged target source is unavailable or incomplete.",
         )
     request_id = require_request_id(args.request_id)
+    supplied_project_name = (
+        str(getattr(args, "project_name", None) or "").strip()
+        or os.getenv("KM_VMS_PROJECT_NAME", "").strip()
+    )
+    if (
+        not supplied_project_name
+        and not _installed_entry_supports_project_handoff(app_dir)
+    ):
+        raise BridgeError(
+            "project_identity_recovery_required",
+            "The frozen installed updater cannot receive a resolved Compose project identity before its remaining Compose calls.",
+        )
+    target_bootstrap = load_source_bootstrap(target_source_dir)
+    try:
+        project_name = require_project_name(
+            target_bootstrap.read_project_name(
+                app_dir,
+                supplied_project_name or None,
+            )
+        )
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "project_identity_invalid"),
+            "Compose project identity could not be resolved safely.",
+        ) from exc
     engine = load_slot_engine(target_source_dir)
     try:
         active = engine.read_active_slot(app_dir)
@@ -4918,11 +5388,17 @@ def handoff(args: argparse.Namespace) -> int:
             getattr(exc, "code", "active_pointer_invalid"),
             "Active release pointer is invalid.",
         ) from exc
+    contract_family = classify_installed_update_contract(
+        app_dir,
+        active,
+        engine=engine,
+    )
     bootstrap = install_stable_bootstrap_for_handoff(
         app_dir,
         target_source_dir,
         engine=engine,
         active_source=(active[1] if active is not None else None),
+        contract_family=contract_family,
     )
     archive_override_changed = normalize_archive_roots_override(app_dir)
     terminal_request: dict[str, Any] | None = None
@@ -4964,10 +5440,6 @@ def handoff(args: argparse.Namespace) -> int:
             installed_source_dir=active_source,
             request_override=terminal_request,
         )
-        project_name = require_project_name(
-            str(getattr(args, "project_name", None) or "").strip()
-            or os.getenv("KM_VMS_PROJECT_NAME", "").strip()
-        )
         previous_binding = capture_slot_runtime_binding(
             app_dir,
             project_name,
@@ -4990,6 +5462,7 @@ def handoff(args: argparse.Namespace) -> int:
             target_source_dir=target_source_dir,
             request_id=request_id,
             installed_identity=installed_identity,
+            project_name=project_name,
         )
         bind_legacy_adopted_slot_as_active(
             app_dir=app_dir,
@@ -4998,10 +5471,7 @@ def handoff(args: argparse.Namespace) -> int:
         )
         previous_binding = capture_slot_runtime_binding(
             app_dir,
-            require_project_name(
-                str(getattr(args, "project_name", None) or "").strip()
-                or os.getenv("KM_VMS_PROJECT_NAME", "").strip()
-            ),
+            project_name,
             slot_result,
             engine=engine,
             require_http=True,
@@ -5021,10 +5491,7 @@ def handoff(args: argparse.Namespace) -> int:
         )
         bootstrap.reconcile_restart_policies(
             app_dir,
-            require_project_name(
-                str(getattr(args, "project_name", None) or "").strip()
-                or os.getenv("KM_VMS_PROJECT_NAME", "").strip()
-            ),
+            project_name,
         )
     except Exception as exc:
         raise BridgeError(
@@ -5038,6 +5505,8 @@ def handoff(args: argparse.Namespace) -> int:
         + ("normalized" if archive_override_changed else "unchanged")
     )
     print(f"handoff_kind={handoff_kind}")
+    print(f"update_contract_family={contract_family}")
+    print(f"resolved_project_name={project_name}")
     print(
         "activation_owner="
         + ("terminal_lock" if terminal_request is not None else "update_helper")
@@ -5427,8 +5896,11 @@ def schedule_refresh(
 
 def bootstrap(args: argparse.Namespace) -> int:
     app_dir = require_app_dir(args.app_dir or os.getenv("KM_VMS_BOOTSTRAP_APP_DIR", ""))
-    project_name = require_project_name(
-        args.project_name or os.getenv("KM_VMS_BOOTSTRAP_PROJECT_NAME", "")
+    project_name = resolve_stable_project_name(
+        app_dir,
+        args.project_name
+        or os.getenv("KM_VMS_BOOTSTRAP_PROJECT_NAME", "")
+        or None,
     )
     helper_image = require_helper_image(
         args.helper_image or os.getenv("KM_VMS_BOOTSTRAP_HELPER_IMAGE", "")
@@ -5658,7 +6130,7 @@ def compose_base(
         )
     bootstrap = importlib.util.module_from_spec(spec)
     try:
-        spec.loader.exec_module(bootstrap)
+        _exec_module_without_bytecode(spec, bootstrap)
         lifecycle = bootstrap.lifecycle_override_path(app_dir)
     except Exception as exc:
         raise BridgeError(
@@ -5776,7 +6248,10 @@ def recreate_and_verify_helper(
 
 def refresh(args: argparse.Namespace) -> int:
     app_dir = require_app_dir(args.app_dir)
-    project_name = require_project_name(args.project_name)
+    project_name = resolve_stable_project_name(
+        app_dir,
+        str(args.project_name or "").strip() or None,
+    )
     helper_image = require_helper_image(args.helper_image)
     request_id = require_request_id(args.request_id)
     expected_image_id = require_image_id(args.expected_image_id)
@@ -5928,6 +6403,24 @@ def build_parser() -> argparse.ArgumentParser:
     projection_parser.add_argument("--project-name", required=True)
     projection_parser.set_defaults(
         handler=publish_current_installed_projection
+    )
+
+    adopted_development_parser = subparsers.add_parser(
+        "prepare-adopted-development",
+        help="build and finalize one cumulative non-official development slot",
+    )
+    adopted_development_parser.add_argument("--app-dir", required=True)
+    adopted_development_parser.add_argument("--request-id", required=True)
+    adopted_development_parser.add_argument("--declared-version", required=True)
+    adopted_development_parser.add_argument("--declared-commit", required=True)
+    adopted_development_parser.add_argument("--project-name")
+    adopted_development_parser.add_argument(
+        "--build-service",
+        action="append",
+        required=True,
+    )
+    adopted_development_parser.set_defaults(
+        handler=prepare_adopted_development_slot
     )
 
     activate_parser = subparsers.add_parser(

@@ -177,6 +177,19 @@ def test_fake_onvif_profiles_ptz_events_return_normalized_matrix(monkeypatch):
     )
     monkeypatch.setattr(
         onvif_routes_module,
+        "get_onvif_profile_config",
+        lambda **kwargs: {
+            "status": "ok",
+            "profile_token": kwargs["profile_token"],
+            "current_read": True,
+            "options_read": True,
+            "supported": {"bitrate": {"writable": True}},
+            "reason_codes": [],
+            "raw_secret_exposed": False,
+        },
+    )
+    monkeypatch.setattr(
+        onvif_routes_module,
         "check_onvif_events_feasibility",
         lambda **kwargs: {
             "events_supported": True,
@@ -194,6 +207,8 @@ def test_fake_onvif_profiles_ptz_events_return_normalized_matrix(monkeypatch):
     assert matrix["media_profiles"]["profile_count"] == 2
     assert matrix["main_sub_assignment"]["main_confidence"] == "token_exact"
     assert matrix["main_sub_assignment"]["sub_confidence"] == "path_unique"
+    assert matrix["profile_config_options"]["status"] == "ok"
+    assert matrix["profile_config_options"]["profile_token"] == "main-token"
     assert matrix["ptz"]["status"] == "ok"
     assert matrix["events"]["status"] == "ok"
     assert matrix["redaction"]["raw_secret_exposed"] is False

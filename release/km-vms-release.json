@@ -1,37 +1,37 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.15",
-  "tag": "v0.8.15",
-  "title": "Camera Authority and Emergency Runtime Continuity",
-  "summary": "Completes exact camera connection, stream identity and authenticated preview authority, and reconstructs stable runtime continuity for install, update, restart, maintenance and recovery across supported NAS environments.",
+  "version": "0.8.16",
+  "tag": "v0.8.16",
+  "title": "Update Contract Compatibility and Authoritative ONVIF Configuration Truth",
+  "summary": "Strengthens update entry and Compose identity handoff across supported legacy and current contracts, and makes ONVIF encoder configuration read, apply and verification truthful with localized operator errors.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.15",
+  "source_ref": "v0.8.16",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
   "requires_backup": false,
   "requires_manual_action": false,
-  "requires_migration": true,
+  "requires_migration": false,
   "changelog": [
-    "Adds first-class nullable ONVIF Sub-profile identity and exact Main/Sub selection, testing and persistence without changing manual RTSP cameras.",
-    "Separates camera management and RTSP authority, preserves explicit ports, and serves preview frames only through authenticated product access.",
-    "Adds an inventory-bound stable bootstrap and verified release-slot authority for clean install, update, restart and recovery.",
-    "Makes persistent services restart automatically while one-shot schema, bootstrap and restore jobs remain non-persistent and writer-fenced.",
-    "Removes legacy-root runtime fallback, adds bounded one-time adoption, and converges terminal update recovery to the exact target or previous slot.",
-    "Restores Maintenance with sanitized update-check presentation and hardens canonical restart, storage apply, migration and manual-update entry points.",
-    "Adds targeted camera, schema, restart, update and Maintenance regressions, including the real TerraMaster ordinary-SSH PATH boundary."
+    "Normalizes terminal and in-app update entry around one exact Compose project identity without guessed product fallbacks.",
+    "Preserves stable bootstrap, active-slot and runtime authority while handing supported legacy and current update contracts to the exact target implementation.",
+    "Adds a canonical cumulative adopted-development owner so working-NAS validation builds only the affected services without creating a second deployment model.",
+    "Reads ONVIF encoder current values and supported options across real Dahua and Zeep response shapes without inventing unsupported capabilities.",
+    "Applies only changed supported encoder fields, rereads the camera and returns a typed mismatch instead of reporting an unverified success.",
+    "Adds camera-health configuration truth and localized RU, EN and ZH-CN presentation for ONVIF configuration failures.",
+    "Adds byte-exact published 0.8.15 terminal and in-app entry regressions for the next release boundary without changing immutable historical code."
   ],
   "title_i18n": {
-    "en": "Camera Authority and Emergency Runtime Continuity",
-    "ru": "Управление камерами и аварийная устойчивость среды выполнения",
-    "zh-CN": "摄像机权限与紧急运行时连续性"
+    "en": "Update Contract Compatibility and Authoritative ONVIF Configuration Truth",
+    "ru": "Совместимость обновлений и достоверные настройки ONVIF",
+    "zh-CN": "更新契约兼容性与权威 ONVIF 配置"
   },
   "summary_i18n": {
-    "en": "Completes exact camera connection, stream identity and authenticated preview authority, and reconstructs stable runtime continuity for install, update, restart, maintenance and recovery across supported NAS environments.",
-    "ru": "Завершает точное подключение камер, идентификацию потоков и авторизованную выдачу предпросмотра, а также восстанавливает устойчивую работу установки, обновления, перезапуска, обслуживания и восстановления на поддерживаемых NAS.",
-    "zh-CN": "完成摄像机连接、码流身份和鉴权预览权限的精确控制，并重建适用于受支持 NAS 环境的安装、更新、重启、维护和恢复运行连续性。"
+    "en": "Strengthens update entry and Compose identity handoff across supported legacy and current contracts, and makes ONVIF encoder configuration read, apply and verification truthful with localized operator errors.",
+    "ru": "Укрепляет вход в обновление и передачу точной Compose-идентичности для поддерживаемых старых и текущих контрактов, а также делает чтение, применение и проверку настроек ONVIF достоверными с локализованными сообщениями об ошибках.",
+    "zh-CN": "加强受支持旧版与当前更新契约的更新入口和 Compose 身份交接，并通过本地化错误提示，确保 ONVIF 编码配置的读取、应用和复核结果真实可靠。"
   }
 }

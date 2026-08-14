@@ -1315,33 +1315,12 @@ def load_stable_bootstrap():
     return stable_dir, module
 
 
-def resolve_helper_project_name(app_dir: Path | None = None) -> str:
-    stable_dir, bootstrap = load_stable_bootstrap()
-    if app_dir is not None and app_dir.resolve() != stable_dir.resolve():
-        raise HelperError(
-            "project_identity_invalid",
-            "Compose project identity was requested for another app directory.",
-        )
-    try:
-        return str(
-            bootstrap.read_project_name(
-                stable_dir,
-                os.getenv("KM_VMS_PROJECT_NAME", "").strip() or None,
-            )
-        )
-    except Exception as exc:
-        raise HelperError(
-            getattr(exc, "code", "project_identity_invalid"),
-            "Compose project identity could not be resolved safely.",
-        ) from exc
-
-
 def set_restore_writer_fence(*, enabled: bool) -> None:
     stable_dir, bootstrap = load_stable_bootstrap()
     try:
         bootstrap.set_writer_fence(
             stable_dir,
-            resolve_helper_project_name(stable_dir),
+            str(os.getenv("KM_VMS_PROJECT_NAME") or "tnas-vms"),
             enabled=enabled,
         )
     except Exception as exc:
@@ -1361,7 +1340,6 @@ def resolve_update_source_dir(app_dir: Path) -> Path:
             "helper_active_source_resolver_missing",
             "Active release source resolver is unavailable.",
         )
-    project_name = resolve_helper_project_name(app_dir)
     try:
         resolved = subprocess.run(
             [
@@ -1372,7 +1350,7 @@ def resolve_update_source_dir(app_dir: Path) -> Path:
                 "--app-dir",
                 str(app_dir),
                 "--project-name",
-                project_name,
+                str(os.getenv("KM_VMS_PROJECT_NAME") or ""),
                 "--repair",
             ],
             cwd=app_dir,
@@ -1418,9 +1396,6 @@ def resolve_update_source_dir(app_dir: Path) -> Path:
 
 def update_child_env(request: dict[str, Any]) -> dict[str, str]:
     env = os.environ.copy()
-    env["KM_VMS_PROJECT_NAME"] = resolve_helper_project_name(
-        compose_app_dir()
-    )
     env["KM_VMS_UPDATE_HELPER_MODE"] = "1"
     env["KM_VMS_UPDATE_CONTROL_REQUEST_ID"] = str(request["request_id"])
     env["KM_VMS_UPDATE_PROGRESS_FILE"] = str(PROGRESS_FILE)
@@ -1814,7 +1789,7 @@ def resume_activation(
             "--app-dir",
             str(update_dir),
             "--project-name",
-            resolve_helper_project_name(update_dir),
+            os.getenv("KM_VMS_PROJECT_NAME", "tnas-vms"),
             "--request-id",
             request["request_id"],
         ]

@@ -1,4 +1,6 @@
 from pathlib import Path
+from collections.abc import Mapping
+import copy
 import hashlib
 import re
 import time
@@ -41,6 +43,21 @@ COMPATIBILITY_DOMAINS = (
     "redaction",
 )
 
+ONVIF_VIDEO_CONFIG_FIELDS = (
+    "codec",
+    "resolution",
+    "fps",
+    "bitrate",
+    "iframe_interval",
+    "quality",
+)
+
+
+class OnvifConfigurationError(RuntimeError):
+    def __init__(self, code: str, message: str):
+        self.code = code
+        super().__init__(message)
+
 
 def wsdl_dir():
     import onvif
@@ -57,7 +74,25 @@ def wsdl_dir():
 
 
 def _safe_attr(obj, name, default=None):
-    return getattr(obj, name, default) if obj is not None else default
+    if obj is None:
+        return default
+    if isinstance(obj, Mapping):
+        if name in obj:
+            return obj[name]
+        lowered = str(name).lower()
+        for key, value in obj.items():
+            if str(key).lower() == lowered:
+                return value
+    try:
+        value = getattr(obj, name)
+    except (AttributeError, TypeError):
+        value = default
+    if value is not default:
+        return value
+    values = getattr(obj, "__values__", None)
+    if isinstance(values, Mapping):
+        return _safe_attr(values, name, default)
+    return default
 
 
 def _safe_text(value, max_length=160):
@@ -263,11 +298,13 @@ def _get_media_service(cam, candidates: list[str]):
 
 def _find_profile(media, profile_token):
     profiles = media.GetProfiles()
-    return next((p for p in profiles if getattr(p, "token", None) == profile_token), None)
+    return next((p for p in profiles if _safe_attr(p, "token") == profile_token), None)
 
 
 def _get_video_encoder_config_with_state(media, profile):
-    vec = _safe_attr(profile, "VideoEncoderConfiguration")
+    vec = _normalize_encoder_configuration(
+        _safe_attr(profile, "VideoEncoderConfiguration")
+    )
     if not vec:
         return None, "missing_video_encoder_configuration"
 
@@ -276,9 +313,16 @@ def _get_video_encoder_config_with_state(media, profile):
         return vec, None
 
     try:
-        return media.GetVideoEncoderConfiguration({"ConfigurationToken": token}), None
-    except Exception as e:
-        return vec, f"video_encoder_configuration_read_failed: {e.__class__.__name__}"
+        value = _normalize_encoder_configuration(
+            media.GetVideoEncoderConfiguration(
+                {"ConfigurationToken": token}
+            )
+        )
+        if value is None:
+            return vec, "video_encoder_configuration_unavailable"
+        return value, None
+    except Exception:
+        return vec, "video_encoder_configuration_read_failed"
 
 
 def _get_video_encoder_config_from_profile(media, profile):
@@ -600,12 +644,76 @@ def probe_onvif_device(host, port=80, username=None, password=None, rtsp_host=No
     }
 
 
+_MISSING = object()
+_OPTIONS_UNSET = object()
+
+
 def _as_list(value):
     if value is None:
         return []
     if isinstance(value, (list, tuple)):
         return list(value)
     return [value]
+
+
+def _unwrap_known_container(value, names: tuple[str, ...], *, require_single=False):
+    current = value
+    for _depth in range(4):
+        if isinstance(current, (list, tuple)):
+            if len(current) != 1:
+                return None if require_single else list(current)
+            current = current[0]
+            continue
+        nested = _MISSING
+        for name in names:
+            candidate = _safe_attr(current, name, _MISSING)
+            if candidate is not _MISSING and candidate is not current:
+                nested = candidate
+                break
+        if nested is _MISSING:
+            return current
+        current = nested
+    return current
+
+
+def _normalize_encoder_configuration(value):
+    return _unwrap_known_container(
+        value,
+        (
+            "Configuration",
+            "VideoEncoderConfiguration",
+            "GetVideoEncoderConfigurationResponse",
+        ),
+        require_single=True,
+    )
+
+
+def _normalize_encoder_options(value):
+    return _unwrap_known_container(
+        value,
+        (
+            "Options",
+            "VideoEncoderConfigurationOptions",
+            "GetVideoEncoderConfigurationOptionsResponse",
+        ),
+    )
+
+
+def _safe_set(obj, name: str, value) -> None:
+    if isinstance(obj, dict):
+        obj[name] = value
+        return
+    values = getattr(obj, "__values__", None)
+    if isinstance(values, dict) and name in values:
+        values[name] = value
+        return
+    try:
+        setattr(obj, name, value)
+    except (AttributeError, TypeError) as exc:
+        raise OnvifConfigurationError(
+            "video_encoder_configuration_shape_unsupported",
+            "The camera returned an unsupported ONVIF encoder configuration shape.",
+        ) from exc
 
 
 def _range_meta(value):
@@ -622,30 +730,79 @@ def _range_meta(value):
     return result
 
 
+def _option_roots(options):
+    roots = []
+    for item in _as_list(_normalize_encoder_options(options)):
+        if item is None:
+            continue
+        roots.append(item)
+        extension = _safe_attr(item, "Extension")
+        if extension is not None:
+            roots.extend(_as_list(extension))
+    return roots
+
+
 def _encoding_options(options, encoding):
     if not options or not encoding:
         return None
-    candidates = [str(encoding), str(encoding).upper(), str(encoding).lower()]
-    for candidate in candidates:
-        direct = _safe_attr(options, candidate)
-        if direct is not None:
-            return direct
-    return None
+    matches = []
+    candidates = {str(encoding).lower()}
+    for root in _option_roots(options):
+        for key in ("H264", "H265", "JPEG", "MPEG4"):
+            if key.lower() not in candidates:
+                continue
+            direct = _safe_attr(root, key)
+            if direct is not None:
+                matches.extend(_as_list(direct))
+    if not matches:
+        return None
+    return matches[0] if len(matches) == 1 else matches
 
 
 def _resolution_options(encoding_options):
     result = []
-    for item in _as_list(_safe_attr(encoding_options, "ResolutionsAvailable")):
-        width = _safe_attr(item, "Width")
-        height = _safe_attr(item, "Height")
-        if width and height:
-            value = f"{width}x{height}"
-            if value not in result:
-                result.append(value)
+    for option in _as_list(encoding_options):
+        for item in _as_list(_safe_attr(option, "ResolutionsAvailable")):
+            width = _safe_number(_safe_attr(item, "Width"))
+            height = _safe_number(_safe_attr(item, "Height"))
+            if width and height:
+                value = f"{int(width)}x{int(height)}"
+                if value not in result:
+                    result.append(value)
     return result
 
 
-def _field_meta(name: str, value, readable: bool = True, writable: bool = False, options=None, value_range=None):
+def _single_range(encoding_options, *names: str):
+    options = _as_list(encoding_options)
+    if len(options) != 1:
+        return None
+    for name in names:
+        value_range = _range_meta(_safe_attr(options[0], name))
+        if value_range is not None:
+            return value_range
+    return None
+
+
+def _top_level_range(options, name: str):
+    roots = [item for item in _as_list(_normalize_encoder_options(options)) if item is not None]
+    if len(roots) != 1:
+        return None
+    return _range_meta(_safe_attr(roots[0], name))
+
+
+def _field_meta(
+    name: str,
+    value,
+    readable: bool = True,
+    writable: bool = False,
+    options=None,
+    value_range=None,
+    *,
+    state: str | None = None,
+    reason_codes=None,
+):
+    if state is None:
+        state = "writable" if writable else "read_only" if readable else "unavailable"
     return {
         "name": name,
         "value": value,
@@ -653,6 +810,8 @@ def _field_meta(name: str, value, readable: bool = True, writable: bool = False,
         "writable": bool(writable),
         "options": options or [],
         "range": value_range,
+        "state": state,
+        "reason_codes": sorted(set(reason_codes or [])),
     }
 
 
@@ -700,154 +859,452 @@ def _validate_profile_config_request(config: dict, supported: dict) -> dict:
     return validated
 
 
-def _supported_video_fields(media, cfg) -> dict:
+def _configuration_token(cfg, profile=None):
+    for candidate in (
+        _safe_attr(cfg, "token"),
+        _safe_attr(cfg, "_token"),
+        _safe_attr(cfg, "ConfigurationToken"),
+        _safe_attr(_safe_attr(profile, "VideoEncoderConfiguration"), "token"),
+        _safe_attr(_safe_attr(profile, "VideoEncoderConfiguration"), "_token"),
+    ):
+        value = _safe_text(candidate, 255)
+        if value:
+            return value
+    return None
+
+
+def _codec_specific_config(cfg):
+    encoding = str(_safe_attr(cfg, "Encoding") or "").upper()
+    for name in (encoding, "H264", "H265", "MPEG4"):
+        if not name:
+            continue
+        value = _safe_attr(cfg, name)
+        if value is not None:
+            return value
+    return None
+
+
+def _config_values(cfg) -> dict:
     rc = _safe_attr(cfg, "RateControl")
     res = _safe_attr(cfg, "Resolution")
-    resolution = f"{_safe_attr(res, 'Width')}x{_safe_attr(res, 'Height')}" if res else None
-    options = _encoder_options(media, cfg)
-    encoding = _safe_attr(cfg, "Encoding")
+    codec_specific = _codec_specific_config(cfg)
+    width = _safe_number(_safe_attr(res, "Width"))
+    height = _safe_number(_safe_attr(res, "Height"))
+    resolution = (
+        f"{int(width)}x{int(height)}"
+        if width is not None and height is not None
+        else None
+    )
+    iframe_interval = _safe_number(_safe_attr(codec_specific, "GovLength"))
+    if iframe_interval is None:
+        iframe_interval = _safe_number(_safe_attr(rc, "EncodingInterval"))
+    return {
+        "codec": _safe_text(_safe_attr(cfg, "Encoding"), 40),
+        "width": width,
+        "height": height,
+        "resolution": resolution,
+        "fps": _safe_number(_safe_attr(rc, "FrameRateLimit")),
+        "bitrate": _safe_number(_safe_attr(rc, "BitrateLimit")),
+        "iframe_interval": iframe_interval,
+        "quality": _safe_number(_safe_attr(cfg, "Quality")),
+    }
+
+
+def _empty_config_values() -> dict:
+    return {
+        "codec": None,
+        "width": None,
+        "height": None,
+        "resolution": None,
+        "fps": None,
+        "bitrate": None,
+        "iframe_interval": None,
+        "quality": None,
+    }
+
+
+def _encoder_options_with_state(media, cfg, profile_token=None):
+    token = _configuration_token(cfg)
+    if media is None:
+        return None, "video_encoder_options_unavailable"
+    if not token and not profile_token:
+        return None, "video_encoder_configuration_token_unavailable"
+    payload = {}
+    if token:
+        payload["ConfigurationToken"] = token
+    if profile_token:
+        payload["ProfileToken"] = profile_token
+    try:
+        options = _normalize_encoder_options(
+            media.GetVideoEncoderConfigurationOptions(payload)
+        )
+    except Exception:
+        return None, "video_encoder_options_read_failed"
+    if options is None:
+        return None, "video_encoder_options_unavailable"
+    return options, None
+
+
+def _encoder_options(media, cfg, profile_token=None):
+    options, _reason = _encoder_options_with_state(media, cfg, profile_token)
+    return options
+
+
+def _supported_video_fields(
+    media,
+    cfg,
+    *,
+    profile_token=None,
+    config_token=None,
+    current_reason=None,
+    options=_OPTIONS_UNSET,
+    options_reason=None,
+) -> dict:
+    values = _config_values(cfg) if cfg is not None else _empty_config_values()
+    token = config_token or _configuration_token(cfg)
+    if options is _OPTIONS_UNSET:
+        options, options_reason = _encoder_options_with_state(
+            media,
+            cfg,
+            profile_token,
+        )
+    encoding = values["codec"]
     encoding_options = _encoding_options(options, encoding)
     codec_options = [
         codec
         for codec in ("H264", "H265", "JPEG", "MPEG4")
         if _encoding_options(options, codec) is not None
     ]
-
     resolution_options = _resolution_options(encoding_options)
-    fps_range = _range_meta(_safe_attr(encoding_options, "FrameRateRange"))
-    bitrate_range = _range_meta(_safe_attr(encoding_options, "BitrateRange"))
-    iframe_range = (
-        _range_meta(_safe_attr(encoding_options, "GovLengthRange"))
-        or _range_meta(_safe_attr(encoding_options, "EncodingIntervalRange"))
+    fps_range = _single_range(encoding_options, "FrameRateRange")
+    bitrate_range = _single_range(encoding_options, "BitrateRange")
+    iframe_range = _single_range(
+        encoding_options,
+        "GovLengthRange",
+        "EncodingIntervalRange",
     )
-    quality_range = _range_meta(_safe_attr(options, "QualityRange"))
-
-    return {
-        "codec": _field_meta("codec", encoding, bool(encoding), bool(codec_options), codec_options),
-        "resolution": _field_meta("resolution", resolution, bool(resolution), bool(resolution_options), resolution_options),
-        "fps": _field_meta("fps", _safe_attr(rc, "FrameRateLimit"), _safe_attr(rc, "FrameRateLimit") is not None, bool(fps_range), value_range=fps_range),
-        "bitrate": _field_meta("bitrate", _safe_attr(rc, "BitrateLimit"), _safe_attr(rc, "BitrateLimit") is not None, bool(bitrate_range), value_range=bitrate_range),
-        "iframe_interval": _field_meta("iframe_interval", _safe_attr(rc, "EncodingInterval"), _safe_attr(rc, "EncodingInterval") is not None, bool(iframe_range), value_range=iframe_range),
-        "quality": _field_meta("quality", _safe_attr(cfg, "Quality"), _safe_attr(cfg, "Quality") is not None, bool(quality_range), value_range=quality_range),
+    quality_range = _top_level_range(options, "QualityRange")
+    capabilities = {
+        "codec": (codec_options, None),
+        "resolution": (resolution_options, None),
+        "fps": ([], fps_range),
+        "bitrate": ([], bitrate_range),
+        "iframe_interval": ([], iframe_range),
+        "quality": ([], quality_range),
     }
 
+    result = {}
+    for name in ONVIF_VIDEO_CONFIG_FIELDS:
+        value = values[name]
+        readable = current_reason is None and value not in (None, "")
+        field_options, value_range = capabilities[name]
+        capability = bool(field_options or value_range)
+        reasons = []
+        if current_reason:
+            reasons.append(current_reason)
+            state = "error" if current_reason.endswith("read_failed") else "unavailable"
+        elif not readable:
+            reasons.append(f"video_encoder_{name}_current_unavailable")
+            state = "unavailable"
+        elif not token:
+            reasons.append("video_encoder_configuration_token_unavailable")
+            state = "unavailable"
+        elif options_reason:
+            reasons.append(options_reason)
+            state = "error" if options_reason.endswith("read_failed") else "unavailable"
+        elif not capability:
+            reasons.append(f"video_encoder_{name}_unsupported")
+            state = "unsupported"
+        else:
+            state = "writable"
+        writable = bool(readable and token and capability and not options_reason)
+        result[name] = _field_meta(
+            name,
+            value,
+            readable,
+            writable,
+            field_options,
+            value_range,
+            state=state,
+            reason_codes=reasons,
+        )
+    return result
 
-def _encoder_options(media, cfg):
-    token = _safe_attr(cfg, "token")
+
+def _get_video_encoder_config_truth(media, profile):
+    embedded = _normalize_encoder_configuration(
+        _safe_attr(profile, "VideoEncoderConfiguration")
+    )
+    if embedded is None:
+        return None, None, "video_encoder_configuration_unavailable"
+    token = _configuration_token(embedded, profile)
     if not token:
-        return None
+        return embedded, None, None
     try:
-        return media.GetVideoEncoderConfigurationOptions({"ConfigurationToken": token})
+        cfg = _normalize_encoder_configuration(
+            media.GetVideoEncoderConfiguration(
+                {"ConfigurationToken": token}
+            )
+        )
     except Exception:
-        return None
+        return None, token, "video_encoder_configuration_read_failed"
+    if cfg is None:
+        return None, token, "video_encoder_configuration_unavailable"
+    returned_token = _configuration_token(cfg)
+    if returned_token and returned_token != token:
+        return None, token, "video_encoder_configuration_token_mismatch"
+    return cfg, token, None
+
+
+def _profile_config_payload(
+    media,
+    profile,
+    profile_token,
+    selected_media_xaddr,
+    *,
+    cfg=None,
+    config_token=None,
+    current_reason=None,
+):
+    if cfg is None and current_reason is None:
+        cfg, config_token, current_reason = _get_video_encoder_config_truth(
+            media,
+            profile,
+        )
+    options = None
+    options_reason = None
+    if current_reason is None:
+        options, options_reason = _encoder_options_with_state(
+            media,
+            cfg,
+            profile_token,
+        )
+    supported = _supported_video_fields(
+        media,
+        cfg,
+        profile_token=profile_token,
+        config_token=config_token,
+        current_reason=current_reason,
+        options=options,
+        options_reason=options_reason,
+    )
+    reason_codes = sorted(
+        {
+            reason
+            for meta in supported.values()
+            for reason in meta.get("reason_codes", [])
+        }
+    )
+    if current_reason:
+        status = "error" if current_reason.endswith("read_failed") or current_reason.endswith("mismatch") else "unavailable"
+    elif not config_token:
+        status = "unavailable"
+    elif options_reason:
+        status = "error" if options_reason.endswith("read_failed") else "unavailable"
+    elif not any(meta["readable"] for meta in supported.values()):
+        status = "unavailable"
+    elif any(meta["writable"] for meta in supported.values()):
+        status = "ok"
+    else:
+        status = "unsupported"
+    return {
+        "profile_token": profile_token,
+        "name": _safe_text(_safe_attr(profile, "Name"), 255),
+        "media_service_xaddr": selected_media_xaddr,
+        "status": status,
+        "reason_codes": reason_codes,
+        "current_read": current_reason is None and cfg is not None,
+        "options_read": options_reason is None and options is not None,
+        "config": _config_values(cfg) if cfg is not None else _empty_config_values(),
+        "supported": supported,
+    }
 
 
 def get_onvif_profile_config(host, port, username, password, profile_token):
     cam, media_candidates = _prepare_camera(host, port, username, password)
     media, selected_media_xaddr = _get_media_service(cam, media_candidates)
-
     profile = _find_profile(media, profile_token)
     if not profile:
-        raise Exception("Профиль не найден")
+        raise OnvifConfigurationError(
+            "onvif_profile_not_found",
+            "The selected ONVIF profile is unavailable.",
+        )
+    return _profile_config_payload(
+        media,
+        profile,
+        profile_token,
+        selected_media_xaddr,
+    )
 
-    cfg = _get_video_encoder_config_from_profile(media, profile)
 
-    if not cfg:
-        return {
-            "profile_token": profile_token,
-            "name": _safe_attr(profile, "Name"),
-            "media_service_xaddr": selected_media_xaddr,
-            "config": {
-                "codec": None,
-                "width": None,
-                "height": None,
-                "resolution": None,
-                "fps": None,
-                "bitrate": None,
-                "iframe_interval": None,
-                "quality": None,
-            },
-            "supported": {},
-        }
+def _normalize_requested_value(name: str, value):
+    if name in {"fps", "bitrate", "iframe_interval"}:
+        return int(value)
+    if name == "quality":
+        return float(value)
+    return str(value)
 
-    rc = _safe_attr(cfg, "RateControl")
-    res = _safe_attr(cfg, "Resolution")
-    resolution = f"{_safe_attr(res, 'Width')}x{_safe_attr(res, 'Height')}" if res else None
-    supported = _supported_video_fields(media, cfg)
 
-    return {
-        "profile_token": profile_token,
-        "name": _safe_attr(profile, "Name"),
-        "media_service_xaddr": selected_media_xaddr,
-        "config": {
-            "codec": _safe_attr(cfg, "Encoding"),
-            "width": _safe_attr(res, "Width"),
-            "height": _safe_attr(res, "Height"),
-            "resolution": resolution,
-            "fps": _safe_attr(rc, "FrameRateLimit"),
-            "bitrate": _safe_attr(rc, "BitrateLimit"),
-            "iframe_interval": _safe_attr(rc, "EncodingInterval"),
-            "quality": _safe_attr(cfg, "Quality"),
-        },
-        "supported": supported,
-    }
+def _config_values_equal(name: str, left, right) -> bool:
+    if left is None or right is None:
+        return left is right
+    if name in {"fps", "bitrate", "iframe_interval", "quality"}:
+        try:
+            return abs(float(left) - float(right)) < 1e-9
+        except (TypeError, ValueError):
+            return False
+    return str(left).strip().lower() == str(right).strip().lower()
+
+
+def _apply_video_config_diff(cfg, requested: dict) -> None:
+    if "codec" in requested:
+        _safe_set(cfg, "Encoding", str(requested["codec"]))
+    if "resolution" in requested:
+        resolution = str(requested["resolution"])
+        if "x" not in resolution.lower():
+            raise OnvifConfigurationError(
+                "video_encoder_resolution_invalid",
+                "The requested ONVIF resolution is invalid.",
+            )
+        width, height = resolution.lower().split("x", 1)
+        target = _safe_attr(cfg, "Resolution")
+        if target is None:
+            raise OnvifConfigurationError(
+                "video_encoder_configuration_shape_unsupported",
+                "The camera did not return a writable resolution object.",
+            )
+        _safe_set(target, "Width", int(width.strip()))
+        _safe_set(target, "Height", int(height.strip()))
+    rate_control = _safe_attr(cfg, "RateControl")
+    if {"fps", "bitrate"}.intersection(requested) and rate_control is None:
+        raise OnvifConfigurationError(
+            "video_encoder_configuration_shape_unsupported",
+            "The camera did not return a writable rate-control object.",
+        )
+    if "fps" in requested:
+        _safe_set(rate_control, "FrameRateLimit", int(requested["fps"]))
+    if "bitrate" in requested:
+        _safe_set(rate_control, "BitrateLimit", int(requested["bitrate"]))
+    if "iframe_interval" in requested:
+        codec_specific = _codec_specific_config(cfg)
+        if codec_specific is not None and _safe_attr(codec_specific, "GovLength") is not None:
+            _safe_set(codec_specific, "GovLength", int(requested["iframe_interval"]))
+        elif rate_control is not None and _safe_attr(rate_control, "EncodingInterval") is not None:
+            _safe_set(rate_control, "EncodingInterval", int(requested["iframe_interval"]))
+        else:
+            raise OnvifConfigurationError(
+                "video_encoder_configuration_shape_unsupported",
+                "The camera did not return a writable I-frame interval.",
+            )
+    if "quality" in requested:
+        _safe_set(cfg, "Quality", float(requested["quality"]))
 
 
 def update_onvif_profile(host, port, username, password, profile_token, config):
     cam, media_candidates = _prepare_camera(host, port, username, password)
     media, selected_media_xaddr = _get_media_service(cam, media_candidates)
-
     profile = _find_profile(media, profile_token)
     if not profile:
-        raise Exception("Профиль не найден")
-
-    cfg = _get_video_encoder_config_from_profile(media, profile)
-    if not cfg:
-        raise Exception("Не удалось получить VideoEncoderConfiguration")
-
-    supported = _supported_video_fields(media, cfg)
-    config = _validate_profile_config_request(config or {}, supported)
-
-    if config.get("codec"):
-        cfg.Encoding = str(config["codec"])
-
-    resolution = config.get("resolution")
-    if resolution and "x" in str(resolution).lower():
-        width_value, height_value = str(resolution).lower().split("x", 1)
-        config["width"] = int(width_value.strip())
-        config["height"] = int(height_value.strip())
-
-    if config.get("width") and config.get("height"):
-        if not getattr(cfg, "Resolution", None):
-            raise Exception("Камера не отдала Resolution в ONVIF-конфиге")
-        cfg.Resolution.Width = int(config["width"])
-        cfg.Resolution.Height = int(config["height"])
-
-    rate_control_fields = {"fps", "bitrate", "iframe_interval"}
-    if rate_control_fields.intersection(config) and not getattr(cfg, "RateControl", None):
-        raise Exception("Камера не отдала RateControl в ONVIF-конфиге")
-
-    if config.get("fps") and getattr(cfg, "RateControl", None):
-        cfg.RateControl.FrameRateLimit = int(config["fps"])
-
-    if config.get("bitrate") and getattr(cfg, "RateControl", None):
-        cfg.RateControl.BitrateLimit = int(config["bitrate"])
-
-    if config.get("iframe_interval") and getattr(cfg, "RateControl", None):
-        cfg.RateControl.EncodingInterval = int(config["iframe_interval"])
-
-    if config.get("quality") not in (None, ""):
-        cfg.Quality = float(config["quality"])
-
-    media.SetVideoEncoderConfiguration({
-        "Configuration": cfg,
-        "ForcePersistence": True
-    })
-
-    return {
-        "ok": True,
-        "media_service_xaddr": selected_media_xaddr,
+        raise OnvifConfigurationError(
+            "onvif_profile_not_found",
+            "The selected ONVIF profile is unavailable.",
+        )
+    cfg, config_token, current_reason = _get_video_encoder_config_truth(
+        media,
+        profile,
+    )
+    if current_reason or cfg is None or not config_token:
+        raise OnvifConfigurationError(
+            current_reason or "video_encoder_configuration_token_unavailable",
+            "The current ONVIF encoder configuration cannot be read safely.",
+        )
+    supported = _supported_video_fields(
+        media,
+        cfg,
+        profile_token=profile_token,
+        config_token=config_token,
+    )
+    requested = _validate_profile_config_request(config or {}, supported)
+    current_values = _config_values(cfg)
+    changed = {
+        name: _normalize_requested_value(name, value)
+        for name, value in requested.items()
+        if not _config_values_equal(name, current_values.get(name), value)
     }
+    if not changed:
+        payload = _profile_config_payload(
+            media,
+            profile,
+            profile_token,
+            selected_media_xaddr,
+            cfg=cfg,
+            config_token=config_token,
+        )
+        payload.update(
+            {
+                "ok": True,
+                "changed": False,
+                "changed_fields": [],
+                "verification": {"status": "not_needed", "matched": True},
+            }
+        )
+        return payload
+
+    try:
+        vendor_configuration = copy.deepcopy(cfg)
+    except Exception:
+        vendor_configuration = cfg
+    _apply_video_config_diff(vendor_configuration, changed)
+    try:
+        media.SetVideoEncoderConfiguration(
+            {
+                "Configuration": vendor_configuration,
+                "ForcePersistence": True,
+            }
+        )
+    except Exception as exc:
+        raise OnvifConfigurationError(
+            "video_encoder_configuration_set_failed",
+            "The camera refused the ONVIF encoder configuration update.",
+        ) from exc
+
+    verified_cfg, verified_token, verified_reason = _get_video_encoder_config_truth(
+        media,
+        profile,
+    )
+    if verified_reason or verified_cfg is None:
+        raise OnvifConfigurationError(
+            verified_reason or "video_encoder_configuration_verify_failed",
+            "The updated ONVIF encoder configuration could not be verified.",
+        )
+    verified_values = _config_values(verified_cfg)
+    mismatched = [
+        name
+        for name, value in changed.items()
+        if not _config_values_equal(name, verified_values.get(name), value)
+    ]
+    if mismatched:
+        raise OnvifConfigurationError(
+            "video_encoder_configuration_mismatch",
+            "The camera returned different encoder values after the update.",
+        )
+    payload = _profile_config_payload(
+        media,
+        profile,
+        profile_token,
+        selected_media_xaddr,
+        cfg=verified_cfg,
+        config_token=verified_token or config_token,
+    )
+    payload.update(
+        {
+            "ok": True,
+            "changed": True,
+            "changed_fields": sorted(changed),
+            "verification": {"status": "matched", "matched": True},
+        }
+    )
+    return payload
 
 
 def _ptz_limits() -> dict:
@@ -1227,6 +1684,38 @@ def check_onvif_events_feasibility(host, port, username, password) -> dict:
     }
 
 
+def select_profile_config_health_target(camera, profiles: list[dict]) -> dict:
+    assigned = _safe_text(getattr(camera, "onvif_profile_token", None), 255)
+    tokens = {
+        _safe_text(item.get("token"), 255)
+        for item in profiles
+        if isinstance(item, dict) and _safe_text(item.get("token"), 255)
+    }
+    if assigned:
+        if assigned in tokens:
+            return {
+                "profile_token": assigned,
+                "source": "assigned_main",
+                "reason_codes": [],
+            }
+        return {
+            "profile_token": None,
+            "source": "assigned_main",
+            "reason_codes": ["assigned_main_profile_not_reported"],
+        }
+    if len(tokens) == 1:
+        return {
+            "profile_token": next(iter(tokens)),
+            "source": "single_profile_fallback",
+            "reason_codes": ["main_assignment_missing_single_profile_fallback"],
+        }
+    return {
+        "profile_token": None,
+        "source": "none",
+        "reason_codes": ["profile_config_exact_profile_unavailable"],
+    }
+
+
 def build_onvif_health_contract(
     camera,
     *,
@@ -1234,6 +1723,8 @@ def build_onvif_health_contract(
     profiles_result: dict | None = None,
     ptz_result: dict | None = None,
     events_result: dict | None = None,
+    profile_config_result: dict | None = None,
+    profile_config_checked: bool = False,
     check_performed: bool = False,
     checked_at: str | None = None,
 ) -> dict:
@@ -1259,7 +1750,40 @@ def build_onvif_health_contract(
         media_domain = compatibility_domain("ok" if profiles else "warning", [] if profiles else ["profiles_empty"], "real_runtime", profile_count=len(profiles))
         stream_status = "ok" if any(item.get("stream_path") for item in profiles) else "warning"
         stream_domain = compatibility_domain(stream_status, [] if stream_status == "ok" else ["stream_uri_path_unavailable"], "real_runtime")
-        config_domain = compatibility_domain("ok", [], "real_runtime")
+        if profile_config_checked and profile_config_result:
+            config_status = str(profile_config_result.get("status") or "error")
+            if config_status == "ok":
+                domain_status = "ok"
+            elif config_status == "unsupported":
+                domain_status = "unsupported"
+            else:
+                domain_status = "error"
+            config_domain = compatibility_domain(
+                domain_status,
+                profile_config_result.get("reason_codes") or [],
+                "real_runtime",
+                profile_token=profile_config_result.get("profile_token"),
+                profile_source=profile_config_result.get("profile_source"),
+                current_read=bool(profile_config_result.get("current_read")),
+                options_read=bool(profile_config_result.get("options_read")),
+                writable_fields=sorted(
+                    name
+                    for name, meta in (profile_config_result.get("supported") or {}).items()
+                    if isinstance(meta, dict) and meta.get("writable") is True
+                ),
+            )
+        elif profile_config_checked:
+            config_domain = compatibility_domain(
+                "error",
+                ["profile_config_check_failed"],
+                "real_runtime",
+            )
+        else:
+            config_domain = compatibility_domain(
+                "not_checked",
+                ["profile_config_not_checked"],
+                "not_checked",
+            )
     elif protocol == "onvif" and check_performed:
         media_domain = compatibility_domain("error", ["profiles_unavailable"], "real_runtime", profile_count=0)
         stream_domain = compatibility_domain("unknown", ["stream_uri_not_checked"], "real_runtime")

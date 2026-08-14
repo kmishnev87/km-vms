@@ -28,7 +28,19 @@ def _write_stable_runtime_fixture(root: Path) -> None:
         / "data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
     )
     bootstrap.parent.mkdir(parents=True, exist_ok=True)
-    bootstrap.write_text("# stable bootstrap fixture\n", encoding="utf-8")
+    bootstrap.write_text(
+        "from pathlib import Path\n"
+        "def read_project_name(app_dir, supplied=None):\n"
+        "    if supplied:\n"
+        "        return str(supplied)\n"
+        "    for line in (Path(app_dir) / '.env').read_text(encoding='utf-8').splitlines():\n"
+        "        if line.startswith('COMPOSE_PROJECT_NAME='):\n"
+        "            value = line.split('=', 1)[1].strip()\n"
+        "            if value:\n"
+        "                return value\n"
+        "    raise RuntimeError('project identity unavailable')\n",
+        encoding="utf-8",
+    )
 
 
 PERMISSION_EXECUTABLE_FIXTURE_FILES = (
@@ -116,6 +128,7 @@ def _write_update_shell_fixture(tmp_path: Path, *, compose_function: str, commit
         (root / "scripts/km-vms-compose-common.sh").write_text(
             compose_function
             + "\n"
+            + "km_vms_resolve_project_name() { if [ -n \"${2:-}\" ]; then printf '%s\\n' \"$2\"; else printf '%s\\n' kmvmsfixture; fi; }\n"
             + "km_vms_resolve_product_source() { printf '%s\\n' \"$1\"; }\n"
             + "km_vms_compose_for_source() { shift 2; km_vms_compose_cmd \"$@\"; }\n",
             encoding="utf-8",
@@ -474,6 +487,7 @@ def test_update_helper_resolves_update_script_from_canonical_active_source(tmp_p
         encoding="utf-8",
     )
     _write_stable_runtime_fixture(app_dir)
+    helper.HOST_APP_DIR = app_dir
 
     slot_id = f"release-{'a' * 40}"
     slot_root = app_dir / "data" / "update-runtime" / "slots" / slot_id
@@ -1208,6 +1222,7 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
                             [
                                 "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
                                 "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; if [ \"$1\" = \"exec\" ]; then echo complete; return 0; fi; :; }",
+                                "km_vms_resolve_project_name() { if [ -n \"${2:-}\" ]; then printf '%s\\n' \"$2\"; else printf '%s\\n' kmvmsfixture; fi; }",
                                 "km_vms_resolve_product_source() { printf '%s\\n' \"$1\"; }",
                                 "km_vms_compose_for_source() { shift 2; km_vms_compose_cmd \"$@\"; }",
                         ]
@@ -1286,6 +1301,7 @@ def test_update_dry_run_never_copies_acquired_source_into_stable_app():
                             [
                                 "km_vms_detect_compose() { COMPOSE_KIND=stub; COMPOSE_BIN=stub; COMPOSE_SOURCE=stub; }",
                                 "km_vms_compose_cmd() { if [ \"$1\" = \"--env-file\" ]; then shift 2; fi; if [ \"$1\" = \"config\" ] && [ ! -f .km-vms-release.json ]; then echo missing release identity before compose config >&2; return 42; fi; if [ \"$1\" = \"exec\" ]; then echo complete; return 0; fi; :; }",
+                                "km_vms_resolve_project_name() { if [ -n \"${2:-}\" ]; then printf '%s\\n' \"$2\"; else printf '%s\\n' kmvmsfixture; fi; }",
                                 "km_vms_resolve_product_source() { printf '%s\\n' \"$1\"; }",
                                 "km_vms_compose_for_source() { shift 2; km_vms_compose_cmd \"$@\"; }",
                         ]
@@ -1485,10 +1501,12 @@ def test_update_permission_bridge_separates_existing_and_target_gates_without_st
     script = read("scripts/update.sh")
     bridge = read("scripts/km-vms-update-helper-bridge.py")
 
-    assert '--contract source --check --app-dir "$PRODUCT_SOURCE_DIR"' in script
-    assert '--contract stable-runtime --fix --app-dir "$APP_DIR"' in script
+    assert '--contract source --check --app-dir "$PRODUCT_SOURCE_DIR"' not in script
+    assert '--contract stable-runtime --fix --app-dir "$APP_DIR"' not in script
     assert '--contract source --check --app-dir "$TMP_ROOT/source"' in script
     assert "install_stable_bootstrap_for_handoff" in bridge
+    assert "classify_installed_update_contract" in bridge
+    assert "pre_contract_slot" in bridge
     assert "stable-prebootstrap" in bridge
     assert "stable-runtime" in bridge
     assert "--preflight-existing" not in script[script.index("preflight_permission_policy()") : script.index("apply_permission_policy()")]
@@ -1496,7 +1514,7 @@ def test_update_permission_bridge_separates_existing_and_target_gates_without_st
     assert script.count('UPDATE_HELPER_REFRESH_SCHEDULED=0') == 1
 
     main = script[script.index('confirm "Apply KM VMS update now?"') :]
-    preflight_i = main.index("\npreflight_permission_policy\n")
+    target_preflight_i = main.index("\npreflight_permission_policy\n")
     handoff_i = main.index("\nprepare_schema_handoff\n")
     target_i = main.index("\nprepare_trusted_target_slot\n")
     activation_i = main.index("\nactivate_trusted_target_slot\n")
@@ -1504,7 +1522,7 @@ def test_update_permission_bridge_separates_existing_and_target_gates_without_st
         '\nwrite_update_metadata "success" ""\n'
     )
     assert (
-        preflight_i
+        target_preflight_i
         < handoff_i
         < target_i
         < activation_i

@@ -182,7 +182,7 @@ capture_safe_bridge_failure_category() {
     )
   fi
   case "$category" in
-    slot_adoption_conflict|installed_contract_unknown|project_identity_ambiguous|project_identity_conflict|project_identity_missing|project_identity_recovery_required)
+    slot_adoption_conflict)
       FAILURE_CATEGORY="$category"
       ;;
     *)
@@ -1126,12 +1126,15 @@ run_trusted_permission_gate() {
 
 preflight_permission_policy() {
   PHASE="permission_preflight"
-  write_helper_progress "running" "Validating the trusted target permission contract."
-  # Installed source and stable-runtime validation belong to the target-owned
-  # compatibility handoff.  Applying current-generation CLI or bootstrap
-  # requirements before that handoff prevents older supported families from
-  # reaching their adapter.
-  preflight_target_permission_policy
+  write_helper_progress "running" "Validating selected source and stable runtime permissions."
+  current_gate="$PRODUCT_SOURCE_DIR/scripts/km-vms-permission-gate.sh"
+  [ -f "$current_gate" ] && [ ! -L "$current_gate" ] ||
+    fail "Selected source permission gate is unavailable."
+  sh "$current_gate" --contract source --check --app-dir "$PRODUCT_SOURCE_DIR" ||
+    fail "Selected source permission validation failed."
+  sh "$TMP_ROOT/source/scripts/km-vms-permission-gate.sh" \
+    --contract stable-runtime --fix --app-dir "$APP_DIR" ||
+    fail "Stable runtime permission validation failed."
 }
 
 apply_permission_policy() {
@@ -1189,18 +1192,6 @@ prepare_schema_handoff() {
   printf '%s' "$PREVIOUS_SLOT_ID" |
     grep -Eq '^(release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})$' ||
     fail "Schema handoff returned no exact previous release slot."
-  resolved_project_name=$(
-    sed -n 's/^resolved_project_name=//p' "$handoff_output" | tail -n 1
-  )
-  safe_project_name "$resolved_project_name"
-  [ -n "$resolved_project_name" ] ||
-    fail "Schema handoff returned no Compose project identity."
-  if [ -n "$PROJECT_NAME" ] && [ "$PROJECT_NAME" != "$resolved_project_name" ]; then
-    fail "Schema handoff returned a contradictory Compose project identity."
-  fi
-  PROJECT_NAME="$resolved_project_name"
-  KM_VMS_PROJECT_NAME="$PROJECT_NAME"
-  export KM_VMS_PROJECT_NAME
 }
 
 prepare_trusted_target_slot() {
@@ -1811,14 +1802,12 @@ print_plan() {
 PHASE="init"
 write_helper_progress "running" "Starting update."
 validate_app_dir
+PROJECT_NAME="${PROJECT_NAME:-$(read_env_value COMPOSE_PROJECT_NAME)}"
+safe_project_name "$PROJECT_NAME"
 if [ "$DRY_RUN" != "1" ]; then
   acquire_lock
 fi
 load_compose_common
-PROJECT_NAME=$(km_vms_resolve_project_name "$APP_DIR" "$PROJECT_NAME")
-safe_project_name "$PROJECT_NAME"
-KM_VMS_PROJECT_NAME="$PROJECT_NAME"
-export KM_VMS_PROJECT_NAME
 PRODUCT_SOURCE_DIR=$(km_vms_resolve_product_source "$APP_DIR")
 acquire_source
 validate_source_tree
@@ -1834,6 +1823,7 @@ fi
 confirm "Apply KM VMS update now?"
 ensure_activation_request_id
 preflight_permission_policy
+preflight_target_permission_policy
 prepare_schema_handoff
 normalize_legacy_schema_override_service
 staged_compose_config

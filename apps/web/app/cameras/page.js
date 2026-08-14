@@ -13,6 +13,12 @@ import {
   loadCamerasViewMode,
   saveCamerasViewMode,
 } from "../../lib/cameraStage16";
+import {
+  buildOnvifConfigDiff,
+  normalizeOnvifConfigError,
+  onvifConfigFromResult,
+  onvifConfigTruthState,
+} from "../../lib/cameraOnvifConfig";
 import { useI18n, useLocaleText } from "../../lib/i18n";
 
 const initialForm = {
@@ -148,8 +154,12 @@ function writableSettings(supported = {}) {
   return Object.values(supported || {}).filter((item) => item?.writable);
 }
 
-function canApplyOnvifSettings(config, profileToken) {
-  return Boolean(profileToken && writableSettings(config?.supported).length);
+function canApplyOnvifSettings(config, baseline, profileToken) {
+  return Boolean(
+    profileToken
+    && writableSettings(config?.supported).length
+    && Object.keys(buildOnvifConfigDiff(config, baseline, config?.supported)).length
+  );
 }
 
 function profileSettingMeta(supported = {}, key) {
@@ -171,6 +181,15 @@ function profileSettingState(meta, value, requiresOptions = false) {
   if (meta?.writable) return "editable";
   if (meta?.readable || value) return "readonly";
   return "unavailable";
+}
+
+function onvifConfigTruthLabel(state, copy) {
+  if (state === "changed") return copy.profileConfigChanged;
+  if (state === "verified") return copy.profileConfigVerified;
+  if (state === "mismatch") return copy.profileConfigMismatch;
+  if (state === "unavailable") return copy.profileConfigUnavailable;
+  if (state === "current") return copy.profileConfigCurrent;
+  return copy.profileConfigNotChecked;
 }
 
 function configVideo(profile) {
@@ -275,21 +294,9 @@ function profileAssignmentSummary(profile, fallbackPath, copy = {}) {
   return parts.join(" / ");
 }
 
-function configFromResult(result) {
-  return {
-    codec: result.config?.codec || "",
-    resolution: result.config?.resolution || (result.config?.width && result.config?.height ? `${result.config.width}x${result.config.height}` : ""),
-    fps: result.config?.fps || "",
-    bitrate: result.config?.bitrate || "",
-    iframe_interval: result.config?.iframe_interval || "",
-    quality: result.config?.quality || "",
-    supported: result.supported || {},
-  };
-}
-
 function mergeProfileConfig(profile, result) {
   if (!profile || profile.token !== result?.profile_token) return profile;
-  const current = configFromResult(result);
+  const current = onvifConfigFromResult(result);
   const resolution = current.resolution || profileResolution(profile);
   const [width, height] = resolution && resolution.includes("x") ? resolution.split("x") : [null, null];
   return {
@@ -475,6 +482,8 @@ export default function CamerasPage() {
   const [onvifData, setOnvifData] = useState(null);
   const [onvifConfigBusy, setOnvifConfigBusy] = useState(false);
   const [onvifConfig, setOnvifConfig] = useState(initialOnvifConfig);
+  const [onvifConfigBaseline, setOnvifConfigBaseline] = useState(initialOnvifConfig);
+  const [onvifConfigTruth, setOnvifConfigTruth] = useState("not_checked");
   const [selectedOnvifProfileToken, setSelectedOnvifProfileToken] = useState("");
   const [onvifStatus, setOnvifStatus] = useState("");
   const [operationToast, setOperationToast] = useState(null);
@@ -561,7 +570,14 @@ export default function CamerasPage() {
   }
 
   function patchOnvifConfig(key, value) {
-    setOnvifConfig((prev) => ({ ...prev, [key]: value }));
+    setOnvifConfig((prev) => {
+      const next = { ...prev, [key]: value };
+      const changed = Object.keys(
+        buildOnvifConfigDiff(next, onvifConfigBaseline, next.supported)
+      ).length > 0;
+      setOnvifConfigTruth(changed ? "changed" : "current");
+      return next;
+    });
   }
 
   function updateProfileConfigState(result) {
@@ -599,6 +615,8 @@ export default function CamerasPage() {
     setOnvifDiscovery(null);
     setOnvifData(null);
     setOnvifConfig(initialOnvifConfig);
+    setOnvifConfigBaseline(initialOnvifConfig);
+    setOnvifConfigTruth("not_checked");
     setSelectedOnvifProfileToken("");
     setOnvifStatus("");
     setShowEditor(true);
@@ -642,6 +660,8 @@ export default function CamerasPage() {
     setOnvifDiscovery(null);
     setOnvifData(null);
     setOnvifConfig(initialOnvifConfig);
+    setOnvifConfigBaseline(initialOnvifConfig);
+    setOnvifConfigTruth("not_checked");
     setSelectedOnvifProfileToken(camera.onvif_profile_token || "");
     setOnvifStatus("");
     setShowEditor(true);
@@ -883,10 +903,14 @@ export default function CamerasPage() {
       });
 
       setSelectedOnvifProfileToken(profileToken);
-      setOnvifConfig(configFromResult(result));
+      const snapshot = onvifConfigFromResult(result);
+      setOnvifConfig(snapshot);
+      setOnvifConfigBaseline(snapshot);
+      setOnvifConfigTruth(onvifConfigTruthState(result));
       updateProfileConfigState(result);
       return result;
     } catch (err) {
+      setOnvifConfigTruth("unavailable");
       setError(normalizeCameraError(err.message, copy));
       return null;
     } finally {
@@ -904,20 +928,17 @@ export default function CamerasPage() {
     setError("");
     setOnvifConfigBusy(true);
     try {
-      const supported = onvifConfig.supported || {};
-      const config = {};
-      if (supported.codec?.writable && supported.codec?.options?.length && onvifConfig.codec) config.codec = onvifConfig.codec;
-      if (supported.resolution?.writable && onvifConfig.resolution) config.resolution = onvifConfig.resolution;
-      if (supported.fps?.writable && onvifConfig.fps) config.fps = Number(onvifConfig.fps);
-      if (supported.bitrate?.writable && onvifConfig.bitrate) config.bitrate = Number(onvifConfig.bitrate);
-      if (supported.iframe_interval?.writable && onvifConfig.iframe_interval) config.iframe_interval = Number(onvifConfig.iframe_interval);
-      if (supported.quality?.writable && onvifConfig.quality !== "") config.quality = Number(onvifConfig.quality);
+      const config = buildOnvifConfigDiff(
+        onvifConfig,
+        onvifConfigBaseline,
+        onvifConfig.supported,
+      );
       if (!Object.keys(config).length) {
-        setError(copy.noWritableOnvifSettings);
+        setOnvifConfigTruth("current");
         return;
       }
 
-      await apiFetch("/cameras/onvif/update_profile", {
+      const result = await apiFetch("/cameras/onvif/update_profile", {
         method: "POST",
         body: JSON.stringify({
           camera_id: editingCameraId || null,
@@ -930,10 +951,21 @@ export default function CamerasPage() {
         }),
         headers: { "Content-Type": "application/json" },
       });
-
-      await loadOnvifProfileConfig(profileToken);
+      const snapshot = onvifConfigFromResult(result);
+      setOnvifConfig(snapshot);
+      setOnvifConfigBaseline(snapshot);
+      setOnvifConfigTruth(result?.verification?.matched ? "verified" : onvifConfigTruthState(result));
+      updateProfileConfigState(result);
     } catch (err) {
-      setError(normalizeCameraError(err.message, copy));
+      setOnvifConfigTruth(
+        err?.code === "video_encoder_configuration_mismatch"
+          ? "mismatch"
+          : "unavailable"
+      );
+      setError(
+        normalizeOnvifConfigError(err, copy)
+          ?? normalizeCameraError(err.message, copy)
+      );
     } finally {
       setOnvifConfigBusy(false);
     }
@@ -968,6 +1000,8 @@ export default function CamerasPage() {
       setOnvifDiscovery(null);
       setOnvifData(null);
       setOnvifConfig(initialOnvifConfig);
+      setOnvifConfigBaseline(initialOnvifConfig);
+      setOnvifConfigTruth("not_checked");
       setSelectedOnvifProfileToken("");
       setOnvifStatus("");
       await load();
@@ -1030,7 +1064,11 @@ export default function CamerasPage() {
     }
   }
 
-  const canApplySelectedOnvifSettings = canApplyOnvifSettings(onvifConfig, selectedOnvifProfileToken);
+  const canApplySelectedOnvifSettings = canApplyOnvifSettings(
+    onvifConfig,
+    onvifConfigBaseline,
+    selectedOnvifProfileToken,
+  );
   const formStreamOptions = availableCameraStreams(form);
   const onvifProfiles = onvifData?.profiles || [];
   const selectedOnvifProfile = profileByToken(onvifData, selectedOnvifProfileToken || form.onvif_profile_token);
@@ -1554,9 +1592,14 @@ export default function CamerasPage() {
                     <h3>{copy.selectedProfileSettings}</h3>
                     <p>{copy.writableOnlyHint}</p>
                   </div>
-                  <button className="button secondary small" onClick={applyOnvifProfileConfig} disabled={onvifConfigBusy || !canApplySelectedOnvifSettings}>
-                    {onvifConfigBusy ? copy.applying : copy.applyProfileSettings}
-                  </button>
+                  <div className="cameraSettingsTruthActions">
+                    <span className={`cameraSettingsTruth ${onvifConfigTruth}`}>
+                      {onvifConfigTruthLabel(onvifConfigTruth, copy)}
+                    </span>
+                    <button className="button secondary small" onClick={applyOnvifProfileConfig} disabled={onvifConfigBusy || !canApplySelectedOnvifSettings}>
+                      {onvifConfigBusy ? copy.applying : copy.applyProfileSettings}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="cameraSettingsGrid">

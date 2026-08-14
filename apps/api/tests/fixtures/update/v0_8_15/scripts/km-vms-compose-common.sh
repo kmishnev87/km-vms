@@ -211,50 +211,17 @@ km_vms_lifecycle_override() {
   printf '%s\n' "$lifecycle"
 }
 
-km_vms_resolve_project_name() {
-  stable_app_dir="$1"
-  supplied="${2:-${KM_VMS_PROJECT_NAME:-${PROJECT_NAME:-}}}"
-  bootstrap="$stable_app_dir/data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
-  [ -f "$bootstrap" ] && [ ! -L "$bootstrap" ] ||
-    km_vms_compose_fail "Stable KM VMS project identity authority is unavailable."
-  if km_vms_command_exists python3; then
-    if [ -n "$supplied" ]; then
-      resolved_project=$(python3 -B "$bootstrap" resolve-project-name \
-        --app-dir "$stable_app_dir" --project-name "$supplied") ||
-        km_vms_compose_fail "Stable KM VMS Compose project identity could not be resolved."
-    else
-      resolved_project=$(python3 -B "$bootstrap" resolve-project-name \
-        --app-dir "$stable_app_dir") ||
-        km_vms_compose_fail "Stable KM VMS Compose project identity could not be resolved."
-    fi
-  else
-    printf '%s\n' "$supplied" | grep -Eq '^[a-z][a-z0-9_-]{0,62}$' ||
-      km_vms_compose_fail "Python is required to resolve an implicit Compose project identity."
-    km_vms_command_exists docker ||
-      km_vms_compose_fail "Python or Docker is required to resolve Compose project identity."
-    helper_ids=$(docker ps -q \
-      --filter "label=com.docker.compose.project=$supplied" \
-      --filter "label=com.docker.compose.service=update-helper")
-    [ "$(printf '%s\n' "$helper_ids" | sed '/^$/d' | wc -l | tr -d ' ')" = "1" ] ||
-      km_vms_compose_fail "Canonical update-helper project identity owner is unavailable."
-    helper_id=$(printf '%s\n' "$helper_ids" | sed -n '1p')
-    resolved_project=$(docker exec "$helper_id" python3 -B \
-      /host-app/data/update-runtime/bootstrap/current/km-vms-bootstrap.py \
-      resolve-project-name --app-dir /host-app --project-name "$supplied") ||
-      km_vms_compose_fail "Stable KM VMS Compose project identity could not be resolved."
-  fi
-  printf '%s\n' "$resolved_project" | grep -Eq '^[a-z][a-z0-9_-]{0,62}$' ||
-    km_vms_compose_fail "Stable KM VMS Compose project identity is invalid."
-  printf '%s\n' "$resolved_project"
-}
-
 km_vms_slot_image_override() {
   stable_app_dir="$1"
-  supplied_project_name="${2:-${KM_VMS_PROJECT_NAME:-${PROJECT_NAME:-}}}"
   bootstrap="$stable_app_dir/data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
   [ -f "$bootstrap" ] && [ ! -L "$bootstrap" ] ||
     km_vms_compose_fail "Stable KM VMS bootstrap authority is unavailable."
-  project_name=$(km_vms_resolve_project_name "$stable_app_dir" "$supplied_project_name")
+  project_name="${KM_VMS_PROJECT_NAME:-${PROJECT_NAME:-}}"
+  if [ -z "$project_name" ]; then
+    project_name=$(sed -n 's/^COMPOSE_PROJECT_NAME=//p' "$stable_app_dir/.env" | tail -n 1)
+  fi
+  printf '%s\n' "$project_name" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$' ||
+    km_vms_compose_fail "Stable KM VMS Compose project identity is invalid."
   if km_vms_command_exists python3; then
     image_override=$(python3 -B "$bootstrap" image-override-path \
       --app-dir "$stable_app_dir" --project-name "$project_name") ||
@@ -290,37 +257,6 @@ km_vms_compose_for_source() {
     km_vms_compose_fail "Stable KM VMS .env is unavailable."
   [ -f "$source_dir/docker-compose.yml" ] ||
     km_vms_compose_fail "KM VMS product source has no docker-compose.yml."
-  requested_project=""
-  expect_project_value=0
-  for argument in "$@"; do
-    if [ "$expect_project_value" = "1" ]; then
-      [ -z "$requested_project" ] ||
-        km_vms_compose_fail "Compose project identity was supplied more than once."
-      requested_project="$argument"
-      expect_project_value=0
-      continue
-    fi
-    case "$argument" in
-      -p|--project-name)
-        expect_project_value=1
-        ;;
-      --project-name=*)
-        [ -z "$requested_project" ] ||
-          km_vms_compose_fail "Compose project identity was supplied more than once."
-        requested_project=${argument#*=}
-        ;;
-    esac
-  done
-  [ "$expect_project_value" = "0" ] ||
-    km_vms_compose_fail "Compose project identity option has no value."
-  project_name=$(km_vms_resolve_project_name \
-    "$stable_app_dir" "${requested_project:-${KM_VMS_PROJECT_NAME:-${PROJECT_NAME:-}}}")
-  if [ -n "$requested_project" ]; then
-    [ "$requested_project" = "$project_name" ] ||
-      km_vms_compose_fail "Compose project identity contradicts stable authority."
-  else
-    set -- -p "$project_name" "$@"
-  fi
   archive_override="$stable_app_dir/data/install-control/docker-compose.archive-roots.yml"
   lifecycle_override=$(km_vms_lifecycle_override "$stable_app_dir")
   slot_runtime_override=""
@@ -339,7 +275,7 @@ km_vms_compose_for_source() {
           km_vms_compose_fail "Release-slot runtime Compose override is unsafe."
         slot_runtime_override="$possible_runtime_override"
       fi
-      slot_image_override=$(km_vms_slot_image_override "$stable_app_dir" "$project_name")
+      slot_image_override=$(km_vms_slot_image_override "$stable_app_dir")
       ;;
   esac
   if [ -n "$slot_image_override" ] && [ -n "$slot_runtime_override" ] && [ -f "$archive_override" ] && [ -n "$lifecycle_override" ]; then

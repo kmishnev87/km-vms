@@ -20,6 +20,7 @@ from app.routers.camera_connection_helpers import (
 from app.routers.deps import require_permission
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.onvif_service import (
+    OnvifConfigurationError,
     build_onvif_health_contract,
     check_onvif_events_feasibility,
     discover_onvif_devices,
@@ -28,6 +29,7 @@ from app.services.onvif_service import (
     get_onvif_profile_config,
     get_onvif_ptz_capabilities,
     probe_onvif_device,
+    select_profile_config_health_target,
     update_onvif_profile,
     validate_ptz_command_payload,
     ptz_validation_response,
@@ -36,6 +38,14 @@ from app.services.onvif_service import (
 
 
 router = APIRouter()
+
+
+def onvif_config_http_detail(exc: Exception) -> dict:
+    return {
+        "code": getattr(exc, "code", None) or onvif_error_code(exc),
+        "message": safe_onvif_error(exc),
+        "raw_secret_exposed": False,
+    }
 
 
 def get_active_camera_or_404(db: Session, camera_id: int) -> Camera:
@@ -210,7 +220,7 @@ def onvif_profile_config(
             profile_token=str(payload["profile_token"]),
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=safe_onvif_error(e))
+        raise HTTPException(status_code=400, detail=onvif_config_http_detail(e))
 
 
 @router.post("/onvif/update_profile")
@@ -230,10 +240,11 @@ def update_onvif_profile_route(
             username=str(creds["username"]),
             password=str(creds["password"]),
             profile_token=str(payload["profile_token"]),
-            config=payload["config"],
+            config=payload.get("config") or {},
         )
     except Exception as e:
-        raise HTTPException(status_code=400, detail=safe_onvif_error(e))
+        status_code = 409 if isinstance(e, OnvifConfigurationError) and e.code == "video_encoder_configuration_mismatch" else 400
+        raise HTTPException(status_code=status_code, detail=onvif_config_http_detail(e))
 
 
 @router.get("/{camera_id}/onvif/ptz/capabilities")
@@ -364,6 +375,8 @@ def onvif_health_check(
     camera = get_active_camera_or_404(db, camera_id)
     checked_at = datetime.utcnow().isoformat() + "Z"
     profiles_result = None
+    profile_config_result = None
+    profile_config_checked = False
     ptz_result = None
     events_result = None
     check_status = "not_checked"
@@ -391,6 +404,50 @@ def onvif_health_check(
                     rtsp_port=int(camera.rtsp_reachable_port or 554),
                 )
                 check_status = "reachable"
+                selection = select_profile_config_health_target(
+                    camera,
+                    profiles_result.get("profiles") or [],
+                )
+                profile_config_checked = True
+                selected_profile_token = selection.get("profile_token")
+                if selected_profile_token:
+                    try:
+                        profile_config_result = run_bounded_read_only_check(
+                            get_onvif_profile_config,
+                            host=str(camera.host),
+                            port=int(camera.port or 80),
+                            username=str(camera.username),
+                            password=str(password),
+                            profile_token=str(selected_profile_token),
+                        )
+                        profile_config_result["profile_source"] = selection.get("source")
+                        profile_config_result["reason_codes"] = sorted(
+                            set(profile_config_result.get("reason_codes") or [])
+                            | set(selection.get("reason_codes") or [])
+                        )
+                    except Exception as exc:
+                        profile_config_result = {
+                            "status": "error",
+                            "profile_token": selected_profile_token,
+                            "profile_source": selection.get("source"),
+                            "current_read": False,
+                            "options_read": False,
+                            "supported": {},
+                            "reason_codes": [
+                                getattr(exc, "code", None)
+                                or onvif_error_code(exc)
+                            ],
+                        }
+                else:
+                    profile_config_result = {
+                        "status": "unavailable",
+                        "profile_token": None,
+                        "profile_source": selection.get("source"),
+                        "current_read": False,
+                        "options_read": False,
+                        "supported": {},
+                        "reason_codes": selection.get("reason_codes") or [],
+                    }
             except Exception as exc:
                 reason_codes.append(onvif_error_code(exc))
                 profiles_result = None
@@ -437,6 +494,8 @@ def onvif_health_check(
                 profiles_result=profiles_result,
                 ptz_result=ptz_result,
                 events_result=events_result,
+                profile_config_result=profile_config_result,
+                profile_config_checked=profile_config_checked,
                 check_performed=True,
                 checked_at=checked_at,
             )

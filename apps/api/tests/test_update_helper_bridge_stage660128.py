@@ -52,6 +52,11 @@ def test_refresh_records_target_validation_failure_before_exit(
         target_slot="release-" + TARGET_COMMIT,
     )
     monkeypatch.setattr(bridge, "require_app_dir", lambda _value: app_dir)
+    monkeypatch.setattr(
+        bridge,
+        "resolve_stable_project_name",
+        lambda _app, supplied=None: supplied or "fixture",
+    )
     monkeypatch.setattr(bridge, "bridge_source_root", lambda: app_dir)
     monkeypatch.setattr(
         bridge,
@@ -578,6 +583,13 @@ def test_legacy_handoff_binds_adopted_slot_as_active_before_returning(
         "normalize_archive_roots_override",
         lambda _app_dir: False,
     )
+    monkeypatch.setattr(
+        bridge,
+        "load_source_bootstrap",
+        lambda _source: SimpleNamespace(
+            read_project_name=lambda _app, supplied=None: supplied or "fixture",
+        ),
+    )
     monkeypatch.setattr(bridge, "load_slot_engine", lambda _source: engine)
     monkeypatch.setattr(
         bridge,
@@ -1035,6 +1047,11 @@ def _install_activation_mocks(
     events: list[str],
 ) -> None:
     monkeypatch.setattr(bridge, "require_app_dir", lambda _value: tmp_path)
+    monkeypatch.setattr(
+        bridge,
+        "resolve_stable_project_name",
+        lambda _app, supplied=None: supplied or "fixture",
+    )
     monkeypatch.setattr(bridge, "load_slot_engine", lambda _root: engine)
     monkeypatch.setattr(bridge, "bridge_source_root", lambda: tmp_path)
     monkeypatch.setattr(

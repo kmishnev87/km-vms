@@ -133,6 +133,45 @@ def test_missing_profile_fields_are_truthful_not_fake_defaults():
     assert item["video_config_state"] == "unavailable"
 
 
+def test_profile_summary_accepts_mapping_and_single_wrapper_encoder_shapes():
+    profile = {
+        "token": "main-token",
+        "Name": "Main",
+        "VideoEncoderConfiguration": {"token": "vec-main"},
+        "AudioEncoderConfiguration": None,
+    }
+
+    class WrappedMedia(FakeMedia):
+        def GetVideoEncoderConfiguration(self, payload):
+            return {
+                "VideoEncoderConfiguration": [{
+                    "token": payload["ConfigurationToken"],
+                    "Encoding": "H265",
+                    "Quality": 3,
+                    "Resolution": {"Width": 1920, "Height": 1080},
+                    "RateControl": {
+                        "FrameRateLimit": 20,
+                        "BitrateLimit": 2048,
+                        "EncodingInterval": 40,
+                    },
+                }]
+            }
+
+    item = _profile_to_dict(
+        profile,
+        WrappedMedia("rtsp://camera/main"),
+        username="operator",
+        password="secret",
+        host="camera",
+        port=80,
+    )
+
+    assert item["token"] == "main-token"
+    assert item["video"]["codec"] == "H265"
+    assert item["video"]["width"] == 1920
+    assert item["video"]["fps"] == 20
+
+
 def test_get_stream_uri_path_extraction_rewrites_host_without_credentials():
     rtsp_scheme = "rtsp"
     uri = f"{rtsp_scheme}://user:" + "secret" + "@internal.lan:554/cam/realmonitor?channel=1&subtype=0"
