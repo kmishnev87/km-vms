@@ -899,6 +899,13 @@ write_release_identity
 apply_stable_permission_policy stable-prebootstrap
 sh "$APP_DIR/scripts/km-vms-storage-discovery.sh" --app-dir "$APP_DIR" >/dev/null
 
+# Trusted target preparation resolves the project through the stable bootstrap.
+# Install that authority from the acquired, permission-checked source first;
+# replace it with the finalized immutable source again after slot activation.
+python3 -B "$APP_DIR/scripts/km-vms-bootstrap.py" \
+  install-bundle --app-dir "$APP_DIR" --source-dir "$APP_DIR" >/dev/null ||
+  fail "Cannot prepare the initial stable bootstrap bundle."
+
 if [ "$INSTALL_IDENTITY_MODE" = "trusted_release" ]; then
   slot_output=$(
     KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE=1 \

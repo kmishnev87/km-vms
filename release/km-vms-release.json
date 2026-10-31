@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.17",
-  "tag": "v0.8.17",
-  "title": "Reliable Maintenance, Verified Updates and Low-Load Health Checks",
-  "summary": "Fixes the Maintenance update screen crash and false activation rollback while preserving strict release integrity checks. Replaces frequent Python health probes with native checks and a daily steady-state interval, retaining fast startup readiness.",
+  "version": "0.8.18",
+  "tag": "v0.8.18",
+  "title": "Safe Fresh Installation, Reliable Maintenance and Low-Load Health Checks",
+  "summary": "Fixes trusted fresh installation bootstrap ordering and isolates project discovery to the installation root. Includes reliable Maintenance, strict update activation binding, backup-data-aware trial restore and daily native health checks.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.17",
+  "source_ref": "v0.8.18",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,6 +16,7 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
+    "Prepares the stable bootstrap before trusted fresh-install target preparation and scopes legacy project discovery to the installation root.",
     "Keeps update pending state in its controller so Maintenance opens and renders available updates without a frontend crash.",
     "Uses one canonical deployment binding before and after activation, rejecting genuine image, identity, Compose and archive-root drift.",
     "Uses native health probes with a 24-hour steady-state interval and rapid startup checks to reduce unnecessary NAS CPU and thermal load.",
@@ -25,6 +26,7 @@
   ],
   "changelog_i18n": {
     "en": [
+      "Prepares the stable bootstrap before trusted fresh-install target preparation and scopes legacy project discovery to the installation root.",
       "Keeps update pending state in its controller so Maintenance opens and renders available updates without a frontend crash.",
       "Uses one canonical deployment binding before and after activation, rejecting genuine image, identity, Compose and archive-root drift.",
       "Uses native health probes with a 24-hour steady-state interval and rapid startup checks to reduce unnecessary NAS CPU and thermal load.",
@@ -33,6 +35,7 @@
       "Adds focused Maintenance, activation, installation identity and restore regression coverage and documents health-monitoring behavior."
     ],
     "ru": [
+      "Исправлен порядок первой установки из GitHub: служебная основа готовится до проверки целевой версии, а соседние установки не влияют на выбор проекта.",
       "Исправлено падение раздела обслуживания при показе доступного обновления.",
       "Проверки до и после обновления используют единую привязку к коду, образам, Compose и корням архива; реальные несоответствия по-прежнему блокируются.",
       "Частые запуски Python заменены нативными проверками раз в сутки; быстрые проверки готовности при запуске сохранены.",
@@ -41,6 +44,7 @@
       "Добавлены проверки обслуживания, активации, установки и восстановления; обновлена документация проверок состояния."
     ],
     "zh-CN": [
+      "修复 GitHub 首次安装的启动顺序，并将旧版项目发现限制在当前安装目录，避免其他安装相互干扰。",
       "修复维护页面在显示可用更新时的崩溃问题。",
       "更新前后使用相同的代码、镜像、Compose 和存档目录绑定验证，继续阻止真实的不一致。",
       "使用每天一次的原生健康检查替代频繁启动 Python，并保留快速启动就绪检查。",
@@ -50,13 +54,13 @@
     ]
   },
   "title_i18n": {
-    "en": "Reliable Maintenance, Verified Updates and Low-Load Health Checks",
-    "ru": "Надёжное обслуживание, проверенные обновления и редкие проверки состояния",
-    "zh-CN": "可靠维护、更新验证与低负载健康检查"
+    "en": "Safe Fresh Installation, Reliable Maintenance and Low-Load Health Checks",
+    "ru": "Надёжная установка, обслуживание и редкие проверки состояния",
+    "zh-CN": "安全首次安装、可靠维护与低负载健康检查"
   },
   "summary_i18n": {
-    "en": "Fixes the Maintenance update screen crash and false activation rollback while preserving strict release integrity checks. Replaces frequent Python health probes with native checks and a daily steady-state interval, retaining fast startup readiness.",
-    "ru": "Устраняет падение раздела обслуживания и ошибочный откат исправного обновления, сохраняя строгую проверку релиза. Частые запуски Python заменены нативными проверками раз в сутки; быстрые проверки при запуске сохранены.",
-    "zh-CN": "修复维护更新页面崩溃和正常更新被错误回滚的问题，同时保留严格的版本完整性验证。使用原生健康检查替代频繁启动 Python，稳定运行时每天检查一次，并保留快速启动就绪检查。"
+    "en": "Fixes trusted fresh installation bootstrap ordering and isolates project discovery to the installation root. Includes reliable Maintenance, strict update activation binding, backup-data-aware trial restore and daily native health checks.",
+    "ru": "Исправляет первую установку и исключает влияние соседних установок на выбор проекта. Включает исправления обслуживания, строгую проверку обновлений, проверку восстановления по данным резервной копии и нативные проверки состояния раз в сутки.",
+    "zh-CN": "修复可信首次安装的启动顺序，并隔离各安装目录的项目发现。同时包含维护修复、严格更新激活验证、基于备份数据的试恢复验证，以及每天一次的原生健康检查。"
   }
 }

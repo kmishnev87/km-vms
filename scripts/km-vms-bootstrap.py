@@ -559,13 +559,14 @@ def _read_install_receipt_project_name(app_dir: Path) -> str | None:
     return _require_project_name(value)
 
 
-def _legacy_docker_project_name() -> str | None:
+def _legacy_docker_project_name(app_dir: Path | None = None) -> str | None:
     try:
         result = subprocess.run(
             [
                 "docker",
                 "ps",
                 "-a",
+                *(["--filter", "label=com.docker.compose.project.working_dir=" + str(app_dir.resolve())] if app_dir is not None else []),
                 "--format",
                 '{{.Label "com.docker.compose.project"}}\t{{.Label "com.docker.compose.service"}}',
             ],
@@ -614,7 +615,9 @@ def read_project_name(app_dir: Path, supplied: str | None = None) -> str:
     if receipt_value is not None:
         evidence["install_receipt"] = receipt_value
     if not active_present:
-        label_value = _legacy_docker_project_name()
+        # Other KM VMS installations on this Docker host are not authorities
+        # for this root. Keep ambiguity rejection within the same installation.
+        label_value = _legacy_docker_project_name(app_dir)
         if label_value is not None:
             evidence["legacy_container_labels"] = label_value
     values = set(evidence.values())

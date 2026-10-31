@@ -133,7 +133,7 @@ def test_project_identity_missing_without_any_trusted_evidence(
     app.mkdir()
     (app / "data").mkdir()
     (app / ".env").write_text("TZ=UTC\n", encoding="utf-8")
-    monkeypatch.setattr(bootstrap, "_legacy_docker_project_name", lambda: None)
+    monkeypatch.setattr(bootstrap, "_legacy_docker_project_name", lambda _app: None)
 
     with pytest.raises(bootstrap.BootstrapError) as captured:
         bootstrap.read_project_name(app)
@@ -215,6 +215,33 @@ def test_project_identity_rejects_ambiguous_complete_legacy_projects(
         bootstrap.read_project_name(app)
 
     assert captured.value.code == "project_identity_ambiguous"
+
+
+def test_fresh_install_does_not_borrow_another_installations_project(tmp_path, monkeypatch):
+    app = tmp_path / "fresh"
+    (app / "data").mkdir(parents=True)
+    (app / ".env").write_text("COMPOSE_PROJECT_NAME=fresh-project\n", encoding="utf-8")
+    (app / ".km-vms-install.json").write_text(json.dumps({"app_dir": str(app), "project_name": "fresh-project"}), encoding="utf-8")
+    calls = []
+
+    def docker(args, **kwargs):
+        calls.append(args)
+        scoped = "label=com.docker.compose.project.working_dir=" + str(app.resolve()) in args
+        other = "" if scoped else "\n".join("other-project\t" + role for role in ("api", "web", "recorder", "postgres", "redis", "nginx"))
+        return subprocess.CompletedProcess(args, 0, stdout=other, stderr="")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", docker)
+    assert bootstrap.read_project_name(app, "fresh-project") == "fresh-project"
+    assert calls and "--filter" in calls[0]
+
+
+def test_trusted_fresh_install_prepares_bootstrap_before_target_resolution():
+    script = (REPO_ROOT / "scripts/install.sh").read_text(encoding="utf-8")
+    start = script.index('sh "$APP_DIR/scripts/km-vms-storage-discovery.sh"')
+    prebundle = script.index('install-bundle --app-dir "$APP_DIR" --source-dir "$APP_DIR"', start)
+    target = script.index('if [ "$INSTALL_IDENTITY_MODE" = "trusted_release" ]; then', start)
+    finalized = script.index('install-bundle --app-dir "$APP_DIR" --source-dir "$PRODUCT_SOURCE"', target)
+    assert start < prebundle < target < finalized
 
 
 def test_pre_contract_slot_does_not_run_writable_legacy_gate(
