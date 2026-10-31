@@ -539,7 +539,11 @@ def _read_install_receipt_project_name(app_dir: Path) -> str | None:
     recorded_app_dir = receipt.get("app_dir")
     if recorded_app_dir is not None:
         try:
-            if Path(str(recorded_app_dir)).resolve(strict=True) != app_dir:
+            recorded_path = Path(str(recorded_app_dir))
+            # A normal helper sees the same install root through /host-app
+            # and its absolute host-path bind. Compare filesystem identity,
+            # not path spelling; a foreign directory still fails closed.
+            if not recorded_path.is_absolute() or not recorded_path.samefile(app_dir):
                 raise BootstrapError(
                     "project_identity_receipt_invalid",
                     "Installation receipt belongs to another app directory.",

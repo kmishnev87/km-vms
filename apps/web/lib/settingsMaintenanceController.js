@@ -1404,6 +1404,7 @@ export function useSettingsMaintenanceController({
     updateApplyStatus,
     updateApplyDialog,
     updateApplyOperator,
+    updateApplyHasUnknownLaunch,
     updateApplyRunning,
     updateApplyAllowed,
     updateApplyPrimaryText,

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -239,7 +240,53 @@ def _count(db: Session, model: Any) -> int:
     return int(db.query(model).count())
 
 
-def _validate_restored_state(db: Session, *, config: RestoreValidationConfig) -> dict[str, Any]:
+def _backup_data_evidence(artifact_path: Path, config: RestoreValidationConfig) -> dict[str, int]:
+    """Count COPY rows in the checksum-verified dump, never live-source rows.
+
+    Positive fixture counts are not an integrity contract: empty cameras or a
+    legitimately deleted archive are valid. Compare the restored data with the
+    actual backup instead, including recorder ownership and finalized segments.
+    The private temporary stream bounds memory and is removed on every exit.
+    """
+    tables = PRODUCT_TABLES - {"schema_version_state", "schema_migration_history"}
+    counts = {name: 0 for name in tables}
+    counts.update(recorder_owned_segments=0, finalized_segments=0)
+    args = [config.pg_restore_path, "--data-only", "--file=-"]
+    args.extend(f"--table={name}" for name in sorted(tables))
+    args.append(str(artifact_path))
+    seen = set()
+    current = None
+    columns = []
+    with tempfile.TemporaryFile() as output:
+        result = subprocess.run(args, stdout=output, stderr=subprocess.PIPE, timeout=config.timeout_seconds)
+        if result.returncode:
+            raise RestoreValidationBlocked("backup_data_evidence_unreadable", {"status": "blocked", "summary": "Backup data evidence could not be read."})
+        output.seek(0)
+        for raw in output:
+            line = raw.rstrip(b"\r\n")
+            if current:
+                if line == b"\\.":
+                    current = None
+                    continue
+                counts[current] += 1
+                if current == "recording_segments":
+                    row = dict(zip(columns, line.split(b"\t")))
+                    if row.get(b"ownership") == b"KM VMS" and row.get(b"source") == b"recorder":
+                        counts["recorder_owned_segments"] += 1
+                    if row.get(b"relative_path") not in {None, b"\\N"} and row.get(b"status") in {b"ready", b"finalized"}:
+                        counts["finalized_segments"] += 1
+                continue
+            header = re.fullmatch(rb"COPY public\.([a-z_]+) \((.*)\) FROM stdin;", line)
+            if header and header[1].decode() in tables:
+                current = header[1].decode()
+                columns = header[2].split(b", ")
+                seen.add(current)
+    if seen != tables or current:
+        raise RestoreValidationBlocked("backup_data_evidence_incomplete", {"status": "blocked", "summary": "Backup data evidence is incomplete."})
+    return counts
+
+
+def _validate_restored_state(db: Session, *, config: RestoreValidationConfig, backup_counts: dict[str, int] | None = None) -> dict[str, Any]:
     checks: dict[str, Any] = {}
     owner = None
     if config.expected_owner_username:
@@ -269,7 +316,8 @@ def _validate_restored_state(db: Session, *, config: RestoreValidationConfig) ->
     plan = build_migration_plan(db)
     checks["migration_plan_readable"] = {"passed": bool(plan.get("status")), "status": plan.get("status")}
     checks["users"] = {"passed": _count(db, User) >= 1, "count": _count(db, User)}
-    checks["cameras"] = {"passed": _count(db, Camera) >= 1, "count": _count(db, Camera)}
+    camera_count = _count(db, Camera)
+    checks["cameras"] = {"passed": camera_count == backup_counts["cameras"] if backup_counts is not None else camera_count >= 1, "count": camera_count}
     settings_row = db.query(SystemSettings).first()
     checks["system_settings"] = {
         "passed": bool(settings_row and settings_row.storage_path),
@@ -283,10 +331,14 @@ def _validate_restored_state(db: Session, *, config: RestoreValidationConfig) ->
         .count()
     )
     checks["recording_metadata"] = {
-        "passed": _count(db, ArchiveRoot) >= 1 and _count(db, RecordingJob) >= 1 and finalized_segments >= 1,
+        "passed": (
+            all(_count(db, model) == backup_counts[name] for name, model in (("archive_roots", ArchiveRoot), ("recording_jobs", RecordingJob), ("recording_segments", RecordingSegment)))
+            and finalized_segments == backup_counts["finalized_segments"]
+        ) if backup_counts is not None else _count(db, ArchiveRoot) >= 1 and _count(db, RecordingJob) >= 1 and finalized_segments >= 1,
         "archive_roots": _count(db, ArchiveRoot),
         "recording_jobs": _count(db, RecordingJob),
         "segments": _count(db, RecordingSegment),
+        "finalized_segments": finalized_segments,
         "records_chronology_metadata_read_path": "metadata_query_without_video_files",
     }
     recorder_owned = (
@@ -294,8 +346,14 @@ def _validate_restored_state(db: Session, *, config: RestoreValidationConfig) ->
         .filter(RecordingSegment.ownership == "KM VMS", RecordingSegment.source == "recorder")
         .count()
     )
-    checks["recorder_ownership"] = {"passed": recorder_owned >= 1, "recorder_owned_segments": int(recorder_owned)}
-    checks["audit_summary"] = {"passed": _count(db, AuditEvent) >= 1, "count": _count(db, AuditEvent)}
+    checks["recorder_ownership"] = {"passed": recorder_owned == backup_counts["recorder_owned_segments"] if backup_counts is not None else recorder_owned >= 1, "recorder_owned_segments": int(recorder_owned)}
+    audit_count = _count(db, AuditEvent)
+    checks["audit_summary"] = {"passed": audit_count == backup_counts["audit_events"] if backup_counts is not None else audit_count >= 1, "count": audit_count}
+    if backup_counts is not None:
+        checks["backup_entity_counts"] = {
+            "passed": _count(db, User) == backup_counts["users"] and _count(db, SystemSettings) == backup_counts["system_settings"],
+            "evidence": "checksum_verified_backup_copy_rows",
+        }
     return checks
 
 
@@ -336,13 +394,14 @@ def run_restore_validation(
 
     validation_id = config.validation_id or f"kmvms-restore-validation-{uuid.uuid4().hex[:12]}"
     config.validation_root.mkdir(parents=True, exist_ok=True)
+    backup_counts = _backup_data_evidence(artifact_path, config)
     _restore_postgres_custom_dump(artifact_path, target_url, config)
 
     engine = create_engine(target_url)
     SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     db = SessionLocal()
     try:
-        checks = _validate_restored_state(db, config=config)
+        checks = _validate_restored_state(db, config=config, backup_counts=backup_counts)
         passed = _all_checks_passed(checks)
         status = RESTORE_VALIDATION_STATUS_VALIDATED if passed else RESTORE_VALIDATION_STATUS_FAILED
         with engine.begin() as conn:

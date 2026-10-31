@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -84,11 +85,6 @@ TARGET_EVIDENCE_SERVICES = (
     *LEGACY_REQUIRED_IMAGE_SERVICES,
     *OPTIONAL_PERSISTENT_IMAGE_SERVICES,
     "schema-update",
-)
-ADOPTED_DEVELOPMENT_BUILD_SERVICES = frozenset(
-    service
-    for service in TARGET_BUILD_SERVICES
-    if service in {*LEGACY_REQUIRED_IMAGE_SERVICES, *OPTIONAL_PERSISTENT_IMAGE_SERVICES}
 )
 ACTIVATION_RUNTIME_SERVICES = (
     "update-retry-admission",
@@ -2022,294 +2018,6 @@ def prepare_legacy_adopted_slot(
     return slot_id
 
 
-def _adopted_development_build_services(values: Sequence[str]) -> list[str]:
-    services = sorted(set(values or []))
-    if (
-        not services
-        or len(services) != len(values or [])
-        or not set(services).issubset(ADOPTED_DEVELOPMENT_BUILD_SERVICES)
-    ):
-        raise BridgeError(
-            "adopted_development_services_invalid",
-            "Adopted development preparation requires unique supported build services.",
-        )
-    return services
-
-
-def prepare_adopted_development_slot(args: argparse.Namespace) -> int:
-    """Build and finalize one cumulative non-official development slot.
-
-    This is a bounded orchestration wrapper around the existing adopted-slot
-    stage/runtime/finalize owners.  It does not create a second slot format and
-    never accepts caller-supplied image evidence.
-    """
-
-    app_dir = require_app_dir(args.app_dir)
-    request_id = require_request_id(args.request_id)
-    declared_version = str(args.declared_version or "")
-    declared_commit = str(args.declared_commit or "").lower()
-    project_name = resolve_stable_project_name(
-        app_dir,
-        str(args.project_name or "").strip() or None,
-    )
-    build_services = _adopted_development_build_services(
-        args.build_service or []
-    )
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,79}", declared_version):
-        raise BridgeError(
-            "installed_version_invalid",
-            "Installed release version is invalid.",
-        )
-    if not COMMIT_SHA_RE.fullmatch(declared_commit):
-        raise BridgeError(
-            "installed_commit_invalid",
-            "Installed release commit is invalid.",
-        )
-
-    slot_tool = app_dir / "scripts/km-vms-release-slots.py"
-    if slot_tool.is_symlink() or not slot_tool.is_file():
-        raise BridgeError(
-            "slot_engine_missing",
-            "Cumulative source has no canonical release-slot engine.",
-        )
-    (
-        captured_compose,
-        captured_images,
-        health_evidence,
-        current_security_contract,
-    ) = capture_pre_update_slot_evidence(
-        app_dir,
-        project_name=project_name,
-        request_id=request_id,
-    )
-    stage_payload = _parse_command_json(
-        run_command(
-            [
-                "python3",
-                str(slot_tool),
-                "stage-adopted",
-                "--app-dir",
-                str(app_dir),
-                "--request-id",
-                request_id,
-                "--declared-version",
-                declared_version,
-                "--declared-commit",
-                declared_commit,
-            ],
-            timeout=300,
-            error_code="slot_adoption_snapshot_failed",
-            error_message="Cumulative development source could not be materialized.",
-        ),
-        error_code="slot_adoption_snapshot_failed",
-        error_message="Cumulative development source returned invalid evidence.",
-    )
-    slot_id = str(stage_payload.get("slot_id") or "")
-    if not re.fullmatch(r"adopted-[0-9a-f]{64}", slot_id):
-        raise BridgeError(
-            "slot_adoption_snapshot_failed",
-            "Cumulative development slot identity is invalid.",
-        )
-    if stage_payload.get("status") == "reused":
-        manifest = stage_payload.get("manifest")
-        if type(manifest) is not dict:
-            raise BridgeError(
-                "slot_adoption_snapshot_failed",
-                "Reused development slot returned no immutable manifest.",
-            )
-        verify_immutable_images(manifest.get("image_evidence", {}))
-        image_services = manifest.get("image_evidence", {}).get("services", {})
-        if any(
-            not str(image_services.get(service, {}).get("source_image_ref") or "").endswith(
-                f":{slot_id}"
-            )
-            for service in build_services
-        ):
-            raise BridgeError(
-                "slot_adoption_conflict",
-                "Reused development slot lacks its exact built service evidence.",
-            )
-        print("adopted_development_prepare=REUSED")
-        print(f"adopted_development_slot={slot_id}")
-        print(f"built_services={','.join(build_services)}")
-        return 0
-    if stage_payload.get("status") != "staged":
-        raise BridgeError(
-            "slot_adoption_snapshot_failed",
-            "Cumulative development slot did not reach staged state.",
-        )
-    staged_source = Path(str(stage_payload.get("source_path") or ""))
-    if not staged_source.is_absolute() or not staged_source.is_dir():
-        raise BridgeError(
-            "slot_adoption_snapshot_failed",
-            "Cumulative development staged source path is invalid.",
-        )
-
-    evidence_root = app_dir / "data/update-runtime/staging"
-    with tempfile.TemporaryDirectory(
-        prefix=".adopted-development-evidence-",
-        dir=evidence_root,
-    ) as temporary:
-        evidence_dir = Path(temporary)
-        services_path = evidence_dir / "services.json"
-        compose_path = evidence_dir / "compose.json"
-        image_path = evidence_dir / "images.json"
-        health_path = evidence_dir / "health.json"
-        atomic_write_json(
-            services_path,
-            {"services": captured_compose["services"]},
-        )
-        runtime_payload = _parse_command_json(
-            run_command(
-                [
-                    "python3",
-                    str(slot_tool),
-                    "prepare-adopted-runtime",
-                    "--app-dir",
-                    str(app_dir),
-                    "--request-id",
-                    request_id,
-                    "--services-file",
-                    str(services_path),
-                ],
-                timeout=30,
-                error_code="slot_runtime_override_failed",
-                error_message="Development runtime override could not be prepared.",
-            ),
-            error_code="slot_runtime_override_failed",
-            error_message="Development runtime override returned invalid evidence.",
-        )
-        runtime_override = Path(str(runtime_payload.get("override_path") or ""))
-        runtime_digest = str(runtime_payload.get("sha256") or "")
-        if (
-            not runtime_override.is_absolute()
-            or runtime_override.is_symlink()
-            or not runtime_override.is_file()
-            or _sha256_file(runtime_override) != runtime_digest
-        ):
-            raise BridgeError(
-                "slot_runtime_override_failed",
-                "Development runtime override evidence is contradictory.",
-            )
-
-        target_env = os.environ.copy()
-        target_env["COMPOSE_PROJECT_NAME"] = project_name
-        target_env["KM_VMS_RELEASE_IMAGE_TAG"] = slot_id
-        compose = compose_base(
-            app_dir,
-            project_name,
-            source_dir=staged_source,
-            runtime_override=runtime_override,
-            include_archive_override=True,
-        )
-        config = run_command(
-            [*compose, "config"],
-            timeout=60,
-            error_code="slot_compose_evidence_failed",
-            error_message="Development slot Compose plan could not be validated.",
-            env=target_env,
-        )
-        services = _compose_services(compose, env=target_env)
-        if services != captured_compose["services"]:
-            raise BridgeError(
-                "slot_compose_evidence_failed",
-                "Development slot changed the current Compose service set.",
-            )
-        security_contract = _current_compose_security_contract(
-            compose,
-            app_dir=app_dir,
-            source_dir=staged_source,
-            request_id=request_id,
-            adopted_final_source=(
-                app_dir / "data/update-runtime/slots" / slot_id / "source"
-            ),
-        )
-        if security_contract != current_security_contract:
-            raise BridgeError(
-                "slot_adoption_conflict",
-                "Development slot changed the current Compose security contract.",
-            )
-        image_refs = _compose_image_refs(compose, env=target_env)
-        run_command(
-            [*compose, "build", *build_services],
-            timeout=3600,
-            error_code="slot_adoption_build_failed",
-            error_message="Development slot images could not be built.",
-            env=target_env,
-        )
-        raw_images = {
-            "schema_version": 1,
-            "services": {
-                service: dict(item)
-                for service, item in captured_images["services"].items()
-            },
-        }
-        for service in build_services:
-            image_ref = str(image_refs.get(service) or "")
-            if not image_ref.endswith(f":{slot_id}"):
-                raise BridgeError(
-                    "slot_image_evidence_failed",
-                    "A development service build used a mutable image tag.",
-                )
-            raw_images["services"][service] = {
-                "image_id": _image_id_for_ref(image_ref),
-                "source_image_ref": image_ref,
-            }
-        image_evidence = preserve_slot_images(
-            raw_images,
-            project_name=project_name,
-            slot_id=slot_id,
-        )
-        compose_evidence = {
-            **captured_compose,
-            "slot_plan_sha256": _normalized_compose_digest(
-                config.stdout,
-                app_dir=app_dir,
-                source_dir=staged_source,
-            ),
-            "runtime_override_sha256": runtime_digest,
-        }
-        atomic_write_json(compose_path, compose_evidence)
-        atomic_write_json(image_path, image_evidence)
-        atomic_write_json(health_path, health_evidence)
-        finalized = _parse_command_json(
-            run_command(
-                [
-                    "python3",
-                    str(slot_tool),
-                    "finalize",
-                    "--app-dir",
-                    str(app_dir),
-                    "--request-id",
-                    request_id,
-                    "--compose-evidence-file",
-                    str(compose_path),
-                    "--image-evidence-file",
-                    str(image_path),
-                    "--health-evidence-file",
-                    str(health_path),
-                ],
-                timeout=300,
-                error_code="slot_adoption_finalize_failed",
-                error_message="Development slot could not be finalized.",
-            ),
-            error_code="slot_adoption_finalize_failed",
-            error_message="Development slot returned invalid final evidence.",
-        )
-    if finalized.get("slot_id") != slot_id or finalized.get("status") not in {
-        "published",
-        "reused",
-    }:
-        raise BridgeError(
-            "slot_adoption_finalize_failed",
-            "Development slot final evidence is contradictory.",
-        )
-    print("adopted_development_prepare=PASS")
-    print(f"adopted_development_slot={slot_id}")
-    print(f"built_services={','.join(build_services)}")
-    return 0
-
-
 def bind_legacy_adopted_slot_as_active(
     *,
     app_dir: Path,
@@ -2823,6 +2531,88 @@ def probe_slot_http(
         )
 
 
+def canonical_slot_deployment_context(
+    app_dir: Path,
+    project_name: str,
+    slot_id: str,
+    *,
+    engine: Any,
+    override_root: Path,
+) -> tuple[
+    list[str],
+    dict[str, str],
+    Path,
+    dict[str, Any],
+    dict[str, Any],
+]:
+    """Build the one canonical deployment binding used on both sides of activation."""
+
+    compose, env, source_dir, manifest = slot_compose(
+        app_dir,
+        project_name,
+        slot_id,
+        engine=engine,
+        override_root=override_root,
+        with_image_override=False,
+    )
+    config = run_command(
+        [*compose, "config"],
+        timeout=60,
+        error_code="slot_compose_evidence_failed",
+        error_message="Release-slot Compose plan is unavailable.",
+        env=env,
+    )
+    plan_digest = _normalized_compose_digest(
+        config.stdout,
+        app_dir=app_dir,
+        source_dir=source_dir,
+    )
+    _archive_attached, archive_digest = _archive_override_evidence(
+        app_dir
+    )
+    try:
+        binding = engine.build_activation_slot_binding(
+            app_dir,
+            slot_id,
+            compose_plan_sha256=plan_digest,
+            archive_override_sha256=archive_digest,
+        )
+        # ``None`` is real current evidence (no generated override), not a
+        # request to reuse the digest captured in the immutable slot.
+        binding["archive_override_sha256"] = archive_digest
+        binding = engine.validate_activation_slot_binding(binding)
+    except Exception as exc:
+        raise BridgeError(
+            getattr(
+                exc,
+                "code",
+                "activation_slot_binding_invalid",
+            ),
+            "Release-slot activation binding is invalid.",
+        ) from exc
+    return compose, env, source_dir, manifest, binding
+
+
+def capture_slot_deployment_binding(
+    app_dir: Path,
+    project_name: str,
+    slot_id: str,
+    *,
+    engine: Any,
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(
+        prefix="km-vms-slot-deployment-capture-",
+    ) as temporary:
+        *_context, binding = canonical_slot_deployment_context(
+            app_dir,
+            project_name,
+            slot_id,
+            engine=engine,
+            override_root=Path(temporary),
+        )
+        return binding
+
+
 def capture_slot_runtime_binding(
     app_dir: Path,
     project_name: str,
@@ -2835,50 +2625,15 @@ def capture_slot_runtime_binding(
     with tempfile.TemporaryDirectory(
         prefix="km-vms-slot-capture-",
     ) as temporary:
-        temporary_root = Path(temporary)
-        compose, env, source_dir, manifest = slot_compose(
-            app_dir,
-            project_name,
-            slot_id,
-            engine=engine,
-            override_root=temporary_root,
-            with_image_override=False,
-        )
-        config = run_command(
-            [*compose, "config"],
-            timeout=60,
-            error_code="slot_compose_evidence_failed",
-            error_message="Release-slot Compose plan is unavailable.",
-            env=env,
-        )
-        plan_digest = _normalized_compose_digest(
-            config.stdout,
-            app_dir=app_dir,
-            source_dir=source_dir,
-        )
-        _archive_attached, archive_digest = _archive_override_evidence(
-            app_dir
-        )
-        try:
-            binding = engine.build_activation_slot_binding(
+        compose, env, source_dir, manifest, binding = (
+            canonical_slot_deployment_context(
                 app_dir,
+                project_name,
                 slot_id,
-                compose_plan_sha256=plan_digest,
-                archive_override_sha256=archive_digest,
+                engine=engine,
+                override_root=Path(temporary),
             )
-            # ``None`` is real current evidence (no generated override), not
-            # a request to reuse the digest captured in the immutable slot.
-            binding["archive_override_sha256"] = archive_digest
-            binding = engine.validate_activation_slot_binding(binding)
-        except Exception as exc:
-            raise BridgeError(
-                getattr(
-                    exc,
-                    "code",
-                    "activation_slot_binding_invalid",
-                ),
-                "Release-slot activation binding is invalid.",
-            ) from exc
+        )
         image_services = manifest["image_evidence"]["services"]
         required = list(CORE_RUNTIME_SERVICES)
         if require_helper_image:
@@ -3702,13 +3457,15 @@ def rollback_activation(
         )
         return terminal
     except Exception as exc:
-        failure_code = str(
+        failure_cause = str(
             getattr(exc, "code", "rollback_verification_failed")
         )
-        if not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", failure_code):
-            failure_code = "rollback_verification_failed"
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,79}", failure_cause):
+            failure_cause = "unclassified"
+        failure_code = "rollback_verification_failed"
         print(
-            f"rollback_failure={failure_code}",
+            f"rollback_failure={failure_code} "
+            f"rollback_failure_cause={failure_cause}",
             file=sys.stderr,
             flush=True,
         )
@@ -4475,9 +4232,11 @@ def _activate_or_resume(args: argparse.Namespace) -> int:
                     "activation_previous_binding_mismatch",
                     "Prepared previous slot is not the active runtime.",
                 )
-            target = engine.build_activation_slot_binding(
+            target = capture_slot_deployment_binding(
                 app_dir,
+                project_name,
                 target_slot_id,
+                engine=engine,
             )
             if (
                 target["commit"] != expected_commit
@@ -4516,9 +4275,11 @@ def _activate_or_resume(args: argparse.Namespace) -> int:
         )
         try:
             active_after = engine.read_active_slot(app_dir)
-            target_after = engine.build_activation_slot_binding(
+            target_after = capture_slot_deployment_binding(
                 app_dir,
+                project_name,
                 target_slot_id,
+                engine=engine,
             )
             if (
                 active_after is None
@@ -5077,51 +4838,28 @@ def publish_current_installed_projection(args: argparse.Namespace) -> int:
             "Installed-slot projection authority is unavailable.",
         ) from exc
     engine = load_slot_engine(source_dir)
-    with tempfile.TemporaryDirectory(
-        prefix="km-vms-installed-projection-",
-    ) as temporary:
-        compose, env, selected_source, _slot_manifest = slot_compose(
+    try:
+        binding = capture_slot_deployment_binding(
             app_dir,
             project_name,
             slot_id,
             engine=engine,
-            override_root=Path(temporary),
-            with_image_override=False,
         )
-        config = run_command(
-            [*compose, "config"],
-            timeout=60,
-            error_code="installed_projection_compose_failed",
-            error_message="Final installed Compose plan is unavailable.",
-            env=env,
+        projection = engine.publish_installed_slot_projection(
+            app_dir,
+            binding=binding,
         )
-        plan_digest = _normalized_compose_digest(
-            config.stdout,
-            app_dir=app_dir,
-            source_dir=selected_source,
-        )
-        _attached, archive_digest = _archive_override_evidence(app_dir)
-        try:
-            binding = engine.build_activation_slot_binding(
-                app_dir,
-                slot_id,
-                compose_plan_sha256=plan_digest,
-                archive_override_sha256=archive_digest,
-            )
-            binding["archive_override_sha256"] = archive_digest
-            binding = engine.validate_activation_slot_binding(binding)
-            projection = engine.publish_installed_slot_projection(
-                app_dir,
-                binding=binding,
-            )
-        except Exception as exc:
-            raise BridgeError(
-                getattr(exc, "code", "installed_projection_publish_failed"),
-                "Installed-slot projection could not be published.",
-            ) from exc
+    except Exception as exc:
+        raise BridgeError(
+            getattr(exc, "code", "installed_projection_publish_failed"),
+            "Installed-slot projection could not be published.",
+        ) from exc
     print("installed_projection=PASS")
     print(f"installed_projection_slot={projection['slot_id']}")
-    print(f"installed_projection_compose_sha256={plan_digest}")
+    print(
+        "installed_projection_compose_sha256="
+        f"{binding['compose_plan_sha256']}"
+    )
     return 0
 
 
@@ -6403,24 +6141,6 @@ def build_parser() -> argparse.ArgumentParser:
     projection_parser.add_argument("--project-name", required=True)
     projection_parser.set_defaults(
         handler=publish_current_installed_projection
-    )
-
-    adopted_development_parser = subparsers.add_parser(
-        "prepare-adopted-development",
-        help="build and finalize one cumulative non-official development slot",
-    )
-    adopted_development_parser.add_argument("--app-dir", required=True)
-    adopted_development_parser.add_argument("--request-id", required=True)
-    adopted_development_parser.add_argument("--declared-version", required=True)
-    adopted_development_parser.add_argument("--declared-commit", required=True)
-    adopted_development_parser.add_argument("--project-name")
-    adopted_development_parser.add_argument(
-        "--build-service",
-        action="append",
-        required=True,
-    )
-    adopted_development_parser.set_defaults(
-        handler=prepare_adopted_development_slot
     )
 
     activate_parser = subparsers.add_parser(

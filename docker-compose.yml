@@ -14,9 +14,11 @@ services:
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vms -d vms"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
+      start_interval: 2s
+      start_period: 5m
+      interval: 24h
+      timeout: 3s
+      retries: 1
     networks:
       - vms-net
 
@@ -31,9 +33,11 @@ services:
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
+      start_interval: 2s
+      start_period: 5m
+      interval: 24h
       timeout: 3s
-      retries: 20
+      retries: 1
     networks:
       - vms-net
 
@@ -95,10 +99,12 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=1).read()"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
+      test: ["CMD", "curl", "-fsS", "--max-time", "2", "http://127.0.0.1:8080/health"]
+      start_interval: 2s
+      start_period: 5m
+      interval: 24h
+      timeout: 3s
+      retries: 1
     networks:
       - vms-net
 
@@ -135,10 +141,12 @@ services:
     security_opt:
       - no-new-privileges:true
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=1).read()"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
+      test: ["CMD", "curl", "-fsS", "--max-time", "2", "http://127.0.0.1:8080/health"]
+      start_interval: 2s
+      start_period: 5m
+      interval: 24h
+      timeout: 3s
+      retries: 1
     networks:
       - vms-net
 
@@ -264,10 +272,12 @@ services:
     ports:
       - "${API_PORT:-18000}:8000"
     healthcheck:
-      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).read()"]
-      interval: 5s
+      test: ["CMD", "curl", "-fsS", "--max-time", "2", "http://127.0.0.1:8000/health"]
+      start_interval: 2s
+      start_period: 5m
+      interval: 24h
       timeout: 3s
-      retries: 30
+      retries: 1
     networks:
       - vms-net
 

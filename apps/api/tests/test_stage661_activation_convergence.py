@@ -83,6 +83,7 @@ class FakeEngine:
         self.pointer = journal["pointer_slot_id"]
         self.switches: list[str] = []
         self.switch_failure = switch_failure
+        self.projections: list[str] = []
 
     def read_activation_journal(self, _app_dir: Path) -> dict:
         return deepcopy(self.journal)
@@ -123,6 +124,15 @@ class FakeEngine:
                 self.journal[key] = value
         return deepcopy(self.journal)
 
+    def publish_installed_slot_projection(
+        self,
+        _app_dir: Path,
+        *,
+        binding: dict,
+    ) -> dict:
+        self.projections.append(binding["slot_id"])
+        return {"slot_id": binding["slot_id"]}
+
 
 @pytest.fixture
 def runtime(monkeypatch: pytest.MonkeyPatch):
@@ -133,6 +143,7 @@ def runtime(monkeypatch: pytest.MonkeyPatch):
         "handoff_phases": [],
         "migration": 0,
         "cleanup": [],
+        "writer_fence": [],
     }
 
     monkeypatch.setattr(
@@ -187,6 +198,13 @@ def runtime(monkeypatch: pytest.MonkeyPatch):
         lambda _engine, _app, _project, journal: calls[
             "cleanup"
         ].append(journal["phase"]),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "set_writer_policy_fence",
+        lambda _app, _project, *, enabled: calls[
+            "writer_fence"
+        ].append(enabled),
     )
     return calls
 
@@ -374,6 +392,21 @@ def test_runtime_reconciliation_recreates_setup_helper_from_selected_slot(
 
     monkeypatch.setattr(bridge, "slot_compose", fake_slot_compose)
     monkeypatch.setattr(bridge, "run_command", fake_run)
+    monkeypatch.setattr(
+        bridge,
+        "writer_policy_fence_active",
+        lambda _app: False,
+    )
+    monkeypatch.setattr(
+        bridge,
+        "cleanup_interrupted_compose_recreates",
+        lambda *_args, **_kwargs: 0,
+    )
+    monkeypatch.setattr(
+        bridge,
+        "wait_compose_service_ready",
+        lambda *_args, **_kwargs: None,
+    )
 
     bridge.reconcile_slot_runtime(
         Path("/app"),
@@ -383,13 +416,17 @@ def test_runtime_reconciliation_recreates_setup_helper_from_selected_slot(
     )
 
     assert selected_slots == [slot_id]
-    assert len(commands) == 1
-    command = commands[0]
-    assert "--force-recreate" in command
-    assert "setup-helper" in command
-    assert command[-len(bridge.ACTIVATION_RUNTIME_SERVICES) :] == list(
-        bridge.ACTIVATION_RUNTIME_SERVICES
-    )
+    assert len(commands) == len(bridge.ACTIVATION_RUNTIME_SERVICES)
+    for service, command in zip(
+        bridge.ACTIVATION_RUNTIME_SERVICES,
+        commands,
+        strict=True,
+    ):
+        assert "--force-recreate" in command
+        assert "--no-build" in command
+        assert "--no-deps" in command
+        assert command[-1] == service
+    assert commands[-1][-1] == "setup-helper"
 
 
 def test_terminal_activation_recreates_helper_only_after_commit(

@@ -130,6 +130,12 @@ sh "$HOME/km-vms/data/update-runtime/bootstrap/current/km-vms-restart.sh" --app-
 
 The helper validates compose files, reuses existing `.env`, does not regenerate secrets, does not wipe database/storage, and does not create owner/settings. Normal restart resolves the verified active slot through the stable bootstrap dispatcher; it does not fall back to executing a full product tree from the stable app root. Persistent services use `restart: always`; one-shot bootstrap/schema/restore jobs use `restart: no`. During a proven nonterminal schema migration or current-database restore, only the API and recorder writers are temporarily fenced with `restart: no` until the existing recovery owner publishes a safe terminal state.
 
+## Health And Restart Checks
+
+The deployment health policy requires Docker Engine 25.0 or later and Docker Compose 2.20.2 or later (or a compatible implementation of `healthcheck.start_interval`). PostgreSQL, Redis, the update status reader, retry admission service and API check readiness every two seconds while starting, with a five-minute initialization allowance. After the first successful check, their normal check interval is 24 hours. HTTP checks use the native `curl` executable; they do not repeatedly start Python.
+
+This policy keeps `service_healthy` startup dependencies responsive without continuous background probes. A steady-state health failure can take up to 24 hours to appear in Docker's health status. Operator diagnostics and explicit deployment checks remain available on demand. Docker health status does not restart a container: persistent process recovery uses the restart policy, while one-shot jobs remain non-restarting. A live process that hangs is therefore not promised automatic recovery by the daily check.
+
 ## Terminal Update
 
 Installed KM VMS instances can be updated in place from a GitHub tarball without requiring `git` on the NAS/server:

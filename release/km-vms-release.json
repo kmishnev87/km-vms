@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.16",
-  "tag": "v0.8.16",
-  "title": "Update Contract Compatibility and Authoritative ONVIF Configuration Truth",
-  "summary": "Strengthens update entry and Compose identity handoff across supported legacy and current contracts, and makes ONVIF encoder configuration read, apply and verification truthful with localized operator errors.",
+  "version": "0.8.17",
+  "tag": "v0.8.17",
+  "title": "Reliable Maintenance, Verified Updates and Low-Load Health Checks",
+  "summary": "Fixes the Maintenance update screen crash and false activation rollback while preserving strict release integrity checks. Replaces frequent Python health probes with native checks and a daily steady-state interval, retaining fast startup readiness.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.16",
+  "source_ref": "v0.8.17",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,22 +16,47 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Normalizes terminal and in-app update entry around one exact Compose project identity without guessed product fallbacks.",
-    "Preserves stable bootstrap, active-slot and runtime authority while handing supported legacy and current update contracts to the exact target implementation.",
-    "Adds a canonical cumulative adopted-development owner so working-NAS validation builds only the affected services without creating a second deployment model.",
-    "Reads ONVIF encoder current values and supported options across real Dahua and Zeep response shapes without inventing unsupported capabilities.",
-    "Applies only changed supported encoder fields, rereads the camera and returns a typed mismatch instead of reporting an unverified success.",
-    "Adds camera-health configuration truth and localized RU, EN and ZH-CN presentation for ONVIF configuration failures.",
-    "Adds byte-exact published 0.8.15 terminal and in-app entry regressions for the next release boundary without changing immutable historical code."
+    "Keeps update pending state in its controller so Maintenance opens and renders available updates without a frontend crash.",
+    "Uses one canonical deployment binding before and after activation, rejecting genuine image, identity, Compose and archive-root drift.",
+    "Uses native health probes with a 24-hour steady-state interval and rapid startup checks to reduce unnecessary NAS CPU and thermal load.",
+    "Accepts installation-root bind aliases only when they identify the same filesystem directory, keeping foreign receipts rejected.",
+    "Validates disposable database restores against counts from the checksum-verified backup itself, including empty or deleted archives, and rejects missing restored rows.",
+    "Adds focused Maintenance, activation and installation identity regression coverage and documents health-monitoring behavior."
   ],
+  "changelog_i18n": {
+    "en": [
+      "Keeps update pending state in its controller so Maintenance opens and renders available updates without a frontend crash.",
+      "Uses one canonical deployment binding before and after activation, rejecting genuine image, identity, Compose and archive-root drift.",
+      "Uses native health probes with a 24-hour steady-state interval and rapid startup checks to reduce unnecessary NAS CPU and thermal load.",
+      "Accepts installation-root bind aliases only when they identify the same filesystem directory, keeping foreign receipts rejected.",
+      "Validates disposable database restores against counts from the checksum-verified backup itself, including empty or deleted archives, and rejects missing restored rows.",
+      "Adds focused Maintenance, activation, installation identity and restore regression coverage and documents health-monitoring behavior."
+    ],
+    "ru": [
+      "Исправлено падение раздела обслуживания при показе доступного обновления.",
+      "Проверки до и после обновления используют единую привязку к коду, образам, Compose и корням архива; реальные несоответствия по-прежнему блокируются.",
+      "Частые запуски Python заменены нативными проверками раз в сутки; быстрые проверки готовности при запуске сохранены.",
+      "Разные пути подключения одной папки установки распознаются как одна папка; чужие квитанции установки отклоняются.",
+      "Пробное восстановление сравнивает данные с самой проверенной резервной копией, правильно обрабатывает пустой или удалённый архив и обнаруживает потерянные строки.",
+      "Добавлены проверки обслуживания, активации, установки и восстановления; обновлена документация проверок состояния."
+    ],
+    "zh-CN": [
+      "修复维护页面在显示可用更新时的崩溃问题。",
+      "更新前后使用相同的代码、镜像、Compose 和存档目录绑定验证，继续阻止真实的不一致。",
+      "使用每天一次的原生健康检查替代频繁启动 Python，并保留快速启动就绪检查。",
+      "允许指向同一安装目录的不同挂载路径，继续拒绝其他目录的安装凭据。",
+      "通过校验和已验证备份的数据计数验证试恢复，支持空存档或已删除存档，并拒绝缺失的数据行。",
+      "增加维护、激活、安装和恢复回归测试，并更新健康检查文档。"
+    ]
+  },
   "title_i18n": {
-    "en": "Update Contract Compatibility and Authoritative ONVIF Configuration Truth",
-    "ru": "Совместимость обновлений и достоверные настройки ONVIF",
-    "zh-CN": "更新契约兼容性与权威 ONVIF 配置"
+    "en": "Reliable Maintenance, Verified Updates and Low-Load Health Checks",
+    "ru": "Надёжное обслуживание, проверенные обновления и редкие проверки состояния",
+    "zh-CN": "可靠维护、更新验证与低负载健康检查"
   },
   "summary_i18n": {
-    "en": "Strengthens update entry and Compose identity handoff across supported legacy and current contracts, and makes ONVIF encoder configuration read, apply and verification truthful with localized operator errors.",
-    "ru": "Укрепляет вход в обновление и передачу точной Compose-идентичности для поддерживаемых старых и текущих контрактов, а также делает чтение, применение и проверку настроек ONVIF достоверными с локализованными сообщениями об ошибках.",
-    "zh-CN": "加强受支持旧版与当前更新契约的更新入口和 Compose 身份交接，并通过本地化错误提示，确保 ONVIF 编码配置的读取、应用和复核结果真实可靠。"
+    "en": "Fixes the Maintenance update screen crash and false activation rollback while preserving strict release integrity checks. Replaces frequent Python health probes with native checks and a daily steady-state interval, retaining fast startup readiness.",
+    "ru": "Устраняет падение раздела обслуживания и ошибочный откат исправного обновления, сохраняя строгую проверку релиза. Частые запуски Python заменены нативными проверками раз в сутки; быстрые проверки при запуске сохранены.",
+    "zh-CN": "修复维护更新页面崩溃和正常更新被错误回滚的问题，同时保留严格的版本完整性验证。使用原生健康检查替代频繁启动 Python，稳定运行时每天检查一次，并保留快速启动就绪检查。"
   }
 }

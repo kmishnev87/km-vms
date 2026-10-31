@@ -26,6 +26,16 @@ SPEC.loader.exec_module(bridge)
 TARGET_COMMIT = "5" * 40
 
 
+def test_product_bridge_does_not_ship_engineering_deployment_cli() -> None:
+    source = BRIDGE_PATH.read_text(encoding="utf-8")
+    assert "prepare-adopted-development" not in source
+    assert not hasattr(bridge, "prepare_adopted_development_slot")
+    assert not hasattr(bridge, "_adopted_development_runtime_source")
+    assert callable(bridge.prepare_initial_install_slot)
+    assert callable(bridge.prepare_trusted_target_slot)
+    assert callable(bridge.canonical_slot_deployment_context)
+
+
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -1056,6 +1066,13 @@ def _install_activation_mocks(
     monkeypatch.setattr(bridge, "bridge_source_root", lambda: tmp_path)
     monkeypatch.setattr(
         bridge,
+        "capture_slot_deployment_binding",
+        lambda app, _project, slot_id, **_kwargs: (
+            engine.build_activation_slot_binding(app, slot_id)
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
         "capture_slot_runtime_binding",
         lambda _app, _project, slot_id, **_kwargs: (
             events.append("capture_previous")
@@ -1189,3 +1206,227 @@ def test_activation_resume_rejects_conflicting_supplied_identity(
     assert captured.value.code == "activation_journal_conflict"
     assert "schema_preflight" not in events
     assert "converge" not in events
+
+
+def test_activation_resume_keeps_the_journaled_canonical_target_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    args = _activation_args(tmp_path)
+    engine = _ActivationEngine(args, events)
+    engine.journal = {
+        "phase": "verifying_target",
+        "request_id": args.request_id,
+        "previous": {"slot_id": args.previous_slot},
+        "target": {
+            "slot_id": args.target_slot,
+            "commit": args.target_commit,
+            "version": args.target_version,
+            "compose_plan_sha256": "e" * 64,
+        },
+        "failure_category": None,
+    }
+    _install_activation_mocks(monkeypatch, tmp_path, engine, events)
+
+    assert bridge.activate_or_resume(args) == 0
+    assert "build_target_binding" not in events
+    assert "capture_target_deployment" not in events
+    assert "schema_preflight" not in events
+    assert events[-1] == "converge"
+
+
+def _complete_activation_binding() -> dict[str, object]:
+    return {
+        "slot_id": "release-" + TARGET_COMMIT,
+        "kind": "trusted_release",
+        "official_source_match": True,
+        "version": "0.8.17",
+        "commit": TARGET_COMMIT,
+        "manifest_sha256": "1" * 64,
+        "inventory_sha256": "2" * 64,
+        "compose_plan_sha256": "3" * 64,
+        "archive_override_sha256": "4" * 64,
+        "image_evidence_sha256": "5" * 64,
+        "api_identity_sha256": "6" * 64,
+    }
+
+
+def test_canonical_slot_deployment_binding_replaces_stale_manifest_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical_plan = "a" * 64
+    canonical_archive = "b" * 64
+    build_calls: list[dict[str, object]] = []
+
+    class Engine:
+        def build_activation_slot_binding(
+            self,
+            _app_dir,
+            slot_id,
+            *,
+            compose_plan_sha256=None,
+            archive_override_sha256=None,
+        ):
+            build_calls.append({
+                "compose_plan_sha256": compose_plan_sha256,
+                "archive_override_sha256": archive_override_sha256,
+            })
+            binding = _complete_activation_binding()
+            binding["slot_id"] = slot_id
+            binding["compose_plan_sha256"] = (
+                compose_plan_sha256 or "c" * 64
+            )
+            binding["archive_override_sha256"] = (
+                archive_override_sha256
+                if archive_override_sha256 is not None
+                else "d" * 64
+            )
+            return binding
+
+        def validate_activation_slot_binding(self, value):
+            return dict(value)
+
+    monkeypatch.setattr(
+        bridge,
+        "slot_compose",
+        lambda *_args, **_kwargs: (
+            ["compose"],
+            {"COMPOSE_PROJECT_NAME": "fixture"},
+            tmp_path / "slot-source",
+            {"image_evidence": {"services": {}}},
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "run_command",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["compose", "config"],
+            0,
+            stdout="services: {}\n",
+            stderr="",
+        ),
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_normalized_compose_digest",
+        lambda *_args, **_kwargs: canonical_plan,
+    )
+    monkeypatch.setattr(
+        bridge,
+        "_archive_override_evidence",
+        lambda _app: (True, canonical_archive),
+    )
+
+    binding = bridge.capture_slot_deployment_binding(
+        tmp_path,
+        "fixture",
+        "release-" + TARGET_COMMIT,
+        engine=Engine(),
+    )
+
+    assert build_calls == [{
+        "compose_plan_sha256": canonical_plan,
+        "archive_override_sha256": canonical_archive,
+    }]
+    assert binding["compose_plan_sha256"] == canonical_plan
+    assert binding["archive_override_sha256"] == canonical_archive
+
+
+def test_activation_journals_the_same_canonical_target_before_and_after_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    args = _activation_args(tmp_path)
+    engine = _ActivationEngine(args, events)
+    canonical = dict(engine.target_binding)
+    canonical["compose_plan_sha256"] = "e" * 64
+    journaled: list[dict[str, object]] = []
+    _install_activation_mocks(monkeypatch, tmp_path, engine, events)
+
+    def capture_target(_app, _project, slot_id, **_kwargs):
+        events.append("capture_target_deployment")
+        assert slot_id == args.target_slot
+        return dict(canonical)
+
+    original_initialize = engine.initialize_activation_journal
+
+    def initialize(_app_dir, **kwargs):
+        journaled.append(dict(kwargs["target"]))
+        return original_initialize(_app_dir, **kwargs)
+
+    monkeypatch.setattr(
+        bridge,
+        "capture_slot_deployment_binding",
+        capture_target,
+    )
+    engine.initialize_activation_journal = initialize
+
+    assert bridge.activate_or_resume(args) == 0
+    assert events.count("capture_target_deployment") == 2
+    assert journaled == [canonical]
+
+
+def test_verify_slot_runtime_accepts_identical_canonical_binding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = _complete_activation_binding()
+    clock = iter((0.0, 0.0))
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        bridge,
+        "capture_slot_runtime_binding",
+        lambda *_args, **_kwargs: dict(binding),
+    )
+
+    bridge.verify_slot_runtime(
+        tmp_path,
+        "fixture",
+        binding,
+        engine=object(),
+        timeout_seconds=1,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("commit", "7" * 40),
+        ("version", "0.8.18"),
+        ("api_identity_sha256", "7" * 64),
+        ("image_evidence_sha256", "7" * 64),
+        ("compose_plan_sha256", "7" * 64),
+        ("archive_override_sha256", "7" * 64),
+    ],
+)
+def test_verify_slot_runtime_rejects_each_protected_binding_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    replacement: str,
+) -> None:
+    binding = _complete_activation_binding()
+    observed = dict(binding)
+    observed[field] = replacement
+    clock = iter((0.0, 0.0, 2.0))
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(bridge.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        bridge,
+        "capture_slot_runtime_binding",
+        lambda *_args, **_kwargs: dict(observed),
+    )
+
+    with pytest.raises(bridge.BridgeError) as captured:
+        bridge.verify_slot_runtime(
+            tmp_path,
+            "fixture",
+            binding,
+            engine=object(),
+            timeout_seconds=1,
+        )
+
+    assert captured.value.code == "slot_runtime_evidence_mismatch"

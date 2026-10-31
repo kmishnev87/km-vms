@@ -289,6 +289,7 @@ export function SettingsMaintenanceModal({
     updateStatus,
     updateApplyStatus,
     updateApplyOperator,
+    updateApplyHasUnknownLaunch,
     updateApplyRunning,
     updateApplyAllowed,
     updateApplyPrimaryText,
@@ -411,7 +412,7 @@ export function SettingsMaintenanceModal({
                       </button>
                       {updateApplyOperator.showApplyButton ? (
                         <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
-                          {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyPending || updateApplyOperator.stateUnknown
+                          {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyHasUnknownLaunch || updateApplyOperator.stateUnknown
                             ? updateApplyPrimaryText
                             : t.updateApplyStart}
                         </button>

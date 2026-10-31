@@ -32,6 +32,7 @@ from app.services.restore_validation import (
     run_restore_validation,
 )
 from app.services.schema_versioning import CURRENT_SCHEMA_VERSION
+from app.services import restore_validation
 from test_schema_migration_runner_stage3 import seed_state
 
 
@@ -353,3 +354,54 @@ def test_postgres_backup_restores_to_disposable_target_and_validates_state(dispo
     manifest = json.loads(Path(result["restore_manifest_path"]).read_text(encoding="utf-8"))
     assert owner_password not in json.dumps(manifest)
     assert manifest["video_archive_restore_status"] == "not_covered_metadata_only"
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_restore_compares_dump_evidence_without_requiring_live_recordings(disposable_databases, tmp_path, empty):
+    source_url, target_url, owner_password = disposable_databases
+    engine = create_engine(source_url)
+    Base.metadata.create_all(bind=engine)
+    try:
+        with sessionmaker(bind=engine)() as db:
+            _seed_representative_source(db, owner_password)
+            if empty:
+                for model in (AuditEvent, RecordingSegment, RecordingJob, Camera, ArchiveRoot):
+                    db.query(model).delete(synchronize_session=False)
+            else:
+                db.query(RecordingSegment).update({"status": "deleted"})
+            db.commit()
+            backup = create_backup_before_upgrade(db, config=BackupExecutionConfig(backup_root=tmp_path / "backups", allow_tmp_for_tests=True))
+        result = run_restore_validation(backup["manifest_path"], config=RestoreValidationConfig(
+            target_database_url=target_url, validation_root=tmp_path / "validation", allow_disposable_target=True,
+            expected_owner_username="stage5_owner", expected_owner_password=owner_password,
+        ), source_database_url=source_url)
+        assert result["backup_restore_validated"] is True
+        assert result["checks"]["recording_metadata"]["finalized_segments"] == 0
+        assert result["checks"]["backup_entity_counts"]["passed"] is True
+        assert result["checks"]["cameras"]["count"] == (0 if empty else 1)
+    finally:
+        engine.dispose()
+
+
+def test_restore_rejects_rows_lost_after_restore(disposable_databases, tmp_path, monkeypatch):
+    source_url, target_url, owner_password = disposable_databases
+    backup = _seed_backup(source_url, tmp_path, owner_password)
+    original = restore_validation._restore_postgres_custom_dump
+
+    def restore_then_lose_rows(*args):
+        original(*args)
+        engine = create_engine(target_url)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("DELETE FROM recording_segments"))
+        finally:
+            engine.dispose()
+
+    monkeypatch.setattr(restore_validation, "_restore_postgres_custom_dump", restore_then_lose_rows)
+    result = run_restore_validation(backup["manifest_path"], config=RestoreValidationConfig(
+        target_database_url=target_url, validation_root=tmp_path / "validation", allow_disposable_target=True,
+        expected_owner_username="stage5_owner",
+    ), source_database_url=source_url)
+    assert result["backup_restore_validated"] is False
+    assert result["checks"]["recording_metadata"]["passed"] is False
+    assert result["checks"]["recorder_ownership"]["passed"] is False

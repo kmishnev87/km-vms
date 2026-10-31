@@ -141,6 +141,51 @@ def test_project_identity_missing_without_any_trusted_evidence(
     assert captured.value.code == "project_identity_missing"
 
 
+def test_install_receipt_accepts_two_mount_names_for_one_filesystem_object(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _slot_id = _active_project_fixture(tmp_path, monkeypatch)
+    host_view = tmp_path / "host-view"
+    host_view.mkdir()
+    (app / ".km-vms-install.json").write_text(
+        json.dumps({"app_dir": str(host_view), "project_name": "fixture-a"}),
+        encoding="utf-8",
+    )
+    original_samefile = Path.samefile
+    checked = []
+
+    def samefile(path, other):
+        if path == host_view and other == app:
+            checked.append((path, other))
+            return True  # Docker bind-mount identity, proved separately live.
+        return original_samefile(path, other)
+
+    monkeypatch.setattr(Path, "samefile", samefile)
+    assert bootstrap.read_project_name(app) == "fixture-a"
+    assert checked == [(host_view, app)]
+
+
+@pytest.mark.parametrize("recorded_kind", ["foreign", "missing", "relative"])
+def test_install_receipt_rejects_nonidentical_directory_even_with_matching_project(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    recorded_kind: str,
+) -> None:
+    app, _slot_id = _active_project_fixture(tmp_path, monkeypatch)
+    recorded = tmp_path / recorded_kind
+    if recorded_kind == "foreign":
+        recorded.mkdir()
+    value = "." if recorded_kind == "relative" else str(recorded)
+    (app / ".km-vms-install.json").write_text(
+        json.dumps({"app_dir": value, "project_name": "fixture-a"}),
+        encoding="utf-8",
+    )
+    with pytest.raises(bootstrap.BootstrapError) as captured:
+        bootstrap.read_project_name(app)
+    assert captured.value.code == "project_identity_receipt_invalid"
+
+
 def test_project_identity_rejects_ambiguous_complete_legacy_projects(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -342,35 +387,6 @@ def test_project_identity_consumers_have_no_guessed_product_fallback() -> None:
         assert 'or "tnas-vms"' not in (
             REPO_ROOT / relative
         ).read_text(encoding="utf-8")
-
-
-def test_adopted_development_owner_accepts_only_unique_buildable_services() -> None:
-    assert bridge._adopted_development_build_services(["web", "api"]) == [
-        "api",
-        "web",
-    ]
-    for invalid in ([], ["api", "api"], ["nginx"]):
-        with pytest.raises(bridge.BridgeError) as captured:
-            bridge._adopted_development_build_services(invalid)
-        assert captured.value.code == "adopted_development_services_invalid"
-
-
-def test_adopted_development_cli_is_one_existing_slot_contract_wrapper() -> None:
-    source = (REPO_ROOT / "scripts/km-vms-update-helper-bridge.py").read_text(
-        encoding="utf-8"
-    )
-    block = source[
-        source.index("def prepare_adopted_development_slot("):
-        source.index("def bind_legacy_adopted_slot_as_active(")
-    ]
-    assert '"stage-adopted"' in block
-    assert '"prepare-adopted-runtime"' in block
-    assert '"finalize"' in block
-    assert block.index('"stage-adopted"') < block.index(
-        '"prepare-adopted-runtime"'
-    ) < block.index('"finalize"')
-    assert "preserve_slot_images(" in block
-    assert "capture_pre_update_slot_evidence(" in block
 
 
 @pytest.mark.parametrize("authority", [bootstrap, bridge])

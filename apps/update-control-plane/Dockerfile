@@ -1,5 +1,7 @@
 FROM python:3.12-alpine
 
+RUN apk add --no-cache curl
+
 WORKDIR /opt/kmvms-control
 COPY control_plane.py /opt/kmvms-control/control_plane.py
 
