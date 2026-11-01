@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+import re
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -39,6 +40,12 @@ SAFE_REASON_CODES = {
     "recording_segment_not_rotating",
     "live_failed",
     "live_starting",
+    "live_interrupted",
+    "live_recovering",
+    "auth_failed",
+    "resource_limit",
+    "no_rtsp_url",
+    "stream_stalled",
     "stream_unavailable",
     "unknown_status",
     "camera_unreachable",
@@ -100,6 +107,12 @@ def _safe_reason_from_error(value: str | None) -> str | None:
     if not value:
         return None
     normalized = value.lower()
+    if normalized in SAFE_REASON_CODES:
+        return normalized
+    if any(part in normalized for part in ("unauthorized", "forbidden", "authentication failed")) or re.search(
+        r"(?:server returned|(?:http|rtsp)(?:/\d(?:\.\d)?)?|failed:?)\s+(?:401|403)\b", normalized
+    ):
+        return "auth_failed"
     if "rtsp" in normalized or "connect" in normalized or "timeout" in normalized or "unreachable" in normalized:
         return "camera_unreachable"
     if "stream" in normalized:
@@ -165,6 +178,10 @@ def _live_reason_and_severity(item: dict[str, Any] | None, expected: bool) -> tu
         return "ok", [], None
     if status in {"failed", "error"} or failure:
         _append_reason(reasons, "live_failed")
+        if item.get("ever_ready"):
+            _append_reason(reasons, "live_interrupted")
+        if item.get("next_retry_at"):
+            _append_reason(reasons, "live_recovering")
         _append_reason(reasons, safe_failure_reason)
         return "error", reasons, safe_failure_reason
     if status in {"starting", "restarting"} or (running and not ready):
@@ -188,8 +205,10 @@ def _build_live_domain(cameras: list[Camera]) -> tuple[dict[str, Any], dict[int,
         (int(item.get("camera_id")), str(item.get("stream") or "")): item
         for item in raw_items
         if item.get("camera_id") is not None and int(item.get("camera_id")) in active_camera_ids
+        and not (item.get("viewer_managed") and int(item.get("viewers") or 0) == 0)
     }
-    expected_keys = {(camera.id, camera.default_live_stream or "sub") for camera in cameras if camera.enabled}
+    expected_keys = set(by_key)
+    camera_names = {int(camera.id): camera.name for camera in cameras}
     keys = sorted(expected_keys | set(by_key.keys()))
     items: list[dict[str, Any]] = []
     by_camera: dict[int, dict[str, Any]] = {}
@@ -199,6 +218,7 @@ def _build_live_domain(cameras: list[Camera]) -> tuple[dict[str, Any], dict[int,
         severity, reasons, safe_failure_reason = _live_reason_and_severity(item, (camera_id, stream) in expected_keys)
         safe_item = {
             "camera_id": camera_id,
+            "camera_name": camera_names.get(camera_id),
             "stream": stream,
             "state": str(item.get("status") or "unknown") if item else "unknown",
             "ready": bool(item.get("ready")) if item else False,
@@ -208,6 +228,9 @@ def _build_live_domain(cameras: list[Camera]) -> tuple[dict[str, Any], dict[int,
             "reason_codes": reasons,
             "safe_failure_reason": safe_failure_reason,
             "startup_age_seconds": item.get("startup_elapsed_seconds") if item else None,
+            "next_retry_at": item.get("next_retry_at") if item and isinstance(item.get("next_retry_at"), (int, float)) else None,
+            "retry_count": int(item.get("retry_count") or 0) if item else 0,
+            "ever_ready": bool(item.get("ever_ready")) if item else False,
         }
         items.append(safe_item)
         current = by_camera.get(camera_id)

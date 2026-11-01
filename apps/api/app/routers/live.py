@@ -28,6 +28,9 @@ SENSITIVE_TEXT_RE = re.compile(
     re.IGNORECASE,
 )
 SAFE_FAILURE_REASONS = {
+    "camera_unreachable",
+    "auth_failed",
+    "stream_stalled",
     "no_rtsp_url",
     "resource_limit",
     "startup_timeout_no_progress",
@@ -77,6 +80,9 @@ LIVE_STATUS_ALLOWED_FIELDS = (
     "last_state_transition",
     "playlist_exists",
     "segment_count",
+    "retry_count",
+    "next_retry_at",
+    "ever_ready",
 )
 
 
@@ -101,10 +107,20 @@ def _live_media_resource(camera_id: int, stream: str) -> dict:
     return {"camera_id": int(camera_id), "stream": str(stream)}
 
 
+def _live_media_cookie_name(camera_id: int, stream: str) -> str:
+    return f"kmvms_live_{int(camera_id)}_{stream}"
+
+
 def _authorize_live_media_token(media_token: Optional[str], camera_id: int, stream: str, db: Session, request: Request | None = None) -> User:
+    # Native HLS and hls.js use the same stable URLs. Refreshing this scoped,
+    # HttpOnly cookie renews access without resetting the media source. Legacy
+    # explicit links still validate their own token, never a cookie fallback.
+    token = media_token
+    if token is None and request is not None:
+        token = request.cookies.get(_live_media_cookie_name(camera_id, stream))
     return validate_media_token(
         db,
-        token=media_token,
+        token=token,
         scope="live",
         resource=_live_media_resource(camera_id, stream),
         permission=PERMISSION_VIEW_LIVE,
@@ -235,7 +251,9 @@ def _serve_live_playlist(camera_id: int, stream: str, media_token: str) -> Respo
     lines = []
     for line in playlist_text.splitlines():
         if line.endswith(".ts"):
-            line = f"/api/live/{camera_id}/{stream}/{line}?media_token={media_token}"
+            line = f"/api/live/{camera_id}/{stream}/{line}"
+            if media_token:
+                line += f"?media_token={media_token}"
         lines.append(line)
 
     return Response(
@@ -333,6 +351,8 @@ def live_debug_all(
 @router.post("/media-token")
 def issue_live_media_token(
     payload: LiveViewerPayload,
+    request: Request,
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_live")),
 ):
@@ -342,7 +362,19 @@ def issue_live_media_token(
         scope="live",
         resource=_live_media_resource(payload.camera_id, payload.stream),
     )
-    return media_token_response(token, expires_at)
+    token_response = media_token_response(token, expires_at)
+    response.set_cookie(
+        key=_live_media_cookie_name(payload.camera_id, payload.stream),
+        value=token,
+        max_age=token_response["expires_in"],
+        expires=expires_at,
+        path=f"/api/live/{payload.camera_id}/{payload.stream}/",
+        secure=request.url.scheme == "https",
+        httponly=True,
+        samesite="strict",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return token_response
 
 
 @router.get("/debug/{camera_id}/{stream}")

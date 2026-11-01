@@ -5,16 +5,17 @@ import Hls from "hls.js";
 import CompactVideoCanvas from "./CompactVideoCanvas";
 import VideoZoomPanSurface from "./VideoZoomPanSurface";
 import { apiFetch, issueLiveMediaTokenInfo } from "../lib/api";
+import { useI18n } from "../lib/i18n";
+import { liveFailureMessage, liveRecoveryDelay, notifyLiveRuntimeChanged } from "../lib/livePlaybackRecovery";
 import {
   isCompactSmoothingSourceVideo,
   normalizeVideoDimensions,
   selectCompactVideoRenderMode,
 } from "../lib/playbackResolution";
 
-const READY_POLL_INTERVAL_MS = 700;
-const READY_TIMEOUT_MS = 210000;
+const READY_POLL_INTERVAL_MS = 1500;
 const VIEWER_TOUCH_INTERVAL_MS = 15000;
-const MEDIA_TOKEN_REFRESH_SAFETY_MS = 45000;
+const MEDIA_TOKEN_REFRESH_SAFETY_MS = 90000;
 const MEDIA_TOKEN_MIN_REFRESH_MS = 30000;
 
 const TEXT = {
@@ -56,6 +57,7 @@ export default function TilePlayer({
   onDesktopDoubleClick,
   onTouchDoubleTap,
 }) {
+  const { text } = useI18n();
   const videoRef = useRef(null);
   const wrapRef = useRef(null);
   const hlsRef = useRef(null);
@@ -63,8 +65,6 @@ export default function TilePlayer({
   const mediaTokenRefreshTimerRef = useRef(null);
   const mediaTokenRefreshInFlightRef = useRef(null);
   const nativeHlsCleanupRef = useRef(null);
-  const touchTimerRef = useRef(null);
-  const viewerIdRef = useRef(null);
   const dimensionProbeTimerRef = useRef(null);
   const audioStatusChangeRef = useRef(onAudioStatusChange);
   const audioPlaybackBlockedRef = useRef(onAudioPlaybackBlocked);
@@ -287,6 +287,18 @@ export default function TilePlayer({
 
   useEffect(() => {
     let cancelled = false;
+    let recoveryAttempt = 0;
+    let recoveryScheduled = false;
+    let starting = false;
+    let generation = 0;
+    let everPlayed = false;
+    let healthySince = 0;
+    let lastPlaybackTime = 0;
+    let lastPlaybackProgressAt = Date.now();
+    let lastTokenError = null;
+    let lastRuntimeState = "";
+    let currentViewerId = null;
+    let viewerTouchTimer = null;
     const sourceKey = {
       cameraId: cameraId ? Number(cameraId) : null,
       stream: stream || null,
@@ -294,13 +306,13 @@ export default function TilePlayer({
     setCanvasFrame({ ready: false, generation: "", reason: "source-change", error: "" });
 
     async function closeViewer() {
-      if (touchTimerRef.current) {
-        clearInterval(touchTimerRef.current);
-        touchTimerRef.current = null;
+      if (viewerTouchTimer) {
+        clearInterval(viewerTouchTimer);
+        viewerTouchTimer = null;
       }
 
-      const viewerId = viewerIdRef.current;
-      viewerIdRef.current = null;
+      const viewerId = currentViewerId;
+      currentViewerId = null;
       if (!viewerId) return;
 
       try {
@@ -308,34 +320,45 @@ export default function TilePlayer({
           method: "DELETE",
         });
       } catch (_) {}
+      notifyLiveRuntimeChanged();
     }
 
     function startViewerHeartbeat() {
-      if (touchTimerRef.current) {
-        clearInterval(touchTimerRef.current);
-        touchTimerRef.current = null;
+      if (viewerTouchTimer) {
+        clearInterval(viewerTouchTimer);
+        viewerTouchTimer = null;
       }
 
-      touchTimerRef.current = setInterval(() => {
-        const viewerId = viewerIdRef.current;
+      viewerTouchTimer = setInterval(() => {
+        const viewerId = currentViewerId;
         if (!viewerId || cancelled) return;
 
         apiFetch(`/live/viewers/${encodeURIComponent(viewerId)}/touch`, {
           method: "POST",
-        }).catch(() => {});
+        }).then((result) => {
+          if (!cancelled && viewerId === currentViewerId && result?.touched === false) failWithMessage(TEXT.failedPlay);
+        }).catch((err) => {
+          if (!cancelled && [401, 403].includes(err?.status)) failWithMessage(TEXT.failedPlay, err);
+        });
       }, VIEWER_TOUCH_INTERVAL_MS);
     }
 
-    async function waitForReady() {
-      const deadline = Date.now() + READY_TIMEOUT_MS;
+    async function waitForReady(expectedGeneration) {
+      const startedWaitingAt = Date.now();
       let lastItem = null;
-      while (!cancelled && Date.now() < deadline) {
+      while (!cancelled && generation === expectedGeneration) {
         try {
           const response = await apiFetch(
             `/live/status?camera_id=${encodeURIComponent(sourceKey.cameraId)}&stream=${encodeURIComponent(sourceKey.stream)}`
           );
+          if (cancelled || generation !== expectedGeneration) break;
           const item = response?.items?.[0];
           if (item) lastItem = item;
+          const runtimeState = `${item?.status || "missing"}|${item?.safe_failure_reason || item?.failure_reason || ""}|${item?.retry_count || 0}`;
+          if (runtimeState !== lastRuntimeState) {
+            lastRuntimeState = runtimeState;
+            notifyLiveRuntimeChanged();
+          }
           if (item?.source_resolution?.width && item?.source_resolution?.height) {
             applyNaturalResolution(item.source_resolution.width, item.source_resolution.height, "runtime-source");
           }
@@ -343,44 +366,61 @@ export default function TilePlayer({
           if (item?.running && item?.ready) {
             return { ready: true, item };
           }
-          if (
-            item?.status === "failed" ||
-            item?.failure_reason ||
-            item?.safe_failure_reason
-          ) {
+          if (item?.status === "failed" && !item?.next_retry_at) {
             return {
               ready: false,
               failed: true,
-              message: item?.safe_failure_reason || item?.failure_reason || TEXT.failedStart,
+              message: liveFailureMessage(item?.safe_failure_reason || item?.failure_reason, everPlayed),
               item,
             };
           }
-        } catch (_) {}
+          if (item?.safe_failure_reason || item?.failure_reason || item?.status === "restarting") {
+            setError(liveFailureMessage(item?.safe_failure_reason || item?.failure_reason, everPlayed));
+          }
+        } catch (err) {
+          if ([401, 403, 404].includes(err?.status)) throw err;
+          setError(liveFailureMessage("camera_unreachable", everPlayed));
+        }
 
         setStatus("waiting");
-        await sleep(READY_POLL_INTERVAL_MS);
+        await sleep(Date.now() - startedWaitingAt > 10000 ? 5000 : READY_POLL_INTERVAL_MS);
       }
 
       return { ready: false, failed: false, message: TEXT.failedStart, item: lastItem };
     }
 
-    function failWithMessage(message) {
+    function failWithMessage(message, cause = null) {
+      if (cancelled || recoveryScheduled) return;
+      generation += 1;
       destroyPlayer();
-      setStatus("error");
-      setError(message || TEXT.failedStart);
-    }
-
-    function isStillStarting(readyState) {
-      return Boolean(
-        readyState?.item?.running &&
-          (readyState.item.status === "starting" || readyState.item.status === "restarting")
-      );
+      void closeViewer();
+      healthySince = 0;
+      if ([401, 403, 404].includes(cause?.status)) {
+        setStatus("error");
+        setError(extractErrorMessage(cause, message || TEXT.failedStart));
+        return;
+      }
+      recoveryScheduled = true;
+      setStatus("waiting");
+      setError(message || liveFailureMessage(null, everPlayed));
+      const delay = liveRecoveryDelay(recoveryAttempt++);
+      const retry = () => {
+        if (!cancelled && starting) {
+          retryTimerRef.current = setTimeout(retry, 250);
+          return;
+        }
+        retryTimerRef.current = null;
+        recoveryScheduled = false;
+        if (!cancelled) void startPlayback();
+      };
+      retryTimerRef.current = setTimeout(retry, delay);
     }
 
     async function buildPlaylistUrl() {
       const tokenInfo = await issueLiveMediaTokenInfo(sourceKey.cameraId, sourceKey.stream);
+      if (!tokenInfo.mediaToken) throw new Error(TEXT.failedPlay);
       return {
-        url: `/api/live/${sourceKey.cameraId}/${sourceKey.stream}/index.m3u8?media_token=${encodeURIComponent(tokenInfo.mediaToken)}`,
+        url: `/api/live/${sourceKey.cameraId}/${sourceKey.stream}/index.m3u8`,
         expiresIn: tokenInfo.expiresIn,
       };
     }
@@ -396,28 +436,24 @@ export default function TilePlayer({
         }
       }
 
-      mediaTokenRefreshInFlightRef.current = (async () => {
+      const pendingRefresh = (async () => {
         const next = await buildPlaylistUrl();
         if (cancelled) return;
-        if (hlsRef.current) {
-          hlsRef.current.loadSource(next.url);
-        } else if (videoRef.current) {
-          const video = videoRef.current;
-          const wasPaused = video.paused;
-          video.src = next.url;
-          video.load();
-          if (!wasPaused) video.play().catch(() => {});
-        }
+        // The response renews a scoped HttpOnly cookie. Neither native HLS nor
+        // hls.js needs a source change, buffer reset or media reattachment.
         scheduleMediaTokenRefresh(next.expiresIn);
       })();
+      mediaTokenRefreshInFlightRef.current = pendingRefresh;
 
       try {
-        await mediaTokenRefreshInFlightRef.current;
+        await pendingRefresh;
+        lastTokenError = null;
         return true;
-      } catch (_) {
+      } catch (err) {
+        lastTokenError = err;
         return false;
       } finally {
-        if (mediaTokenRefreshInFlightRef.current) {
+        if (mediaTokenRefreshInFlightRef.current === pendingRefresh) {
           mediaTokenRefreshInFlightRef.current = null;
         }
       }
@@ -433,37 +469,9 @@ export default function TilePlayer({
       mediaTokenRefreshTimerRef.current = setTimeout(async () => {
         const refreshed = await refreshPlaylistSource();
         if (!cancelled && !refreshed) {
-          failWithMessage(TEXT.failedPlay);
+          failWithMessage(liveFailureMessage(null, everPlayed), lastTokenError);
         }
       }, delay);
-    }
-
-    function continueWaitingForReady(message) {
-      if (cancelled) return;
-
-      setStatus("waiting");
-      setError("");
-      retryTimerRef.current = setTimeout(async () => {
-        if (cancelled) return;
-
-        const readyState = await waitForReady();
-        if (readyState.ready) {
-          await attachPlayer(await buildPlaylistUrl());
-          return;
-        }
-
-        if (readyState.failed) {
-          failWithMessage(readyState.message || message);
-          return;
-        }
-
-        if (isStillStarting(readyState)) {
-          continueWaitingForReady(message);
-          return;
-        }
-
-        failWithMessage(message);
-      }, READY_POLL_INTERVAL_MS);
     }
 
     async function attachPlayer(playlist) {
@@ -472,6 +480,9 @@ export default function TilePlayer({
       let authRefreshFailures = 0;
 
       destroyPlayer();
+      scheduleMediaTokenRefresh(playlist.expiresIn);
+      lastPlaybackProgressAt = Date.now();
+      lastPlaybackTime = 0;
 
       if (Hls.isSupported()) {
         const hls = new Hls({
@@ -490,10 +501,9 @@ export default function TilePlayer({
 
         hlsRef.current = hls;
 
-        hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+        hls.once(Hls.Events.MEDIA_ATTACHED, () => {
           if (!cancelled) {
             hls.loadSource(playlist.url);
-            scheduleMediaTokenRefresh(playlist.expiresIn);
           }
         });
 
@@ -511,6 +521,8 @@ export default function TilePlayer({
           }
           setStatus("playing");
           setError("");
+          everPlayed = true;
+          notifyLiveRuntimeChanged();
           video.play().catch(() => {});
           startDimensionProbe("hls-manifest-probe");
         });
@@ -534,12 +546,14 @@ export default function TilePlayer({
             authRefreshFailures += 1;
             const refreshed = await refreshPlaylistSource();
             if (!cancelled && !refreshed) {
-              failWithMessage(TEXT.failedPlay);
+              failWithMessage(liveFailureMessage(null, everPlayed), lastTokenError);
+            } else if (!cancelled && hls === hlsRef.current) {
+              hls.startLoad();
             }
             return;
           }
           if (cancelled || !data?.fatal) return;
-          failWithMessage(TEXT.failedPlay);
+          failWithMessage(liveFailureMessage(null, everPlayed));
         });
 
         hls.attachMedia(video);
@@ -549,13 +563,14 @@ export default function TilePlayer({
       if (video.canPlayType("application/vnd.apple.mpegurl")) {
         let nativeRefreshFailures = 0;
         video.src = playlist.url;
-        scheduleMediaTokenRefresh(playlist.expiresIn);
 
         const onLoaded = () => {
           if (cancelled) return;
           sampleVideoDimensions("native-hls");
           setStatus("playing");
           setError("");
+          everPlayed = true;
+          notifyLiveRuntimeChanged();
           nativeRefreshFailures = 0;
           video.play().catch(() => {});
           startDimensionProbe("native-hls-probe");
@@ -568,10 +583,7 @@ export default function TilePlayer({
             return;
           }
           nativeRefreshFailures += 1;
-          const refreshed = await refreshPlaylistSource();
-          if (!cancelled && !refreshed) {
-            failWithMessage(TEXT.failedPlay);
-          }
+          failWithMessage(liveFailureMessage(null, everPlayed));
         };
 
         video.addEventListener("loadedmetadata", onLoaded);
@@ -586,16 +598,20 @@ export default function TilePlayer({
 
       setStatus("error");
       setError(TEXT.browserUnsupported);
+      void closeViewer();
     }
 
     async function startPlayback() {
-      if (!sourceKey.cameraId || !sourceKey.stream) return;
+      if (cancelled || starting || !sourceKey.cameraId || !sourceKey.stream) return;
+      starting = true;
+      const expectedGeneration = ++generation;
 
       setStatus("loading");
       setError("");
 
       try {
         await closeViewer();
+        if (cancelled || generation !== expectedGeneration) return;
 
         const viewer = await apiFetch("/live/viewers", {
           method: "POST",
@@ -605,7 +621,7 @@ export default function TilePlayer({
             stream: sourceKey.stream,
           }),
         });
-        viewerIdRef.current = viewer?.viewer_id || null;
+        currentViewerId = viewer?.viewer_id || null;
         startViewerHeartbeat();
 
         if (cancelled) {
@@ -613,14 +629,11 @@ export default function TilePlayer({
           return;
         }
 
-        const readyState = await waitForReady();
+        const readyState = await waitForReady(expectedGeneration);
+        if (cancelled || generation !== expectedGeneration) return;
         if (!readyState.ready) {
           if (readyState.failed) {
             failWithMessage(readyState.message || TEXT.failedStart);
-            return;
-          }
-          if (isStillStarting(readyState)) {
-            continueWaitingForReady(TEXT.failedStart);
             return;
           }
           failWithMessage(TEXT.failedStart);
@@ -628,7 +641,7 @@ export default function TilePlayer({
         }
 
         const src = await buildPlaylistUrl();
-        if (!cancelled) {
+        if (!cancelled && generation === expectedGeneration) {
           await attachPlayer(src);
         }
       } catch (err) {
@@ -638,15 +651,41 @@ export default function TilePlayer({
             failWithMessage(message);
             return;
           }
-          failWithMessage(message);
+          failWithMessage(message, err);
         }
+      } finally {
+        starting = false;
       }
     }
 
+    const watchTimer = setInterval(() => {
+      const video = videoRef.current;
+      if (cancelled || !video || !hlsRef.current && !nativeHlsCleanupRef.current) return;
+      const now = Date.now();
+      if (video.currentTime > lastPlaybackTime + 0.01) {
+        lastPlaybackTime = video.currentTime;
+        lastPlaybackProgressAt = now;
+        healthySince ||= now;
+        if (now - healthySince >= 30000) recoveryAttempt = 0;
+      } else if (!video.paused && now - lastPlaybackProgressAt > 30000) {
+        failWithMessage(liveFailureMessage("stream_stalled", everPlayed));
+      }
+    }, 10000);
+    const onResume = () => {
+      if (!cancelled && !document.hidden && (hlsRef.current || nativeHlsCleanupRef.current)) {
+        void refreshPlaylistSource().then((ok) => { if (!ok) failWithMessage(TEXT.failedPlay, lastTokenError); });
+      }
+    };
+    window.addEventListener("online", onResume);
+    document.addEventListener("visibilitychange", onResume);
     startPlayback();
 
     return () => {
       cancelled = true;
+      generation += 1;
+      clearInterval(watchTimer);
+      window.removeEventListener("online", onResume);
+      document.removeEventListener("visibilitychange", onResume);
       destroyPlayer();
       closeViewer();
       clearDimensionProbe();
@@ -678,8 +717,9 @@ export default function TilePlayer({
     <div
       ref={wrapRef}
       className={`liveVideoWrap ${compactCanvasRequested ? "compactVideoCanvasRequested" : ""} ${nativeVideoSuppressed ? "compactVideoCanvasActive" : ""}`}
-      title={TEXT.doubleClick}
+      title={text(TEXT.doubleClick)}
       data-render-context="live"
+      data-playback-status={status}
       data-renderer={nativeVideoSuppressed ? "canvas" : "native"}
       data-render-mode={renderState.mode}
       data-quality-tier={renderState.qualityTier}
@@ -727,12 +767,12 @@ export default function TilePlayer({
 
       {status === "loading" || status === "waiting" ? (
         <div className="liveCenterHint">
-          {status === "waiting" ? TEXT.waiting : TEXT.loading}
+          {text(status === "waiting" ? error || TEXT.waiting : TEXT.loading)}
         </div>
       ) : null}
 
       {status === "error" ? (
-        <div className="liveCenterHint liveCenterHintError">{error}</div>
+        <div className="liveCenterHint liveCenterHintError">{text(error)}</div>
       ) : null}
     </div>
   );

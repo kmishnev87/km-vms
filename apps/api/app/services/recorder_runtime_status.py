@@ -19,7 +19,7 @@ HEALTHY_NEUTRAL_JOB_STATES = {"starting", "recording", "stopping", "stopped", "i
 SEGMENT_STATUS_DELETED = "deleted"
 RECORDER_SOURCE = "recorder"
 HEARTBEAT_STALE_SECONDS = 90
-MEDIA_PROGRESS_STALE_SECONDS = 90
+MEDIA_PROGRESS_STALE_SECONDS = 60
 MAX_RECENT_ITEMS = 50
 SEGMENT_STALE_GRACE_SECONDS = 300
 STALE_CURRENT_SEGMENT_REASON = "recording_segment_not_rotating"
@@ -84,7 +84,10 @@ def age_seconds(value: datetime | None, now: datetime) -> int | None:
         return None
     if isinstance(value, str):
         value = datetime.fromisoformat(value.removesuffix("Z"))
-    return max(0, int((now - value).total_seconds()))
+    elapsed = (now - value).total_seconds()
+    # A materially future heartbeat/progress stamp is invalid evidence, not a
+    # perpetually fresh heartbeat. Small clock/serialization skew is tolerated.
+    return None if elapsed < -30 else max(0, int(elapsed))
 
 
 def segment_age_seconds(segment: RecordingSegment | None, now: datetime, ctx: TimezoneContext) -> int | None:
@@ -133,7 +136,8 @@ def read_recorder_heartbeat(db: Session) -> dict[str, Any]:
                            last_exit_code,
                            updated_at
                     FROM recorder_runtime_status
-                    ORDER BY heartbeat_at DESC
+                    ORDER BY CASE WHEN loop_state IN ('shutdown', 'replaced') THEN 1 ELSE 0 END,
+                             heartbeat_at DESC
                     LIMIT 1
                     """
                 )
@@ -172,10 +176,35 @@ def read_recorder_heartbeat(db: Session) -> dict[str, Any]:
     }
 
 
+def current_recording_jobs(db: Session, instance_id: str | None = None) -> dict[int, RecordingJob]:
+    if instance_id is None:
+        heartbeat = read_recorder_heartbeat(db)
+        instance_id = str(heartbeat.get("recorder_instance_id") or "") if heartbeat.get("available") else ""
+    if not instance_id:
+        return {}
+    jobs = (
+        db.query(RecordingJob)
+        .join(Camera, Camera.id == RecordingJob.camera_id)
+        .filter(
+            RecordingJob.recorder_instance_id == instance_id,
+            RecordingJob.source == RECORDER_SOURCE,
+            RecordingJob.ownership == "KM VMS",
+            Camera.deleted_at.is_(None),
+        )
+        .order_by(RecordingJob.started_at.desc(), RecordingJob.updated_at.desc().nullslast(), RecordingJob.id.desc())
+        .all()
+    )
+    latest = {}
+    for job in jobs:
+        latest.setdefault(int(job.camera_id), job)
+    return latest
+
+
 def summarize_recorder_jobs(db: Session) -> dict[str, Any]:
     ctx = timezone_context(db)
-    jobs = db.query(RecordingJob).order_by(RecordingJob.updated_at.desc().nullslast(), RecordingJob.started_at.desc()).limit(MAX_RECENT_ITEMS).all()
-    state_counts = counter_dict(db.query(RecordingJob.state, func.count(RecordingJob.id)).group_by(RecordingJob.state).all())
+    enabled_ids = {int(row.id) for row in db.query(Camera).filter(Camera.enabled.is_(True), Camera.deleted_at.is_(None), Camera.recording_mode == "always").all()}
+    jobs = [job for camera_id, job in current_recording_jobs(db).items() if camera_id in enabled_ids]
+    state_counts = dict(Counter(str(job.state or "unknown") for job in jobs))
     active_jobs = [
         {
             "job_id": job.id,
@@ -205,7 +234,6 @@ def summarize_recorder_jobs(db: Session) -> dict[str, Any]:
 def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
     ctx = timezone_context(db)
     cameras = db.query(Camera).filter(Camera.deleted_at.is_(None)).order_by(Camera.id.asc()).all()
-    latest_jobs: dict[int, RecordingJob] = {}
     now = utc_now()
     heartbeat = read_recorder_heartbeat(db)
     heartbeat_instance_id = str(heartbeat.get("recorder_instance_id") or "")
@@ -215,25 +243,9 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
         and heartbeat_instance_id
         and heartbeat_age is not None
         and heartbeat_age <= HEARTBEAT_STALE_SECONDS
-        and str(heartbeat.get("loop_state") or "") != "shutdown"
+        and str(heartbeat.get("loop_state") or "") not in {"shutdown", "replaced"}
     )
-
-    def job_rank(job: RecordingJob) -> tuple[int, int, datetime]:
-        state = str(job.state or "")
-        if state in {"starting", "recording", "stopping", "restarting"}:
-            priority = 3
-        elif state == "error":
-            priority = 2
-        else:
-            priority = 1
-        timestamp = job.updated_at or job.started_at or job.created_at or datetime.min
-        current_instance = int(bool(heartbeat_instance_id and str(job.recorder_instance_id or "") == heartbeat_instance_id))
-        return current_instance, priority, timestamp
-
-    for job in db.query(RecordingJob).order_by(RecordingJob.camera_id.asc()).all():
-        current = latest_jobs.get(job.camera_id)
-        if current is None or job_rank(job) >= job_rank(current):
-            latest_jobs[job.camera_id] = job
+    latest_jobs = current_recording_jobs(db, heartbeat_instance_id)
 
     writing_segments: dict[int, RecordingSegment] = {}
     for segment in (
@@ -339,7 +351,9 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             reason_codes.append("recording_media_progress_missing_or_stale")
         if stale_current_segment:
             reason_codes.append(STALE_CURRENT_SEGMENT_REASON)
-        if current_failure:
+        if job_state == "restarting":
+            recording_health = "retrying"
+        elif current_failure:
             recording_health = "failed"
         elif stale_current_segment:
             recording_health = "degraded"
@@ -347,8 +361,6 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             recording_health = "recording"
         elif job_state in {"starting", "recording"}:
             recording_health = "starting"
-        elif job_state == "restarting":
-            recording_health = "retrying"
         else:
             recording_health = "unknown"
         rows.append({

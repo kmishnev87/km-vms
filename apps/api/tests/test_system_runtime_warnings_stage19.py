@@ -332,6 +332,23 @@ def test_live_not_requested_or_not_applicable_stays_neutral(db, monkeypatch):
     assert live["items"] == []
 
 
+def test_closed_viewer_does_not_keep_failed_live_warning_and_open_warning_names_camera(db, monkeypatch):
+    camera = add_camera(db)
+    item = {"camera_id": camera.id, "stream": "main", "status": "failed", "running": False,
+            "ready": False, "viewers": 0, "viewer_managed": True,
+            "failure_reason": "camera_unreachable", "ever_ready": True, "next_retry_at": 1000.0}
+    monkeypatch.setattr(runtime_status.live_manager, "status", lambda: [item])
+    live = build_operator_runtime_status(db)["domains"]["live"]
+    assert live["items"] == []
+    assert live["summary"]["error_count"] == 0
+    item["viewers"] = 1
+    live = build_operator_runtime_status(db)["domains"]["live"]
+    assert live["items"][0]["camera_name"] == camera.name
+    assert live["items"][0]["safe_failure_reason"] == "camera_unreachable"
+    assert "live_interrupted" in live["items"][0]["reason_codes"]
+    assert "live_recovering" in live["items"][0]["reason_codes"]
+
+
 def test_live_starting_below_30_seconds_stays_neutral(db, monkeypatch):
     camera = add_camera(db)
     add_heartbeat(db, active_jobs=0, recording_cameras=0)

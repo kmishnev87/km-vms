@@ -29,6 +29,7 @@ from app.services.setup_storage import (
     APPLY_STATUS_FILE,
     CONTAINER_ARCHIVE_PATH,
     DISCOVERY_FILE,
+    RUNTIME_CONVERGENCE_FILE,
     SELECTION_CONTROL_FILE,
     SELECTION_FILE,
 )
@@ -152,6 +153,7 @@ def add_archive_root(db, root_path: Path, *, root_id="root_extra", active=False)
 def write_setup_storage_selection(host_path: str) -> None:
     control = Path(settings.storage_install_control)
     control.mkdir(parents=True, exist_ok=True)
+    request_id = "stage3-storage-contract-activation"
     (control / SELECTION_FILE).write_text(
         json.dumps(
             {
@@ -163,9 +165,30 @@ def write_setup_storage_selection(host_path: str) -> None:
                 "candidate_id": "stage3-storage-contract",
                 "selected_at": "2026-05-07T00:00:00Z",
                 "apply_status": "active",
+                "activation_request_id": request_id,
             }
         )
         + "\n",
+        encoding="utf-8",
+    )
+    (control / APPLY_STATUS_FILE).write_text(
+        json.dumps({
+            "schema_version": 2,
+            "status": "active",
+            "request_id": request_id,
+            "selected_host_path": host_path,
+            "container_archive_path": CONTAINER_ARCHIVE_PATH,
+            "runtime_proof": {"recorder_canonical_marker": True},
+        }),
+        encoding="utf-8",
+    )
+    (control / RUNTIME_CONVERGENCE_FILE).write_text(
+        json.dumps({
+            "schema_version": 1,
+            "request_id": request_id,
+            "selected_host_path": host_path,
+            "state": "runtime_verified",
+        }),
         encoding="utf-8",
     )
 
@@ -255,22 +278,41 @@ def test_patch_settings_ignores_storage_path_as_runtime_mutation(db):
     assert result["storage_path"] == original_storage_path
 
 
-def test_setup_custom_storage_path_is_not_runtime_source_of_truth(db):
+def test_setup_custom_storage_path_is_not_runtime_source_of_truth(db, monkeypatch):
     custom_path = str(Path(settings.storage_root).parent / "custom-user-request")
     write_setup_storage_selection(str(Path(settings.storage_root).parent / "selected-host-archive"))
 
-    result = setup(
-        SetupRequest(
-            username="stage2_owner",
-            password="stage2-password",
-            password_confirm="stage2-password",
-            timezone="UTC",
-            language="en",
-            storage_path=custom_path,
-            recording_format="mp4",
-        ),
-        db=db,
+    payload = SetupRequest(
+        username="stage2_owner",
+        password="stage2-password",
+        password_confirm="stage2-password",
+        timezone="UTC",
+        language="en",
+        storage_path=custom_path,
+        recording_format="mp4",
     )
+
+    # An active selection alone must not bypass the real runtime proof guard.
+    with pytest.raises(HTTPException) as exc:
+        setup(payload, db=db)
+    assert exc.value.status_code == 422
+    assert "storage_canonical_runtime_proof_failed" in str(exc.value.detail)
+    assert get_system_settings(db).system_initialized is False
+
+    # This path-mapping unit test models completed physical mount verification.
+    # Missing/mismatched proof is covered by test_setup_storage_selection_contract.
+    healthy = {"marker_matches": True, "namespace_exists": True, "readable": True, "writable": True}
+    monkeypatch.setattr(
+        setup_storage,
+        "_initial_storage_runtime_state",
+        lambda *_args, **_kwargs: {
+            "manifest_matches": True,
+            "database_matches": True,
+            "canonical": dict(healthy),
+            "per_root": dict(healthy),
+        },
+    )
+    result = setup(payload, db=db)
 
     refreshed = get_system_settings(db)
     assert refreshed.system_initialized is True

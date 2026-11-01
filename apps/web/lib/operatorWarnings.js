@@ -325,6 +325,10 @@ function liveWarnings(domain, items) {
       title: "Онлайн-поток недоступен",
       message: `${failed.length} активных онлайн-потоков завершились ошибкой или недоступны.`,
       affected_count: failed.length,
+      affected_cameras: failed.map((item) => ({
+        camera_id: item.camera_id, camera_name: item.camera_name,
+        reason: item.safe_failure_reason, next_retry_at: item.next_retry_at,
+      })),
       reason_codes: Array.from(new Set(failed.flatMap((item) => asArray(item.reason_codes)))),
       action_hint: "Проверьте онлайн-просмотр и доступность камеры.",
     });
@@ -337,6 +341,10 @@ function liveWarnings(domain, items) {
       title: "Онлайн-поток долго запускается",
       message: `${starting.length} активных онлайн-потоков ещё не готовы к просмотру.`,
       affected_count: starting.length,
+      affected_cameras: starting.map((item) => ({
+        camera_id: item.camera_id, camera_name: item.camera_name,
+        reason: item.safe_failure_reason, next_retry_at: item.next_retry_at,
+      })),
       reason_codes: Array.from(new Set(starting.flatMap((item) => asArray(item.reason_codes)))),
       action_hint: "Проверьте онлайн-просмотр, если поток не появится.",
     });

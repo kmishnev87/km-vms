@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.19",
-  "tag": "v0.8.19",
-  "title": "First-Run Storage Activation and Canonical Project Context",
-  "summary": "Fixes first-run storage activation in the Python-free setup helper by preserving the installation project and path context. Keeps canonical authority checks and clarifies host Python prerequisites.",
+  "version": "0.8.20",
+  "tag": "v0.8.20",
+  "title": "Uninterrupted Live and Automatic Recording Recovery",
+  "summary": "Keeps Live playback running across media-access renewal, restores interrupted viewing and recording automatically, and reports current stream and recorder state accurately. Includes named warnings, fullscreen Escape handling and updated regression coverage.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.19",
+  "source_ref": "v0.8.20",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,47 +16,55 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Passes the installation's Compose project identity to setup-helper so first-run storage activation can find its verified maintenance owner without Python.",
-    "Preserves exact installation authority checks and rejects missing project context or ambiguous maintenance owners.",
-    "Materializes the immutable image override in the caller's verified installation path instead of returning a container-only alias.",
-    "Adds executable no-Python regression coverage for default and custom Compose project names.",
-    "Documents the host Python 3 prerequisite for initial canonical slot materialization; runtime setup-helper remains Python-free.",
-    "Includes the preceding Maintenance crash, strict activation binding, backup trial-restore and daily native health-check fixes."
+    "Renews scoped Live media access without replacing the HLS source or resetting playback; server-side authorization remains enforced.",
+    "Makes Live startup cancellable and recovery retryable, including reconnects that arrive while an old stream is stopping.",
+    "Detects stalled recording from real media progress and continues bounded recovery attempts without a lifetime three-retry limit.",
+    "Uses UTC service timestamps and current recorder-instance jobs instead of stale history when reporting recording state.",
+    "Distinguishes actual authentication errors from ordinary 401/403 digits in FFmpeg messages and avoids pointless hardware fallback for unavailable cameras.",
+    "Shows affected camera names and recovery state in Live warnings, with Russian, English and Simplified Chinese text.",
+    "Lets Escape exit an expanded Live tile and shows the actual active-stream count in System Status.",
+    "Adds recovery and playback regressions and updates storage-setup and mobile-layout test fixtures without weakening product guards."
   ],
   "title_i18n": {
-    "en": "First-Run Storage Activation and Canonical Project Context",
-    "ru": "Первый запуск: активация хранилища и правильный проект установки",
-    "zh-CN": "首次启动存储激活与规范项目上下文"
+    "en": "Uninterrupted Live and Automatic Recording Recovery",
+    "ru": "Непрерывный онлайн-просмотр и автоматическое восстановление записи",
+    "zh-CN": "持续实时观看与录像自动恢复"
   },
   "summary_i18n": {
-    "en": "Fixes first-run storage activation in the Python-free setup helper by preserving the installation project and path context. Keeps canonical authority checks and clarifies host Python prerequisites.",
-    "ru": "Исправляет остановку первого запуска после выбора архива: служебные контейнеры сохраняют имя и путь своей установки. Проверки целостности сохранены, требование Python 3 на хосте уточнено.",
-    "zh-CN": "保留无 Python 设置辅助容器的安装项目和路径上下文，修复首次启动存储激活。保留规范权限验证，并明确主机 Python 3 前提条件。"
+    "en": "Keeps Live playback running across media-access renewal, restores interrupted viewing and recording automatically, and reports current stream and recorder state accurately. Includes named warnings, fullscreen Escape handling and updated regression coverage.",
+    "ru": "Онлайн-просмотр больше не прерывается при продлении доступа к видео. Просмотр и запись автоматически восстанавливаются после временных сбоев, а статусы отражают текущую работу. Уточнены предупреждения по камерам, выход по Escape и проверки восстановления.",
+    "zh-CN": "续期视频访问权限时不再中断实时播放，临时故障后自动恢复观看和录像，并准确显示当前视频流与录像状态。改进按摄像机显示的警告、Escape 全屏退出以及恢复回归测试。"
   },
   "changelog_i18n": {
     "en": [
-      "Passes the installation's Compose project identity to setup-helper so first-run storage activation can find its verified maintenance owner without Python.",
-      "Preserves exact installation authority checks and rejects missing project context or ambiguous maintenance owners.",
-      "Materializes the immutable image override in the caller's verified installation path instead of returning a container-only alias.",
-      "Adds executable no-Python regression coverage for default and custom Compose project names.",
-      "Documents the host Python 3 prerequisite for initial canonical slot materialization; runtime setup-helper remains Python-free.",
-      "Includes the preceding Maintenance crash, strict activation binding, backup trial-restore and daily native health-check fixes."
+      "Renews scoped Live media access without replacing the HLS source or resetting playback; server-side authorization remains enforced.",
+      "Makes Live startup cancellable and recovery retryable, including reconnects that arrive while an old stream is stopping.",
+      "Detects stalled recording from real media progress and continues bounded recovery attempts without a lifetime three-retry limit.",
+      "Uses UTC service timestamps and current recorder-instance jobs instead of stale history when reporting recording state.",
+      "Distinguishes actual authentication errors from ordinary 401/403 digits in FFmpeg messages and avoids pointless hardware fallback for unavailable cameras.",
+      "Shows affected camera names and recovery state in Live warnings, with Russian, English and Simplified Chinese text.",
+      "Lets Escape exit an expanded Live tile and shows the actual active-stream count in System Status.",
+      "Adds recovery and playback regressions and updates storage-setup and mobile-layout test fixtures without weakening product guards."
     ],
     "ru": [
-      "Исправлена активация папки архива при первом запуске: setup-helper получает имя своего Compose-проекта и находит проверенный служебный контейнер без Python.",
-      "Проверки принадлежности установки сохранены; отсутствие имени проекта и неоднозначный служебный контейнер по-прежнему приводят к безопасному отказу.",
-      "Файл привязки образов создаётся по проверенному пути вызывающей установки, а не по внутреннему пути другого контейнера; чужие пути и символьные ссылки отклоняются.",
-      "Добавлены исполняемые проверки без Python для стандартного и пользовательского имени проекта.",
-      "Уточнено требование Python 3 на хосте для подготовки первого слота; самому setup-helper Python не требуется.",
-      "Включены предыдущие исправления обслуживания, проверки активации, пробного восстановления и нативные проверки состояния раз в сутки."
+      "Доступ к Live продлевается без замены HLS-источника и сброса воспроизведения; серверная проверка прав сохранена.",
+      "Запуск Live отменяется при закрытии просмотра, а восстановление учитывает повторное подключение во время остановки старого потока.",
+      "Зависшая запись определяется по реальному поступлению видео; автоматические повторы больше не исчерпываются после трёх восстановлений за всё время работы.",
+      "Служебное время записи учитывается в UTC, а текущий статус выбирается по действующему экземпляру Recorder, не по старой истории заданий.",
+      "Обычные цифры 401/403 в сообщениях FFmpeg не принимаются за отказ авторизации; недоступная камера не вызывает бессмысленный переход на CPU.",
+      "В предупреждениях Live указаны затронутые камеры и состояние восстановления; тексты проверены на русском, английском и упрощённом китайском.",
+      "Escape закрывает раскрытую Live-плитку, а состояние системы показывает фактическое число активных потоков.",
+      "Добавлены проверки восстановления и плеера; устаревшие тесты настройки хранилища и мобильной вёрстки обновлены без ослабления защит продукта."
     ],
     "zh-CN": [
-      "向设置辅助容器传递 Compose 项目标识，使首次存储激活无需 Python 即可找到已验证的维护容器。",
-      "保留严格安装归属验证，继续拒绝缺少项目上下文或维护容器不明确的情况。",
-      "在调用方已验证的安装路径中生成不可变镜像覆盖文件，避免返回容器内部别名，并继续拒绝外部路径和符号链接。",
-      "为默认和自定义项目名称添加可执行的无 Python 回归测试。",
-      "明确首次规范发布槽准备需要主机 Python 3，运行时设置辅助容器仍无需 Python。",
-      "包含此前的维护页面、严格激活验证、备份试恢复及每日原生健康检查修复。"
+      "实时视频权限续期不再替换 HLS 源或重置播放，保留服务器端授权验证。",
+      "关闭观看会取消实时流启动，恢复流程也正确处理旧视频流停止期间的重新连接。",
+      "根据实际媒体进度检测录像停滞，自动恢复不再受整个运行期间仅三次重试的限制。",
+      "使用 UTC 服务时间和当前录像实例任务报告状态，避免旧任务历史干扰当前结果。",
+      "不再将 FFmpeg 普通消息中的 401/403 数字误判为身份验证失败，摄像机不可达时避免无意义的 CPU 回退。",
+      "实时警告显示受影响摄像机名称和恢复状态，验证俄语、英语及简体中文文本。",
+      "Escape 可退出展开的实时画面，系统状态显示实际活动视频流数量。",
+      "增加恢复与播放回归测试，并更新存储设置及移动布局测试数据，不削弱产品保护。"
     ]
   }
 }

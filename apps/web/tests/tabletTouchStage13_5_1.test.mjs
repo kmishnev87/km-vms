@@ -83,7 +83,8 @@ assert.match(livePage, /data-live-tile-video-id=\{tile\.id\}/);
 assert.match(livePage, /const tileFullscreenReturnStateRef = useRef\(null\)/);
 assert.match(livePage, /const returnState = \{ isSystemFullscreen, isSidebarCollapsed \};\s*tileFullscreenReturnStateRef\.current = returnState;\s*if \(!returnState\.isSystemFullscreen\) setIsSystemFullscreen\(false\);\s*setFullscreenTileId\(tileId\);/s);
 assert.match(livePage, /if \(!tileFullscreenReturnStateRef\.current\?\.isSystemFullscreen\) setIsSystemFullscreen\(false\);\s*setFullscreenTileId\(tileId\);/s);
-assert.match(livePage, /event\.key === "Escape" && isSystemFullscreen && !fullscreenTileId/);
+assert.match(livePage, /event\.key !== "Escape"/);
+assert.match(livePage, /if \(fullscreenTileId\) \{\s*event\.preventDefault\(\);\s*void exitTileFullscreen\(\);\s*return;/);
 assert.match(livePage, /const returnState = tileFullscreenReturnStateRef\.current;\s*tileFullscreenReturnStateRef\.current = null;\s*setIsSystemFullscreen\(Boolean\(returnState\?\.isSystemFullscreen\)\);\s*setIsSidebarCollapsed\(returnState\?\.isSystemFullscreen \? returnState\.isSidebarCollapsed : false\);\s*setFullscreenTileId\(null\);/s);
 assert.match(livePage, /if \(event\.target\?\.closest\?\.\("button, select, input, textarea, a"\)\) return;\s*if \(dragState \|\| resizeState\) return;\s*if \(event\.pointerType === "mouse" \|\| event\.pointerType === "touch"\) return;\s*event\.stopPropagation\(\);/s);
 assert.match(livePage, /if \(event\.pointerType === "mouse" && event\.buttons === 0\) \{\s*setDragState\(null\);\s*return;\s*\}/s);
@@ -129,7 +130,7 @@ assert.doesNotMatch(timeline, /onMouseDown=/);
 
 assert.match(liveCss, /\.liveWorkspaceCameraItem\[data-sidebar-pointer-drag-mode="workspace"\]/);
 assert.match(liveCss, /\.liveWorkspaceCameraItem[\s\S]*touch-action: none/);
-assert.match(liveCss, /@media \(max-width: 640px\) \{[\s\S]*?\.liveWorkspaceCameraList \{[\s\S]*?--live-camera-scroll-gutter: 22px;[\s\S]*?padding-inline-end: var\(--live-camera-scroll-gutter\);/);
+assert.match(liveCss, /@media \(max-width: 640px\) \{\s*\.liveWorkspaceCameraPanel \{\s*--live-camera-scroll-gutter: 32px;\s*\}\s*\.liveWorkspacePanelHeader,\s*\.liveWorkspaceCameraList \{[^}]*padding-inline-end: var\(--live-camera-scroll-gutter\);/);
 assert.match(liveCss, /\.liveWorkspaceSidebarDragGhost[\s\S]*position: fixed/);
 assert.match(liveCss, /\.liveWorkspaceTileVideo:fullscreen/);
 assert.match(liveCss, /touch-action: none/);
@@ -138,7 +139,7 @@ assert.match(liveCss, /\.liveWorkspaceTileVideo \{[\s\S]*?touch-action: pan-y;/)
 assert.match(liveCss, /touch-action: manipulation/);
 assert.match(chronologyCss, /\.chronologyCameraItem\[data-sidebar-pointer-drag-mode="workspace"\]/);
 assert.match(chronologyCss, /\.chronologyCameraItem[\s\S]*touch-action: none/);
-assert.match(chronologyCss, /@media \(max-width: 640px\) \{[\s\S]*?\.chronologyCameraList \{[\s\S]*?--chronology-camera-scroll-gutter: 22px;[\s\S]*?padding-inline-end: var\(--chronology-camera-scroll-gutter\);/);
+assert.match(chronologyCss, /@media \(max-width: 640px\) \{\s*\.chronologyCameraPanel \{\s*--chronology-camera-scroll-gutter: 32px;\s*\}\s*\.chronologyPanelHeader,\s*\.chronologyCameraList \{[^}]*padding-inline-end: var\(--chronology-camera-scroll-gutter\);/);
 assert.match(chronologyCss, /\.chronologySidebarDragGhost[\s\S]*position: fixed/);
 assert.match(chronologyCss, /\.chronologyShell\.systemFullscreen \.chronologyTimelineWrap \.chronologyTimelineBody[\s\S]*background: linear-gradient/);
 assert.match(chronologyCss, /touch-action: none/);

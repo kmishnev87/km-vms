@@ -69,6 +69,9 @@ FORBIDDEN_TEXT = (
     "ffmpeg -",
 )
 LIVE_STATUS_ALLOWED = {
+    "retry_count",
+    "next_retry_at",
+    "ever_ready",
     "stream_key",
     "camera_id",
     "stream",
@@ -100,6 +103,65 @@ LIVE_STATUS_ALLOWED = {
     "failure_reason",
     "safe_failure_reason",
 }
+
+
+def test_live_cookie_renews_access_without_changing_playlist_url(client, api_db, monkeypatch):
+    from app.routers.live import _live_media_cookie_name
+    db, root = api_db
+    user = add_user(db)
+    cam = add_camera(db)
+    playlist = root / "index.m3u8"
+    playlist.write_text("#EXTM3U\n#EXTINF:2,\nseg_000001.ts\n")
+    monkeypatch.setattr(live_manager, "get_playlist_file", lambda *args: playlist)
+    issued = client.post("/live/media-token", json={"camera_id": cam.id, "stream": "sub"}, headers=auth_headers(user))
+    assert issued.status_code == 200
+    attributes = issued.headers["set-cookie"].split(";")[1:]
+    assert any(item.strip().lower() == "httponly" for item in attributes)
+    assert any(item.strip().lower() == "samesite=strict" for item in attributes)
+    assert any(item.strip() == f"Path=/api/live/{cam.id}/sub/" for item in attributes)
+    assert issued.headers["cache-control"] == "no-store"
+    cookie_name = _live_media_cookie_name(cam.id, "sub")
+    media_headers = {"Cookie": f"{cookie_name}={issued.json()['media_token']}"}
+    url = f"/live/{cam.id}/sub/index.m3u8"
+    played = client.get(url, headers=media_headers)
+    assert played.status_code == 200
+    assert "?media_token=" not in played.text
+    renewed = client.post("/live/media-token", json={"camera_id": cam.id, "stream": "sub"}, headers=auth_headers(user))
+    assert renewed.status_code == 200
+    assert client.get(url, headers={"Cookie": f"{cookie_name}={renewed.json()['media_token']}"}).status_code == 200
+    # No ambient authentication on an unrelated stream/resource.
+    assert client.get(f"/live/{cam.id}/main/index.m3u8", headers=media_headers).status_code == 401
+    # An explicitly bad legacy link cannot fall back to a valid browser cookie.
+    assert client.get(url + "?media_token=invalid", headers=media_headers).status_code == 401
+    # Public, explicitly signed legacy links remain supported.
+    assert client.get(url, params={"media_token": issued.json()["media_token"]}).status_code == 200
+
+
+def test_live_cookie_still_enforces_expiration_and_active_user(client, api_db, monkeypatch):
+    import jwt
+    from app.routers.live import _live_media_cookie_name
+    from app.services import media_tokens
+    db, root = api_db
+    user = add_user(db)
+    cam = add_camera(db)
+    playlist = root / "index.m3u8"
+    playlist.write_text("#EXTM3U\n#EXTINF:2,\nseg_000001.ts\n")
+    monkeypatch.setattr(live_manager, "get_playlist_file", lambda *args: playlist)
+    issued = client.post("/live/media-token", json={"camera_id": cam.id, "stream": "sub"}, headers=auth_headers(user))
+    assert issued.status_code == 200
+    token = issued.json()["media_token"]
+    name = _live_media_cookie_name(cam.id, "sub")
+    url = f"/live/{cam.id}/sub/index.m3u8"
+    payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+    payload["exp"] = 1
+    expired = jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+    assert client.get(url, headers={"Cookie": f"{name}={expired}"}).status_code == 401
+    with monkeypatch.context() as permission_patch:
+        permission_patch.setattr(media_tokens, "user_has_permission", lambda *args: False)
+        assert client.get(url, headers={"Cookie": f"{name}={token}"}).status_code == 403
+    user.is_active = False
+    db.commit()
+    assert client.get(url, headers={"Cookie": f"{name}={token}"}).status_code == 401
 
 
 @pytest.fixture

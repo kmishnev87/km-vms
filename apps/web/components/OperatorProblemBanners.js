@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { apiFetch, canAccessPath } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { useI18n } from "../lib/i18n";
+import { liveFailureMessage } from "../lib/livePlaybackRecovery";
 import {
   buildDashboardStatusSummary,
   buildOperatorWarnings,
@@ -20,18 +21,22 @@ function severityRank(severity) {
   return severity === "error" ? 2 : severity === "warning" ? 1 : 0;
 }
 
-function warningCountLabel(count) {
-  if (count === 1) return `${count} предупреждение`;
-  if (count > 1 && count < 5) return `${count} предупреждения`;
-  return `${count} предупреждений`;
+function warningCountLabel(count, text) {
+  const lastTwo = count % 100;
+  if ((lastTwo < 11 || lastTwo > 14) && count % 10 === 1) return `${count} ${text("предупреждение")}`;
+  if ((lastTwo < 11 || lastTwo > 14) && count % 10 >= 2 && count % 10 <= 4) return `${count} ${text("предупреждения")}`;
+  return `${count} ${text("предупреждений")}`;
 }
 
-function affectedCountLabel(count) {
-  return `Затронуто: ${count}`;
+function affectedCountLabel(count, text) {
+  return text("Затронуто: {count}", { count });
 }
 
 function displayTitle(item) {
   const reasons = Array.isArray(item?.reason_codes) ? item.reason_codes : [];
+  if (item?.domain === "live" && reasons.includes("live_interrupted")) {
+    return "Онлайн-просмотр прервался";
+  }
   if (item?.domain === "live" && reasons.includes("live_starting")) {
     return "Поток запускается дольше 30 секунд";
   }
@@ -120,8 +125,12 @@ export default function OperatorProblemBanners({
   useEffect(() => {
     let cancelled = false;
     let timer = null;
+    let refreshTimer = null;
+    let inFlight = false;
 
     async function loadStatus() {
+      if (inFlight || cancelled) return true;
+      inFlight = true;
       try {
         const data = await apiFetch("/system/runtime/status");
         if (!cancelled) {
@@ -138,6 +147,8 @@ export default function OperatorProblemBanners({
           }
         }
         return false;
+      } finally {
+        inFlight = false;
       }
     }
 
@@ -167,9 +178,17 @@ export default function OperatorProblemBanners({
     }
 
     start();
+    const refreshLive = () => {
+      if (!currentUserReady || !effectiveCurrentUser || !userCanReadRuntimeStatus(effectiveCurrentUser)) return;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(loadStatus, 200);
+    };
+    window.addEventListener("kmvms:live-runtime-changed", refreshLive);
     return () => {
       cancelled = true;
       if (timer) clearInterval(timer);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      window.removeEventListener("kmvms:live-runtime-changed", refreshLive);
     };
   }, [currentUserReady, effectiveCurrentUser]);
 
@@ -213,7 +232,7 @@ export default function OperatorProblemBanners({
       <div className={`operatorWarningStrip operatorWarningStrip-${highestSeverity}`}>
         <span className="operatorWarningStripIcon" aria-hidden="true">{highestSeverity === "error" ? "!" : "i"}</span>
         <strong className="operatorWarningStripTitle">
-          {warningCountLabel(totalCount)}
+          {warningCountLabel(totalCount, text)}
         </strong>
         <div className="operatorWarningChips" aria-label={text("Группы предупреждений")}>
           {domainCounts.map((item) => (
@@ -247,7 +266,13 @@ export default function OperatorProblemBanners({
                     <span className="operatorWarningRowSeverity" aria-label={text(item.severity_label)} title={text(item.severity_label)} />
                     <div className="operatorWarningRowText">
                       <strong>{text(displayTitle(item))}</strong>
-                      <span>{item.affected_count ? affectedCountLabel(item.affected_count) : text(displayMessage(item))}</span>
+                      <span>{item.affected_count ? affectedCountLabel(item.affected_count, text) : text(displayMessage(item))}</span>
+                      {Array.isArray(item.affected_cameras) ? item.affected_cameras.map((camera) => (
+                        <small key={camera.camera_id}>
+                          {camera.camera_name || `${text("Камера")} ${camera.camera_id}`} — {text(liveFailureMessage(camera.reason, item.reason_codes?.includes("live_interrupted")))}
+                          {camera.next_retry_at > Date.now() / 1000 ? ` ${text("Следующая попытка через")} ${Math.ceil(camera.next_retry_at - Date.now() / 1000)} ${text("сек.")}` : ""}
+                        </small>
+                      )) : null}
                       {displayHint(item) ? <small>{displayHint(item) === item.action_hint ? text(item.action_hint) : text(displayHint(item))}</small> : null}
                     </div>
                     <ActionLink action={item.action} item={item} currentPathname={pathname} currentUser={effectiveCurrentUser} text={text} />

@@ -877,10 +877,13 @@ export default function LivePage() {
 
   useEffect(() => {
     function handleKeyDown(event) {
-      if (event.key === "Escape" && isSystemFullscreen && !fullscreenTileId) {
-        setIsSystemFullscreen(false);
-        setIsSidebarCollapsed(false);
+      if (event.key !== "Escape") return;
+      if (fullscreenTileId) {
+        event.preventDefault();
+        void exitTileFullscreen();
+        return;
       }
+      if (isSystemFullscreen) void exitSystemFullscreen();
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);

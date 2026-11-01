@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from app.core.config import settings
+from app.db.session import SessionLocal
 from app.models.camera import Camera
 from app.services.audit_log import create_event
 from app.services.hardware import get_hardware_capabilities, hardware_capabilities_summary
@@ -59,6 +60,10 @@ CPU_ESCALATION_SPEED_THRESHOLD = 0.9
 CPU_ESCALATION_STABLE_SECONDS = 20
 CPU_ESCALATION_COOLDOWN_SECONDS = 120
 MAX_CPU_ESCALATIONS_PER_STREAM = 1
+LIVE_MEDIA_STALE_SECONDS = 30
+LIVE_RECOVERY_STABLE_SECONDS = 30
+LIVE_RETRY_SECONDS = (5, 10, 20, 30, 60, 120)
+LIVE_BLOCKED_RETRY_SECONDS = 300
 LIVE_AUDIT_THROTTLE_SECONDS = 60
 LIVE_AUDIT_THROTTLED_EVENTS = {
     "live.fallback",
@@ -81,6 +86,19 @@ def _camera_source(camera: Camera):
         rtsp_sub_url=camera.rtsp_sub_url,
         rtsp_transport=camera.rtsp_transport,
     )
+
+
+def classify_live_failure(detail: str | None) -> str | None:
+    value = str(detail or "").lower()
+    # Frame counts, DTS values and hexadecimal FFmpeg addresses often contain
+    # 401/403. Only an actual authentication message is evidence of bad access.
+    if any(part in value for part in ("unauthorized", "forbidden", "authentication failed")) or re.search(
+        r"(?:server returned|(?:http|rtsp)(?:/\d(?:\.\d)?)?|failed:?)\s+(?:401|403)\b", value
+    ):
+        return "auth_failed"
+    if any(part in value for part in ("no route to host", "network is unreachable", "connection", "timed out", "timeout", "end of file", "i/o error")):
+        return "camera_unreachable"
+    return None
 
 
 def _read_proc_cmdline(pid: int | None) -> str:
@@ -204,6 +222,14 @@ class StreamInstance:
         self.state_changed_at = time.time()
         self.last_state_transition = "initialized"
         self.audit_event_last_seen: dict[tuple, float] = {}
+        self.viewer_managed = False
+        self.start_cancelled = threading.Event()
+        self.start_thread: threading.Thread | None = None
+        self.retry_count = 0
+        self.next_retry_at: float | None = None
+        self.ever_ready = False
+        self.healthy_since: float | None = None
+        self.last_ready_at: float | None = None
 
     @property
     def sid(self) -> str:
@@ -211,9 +237,7 @@ class StreamInstance:
 
     @property
     def stream_dir(self) -> Path:
-        path = Path(settings.storage_previews) / "live" / str(self.camera_id) / self.stream
-        path.mkdir(parents=True, exist_ok=True)
-        return path
+        return Path(settings.storage_previews) / "live" / str(self.camera_id) / self.stream
 
     @property
     def playlist_path(self) -> Path:
@@ -250,8 +274,16 @@ class StreamInstance:
 
     def is_ready(self) -> bool:
         try:
+            if not self.is_running():
+                return False
             segments = list(self.stream_dir.glob("seg_*.ts"))
-            return self.playlist_path.exists() and self.playlist_path.stat().st_size > 0 and bool(segments)
+            if not segments or not self.playlist_path.exists() or self.playlist_path.stat().st_size <= 0:
+                return False
+            now = time.time()
+            return (
+                now - self.playlist_path.stat().st_mtime <= LIVE_MEDIA_STALE_SECONDS
+                and now - max(segment.stat().st_mtime for segment in segments) <= LIVE_MEDIA_STALE_SECONDS
+            )
         except Exception:
             return False
 
@@ -337,7 +369,10 @@ class StreamInstance:
         if not path.exists():
             return ""
         try:
-            return mask_rtsp_credentials(path.read_text(encoding="utf-8", errors="replace")[-max_chars:])
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, handle.tell() - max_chars))
+                return mask_rtsp_credentials(handle.read(max_chars).decode("utf-8", errors="replace"))
         except Exception:
             return ""
 
@@ -876,6 +911,8 @@ class StreamInstance:
         force_hw_backend: str | None = None,
     ) -> dict:
         with self.lock:
+            if self.viewer_managed and self.start_cancelled.is_set():
+                return {"ok": False, "error_code": "client_stop"}
             self.touch()
             if self.is_running():
                 return self.snapshot(viewers=0)
@@ -886,6 +923,8 @@ class StreamInstance:
                 else:
                     self.stop(reason="restart_running_process", cleanup_files=True)
 
+            self.next_retry_at = None
+            self.last_ready_at = None
             input_url = choose_input_url(camera, self.stream)
             if not input_url:
                 self._set_state_locked("failed", "no_rtsp_url", failure_reason="no_rtsp_url")
@@ -959,6 +998,13 @@ class StreamInstance:
                 force_mode=force_mode,
                 force_hw_backend=force_hw_backend,
             )
+            if self.viewer_managed and self.start_cancelled.is_set():
+                self._set_state_locked("stopped", "client_stop")
+                return {"ok": False, "error_code": "client_stop"}
+            input_failure = classify_live_failure(self.last_error)
+            if input_failure:
+                self._schedule_retry_locked(input_failure)
+                return {"ok": False, "error_code": input_failure, **self.snapshot(viewers=0)}
             self.requested_mode = force_mode or "auto"
             if self.mode != "copy" and not transcode_allowed:
                 self.resource_limit = "max_concurrent_transcodes"
@@ -994,6 +1040,11 @@ class StreamInstance:
             )
 
             try:
+                if self.viewer_managed and self.start_cancelled.is_set():
+                    self.stderr_file.close()
+                    self.stderr_file = None
+                    self._set_state_locked("stopped", "client_stop")
+                    return {"ok": False, "error_code": "client_stop"}
                 self.proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
@@ -1053,6 +1104,8 @@ class StreamInstance:
                 self.start_hard_deadline = self.started_at + max(initial_timeout * 2, STARTUP_HARD_TIMEOUT_SECONDS)
             self.last_exit_code = None
             self.last_error = None
+            self.next_retry_at = None
+            self.healthy_since = None
 
             logger.info(
                 "Live Engine started stream camera_id=%s stream=%s pid=%s mode=%s fallback_reason=%s",
@@ -1140,8 +1193,27 @@ class StreamInstance:
             if cleanup_files:
                 shutil.rmtree(self.stream_dir, ignore_errors=True)
 
+    def _schedule_retry_locked(self, reason: str):
+        if self.next_retry_at is not None or self.start_cancelled.is_set():
+            return
+        self.retry_count += 1
+        delay = LIVE_RETRY_SECONDS[min(self.retry_count - 1, len(LIVE_RETRY_SECONDS) - 1)]
+        if reason in {"auth_failed", "no_rtsp_url", "resource_limit"}:
+            delay = LIVE_BLOCKED_RETRY_SECONDS
+        self.next_retry_at = time.time() + delay
+        self.healthy_since = None
+        self._set_state_locked("restarting", "retry_scheduled", failure_reason=reason)
+        self._audit_live_event(
+            "live.retry_scheduled", "warning",
+            f"Live восстанавливает поток {self._camera_name()} / {self.stream}",
+            f"Live is recovering {self._camera_name()} / {self.stream}",
+            metadata={"reason": reason, "retry_count": self.retry_count, "retry_after_seconds": delay},
+        )
+
     def maintain_startup(self) -> bool:
         with self.lock:
+            if self.viewer_managed and self.start_cancelled.is_set():
+                return False
             stderr_tail = self._read_log_tail()
             fatal_error = self._detect_fatal_error(stderr_tail)
             process_info = self.process_info()
@@ -1155,6 +1227,20 @@ class StreamInstance:
                 if self.jitter_detected:
                     self.unstable_source = True
                 self._set_state_locked("ready", "hls_ready", failure_reason=None)
+                now = time.time()
+                self.ever_ready = True
+                playlist_at, segment_at = self._hls_update_times()
+                self.last_ready_at = min(playlist_at, segment_at) if playlist_at and segment_at else now
+                if self.healthy_since is None:
+                    self.healthy_since = now
+                if self.retry_count and now - self.healthy_since >= LIVE_RECOVERY_STABLE_SECONDS:
+                    self.retry_count = 0
+                    self.next_retry_at = None
+                    self._audit_live_event(
+                        "live.recovered", "info",
+                        f"Онлайн-поток {self._camera_name()} восстановлен",
+                        f"Live stream {self._camera_name()} recovered",
+                    )
                 return False
 
             if self.proc and self.proc.poll() is None and not process_info["running_verified"]:
@@ -1169,6 +1255,10 @@ class StreamInstance:
                 if previous_mode != "copy" and fatal_error:
                     reason = "rtsp_error" if "Connection" in fatal_error or "401" in fatal_error or "403" in fatal_error else "transcode_failed"
                 self._mark_process_exit_locked(reason=reason, cleanup_files=True)
+                source_failure = classify_live_failure(self.last_error or stderr_tail)
+                if source_failure:
+                    self._schedule_retry_locked(source_failure)
+                    return True
                 if previous_mode == "copy" and source:
                     self.restart_reason = "copy_failed"
                     self.last_fallback_reason = "copy_failed"
@@ -1179,13 +1269,23 @@ class StreamInstance:
                         "hardware_failed",
                         self.last_error or stderr_tail or reason,
                     )
-                return False
+                self._schedule_retry_locked("process_exit")
+                return True
 
             if not self.is_running() or not self.start_deadline:
                 return False
 
             now = time.time()
             source = self.camera_source
+            if self.last_ready_at is not None and now - self.last_ready_at > LIVE_MEDIA_STALE_SECONDS:
+                self.stop(reason="stream_stalled", cleanup_files=True)
+                self._schedule_retry_locked("stream_stalled")
+                return True
+            source_failure = classify_live_failure(fatal_error or stderr_tail)
+            if source_failure:
+                self.stop(reason=source_failure, cleanup_files=True)
+                self._schedule_retry_locked(source_failure)
+                return True
             if self.mode == "hardware_transcode" and fatal_error and source:
                 self.stop(reason="hardware_fatal_error", cleanup_files=True)
                 return self._retry_next_backend_or_cpu_locked(
@@ -1271,6 +1371,10 @@ class StreamInstance:
         running = process_info["running_verified"]
         ready = self.is_ready()
         playlist_updated_at, last_segment_at = self._hls_update_times()
+        try:
+            playlist_size = self.playlist_path.stat().st_size
+        except OSError:
+            playlist_size = 0
         if running and ready:
             status = "ready"
         elif running:
@@ -1283,6 +1387,10 @@ class StreamInstance:
         return {
             "stream_key": self.sid,
             "camera_id": self.camera_id,
+            "viewer_managed": self.viewer_managed,
+            "retry_count": self.retry_count,
+            "next_retry_at": self.next_retry_at,
+            "ever_ready": self.ever_ready,
             "stream": self.stream,
             "stream_type": self.stream,
             "pid": self.proc.pid if running and self.proc else None,
@@ -1365,7 +1473,7 @@ class StreamInstance:
             "ready": ready,
             "playlist_path": str(self.playlist_path),
             "playlist_exists": self.playlist_path.exists(),
-            "playlist_size": self.playlist_path.stat().st_size if self.playlist_path.exists() else 0,
+            "playlist_size": playlist_size,
             "playlist_updated_at": playlist_updated_at,
             "last_segment_at": last_segment_at,
             "segment_count": len(list(self.stream_dir.glob("seg_*.ts"))) if self.stream_dir.exists() else 0,
@@ -1429,7 +1537,9 @@ class StreamManager:
         for key, instance in self.streams.items():
             if exclude_key and key == exclude_key:
                 continue
-            if instance.mode != "copy" and instance.is_running():
+            if instance.mode != "copy" and (
+                instance.is_running() or (instance.start_thread is not None and instance.start_thread.is_alive())
+            ):
                 count += 1
         return count
 
@@ -1475,6 +1585,9 @@ class StreamManager:
 
         with self.lock:
             instance = self._get_stream_locked(camera.id, stream)
+            instance.viewer_managed = True
+            instance.start_cancelled.clear()
+            instance.touch()
             self.viewers[viewer_id] = ViewerSession(
                 id=viewer_id,
                 camera_id=camera.id,
@@ -1484,25 +1597,9 @@ class StreamManager:
             )
             viewers = self._viewer_count_locked(camera.id, stream)
 
-        result = self.start_or_reuse_stream(camera, stream)
-        if not result.get("ok"):
-            if result.get("error_code") in {"no_rtsp_url", "resource_limit"}:
-                self.close_viewer(viewer_id)
-                return result
-
-            with self.lock:
-                viewers = self._viewer_count_locked(camera.id, stream)
-            snapshot = instance.snapshot(viewers=viewers)
-            return {
-                "ok": True,
-                "viewer_id": viewer_id,
-                "stream_url": f"/api/live/{camera.id}/{stream}/index.m3u8",
-                "recoverable_start_error": result.get("error") or snapshot.get("failure_reason"),
-                **snapshot,
-            }
-
-        with self.lock:
-            viewers = self._viewer_count_locked(camera.id, stream)
+        # Return the viewer id before any RTSP/hardware probe. The browser can
+        # cancel a tile immediately, including while that probe is in flight.
+        self._launch_viewer_start(instance, _camera_source(camera))
         snapshot = instance.snapshot(viewers=viewers)
         return {
             "ok": True,
@@ -1510,6 +1607,49 @@ class StreamManager:
             "stream_url": f"/api/live/{camera.id}/{stream}/index.m3u8",
             **snapshot,
         }
+
+    def _launch_viewer_start(self, instance: StreamInstance, camera) -> None:
+        key = self._key(instance.camera_id, instance.stream)
+        with self.lock:
+            if self.streams.get(key) is not instance or not self._viewer_count_locked(*key):
+                return
+            if instance.is_running() or (instance.start_thread and instance.start_thread.is_alive()):
+                return
+            if instance.next_retry_at and time.time() < instance.next_retry_at:
+                return
+            instance.start_cancelled.clear()
+            instance.camera_source = camera
+            instance._set_state_locked("starting", "start_queued")
+
+            def run():
+                try:
+                    with self.lock:
+                        if self.streams.get(key) is not instance or not self._viewer_count_locked(*key):
+                            return
+                        limit = int(settings.live_max_concurrent_transcodes or 0)
+                        allowed = limit <= 0 or self._running_transcodes_locked(exclude_key=key) < limit
+                    source = camera
+                    if instance.retry_count:
+                        # A retry must see corrected URLs/credentials without an
+                        # application restart. Query only on a failed attempt,
+                        # never on the steady-state media/heartbeat path.
+                        with SessionLocal() as db:
+                            current = db.get(Camera, instance.camera_id)
+                            source = _camera_source(current) if current and not current.deleted_at else None
+                        if source is None:
+                            self.stop_stream(*key, reason="camera_not_found")
+                            return
+                    instance.start(source, transcode_allowed=allowed)
+                except Exception as exc:
+                    logger.error("Live Engine background start failed camera_id=%s stream=%s error=%s", *key, mask_rtsp_credentials(str(exc)))
+                    with instance.lock:
+                        instance._schedule_retry_locked("live_start_failed")
+                finally:
+                    if instance.start_cancelled.is_set():
+                        instance.stop(reason="client_stop", cleanup_files=True)
+
+            instance.start_thread = threading.Thread(target=run, name=f"live-start-{key[0]}-{key[1]}", daemon=True)
+            instance.start_thread.start()
 
     def close_viewer(self, viewer_id: str) -> bool:
         with self.lock:
@@ -1519,6 +1659,8 @@ class StreamManager:
             instance = self.streams.get(self._key(viewer.camera_id, viewer.stream))
             if instance:
                 instance.touch()
+                if self._viewer_count_locked(viewer.camera_id, viewer.stream) == 0:
+                    instance.start_cancelled.set()
             return True
 
     def touch_viewer(self, viewer_id: str) -> bool:
@@ -1547,6 +1689,7 @@ class StreamManager:
             instance = self.streams.get(self._key(camera_id, stream))
             if not instance:
                 return False
+            instance.start_cancelled.set()
             for viewer_id, viewer in list(self.viewers.items()):
                 if self._key(viewer.camera_id, viewer.stream) == self._key(camera_id, stream):
                     self.viewers.pop(viewer_id, None)
@@ -1557,6 +1700,8 @@ class StreamManager:
         with self.lock:
             instances = list(self.streams.values())
             self.viewers.clear()
+            for instance in instances:
+                instance.start_cancelled.set()
         for instance in instances:
             instance.stop(reason="stop_all", cleanup_files=True)
         return len(instances)
@@ -1569,9 +1714,36 @@ class StreamManager:
             instances = list(self.streams.items())
 
         for key, instance in instances:
-            instance.maintain_startup()
             with self.lock:
                 viewers = self._viewer_count_locked(instance.camera_id, instance.stream)
+            if not instance.lock.acquire(blocking=False):
+                continue
+            launch_retry = False
+            try:
+                if instance.viewer_managed and not viewers:
+                    instance.start_cancelled.set()
+                    instance.stop(reason="client_stop", cleanup_files=True)
+                    with self.lock:
+                        if self._viewer_count_locked(*key):
+                            # A new viewer may arrive while terminate/wait is in
+                            # progress. Do not leave that viewer attached to a
+                            # stopped, permanently cancelled stream.
+                            instance.start_cancelled.clear()
+                            instance._schedule_retry_locked("stream_stalled" if instance.ever_ready else "process_exit")
+                        elif not (instance.start_thread and instance.start_thread.is_alive()):
+                            self.streams.pop(key, None)
+                    continue
+                instance.maintain_startup()
+                if viewers > 0 and not instance.is_running():
+                    starting = bool(instance.start_thread and instance.start_thread.is_alive())
+                    if not starting and instance.next_retry_at is None:
+                        instance.start_cancelled.clear()
+                        instance._schedule_retry_locked(instance.failure_reason or ("stream_stalled" if instance.ever_ready else "process_exit"))
+                    launch_retry = bool(instance.next_retry_at and now >= instance.next_retry_at and instance.camera_source)
+            finally:
+                instance.lock.release()
+            if launch_retry:
+                self._launch_viewer_start(instance, instance.camera_source)
             if viewers > 0:
                 continue
             if instance.is_running() and now - instance.last_access > ttl:

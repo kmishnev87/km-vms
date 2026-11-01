@@ -1,6 +1,7 @@
 import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import vm from "node:vm";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -31,6 +32,22 @@ const api = read("lib/api.js");
 const routePermissions = read("lib/routePermissions.js");
 const i18n = readI18nSource();
 const css = readEffectiveCss("app/globals.css");
+
+const metaSource = systemStatus.slice(systemStatus.indexOf("function domainMeta("), systemStatus.indexOf("function problemCountLabel("));
+const metaContext = {};
+vm.runInNewContext(`${metaSource}\nthis.meta = domainMeta;`, metaContext);
+const translate = (key, params) => `${key}:${params?.count ?? ""}`;
+const liveRow = { domain: "live", severity: "ok", problem_count: 0 };
+assert.equal(metaContext.meta(liveRow, translate, { active_streams_count: 3 }), "systemStatus.activeLive:3");
+assert.equal(metaContext.meta(liveRow, translate, { active_streams_count: 1 }), "systemStatus.activeLive:1");
+assert.equal(metaContext.meta(liveRow, translate, { active_streams_count: 0 }), "systemStatus.neutralLive:");
+for (const value of [undefined, null, NaN, -1]) {
+  assert.equal(metaContext.meta(liveRow, translate, { active_streams_count: value }), "systemStatus.loading:");
+}
+assert.equal(metaContext.meta({ ...liveRow, severity: "unknown" }, translate, { active_streams_count: 0 }), "systemStatus.loading:");
+assert.equal(metaContext.meta({ ...liveRow, severity: "error", problem_count: 1 }, translate, { active_streams_count: 0 }), "systemStatus.affected:1");
+assert.equal(metaContext.meta({ ...liveRow, domain: "storage" }, translate), "systemStatus.domainOk:");
+assert.match(systemStatus, /domainMeta\(row, t, systemHealth\.runtimeStatus\?\.domains\?\.live\?\.summary\)/);
 
 for (const asset of [
   "public/assets/icons/dashboard/system-status-base.png",

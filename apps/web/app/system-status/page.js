@@ -16,10 +16,14 @@ function safeSeverity(value) {
   return ["ok", "warning", "error"].includes(value) ? value : "unknown";
 }
 
-function domainMeta(row, t) {
+function domainMeta(row, t, liveSummary) {
   if (row.severity === "unknown") return t("systemStatus.loading");
-  if (row.domain === "live" && row.severity === "ok") return t("systemStatus.neutralLive");
   if (row.problem_count > 0) return t("systemStatus.affected", { count: row.affected_count || row.problem_count });
+  if (row.domain === "live" && row.severity === "ok") {
+    const count = liveSummary?.active_streams_count;
+    if (!Number.isFinite(count) || count < 0) return t("systemStatus.loading");
+    return count > 0 ? t("systemStatus.activeLive", { count }) : t("systemStatus.neutralLive");
+  }
   return t("systemStatus.domainOk");
 }
 
@@ -128,7 +132,7 @@ export default function SystemStatusPage() {
                     <span className={`systemStatusDot ${row.severity}`} />
                     <div>
                       <div className="systemStatusDomainName">{t(`systemStatus.domains.${row.domain}`)}</div>
-                      <div className="systemStatusDomainMeta">{domainMeta(row, t)}</div>
+                      <div className="systemStatusDomainMeta">{domainMeta(row, t, systemHealth.runtimeStatus?.domains?.live?.summary)}</div>
                     </div>
                     <span className={`systemStatusBadge ${row.severity}`}>{t(`systemStatus.status.${row.severity}`)}</span>
                   </div>

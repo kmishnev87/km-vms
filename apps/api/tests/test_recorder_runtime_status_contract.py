@@ -229,6 +229,41 @@ def test_shared_recorder_runtime_status_import_boundary():
         assert "redact_text as audit_redact_text" not in source
 
 
+def test_summary_counts_latest_current_jobs_not_old_instances_or_errors(db):
+    camera = add_camera(db)
+    add_job(db, camera, job_id="current", state="recording")
+    for job_id, state in [("old-active", "recording"), ("old-error", "error")]:
+        db.add(RecordingJob(id=job_id, camera_id=camera.id, recorder_instance_id="old-instance",
+                            state=state, started_at=datetime.utcnow() + timedelta(hours=5),
+                            updated_at=datetime.utcnow() + timedelta(hours=5)))
+    db.commit()
+    summary = recorder_runtime_status.summarize_recorder_jobs(db)
+    assert summary["active_count"] == 1
+    assert summary["failed_count"] == 0
+    assert summary["state_counts"] == {"recording": 1}
+    assert list_camera_recording_states(db)[0]["job_id"] == "current"
+
+
+def test_latest_stopped_job_does_not_resurrect_older_error_same_instance(db):
+    camera = add_camera(db)
+    add_job(db, camera, job_id="failed", state="error", last_error="old failure", updated_delta_seconds=-120)
+    add_job(db, camera, job_id="stopped", state="stopped")
+    row = list_camera_recording_states(db)[0]
+    assert row["job_id"] == "stopped"
+    assert row["current_failure"] is False
+    assert recorder_runtime_status.summarize_recorder_jobs(db)["failed_count"] == 0
+
+
+def test_replaced_future_heartbeat_cannot_outrank_active_utc_instance(db):
+    set_heartbeat(db)
+    db.execute(text("""INSERT INTO recorder_runtime_status
+        (recorder_instance_id,loop_state,heartbeat_at) VALUES ('old-local','replaced',:future)"""),
+        {"future": datetime.utcnow() + timedelta(hours=5)})
+    db.commit()
+    heartbeat = recorder_runtime_status.read_recorder_heartbeat(db)
+    assert heartbeat["recorder_instance_id"] == RECORDER_INSTANCE_ID
+
+
 def test_recording_job_with_stale_error_is_not_current_failure(db):
     camera = add_camera(db, last_error="old camera error")
     add_job(

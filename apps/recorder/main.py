@@ -30,7 +30,11 @@ STDERR_TAIL_LINES = 80
 MAX_ERROR_LENGTH = 2000
 BACKOFF_STEPS_SECONDS = (10, 20, 30, 60, 120)
 STARTUP_CONFIRM_SECONDS = 5
-MEDIA_PROGRESS_HEARTBEAT_GRACE_SECONDS = 45
+MEDIA_STALL_SECONDS = 60
+MEDIA_STALL_SAMPLES = 2
+RECOVERY_STABLE_SECONDS = 60
+BLOCKED_RETRY_SECONDS = 300
+MEDIA_PROGRESS_HEARTBEAT_GRACE_SECONDS = MEDIA_STALL_SECONDS
 OWNERSHIP_KM_VMS = "KM VMS"
 METADATA_SOURCE_RECORDER = "recorder"
 SEGMENT_STATUS_WRITING = "writing"
@@ -118,6 +122,7 @@ ERROR_PROCESS_START_FAILED = "process_start_failed"
 ERROR_DUPLICATE_PROCESS = "duplicate_process_prevented"
 ERROR_UNKNOWN_FFMPEG = "unknown_ffmpeg_error"
 ERROR_STALE_SEGMENT = "recording_segment_not_rotating"
+ERROR_MEDIA_STALLED = "recording_media_stalled"
 
 running = True
 jobs: dict[int, "RecordingJob"] = {}
@@ -160,6 +165,8 @@ class RecordingJob:
     last_media_progress_at: float | None = None
     current_media_size: int = 0
     current_media_relative_path: str | None = None
+    stalled_samples: int = 0
+    stable_progress_since: float | None = None
 
     def set_state(self, state: str, error: str | None = None, error_type: str | None = None) -> None:
         if self.state != state:
@@ -649,7 +656,7 @@ def create_recording_job(row, job: RecordingJob) -> str:
                     :source_stream,
                     :input_fingerprint,
                     :recorder_instance_id,
-                    NOW(),
+                    timezone('UTC', NOW()),
                     :created_by,
                     :ownership,
                     :source,
@@ -701,13 +708,13 @@ def update_recording_job(
                 """
                 UPDATE recording_jobs
                 SET state = COALESCE(:state, state),
-                    stopped_at = CASE WHEN :stopped THEN NOW() ELSE stopped_at END,
+                    stopped_at = CASE WHEN :stopped THEN timezone('UTC', NOW()) ELSE stopped_at END,
                     stop_reason = CASE WHEN :stop_reason_set THEN :stop_reason ELSE stop_reason END,
                     last_error = CASE WHEN :last_error_set THEN :last_error ELSE last_error END,
                     last_error_type = CASE WHEN :last_error_type_set THEN :last_error_type ELSE last_error_type END,
                     ffmpeg_pid = CASE WHEN :ffmpeg_pid_set THEN :ffmpeg_pid ELSE ffmpeg_pid END,
                     last_exit_code = CASE WHEN :last_exit_code_set THEN :last_exit_code ELSE last_exit_code END,
-                    updated_at = NOW()
+                    updated_at = timezone('UTC', NOW())
                 WHERE id = :id
                 """
             ),
@@ -758,7 +765,7 @@ def clear_recording_job_error(job: RecordingJob) -> None:
                 SET last_error = NULL,
                     last_error_type = NULL,
                     last_exit_code = NULL,
-                    updated_at = NOW()
+                    updated_at = timezone('UTC', NOW())
                 WHERE id = :id
                 """
             ),
@@ -1056,7 +1063,7 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
                 "mime_type": media_metadata["mime_type"],
                 "integrity_status": SEGMENT_STATUS_WRITING,
                 "media_progress_at": datetime.utcnow() if stat.st_size > 0 else None,
-                "file_mtime": datetime.fromtimestamp(stat.st_mtime),
+                "file_mtime": datetime.fromtimestamp(stat.st_mtime, UTC).replace(tzinfo=None),
                 "reconciliation_status": "pending",
             },
         ).first()
@@ -1129,6 +1136,8 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
     job.known_segment_paths.add(rel_path)
     if stat.st_size > 0:
         job.last_media_progress_at = time.time()
+        if job.stable_progress_since is None:
+            job.stable_progress_since = job.last_media_progress_at
         job.current_media_size = int(stat.st_size)
         job.current_media_relative_path = rel_path
     log_event("info", "segment_detected", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, size_bytes=stat.st_size)
@@ -1146,7 +1155,7 @@ def update_writing_segment_progress(job: RecordingJob, file_path: Path) -> bool:
         return False
     if stat.st_size <= 0:
         return False
-    file_mtime = datetime.fromtimestamp(stat.st_mtime)
+    file_mtime = datetime.fromtimestamp(stat.st_mtime, UTC).replace(tzinfo=None)
     with engine.begin() as conn:
         result = conn.execute(
             text(
@@ -1154,9 +1163,9 @@ def update_writing_segment_progress(job: RecordingJob, file_path: Path) -> bool:
                 UPDATE recording_segments
                 SET size_bytes = :size_bytes,
                     file_mtime = :file_mtime,
-                    file_size_verified_at = NOW(),
-                    media_progress_at = NOW(),
-                    updated_at = NOW()
+                    file_size_verified_at = timezone('UTC', NOW()),
+                    media_progress_at = timezone('UTC', NOW()),
+                    updated_at = timezone('UTC', NOW())
                 WHERE job_id = :job_id
                   AND relative_path = :relative_path
                   AND archive_root_id = :archive_root_id
@@ -1179,7 +1188,10 @@ def update_writing_segment_progress(job: RecordingJob, file_path: Path) -> bool:
         )
     if result.rowcount <= 0:
         return False
-    job.last_media_progress_at = time.time()
+    now = time.time()
+    if job.last_media_progress_at is None or now - job.last_media_progress_at > MEDIA_STALL_SECONDS:
+        job.stable_progress_since = now
+    job.last_media_progress_at = now
     job.current_media_size = int(stat.st_size)
     job.current_media_relative_path = rel_path
     return True
@@ -1466,31 +1478,28 @@ def current_segment_age_seconds(file_path: Path) -> int:
     return max(0, int((datetime.now() - started_at).total_seconds()))
 
 
-def stale_recovery_allowed(job: RecordingJob, now_ts: float) -> bool:
-    if job.last_stale_recovery_at and now_ts - job.last_stale_recovery_at < 15 * 60:
-        return False
-    return job.stale_recovery_count < 3
-
-
 def handle_stale_current_segment(row, job: RecordingJob) -> bool:
     if not job.process or job.process.poll() is not None:
         return False
-    sync_segment_metadata_for_job(job)
-    file_path = current_writing_segment(job)
-    if file_path is None:
-        return False
-    age_sec = current_segment_age_seconds(file_path)
+    file_path = (job.archive_root_path / job.current_media_relative_path) if job.current_media_relative_path else current_writing_segment(job)
+    age_sec = current_segment_age_seconds(file_path) if file_path is not None else 0
     threshold_sec = stale_segment_after_seconds(row)
-    if age_sec <= threshold_sec:
+    now_ts = time.time()
+    progress_age = now_ts - (job.last_media_progress_at or job.started_at or now_ts)
+    stalled = progress_age > MEDIA_STALL_SECONDS
+    job.stalled_samples = job.stalled_samples + 1 if stalled else 0
+    rotation_overdue = file_path is not None and age_sec > threshold_sec
+    if not rotation_overdue and job.stalled_samples < MEDIA_STALL_SAMPLES:
         return False
 
-    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
-    now_ts = time.time()
+    reason = ERROR_MEDIA_STALLED if stalled else ERROR_STALE_SEGMENT
+    rel_path = storage_relative_path(file_path, root=job.archive_root_path) if file_path is not None else None
     event_metadata = {
-        "reason": ERROR_STALE_SEGMENT,
+        "reason": reason,
         "age_seconds": age_sec,
         "stale_after_seconds": threshold_sec,
-        "segment_name": file_path.name,
+        "segment_name": file_path.name if file_path is not None else None,
+        "progress_age_seconds": round(progress_age),
     }
     log_event(
         "warning",
@@ -1511,18 +1520,12 @@ def handle_stale_current_segment(row, job: RecordingJob) -> bool:
         metadata=event_metadata,
     )
 
-    if not stale_recovery_allowed(job, now_ts):
-        job.set_state(RecorderState.ERROR, "stale writing segment recovery limit reached", ERROR_STALE_SEGMENT)
-        update_camera_status_from_job(job)
-        update_recording_job(job, state=RecorderState.ERROR, last_error=job.last_error, last_error_type=ERROR_STALE_SEGMENT)
-        log_event("error", "stale_current_segment_recovery_blocked", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id)
-        return True
-
     job.stale_recovery_count += 1
     job.last_stale_recovery_at = now_ts
-    stop_camera(row.id, ERROR_STALE_SEGMENT, audit_event="camera_restarted")
+    stop_camera(row.id, reason, audit_event="camera_restarted", for_retry=True)
+    schedule_retry(job, "Recording media stopped progressing" if stalled else "Recording segment rotation overdue", reason)
     log_event("warning", "stale_current_segment_recovery_attempted", camera_id=job.camera_id, camera_name=job.camera_name, attempt=job.stale_recovery_count)
-    return False
+    return True
 
 
 def finalize_segments_for_job(job: RecordingJob) -> None:
@@ -1600,7 +1603,10 @@ def mark_stale_writing_segments_on_startup() -> None:
                     WHERE ownership = :ownership
                       AND source = :source
                       AND status = :writing
-                      AND created_at < NOW() - INTERVAL '10 minutes'
+                      AND job_id IN (
+                          SELECT id FROM recording_jobs
+                          WHERE recorder_instance_id IS DISTINCT FROM :instance_id
+                      )
                     """
                 ),
                 {
@@ -1611,6 +1617,7 @@ def mark_stale_writing_segments_on_startup() -> None:
                     "ownership": OWNERSHIP_KM_VMS,
                     "source": METADATA_SOURCE_RECORDER,
                     "writing": SEGMENT_STATUS_WRITING,
+                    "instance_id": RECORDER_INSTANCE_ID,
                 },
             )
         if result.rowcount:
@@ -1623,6 +1630,27 @@ def mark_stale_writing_segments_on_startup() -> None:
             )
     except Exception as exc:
         log_event("warning", "stale_writing_reconciliation_failed", error=str(exc))
+
+
+def reconcile_previous_recorder_instances() -> None:
+    with engine.begin() as conn:
+        result = conn.execute(text("""
+            UPDATE recording_jobs
+            SET state = 'stopped',
+                stop_reason = 'previous_recorder_instance_interrupted',
+                ffmpeg_pid = NULL,
+                updated_at = timezone('UTC', NOW())
+            WHERE recorder_instance_id IS DISTINCT FROM :instance_id
+              AND ownership = :ownership AND source = :source
+              AND state IN ('starting', 'recording', 'stopping', 'restarting')
+        """), {"instance_id": RECORDER_INSTANCE_ID, "ownership": OWNERSHIP_KM_VMS, "source": METADATA_SOURCE_RECORDER})
+        conn.execute(text("""
+            UPDATE recorder_runtime_status SET loop_state = 'replaced'
+            WHERE recorder_instance_id IS DISTINCT FROM :instance_id
+              AND loop_state NOT IN ('shutdown', 'replaced')
+        """), {"instance_id": RECORDER_INSTANCE_ID})
+    if result.rowcount:
+        log_event("info", "previous_recorder_jobs_interrupted", count=result.rowcount)
 
 
 def choose_input_url(row) -> str | None:
@@ -1787,9 +1815,11 @@ def classify_error(message: str | None, exit_code: int | None = None) -> str:
     text_value = (message or "").lower()
     if "no such file or directory" in text_value and "ffmpeg" in text_value:
         return ERROR_FFMPEG_NOT_FOUND
-    if "401" in text_value or "unauthorized" in text_value or "authentication" in text_value:
+    if any(value in text_value for value in ("unauthorized", "forbidden", "authentication failed")) or re.search(
+        r"(?:server returned|(?:http|rtsp)(?:/\d(?:\.\d)?)?|failed:?)\s+(?:401|403)\b", text_value
+    ):
         return ERROR_AUTH_FAILED
-    if "connection timed out" in text_value or "timed out" in text_value or "timeout" in text_value:
+    if any(value in text_value for value in ("connection", "timed out", "timeout", "no route to host", "network is unreachable", "end of file")):
         return ERROR_NETWORK_TIMEOUT
     if "permission denied" in text_value:
         return ERROR_PERMISSION_DENIED
@@ -1818,7 +1848,10 @@ def schedule_retry(job: RecordingJob, error: str, error_type: str, exit_code: in
     job.retry_count += 1
     job.last_retry_at = time.time()
     backoff = BACKOFF_STEPS_SECONDS[min(job.retry_count - 1, len(BACKOFF_STEPS_SECONDS) - 1)]
+    if error_type in {ERROR_AUTH_FAILED, ERROR_INVALID_RTSP, ERROR_FFMPEG_NOT_FOUND, ERROR_PERMISSION_DENIED, ERROR_STORAGE_UNAVAILABLE}:
+        backoff = BLOCKED_RETRY_SECONDS
     job.next_retry_at = time.time() + backoff
+    job.stable_progress_since = None
     job.set_state(RecorderState.RESTARTING, error=error, error_type=error_type)
     update_camera_status_from_job(job)
     update_recording_job(job, state=RecorderState.RESTARTING, last_error=error, last_error_type=error_type, last_exit_code=exit_code)
@@ -1922,6 +1955,13 @@ def start_camera(row) -> None:
         )
         return
 
+    if job.db_job_id:
+        close_recording_job(job, state=RecorderState.STOPPED, reason="retry_replaced", error=job.last_error)
+    job.last_media_progress_at = None
+    job.stable_progress_since = None
+    job.current_media_relative_path = None
+    job.current_media_size = 0
+    job.stalled_samples = 0
     try:
         create_recording_job(row, job)
     except Exception as exc:
@@ -1999,12 +2039,12 @@ def start_camera(row) -> None:
     job.stopped_at = None
     job.last_exit_code = None
     job.stderr_tail.clear()
-    job.set_state(RecorderState.RECORDING)
+    job.set_state(RecorderState.STARTING)
     start_stderr_reader(job)
     update_camera_status_from_job(job)
     update_recording_job(
         job,
-        state=RecorderState.RECORDING,
+        state=RecorderState.STARTING,
         ffmpeg_pid=job.pid,
         last_error=None,
         last_error_type=None,
@@ -2020,7 +2060,7 @@ def start_camera(row) -> None:
     )
 
 
-def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "recording_stopped") -> None:
+def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "recording_stopped", *, for_retry: bool = False) -> None:
     job = jobs.get(camera_id)
     if not job:
         return
@@ -2056,7 +2096,13 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     else:
         job.set_state(RecorderState.STOPPED)
     update_camera_status_from_job(job)
-    close_recording_job(job, state=job.state, reason=reason)
+    if for_retry:
+        update_recording_job(job, state=RecorderState.RESTARTING, ffmpeg_pid=None, stop_reason=reason)
+    else:
+        close_recording_job(job, state=job.state, reason=reason)
+    job.last_media_progress_at = None
+    job.stable_progress_since = None
+    job.stalled_samples = 0
     log_event("info", "recording_stopped", camera_id=job.camera_id, camera_name=job.camera_name, reason=reason, exit_code=job.last_exit_code)
     write_audit_event(
         event_type="camera_stopped" if audit_event == "recording_stopped" else audit_event,
@@ -2131,6 +2177,7 @@ def sync_cameras() -> None:
 
             if not row.enabled:
                 job.retry_count = 0
+                job.stale_recovery_count = 0
                 job.next_retry_at = None
                 if job.process and job.process.poll() is None:
                     stop_camera(row.id, RecorderState.DISABLED, audit_event="camera_disabled_recording_stopped")
@@ -2153,6 +2200,7 @@ def sync_cameras() -> None:
 
             if row.recording_mode != "always":
                 job.retry_count = 0
+                job.stale_recovery_count = 0
                 job.next_retry_at = None
                 if job.process and job.process.poll() is None:
                     stop_camera(row.id, RecorderState.IDLE)
@@ -2245,7 +2293,7 @@ def check_children() -> None:
 def confirm_recording_startups() -> None:
     for job in list(jobs.values()):
         proc = job.process
-        if job.state != RecorderState.RECORDING or not proc or not job.started_at:
+        if job.state not in {RecorderState.STARTING, RecorderState.RECORDING} or not proc or not job.started_at:
             continue
         if proc.poll() is not None:
             continue
@@ -2253,10 +2301,19 @@ def confirm_recording_startups() -> None:
             continue
         if not job.last_media_progress_at or time.time() - job.last_media_progress_at > MEDIA_PROGRESS_HEARTBEAT_GRACE_SECONDS:
             continue
-        if not (job.retry_count or job.next_retry_at or job.last_error or job.last_error_type):
+        if job.state == RecorderState.STARTING:
+            job.set_state(RecorderState.RECORDING)
+            update_camera_status_from_job(job)
+            update_recording_job(job, state=RecorderState.RECORDING, last_error=None, last_error_type=None, last_exit_code=None)
+            log_event("info", "recording_start_confirmed", camera_id=job.camera_id, camera_name=job.camera_name, pid=job.pid)
+        if not job.stable_progress_since or time.time() - job.stable_progress_since < RECOVERY_STABLE_SECONDS:
+            continue
+        if not (job.retry_count or job.stale_recovery_count or job.next_retry_at or job.last_error or job.last_error_type):
             continue
 
         job.retry_count = 0
+        job.stale_recovery_count = 0
+        job.last_stale_recovery_at = None
         job.next_retry_at = None
         job.last_error = None
         job.last_error_type = None
@@ -2319,14 +2376,14 @@ def write_recorder_heartbeat(loop_state: str = "loop") -> None:
                         :recorder_instance_id,
                         :service_status,
                         :loop_state,
-                        to_timestamp(:started_at),
-                        NOW(),
+                        timezone('UTC', to_timestamp(:started_at)),
+                        timezone('UTC', NOW()),
                         :active_jobs_count,
                         :recording_cameras_count,
                         :failed_cameras_count,
                         :last_error,
                         :last_exit_code,
-                        NOW()
+                        timezone('UTC', NOW())
                     )
                     ON CONFLICT (recorder_instance_id) DO UPDATE
                     SET service_status = EXCLUDED.service_status,
@@ -2369,6 +2426,7 @@ signal.signal(signal.SIGINT, shutdown_handler)
 try:
     ensure_recording_metadata_schema()
     mark_stale_writing_segments_on_startup()
+    reconcile_previous_recorder_instances()
     log_event("info", "metadata_schema_ready")
 except Exception as exc:
     log_event("error", "metadata_schema_failed", error=str(exc))
