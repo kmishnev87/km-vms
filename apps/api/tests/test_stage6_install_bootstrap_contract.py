@@ -43,6 +43,132 @@ def test_install_docs_include_public_pipe_install_without_token_requirement():
     assert "Private GitHub repository install without `git`" in docs
     assert "The operator does not run `km-vms-storage-apply.sh` or `km-vms-restart.sh` manually" in docs
     assert "setup-complete.json" in docs
+    assert "host needs Python 3" in docs
+    assert "does not require host Python" not in docs
+
+
+def test_setup_helper_seeds_its_own_project_for_no_python_restart(tmp_path):
+    compose = read("docker-compose.yml")
+    helper = compose.split("  setup-helper:", 1)[1].split("  update-helper:", 1)[0]
+    assert "KM_VMS_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-tnas-vms}" in helper
+    restart_definitions = read("scripts/km-vms-restart.sh").split(
+        '\nwhile [ "$#" -gt 0 ]; do\n', 1
+    )[0]
+    app = tmp_path / "app"
+    bootstrap = app / "data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+    bootstrap.parent.mkdir(parents=True)
+    bootstrap.touch()
+    stubs = tmp_path / "no-python-bin"
+    stubs.mkdir()
+    for name in ("dirname", "head", "sed", "wc", "tr"):
+        (stubs / name).symlink_to(shutil.which(name))
+    docker = stubs / "docker"
+    docker.write_text('''#!/bin/sh
+if [ "$1" = ps ]; then
+  case "$*" in
+    *"label=com.docker.compose.project=$EXPECTED_PROJECT "*"label=com.docker.compose.service=update-helper"*)
+      printf '%s\\n' own-update-helper
+      [ "${AMBIGUOUS:-0}" = 0 ] || printf '%s\\n' second-update-helper
+      ;;
+  esac
+  exit 0
+fi
+[ "$1:$2:$3:$4" = "exec:own-update-helper:python3:-B" ] || exit 90
+shift 4
+[ "$2" = resolve-project-name ] || exit 91
+printf '%s\\n' "$EXPECTED_PROJECT"
+''', encoding="utf-8")
+    docker.chmod(0o755)
+    harness = tmp_path / "restart-no-python.sh"
+    harness.write_text(
+        restart_definitions
+        + '\ncommand -v python3 >/dev/null 2>&1 && exit 92\n'
+        + 'bootstrap_command resolve-project-name --app-dir "$APP_DIR" --project-name "$PROJECT_NAME"\n',
+        encoding="utf-8",
+    )
+    # The production script sources its sibling Compose utilities.
+    shutil.copyfile(ROOT / "scripts/km-vms-compose-common.sh", tmp_path / "km-vms-compose-common.sh")
+    for project in ("tnas-vms", "km-vms-custom-install"):
+        env = os.environ.copy()
+        env.update(PATH=str(stubs), KM_VMS_APP_DIR=str(app),
+                   KM_VMS_PROJECT_NAME=project, EXPECTED_PROJECT=project)
+        result = subprocess.run([shutil.which("sh"), str(harness)], env=env,
+                                capture_output=True, text=True, check=False)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == project
+        # Missing context and ambiguous owners must still fail closed.
+        for overrides in ({"KM_VMS_PROJECT_NAME": ""}, {"AMBIGUOUS": "1"}):
+            result = subprocess.run([shutil.which("sh"), str(harness)],
+                                    env={**env, **overrides}, capture_output=True,
+                                    text=True, check=False)
+            assert result.returncode != 0
+            assert "Canonical maintenance check owner is unavailable" in result.stderr
+
+
+def test_no_python_image_override_uses_the_callers_installation_path(tmp_path):
+    app = tmp_path / "installation"
+    bootstrap = app / "data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+    bootstrap.parent.mkdir(parents=True)
+    bootstrap.touch()
+    image_override = app / "data/update-runtime/derived-compose/initial-fixture-images.yml"
+    image_override.parent.mkdir(parents=True)
+    image_override.write_text("services: {}\n", encoding="utf-8")
+    stubs = tmp_path / "no-python-bin"
+    stubs.mkdir()
+    for name in ("grep", "sed", "wc", "tr"):
+        (stubs / name).symlink_to(shutil.which(name))
+    docker = stubs / "docker"
+    docker.write_text('''#!/bin/sh
+if [ "$1" = ps ]; then
+  printf '%s\\n' own-update-helper
+  exit 0
+fi
+[ "$1:$2:$3:$4" = "exec:own-update-helper:python3:-B" ] || exit 90
+shift 5
+operation="$1"
+shift
+app_dir=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --app-dir) app_dir="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+case "$operation" in
+  resolve-project-name) printf '%s\\n' fixture-install ;;
+  image-override-path)
+    [ "${FOREIGN_OVERRIDE:-0}" = 0 ] || app_dir=/foreign
+    printf '%s/data/update-runtime/derived-compose/initial-fixture-images.yml\\n' "$app_dir"
+    ;;
+  *) exit 91 ;;
+esac
+''', encoding="utf-8")
+    docker.chmod(0o755)
+    harness = tmp_path / "image-override-no-python.sh"
+    harness.write_text(
+        '#!/bin/sh\nset -eu\n'
+        + '. "$COMMON_SCRIPT"\n'
+        + 'command -v python3 >/dev/null 2>&1 && exit 92\n'
+        + 'km_vms_slot_image_override "$APP_DIR" fixture-install\n',
+        encoding="utf-8",
+    )
+    env = {**os.environ, "PATH": str(stubs), "APP_DIR": str(app),
+           "COMMON_SCRIPT": str(ROOT / "scripts/km-vms-compose-common.sh")}
+    def run(overrides=None):
+        return subprocess.run([shutil.which("sh"), str(harness)],
+                              env={**env, **(overrides or {})},
+                              capture_output=True, text=True, check=False)
+    result = run()
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(image_override)
+    foreign = run({"FOREIGN_OVERRIDE": "1"})
+    assert foreign.returncode != 0
+    assert "escaped stable runtime" in foreign.stderr
+    image_override.unlink()
+    image_override.symlink_to(bootstrap)
+    linked = run()
+    assert linked.returncode != 0
+    assert "override is unsafe" in linked.stderr
 
 
 def test_install_script_creates_nginx_readable_preview_root():

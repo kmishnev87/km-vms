@@ -331,6 +331,7 @@ services:
     environment:
       TZ: ${TZ:-Asia/Yekaterinburg}
       KM_VMS_SETUP_APP_DIR: ${KM_VMS_HOST_APP_DIR:-/host-app}
+      KM_VMS_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-tnas-vms}
     command:
       - sh
       - -c

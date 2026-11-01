@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.18",
-  "tag": "v0.8.18",
-  "title": "Safe Fresh Installation, Reliable Maintenance and Low-Load Health Checks",
-  "summary": "Fixes trusted fresh installation bootstrap ordering and isolates project discovery to the installation root. Includes reliable Maintenance, strict update activation binding, backup-data-aware trial restore and daily native health checks.",
+  "version": "0.8.19",
+  "tag": "v0.8.19",
+  "title": "First-Run Storage Activation and Canonical Project Context",
+  "summary": "Fixes first-run storage activation in the Python-free setup helper by preserving the installation project and path context. Keeps canonical authority checks and clarifies host Python prerequisites.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.18",
+  "source_ref": "v0.8.19",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,51 +16,47 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Prepares the stable bootstrap before trusted fresh-install target preparation and scopes legacy project discovery to the installation root.",
-    "Keeps update pending state in its controller so Maintenance opens and renders available updates without a frontend crash.",
-    "Uses one canonical deployment binding before and after activation, rejecting genuine image, identity, Compose and archive-root drift.",
-    "Uses native health probes with a 24-hour steady-state interval and rapid startup checks to reduce unnecessary NAS CPU and thermal load.",
-    "Accepts installation-root bind aliases only when they identify the same filesystem directory, keeping foreign receipts rejected.",
-    "Validates disposable database restores against counts from the checksum-verified backup itself, including empty or deleted archives, and rejects missing restored rows.",
-    "Adds focused Maintenance, activation and installation identity regression coverage and documents health-monitoring behavior."
+    "Passes the installation's Compose project identity to setup-helper so first-run storage activation can find its verified maintenance owner without Python.",
+    "Preserves exact installation authority checks and rejects missing project context or ambiguous maintenance owners.",
+    "Materializes the immutable image override in the caller's verified installation path instead of returning a container-only alias.",
+    "Adds executable no-Python regression coverage for default and custom Compose project names.",
+    "Documents the host Python 3 prerequisite for initial canonical slot materialization; runtime setup-helper remains Python-free.",
+    "Includes the preceding Maintenance crash, strict activation binding, backup trial-restore and daily native health-check fixes."
   ],
-  "changelog_i18n": {
-    "en": [
-      "Prepares the stable bootstrap before trusted fresh-install target preparation and scopes legacy project discovery to the installation root.",
-      "Keeps update pending state in its controller so Maintenance opens and renders available updates without a frontend crash.",
-      "Uses one canonical deployment binding before and after activation, rejecting genuine image, identity, Compose and archive-root drift.",
-      "Uses native health probes with a 24-hour steady-state interval and rapid startup checks to reduce unnecessary NAS CPU and thermal load.",
-      "Accepts installation-root bind aliases only when they identify the same filesystem directory, keeping foreign receipts rejected.",
-      "Validates disposable database restores against counts from the checksum-verified backup itself, including empty or deleted archives, and rejects missing restored rows.",
-      "Adds focused Maintenance, activation, installation identity and restore regression coverage and documents health-monitoring behavior."
-    ],
-    "ru": [
-      "Исправлен порядок первой установки из GitHub: служебная основа готовится до проверки целевой версии, а соседние установки не влияют на выбор проекта.",
-      "Исправлено падение раздела обслуживания при показе доступного обновления.",
-      "Проверки до и после обновления используют единую привязку к коду, образам, Compose и корням архива; реальные несоответствия по-прежнему блокируются.",
-      "Частые запуски Python заменены нативными проверками раз в сутки; быстрые проверки готовности при запуске сохранены.",
-      "Разные пути подключения одной папки установки распознаются как одна папка; чужие квитанции установки отклоняются.",
-      "Пробное восстановление сравнивает данные с самой проверенной резервной копией, правильно обрабатывает пустой или удалённый архив и обнаруживает потерянные строки.",
-      "Добавлены проверки обслуживания, активации, установки и восстановления; обновлена документация проверок состояния."
-    ],
-    "zh-CN": [
-      "修复 GitHub 首次安装的启动顺序，并将旧版项目发现限制在当前安装目录，避免其他安装相互干扰。",
-      "修复维护页面在显示可用更新时的崩溃问题。",
-      "更新前后使用相同的代码、镜像、Compose 和存档目录绑定验证，继续阻止真实的不一致。",
-      "使用每天一次的原生健康检查替代频繁启动 Python，并保留快速启动就绪检查。",
-      "允许指向同一安装目录的不同挂载路径，继续拒绝其他目录的安装凭据。",
-      "通过校验和已验证备份的数据计数验证试恢复，支持空存档或已删除存档，并拒绝缺失的数据行。",
-      "增加维护、激活、安装和恢复回归测试，并更新健康检查文档。"
-    ]
-  },
   "title_i18n": {
-    "en": "Safe Fresh Installation, Reliable Maintenance and Low-Load Health Checks",
-    "ru": "Надёжная установка, обслуживание и редкие проверки состояния",
-    "zh-CN": "安全首次安装、可靠维护与低负载健康检查"
+    "en": "First-Run Storage Activation and Canonical Project Context",
+    "ru": "Первый запуск: активация хранилища и правильный проект установки",
+    "zh-CN": "首次启动存储激活与规范项目上下文"
   },
   "summary_i18n": {
-    "en": "Fixes trusted fresh installation bootstrap ordering and isolates project discovery to the installation root. Includes reliable Maintenance, strict update activation binding, backup-data-aware trial restore and daily native health checks.",
-    "ru": "Исправляет первую установку и исключает влияние соседних установок на выбор проекта. Включает исправления обслуживания, строгую проверку обновлений, проверку восстановления по данным резервной копии и нативные проверки состояния раз в сутки.",
-    "zh-CN": "修复可信首次安装的启动顺序，并隔离各安装目录的项目发现。同时包含维护修复、严格更新激活验证、基于备份数据的试恢复验证，以及每天一次的原生健康检查。"
+    "en": "Fixes first-run storage activation in the Python-free setup helper by preserving the installation project and path context. Keeps canonical authority checks and clarifies host Python prerequisites.",
+    "ru": "Исправляет остановку первого запуска после выбора архива: служебные контейнеры сохраняют имя и путь своей установки. Проверки целостности сохранены, требование Python 3 на хосте уточнено.",
+    "zh-CN": "保留无 Python 设置辅助容器的安装项目和路径上下文，修复首次启动存储激活。保留规范权限验证，并明确主机 Python 3 前提条件。"
+  },
+  "changelog_i18n": {
+    "en": [
+      "Passes the installation's Compose project identity to setup-helper so first-run storage activation can find its verified maintenance owner without Python.",
+      "Preserves exact installation authority checks and rejects missing project context or ambiguous maintenance owners.",
+      "Materializes the immutable image override in the caller's verified installation path instead of returning a container-only alias.",
+      "Adds executable no-Python regression coverage for default and custom Compose project names.",
+      "Documents the host Python 3 prerequisite for initial canonical slot materialization; runtime setup-helper remains Python-free.",
+      "Includes the preceding Maintenance crash, strict activation binding, backup trial-restore and daily native health-check fixes."
+    ],
+    "ru": [
+      "Исправлена активация папки архива при первом запуске: setup-helper получает имя своего Compose-проекта и находит проверенный служебный контейнер без Python.",
+      "Проверки принадлежности установки сохранены; отсутствие имени проекта и неоднозначный служебный контейнер по-прежнему приводят к безопасному отказу.",
+      "Файл привязки образов создаётся по проверенному пути вызывающей установки, а не по внутреннему пути другого контейнера; чужие пути и символьные ссылки отклоняются.",
+      "Добавлены исполняемые проверки без Python для стандартного и пользовательского имени проекта.",
+      "Уточнено требование Python 3 на хосте для подготовки первого слота; самому setup-helper Python не требуется.",
+      "Включены предыдущие исправления обслуживания, проверки активации, пробного восстановления и нативные проверки состояния раз в сутки."
+    ],
+    "zh-CN": [
+      "向设置辅助容器传递 Compose 项目标识，使首次存储激活无需 Python 即可找到已验证的维护容器。",
+      "保留严格安装归属验证，继续拒绝缺少项目上下文或维护容器不明确的情况。",
+      "在调用方已验证的安装路径中生成不可变镜像覆盖文件，避免返回容器内部别名，并继续拒绝外部路径和符号链接。",
+      "为默认和自定义项目名称添加可执行的无 Python 回归测试。",
+      "明确首次规范发布槽准备需要主机 Python 3，运行时设置辅助容器仍无需 Python。",
+      "包含此前的维护页面、严格激活验证、备份试恢复及每日原生健康检查修复。"
+    ]
   }
 }

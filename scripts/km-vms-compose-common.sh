@@ -269,8 +269,8 @@ km_vms_slot_image_override() {
       km_vms_compose_fail "Canonical update-helper owner is unavailable."
     helper_id=$(printf '%s\n' "$helper_ids" | sed -n '1p')
     image_override=$(docker exec "$helper_id" python3 -B \
-      /host-app/data/update-runtime/bootstrap/current/km-vms-bootstrap.py \
-      image-override-path --app-dir /host-app --project-name "$project_name") ||
+      "$bootstrap" \
+      image-override-path --app-dir "$stable_app_dir" --project-name "$project_name") ||
       km_vms_compose_fail "Immutable slot image override could not be materialized."
   fi
   case "$image_override" in

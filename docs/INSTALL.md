@@ -1,6 +1,6 @@
 # KM VMS Installation
 
-KM VMS is installed on NAS/server systems through `scripts/install.sh`. The installer is POSIX `sh` compatible and does not require host Python, Node, npm, or a package manager bootstrap.
+KM VMS is installed on NAS/server systems through `scripts/install.sh`. The installer is POSIX `sh` compatible. The host needs Python 3 to materialize the initial canonical release slot, as well as Docker and Docker Compose. Host Node, npm, and a package manager bootstrap are not required. The runtime setup-helper does not need Python; it uses the installation's verified update-helper for canonical maintenance checks.
 
 Supported platform class: TerraMaster, Synology, QNAP, TrueNAS, Unraid, and generic Linux servers with Docker and Docker Compose. The installer does not hardcode vendor storage paths; choose an app directory explicitly.
 
