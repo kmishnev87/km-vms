@@ -1,6 +1,6 @@
 import inspect
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1111,3 +1111,193 @@ def test_recorder_finalization_source_advances_signal_in_same_transaction():
     assert "recorder_finalization_receipt_mismatch" in function
     assert "AND object_identity = :object_identity" in function
     assert "AND physical_identity IS NOT DISTINCT FROM :physical_identity" in function
+
+
+@pytest.mark.parametrize("free_percent", [5.0, 6.0, 8.9, 9.0])
+def test_stage1377_interrupted_cleanup_resumes_above_start_threshold(stage4102, monkeypatch, free_percent):
+    ctx = stage4102
+    ctx.system.auto_free_space_cleanup_enabled = True
+    ctx.system.auto_free_space_acknowledged_terms_version = AUTO_FREE_SPACE_TERMS_VERSION
+    ctx.system.recording_suspended_by_low_disk = True
+    ctx.system.low_disk_suspended_physical_volume_id = ctx.root.physical_identity
+    ctx.db.commit()
+    camera = add_camera(ctx, days=365, quota=500)
+    segment, path = add_segment(ctx, camera, index=1)
+    group = volume_group(ctx, 0.9)
+    monkeypatch.setattr(automation, "storage_volume_groups", lambda db: [group])
+    monkeypatch.setattr(automation, "_revalidate_pressure_group", lambda *a, **k: {
+        "physical_identity": ctx.root.physical_identity, "runtime_device_id": "rv1:" + "a" * 32,
+    })
+    claim = automation._claim_auto_free_operation(ctx.db, group)
+    operation = ctx.db.get(StorageOperation, claim["handle"].operation_id)
+    operation.lease_expires_at = database_now(ctx.db) - timedelta(seconds=1)
+    ctx.db.commit()
+    group["capacity"]["free_percent"] = free_percent
+    probes = iter([free_percent, 9.0])
+
+    def probe(db, context):
+        free = next(probes)
+        group["capacity"]["free_percent"] = free
+        return {"status": "ok", "physical_volume_id": group["physical_volume_id"],
+                "root_ids": [ctx.root.id], "free_percent": free}
+
+    monkeypatch.setattr(automation, "_probe_auto_free_context", probe)
+    result = automation.run_auto_free_pressure_groups(ctx.db, page_size=1)
+    ctx.db.refresh(operation)
+    ctx.db.refresh(ctx.system)
+    assert result["operation_count"] == 1
+    assert operation.status == "completed"
+    assert operation.result["status"] == "target_reached"
+    assert ctx.system.recording_suspended_by_low_disk is False
+    assert path.exists() is (free_percent >= 9.0)
+    assert result["deleted_count"] == (0 if free_percent >= 9.0 else 1)
+
+
+def test_stage1377_latest_success_does_not_mask_another_camera_excess(stage4102):
+    ctx = stage4102
+    blocked = add_camera(ctx, name="blocked", days=365, quota=1)
+    healthy = add_camera(ctx, name="healthy", days=365, quota=1)
+    add_segment(ctx, blocked, index=1, size_bytes=2 * 1024**3, integrity_status="corrupted_file")
+    add_segment(ctx, healthy, index=2, size_bytes=700 * 1024**2)
+    add_segment(ctx, healthy, index=3, size_bytes=700 * 1024**2)
+    run_automatic_retention_once(ctx.db, max_candidates=1)
+    status = automation.retention_runtime_status(ctx.db)
+    assert status["last_status"] == "completed"
+    assert status["state"] == "violating"
+    assert status["violating_camera_count"] == 1
+    assert status["quota_overage_bytes"] == 1024**3
+    assert status["problem_cameras"][0]["camera_id"] == blocked.id
+
+
+def test_stage1377_resolved_excess_does_not_keep_historical_failure(stage4102):
+    ctx = stage4102
+    camera = add_camera(ctx, days=365, quota=1)
+    add_segment(ctx, camera, index=1, size_bytes=2 * 1024**3, integrity_status="corrupted_file")
+    run_automatic_retention_once(ctx.db, max_candidates=1)
+    camera.storage_quota_gb = 3
+    ctx.db.commit()
+    status = automation.retention_runtime_status(ctx.db)
+    assert status["last_status"] == "blocked"
+    assert status["state"] == "compliant"
+    assert status["violating_camera_count"] == 0
+    assert status["problem_cameras"] == []
+
+
+def test_stage1377_unknown_size_is_not_reported_healthy(stage4102):
+    ctx = stage4102
+    camera = add_camera(ctx, days=365, quota=1)
+    add_segment(ctx, camera, index=1, size_bytes=0)
+    status = automation.retention_runtime_status(ctx.db)
+    assert status["state"] == "unknown"
+    assert status["unknown_camera_count"] == 1
+    assert status["problem_cameras"][0]["camera_id"] == camera.id
+
+
+@pytest.mark.parametrize("free_percent", [5.0, 6.0, 8.9])
+def test_stage1377_unadmitted_volume_above_trigger_never_starts_cleanup(stage4102, monkeypatch, free_percent):
+    ctx = stage4102
+    ctx.system.auto_free_space_cleanup_enabled = True
+    ctx.system.auto_free_space_acknowledged_terms_version = AUTO_FREE_SPACE_TERMS_VERSION
+    ctx.db.commit()
+    monkeypatch.setattr(automation, "storage_volume_groups", lambda db: [volume_group(ctx, free_percent)])
+    monkeypatch.setattr(automation, "prepare_auto_free_context", lambda *a, **k: pytest.fail("new cleanup was not admitted"))
+    assert automation.run_auto_free_pressure_groups(ctx.db, page_size=1)["operation_count"] == 0
+
+
+def test_stage1377_problem_sample_is_bounded_but_total_is_exact(stage4102):
+    ctx = stage4102
+    for index in range(22):
+        camera = add_camera(ctx, name=f"over-quota-{index}", days=365, quota=1)
+        add_segment(ctx, camera, index=index, size_bytes=2 * 1024**3)
+    status = automation.retention_runtime_status(ctx.db)
+    assert status["problem_camera_count"] == 22
+    assert status["violating_camera_count"] == 22
+    assert status["quota_overage_bytes"] == 22 * 1024**3
+    assert len(status["problem_cameras"]) == 20
+    assert status["problem_cameras_truncated"] is True
+
+
+@pytest.mark.parametrize("policy_enabled,identity_valid", [(False, True), (True, False)])
+def test_stage1377_recovery_preserves_policy_and_volume_identity_guards(stage4102, monkeypatch, policy_enabled, identity_valid):
+    ctx = stage4102
+    ctx.system.auto_free_space_cleanup_enabled = True
+    ctx.system.auto_free_space_acknowledged_terms_version = AUTO_FREE_SPACE_TERMS_VERSION
+    ctx.db.commit()
+    camera = add_camera(ctx, days=365, quota=500)
+    _segment, path = add_segment(ctx, camera, index=1)
+    group = volume_group(ctx, 4.0)
+    monkeypatch.setattr(automation, "storage_volume_groups", lambda db: [group])
+    monkeypatch.setattr(automation, "_revalidate_pressure_group", lambda *a, **k: {
+        "physical_identity": ctx.root.physical_identity, "runtime_device_id": "rv1:" + "a" * 32,
+    })
+    claim = automation._claim_auto_free_operation(ctx.db, group)
+    operation = ctx.db.get(StorageOperation, claim["handle"].operation_id)
+    operation.lease_expires_at = database_now(ctx.db) - timedelta(seconds=1)
+    ctx.system.auto_free_space_cleanup_enabled = policy_enabled
+    ctx.db.commit()
+    group["capacity"]["free_percent"] = 6.0
+    if not identity_valid:
+        monkeypatch.setattr(automation, "_revalidate_pressure_group", lambda *a, **k: {
+            "physical_identity": ctx.root.physical_identity, "runtime_device_id": "rv1:" + "b" * 32,
+        })
+    monkeypatch.setattr(automation, "execute_segments", lambda *a, **k: pytest.fail("guard must prevent deletion"))
+    automation.run_auto_free_pressure_groups(ctx.db, page_size=1)
+    assert path.exists()
+    ctx.db.refresh(operation)
+    if not identity_valid:
+        assert operation.status == "blocked"
+
+
+def test_stage1377_terminal_partial_cleanup_retries_above_trigger(stage4102, monkeypatch):
+    ctx = stage4102
+    ctx.system.auto_free_space_cleanup_enabled = True
+    ctx.system.auto_free_space_acknowledged_terms_version = AUTO_FREE_SPACE_TERMS_VERSION
+    ctx.db.commit()
+    camera = add_camera(ctx, days=365, quota=500)
+    _segment, path = add_segment(ctx, camera, index=1)
+    group = volume_group(ctx, 4.0)
+    monkeypatch.setattr(automation, "storage_volume_groups", lambda db: [group])
+    monkeypatch.setattr(automation, "_revalidate_pressure_group", lambda *a, **k: {
+        "physical_identity": ctx.root.physical_identity, "runtime_device_id": "rv1:" + "a" * 32,
+    })
+    # Represent a prior operation without relying on SQLite's one-second clock
+    # precision to make its id different from the immediate retry below.
+    original_id_factory = automation._auto_free_operation_id
+    monkeypatch.setattr(automation, "_auto_free_operation_id", lambda *a: "auto-free-fixture-prior")
+    claim = automation._claim_auto_free_operation(ctx.db, group)
+    monkeypatch.setattr(automation, "_auto_free_operation_id", original_id_factory)
+    automation.finish_operation(ctx.db, claim["handle"], status="partial",
+        result={"status": "no_progress", "final_free_percent": 6.0},
+        progress=dict(ctx.db.get(StorageOperation, claim["handle"].operation_id).progress),
+        retry_allowed=True, retry_mode="scheduled")
+    old = ctx.db.get(StorageOperation, claim["handle"].operation_id)
+    old.finished_at = database_now(ctx.db) - timedelta(minutes=10)
+    old.updated_at = old.finished_at
+    ctx.db.commit()
+    group["capacity"]["free_percent"] = 6.0
+    probes = iter([6.0, 9.0])
+
+    def probe(db, context):
+        free = next(probes)
+        group["capacity"]["free_percent"] = free
+        return {"status": "ok", "physical_volume_id": group["physical_volume_id"],
+                "root_ids": [ctx.root.id], "free_percent": free}
+
+    monkeypatch.setattr(automation, "_probe_auto_free_context", probe)
+    result = automation.run_auto_free_pressure_groups(ctx.db, page_size=1)
+    assert result["deleted_count"] == 1, result
+    assert not path.exists()
+    assert automation.run_auto_free_pressure_groups(ctx.db, page_size=1)["operation_count"] == 0
+
+
+@pytest.mark.parametrize("offset,hour", [(5, 20), (-7, 4)])
+def test_stage1377_retention_evaluation_converts_database_timezone_to_utc(offset, hour):
+    from app.services.timezone_contract import TimezoneContext, retention_cutoff_storage
+    zone = timezone(timedelta(hours=offset))
+    wire_time = datetime(2026, 11, 2, hour, 30, tzinfo=zone)
+    db = SimpleNamespace(execute=lambda statement: SimpleNamespace(scalar_one=lambda: wire_time))
+    evaluated = automation.retention_evaluation_now(db)
+    assert evaluated == wire_time.astimezone(timezone.utc).replace(tzinfo=None)
+    ctx = TimezoneContext(name="fixture", zone=zone)
+    _cutoff, local_cutoff = retention_cutoff_storage(30, ctx, now_utc=evaluated)
+    assert local_cutoff.date() == wire_time.date() - timedelta(days=30)

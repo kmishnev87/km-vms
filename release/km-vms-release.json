@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.20",
-  "tag": "v0.8.20",
-  "title": "Uninterrupted Live and Automatic Recording Recovery",
-  "summary": "Keeps Live playback running across media-access renewal, restores interrupted viewing and recording automatically, and reports current stream and recorder state accurately. Includes named warnings, fullscreen Escape handling and updated regression coverage.",
+  "version": "0.8.21",
+  "tag": "v0.8.21",
+  "title": "Reliable Archive Cleanup Recovery and Accurate Retention Status",
+  "summary": "Resumes admitted archive cleanup after interruptions without changing disk-safety thresholds or deletion permissions. Retention status now reflects current archive measurements across all cameras, reports remaining excess and unknown sizes, and clears resolved historical warnings.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.20",
+  "source_ref": "v0.8.21",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,55 +16,51 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Renews scoped Live media access without replacing the HLS source or resetting playback; server-side authorization remains enforced.",
-    "Makes Live startup cancellable and recovery retryable, including reconnects that arrive while an old stream is stopping.",
-    "Detects stalled recording from real media progress and continues bounded recovery attempts without a lifetime three-retry limit.",
-    "Uses UTC service timestamps and current recorder-instance jobs instead of stale history when reporting recording state.",
-    "Distinguishes actual authentication errors from ordinary 401/403 digits in FFmpeg messages and avoids pointless hardware fallback for unavailable cameras.",
-    "Shows affected camera names and recovery state in Live warnings, with Russian, English and Simplified Chinese text.",
-    "Lets Escape exit an expanded Live tile and shows the actual active-stream count in System Status.",
-    "Adds recovery and playback regressions and updates storage-setup and mobile-layout test fixtures without weakening product guards."
+    "Resumes interrupted disk cleanup independently of the threshold for starting new work, including the interval between five and nine percent free space.",
+    "Continues retryable partial cleanup with the existing retry cooldown and closes recovered operations without deleting files when the target is already reached.",
+    "Measures current retention compliance across all cameras in one metadata aggregation, so another camera's latest success cannot hide a remaining violation.",
+    "Shows affected camera names and confirmed size overage, treats unknown archive sizes as needing attention, and stops using resolved historical failures as current health.",
+    "Converts timezone-aware database time to UTC for retention calendar calculations, preventing shifted expiration boundaries without changing coordinator lease clocks.",
+    "Preserves explicit auto-free consent, physical-volume identity, finalized-recording ownership and namespace checks, the existing safety thresholds, and daily native healthchecks.",
+    "Adds targeted recovery, threshold, multi-camera, unknown-size and bounded-status regressions, with complete Russian, English and Simplified Chinese text."
   ],
   "title_i18n": {
-    "en": "Uninterrupted Live and Automatic Recording Recovery",
-    "ru": "Непрерывный онлайн-просмотр и автоматическое восстановление записи",
-    "zh-CN": "持续实时观看与录像自动恢复"
+    "en": "Reliable Archive Cleanup Recovery and Accurate Retention Status",
+    "ru": "Восстановление очистки архива и достоверные статусы хранения",
+    "zh-CN": "归档清理恢复与准确的保留状态"
   },
   "summary_i18n": {
-    "en": "Keeps Live playback running across media-access renewal, restores interrupted viewing and recording automatically, and reports current stream and recorder state accurately. Includes named warnings, fullscreen Escape handling and updated regression coverage.",
-    "ru": "Онлайн-просмотр больше не прерывается при продлении доступа к видео. Просмотр и запись автоматически восстанавливаются после временных сбоев, а статусы отражают текущую работу. Уточнены предупреждения по камерам, выход по Escape и проверки восстановления.",
-    "zh-CN": "续期视频访问权限时不再中断实时播放，临时故障后自动恢复观看和录像，并准确显示当前视频流与录像状态。改进按摄像机显示的警告、Escape 全屏退出以及恢复回归测试。"
+    "en": "Resumes admitted archive cleanup after interruptions without changing disk-safety thresholds or deletion permissions. Retention status now reflects current archive measurements across all cameras, reports remaining excess and unknown sizes, and clears resolved historical warnings.",
+    "ru": "Начатая очистка архива восстанавливается после прерывания без изменения защитных порогов и прав удаления. Статусы хранения учитывают текущий архив всех камер, показывают оставшееся превышение и неизвестный размер, а устранённые старые ошибки больше не подменяют текущее состояние.",
+    "zh-CN": "中断后恢复已获准的归档清理，不改变磁盘安全阈值或删除权限。保留状态依据所有摄像机的当前归档数据，显示剩余超额和未知大小，并清除已解决的历史警告。"
   },
   "changelog_i18n": {
     "en": [
-      "Renews scoped Live media access without replacing the HLS source or resetting playback; server-side authorization remains enforced.",
-      "Makes Live startup cancellable and recovery retryable, including reconnects that arrive while an old stream is stopping.",
-      "Detects stalled recording from real media progress and continues bounded recovery attempts without a lifetime three-retry limit.",
-      "Uses UTC service timestamps and current recorder-instance jobs instead of stale history when reporting recording state.",
-      "Distinguishes actual authentication errors from ordinary 401/403 digits in FFmpeg messages and avoids pointless hardware fallback for unavailable cameras.",
-      "Shows affected camera names and recovery state in Live warnings, with Russian, English and Simplified Chinese text.",
-      "Lets Escape exit an expanded Live tile and shows the actual active-stream count in System Status.",
-      "Adds recovery and playback regressions and updates storage-setup and mobile-layout test fixtures without weakening product guards."
+      "Resumes interrupted disk cleanup independently of the threshold for starting new work, including the interval between five and nine percent free space.",
+      "Continues retryable partial cleanup with the existing retry cooldown and closes recovered operations without deleting files when the target is already reached.",
+      "Measures current retention compliance across all cameras in one metadata aggregation, so another camera's latest success cannot hide a remaining violation.",
+      "Shows affected camera names and confirmed size overage, treats unknown archive sizes as needing attention, and stops using resolved historical failures as current health.",
+      "Converts timezone-aware database time to UTC for retention calendar calculations, preventing shifted expiration boundaries without changing coordinator lease clocks.",
+      "Preserves explicit auto-free consent, physical-volume identity, finalized-recording ownership and namespace checks, the existing safety thresholds, and daily native healthchecks.",
+      "Adds targeted recovery, threshold, multi-camera, unknown-size and bounded-status regressions, with complete Russian, English and Simplified Chinese text."
     ],
     "ru": [
-      "Доступ к Live продлевается без замены HLS-источника и сброса воспроизведения; серверная проверка прав сохранена.",
-      "Запуск Live отменяется при закрытии просмотра, а восстановление учитывает повторное подключение во время остановки старого потока.",
-      "Зависшая запись определяется по реальному поступлению видео; автоматические повторы больше не исчерпываются после трёх восстановлений за всё время работы.",
-      "Служебное время записи учитывается в UTC, а текущий статус выбирается по действующему экземпляру Recorder, не по старой истории заданий.",
-      "Обычные цифры 401/403 в сообщениях FFmpeg не принимаются за отказ авторизации; недоступная камера не вызывает бессмысленный переход на CPU.",
-      "В предупреждениях Live указаны затронутые камеры и состояние восстановления; тексты проверены на русском, английском и упрощённом китайском.",
-      "Escape закрывает раскрытую Live-плитку, а состояние системы показывает фактическое число активных потоков.",
-      "Добавлены проверки восстановления и плеера; устаревшие тесты настройки хранилища и мобильной вёрстки обновлены без ослабления защит продукта."
+      "Прерванная очистка диска возобновляется независимо от порога нового запуска, в том числе при свободном месте между пятью и девятью процентами.",
+      "Частично выполненная очистка повторяется с прежней паузой между неудачными попытками; при уже достигнутой цели восстановленная операция завершается без удаления файлов.",
+      "Соблюдение правил хранения рассчитывается по текущим метаданным всех камер одним агрегирующим запросом: успех другой камеры не скрывает оставшееся нарушение.",
+      "Показаны затронутые камеры и подтверждённое превышение размера; неизвестный объём требует внимания, а исправленные старые ошибки не выдаются за текущее состояние.",
+      "Время БД с часовым поясом переводится в UTC для календарных расчётов хранения: границы срока не сдвигаются, а часы блокировок и аренды операций не меняются.",
+      "Сохранены явное согласие на автоосвобождение, проверка физического тома, принадлежности завершённых записей и папок архива, защитные пороги и суточные native healthcheck.",
+      "Добавлены целевые проверки восстановления, порогов, нескольких камер, неизвестного размера и ограниченной сводки; тексты заполнены на русском, английском и упрощённом китайском."
     ],
     "zh-CN": [
-      "实时视频权限续期不再替换 HLS 源或重置播放，保留服务器端授权验证。",
-      "关闭观看会取消实时流启动，恢复流程也正确处理旧视频流停止期间的重新连接。",
-      "根据实际媒体进度检测录像停滞，自动恢复不再受整个运行期间仅三次重试的限制。",
-      "使用 UTC 服务时间和当前录像实例任务报告状态，避免旧任务历史干扰当前结果。",
-      "不再将 FFmpeg 普通消息中的 401/403 数字误判为身份验证失败，摄像机不可达时避免无意义的 CPU 回退。",
-      "实时警告显示受影响摄像机名称和恢复状态，验证俄语、英语及简体中文文本。",
-      "Escape 可退出展开的实时画面，系统状态显示实际活动视频流数量。",
-      "增加恢复与播放回归测试，并更新存储设置及移动布局测试数据，不削弱产品保护。"
+      "中断的磁盘清理可独立于新任务启动阈值恢复，包括剩余空间在百分之五到百分之九之间的情况。",
+      "部分完成的清理沿用现有失败重试间隔；目标已达到时直接结束恢复的操作，不再删除文件。",
+      "通过一次元数据聚合检查所有摄像机的当前保留规则，避免其他摄像机最近的成功掩盖仍存在的违规。",
+      "显示受影响摄像机及已确认的容量超额；未知大小需要处理，已解决的历史失败不再代表当前状态。",
+      "保留期限的日历计算先将带时区的数据库时间转换为 UTC，防止过期边界偏移，同时保持协调器租约时钟不变。",
+      "保留自动释放空间的明确同意、物理卷身份、已完成录像归属和归档目录检查、安全阈值以及每日原生健康检查。",
+      "新增恢复、阈值、多摄像机、未知大小和有界状态摘要的针对性回归检查，并提供完整俄语、英语及简体中文文本。"
     ]
   }
 }

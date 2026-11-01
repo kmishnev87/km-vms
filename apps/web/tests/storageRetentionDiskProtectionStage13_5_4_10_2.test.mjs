@@ -195,3 +195,29 @@ for (const key of [
 
 assert.doesNotMatch(page, /storageOpsRetentionScenarioRow/);
 assert.doesNotMatch(page, /storageOpsAutoFreeScenarioRow/);
+
+// Current measurements take precedence over a different camera's latest success,
+// and over a historical failure that is no longer true for the current archive.
+const currentViolation = {
+  state: "violating", measurement_state: "violating", last_status: "completed",
+  configured_camera_count: 2, meaningful_rule_camera_count: 2,
+  violating_camera_count: 1, problem_camera_count: 1, quota_overage_bytes: 1024 ** 3,
+  problem_cameras: [{ camera_id: 1, camera_name: "Camera A", quota_overage_bytes: 1024 ** 3 }],
+};
+const violationModel = context.retentionOperationPresentation(currentViolation);
+assert.equal(violationModel.status, "needs_attention");
+assert.equal(violationModel.problemCameras[0].camera_name, "Camera A");
+assert.equal(violationModel.overageBytes, 1024 ** 3);
+assert.equal(context.retentionOperationPresentation({
+  ...currentViolation, state: "compliant", measurement_state: "compliant", last_status: "blocked",
+  problem_camera_count: 0, violating_camera_count: 0, quota_overage_bytes: 0, problem_cameras: [],
+}).status, "healthy");
+assert.equal(context.retentionOperationPresentation({
+  ...currentViolation, state: "unknown", measurement_state: "unknown", unknown_camera_count: 1,
+}).status, "needs_attention");
+assert.equal(context.retentionOperationPresentation({ ...currentViolation, running: true }).status, "running");
+assert.equal(context.retentionScenarioModel({ retention: currentViolation }).status, "apply_failed");
+assert.match(page, /model\.problemCameras\.map/);
+for (const key of ["retentionCurrentProblemsText", "retentionCurrentUnknownText"]) {
+  assert.equal((i18n.match(new RegExp(`${key}:`, "g")) || []).length, 3);
+}

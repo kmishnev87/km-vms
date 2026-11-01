@@ -439,6 +439,8 @@ export const ruDictionary = {
     archiveManagementRetentionNotConfiguredText: "Задайте для камер срок хранения и лимит места.",
     archiveManagementRetentionIncompleteText: "Полные правила заданы для {configured} из {total} камер.",
     archiveManagementRetentionAttentionText: "Последнее применение правил завершилось не полностью. Проверьте проблемы архива.",
+    retentionCurrentProblemsText: "Камер с невыполненными правилами хранения: {count}. Подтверждённое превышение размера: {excess}. Затронуты: {cameras}.",
+    retentionCurrentUnknownText: "Камер с неподтверждённым размером архива: {count}. Проверьте проблемные записи: {cameras}.",
     archiveManagementRetentionUnknownText: "Состояние автоматического применения правил пока не подтверждено.",
     archiveManagementAutoFreeStatusEnabled: "Включено",
     archiveManagementAutoFreeStatusDisabled: "Выключено",

@@ -317,6 +317,10 @@ export function retentionOperationPresentation(retention = {}) {
   const incompleteCount = Math.max(0, finiteCount(retention?.missing_or_invalid_rule_camera_count) ?? 0);
   const last = operationLastResult(retention);
   const state = String(retention?.state || "").toLowerCase();
+  const measurementState = String(retention?.measurement_state || "").toLowerCase();
+  const currentKnown = ["compliant", "violating", "unknown"].includes(measurementState);
+  const problemCount = Math.max(0, finiteCount(retention?.problem_camera_count) ?? 0);
+  const unknownCount = Math.max(0, finiteCount(retention?.unknown_camera_count) ?? 0);
   let status = "healthy";
   let tone = "ok";
   if (retention?.running === true || state === "running") {
@@ -331,7 +335,8 @@ export function retentionOperationPresentation(retention = {}) {
   } else if (incompleteCount > 0 || configuredCount < totalCameraCount) {
     status = "incomplete";
     tone = "warning";
-  } else if (["blocked", "failed", "partial", "interrupted"].includes(state) || ["blocked", "failed", "partial", "interrupted"].includes(last.status)) {
+  } else if (["violating", "unknown"].includes(measurementState) || problemCount > 0
+    || (!currentKnown && (["blocked", "failed", "partial", "interrupted"].includes(state) || ["blocked", "failed", "partial", "interrupted"].includes(last.status)))) {
     status = "needs_attention";
     tone = "warning";
   } else if (!retention?.state && last.status === "never_run") {
@@ -344,6 +349,13 @@ export function retentionOperationPresentation(retention = {}) {
     configuredCount,
     totalCameraCount,
     incompleteCount,
+    ...(currentKnown ? {
+      measurementState,
+      problemCount,
+      unknownCount,
+      overageBytes: Math.max(0, finiteCount(retention?.quota_overage_bytes) ?? 0),
+      problemCameras: Array.isArray(retention?.problem_cameras) ? retention.problem_cameras.slice(0, 20) : [],
+    } : {}),
     nextDueAt: retention?.next_due_at || null,
     last,
   };
@@ -1300,7 +1312,9 @@ export function storageTopHealthModel({ operations = {}, pathHealth = {}, capaci
     tone = "unknown";
     reason = text.unknown;
     nextStep = text.unknown;
-  } else if (retention?.last_status === "failed") {
+  } else if (["violating", "unknown"].includes(String(retention?.measurement_state || ""))
+    || Number(retention?.problem_camera_count || 0) > 0
+    || (!retention?.measurement_state && retention?.last_status === "failed")) {
     status = "retention_failed";
     tone = "warning";
     reason = text.retention;
@@ -1328,7 +1342,7 @@ export function retentionScenarioModel({ preview = null, result = null, retentio
   const count = Number(source?.planned_count ?? source?.deleted_count ?? 0);
   const bytes = Number(source?.estimated_freed_bytes ?? source?.bytes_freed ?? 0);
   const durableState = String(retention?.state || retention?.last_status || "idle").toLowerCase();
-  const failed = ["failed", "blocked", "partial", "interrupted", "no_safe_candidate", "no_progress"].includes(durableState);
+  const failed = ["failed", "blocked", "partial", "interrupted", "no_safe_candidate", "no_progress", "violating"].includes(durableState);
   return {
     status: !permission.allowed
       ? "unavailable_due_to_permissions"

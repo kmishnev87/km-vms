@@ -7,7 +7,7 @@ from collections import Counter
 from datetime import datetime, time as datetime_time, timedelta
 from typing import Callable
 
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.camera import Camera
@@ -67,6 +67,7 @@ from app.services.system_settings import (
     get_system_settings_read_only,
 )
 from app.services.timezone_contract import (
+    aware_utc_to_storage_naive_utc,
     retention_cutoff_storage,
     storage_naive_utc_to_aware_utc,
     system_local_naive_to_storage_utc,
@@ -92,6 +93,16 @@ AUTO_FREE_RETRY_SECONDS = 300
 
 def _iso(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
+
+
+def retention_evaluation_now(db: Session) -> datetime:
+    """Calendar policies require UTC, unlike the coordinator's DB-local leases."""
+    value = db.execute(select(func.current_timestamp())).scalar_one()
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if not isinstance(value, datetime):
+        raise StorageOperationContractError("retention_database_time_unavailable")
+    return aware_utc_to_storage_naive_utc(value) if value.tzinfo is not None else value
 
 
 def _bounded_counts(values: Counter | dict | None, limit: int = REASON_COUNT_LIMIT) -> dict[str, int]:
@@ -204,7 +215,7 @@ def earliest_retention_due_at(db: Session) -> datetime | None:
 
 def publish_due_retention_signal(db: Session, *, now: datetime | None = None) -> dict | None:
     due_at = earliest_retention_due_at(db)
-    current = now or database_now(db)
+    current = now or retention_evaluation_now(db)
     if due_at is None or due_at > current:
         return None
     due_generation = max(1, int(due_at.timestamp()))
@@ -306,11 +317,22 @@ def _authoritative_camera_query(db: Session, snapshot: dict):
     )
 
 
+def _quota_measurement(quota_gb: int, owned_bytes: int, unknown_size_count: int) -> tuple[int, int, str]:
+    quota_bytes = quota_gb * 1024 * 1024 * 1024 if quota_gb > 0 else 0
+    overage = max(0, owned_bytes - quota_bytes) if quota_bytes > 0 else 0
+    state = (
+        "not_configured" if quota_gb <= 0
+        else "violating" if overage > 0
+        else "unknown" if unknown_size_count > 0
+        else "compliant"
+    )
+    return quota_bytes, overage, state
+
+
 def measure_camera_retention(db: Session, snapshot: dict) -> dict:
     evaluation_at = datetime.fromisoformat(str(snapshot["evaluation_at"]).replace("Z", "+00:00")).replace(tzinfo=None)
     retention_days = int(snapshot.get("retention_days") or 0)
     quota_gb = int(snapshot.get("storage_quota_gb") or 0)
-    quota_bytes = quota_gb * 1024 * 1024 * 1024 if quota_gb > 0 else 0
     aggregate = (
         _authoritative_camera_query(db, snapshot)
         .with_entities(
@@ -361,16 +383,7 @@ def measure_camera_retention(db: Session, snapshot: dict) -> dict:
             )
             .count()
         )
-    quota_overage_bytes = max(0, owned_bytes - quota_bytes) if quota_bytes > 0 else 0
-    quota_state = (
-        "not_configured"
-        if quota_gb <= 0
-        else "violating"
-        if quota_overage_bytes > 0
-        else "unknown"
-        if unknown_size_count > 0
-        else "compliant"
-    )
+    quota_bytes, quota_overage_bytes, quota_state = _quota_measurement(quota_gb, owned_bytes, unknown_size_count)
     missing_rule_count = int(retention_days <= 0) + int(quota_gb <= 0)
     violation = bool(age_due_count > 0 or quota_state in {"violating", "unknown"})
     measurement_confidence = "unknown" if quota_state == "unknown" else "confirmed"
@@ -664,7 +677,7 @@ def run_camera_retention_operation(
             current_camera,
             signal_watermark=int(snapshot["signal_watermark"]),
             high_watermark=int(snapshot["segment_high_watermark"]),
-            evaluation_at=database_now(db),
+            evaluation_at=retention_evaluation_now(db),
         )
         if not _camera_policy_matches(snapshot, current_snapshot):
             current_measurement = measure_camera_retention(db, current_snapshot)
@@ -829,7 +842,7 @@ def run_retention_signal_generation(
             return bool(should_preempt())
         return retention_slice_preemption_required(db)
 
-    evaluation_at = database_now(db)
+    evaluation_at = retention_evaluation_now(db)
     high_watermark = _max_finalized_segment_id(db)
     camera_ids = _retained_camera_ids(db, high_watermark=high_watermark)
     status_counts: Counter = Counter()
@@ -1317,7 +1330,6 @@ def _latest_volume_operation(db: Session, canonical_volume: str) -> StorageOpera
         db.query(StorageOperation)
         .filter(StorageOperation.operation_type == "retention_auto_free_space")
         .order_by(StorageOperation.updated_at.desc(), StorageOperation.id.desc())
-        .limit(64)
         .all()
     )
     return next(
@@ -1365,7 +1377,6 @@ def _claim_auto_free_operation(db: Session, group: dict) -> dict:
             StorageOperation.status.in_(tuple(ACTIVE_OPERATION_STATUSES)),
         )
         .order_by(StorageOperation.created_at.desc(), StorageOperation.id.desc())
-        .limit(32)
         .all()
     )
     existing = next(
@@ -1778,6 +1789,40 @@ def run_auto_free_slice(db: Session, context: dict, *, page_size: int) -> dict:
     return {"status": "running", "free_percent": probe.get("free_percent")}
 
 
+def _auto_free_recovery_volumes(db: Session) -> set[str]:
+    """Resume admitted work independently of the threshold for NEW cleanup.
+
+    Only the latest operation per volume counts. A completed target must not
+    revive old failures, and a volume with no admitted operation stays untouched.
+    """
+    rows = (
+        db.query(StorageOperation)
+        .filter(StorageOperation.operation_type == "retention_auto_free_space")
+        .order_by(StorageOperation.updated_at.desc(), StorageOperation.id.desc())
+        .all()
+    )
+    seen: set[str] = set()
+    recoverable: set[str] = set()
+    for row in rows:
+        volume_ids = set(canonical_operation_scope(row.scope).get("physical_volume_ids") or [])
+        unseen = volume_ids - seen
+        seen.update(volume_ids)
+        if not unseen:
+            continue
+        snapshot = dict((row.progress or {}).get("pressure_snapshot") or {})
+        if (
+            not snapshot.get("root_ids")
+            or snapshot.get("trigger_percent") != AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT
+            or snapshot.get("target_percent") != AUTO_FREE_SPACE_RECOVERY_THRESHOLD_PERCENT
+        ):
+            continue
+        if row.status in ACTIVE_OPERATION_STATUSES or (
+            row.status in {"blocked", "partial", "failed"} and row.retry_allowed
+        ):
+            recoverable.update(unseen)
+    return recoverable
+
+
 def run_auto_free_pressure_groups(db: Session, *, page_size: int) -> dict:
     groups = storage_volume_groups(db)
     critical = apply_critical_recording_protection(db, groups)
@@ -1796,9 +1841,18 @@ def run_auto_free_pressure_groups(db: Session, *, page_size: int) -> dict:
             "operation_count": 0,
             "critical": critical,
         }
+    recovery_volumes = _auto_free_recovery_volumes(db)
+    candidates = [
+        group for group in groups
+        if group.get("physical_volume_id")
+        and (
+            group in pressured
+            or str(group["physical_volume_id"]) in recovery_volumes
+        )
+    ]
     contexts = []
     results: list[dict] = []
-    for group in pressured:
+    for group in candidates:
         try:
             context = prepare_auto_free_context(db, group)
         except (StorageOperationConflict, StorageOperationContractError) as exc:
@@ -1915,11 +1969,16 @@ def retention_runtime_status(db: Session) -> dict:
     last_result = dict((latest_terminal.result if latest_terminal else None) or {})
     camera_rows = (
         db.query(
+            Camera.id,
+            Camera.name,
             Camera.deleted_at,
             Camera.enabled,
             Camera.retention_days,
             Camera.storage_quota_gb,
             func.count(RecordingSegment.id),
+            func.coalesce(func.sum(case((RecordingSegment.size_bytes > 0, RecordingSegment.size_bytes), else_=0)), 0),
+            func.coalesce(func.sum(case((or_(RecordingSegment.size_bytes.is_(None), RecordingSegment.size_bytes <= 0), 1), else_=0)), 0),
+            func.min(RecordingSegment.started_at),
         )
         .join(RecordingSegment, RecordingSegment.camera_id == Camera.id)
         .filter(
@@ -1930,6 +1989,7 @@ def retention_runtime_status(db: Session) -> dict:
         )
         .group_by(
             Camera.id,
+            Camera.name,
             Camera.deleted_at,
             Camera.enabled,
             Camera.retention_days,
@@ -1938,37 +1998,72 @@ def retention_runtime_status(db: Session) -> dict:
         .all()
     )
     next_due = earliest_retention_due_at(db)
-    last_result_state = str(last_result.get("status") or (latest_terminal.status if latest_terminal else "idle"))
+    # Measure the CURRENT archive in one metadata aggregation, not the last
+    # success of an unrelated camera. No filesystem walk or per-camera DB loop.
+    context = timezone_context(db)
+    evaluation_at = retention_evaluation_now(db)
+    cutoffs: dict[int, tuple[datetime, datetime]] = {}
+    violating_count = 0
+    unknown_count = 0
+    total_overage = 0
+    problems = []
+    for camera_id, camera_name, _deleted, _enabled, days, quota, _count, owned_bytes, unknown_sizes, oldest in camera_rows:
+        days, quota = int(days or 0), int(quota or 0)
+        _quota_bytes, overage, quota_state = _quota_measurement(quota, int(owned_bytes), int(unknown_sizes))
+        age_due = False
+        if days > 0 and oldest is not None:
+            if days not in cutoffs:
+                cutoffs[days] = retention_cutoff_storage(days, context, now_utc=evaluation_at)
+            cutoff, compatibility_cutoff = cutoffs[days]
+            age_due = oldest < cutoff or oldest < compatibility_cutoff
+        violation = bool(overage > 0 or age_due)
+        unknown = quota > 0 and int(unknown_sizes) > 0
+        violating_count += int(violation)
+        unknown_count += int(unknown)
+        total_overage += overage
+        if violation or unknown:
+            problems.append({
+                "camera_id": int(camera_id), "camera_name": str(camera_name),
+                "quota_overage_bytes": overage, "quota_state": quota_state,
+                "age_due": age_due, "unknown_size_count": int(unknown_sizes),
+            })
+    measurement_state = "violating" if violating_count else "unknown" if unknown_count else "compliant"
     state = (
         "running"
         if active
         else "pending"
         if signal["pending"]
-        else "interrupted"
-        if interrupted
-        else last_result_state
+        else measurement_state
     )
     latest_evidence = active or interrupted or latest_terminal
     meaningful_rule_count = sum(
         1
-        for _deleted_at, _enabled, days, quota, _count in camera_rows
+        for _id, _name, _deleted_at, _enabled, days, quota, _count, _bytes, _unknown, _oldest in camera_rows
         if int(days or 0) > 0 or int(quota or 0) > 0
     )
     return {
         "enabled": True,
         "state": state,
+        "measurement_state": measurement_state,
+        "measurement_at": _iso(evaluation_at) + "Z",
+        "violating_camera_count": violating_count,
+        "unknown_camera_count": unknown_count,
+        "quota_overage_bytes": total_overage,
+        "problem_camera_count": len(problems),
+        "problem_cameras": problems[:STATUS_OPERATION_LIMIT],
+        "problem_cameras_truncated": len(problems) > STATUS_OPERATION_LIMIT,
         "running": active is not None,
         "pending": bool(signal["pending"]),
         "signal": signal,
         "configured_camera_count": len(camera_rows),
         "active_camera_count": sum(
-            1 for deleted_at, enabled, _days, _quota, _count in camera_rows if deleted_at is None and enabled
+            1 for _id, _name, deleted_at, enabled, _days, _quota, _count, _bytes, _unknown, _oldest in camera_rows if deleted_at is None and enabled
         ),
         "disabled_camera_count": sum(
-            1 for deleted_at, enabled, _days, _quota, _count in camera_rows if deleted_at is None and not enabled
+            1 for _id, _name, deleted_at, enabled, _days, _quota, _count, _bytes, _unknown, _oldest in camera_rows if deleted_at is None and not enabled
         ),
         "retained_deleted_camera_count": sum(
-            1 for deleted_at, _enabled, _days, _quota, _count in camera_rows if deleted_at is not None
+            1 for _id, _name, deleted_at, _enabled, _days, _quota, _count, _bytes, _unknown, _oldest in camera_rows if deleted_at is not None
         ),
         "meaningful_rule_camera_count": meaningful_rule_count,
         "missing_or_invalid_rule_camera_count": max(0, len(camera_rows) - meaningful_rule_count),

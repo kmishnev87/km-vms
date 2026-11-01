@@ -439,6 +439,8 @@ export const zhCNDictionary = {
     archiveManagementRetentionNotConfiguredText: "请为摄像机设置保留期限和存储限制。",
     archiveManagementRetentionIncompleteText: "{total} 台摄像机中有 {configured} 台已配置完整规则。",
     archiveManagementRetentionAttentionText: "上次规则应用未完全完成。请检查归档问题。",
+    retentionCurrentProblemsText: "{count} 台摄像机仍未满足保留规则。已确认超出容量：{excess}。受影响：{cameras}。",
+    retentionCurrentUnknownText: "{count} 台摄像机的归档大小尚未确认。请检查异常录像：{cameras}。",
     archiveManagementRetentionUnknownText: "尚未确认自动保留状态。",
     archiveManagementAutoFreeStatusEnabled: "已启用",
     archiveManagementAutoFreeStatusDisabled: "已禁用",

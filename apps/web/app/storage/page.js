@@ -568,6 +568,14 @@ function retentionManagementDescription(model, copy, language) {
       .replace("{configured}", String(model.configuredCount))
       .replace("{total}", String(model.totalCameraCount));
   }
+  if (model.problemCount > 0) {
+    const template = model.measurementState === "unknown"
+      ? copy.retentionCurrentUnknownText : copy.retentionCurrentProblemsText;
+    return template
+      .replace("{count}", String(model.problemCount))
+      .replace("{excess}", formatBytes(model.overageBytes))
+      .replace("{cameras}", model.problemCameras.map((camera) => camera.camera_name).join(", "));
+  }
   if (model.status === "running") return copy.archiveManagementRetentionRunningText;
   if (model.status === "pending") return copy.archiveManagementRetentionPendingText;
   if (model.status === "needs_attention") {

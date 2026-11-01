@@ -439,6 +439,8 @@ export const enDictionary = {
     archiveManagementRetentionNotConfiguredText: "Set a retention period and storage limit for cameras.",
     archiveManagementRetentionIncompleteText: "Complete rules are configured for {configured} of {total} cameras.",
     archiveManagementRetentionAttentionText: "The latest rule application did not complete fully. Review archive problems.",
+    retentionCurrentProblemsText: "Cameras with unmet retention rules: {count}. Confirmed size overage: {excess}. Affected: {cameras}.",
+    retentionCurrentUnknownText: "Cameras with unconfirmed archive size: {count}. Review problem recordings: {cameras}.",
     archiveManagementRetentionUnknownText: "Automatic retention status has not been confirmed yet.",
     archiveManagementAutoFreeStatusEnabled: "Enabled",
     archiveManagementAutoFreeStatusDisabled: "Disabled",
