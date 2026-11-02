@@ -3814,6 +3814,12 @@ a.appIllustratedAction:focus-visible {
   font-size: 12px;
 }
 
+.operationFeedbackToastAction {
+  justify-self: center;
+  margin-top: 6px;
+  pointer-events: auto;
+}
+
 .operationFeedbackToast-success {
   border-color: #86efac;
   background: #f0fdf4;

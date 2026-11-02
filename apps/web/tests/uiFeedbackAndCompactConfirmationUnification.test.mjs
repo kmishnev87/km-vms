@@ -25,10 +25,11 @@ const diagnostics = read("components/AuditDiagnosticsEntries.js");
 const i18n = readI18nSource();
 
 const toastSource = feedback.slice(feedback.indexOf("export function OperationToast"));
-assert.match(toastSource, /window\.setTimeout\(\(\) => onCloseRef\.current\?\.\(\), 2500\)/);
+assert.match(toastSource, /window\.setTimeout\(\(\) => onCloseRef\.current\?\.\(\), toast\.action \? 8000 : 2500\)/);
 assert.match(toastSource, /\}, \[toast\]\);/);
 assert.doesNotMatch(toastSource, /autoDismissMs/);
-assert.doesNotMatch(toastSource, /<button/);
+assert.match(toastSource, /\{toast\.action \? \([\s\S]*?<button[\s\S]*?toast\.action\.onClick\(\)/);
+assert.match(sharedCss, /\.operationFeedbackToastAction\s*\{[^}]*pointer-events:\s*auto/);
 assert.match(toastSource, /\["success", "error", "warning", "info"\]/);
 
 assert.match(sharedCss, /\.operationFeedbackToastRegion\s*\{[\s\S]*?top:\s*50%;[\s\S]*?left:\s*50%;[\s\S]*?transform:\s*translate\(-50%, -50%\);/);

@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path) => fs.readFileSync(resolve(root, path), "utf8");
 const scope = {};
-vm.runInNewContext(read("lib/recordingFormatChange.js").replaceAll("export function ", "function ") + "\nthis.h={recordingFormatCopy,recordingFormatError,recordingFormatNotice,recordingFormatCameraText,shouldWatchRecordingFormat};", scope);
+vm.runInNewContext(read("lib/recordingFormatChange.js").replaceAll("export function ", "function ") + "\nthis.h={recordingFormatCopy,recordingFormatError,recordingFormatNotice,recordingFormatCameraText,shouldWatchRecordingFormat,recordingFormatNotificationKey};", scope);
 const h = scope.h;
 const plain = (value) => JSON.parse(JSON.stringify(value));
 for (const lang of ["ru", "en", "zh-CN"]) {
@@ -25,31 +25,49 @@ assert.equal(h.shouldWatchRecordingFormat({ state: "pending", requested_at: "202
 assert.equal(h.shouldWatchRecordingFormat({ state: "failed", requested_at: "2026-11-02T12:00:00Z" }), true);
 assert.equal(h.shouldWatchRecordingFormat({ state: "applied", requested_at: "2026-11-02T12:00:00Z" }), false);
 assert.equal(h.shouldWatchRecordingFormat({ state: "pending" }), false);
+const pending = { state: "pending", requested_at: "2026-11-02T12:00:00Z", target_format: "mp4", items: [{ camera_id: 1, state: "waiting" }] };
+assert.equal(h.recordingFormatNotificationKey(null), "");
+assert.equal(h.recordingFormatNotificationKey(pending), h.recordingFormatNotificationKey({ ...pending, items: [{ camera_id: 1, state: "switching" }] }), "camera progress must not spam pending notifications");
+assert.notEqual(h.recordingFormatNotificationKey(pending), h.recordingFormatNotificationKey({ ...pending, state: "applied" }));
+assert.notEqual(h.recordingFormatNotificationKey(pending), h.recordingFormatNotificationKey({ ...pending, requested_at: "2026-11-02T13:00:00Z" }));
+const failed = { ...pending, state: "failed", items: [{ camera_id: 1, state: "failed", reason_code: "network_timeout" }, { camera_id: 2, state: "failed", reason_code: "auth_failed" }] };
+assert.equal(h.recordingFormatNotificationKey(failed), h.recordingFormatNotificationKey({ ...failed, items: [...failed.items].reverse() }));
+assert.notEqual(h.recordingFormatNotificationKey(failed), h.recordingFormatNotificationKey({ ...failed, items: [{ ...failed.items[0], reason_code: "finish_timeout" }] }));
 
 const page = read("app/settings/page.js");
+const notification = page.slice(page.indexOf("  function showFormatStatusToast("), page.indexOf("  async function load("));
 const submit = page.slice(page.indexOf("  async function submitSettings("), page.indexOf("  async function rescanHardware("));
 assert.ok(submit.includes("async function submitSettings"));
 function harness(api) {
   const state = { calls: [], toasts: [], choice: null, saving: false };
   const context = {
-    savingRef: { current: false }, formatStatusGeneration: { current: 0 },
+    savingRef: { current: false }, formatStatusGeneration: { current: 0 }, formatNotificationKey: { current: null },
     setSaving: (value) => { state.saving = value; },
     setFormatChoiceError: (value) => { state.error = value; },
     setDraft: (value) => { state.draft = value; },
     setSavedDraft: (value) => { state.saved = value; },
     setFormatStatus: (value) => { state.status = value; },
     setFormatChoice: (value) => { state.choice = value; },
+    setFormatDetailsOpen: (value) => { state.detailsOpen = value; },
     persistLocale: () => {}, settingsDraftFromApi: (value) => value,
     showToast: (value) => state.toasts.push(value),
-    recordingFormatNotice: h.recordingFormatNotice, recordingFormatError: h.recordingFormatError,
+    recordingFormatNotice: h.recordingFormatNotice, recordingFormatError: h.recordingFormatError, recordingFormatNotificationKey: h.recordingFormatNotificationKey,
+    formatCopy: h.recordingFormatCopy("ru"),
     normalizedError: (error) => ({ title: "typed error", text: error.code }),
     lang: "ru", t: { toasts: { saveOkTitle: "Настройки сохранены", saveOkText: "Изменения применены" } },
     apiFetch: async (path, options) => { state.calls.push({ path, body: JSON.parse(options.body) }); return api(path, options); },
   };
-  vm.runInNewContext(submit + "\nthis.submit=submitSettings;", context);
+  vm.runInNewContext(notification + submit + "\nthis.submit=submitSettings;", context);
   return { state, run: context.submit };
 }
+
 const snapshot = { recording_format: "mp4", expected_recording_format: "mkv", language: "ru" };
+const details = harness(async () => ({ recording_format_change: failed }));
+await details.run("immediate", snapshot);
+assert.equal(details.state.toasts[0].variant, "warning");
+assert.equal(details.state.toasts[0].action.label, h.recordingFormatCopy("ru").details);
+details.state.toasts[0].action.onClick();
+assert.equal(details.state.detailsOpen, true);
 const choice = harness(async () => { throw { code: "recording_format_change_requires_choice", status: 409 }; });
 await choice.run(null, snapshot);
 assert.deepEqual(plain(choice.state.choice.payload), snapshot);
@@ -90,7 +108,30 @@ assert.ok(page.includes('submitSettings("immediate", formatChoice.payload)'));
 assert.ok(!page.includes('Сейчас используется MP4'), "draft selection must not claim that every camera already uses the new format");
 assert.ok(!page.includes('Сейчас используется MKV'));
 const css = read("app/styles/20-settings-maintenance.css");
-assert.ok(css.includes(".settingsRecordingFormatStatus"));
-assert.ok(css.includes("height: 140px"));
+assert.ok(!css.includes(".settingsRecordingFormatStatus"), "no permanent inline status panel or reserved height");
+const recordingRow = page.slice(page.indexOf('htmlFor="settings-recording"'), page.indexOf('htmlFor="settings-hardware"'));
+assert.ok(!recordingRow.includes("RecordingFormatChangeStatus"), "status details must not expand the settings row");
+assert.ok(page.includes("open={formatDetailsOpen}"));
+assert.ok(read("components/RecordingFormatChangeStatus.js").includes('<OperationDialog'));
+assert.ok(css.includes("--settings-compact-select-width: 210px"));
+assert.match(read("app/styles/60-responsive-shared.css"), /\.settingsRowCompactSelect \.settingsRowControl,\s*\.settingsRow \.settingsRowControlMeta\s*\{[^}]*width:\s*min\(var\(--settings-compact-select-width\), 100%\)/);
 assert.ok(css.includes(".settingsRecordingFormatChoice .operationFeedbackBusy { display: none; }"));
+const notificationEffectStart = page.indexOf("  useEffect(() => {\n    const key = recordingFormatNotificationKey(formatStatus);");
+const notificationEffect = page.slice(notificationEffectStart, page.indexOf("  function showToast(", notificationEffectStart));
+const notificationEvents = [];
+const effectContext = {
+  formatStatus: { ...pending, state: "applied" }, lang: "ru", formatNotificationKey: { current: null },
+  recordingFormatNotificationKey: h.recordingFormatNotificationKey,
+  showFormatStatusToast: (status) => notificationEvents.push(status.state),
+  useEffect: (effect) => effect(),
+};
+const notify = (status) => { effectContext.formatStatus = status; vm.runInNewContext(notificationEffect, effectContext); };
+notify({ ...pending, state: "applied" });
+assert.deepEqual(notificationEvents, [], "opening settings must not announce a historical success");
+notify(pending);
+notify({ ...pending, items: [{ camera_id: 1, state: "switching" }] });
+notify(failed);
+notify({ ...failed, items: [...failed.items].reverse() });
+notify({ ...pending, state: "applied" });
+assert.deepEqual(notificationEvents, ["pending", "failed", "applied"], "polling announces meaningful transitions once without changing the row");
 console.log("Stage 13.7.5 format choice, snapshots, races, copy, state and stable layout PASS");

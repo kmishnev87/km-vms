@@ -1088,7 +1088,8 @@
 
 /* Collected visual fixes: compact Settings controls and Storage summary. */
 @media (max-width: 900px) {
-  .settingsRowCompactSelect .settingsRowControl {
+  .settingsRowCompactSelect .settingsRowControl,
+  .settingsRow .settingsRowControlMeta {
     justify-self: end;
     width: min(var(--settings-compact-select-width), 100%);
   }

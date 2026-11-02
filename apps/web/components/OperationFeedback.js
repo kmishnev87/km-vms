@@ -237,7 +237,7 @@ export function OperationToast({ toast, onClose }) {
   onCloseRef.current = onClose;
   useEffect(() => {
     if (!toast) return undefined;
-    const timer = window.setTimeout(() => onCloseRef.current?.(), 2500);
+    const timer = window.setTimeout(() => onCloseRef.current?.(), toast.action ? 8000 : 2500);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
@@ -250,6 +250,15 @@ export function OperationToast({ toast, onClose }) {
         <div>
           <strong>{toast.title}</strong>
           {toast.message ? <span>{toast.message}</span> : null}
+          {toast.action ? (
+            <button
+              className="button secondary small operationFeedbackToastAction"
+              type="button"
+              onClick={() => { onCloseRef.current?.(); toast.action.onClick(); }}
+            >
+              {toast.action.label}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

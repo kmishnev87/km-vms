@@ -6,7 +6,7 @@ import Layout from "../../components/Layout";
 import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
 import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
 import RecordingFormatChangeStatus from "../../components/RecordingFormatChangeStatus";
-import { recordingFormatCopy, recordingFormatError, recordingFormatNotice, shouldWatchRecordingFormat } from "../../lib/recordingFormatChange";
+import { recordingFormatCopy, recordingFormatError, recordingFormatNotice, recordingFormatNotificationKey, shouldWatchRecordingFormat } from "../../lib/recordingFormatChange";
 import {
   SettingsMaintenanceConfirmationDialogs,
   SettingsMaintenanceModal,
@@ -2085,7 +2085,9 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const formatStatusGeneration = useRef(0);
+  const formatNotificationKey = useRef(null);
   const [formatStatus, setFormatStatus] = useState(null);
+  const [formatDetailsOpen, setFormatDetailsOpen] = useState(false);
   const [formatChoice, setFormatChoice] = useState(null);
   const [formatChoiceError, setFormatChoiceError] = useState("");
   const [hardwareChecking, setHardwareChecking] = useState(false);
@@ -2183,12 +2185,33 @@ export default function SettingsPage() {
     };
   }, [canManageMaintenance, formatStatus?.requested_at, formatStatus?.state, lang]);
 
+  useEffect(() => {
+    const key = recordingFormatNotificationKey(formatStatus);
+    if (!key) return;
+    const previous = formatNotificationKey.current;
+    formatNotificationKey.current = key;
+    if (previous === key || (previous == null && formatStatus.state === "applied")) return;
+    showFormatStatusToast(formatStatus);
+  }, [formatStatus, lang]);
+
 
   function showToast(nextToast) {
     setToast({
       ...nextToast,
       tone: nextToast?.tone || nextToast?.variant || "info",
       message: nextToast?.message ?? nextToast?.text ?? "",
+    });
+  }
+
+  function showFormatStatusToast(status, saved = false) {
+    const notice = recordingFormatNotice(status, lang);
+    showToast({
+      variant: notice.state === "failed" ? "warning" : notice.state === "pending" ? "info" : "success",
+      title: saved ? t.toasts.saveOkTitle : formatCopy.title,
+      text: notice.state === "idle" ? t.toasts.saveOkText : notice.message,
+      action: status?.items?.length && ["pending", "failed"].includes(notice.state)
+        ? { label: formatCopy.details, onClick: () => setFormatDetailsOpen(true) }
+        : undefined,
     });
   }
 
@@ -2292,11 +2315,11 @@ export default function SettingsPage() {
       const nextDraft = settingsDraftFromApi(updated);
       setDraft(nextDraft);
       setSavedDraft(nextDraft);
+      formatNotificationKey.current = recordingFormatNotificationKey(updated.recording_format_change);
       setFormatStatus(updated.recording_format_change);
       setFormatChoice(null);
       persistLocale(nextDraft.language);
-      const notice = recordingFormatNotice(updated.recording_format_change, lang);
-      showToast({ variant: notice.state === "failed" ? "warning" : notice.state === "pending" ? "info" : "success", title: t.toasts.saveOkTitle, text: notice.state === "idle" ? t.toasts.saveOkText : notice.message });
+      showFormatStatusToast(updated.recording_format_change, true);
     } catch (err) {
       const formatError = recordingFormatError(err, lang);
       if (formatError?.kind === "choice" && !applyMode) {
@@ -2664,7 +2687,6 @@ export default function SettingsPage() {
                   <div className="settingsRowText">
                     <label htmlFor="settings-recording">{t.recording}<InfoTip text={t.tooltips.recording} /></label>
                     <span>{profileHelp} {t.mapsTo}: {recordingFormatForProfile(draft.recordingProfile).toUpperCase()}.</span>
-                    <RecordingFormatChangeStatus status={formatStatus} lang={lang} />
                   </div>
                   <div className="settingsRowControl">
                     <select id="settings-recording" className="select settingsSelect" value={draft.recordingProfile} onChange={(event) => patch("recordingProfile", event.target.value)} disabled={saving}>
@@ -2841,6 +2863,8 @@ export default function SettingsPage() {
             </div>
           </div>
         ) : null}
+
+        <RecordingFormatChangeStatus status={formatStatus} lang={lang} open={formatDetailsOpen} onClose={() => setFormatDetailsOpen(false)} />
 
         <OperationDialog
           dialog={formatChoice ? {

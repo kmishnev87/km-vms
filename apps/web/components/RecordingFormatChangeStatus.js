@@ -1,18 +1,22 @@
 "use client";
 
 import { recordingFormatCameraText, recordingFormatCopy, recordingFormatNotice } from "../lib/recordingFormatChange";
+import { OperationDialog } from "./OperationFeedback";
 
-export default function RecordingFormatChangeStatus({ status, lang }) {
+export default function RecordingFormatChangeStatus({ status, lang, open, onClose }) {
+  const copy = recordingFormatCopy(lang);
   const notice = recordingFormatNotice(status, lang);
   return (
-    <section className="settingsRecordingFormatStatus" data-state={notice.state} aria-label={recordingFormatCopy(lang).title} aria-live="polite">
-      <strong>{recordingFormatCopy(lang).title}</strong>
-      <p>{notice.message}</p>
-      {status?.items?.length ? <ul>{status.items.map((item) => (
-        <li key={item.camera_id}>
-          <b>{item.camera_name}</b>: {recordingFormatCameraText(item, lang)}
-        </li>
-      ))}</ul> : null}
-    </section>
+    <OperationDialog
+      dialog={open ? {
+        id: "recording-format-details",
+        tone: notice.state === "failed" ? "warning" : "info",
+        title: copy.title,
+        message: notice.message,
+        items: (status?.items || []).map((item) => `${item.camera_name}: ${recordingFormatCameraText(item, lang)}`),
+        closeLabel: copy.close,
+      } : null}
+      onClose={onClose}
+    />
   );
 }

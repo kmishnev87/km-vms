@@ -5,7 +5,9 @@ const COPY = {
     pending: "Выбор сохранён. Ждём перехода камер на {format}.",
     applied: "Запись в формате {format} подтверждена на всех включённых камерах.",
     configured: "Настройка сохранена. Новые записи будут в формате {format}.",
-    failed: "Не для всех камер подтверждено применение {format}. Причины указаны ниже.",
+    failed: "Не для всех камер подтверждено применение {format}. Откройте подробности, чтобы узнать причину.",
+    details: "Подробнее",
+    close: "Закрыть",
     waiting_segment: "ждём окончания текущего файла",
     switching: "завершаем прежний файл и переключаем запись",
     starting: "запускаем запись и ждём видео",
@@ -40,7 +42,9 @@ const COPY = {
     pending: "Choice saved. Waiting for cameras to switch to {format}.",
     applied: "Recording in {format} is confirmed on all enabled cameras.",
     configured: "Setting saved. New recordings will use {format}.",
-    failed: "The switch to {format} is not confirmed for every camera. See the reasons below.",
+    failed: "The switch to {format} is not confirmed for every camera. Open details to see why.",
+    details: "Details",
+    close: "Close",
     waiting_segment: "waiting for the current file to finish",
     switching: "finishing the previous file and switching recording",
     starting: "starting recording and waiting for video",
@@ -75,7 +79,9 @@ const COPY = {
     pending: "选择已保存，正在等待摄像机切换为 {format}。",
     applied: "所有已启用摄像机均已确认使用 {format} 录像。",
     configured: "设置已保存，新录像将使用 {format}。",
-    failed: "部分摄像机尚未确认切换为 {format}，原因见下方。",
+    failed: "部分摄像机尚未确认切换为 {format}，请打开详情查看原因。",
+    details: "查看详情",
+    close: "关闭",
     waiting_segment: "等待当前文件完成",
     switching: "正在完成旧文件并切换录像格式",
     starting: "正在启动录像并等待视频",
@@ -136,4 +142,12 @@ export function recordingFormatCameraText(item, lang) {
 
 export function shouldWatchRecordingFormat(status) {
   return Boolean(status?.requested_at && ["pending", "failed"].includes(status.state));
+}
+
+export function recordingFormatNotificationKey(status) {
+  if (!status?.requested_at || !["pending", "failed", "applied"].includes(status.state)) return "";
+  const failures = status.state === "failed"
+    ? (status.items || []).filter((item) => item.state === "failed").map((item) => [item.camera_id, item.reason_code || ""]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    : [];
+  return JSON.stringify([status.requested_at, status.target_format, status.state, failures]);
 }

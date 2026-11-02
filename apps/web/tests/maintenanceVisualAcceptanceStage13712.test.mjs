@@ -114,9 +114,9 @@ assert.match(css, /\.settingsHeaderActions > \.button\s*\{[\s\S]*width:\s*var\(-
 assert.match(responsiveCss, /@media \(max-width: 900px\)[\s\S]*\.settingsHeaderActions\s*\{[\s\S]*width:\s*var\(--settings-header-actions-width\);[\s\S]*align-self:\s*center;[\s\S]*grid-template-columns:\s*repeat\(2, var\(--settings-header-action-width\)\)/);
 assert.match(css, /\.settingsDirtyNote\s*\{[\s\S]*min-height:\s*14px;[\s\S]*visibility:\s*hidden/);
 assert.match(css, /\.settingsDirtyNote\.is-visible\s*\{[\s\S]*visibility:\s*visible/);
-assert.match(css, /\.settingsPage\s*\{[\s\S]*--settings-compact-select-width:\s*200px/);
-assert.match(css, /\.settingsRowCompactSelect \.settingsSelect\s*\{[\s\S]*text-align-last:\s*left/);
-assert.match(css, /\.settingsRowControlMeta\s*\{[\s\S]*justify-items:\s*center;[\s\S]*width:\s*200px/);
+assert.match(css, /\.settingsPage\s*\{[\s\S]*--settings-compact-select-width:\s*210px/);
+assert.match(css, /\.settingsRowCompactSelect \.settingsSelect\s*\{[\s\S]*padding:\s*5px 32px 5px 10px;[\s\S]*text-align:\s*left;[\s\S]*text-align-last:\s*left/);
+assert.match(css, /\.settingsRowControlMeta\s*\{[\s\S]*justify-items:\s*center;[\s\S]*width:\s*var\(--settings-compact-select-width\)/);
 assert.match(css, /\.settingsMaintenanceCardHeadingAligned\s*\{[\s\S]*grid-template-columns:\s*180px minmax\(0, 1fr\)/);
 assert.doesNotMatch(css, /\.settingsMaintenanceCoreCard,\s*\.settingsMaintenanceBackupManager\.settingsMaintenanceCoreCard\s*\{[^}]*min-height:\s*205px/);
 
