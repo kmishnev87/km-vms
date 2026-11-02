@@ -21,6 +21,7 @@ def installed():
 def candidate(**overrides):
     payload = json.loads((ROOT / "release/km-vms-release.json").read_text(encoding="utf-8"))
     payload.update(version="0.8.23", tag="v0.8.23", source_ref="v0.8.23", commit_sha="b" * 40)
+    payload.update(requires_migration=False, schema_update={"mode": "managed", "target_version": 10})
     payload.update(overrides)
     return payload
 
@@ -43,7 +44,7 @@ def test_published_0822_blocks_out_of_band_but_admits_managed_schema_change():
     assert compare(installed(), blocked)[0] == "blocked"
     assert {entry.code for entry in compare(installed(), blocked)[1]} == {"requires_migration"}
     managed = check._manifest_from_release_payload(candidate())
-    assert managed.schema_update == {"mode": "managed", "target_version": 9}
+    assert managed.schema_update == {"mode": "managed", "target_version": 10}
     assert managed.requires_migration is False
     assert compare(installed(), managed)[:2] == ("update_available", [])
     assert check._compare(installed(), managed)[:2] == ("update_available", [])
@@ -65,6 +66,17 @@ def test_invalid_managed_schema_metadata_is_rejected(value):
 def test_conflicting_migration_flags_do_not_silently_allow_apply():
     with pytest.raises(check.UpdateCheckBlocked):
         check._manifest_from_release_payload(candidate(requires_migration=True))
+
+
+def test_legacy_false_flag_does_not_disable_the_registered_migration_gate():
+    from app.services.schema_migrations import PRODUCTION_MIGRATIONS
+    from app.services.schema_update_pipeline import _migration_summary
+    manifest = check._manifest_from_release_payload(candidate())
+    assert manifest.requires_migration is False  # no out-of-band/manual SQL
+    summary = _migration_summary(PRODUCTION_MIGRATIONS.path(9, 10))
+    assert summary["migration_required"] is True
+    assert summary["migration_ids"] == ["stage1375_recording_format_choice_schema_v10"]
+    assert summary["previous_runtime_compatibility"]["required_previous_runtime_protocol"] == 1
 
 
 def test_next_release_registers_actual_tagged_schema_not_previous_family(tmp_path, monkeypatch):

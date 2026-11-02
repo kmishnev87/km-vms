@@ -9,6 +9,7 @@ import threading
 import zipfile
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
@@ -39,6 +40,7 @@ from app.services.recorder_diagnostics import (
     build_system_runtime_status,
 )
 from app.services.system_runtime_status import build_operator_runtime_status
+from app.services.recording_format_change import format_change_status, prepare_format_change
 from app.services.storage_monitoring import build_storage_monitoring_summary
 from app.services.system_settings import (
     AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT,
@@ -126,6 +128,8 @@ class SettingsUpdateRequest(BaseModel):
     language: str | None = None
     storage_path: str | None = None
     recording_format: str | None = None
+    recording_format_apply_mode: Literal["after_segment", "immediate"] | None = None
+    expected_recording_format: Literal["mkv", "mp4"] | None = None
     hardware_preferred_backend: str | None = None
     auto_free_space_cleanup_enabled: bool | None = None
     auto_free_space_acknowledgement: AutoFreeSpaceAcknowledgement | None = None
@@ -694,7 +698,7 @@ def get_settings(
     current_user: User = Depends(require_permission("manage_settings")),
 ):
     system = get_system_settings(db)
-    return serialize_settings(system)
+    return {**serialize_settings(system), "recording_format_change": format_change_status(db, system)}
 
 
 @router.patch("/settings")
@@ -706,6 +710,8 @@ def patch_settings(
 ):
     data = payload.model_dump(exclude_unset=True)
     data.pop("storage_path", None)
+    format_apply_mode = data.pop("recording_format_apply_mode", None)
+    expected_recording_format = data.pop("expected_recording_format", None)
     acknowledgement = data.pop("auto_free_space_acknowledgement", None)
     try:
         data = validate_settings_payload(data, partial=True)
@@ -761,20 +767,13 @@ def patch_settings(
                 "terms_version": AUTO_FREE_SPACE_TERMS_VERSION,
             },
         )
-    if (
-        "recording_format" in data
-        and str(data.get("recording_format") or "").strip().lower() != previous.get("recording_format")
-    ):
-        active_count = active_recording_jobs_count(db)
-        if active_count:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "error": "recording_format_change_blocked_active_recordings",
-                    "active_recording_jobs_count": active_count,
-                    "active_change_behavior": "blocked_while_active_recording_jobs_exist",
-                },
-            )
+    format_request_changed = prepare_format_change(
+        db, system_row, data,
+        apply_mode=format_apply_mode,
+        expected_format=expected_recording_format,
+    )
+    if format_request_changed:
+        system_row.updated_at = datetime.utcnow()
     effective_data = {
         key: value
         for key, value in data.items()
@@ -844,6 +843,7 @@ def patch_settings(
                     "old": previous.get(key),
                     "new": current.get(key),
                     "recording_format_contract": current.get("recording_format_contract") if key == "recording_format" else None,
+                    **({"apply_mode": system.recording_format_apply_mode} if key == "recording_format" else {}),
                 },
                 ip_address=request_ip(request),
                 user_agent=request_user_agent(request),
@@ -879,7 +879,7 @@ def patch_settings(
             "old": previous.get("auto_free_space_cleanup_effective"),
             "new": current.get("auto_free_space_cleanup_effective"),
         }
-    if changed or acknowledgement_accepted:
+    if changed or acknowledgement_accepted or format_request_changed:
         create_event(
             db=db,
             actor=current_user,
@@ -888,11 +888,14 @@ def patch_settings(
             message_ru=f"{current_user.username} сохранил настройки",
             message_en=f"{current_user.username} saved settings",
             target_type="settings",
-            metadata={"changed": changed},
+            metadata={
+                "changed": changed,
+                **({"recording_format_apply_mode": system.recording_format_apply_mode} if format_request_changed else {}),
+            },
             ip_address=request_ip(request),
             user_agent=request_user_agent(request),
         )
-    return serialize_settings(system)
+    return {**serialize_settings(system), "recording_format_change": format_change_status(db, system)}
 
 
 @router.post("/settings/storage/validate")

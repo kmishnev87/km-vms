@@ -15,6 +15,8 @@ class SystemSettings(Base):
     language: Mapped[str] = mapped_column(String(10), default="ru")
     storage_path: Mapped[str] = mapped_column(String(1024), default="/storage/archive")
     recording_format: Mapped[str] = mapped_column(String(16), default="mkv")
+    recording_format_apply_mode: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    recording_format_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     hardware_preferred_backend: Mapped[str | None] = mapped_column(String(64), nullable=True)
     auto_free_space_cleanup_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     auto_free_space_acknowledged_terms_version: Mapped[str | None] = mapped_column(String(64), nullable=True)

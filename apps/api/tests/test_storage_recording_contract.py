@@ -341,7 +341,7 @@ def test_recording_format_contract_maps_profile_labels():
     assert recording_format_contract("bad")["recording_format"] == "mkv"
 
 
-def test_recording_format_change_blocks_when_active_jobs_exist(db):
+def test_recording_format_change_requires_choice_when_active_jobs_exist(db):
     row = get_system_settings(db)
     row.recording_format = "mkv"
     job = RecordingJob(
@@ -363,7 +363,7 @@ def test_recording_format_change_blocks_when_active_jobs_exist(db):
         )
 
     assert exc.value.status_code == 409
-    assert exc.value.detail["error"] == "recording_format_change_blocked_active_recordings"
+    assert exc.value.detail["error"] == "recording_format_change_requires_choice"
     assert get_system_settings(db).recording_format == "mkv"
 
 

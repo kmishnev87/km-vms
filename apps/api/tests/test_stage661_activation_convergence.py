@@ -622,6 +622,14 @@ def test_completed_schema_marker_is_not_replayed(
     assert runtime["migration"] == 0
 
 
+def test_required_schema_path_runs_migration_before_target_even_without_manual_flag(runtime):
+    engine = FakeEngine(_journal("target_prepared", migration_required=True))
+    result = bridge.converge_activation(engine, Path("/app"), "tnas-vms", REQUEST_ID)
+    assert result["phase"] == "completed"
+    assert runtime["migration"] == 1
+    assert result["schema"]["migration_completed"] is True
+
+
 def test_schema_failure_restores_previous_runtime_before_blocking(
     monkeypatch: pytest.MonkeyPatch,
     runtime,

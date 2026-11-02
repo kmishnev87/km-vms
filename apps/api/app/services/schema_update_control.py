@@ -61,7 +61,7 @@ JWT_SECRET = str(os.getenv("JWT_SECRET") or "")
 MAX_CONTROL_BYTES = 64 * 1024
 MAX_DETAILS_BYTES = 8 * 1024
 MAX_TIMESTAMP_LENGTH = 80
-TARGET_SCHEMA_VERSION = 9
+TARGET_SCHEMA_VERSION = 10
 REQUEST_RE = re.compile(r"^(?:update|stage609)-[0-9a-f]{32}$")
 ATTEMPT_RE = re.compile(r"^migration-attempt-[0-9a-f]{32}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
@@ -318,17 +318,17 @@ SOURCE_SHAPE_FINGERPRINT_ALTERNATES: dict[str, frozenset[str]] = {
     for version, values in _UPDATE_LINEAGE["shape_alternates"].items()
 }
 TARGET_SHAPE_FINGERPRINT = (
-    "ecc7ccf61e781477ceec853414d0b4ff"
-    "90da7f45b4a73052885db4a57093fdcb"
+    "1161a42b16d7ae0946c7ee04dc3fb1de32"
+    "a61ac91738c6b5ce357189b51cbb0f"
 )
-# The preparatory release keeps the published schema-v9 shape family unchanged.
+# Exact schema-v10 shapes reproduced by the registered migration on PostgreSQL.
+# Upgraded installations may retain the harmless retired system_name column;
+# current fresh installations omit it. Published source hashes stay in lineage.
 # Unknown target fingerprints remain fail-closed.
 TARGET_SHAPE_FINGERPRINT_ALTERNATES = frozenset(
     {
-        "5a0e8ab16dc61c99ed6a5842d54d4e6a"
-        "0599bfcdaf7e03a24b30c51316060c7e",
-        "16c571428596280b75779606006b2871a"
-        "f828b9d634c6a9faee6c41701892477",
+        "eb1a1004514c6b4e903531096f4693bee"
+        "74ffed169a1fbfe33a02aea6c2f7f0f",
     }
 )
 TARGET_SHAPE_FINGERPRINTS = frozenset(
@@ -3065,6 +3065,30 @@ def expected_source_lineage(
     )
 
 
+def bind_actual_source_database(db: Session, expected_version: int, expected_shapes: frozenset[str]) -> tuple[int, str]:
+    """After application rollback the DB can truthfully remain newer than its tag.
+
+    This is not arbitrary drift admission: the completed migration certificate
+    must explicitly support the *known installed* reader/writer contract.
+    """
+    actual = current_schema_version(db)
+    if actual == expected_version:
+        shape = database_shape_fingerprint(db)
+        if shape not in expected_shapes:
+            raise SchemaControlError("installed_source_shape_mismatch")
+        return actual, shape
+    if type(actual) is int and expected_version < actual <= TARGET_SCHEMA_VERSION:
+        from app.services.schema_runtime_compatibility import validate_runtime_compatibility
+        state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+        if state is not None:
+            try:
+                proof = validate_runtime_compatibility(db, state, expected_version)
+                return actual, proof["shape_sha256"]
+            except RuntimeError as exc:
+                raise SchemaControlError("installed_source_compatibility_not_verified") from exc
+    raise SchemaControlError("installed_source_schema_version_mismatch")
+
+
 def validate_source_lineage(
     db: Session,
     *,
@@ -3082,12 +3106,7 @@ def validate_source_lineage(
         target_release=target_release,
         target_commit=target_commit,
     )
-    source_schema_version = current_schema_version(db)
-    if source_schema_version != expected_schema_version:
-        raise SchemaControlError("installed_source_schema_version_mismatch")
-    shape = database_shape_fingerprint(db)
-    if shape not in expected_shapes:
-        raise SchemaControlError("installed_source_shape_mismatch")
+    source_schema_version, shape = bind_actual_source_database(db, expected_schema_version, expected_shapes)
     return installed_version, installed_commit, source_schema_version, shape
 
 
@@ -3336,14 +3355,7 @@ def load_prebootstrap_update_context(
             )
         source_shape = next(iter(expected_source_shapes))
     else:
-        source_schema_actual = current_schema_version(db)
-        if source_schema_actual != source_schema:
-            raise SchemaControlError(
-                "installed_source_schema_version_mismatch"
-            )
-        source_shape = database_shape_fingerprint(db)
-        if source_shape not in expected_source_shapes:
-            raise SchemaControlError("installed_source_shape_mismatch")
+        source_schema, source_shape = bind_actual_source_database(db, source_schema, expected_source_shapes)
     fingerprint = plan_fingerprint(
         installed_version=installed_version,
         installed_commit=installed_commit,

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.23",
-  "tag": "v0.8.23",
-  "title": "Prepared database evolution",
-  "summary": "Prepare safe automatic database changes and verified return to the previous compatible runtime.",
+  "version": "0.8.24",
+  "tag": "v0.8.24",
+  "title": "Safe recording format changes",
+  "summary": "Switch MKV and MP4 with an explicit choice, safe file completion and truthful per-camera progress.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.23",
+  "source_ref": "v0.8.24",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -17,42 +17,54 @@
   "requires_migration": false,
   "schema_update": {
     "mode": "managed",
-    "target_version": 9
+    "target_version": 10
   },
   "changelog": [
-    "Separate the physical database revision from explicit reader and writer compatibility.",
-    "Verify the previous API image capability before relying on it for rollback after a compatible migration.",
-    "Bind compatibility to the verified database shape, immutable history and completed migration evidence.",
-    "Keep database schema 9 and existing recording behavior unchanged in this preparatory release."
+    "Choose to switch after current files or finish them gracefully now, without manually disabling cameras.",
+    "Keep existing archive files unchanged and preserve video captured during the switch.",
+    "Persist the desired format, application mode and request time across restarts without a separate queue.",
+    "Show pending, confirmed and failed application per camera with clear safe reasons.",
+    "Avoid unintended format restarts when reading settings temporarily fails; never force-kill a writer solely to change format.",
+    "Add two nullable settings columns through the registered schema 9-to-10 migration.",
+    "Use the prepared runtime compatibility protocol for mandatory registered schema migration and verified application rollback."
   ],
   "title_i18n": {
-    "en": "Prepared database evolution",
-    "ru": "Подготовка безопасных изменений базы",
-    "zh-CN": "准备安全的数据库演进"
+    "en": "Safe recording format changes",
+    "ru": "Безопасная смена формата записи",
+    "zh-CN": "安全切换录像格式"
   },
   "summary_i18n": {
-    "en": "Prepare safe automatic database changes and verified return to the previous compatible runtime.",
-    "ru": "Подготовка автоматических изменений базы и проверенного возврата к предыдущей совместимой программе.",
-    "zh-CN": "准备自动数据库变更，并验证可安全回退至兼容的旧版程序。"
+    "en": "Switch MKV and MP4 with an explicit choice, safe file completion and truthful per-camera progress.",
+    "ru": "Переключение MKV и MP4 с понятным выбором, аккуратным завершением файлов и достоверным состоянием по камерам.",
+    "zh-CN": "明确选择 MKV 与 MP4 的切换时机，正常结束文件，并显示各摄像机的真实进度。"
   },
   "changelog_i18n": {
     "en": [
-      "Separate the physical database revision from explicit reader and writer compatibility.",
-      "Verify the previous API image capability before relying on it for rollback after a compatible migration.",
-      "Bind compatibility to the verified database shape, immutable history and completed migration evidence.",
-      "Keep database schema 9 and existing recording behavior unchanged in this preparatory release."
+      "Choose to switch after current files or finish them gracefully now, without manually disabling cameras.",
+      "Keep existing archive files unchanged and preserve video captured during the switch.",
+      "Persist the desired format, application mode and request time across restarts without a separate queue.",
+      "Show pending, confirmed and failed application per camera with clear safe reasons.",
+      "Avoid unintended format restarts when reading settings temporarily fails; never force-kill a writer solely to change format.",
+      "Add two nullable settings columns through the registered schema 9-to-10 migration.",
+      "Use the prepared runtime compatibility protocol for mandatory registered schema migration and verified application rollback."
     ],
     "ru": [
-      "Физический номер схемы отделён от явно заявленной совместимости чтения и записи.",
-      "Перед совместимой миграцией проверяется, что предыдущий образ API умеет безопасно работать после возврата.",
-      "Совместимость подтверждается составом базы, неизменной историей и завершённой миграцией.",
-      "Подготовительный выпуск сохраняет схему 9 и прежнее поведение записи без новых полей настроек."
+      "Выбор: перейти после текущих файлов или аккуратно завершить их сейчас, без ручного выключения камер.",
+      "Старый архив не преобразуется и не удаляется; видео, полученное во время перехода, сохраняется.",
+      "Выбранный формат, способ применения и время запроса сохраняются после перезапуска без отдельной очереди.",
+      "Для каждой камеры видны ожидание, подтверждённое применение или конкретная безопасная причина ошибки.",
+      "Временный сбой чтения настроек не переключает формат самовольно; ради смены формата запись принудительно не убивается.",
+      "Два необязательных поля настроек добавляются зарегистрированной миграцией схемы 9 → 10.",
+      "Обязательная зарегистрированная миграция базы использует подготовленный механизм совместимости и проверенного возврата программы."
     ],
     "zh-CN": [
-      "将物理架构版本与明确声明的读写兼容性分开。",
-      "兼容迁移前验证旧版 API 镜像是否具备安全回退能力。",
-      "兼容性凭据绑定已验证的数据库结构、不可变历史和已完成迁移。",
-      "此准备版本保留架构 9 和原有录像行为，不增加设置字段。"
+      "选择在当前文件完成后切换，或立即正常结束文件，无需手动停用摄像机。",
+      "旧录像不会被转换或删除，切换期间收到的视频仍会保存。",
+      "目标格式、应用方式和请求时间在重启后保留，无需单独的任务队列。",
+      "按摄像机显示等待、确认完成或明确且安全的错误原因。",
+      "临时读取设置失败不会意外切换格式，也不会仅为更改格式而强制终止录像进程。",
+      "通过已注册的数据库架构 9 到 10 迁移，添加两个可空设置字段。",
+      "利用已准备的兼容性协议执行必需的已注册数据库迁移，并验证程序回退。"
     ]
   }
 }

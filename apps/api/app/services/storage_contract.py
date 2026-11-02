@@ -60,5 +60,5 @@ def recording_format_contract(recording_format: str | None) -> dict:
         "recording_profile": recording_profile_for_format(normalized),
         "valid_recording_formats": sorted(RECORDING_FORMATS),
         "profile_mapping": dict(RECORDING_FORMAT_BY_PROFILE),
-        "active_change_behavior": "blocked_while_active_recording_jobs_exist",
+        "active_change_behavior": "explicit_choice_after_segment_or_immediate",
     }

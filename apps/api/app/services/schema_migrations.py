@@ -2034,7 +2034,7 @@ def validate_current_target_schema(db: Session) -> dict[str, Any]:
         or state.status not in SAFE_STATUSES
     ):
         raise RuntimeError("current_target_schema_state_invalid")
-    return _stage13721_v9_target_schema_shape_verify(db)
+    return _stage1375_format_target_verify(db)
 
 
 STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION = MigrationDefinition(
@@ -2065,6 +2065,60 @@ STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION = MigrationDefinition(
 
 
 
+STAGE1375_FORMAT_CHANGE_COLUMNS = {
+    "recording_format_apply_mode": "VARCHAR(32) NULL",
+    "recording_format_requested_at": "TIMESTAMP NULL",
+}
+
+
+def _stage1375_format_preflight(db: Session) -> dict[str, Any]:
+    state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    if state is None or state.schema_version != 9 or state.baseline_id != CURRENT_BASELINE_ID or state.status not in SAFE_STATUSES:
+        raise RuntimeError("stage1375_source_schema_state_invalid")
+    _stage13721_v9_target_schema_shape_verify(db)
+    return {"status": "ready"}
+
+
+def _stage1375_format_apply(db: Session) -> dict[str, Any]:
+    columns = {str(column["name"]) for column in inspect(db.connection()).get_columns("system_settings")}
+    added = []
+    for name, ddl in STAGE1375_FORMAT_CHANGE_COLUMNS.items():
+        if name not in columns:
+            db.execute(text(f"ALTER TABLE system_settings ADD COLUMN {name} {ddl}"))
+            added.append(name)
+    return {"status": "applied", "added_columns": added}
+
+
+def _stage1375_format_target_verify(db: Session) -> dict[str, Any]:
+    result = _stage13721_v9_target_schema_shape_verify(db)
+    columns = {str(column["name"]): column for column in inspect(db.connection()).get_columns("system_settings")}
+    for name, ddl in STAGE1375_FORMAT_CHANGE_COLUMNS.items():
+        column = columns.get(name)
+        if column is None or column.get("nullable") is not True:
+            raise RuntimeError("stage1375_format_column_missing_or_not_nullable")
+        actual = str(column.get("type") or "").upper()
+        if (name.endswith("apply_mode") and ("VARCHAR" not in actual or "32" not in actual)) or (name.endswith("requested_at") and not any(kind in actual for kind in ("TIMESTAMP", "DATETIME"))):
+            raise RuntimeError("stage1375_format_column_type_mismatch")
+    return {**result, "schema_version": 10, "recording_format_choice": "nullable_additive"}
+
+
+STAGE1375_FORMAT_CHANGE_MIGRATION = MigrationDefinition(
+    migration_id="stage1375_recording_format_choice_schema_v10",
+    from_version=9,
+    to_version=10,
+    description="Persist recording format application choice and request time in existing settings.",
+    risk=RISK_ADDITIVE_SAFE,
+    transaction_mode="session_transaction",
+    preflight=_stage1375_format_preflight,
+    apply=_stage1375_format_apply,
+    verify=_stage1375_format_target_verify,
+    safe_failure_summary="Recording format choice migration failed safely.",
+    rollback_note="Nullable additive settings columns preserve existing values and video files; no schema downgrade is required.",
+    runtime_compatibility_floor=9,
+    definition_material={"source_schema_version": 9, "target_schema_version": 10, "table": "system_settings", "columns": STAGE1375_FORMAT_CHANGE_COLUMNS, "existing_rows_preserved": True},
+)
+
+
 PRODUCTION_MIGRATIONS = MigrationRegistry(
     (
         STAGE4101_STORAGE_FOUNDATION_MIGRATION,
@@ -2075,6 +2129,7 @@ PRODUCTION_MIGRATIONS = MigrationRegistry(
         STAGE660128_V6_TO_V7_FINALIZATION,
         STAGE660128_UNIVERSAL_SCHEMA_MIGRATION,
         STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION,
+        STAGE1375_FORMAT_CHANGE_MIGRATION,
     ),
     published_variants=(
         STAGE410522_INTEGRITY_ITEM_STATE_MIGRATION,

@@ -82,6 +82,8 @@ def serialize_settings(row: SystemSettings) -> dict:
         "storage_contract": contract,
         **contract,
         "recording_format": row.recording_format,
+        "recording_format_apply_mode": getattr(row, "recording_format_apply_mode", None),
+        "recording_format_requested_at": getattr(row, "recording_format_requested_at", None),
         "recording_profile": format_contract["recording_profile"],
         "recording_format_contract": format_contract,
         "hardware_preferred_backend": row.hardware_preferred_backend,

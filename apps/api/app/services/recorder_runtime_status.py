@@ -397,6 +397,11 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             "current_segment_started_at_system": format_system_iso(current_segment.started_at, ctx, local_naive=segment_uses_local_naive_display(current_segment)) if current_segment else None,
             "current_segment_age_seconds": current_segment_age,
             "current_segment_id": int(current_segment.id) if current_segment else None,
+            "recording_container_format": (
+                current_segment.container_format
+                if current_segment is not None and current_segment.container_format in {"mkv", "mp4"}
+                else None
+            ),
             "current_segment_job_id": current_segment.job_id if current_segment else None,
             "current_segment_size_bytes": int(current_segment.size_bytes or 0) if current_segment else 0,
             "media_progress_at": iso_or_none(media_progress_at),

@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
 import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
 import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
+import RecordingFormatChangeStatus from "../../components/RecordingFormatChangeStatus";
+import { recordingFormatCopy, recordingFormatError, recordingFormatNotice, shouldWatchRecordingFormat } from "../../lib/recordingFormatChange";
 import {
   SettingsMaintenanceConfirmationDialogs,
   SettingsMaintenanceModal,
@@ -92,9 +94,9 @@ const TEXT = {
     timezoneHelp: "Определяет время интерфейса, архива и хронологии.",
     recording: "Формат записи",
     compatibility: "Макс. совместимость",
-    compatibilityHelp: "Сейчас используется MP4. Удобнее для плееров.",
+    compatibilityHelp: "MP4 удобнее для плееров.",
     reliability: "Макс. надежность",
-    reliabilityHelp: "Сейчас используется MKV. Лучше переносит сбои записи.",
+    reliabilityHelp: "MKV лучше переносит сбои записи.",
     mapsTo: "Формат",
     hardware: "Аппаратное ускорение",
     hardwareAvailable: "Аппаратное ускорение доступно.",
@@ -785,9 +787,9 @@ const TEXT = {
     timezoneHelp: "Defines interface time, archive timestamps, and chronology.",
     recording: "Recording format",
     compatibility: "Maximum compatibility",
-    compatibilityHelp: "Current mapping: MP4. Easier to open in players.",
+    compatibilityHelp: "MP4 is easier to open in players.",
     reliability: "Maximum reliability",
-    reliabilityHelp: "Current mapping: MKV. More resilient to recording interruptions.",
+    reliabilityHelp: "MKV is more resilient to recording interruptions.",
     mapsTo: "Format",
     hardware: "Hardware Acceleration",
     hardwareAvailable: "Hardware acceleration is available.",
@@ -1465,6 +1467,8 @@ const TEXT = {
 };
 
 const ZH_TEXT_OVERRIDES = {
+  compatibilityHelp: "MP4 更容易在播放器中打开。",
+  reliabilityHelp: "MKV 更能承受录像中断。",
   edit: "编辑",
   deactivate: "停用",
   activate: "启用",
@@ -2044,6 +2048,8 @@ function normalizedError(err, lang, context = "generic") {
   if (message.includes("403") || lower.includes("forbidden") || message.includes("ограничены права пользователя")) {
     return { variant: "error", title: t.toasts.forbiddenTitle, text: forbiddenMessage(lang) };
   }
+  const formatError = recordingFormatError(err, lang);
+  if (formatError) return { variant: "error", title: recordingFormatCopy(lang).saveErrorTitle, text: formatError.message };
   if (lower.includes("failed to fetch") || lower.includes("networkerror") || lower.includes("server is unavailable")) {
     return { variant: "error", title: t.toasts.networkTitle, text: t.toasts.networkText };
   }
@@ -2077,6 +2083,11 @@ export default function SettingsPage() {
   const [hardware, setHardware] = useState(null);
   const [toast, setToast] = useState(null);
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const formatStatusGeneration = useRef(0);
+  const [formatStatus, setFormatStatus] = useState(null);
+  const [formatChoice, setFormatChoice] = useState(null);
+  const [formatChoiceError, setFormatChoiceError] = useState("");
   const [hardwareChecking, setHardwareChecking] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [users, setUsers] = useState([]);
@@ -2099,7 +2110,8 @@ export default function SettingsPage() {
   const lang = languageOf(draft || savedDraft);
   const t = settingsTextFor(lang);
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
-  const anyBusy = saving || hardwareChecking;
+  const anyBusy = saving || hardwareChecking || Boolean(formatChoice);
+  const formatCopy = recordingFormatCopy(lang);
   const canManageMaintenance = Boolean(currentUser?.permissions?.includes("manage_settings"));
   const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
   const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
@@ -2131,6 +2143,46 @@ export default function SettingsPage() {
     }
   }, [securityModalOpen, auditFilters]);
 
+  useEffect(() => {
+    if (!canManageMaintenance || !shouldWatchRecordingFormat(formatStatus)) return undefined;
+    let cancelled = false;
+    let blocked = false;
+    let inFlight = false;
+    let timer;
+    let controller;
+    const schedule = () => { if (!cancelled && !blocked) timer = window.setTimeout(refresh, 5000); };
+    async function refresh() {
+      if (cancelled || blocked || inFlight) return;
+      if (document.hidden) { schedule(); return; }
+      inFlight = true;
+      const generation = formatStatusGeneration.current;
+      controller = new AbortController();
+      try {
+        const data = await apiFetch("/settings", { signal: controller.signal });
+        if (!cancelled && generation === formatStatusGeneration.current) setFormatStatus(data.recording_format_change);
+      } catch (err) {
+        if (!cancelled && [401, 403].includes(err?.status)) {
+          blocked = true;
+          showToast(normalizedError(err, lang));
+        }
+      } finally {
+        inFlight = false;
+        schedule();
+      }
+    }
+    function onVisibility() {
+      if (!document.hidden) { window.clearTimeout(timer); refresh(); }
+    }
+    schedule();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      controller?.abort();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [canManageMaintenance, formatStatus?.requested_at, formatStatus?.state, lang]);
+
 
   function showToast(nextToast) {
     setToast({
@@ -2150,6 +2202,7 @@ export default function SettingsPage() {
       const nextDraft = settingsDraftFromApi(settingsData);
       setDraft(nextDraft);
       setSavedDraft(nextDraft);
+      setFormatStatus(settingsData.recording_format_change);
       setHardware(hardwareData);
       setCurrentUser(meData);
       if (meData?.permissions?.includes("admin_access")) {
@@ -2217,22 +2270,44 @@ export default function SettingsPage() {
   }
 
   async function save() {
-    if (!draft || !dirty || saving) return;
+    if (!draft || !dirty || savingRef.current || formatChoice) return;
+    await submitSettings(null, {
+      ...payloadFromDraft(draft),
+      expected_recording_format: recordingFormatForProfile(savedDraft.recordingProfile),
+    });
+  }
+
+  async function submitSettings(applyMode, snapshot) {
+    if (savingRef.current || !snapshot) return;
+    savingRef.current = true;
+    formatStatusGeneration.current += 1;
     setSaving(true);
+    setFormatChoiceError("");
     try {
       const updated = await apiFetch("/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payloadFromDraft(draft)),
+        body: JSON.stringify({ ...snapshot, ...(applyMode ? { recording_format_apply_mode: applyMode } : {}) }),
       });
       const nextDraft = settingsDraftFromApi(updated);
       setDraft(nextDraft);
       setSavedDraft(nextDraft);
+      setFormatStatus(updated.recording_format_change);
+      setFormatChoice(null);
       persistLocale(nextDraft.language);
-      showToast({ variant: "success", title: t.toasts.saveOkTitle, text: t.toasts.saveOkText });
+      const notice = recordingFormatNotice(updated.recording_format_change, lang);
+      showToast({ variant: notice.state === "failed" ? "warning" : notice.state === "pending" ? "info" : "success", title: t.toasts.saveOkTitle, text: notice.state === "idle" ? t.toasts.saveOkText : notice.message });
     } catch (err) {
-      showToast(normalizedError(err, lang));
+      const formatError = recordingFormatError(err, lang);
+      if (formatError?.kind === "choice" && !applyMode) {
+        setFormatChoice({ payload: snapshot, from: snapshot.expected_recording_format, to: snapshot.recording_format });
+      } else if (applyMode && formatError) {
+        setFormatChoiceError(formatError.message);
+      } else {
+        showToast(normalizedError(err, lang));
+      }
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }
@@ -2589,6 +2664,7 @@ export default function SettingsPage() {
                   <div className="settingsRowText">
                     <label htmlFor="settings-recording">{t.recording}<InfoTip text={t.tooltips.recording} /></label>
                     <span>{profileHelp} {t.mapsTo}: {recordingFormatForProfile(draft.recordingProfile).toUpperCase()}.</span>
+                    <RecordingFormatChangeStatus status={formatStatus} lang={lang} />
                   </div>
                   <div className="settingsRowControl">
                     <select id="settings-recording" className="select settingsSelect" value={draft.recordingProfile} onChange={(event) => patch("recordingProfile", event.target.value)} disabled={saving}>
@@ -2765,6 +2841,27 @@ export default function SettingsPage() {
             </div>
           </div>
         ) : null}
+
+        <OperationDialog
+          dialog={formatChoice ? {
+            id: "recording-format-choice",
+            presentation: "neutral-choice",
+            className: "settingsRecordingFormatChoice",
+            title: formatCopy.choiceTitle,
+            message: formatCopy.choiceMessage.replace("{from}", formatChoice.from.toUpperCase()).replace("{to}", formatChoice.to.toUpperCase()),
+            descriptions: [
+              { label: formatCopy.afterLabel, value: formatCopy.afterDescription },
+              { label: formatCopy.nowLabel, value: formatCopy.nowDescription },
+            ],
+            content: <div className="settingsRecordingFormatChoiceNote" role={formatChoiceError ? "alert" : undefined}>{formatChoiceError || formatCopy.safeNote}</div>,
+            busy: saving,
+            cancelLabel: formatCopy.cancel,
+            confirmLabel: saving ? formatCopy.applying : formatCopy.afterLabel,
+            onConfirm: () => submitSettings("after_segment", formatChoice.payload),
+            actions: [{ id: "apply-immediate", label: formatCopy.nowLabel, onClick: () => submitSettings("immediate", formatChoice.payload) }],
+          } : null}
+          onClose={() => { if (!savingRef.current) { setFormatChoice(null); setFormatChoiceError(""); } }}
+        />
 
         <OperationDialog
           dialog={userDeleteTarget ? {

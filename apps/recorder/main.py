@@ -153,6 +153,10 @@ class RecordingJob:
     db_job_id: str | None = None
     source_stream: str | None = None
     recording_format: str = DEFAULT_RECORDING_FORMAT
+    format_change_target: str | None = None
+    format_change_anchor: str | None = None
+    format_change_requested_epoch: float | None = None
+    format_change_retry_at: float = 0
     segment_baseline_paths: set[str] = field(default_factory=set)
     known_segment_paths: set[str] = field(default_factory=set)
     archive_root_id: str | None = None
@@ -826,19 +830,32 @@ def normalize_recording_format(value: Any) -> str:
     return normalized if normalized in RECORDING_FORMATS else DEFAULT_RECORDING_FORMAT
 
 
-def read_recording_format() -> str:
+def read_recording_format_choice() -> tuple[str, str, float | None] | None:
     try:
         with engine.begin() as conn:
-            row = conn.execute(text("SELECT recording_format FROM system_settings ORDER BY id ASC LIMIT 1")).first()
+            row = conn.execute(text(
+                "SELECT recording_format, recording_format_apply_mode, recording_format_requested_at "
+                "FROM system_settings ORDER BY id ASC LIMIT 1"
+            )).first()
     except Exception as exc:
-        log_event("warning", "recording_format_read_failed", error=redact_text(str(exc)), fallback=DEFAULT_RECORDING_FORMAT)
-        return DEFAULT_RECORDING_FORMAT
+        log_event("warning", "recording_format_read_failed", error=redact_text(str(exc)), action="keep_running_recordings")
+        return None
 
     raw_value = row.recording_format if row else None
     recording_format = normalize_recording_format(raw_value)
     if raw_value is not None and str(raw_value or "").strip().lower() not in RECORDING_FORMATS:
         log_event("warning", "recording_format_invalid_fallback", value=redact_text(str(raw_value)), fallback=recording_format)
-    return recording_format
+    mode = getattr(row, "recording_format_apply_mode", None) or "after_segment"
+    requested = getattr(row, "recording_format_requested_at", None)
+    if isinstance(requested, str):
+        requested = datetime.fromisoformat(requested.replace("Z", "+00:00"))
+    requested_epoch = requested.replace(tzinfo=UTC).timestamp() if requested is not None and requested.tzinfo is None else requested.timestamp() if requested is not None else None
+    return recording_format, mode, requested_epoch
+
+
+def read_recording_format() -> str:
+    choice = read_recording_format_choice()
+    return choice[0] if choice is not None else DEFAULT_RECORDING_FORMAT
 
 
 def read_recording_suspended_by_low_disk() -> bool:
@@ -1473,6 +1490,28 @@ def current_writing_segment(job: RecordingJob) -> Path | None:
     return files[-1]
 
 
+def format_change_ready(job: RecordingJob, target: str, mode: str, requested_epoch: float | None) -> bool:
+    if mode == "immediate":
+        return True
+    current = current_writing_segment(job)
+    if job.format_change_target != target or job.format_change_requested_epoch != requested_epoch:
+        job.format_change_target = target
+        job.format_change_requested_epoch = requested_epoch
+        job.format_change_anchor = None
+    if current is None:
+        return False
+    # FFmpeg and this process share TZ. Convert its filename-local timestamp to
+    # an epoch, not to the operator's display timezone. A boundary that happened
+    # between saving settings and this loop must not incur another full segment.
+    if requested_epoch is not None and parse_segment_start_time(current).timestamp() >= requested_epoch:
+        return True
+    current_name = str(current)
+    if job.format_change_anchor is None:
+        job.format_change_anchor = current_name
+        return False
+    return current_name != job.format_change_anchor
+
+
 def current_segment_age_seconds(file_path: Path) -> int:
     started_at = parse_segment_start_time(file_path)
     return max(0, int((datetime.now() - started_at).total_seconds()))
@@ -1955,8 +1994,9 @@ def start_camera(row) -> None:
         )
         return
 
-    if job.db_job_id:
+    if job.db_job_id and job.stopped_at is None:
         close_recording_job(job, state=RecorderState.STOPPED, reason="retry_replaced", error=job.last_error)
+    job.stopped_at = None
     job.last_media_progress_at = None
     job.stable_progress_since = None
     job.current_media_relative_path = None
@@ -2060,12 +2100,13 @@ def start_camera(row) -> None:
     )
 
 
-def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "recording_stopped", *, for_retry: bool = False) -> None:
+def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "recording_stopped", *, for_retry: bool = False, graceful_format_change: bool = False) -> bool:
     job = jobs.get(camera_id)
     if not job:
-        return
+        return True
 
     proc = job.process
+    previous_state = job.state
     job.set_state(RecorderState.STOPPING)
     update_camera_status_from_job(job)
 
@@ -2074,6 +2115,14 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
         try:
             proc.wait(timeout=STOP_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
+            if graceful_format_change:
+                # Never force-kill a writer merely to apply a format preference.
+                job.set_state(previous_state)
+                update_camera_status_from_job(job)
+                update_recording_job(job, state=previous_state, stop_reason="recording_format_finish_timeout")
+                job.format_change_retry_at = time.monotonic() + 30
+                log_event("warning", "recording_format_finish_timeout", camera_id=job.camera_id)
+                return False
             proc.kill()
             proc.wait(timeout=5)
 
@@ -2083,7 +2132,22 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     if job.stderr_thread and job.stderr_thread.is_alive():
         job.stderr_thread.join(timeout=1)
 
-    finalize_segments_for_job(job)
+    finalized = True
+    try:
+        finalize_segments_for_job(job)
+        if graceful_format_change and job.db_job_id:
+            with engine.begin() as conn:
+                unfinished = conn.execute(text(
+                    "SELECT COUNT(*) FROM recording_segments WHERE job_id = :job_id "
+                    "AND status IN ('writing', 'failed', 'stale_writing')"
+                ), {"job_id": job.db_job_id}).scalar_one()
+            finalized = unfinished == 0
+    except Exception:
+        if not graceful_format_change:
+            raise
+        finalized = False
+    if graceful_format_change and not finalized:
+        reason = "recording_format_finalization_failed"
 
     job.process = None
     job.pid = None
@@ -2103,6 +2167,10 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
     job.last_media_progress_at = None
     job.stable_progress_since = None
     job.stalled_samples = 0
+    job.format_change_target = None
+    job.format_change_anchor = None
+    job.format_change_requested_epoch = None
+    job.format_change_retry_at = 0
     log_event("info", "recording_stopped", camera_id=job.camera_id, camera_name=job.camera_name, reason=reason, exit_code=job.last_exit_code)
     write_audit_event(
         event_type="camera_stopped" if audit_event == "recording_stopped" else audit_event,
@@ -2111,6 +2179,7 @@ def stop_camera(camera_id: int, reason: str = "stopped", audit_event: str = "rec
         camera_name=job.camera_name,
         metadata={"reason": reason, "exit_code": job.last_exit_code},
     )
+    return finalized
 
 
 def enforce_retention(camera_id: int, folder_name: str, retention_days: int, storage_quota_gb: int) -> None:
@@ -2140,7 +2209,10 @@ def retention_ready(row, job: RecordingJob) -> bool:
 def sync_cameras() -> None:
     db = SessionLocal()
     try:
-        effective_recording_format = read_recording_format()
+        format_choice = read_recording_format_choice()
+        if format_choice is None:
+            return
+        effective_recording_format, format_apply_mode, format_requested_epoch = format_choice
         low_disk_recording_suspended = read_recording_suspended_by_low_disk()
         rows = db.execute(
             text(
@@ -2172,7 +2244,6 @@ def sync_cameras() -> None:
         for row in rows:
             seen_ids.add(row.id)
             job = get_or_create_job(row)
-            job.recording_format = effective_recording_format
             desired_signature = camera_signature(row, effective_recording_format)
 
             if not row.enabled:
@@ -2222,6 +2293,13 @@ def sync_cameras() -> None:
                     continue
 
             if job.config_signature and job.config_signature != desired_signature and job.process and job.process.poll() is None:
+                format_changed = job.recording_format != effective_recording_format
+                format_only = format_changed and job.config_signature[:-1] == desired_signature[:-1]
+                if format_only:
+                    if time.monotonic() < job.format_change_retry_at:
+                        continue
+                    if not format_change_ready(job, effective_recording_format, format_apply_mode, format_requested_epoch):
+                        continue
                 log_event("info", "recording_config_changed_restart", camera_id=job.camera_id, camera_name=job.camera_name, recording_format=effective_recording_format)
                 write_audit_event(
                     event_type="camera_restarted",
@@ -2230,10 +2308,17 @@ def sync_cameras() -> None:
                     camera_name=job.camera_name,
                     metadata={"reason": "config_changed", "recording_format": effective_recording_format},
                 )
-                stop_camera(row.id, "config_changed")
+                finished = stop_camera(
+                    row.id,
+                    "recording_format_change" if format_changed else "config_changed",
+                    graceful_format_change=format_changed,
+                )
+                if not finished and job.process and job.process.poll() is None:
+                    continue
                 job.config_signature = desired_signature
 
             if job.state == RecorderState.RESTARTING and can_retry(job):
+                job.recording_format = effective_recording_format
                 start_camera(row)
                 continue
 
@@ -2241,6 +2326,7 @@ def sync_cameras() -> None:
                 continue
 
             if not job.process or job.process.poll() is not None:
+                job.recording_format = effective_recording_format
                 start_camera(row)
 
         for camera_id in list(jobs.keys()):
