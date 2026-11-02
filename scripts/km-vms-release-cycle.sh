@@ -62,6 +62,7 @@ if [ "$SYNC_LOCAL_IDENTITY" = "1" ]; then
 fi
 
 python3 - "$CHECK" "$DRY_RUN" "$PREPARE_VERSION" "$PRINT_COMMANDS" "$ALLOW_DIRTY" "$VERSION_ARG" <<'PY'
+import ast
 import json
 import re
 import subprocess
@@ -242,6 +243,16 @@ def validate_descriptor() -> dict:
     for key in ("requires_backup", "requires_manual_action", "requires_migration"):
         if not isinstance(descriptor.get(key), bool):
             fail(f"release descriptor {key} must be boolean")
+    schema_update = descriptor.get("schema_update")
+    if schema_update is not None and (
+        type(schema_update) is not dict
+        or set(schema_update) != {"mode", "target_version"}
+        or schema_update.get("mode") != "managed"
+        or type(schema_update.get("target_version")) is not int
+        or schema_update["target_version"] != CURRENT_PRODUCT_DB_SCHEMA_VERSION
+        or descriptor["requires_migration"] is not False
+    ):
+        fail("release descriptor managed schema update contract is invalid")
     return descriptor
 
 
@@ -350,14 +361,36 @@ def register_current_release(
             "a schema-changing current release needs explicit lineage "
             "metadata and cannot inherit the previous schema family"
         )
-    lineage["tag_commits"][version] = tagged
-    lineage["schema_versions"][version] = lineage[
-        "schema_versions"
-    ][previous]
-    lineage["shape_fingerprints"][version] = lineage[
-        "shape_fingerprints"
-    ][previous]
+    schema_version = lineage["schema_versions"][previous]
+    shape = lineage["shape_fingerprints"][previous]
     previous_alternates = lineage["shape_alternates"].get(previous)
+    if descriptor.get("schema_update"):
+        # Read the immutable released target, never the dirty next-version
+        # source. A managed schema-changing release must not inherit the old
+        # family's version/fingerprints when the following release is prepared.
+        try:
+            source = run_git("show", f"v{version}:apps/api/app/services/schema_update_control.py")
+            values = {}
+            for node in ast.parse(source).body:
+                if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                    key = node.targets[0].id
+                    if key in {"TARGET_SCHEMA_VERSION", "TARGET_SHAPE_FINGERPRINT", "TARGET_SHAPE_FINGERPRINT_ALTERNATES"}:
+                        value = node.value
+                        if key.endswith("ALTERNATES"):
+                            if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Name) or value.func.id != "frozenset" or len(value.args) != 1 or value.keywords:
+                                raise ValueError("non-literal target shapes")
+                            value = value.args[0]
+                        values[key] = ast.literal_eval(value)
+            schema_version = values["TARGET_SCHEMA_VERSION"]
+            shape = values["TARGET_SHAPE_FINGERPRINT"]
+            previous_alternates = sorted(values["TARGET_SHAPE_FINGERPRINT_ALTERNATES"])
+            if type(schema_version) is not int or schema_version != descriptor["schema_update"]["target_version"] or not re.fullmatch(r"[0-9a-f]{64}", shape) or len(previous_alternates) > 4 or any(not re.fullmatch(r"[0-9a-f]{64}", item) for item in previous_alternates):
+                raise ValueError("target lineage mismatch")
+        except (subprocess.CalledProcessError, SyntaxError, ValueError, KeyError, TypeError):
+            fail("managed release lineage must match its immutable tagged schema target")
+    lineage["tag_commits"][version] = tagged
+    lineage["schema_versions"][version] = schema_version
+    lineage["shape_fingerprints"][version] = shape
     if previous_alternates:
         lineage["shape_alternates"][version] = list(
             previous_alternates

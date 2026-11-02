@@ -182,6 +182,33 @@ The updater prepares validated product source and exact immutable images in a ne
 
 The updater must not run `down -v`, `docker system prune`, delete Docker volumes, regenerate secrets, change the selected storage path, or create users/settings. Schema work is admitted only through the explicit migration gate and durable writer-isolation contract; it is not an implicit side effect of copying source files.
 
+Release descriptors distinguish a managed schema update from an out-of-band migration.
+`schema_update: {"mode": "managed", "target_version": N}` declares that the target's
+registered migration pipeline owns the database change. For these releases the legacy
+`requires_migration` flag is `false`: that flag means a migration outside the automatic
+pipeline is required, and published older clients block it before apply can start.
+The managed declaration does not authorize arbitrary SQL or bypass source lineage,
+exact schema verification, registered-plan checks, writer isolation or recovery receipts.
+`requires_backup` and `requires_manual_action` remain independent blocking conditions.
+
+Physical schema revision and runtime read/write compatibility are separate.
+Future migrations must explicitly declare the oldest prepared reader/writer
+contract they preserve; an additive risk label alone is not permission to run
+old code against a new database. Before changing the database, the updater
+verifies compatibility-protocol support on the exact immutable previous API
+image. After successful migration and exact target verification, a signed
+certificate in existing schema metadata binds the actual revision, shape,
+immutable history and completed migration control state. A prepared older
+runtime verifies that evidence on rollback, keeps the true newer revision and
+does not run DDL or downgrade history. Unknown drift, incomplete migrations,
+missing evidence and incompatible changes remain blocked. Breaking changes
+require a compatible expand/contract transition or a separately verified data
+recovery plan; changing a version number is not such a plan.
+
+The preparatory 0.8.23 release keeps physical schema 9. Install this release
+before a later release first relies on the new compatibility protocol. This is
+normal product update behavior, not a development-only bypass or manual overlay.
+
 If target health or release identity fails, activation returns to the exact captured previous slot without claiming a database rollback. The durable activation journal and stable bootstrap converge the same target/previous decision after helper, container, Docker daemon, or host restart. A missing or corrupt `active` pointer is repaired only from verified terminal journal evidence; nonterminal or contradictory evidence fails closed and delegates to the existing convergence owner instead of executing root source.
 
 The read-only update status and release manifest check API is available through protected owner/admin endpoints. The in-app apply helper uses the same bounded update mechanism and must pin apply to trusted release evidence. Public available-update discovery prefers semantic Git tags and resolves the tag to immutable commit evidence before enabling apply. If GitHub, tags, release metadata or commit evidence are unavailable, update apply remains disabled and the status/check response reports a sanitized provider warning.
@@ -199,6 +226,11 @@ sh scripts/km-vms-release-cycle.sh --print-github-release-commands --version 0.8
 ```
 
 The helper validates version consistency across API, web package files and `release/km-vms-release.json`, and rejects patch values above `29`. It also validates that the descriptor uses the Stage 6.1.3 evidence model: the public release tag `vX.Y.Z` resolves to the immutable commit SHA. The descriptor in the repository is allowed to have `commit_sha: null` because the trusted commit evidence for normal releases is derived from the immutable semver tag. If `commit_sha` is present, it must match the resolved tag commit.
+
+When preparing the next release after a managed schema update, the helper records
+the previous release's actual schema version and exact target fingerprints from its
+immutable Git tag. It does not copy the older schema family or read those values
+from dirty next-version source. Missing or conflicting tagged evidence blocks preparation.
 
 `--prepare-version` deliberately clears the previous release `title`, `summary`, `changelog` and localized note maps. Before `--check` can pass for the new version, write new plain `title`/`summary` plus complete `title_i18n` and `summary_i18n` maps for exactly `en`, `ru` and `zh-CN`. `changelog_i18n` is optional, but when present it must contain all three locale lists. Plain text remains the backward-compatible/GitHub source; installed identities copy only note fields that actually exist and never invent a generic English description.
 

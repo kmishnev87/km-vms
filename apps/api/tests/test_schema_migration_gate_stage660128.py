@@ -41,7 +41,7 @@ def test_published_universal_schema_v8_fingerprint_is_immutable() -> None:
     )
 
 
-def test_current_schema_v9_accepts_only_verified_exact_shapes(
+def test_current_schema_accepts_only_verified_exact_shapes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for fingerprint in control.TARGET_SHAPE_FINGERPRINTS:
@@ -65,15 +65,15 @@ def test_current_schema_v9_accepts_only_verified_exact_shapes(
     assert control.target_shape_is_exact(object()) == (False, unknown)
 
 
-def test_schema_v9_exact_fingerprints_match_three_validated_paths() -> None:
+def test_preparatory_release_keeps_published_v9_exact_shape_family() -> None:
     assert control.TARGET_SHAPE_FINGERPRINTS == {
         "ecc7ccf61e781477ceec853414d0b4ff90da7f45b4a73052885db4a57093fdcb",
-        "5a0e8ab16dc61c99ed6a5842d54d4e6a0599bfcdaf7e03a24b30c51316060c7e",
         "16c571428596280b75779606006b2871af828b9d634c6a9faee6c41701892477",
+        "5a0e8ab16dc61c99ed6a5842d54d4e6a0599bfcdaf7e03a24b30c51316060c7e",
     }
 
 
-def test_same_target_lineage_includes_verified_schema_v9_shapes(
+def test_same_target_lineage_includes_verified_current_shapes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -219,6 +219,7 @@ def test_safe_backup_failure_retries_without_duplicate_mutation(
         "source_schema_version": 1,
         "target_schema_version": control.TARGET_SCHEMA_VERSION,
         "migration_required": True,
+        "previous_runtime_compatibility": {"status": "compatible"},
         "migration_count": len(PRODUCTION_MIGRATIONS.migrations),
         "migration_ids": [
             migration.migration_id
@@ -315,6 +316,7 @@ def test_failure_before_first_real_mutation_keeps_marker_false(
         "source_schema_version": 1,
         "target_schema_version": control.TARGET_SCHEMA_VERSION,
         "migration_required": True,
+        "previous_runtime_compatibility": {"status": "compatible"},
         "migration_count": len(PRODUCTION_MIGRATIONS.migrations),
         "migration_ids": [
             migration.migration_id
@@ -1010,13 +1012,7 @@ def test_declared_v0724_shape_alternate_is_a_bounded_source_variant(
         7,
         alternate,
     )
-    assert control.SOURCE_SHAPE_FINGERPRINT_ALTERNATES == {
-        "0.7.24": frozenset(
-            {
-                alternate
-            }
-        )
-    }
+    assert control.SOURCE_SHAPE_FINGERPRINT_ALTERNATES["0.7.24"] == frozenset({alternate})
 
 
 def test_unknown_v0724_shape_remains_blocked(

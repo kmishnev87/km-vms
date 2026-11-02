@@ -19,6 +19,13 @@ from app.services import (
 ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.fixture(autouse=True)
+def known_schema_for_authority_state_machine_stubs(monkeypatch):
+    # These tests intentionally use object() instead of a database. Real
+    # future-schema verification is exercised separately against PostgreSQL.
+    monkeypatch.setattr(control, "forward_runtime_startup_noop", lambda _db: False)
+
+
 def _authority(**overrides: bool) -> dict[str, bool]:
     result = {
         "request": False,

@@ -1,66 +1,58 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.22",
-  "tag": "v0.8.22",
-  "title": "Simpler camera setup and editing",
-  "summary": "Guided ONVIF and RTSP camera setup, clear stream assignments and direct editing without repeating unchanged checks.",
+  "version": "0.8.23",
+  "tag": "v0.8.23",
+  "title": "Prepared database evolution",
+  "summary": "Prepare safe automatic database changes and verified return to the previous compatible runtime.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.22",
+  "source_ref": "v0.8.23",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
   "requires_backup": false,
   "requires_manual_action": false,
   "requires_migration": false,
+  "schema_update": {
+    "mode": "managed",
+    "target_version": 9
+  },
   "changelog": [
-    "Add cameras in three steps: connection and image, video and recording, review and save.",
-    "Edit connection, video and recording independently while preserving saved credentials and offline settings.",
-    "Keep exact Main/Sub checks, ignore stale replies and separate verified device changes from KM VMS recording rules.",
-    "Recommend streams within each lens and keep temporary test images separate from saved camera images.",
-    "Load lens images and check selected streams automatically, with two direct purpose selectors and a stable dialog layout.",
-    "Read characteristics for every discovered stream automatically and show selected stream details without truncation.",
-    "Keep normal recording startup neutral, refresh status on camera and live transitions, and show named recording causes without mislabeling live faults."
+    "Separate the physical database revision from explicit reader and writer compatibility.",
+    "Verify the previous API image capability before relying on it for rollback after a compatible migration.",
+    "Bind compatibility to the verified database shape, immutable history and completed migration evidence.",
+    "Keep database schema 9 and existing recording behavior unchanged in this preparatory release."
   ],
   "title_i18n": {
-    "en": "Simpler camera setup and editing",
-    "ru": "Понятное добавление и редактирование камер",
-    "zh-CN": "更清晰的摄像机添加与编辑"
+    "en": "Prepared database evolution",
+    "ru": "Подготовка безопасных изменений базы",
+    "zh-CN": "准备安全的数据库演进"
   },
   "summary_i18n": {
-    "en": "Guided ONVIF and RTSP camera setup, clear stream assignments and direct editing without repeating unchanged checks.",
-    "ru": "Пошаговое подключение ONVIF и RTSP, понятный выбор потоков и прямое редактирование без повторения неизменившихся проверок.",
-    "zh-CN": "引导式 ONVIF 与 RTSP 摄像机设置、清晰的码流用途，以及无需重复检查未改连接的直接编辑。"
+    "en": "Prepare safe automatic database changes and verified return to the previous compatible runtime.",
+    "ru": "Подготовка автоматических изменений базы и проверенного возврата к предыдущей совместимой программе.",
+    "zh-CN": "准备自动数据库变更，并验证可安全回退至兼容的旧版程序。"
   },
   "changelog_i18n": {
     "en": [
-      "Add cameras in three steps: connection and image, video and recording, review and save.",
-      "Edit connection, video and recording independently while preserving saved credentials and offline settings.",
-      "Keep exact Main/Sub checks, ignore stale replies and separate verified device changes from KM VMS recording rules.",
-      "Recommend streams within each lens and keep temporary test images separate from saved camera images.",
-      "Load lens images and check selected streams automatically, with two direct purpose selectors and a stable dialog layout.",
-      "Read characteristics for every discovered stream automatically and show selected stream details without truncation.",
-      "Keep normal recording startup neutral, refresh status on camera and live transitions, and show named recording causes without mislabeling live faults."
+      "Separate the physical database revision from explicit reader and writer compatibility.",
+      "Verify the previous API image capability before relying on it for rollback after a compatible migration.",
+      "Bind compatibility to the verified database shape, immutable history and completed migration evidence.",
+      "Keep database schema 9 and existing recording behavior unchanged in this preparatory release."
     ],
     "ru": [
-      "Добавление в три шага: подключение и изображение, видео и запись, проверка и сохранение.",
-      "Отдельное редактирование подключения, видео и записи с сохранением пароля и настроек недоступной камеры.",
-      "Точные проверки Main/Sub, игнорирование устаревших ответов и отдельное применение настроек устройства с проверкой результата.",
-      "Подбор потоков внутри выбранного объектива и отдельные временные кадры, не меняющие сохранённую картинку камеры.",
-      "Автоматическая загрузка объективов и проверка выбранных потоков, два прямых выбора назначения и стабильное окно без скачков.",
-      "Автоматическое чтение характеристик всех найденных потоков и полный текст выбранного потока без обрезания.",
-      "Обычный запуск записи без ложных тревог, обновление предупреждений при смене состояния и конкретные причины с именами камер, отдельно от ошибок онлайн."
+      "Физический номер схемы отделён от явно заявленной совместимости чтения и записи.",
+      "Перед совместимой миграцией проверяется, что предыдущий образ API умеет безопасно работать после возврата.",
+      "Совместимость подтверждается составом базы, неизменной историей и завершённой миграцией.",
+      "Подготовительный выпуск сохраняет схему 9 и прежнее поведение записи без новых полей настроек."
     ],
     "zh-CN": [
-      "分三步添加摄像机：连接与图像、视频与录像、确认并保存。",
-      "分别编辑连接、视频和录像，保留已保存的密码及离线摄像机设置。",
-      "精确检查主码流与子码流，忽略过期响应，并将验证后的设备更改与 KM VMS 录像规则分开。",
-      "按镜头推荐码流，将临时测试画面与已保存的摄像机图像分开。",
-      "自动加载镜头画面并检查所选码流，通过两个用途选项完成设置，弹窗布局保持稳定。",
-      "自动读取所有已发现码流的参数，并完整显示所选码流的信息。",
-      "正常启动录像不再误报，摄像机及实时视频状态变化时及时刷新告警，按摄像机显示录像原因并区分实时视频故障。"
+      "将物理架构版本与明确声明的读写兼容性分开。",
+      "兼容迁移前验证旧版 API 镜像是否具备安全回退能力。",
+      "兼容性凭据绑定已验证的数据库结构、不可变历史和已完成迁移。",
+      "此准备版本保留架构 9 和原有录像行为，不增加设置字段。"
     ]
   }
 }

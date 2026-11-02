@@ -3134,6 +3134,7 @@ def run_target_schema_preflight(
     target_slot_id: str,
     *,
     engine: Any,
+    previous_slot_id: str | None = None,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(
         prefix="km-vms-slot-schema-preflight-",
@@ -3212,6 +3213,24 @@ def run_target_schema_preflight(
             "schema_previous_runtime_incompatible",
             "Automatic application rollback is not compatible with the planned schema path.",
         )
+    required_protocol = compatibility.get("required_previous_runtime_protocol", 0)
+    if type(required_protocol) is not int or required_protocol not in {0, 1}:
+        raise BridgeError("schema_preflight_evidence_invalid", "Unknown schema runtime compatibility protocol.")
+    if required_protocol:
+        if not previous_slot_id:
+            raise BridgeError("schema_previous_runtime_protocol_missing", "Previous runtime capability must be verified before database changes.")
+        _previous_root, _previous_source, previous_manifest = slot_record(app_dir, previous_slot_id, engine=engine)
+        image = previous_manifest.get("image_evidence", {}).get("services", {}).get("api", {}).get("image_id", "")
+        if not IMAGE_ID_RE.fullmatch(image):
+            raise BridgeError("schema_previous_runtime_protocol_missing", "Previous API image identity is missing.")
+        inspected = run_command(
+            ["docker", "image", "inspect", image, "--format", '{{ index .Config.Labels "org.km-vms.schema-runtime-compatibility" }}'],
+            timeout=30,
+            error_code="schema_previous_runtime_protocol_missing",
+            error_message="Previous runtime compatibility capability could not be verified.",
+        )
+        if inspected.stdout.strip() != str(required_protocol):
+            raise BridgeError("schema_previous_runtime_protocol_missing", "Install the preparatory runtime before this schema-changing release.")
     compatibility_sha256 = hashlib.sha256(
         json.dumps(
             summary,
@@ -4266,6 +4285,7 @@ def _activate_or_resume(args: argparse.Namespace) -> int:
             project_name,
             target_slot_id,
             engine=engine,
+            previous_slot_id=previous_slot_id,
         )
         write_activation_progress(
             request_id,

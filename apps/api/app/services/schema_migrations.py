@@ -83,6 +83,7 @@ class MigrationDefinition:
     safe_failure_summary: str
     rollback_note: str
     definition_material: dict[str, Any] | None = None
+    runtime_compatibility_floor: int | None = None
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{2,99}", self.migration_id):
@@ -91,6 +92,11 @@ class MigrationDefinition:
             raise MigrationRegistryError("migration to_version must be greater than from_version")
         if self.risk not in SUPPORTED_RISKS:
             raise MigrationRegistryError(f"unsupported migration risk: {self.risk}")
+        if self.runtime_compatibility_floor is not None and (
+            type(self.runtime_compatibility_floor) is not int
+            or not 9 <= self.runtime_compatibility_floor <= self.from_version
+        ):
+            raise MigrationRegistryError("runtime compatibility requires an explicit prepared reader/writer floor")
 
 
 @dataclass(frozen=True)
@@ -1701,6 +1707,9 @@ def migration_definition_fingerprint(migration: MigrationDefinition) -> str:
             for callback in (migration.preflight, migration.apply, migration.verify)
         ],
     }
+    # Preserve every already-published definition fingerprint byte for byte.
+    if migration.runtime_compatibility_floor is not None:
+        payload["runtime_compatibility_floor"] = migration.runtime_compatibility_floor
     rendered = json.dumps(
         payload,
         sort_keys=True,
@@ -2017,9 +2026,10 @@ def _stage13721_camera_sub_profile_verify(db: Session) -> dict[str, Any]:
 
 def validate_current_target_schema(db: Session) -> dict[str, Any]:
     state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+    from app.services.schema_runtime_compatibility import supports_future_schema
     if (
         state is None
-        or state.schema_version != CURRENT_SCHEMA_VERSION
+        or (state.schema_version != CURRENT_SCHEMA_VERSION and not supports_future_schema(db, state, CURRENT_SCHEMA_VERSION))
         or state.baseline_id != CURRENT_BASELINE_ID
         or state.status not in SAFE_STATUSES
     ):
@@ -2051,6 +2061,8 @@ STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION = MigrationDefinition(
         "existing_rows_preserved": True,
     },
 )
+
+
 
 
 PRODUCTION_MIGRATIONS = MigrationRegistry(
@@ -2167,7 +2179,9 @@ def _raw_current_state_for_plan(db: Session) -> tuple[SchemaVersionState | None,
             "summary": "Schema version metadata is not initialized; Stage 3 plan is read-only and will not adopt.",
         }
     if row.schema_version > CURRENT_SCHEMA_VERSION:
-        return row, {"status": "future_version", "summary": "Database schema version is newer than this app supports."}
+        from app.services.schema_runtime_compatibility import supports_future_schema
+        if not supports_future_schema(db, row, CURRENT_SCHEMA_VERSION):
+            return row, {"status": "future_version", "summary": "Database schema version is newer than this app supports."}
     if row.baseline_id != CURRENT_BASELINE_ID or row.status not in SAFE_STATUSES:
         return row, {"status": "unknown", "summary": "Schema version metadata is unknown or malformed."}
     if _current_history_count(db, row) != 1:
@@ -2282,6 +2296,10 @@ def build_migration_plan(
         base.update({"status": "current", "summary": "Schema is current; no pending migrations."})
         return base
     if row.schema_version > target:
+        from app.services.schema_runtime_compatibility import supports_future_schema
+        if target == CURRENT_SCHEMA_VERSION and supports_future_schema(db, row, target):
+            base.update({"status": "current", "runtime_compatibility": "verified", "summary": "Newer physical schema explicitly supports this reader and writer; no schema downgrade is performed."})
+            return base
         base.update(
             {
                 "status": "blocked",

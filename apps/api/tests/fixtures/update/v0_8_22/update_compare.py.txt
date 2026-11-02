@@ -1,0 +1,59 @@
+def _compare(installed: UpdateInstalledState, latest: UpdateManifestSummary) -> tuple[str, list[UpdateBlocker], list[UpdateMetadataWarning]]:
+    blockers: list[UpdateBlocker] = []
+    warnings: list[UpdateMetadataWarning] = []
+    if installed.status in {"installed_identity_drift", "identity_incomplete", "metadata_invalid"}:
+        blockers.append(_blocker(installed.status, "Installed release identity is incomplete or does not match deployed source evidence."))
+        return installed.status, blockers, warnings
+    if installed.installed_commit and latest.commit and installed.installed_commit.lower() == latest.commit.lower():
+        return "current", blockers, warnings
+    if installed.git_head and latest.commit and installed.git_head.lower() == latest.commit.lower() and not installed.installed_commit:
+        blockers.append(_blocker("identity_incomplete", "Deployed source matches the release but installed release identity is missing."))
+        return "identity_incomplete", blockers, warnings
+    if latest.minimum_current_version:
+        current = _semver(installed.installed_version)
+        minimum = _semver(latest.minimum_current_version)
+        if current is None or minimum is None or current < minimum:
+            blockers.append(_blocker("minimum_current_version_not_satisfied", "Installed version does not satisfy the release minimum_current_version."))
+            return "blocked", blockers, warnings
+    if latest.requires_backup:
+        blockers.append(_blocker("requires_backup", "Release requires backup before any future apply."))
+    if latest.requires_manual_action:
+        blockers.append(_blocker("requires_manual_action", "Release requires manual operator action."))
+    if latest.requires_migration:
+        blockers.append(_blocker("requires_migration", "Release requires migration support outside Stage 6.0.8."))
+    if blockers:
+        return "blocked", blockers, warnings
+    ordering = compare_versions(installed.installed_version, latest.version)["ordering"]
+    if ordering == "same_version" and not latest.commit:
+        warnings.append(_warning("commit_evidence_missing", "Version matches but commit evidence is unavailable."))
+        return "current_or_unknown", blockers, warnings
+    if (
+        ordering == "same_version"
+        and latest.commit
+        and installed.identity_validity == "inventory_bound"
+    ):
+        warnings.append(
+            _warning(
+                "inventory_bound_same_version_not_canonicalized",
+                "Inventory-bound source requires a strictly newer trusted release before update apply.",
+            )
+        )
+        return "current_or_unknown", blockers, warnings
+    if ordering == "same_version" and latest.commit:
+        if installed.installed_commit and installed.installed_commit.lower() != latest.commit.lower():
+            blockers.append(_blocker("commit_mismatch", "Installed release commit does not match the same-version release commit."))
+            return "blocked", blockers, warnings
+        blockers.append(_blocker("identity_incomplete", "Same-version release includes commit evidence, but installed release commit evidence is missing."))
+        return "identity_incomplete", blockers, warnings
+    if not latest.commit:
+        blockers.append(_blocker("trusted_commit_missing", "Available release does not include commit evidence required for apply."))
+        if ordering == "newer_available":
+            return "blocked", blockers, warnings
+        return "unknown", blockers, warnings
+    if ordering == "newer_available":
+        return "update_available", blockers, warnings
+    if ordering == "installed_newer_than_channel":
+        blockers.append(_blocker("installed_newer_than_available", "Installed version is newer than available release."))
+        return "installed_newer_than_available", blockers, warnings
+    warnings.append(_warning("comparison_evidence_insufficient", "Installed/latest comparison evidence is insufficient."))
+    return "unknown", blockers, warnings

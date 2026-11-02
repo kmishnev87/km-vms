@@ -26,6 +26,31 @@ SPEC.loader.exec_module(bridge)
 TARGET_COMMIT = "5" * 40
 
 
+@pytest.mark.parametrize("previous_protocol", ["1", "", "2"])
+def test_schema_preflight_requires_capability_of_exact_previous_api_image(tmp_path, monkeypatch, previous_protocol):
+    image = "sha256:" + "d" * 64
+    manifest = {"image_evidence": {"services": {"api": {"image_id": image}}}}
+    monkeypatch.setattr(bridge, "slot_compose", lambda *_a, **_kw: (["compose"], {}, tmp_path, {}))
+    monkeypatch.setattr(bridge, "slot_record", lambda *_a, **_kw: (tmp_path, tmp_path, manifest))
+    summary = {"migration_required": True, "source_schema_version": 9, "target_schema_version": 10,
+        "previous_runtime_compatibility": {"status": "compatible", "required_previous_runtime_protocol": 1}}
+    output = "\n".join(["schema_migration_required=true", "schema_source_version=9", "schema_target_version=10", "schema_previous_runtime_compatible=true", "schema_preflight=" + json.dumps(summary)])
+    commands = []
+    def run(command, **_kwargs):
+        commands.append(command)
+        if command[:3] == ["docker", "image", "inspect"]:
+            assert command[3] == image
+            return SimpleNamespace(stdout=previous_protocol)
+        return SimpleNamespace(stdout=output)
+    monkeypatch.setattr(bridge, "run_command", run)
+    if previous_protocol == "1":
+        assert bridge.run_target_schema_preflight(tmp_path, "fixture", "target", engine=object(), previous_slot_id="previous")["migration_required"] is True
+    else:
+        with pytest.raises(bridge.BridgeError, match="preparatory runtime"):
+            bridge.run_target_schema_preflight(tmp_path, "fixture", "target", engine=object(), previous_slot_id="previous")
+    assert any(command[:3] == ["docker", "image", "inspect"] for command in commands)
+
+
 def test_product_bridge_does_not_ship_engineering_deployment_cli() -> None:
     source = BRIDGE_PATH.read_text(encoding="utf-8")
     assert "prepare-adopted-development" not in source
@@ -750,11 +775,12 @@ def test_bridge_prefers_candidate_lineage_over_stale_installed_cwd(
     assert result.stdout.strip() == lineage["tag_commits"][latest_version]
 
 
-def test_bridge_lineage_accepts_historical_schemas_through_9_and_rejects_10(
+def test_bridge_lineage_accepts_supported_schemas_and_rejects_future(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    versions = [f"0.{schema_version}.0" for schema_version in range(1, 10)]
+    current = bridge.CURRENT_PRODUCT_DB_SCHEMA_VERSION
+    versions = [f"0.{schema_version}.0" for schema_version in range(1, current + 1)]
     lineage = {
         "schema_version": 1,
         "product": "KM VMS",
@@ -777,9 +803,9 @@ def test_bridge_lineage_accepts_historical_schemas_through_9_and_rejects_10(
     monkeypatch.setenv("KMVMS_UPDATE_LINEAGE_FILE", str(lineage_path))
 
     accepted = bridge.load_update_lineage()
-    assert accepted["schema_versions"][versions[-1]] == 9
+    assert accepted["schema_versions"][versions[-1]] == current
 
-    lineage["schema_versions"][versions[-1]] = 10
+    lineage["schema_versions"][versions[-1]] = current + 1
     _write_json(lineage_path, lineage)
     with pytest.raises(RuntimeError, match="update_lineage_entry_invalid"):
         bridge.load_update_lineage()

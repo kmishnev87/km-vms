@@ -402,7 +402,7 @@ def bearer_subject(headers: Any) -> str:
     return subject
 
 
-def validate_failure_contract(payload: dict[str, Any]) -> dict[str, Any]:
+def validate_failure_contract(payload: dict[str, Any], *, expected_schema: int = CURRENT_PRODUCT_DB_SCHEMA_VERSION) -> dict[str, Any]:
     required = {
         "schema_version",
         "request_id",
@@ -474,7 +474,7 @@ def validate_failure_contract(payload: dict[str, Any]) -> dict[str, Any]:
     if (
         type(payload.get("target_schema_version")) is not int
         or payload["target_schema_version"]
-        != CURRENT_PRODUCT_DB_SCHEMA_VERSION
+        != expected_schema
     ):
         raise ContractError("failure_contract_schema_target_invalid")
     for key in ("registry_fingerprint", "plan_fingerprint"):
@@ -585,7 +585,7 @@ def validate_stage_receipt(
     if (
         type(payload.get("target_schema_version")) is not int
         or payload["target_schema_version"]
-        != CURRENT_PRODUCT_DB_SCHEMA_VERSION
+        != auth.get("target_schema_version", CURRENT_PRODUCT_DB_SCHEMA_VERSION)
     ):
         raise ContractError("stage_receipt_schema_target_invalid")
     for key in (
@@ -758,11 +758,13 @@ def controller_contract() -> dict[str, Any] | None:
         "fencing_generation",
     }
     if (
-        set(auth) != expected_auth
+        set(auth) not in (expected_auth, expected_auth | {"target_schema_version"})
         or type(auth.get("schema_version")) is not int
         or auth["schema_version"] != 1
     ):
         raise ContractError("auth_snapshot_fields_invalid")
+    if "target_schema_version" in auth and (type(auth["target_schema_version"]) is not int or not 1 <= auth["target_schema_version"] <= 2147483647):
+        raise ContractError("auth_snapshot_schema_target_invalid")
     request_id = exact_string(
         auth.get("request_id"),
         code="auth_snapshot_identity_invalid",
@@ -993,7 +995,7 @@ def controller_contract() -> dict[str, Any] | None:
         "summary": summary,
         "operator_action": operator_action,
     }
-    return validate_failure_contract(payload)
+    return validate_failure_contract(payload, expected_schema=auth.get("target_schema_version", CURRENT_PRODUCT_DB_SCHEMA_VERSION))
 
 
 def controller_loop() -> None:
@@ -1118,7 +1120,13 @@ def legacy_apply_payload(contract: dict[str, Any]) -> dict[str, Any]:
 def active_contract(headers: Any) -> tuple[dict[str, Any], str]:
     contract = read_signed(FAILURE_PLANE)
     assert contract is not None
-    contract = validate_failure_contract(contract)
+    auth = read_signed(AUTH_SNAPSHOT)
+    if auth is None or any(contract.get(key) != auth.get(key) for key in ("request_id", "target_version", "target_commit", "fencing_generation", "actor_subject")):
+        raise ContractError("failure_contract_auth_binding_invalid")
+    expected_schema = auth.get("target_schema_version", CURRENT_PRODUCT_DB_SCHEMA_VERSION)
+    if type(expected_schema) is not int or not 1 <= expected_schema <= 2147483647:
+        raise ContractError("auth_snapshot_schema_target_invalid")
+    contract = validate_failure_contract(contract, expected_schema=expected_schema)
     subject = bearer_subject(headers)
     if subject != contract["actor_subject"]:
         raise ContractError("foreign_actor_forbidden")
@@ -1271,7 +1279,7 @@ def create_retry(contract: dict[str, Any], subject: str, body: dict[str, Any]) -
             or not re.fullmatch(r"[0-9a-f]{40}", prior_target_commit)
             or type(prior.get("target_schema_version")) is not int
             or prior["target_schema_version"]
-            != CURRENT_PRODUCT_DB_SCHEMA_VERSION
+            != contract["target_schema_version"]
             or type(prior.get("fencing_generation")) is not int
             or prior["fencing_generation"] < 0
             or type(prior.get("retry_request")) is not dict

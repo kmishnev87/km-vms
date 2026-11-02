@@ -6,6 +6,10 @@ ENV TZ=Asia/Yekaterinburg
 
 WORKDIR /app
 
+# Bound to the immutable API image; the updater checks this before a compatible
+# forward migration can rely on this runtime for automatic application rollback.
+LABEL org.km-vms.schema-runtime-compatibility="1"
+
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \

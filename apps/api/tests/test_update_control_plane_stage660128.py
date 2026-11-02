@@ -112,7 +112,7 @@ def _stage(state: str, *, retryable: bool = False) -> dict:
         "admission_attempt_id": ATTEMPT_ID,
         "target_version": "0.7.25",
         "target_commit": TARGET_COMMIT,
-        "target_schema_version": 9,
+        "target_schema_version": control.CURRENT_PRODUCT_DB_SCHEMA_VERSION,
         "registry_fingerprint": REGISTRY,
         "plan_fingerprint": PLAN,
         "fencing_generation": 1,
@@ -139,7 +139,7 @@ def _bootstrap() -> dict:
         "admission_attempt_id": ATTEMPT_ID,
         "target_release": "0.7.25",
         "target_commit": TARGET_COMMIT,
-        "target_schema_version": 9,
+        "target_schema_version": control.CURRENT_PRODUCT_DB_SCHEMA_VERSION,
         "installed_version": "0.7.18",
         "installed_commit": "a" * 40,
         "source_schema_version": 1,
@@ -205,8 +205,24 @@ def _failed_contract(tmp_path: Path) -> dict:
     _write_json(control.HELPER_STATUS, _helper("failed"))
     contract = control.controller_contract()
     assert contract is not None
-    assert contract["target_schema_version"] == 9
+    assert contract["target_schema_version"] == control.CURRENT_PRODUCT_DB_SCHEMA_VERSION
     return contract
+
+
+def test_prepared_controller_tracks_only_the_schema_bound_by_signed_authority(tmp_path):
+    _arrange_retryable_gate_failure(tmp_path)
+    future = control.CURRENT_PRODUCT_DB_SCHEMA_VERSION + 1
+    auth = {**_auth(), "target_schema_version": future}
+    _write_signed(control.AUTH_SNAPSHOT, auth)
+    for path, state in ((control.PREPARATION_RECEIPT, "completed"), (control.RECOVERY_RECEIPT, "completed"), (control.GATE_RECEIPT, "failed")):
+        _write_signed(path, {**_stage(state, retryable=state == "failed"), "target_schema_version": future})
+    _write_signed(control.BOOTSTRAP_RECEIPT, {**_bootstrap(), "target_schema_version": future})
+    _write_json(control.HELPER_STATUS, _helper("failed"))
+    assert control.controller_contract()["target_schema_version"] == future
+    wrong = {**_stage("completed"), "target_schema_version": future + 1}
+    _write_signed(control.PREPARATION_RECEIPT, wrong)
+    with pytest.raises(control.ContractError, match="stage_receipt_schema_target_invalid"):
+        control.controller_contract()
 
 
 def test_stage_failure_remains_publicly_nonterminal_until_helper_stops(
@@ -247,7 +263,7 @@ def test_exact_retryable_failure_publishes_after_helper_stops(
     assert apply_payload["retryable"] is True
 
 
-@pytest.mark.parametrize("schema_version", (8, 10))
+@pytest.mark.parametrize("schema_version", (control.CURRENT_PRODUCT_DB_SCHEMA_VERSION - 1, control.CURRENT_PRODUCT_DB_SCHEMA_VERSION + 1))
 def test_failure_and_stage_contracts_reject_non_current_schema(
     tmp_path: Path,
     schema_version: int,
@@ -307,10 +323,10 @@ def test_schema9_retry_admission_reconciles_idempotent_replay(
         required=True,
     )
     assert admission is not None
-    assert admission["target_schema_version"] == 9
+    assert admission["target_schema_version"] == control.CURRENT_PRODUCT_DB_SCHEMA_VERSION
 
 
-@pytest.mark.parametrize("schema_version", (8, 10))
+@pytest.mark.parametrize("schema_version", (control.CURRENT_PRODUCT_DB_SCHEMA_VERSION - 1, control.CURRENT_PRODUCT_DB_SCHEMA_VERSION + 1))
 def test_retry_admission_rejects_persisted_non_current_schema(
     tmp_path: Path,
     schema_version: int,
@@ -441,4 +457,4 @@ def test_current_product_schema_is_synchronized_across_active_consumers() -> Non
         assert match is not None, name
         versions[name] = int(match.group(1))
 
-    assert versions == {name: 9 for name in consumers}
+    assert versions == {name: control.CURRENT_PRODUCT_DB_SCHEMA_VERSION for name in consumers}

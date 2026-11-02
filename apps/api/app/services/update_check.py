@@ -131,6 +131,7 @@ class UpdateManifestSummary:
     source_repo: str | None
     source_ref: str | None
     breaking_changes: list[str] = field(default_factory=list)
+    schema_update: dict[str, Any] | None = None
 
 
 @dataclass
@@ -715,6 +716,29 @@ def _manifest_text(payload: dict[str, Any], key: str, *, required: bool = False,
     return value
 
 
+def _schema_update_contract(payload: dict[str, Any]) -> dict[str, Any] | None:
+    """Managed migration is done by the target pipeline, not out-of-band.
+
+    Keep requires_migration as the legacy out-of-band blocker: published older
+    clients cannot enter the existing managed pipeline if that flag is true.
+    This metadata never grants schema admission; the target still verifies the
+    source lineage, exact shape, registered plan, authorization and receipts.
+    """
+    value = payload.get("schema_update")
+    if value is None:
+        return None
+    if (
+        type(value) is not dict
+        or set(value) != {"mode", "target_version"}
+        or value.get("mode") != "managed"
+        or type(value.get("target_version")) is not int
+        or value["target_version"] < 1
+        or payload.get("requires_migration") is not False
+    ):
+        raise UpdateCheckBlocked("check_failed", {"summary": "Managed schema update contract is invalid.", "error_category": "manifest_schema_invalid"})
+    return {"mode": "managed", "target_version": value["target_version"]}
+
+
 def _normalize_manifest(payload: dict[str, Any]) -> UpdateManifestSummary:
     if payload.get("schema_version") != 1:
         raise UpdateCheckBlocked("check_failed", {"summary": "Release manifest schema_version is unsupported.", "error_category": "manifest_schema_invalid"})
@@ -780,6 +804,7 @@ def _normalize_manifest(payload: dict[str, Any]) -> UpdateManifestSummary:
         source_type=source_type,
         source_repo=source_repo,
         source_ref=source_ref,
+        schema_update=_schema_update_contract(payload),
         breaking_changes=_release_changelog(
             payload.get("breaking_changes"),
             field_name="breaking_changes",
@@ -1030,6 +1055,7 @@ def _manifest_from_release_payload(payload: dict[str, Any], *, resolve_commit: b
         "requires_backup": bool(payload.get("requires_backup") is True),
         "requires_manual_action": bool(payload.get("requires_manual_action") is True),
         "requires_migration": bool(payload.get("requires_migration") is True),
+        "schema_update": _schema_update_contract(payload),
         "minimum_current_version": None,
         "artifacts": {"source": {"type": "github_tarball", "repo": source_repo, "ref": commit or source_ref}},
     }
@@ -1178,6 +1204,7 @@ def _trusted_apply_snapshot_from_payload(payload: dict[str, Any], *, now: dateti
             "requires_backup": bool(latest.get("requires_backup")),
             "requires_manual_action": bool(latest.get("requires_manual_action")),
             "requires_migration": bool(latest.get("requires_migration")),
+            "schema_update": _schema_update_contract(latest),
             "source_type": source_type,
             "source_repo": source_repo,
             "source_ref": source_ref,
@@ -1408,7 +1435,7 @@ def _compare(installed: UpdateInstalledState, latest: UpdateManifestSummary) -> 
     if latest.requires_manual_action:
         blockers.append(_blocker("requires_manual_action", "Release requires manual operator action."))
     if latest.requires_migration:
-        blockers.append(_blocker("requires_migration", "Release requires migration support outside Stage 6.0.8."))
+        blockers.append(_blocker("requires_migration", "Release requires an out-of-band database migration before automatic update."))
     if blockers:
         return "blocked", blockers, warnings
     ordering = compare_versions(installed.installed_version, latest.version)["ordering"]

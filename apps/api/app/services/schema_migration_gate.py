@@ -645,6 +645,8 @@ def main(
                 generation=generation,
                 state="completed",
             )
+            from app.services.schema_runtime_compatibility import publish_runtime_compatibility
+            publish_runtime_compatibility(db)
             db.commit()
             write_stage_receipt(
                 GATE_RECEIPT_PATH,

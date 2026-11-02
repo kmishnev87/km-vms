@@ -321,11 +321,8 @@ TARGET_SHAPE_FINGERPRINT = (
     "ecc7ccf61e781477ceec853414d0b4ff"
     "90da7f45b4a73052885db4a57093fdcb"
 )
-# Exact, semantically validated schema-v9 shapes obtained by applying only the
-# nullable Camera Sub-profile token migration to each accepted schema-v8 shape:
-# the published canonical target, an evolved installation retaining the
-# harmless retired ``system_name`` column, and the current fresh bootstrap.
-# Unknown fingerprints remain fail-closed.
+# The preparatory release keeps the published schema-v9 shape family unchanged.
+# Unknown target fingerprints remain fail-closed.
 TARGET_SHAPE_FINGERPRINT_ALTERNATES = frozenset(
     {
         "5a0e8ab16dc61c99ed6a5842d54d4e6a"
@@ -1590,10 +1587,9 @@ def _validate_migrated_target_history(
             baseline_count += 1
             if (
                 baseline_count != 1
-                or not re.fullmatch(
-                    r"chapter06_stage4_baseline_schema_v[1-9]",
-                    row.migration_id,
-                )
+                or type(row.schema_version) is not int
+                or not 1 <= row.schema_version <= TARGET_SCHEMA_VERSION
+                or row.migration_id != f"{CURRENT_BASELINE_ID}_schema_v{row.schema_version}"
                 or row.previous_version is not None
                 or row.target_version != row.schema_version
                 or row.status not in SAFE_STATUSES
@@ -1875,7 +1871,13 @@ def validate_exact_target_noop(
     if state.schema_version < TARGET_SCHEMA_VERSION:
         raise SchemaControlError("no_active_schema_below_target")
     if state.schema_version > TARGET_SCHEMA_VERSION:
-        raise SchemaControlError("no_active_schema_future_target")
+        from app.services.schema_runtime_compatibility import validate_runtime_compatibility
+        try:
+            validate_runtime_compatibility(db, state, TARGET_SCHEMA_VERSION)
+            validate_current_target_schema(db)
+        except RuntimeError as exc:
+            raise SchemaControlError("no_active_schema_future_target") from exc
+        return
     if (
         state.baseline_id != CURRENT_BASELINE_ID
         or state.status not in SAFE_STATUSES
@@ -2252,7 +2254,8 @@ def _validate_terminal_auth_snapshot(
         "fencing_generation",
     }
     if (
-        set(payload) != expected
+        set(payload) not in (expected, expected | {"target_schema_version"})
+        or ("target_schema_version" in payload and (type(payload["target_schema_version"]) is not int or payload["target_schema_version"] != TARGET_SCHEMA_VERSION))
         or type(payload.get("schema_version")) is not int
         or payload["schema_version"] != 1
         or payload.get("request_id") != context.request_id
@@ -2504,7 +2507,30 @@ def _validate_completed_terminal_authority(
     return context
 
 
+def forward_runtime_startup_noop(db: Session) -> bool:
+    # A rollback starts the prepared previous image against a newer *physical*
+    # schema. It must not reinterpret the newer request with its older registry
+    # or attempt a downgrade. Signed evidence binds completed DDL/history/shape.
+    if inspect(db.connection()).has_table("schema_version_state"):
+        state = db.get(SchemaVersionState, CURRENT_STATE_ID)
+        if state is not None and state.schema_version > TARGET_SCHEMA_VERSION:
+            validate_exact_target_noop(db)
+            control = _schema_control_row_for_execution(db)
+            status = _read_update_status_for_execution()
+            if control is not None:
+                if (control.state != "completed" or status is None
+                    or status.get("status") not in {"completed", "rolling_back", "failed_rolled_back"}
+                    or status.get("request_id") != control.request_id):
+                    raise SchemaControlError("forward_runtime_startup_authority_invalid")
+            elif status is not None and not _is_exact_unbound_status_sentinel(status):
+                raise SchemaControlError("forward_runtime_startup_authority_invalid")
+            return True
+    return False
+
+
 def resolve_schema_execution_mode(db: Session) -> str:
+    if forward_runtime_startup_noop(db):
+        return "exact_target_noop"
     status_observation = _observe_update_status_for_execution()
     authority = schema_execution_authority_presence()
     request = authority["request"]
@@ -3800,6 +3826,7 @@ def write_auth_snapshot(
             "request_id": context.request_id,
             "target_version": context.target_release,
             "target_commit": context.target_commit,
+            "target_schema_version": TARGET_SCHEMA_VERSION,
             "actor_subject": actor_subject,
             "actor_user_id": str(actor_user_id),
             "actor_role": actor_role,

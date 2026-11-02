@@ -39,6 +39,10 @@ def init_db() -> None:
             )
     with Session(engine) as db:
         validate_current_target_schema(db)
+        if fresh_install and engine.dialect.name == "postgresql":
+            from app.services.schema_runtime_compatibility import publish_runtime_compatibility
+            publish_runtime_compatibility(db)
+            db.commit()
     post_bootstrap_shape = inspect_schema_shape(engine)
     if (
         not fresh_install

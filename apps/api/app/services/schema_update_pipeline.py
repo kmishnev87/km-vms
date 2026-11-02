@@ -49,10 +49,13 @@ PREVIOUS_RUNTIME_COMPATIBLE_MIGRATION_IDS = frozenset(
 
 
 def _migration_summary(pending: list[Any]) -> dict[str, Any]:
+    from app.services.schema_runtime_compatibility import migration_compatibility_floor
     migration_ids = [migration.migration_id for migration in pending]
-    incompatible = sorted(
-        set(migration_ids) - PREVIOUS_RUNTIME_COMPATIBLE_MIGRATION_IDS
-    )
+    source = pending[0].from_version if pending else TARGET_SCHEMA_VERSION
+    declared = [item for item in pending if migration_compatibility_floor(item) is not None]
+    incompatible = sorted(item.migration_id for item in pending if
+        item.migration_id not in PREVIOUS_RUNTIME_COMPATIBLE_MIGRATION_IDS
+        and (migration_compatibility_floor(item) is None or migration_compatibility_floor(item) > source))
     return {
         "source_schema_version": (
             pending[0].from_version
@@ -65,7 +68,8 @@ def _migration_summary(pending: list[Any]) -> dict[str, Any]:
         "migration_ids": migration_ids,
         "previous_runtime_compatibility": {
             "status": "compatible" if not incompatible else "blocked",
-            "evidence_model": "explicit_migration_allowlist_v1",
+            "evidence_model": "declared_read_write_contract_v1" if declared else "explicit_migration_allowlist_v1",
+            "required_previous_runtime_protocol": 1 if declared else 0,
             "compatible_migration_ids": sorted(
                 set(migration_ids) - set(incompatible)
             ),
@@ -198,6 +202,8 @@ def run_update_migration() -> None:
         lock_backend_pid = acquire_schema_lock(lock_db)
         try:
             context, summary = read_only_update_preflight(lock_db)
+            if summary["previous_runtime_compatibility"]["status"] != "compatible":
+                raise RuntimeError("schema_previous_runtime_incompatible")
             if not summary["migration_required"]:
                 print("schema_migration_required=false")
                 return

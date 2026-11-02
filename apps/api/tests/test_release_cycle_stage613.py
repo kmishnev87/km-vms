@@ -95,13 +95,19 @@ def test_stage613_release_cycle_script_check_and_dry_run_do_not_modify_files(tmp
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        check=True,
+        check=False,
     )
 
     assert "release-cycle check PASS" in check.stdout
-    assert f"DRY-RUN: would register current schema-equivalent release {current}" in dry_run.stdout
-    assert f"DRY-RUN: would prepare release version {target}" in dry_run.stdout
-    assert "would invalidate title, summary, changelog and localized release notes" in dry_run.stdout
+    tagged = subprocess.run(["git", "rev-parse", "--verify", f"refs/tags/v{current}^{{commit}}"], cwd=ROOT, capture_output=True).returncode == 0
+    if tagged:
+        assert dry_run.returncode == 0, dry_run.stderr
+        assert f"DRY-RUN: would register current schema-equivalent release {current}" in dry_run.stdout
+        assert f"DRY-RUN: would prepare release version {target}" in dry_run.stdout
+        assert "would invalidate title, summary, changelog and localized release notes" in dry_run.stdout
+    else:
+        assert dry_run.returncode != 0
+        assert f"immediate previous public release tag is missing: v{current}" in dry_run.stderr
     assert before == {path: path.read_bytes() for path in tracked}
 
 
@@ -292,7 +298,10 @@ def test_stage1379_prepare_invalidates_old_notes_until_new_payload_is_written(
         )
     )
     latest = list(rejected_lineage["schema_versions"])[-1]
-    rejected_lineage["schema_versions"][latest] = 10
+    script_text = script.read_text(encoding="utf-8")
+    import re
+    supported_schema = int(re.search(r"CURRENT_PRODUCT_DB_SCHEMA_VERSION = (\d+)", script_text).group(1))
+    rejected_lineage["schema_versions"][latest] = supported_schema + 1
     (tmp_path / "release/km-vms-update-lineage.json").write_text(
         json.dumps(rejected_lineage),
         encoding="utf-8",

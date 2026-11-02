@@ -664,16 +664,18 @@ def test_schema_failure_restores_previous_runtime_before_blocking(
 def test_current_canonical_schema_paths_keep_previous_runtime_compatible() -> None:
     migrations = list(PRODUCTION_MIGRATIONS.migrations)
     assert {
-        migration.migration_id for migration in migrations
+        migration.migration_id for migration in migrations if migration.runtime_compatibility_floor is None
     }.issubset(
         schema_update_pipeline.PREVIOUS_RUNTIME_COMPATIBLE_MIGRATION_IDS
     )
-    summary = schema_update_pipeline._migration_summary(migrations)
+    legacy = [migration for migration in migrations if migration.runtime_compatibility_floor is None]
+    summary = schema_update_pipeline._migration_summary(legacy)
     assert summary["previous_runtime_compatibility"] == {
         "status": "compatible",
         "evidence_model": "explicit_migration_allowlist_v1",
+        "required_previous_runtime_protocol": 0,
         "compatible_migration_ids": sorted(
-            migration.migration_id for migration in migrations
+            migration.migration_id for migration in legacy
         ),
         "unsupported_migration_ids": [],
     }

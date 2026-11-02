@@ -369,6 +369,9 @@ def _status_with_history_consistency(db: Session, row: SchemaVersionState | None
     if row.status == "adoption_failed":
         return _blocked_status(row, "adoption_failed", "Schema adoption is incomplete or failed.")
     if row.schema_version > CURRENT_SCHEMA_VERSION:
+        from app.services.schema_runtime_compatibility import supports_future_schema
+        if supports_future_schema(db, row, CURRENT_SCHEMA_VERSION):
+            return {**_status_payload(row), "managed": True, "status": "current", "runtime_compatibility": "verified", "runtime_schema_version": CURRENT_SCHEMA_VERSION, "manual_review_required": False}
         return _blocked_status(row, "future_version", "Database schema version is newer than this application supports.")
     if row.schema_version < CURRENT_SCHEMA_VERSION:
         return _blocked_status(row, "downgrade_blocked", "Stage 3 deterministic migration runner is required for lower schema versions.")
@@ -403,7 +406,8 @@ def validate_schema_version_pre_bootstrap(bind, pre_bootstrap_shape: SchemaShape
             if status["status"] == METADATA_INCOMPLETE_STATUS:
                 raise SchemaVersionBlocked(METADATA_INCOMPLETE_STATUS, status)
             if row.schema_version > CURRENT_SCHEMA_VERSION:
-                raise SchemaVersionBlocked("future_version", _status_payload(row))
+                if status.get("runtime_compatibility") != "verified":
+                    raise SchemaVersionBlocked("future_version", _status_payload(row))
             if row.schema_version < CURRENT_SCHEMA_VERSION:
                 raise SchemaVersionBlocked("downgrade_blocked", _status_payload(row))
             if row.baseline_id != CURRENT_BASELINE_ID or row.status not in SAFE_STATUSES:
@@ -437,6 +441,9 @@ def ensure_schema_version_state(db: Session, pre_bootstrap_shape: SchemaShape | 
             payload = _status_payload(row)
             raise SchemaVersionBlocked("adoption_failed", {**payload, "summary": "Previous adoption failed or is incomplete."})
         if row.schema_version > CURRENT_SCHEMA_VERSION:
+            status = _status_with_history_consistency(db, row)
+            if status.get("runtime_compatibility") == "verified":
+                return status
             raise SchemaVersionBlocked(
                 "future_version",
                 _blocked_status(row, "future_version", "Database schema version is newer than this application supports."),
