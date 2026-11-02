@@ -14,6 +14,7 @@ from app.services.retention_automation import auto_free_runtime_status, retentio
 from app.services.recorder_runtime_status import (
     ACTIVE_JOB_STATES,
     HEARTBEAT_STALE_SECONDS,
+    RECORDING_STARTING_WARNING_THRESHOLD_SECONDS,
     SEGMENT_STATUS_DELETED,
     STALE_CURRENT_SEGMENT_REASON,
     age_seconds as _age_seconds,
@@ -37,6 +38,10 @@ SAFE_REASON_CODES = {
     "recorder_heartbeat_stale",
     "recording_failed",
     "recording_stale",
+    "recording_starting",
+    "recording_start_timeout",
+    "recording_no_active_job",
+    "recording_unconfirmed",
     "recording_segment_not_rotating",
     "live_failed",
     "live_starting",
@@ -336,6 +341,15 @@ def _build_camera_domain(
         last_segment_age = segment_state.get("last_segment_age_seconds")
         stale_threshold = _recording_stale_threshold(camera)
         has_active_recording_job = job_state in ACTIVE_JOB_STATES
+        startup_elapsed = recorder_state.get("recording_startup_elapsed_seconds")
+        normal_starting = bool(
+            recording_enabled and not confirmed_recording and not current_failure and not stale_current_segment
+            and recorder_state.get("heartbeat_current")
+            and startup_elapsed is not None
+            and 0 <= startup_elapsed < RECORDING_STARTING_WARNING_THRESHOLD_SECONDS
+            and (job_state in {"starting", "recording"}
+                 or (not has_active_recording_job and camera.status in {"created", "enabled"}))
+        )
         has_valid_current_segment = (
             recording_enabled
             and has_active_recording_job
@@ -354,9 +368,13 @@ def _build_camera_domain(
             severity = "error"
             _append_reason(reasons, "recording_failed")
             _append_reason(reasons, _safe_reason_from_error(recorder_state.get("last_error") or recorder_state.get("camera_last_error")))
+        elif normal_starting:
+            severity = "ok"
+            _append_reason(reasons, "recording_starting")
         elif recording_enabled and not has_active_recording_job:
             severity = "warning"
             _append_reason(reasons, "no_evidence")
+            _append_reason(reasons, "recording_no_active_job")
         elif recording_enabled and stale_current_segment:
             severity = "warning"
             _append_reason(reasons, STALE_CURRENT_SEGMENT_REASON)
@@ -364,6 +382,9 @@ def _build_camera_domain(
         elif recording_enabled and has_active_recording_job and not confirmed_recording:
             severity = "warning"
             _append_reason(reasons, "no_evidence")
+            _append_reason(reasons, "recording_start_timeout" if job_state == "starting" and startup_elapsed is not None and startup_elapsed >= RECORDING_STARTING_WARNING_THRESHOLD_SECONDS else "recording_unconfirmed")
+            if not recorder_state.get("heartbeat_current"):
+                _append_reason(reasons, "recorder_heartbeat_stale")
         elif recording_enabled and last_segment_age is not None and last_segment_age > stale_threshold and not has_valid_current_segment:
             severity = "warning"
             _append_reason(reasons, "recording_stale")
@@ -388,6 +409,8 @@ def _build_camera_domain(
                 "recording_state": job_state or "unknown",
                 "confirmed_recording": confirmed_recording,
                 "recording_health": recorder_state.get("recording_health") or ("degraded" if stale_current_segment else "unknown"),
+                "recording_startup_elapsed_seconds": startup_elapsed,
+                "recording_startup_warning_after_seconds": RECORDING_STARTING_WARNING_THRESHOLD_SECONDS,
                 "live_state": (live_state or {}).get("state", "unknown"),
                 "severity": severity,
                 "reason_codes": reasons,

@@ -132,6 +132,7 @@ ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("system", "GET", "/system/info", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("previews", "GET", "/previews/camera-previews/{camera_id}.jpg", PERMISSION_MANAGE_CAMERAS, 'require_permission("manage_cameras")', "Authenticated preview file response under configured previews root."),
     EndpointPermission("previews", "GET", "/previews/camera-tests/{token}.jpg", PERMISSION_MANAGE_CAMERAS, 'require_permission("manage_cameras")', "Authenticated camera-test preview file response under configured previews root."),
+    EndpointPermission("previews", "POST", "/previews/camera-tests/cleanup", PERMISSION_MANAGE_CAMERAS, 'require_permission("manage_cameras")', "Discards only explicitly named temporary test frames, never saved previews or recordings."),
     EndpointPermission("cameras", "GET", "/cameras", PERMISSION_MANAGE_CAMERAS, "require_permission"),
     EndpointPermission("cameras", "GET", "/cameras/{camera_id}", PERMISSION_MANAGE_CAMERAS, "require_permission"),
     EndpointPermission("cameras", "POST", "/cameras", PERMISSION_MANAGE_CAMERAS, "require_permission"),

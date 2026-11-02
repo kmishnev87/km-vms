@@ -14,6 +14,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const recordsPage = fs.readFileSync(resolve(__dirname, "../app/recordings/page.js"), "utf8");
 const archivePlayer = fs.readFileSync(resolve(__dirname, "../components/ArchiveTilePlayer.js"), "utf8");
 const camerasPage = fs.readFileSync(resolve(__dirname, "../app/cameras/page.js"), "utf8");
+const editorModel = fs.readFileSync(resolve(__dirname, "../lib/cameraEditor.js"), "utf8");
+const cameraEditor = fs.readFileSync(resolve(__dirname, "../components/cameras/CameraEditor.js"), "utf8");
 
 assert.deepEqual(HIGH_RESOLUTION_THRESHOLD, { width: 2560, height: 1440 });
 assert.equal(isHighResolutionVideo({ width: 2560, height: 1440 }), true);
@@ -45,12 +47,13 @@ assert.equal(archivePlayer.includes("data-highres-adaptive"), true);
 assert.equal(archivePlayer.includes("isUnsupportedDirectPlayback"), false);
 assert.equal(archivePlayer.includes("Двойной клик для полноэкранного режима"), true);
 
-assert.equal(camerasPage.includes("validation_token: null"), true);
-assert.equal(camerasPage.includes("onvif_probe_token: null"), true);
-assert.equal(camerasPage.includes("manual_confirm_unverified: false"), true);
-assert.equal(camerasPage.includes("hasVerifiedCameraPayload"), true);
-assert.equal(camerasPage.includes("showManualUnverifiedBypass"), true);
-assert.equal(camerasPage.includes("cameraVerifiedNotice"), true);
+assert.equal(editorModel.includes("validation_token: null"), true);
+assert.equal(editorModel.includes("onvif_probe_token: null"), true);
+assert.equal(editorModel.includes("manual_confirm_unverified: false"), true);
+assert.equal(editorModel.includes("cameraChecksReady"), true);
+assert.equal(cameraEditor.includes("function renderUnverifiedChoice()"), true);
+assert.equal(cameraEditor.includes("if (editor.verified || (camera && !editor.connectionChanged)) return null;"), true);
+assert.equal(cameraEditor.includes("cameraFlowFeedback"), true);
 assert.equal(camerasPage.includes('patch("preview_token"'), false);
 
 for (const source of [recordsPage, archivePlayer, camerasPage]) {

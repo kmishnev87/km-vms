@@ -28,6 +28,8 @@ const {
   saveCamerasViewMode,
 } = context;
 const camerasPage = fs.readFileSync(resolve(__dirname, "../app/cameras/page.js"), "utf8");
+const cameraEditor = fs.readFileSync(resolve(__dirname, "../components/cameras/CameraEditor.js"), "utf8");
+const editorOwner = fs.readFileSync(resolve(__dirname, "../components/cameras/useCameraEditor.js"), "utf8");
 const camerasCss = fs.readFileSync(resolve(__dirname, "../app/styles/50-cameras-shared-modals.css"), "utf8");
 const responsiveCss = fs.readFileSync(resolve(__dirname, "../app/styles/60-responsive-shared.css"), "utf8");
 
@@ -114,10 +116,10 @@ assert.equal(camerasPage.includes("useCurrentUser()"), true);
 assert.equal(camerasPage.includes("loadCamerasViewMode(window.localStorage, currentUser"), true);
 assert.equal(camerasPage.includes("saveCamerasViewMode(window.localStorage, currentUser, viewMode"), true);
 assert.equal(camerasPage.includes("rtsp_port_manually_set"), false);
-assert.equal(camerasPage.includes('runTest("main")'), true);
-assert.equal(camerasPage.includes('runTest("sub")'), true);
-assert.equal(camerasPage.includes('testResult.tested_role === "sub" ? copy.testSubOk : copy.testMainOk'), true);
-assert.equal(camerasPage.includes("onvif_sub_profile_token"), true);
+assert.equal(editorOwner.includes('stream_role: role'), true);
+assert.equal(editorOwner.includes('result.tested_role !== role'), true);
+assert.equal(editorOwner.includes('all ? roles'), true);
+assert.equal(cameraEditor.includes("onvif_sub_profile_token"), true);
 assert.equal(camerasPage.includes("AuthenticatedPreviewImage"), true);
 assert.equal(camerasPage.includes("<img src={camera.preview_url}"), false);
 assert.equal(camerasPage.includes("testResult.preview_url}?v="), false);

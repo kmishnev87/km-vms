@@ -11,6 +11,7 @@ import {
   buildDashboardStatusSummary,
   buildOperatorWarnings,
   shouldStopRuntimeStatusPolling,
+  recordingFailureMessage,
   userCanReadRuntimeStatus,
 } from "../lib/operatorWarnings";
 
@@ -127,9 +128,12 @@ export default function OperatorProblemBanners({
     let timer = null;
     let refreshTimer = null;
     let inFlight = false;
+    let refreshPending = false;
+    let denied = false;
 
     async function loadStatus() {
-      if (inFlight || cancelled) return true;
+      if (cancelled || denied) return false;
+      if (inFlight) { refreshPending = true; return true; }
       inFlight = true;
       try {
         const data = await apiFetch("/system/runtime/status");
@@ -142,6 +146,7 @@ export default function OperatorProblemBanners({
         if (!cancelled) {
           setRuntimeStatus(null);
           if (shouldStopRuntimeStatusPolling(error)) {
+            denied = true;
             setAccessDenied(true);
             if (timer) clearInterval(timer);
           }
@@ -149,6 +154,11 @@ export default function OperatorProblemBanners({
         return false;
       } finally {
         inFlight = false;
+        if (refreshPending && !cancelled && !denied) {
+          refreshPending = false;
+          if (refreshTimer) clearTimeout(refreshTimer);
+          refreshTimer = setTimeout(loadStatus, 200);
+        }
       }
     }
 
@@ -179,16 +189,18 @@ export default function OperatorProblemBanners({
 
     start();
     const refreshLive = () => {
-      if (!currentUserReady || !effectiveCurrentUser || !userCanReadRuntimeStatus(effectiveCurrentUser)) return;
+      if (cancelled || denied || !currentUserReady || !effectiveCurrentUser || !userCanReadRuntimeStatus(effectiveCurrentUser)) return;
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(loadStatus, 200);
     };
     window.addEventListener("kmvms:live-runtime-changed", refreshLive);
+    window.addEventListener("kmvms:camera-runtime-changed", refreshLive);
     return () => {
       cancelled = true;
       if (timer) clearInterval(timer);
       if (refreshTimer) clearTimeout(refreshTimer);
       window.removeEventListener("kmvms:live-runtime-changed", refreshLive);
+      window.removeEventListener("kmvms:camera-runtime-changed", refreshLive);
     };
   }, [currentUserReady, effectiveCurrentUser]);
 
@@ -269,7 +281,9 @@ export default function OperatorProblemBanners({
                       <span>{item.affected_count ? affectedCountLabel(item.affected_count, text) : text(displayMessage(item))}</span>
                       {Array.isArray(item.affected_cameras) ? item.affected_cameras.map((camera) => (
                         <small key={camera.camera_id}>
-                          {camera.camera_name || `${text("Камера")} ${camera.camera_id}`} — {text(liveFailureMessage(camera.reason, item.reason_codes?.includes("live_interrupted")))}
+                          {camera.camera_name || `${text("Камера")} ${camera.camera_id}`} — {text(item.domain === "cameras"
+                            ? recordingFailureMessage(camera.reason, camera.reason_codes, camera.recording_state)
+                            : liveFailureMessage(camera.reason, item.reason_codes?.includes("live_interrupted")))}
                           {camera.next_retry_at > Date.now() / 1000 ? ` ${text("Следующая попытка через")} ${Math.ceil(camera.next_retry_at - Date.now() / 1000)} ${text("сек.")}` : ""}
                         </small>
                       )) : null}

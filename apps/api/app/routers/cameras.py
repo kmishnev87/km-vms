@@ -67,6 +67,7 @@ from app.schemas.camera import (
     safe_rtsp_management_value,
 )
 from app.services.audit_log import create_event, request_ip, request_user_agent
+from app.services.camera_previews import purge_expired_test_previews
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.recording_retention import EXECUTION_POLICY_MANUAL_COMPLETE, execute_segments, preview_segments
 from app.services.retention_automation import advance_retention_signal
@@ -230,12 +231,19 @@ def test_camera(
     streams = data.get("streams", [])
     video = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
-    preview_path, preview_url, preview_token = test_preview_destination(payload)
-    preview_ok = capture_camera_preview(input_url, transport, preview_path)
-    validation_token = register_rtsp_test_proof(resolved_payload, tested_role)
+    # Catalog enrichment needs stream metadata, not JPEGs or save-gate proofs.
+    metadata_only = payload.get("metadata_only") is True
+    preview_url = preview_token = validation_token = None
+    preview_ok = False
+    if not metadata_only:
+        if payload.get("include_preview") is not False:
+            preview_path, preview_url, preview_token = test_preview_destination(payload)
+            preview_ok = capture_camera_preview(input_url, transport, preview_path)
+        validation_token = register_rtsp_test_proof(resolved_payload, tested_role)
 
     return {
         "ok": True,
+        "metadata_only": metadata_only,
         "display_path": safe_rtsp_display_path(input_url),
         "transport": transport,
         "preview_url": preview_url if preview_ok else None,
@@ -249,7 +257,7 @@ def test_camera(
             ),
         },
         "preview_ok": preview_ok,
-        "preview_message": None if preview_ok else "Соединение установлено, но кадр превью получить не удалось.",
+        "preview_message": None if preview_ok or metadata_only or payload.get("include_preview") is False else "Соединение установлено, но кадр превью получить не удалось.",
         "video": {
             "codec": video.get("codec_name") if video else None,
             "profile": video.get("profile") if video else None,
@@ -436,10 +444,8 @@ def capture_camera_preview(input_url: str, transport: str, output_path: Path) ->
 
 
 def test_preview_destination(payload: dict) -> tuple[Path, str, str]:
-    camera_id = payload.get("camera_id")
-    if camera_id:
-        path = settings.camera_preview_path(int(camera_id))
-        return path, settings.camera_preview_url(int(camera_id)), ""
+    # Edit checks must not overwrite the saved preview before Save is accepted.
+    purge_expired_test_previews()
     token = uuid4().hex
     path = settings.camera_test_preview_path(token)
     return path, settings.camera_test_preview_url(token), token

@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.21",
-  "tag": "v0.8.21",
-  "title": "Reliable Archive Cleanup Recovery and Accurate Retention Status",
-  "summary": "Resumes admitted archive cleanup after interruptions without changing disk-safety thresholds or deletion permissions. Retention status now reflects current archive measurements across all cameras, reports remaining excess and unknown sizes, and clears resolved historical warnings.",
+  "version": "0.8.22",
+  "tag": "v0.8.22",
+  "title": "Simpler camera setup and editing",
+  "summary": "Guided ONVIF and RTSP camera setup, clear stream assignments and direct editing without repeating unchanged checks.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.21",
+  "source_ref": "v0.8.22",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -16,51 +16,51 @@
   "requires_manual_action": false,
   "requires_migration": false,
   "changelog": [
-    "Resumes interrupted disk cleanup independently of the threshold for starting new work, including the interval between five and nine percent free space.",
-    "Continues retryable partial cleanup with the existing retry cooldown and closes recovered operations without deleting files when the target is already reached.",
-    "Measures current retention compliance across all cameras in one metadata aggregation, so another camera's latest success cannot hide a remaining violation.",
-    "Shows affected camera names and confirmed size overage, treats unknown archive sizes as needing attention, and stops using resolved historical failures as current health.",
-    "Converts timezone-aware database time to UTC for retention calendar calculations, preventing shifted expiration boundaries without changing coordinator lease clocks.",
-    "Preserves explicit auto-free consent, physical-volume identity, finalized-recording ownership and namespace checks, the existing safety thresholds, and daily native healthchecks.",
-    "Adds targeted recovery, threshold, multi-camera, unknown-size and bounded-status regressions, with complete Russian, English and Simplified Chinese text."
+    "Add cameras in three steps: connection and image, video and recording, review and save.",
+    "Edit connection, video and recording independently while preserving saved credentials and offline settings.",
+    "Keep exact Main/Sub checks, ignore stale replies and separate verified device changes from KM VMS recording rules.",
+    "Recommend streams within each lens and keep temporary test images separate from saved camera images.",
+    "Load lens images and check selected streams automatically, with two direct purpose selectors and a stable dialog layout.",
+    "Read characteristics for every discovered stream automatically and show selected stream details without truncation.",
+    "Keep normal recording startup neutral, refresh status on camera and live transitions, and show named recording causes without mislabeling live faults."
   ],
   "title_i18n": {
-    "en": "Reliable Archive Cleanup Recovery and Accurate Retention Status",
-    "ru": "Восстановление очистки архива и достоверные статусы хранения",
-    "zh-CN": "归档清理恢复与准确的保留状态"
+    "en": "Simpler camera setup and editing",
+    "ru": "Понятное добавление и редактирование камер",
+    "zh-CN": "更清晰的摄像机添加与编辑"
   },
   "summary_i18n": {
-    "en": "Resumes admitted archive cleanup after interruptions without changing disk-safety thresholds or deletion permissions. Retention status now reflects current archive measurements across all cameras, reports remaining excess and unknown sizes, and clears resolved historical warnings.",
-    "ru": "Начатая очистка архива восстанавливается после прерывания без изменения защитных порогов и прав удаления. Статусы хранения учитывают текущий архив всех камер, показывают оставшееся превышение и неизвестный размер, а устранённые старые ошибки больше не подменяют текущее состояние.",
-    "zh-CN": "中断后恢复已获准的归档清理，不改变磁盘安全阈值或删除权限。保留状态依据所有摄像机的当前归档数据，显示剩余超额和未知大小，并清除已解决的历史警告。"
+    "en": "Guided ONVIF and RTSP camera setup, clear stream assignments and direct editing without repeating unchanged checks.",
+    "ru": "Пошаговое подключение ONVIF и RTSP, понятный выбор потоков и прямое редактирование без повторения неизменившихся проверок.",
+    "zh-CN": "引导式 ONVIF 与 RTSP 摄像机设置、清晰的码流用途，以及无需重复检查未改连接的直接编辑。"
   },
   "changelog_i18n": {
     "en": [
-      "Resumes interrupted disk cleanup independently of the threshold for starting new work, including the interval between five and nine percent free space.",
-      "Continues retryable partial cleanup with the existing retry cooldown and closes recovered operations without deleting files when the target is already reached.",
-      "Measures current retention compliance across all cameras in one metadata aggregation, so another camera's latest success cannot hide a remaining violation.",
-      "Shows affected camera names and confirmed size overage, treats unknown archive sizes as needing attention, and stops using resolved historical failures as current health.",
-      "Converts timezone-aware database time to UTC for retention calendar calculations, preventing shifted expiration boundaries without changing coordinator lease clocks.",
-      "Preserves explicit auto-free consent, physical-volume identity, finalized-recording ownership and namespace checks, the existing safety thresholds, and daily native healthchecks.",
-      "Adds targeted recovery, threshold, multi-camera, unknown-size and bounded-status regressions, with complete Russian, English and Simplified Chinese text."
+      "Add cameras in three steps: connection and image, video and recording, review and save.",
+      "Edit connection, video and recording independently while preserving saved credentials and offline settings.",
+      "Keep exact Main/Sub checks, ignore stale replies and separate verified device changes from KM VMS recording rules.",
+      "Recommend streams within each lens and keep temporary test images separate from saved camera images.",
+      "Load lens images and check selected streams automatically, with two direct purpose selectors and a stable dialog layout.",
+      "Read characteristics for every discovered stream automatically and show selected stream details without truncation.",
+      "Keep normal recording startup neutral, refresh status on camera and live transitions, and show named recording causes without mislabeling live faults."
     ],
     "ru": [
-      "Прерванная очистка диска возобновляется независимо от порога нового запуска, в том числе при свободном месте между пятью и девятью процентами.",
-      "Частично выполненная очистка повторяется с прежней паузой между неудачными попытками; при уже достигнутой цели восстановленная операция завершается без удаления файлов.",
-      "Соблюдение правил хранения рассчитывается по текущим метаданным всех камер одним агрегирующим запросом: успех другой камеры не скрывает оставшееся нарушение.",
-      "Показаны затронутые камеры и подтверждённое превышение размера; неизвестный объём требует внимания, а исправленные старые ошибки не выдаются за текущее состояние.",
-      "Время БД с часовым поясом переводится в UTC для календарных расчётов хранения: границы срока не сдвигаются, а часы блокировок и аренды операций не меняются.",
-      "Сохранены явное согласие на автоосвобождение, проверка физического тома, принадлежности завершённых записей и папок архива, защитные пороги и суточные native healthcheck.",
-      "Добавлены целевые проверки восстановления, порогов, нескольких камер, неизвестного размера и ограниченной сводки; тексты заполнены на русском, английском и упрощённом китайском."
+      "Добавление в три шага: подключение и изображение, видео и запись, проверка и сохранение.",
+      "Отдельное редактирование подключения, видео и записи с сохранением пароля и настроек недоступной камеры.",
+      "Точные проверки Main/Sub, игнорирование устаревших ответов и отдельное применение настроек устройства с проверкой результата.",
+      "Подбор потоков внутри выбранного объектива и отдельные временные кадры, не меняющие сохранённую картинку камеры.",
+      "Автоматическая загрузка объективов и проверка выбранных потоков, два прямых выбора назначения и стабильное окно без скачков.",
+      "Автоматическое чтение характеристик всех найденных потоков и полный текст выбранного потока без обрезания.",
+      "Обычный запуск записи без ложных тревог, обновление предупреждений при смене состояния и конкретные причины с именами камер, отдельно от ошибок онлайн."
     ],
     "zh-CN": [
-      "中断的磁盘清理可独立于新任务启动阈值恢复，包括剩余空间在百分之五到百分之九之间的情况。",
-      "部分完成的清理沿用现有失败重试间隔；目标已达到时直接结束恢复的操作，不再删除文件。",
-      "通过一次元数据聚合检查所有摄像机的当前保留规则，避免其他摄像机最近的成功掩盖仍存在的违规。",
-      "显示受影响摄像机及已确认的容量超额；未知大小需要处理，已解决的历史失败不再代表当前状态。",
-      "保留期限的日历计算先将带时区的数据库时间转换为 UTC，防止过期边界偏移，同时保持协调器租约时钟不变。",
-      "保留自动释放空间的明确同意、物理卷身份、已完成录像归属和归档目录检查、安全阈值以及每日原生健康检查。",
-      "新增恢复、阈值、多摄像机、未知大小和有界状态摘要的针对性回归检查，并提供完整俄语、英语及简体中文文本。"
+      "分三步添加摄像机：连接与图像、视频与录像、确认并保存。",
+      "分别编辑连接、视频和录像，保留已保存的密码及离线摄像机设置。",
+      "精确检查主码流与子码流，忽略过期响应，并将验证后的设备更改与 KM VMS 录像规则分开。",
+      "按镜头推荐码流，将临时测试画面与已保存的摄像机图像分开。",
+      "自动加载镜头画面并检查所选码流，通过两个用途选项完成设置，弹窗布局保持稳定。",
+      "自动读取所有已发现码流的参数，并完整显示所选码流的信息。",
+      "正常启动录像不再误报，摄像机及实时视频状态变化时及时刷新告警，按摄像机显示录像原因并区分实时视频故障。"
     ]
   }
 }

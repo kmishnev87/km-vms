@@ -23,8 +23,14 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
   useEffect(() => {
     let cancelled = false;
     let timer = null;
+    let refreshTimer = null;
+    let inFlight = false;
+    let refreshPending = false;
+    let denied = false;
 
     async function loadStatus() {
+      if (cancelled || denied) return false;
+      if (inFlight) { refreshPending = true; return true; }
       if (!enabled || !canRead) {
         if (!cancelled) {
           setRuntimeStatus(null);
@@ -34,6 +40,7 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
       }
 
       setDeniedUserIdentity((current) => current && current !== userIdentity ? null : current);
+      inFlight = true;
       setLoading(true);
       try {
         const data = await apiFetch("/system/runtime/status");
@@ -46,12 +53,20 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
         if (!cancelled) {
           setRuntimeStatus(null);
           if (shouldStopRuntimeStatusPolling(error)) {
+            denied = true;
             setDeniedUserIdentity(userIdentity);
+            if (timer) clearInterval(timer);
           }
         }
         return !shouldStopRuntimeStatusPolling(error);
       } finally {
+        inFlight = false;
         if (!cancelled) setLoading(false);
+        if (refreshPending && !cancelled && !denied) {
+          refreshPending = false;
+          if (refreshTimer) clearTimeout(refreshTimer);
+          refreshTimer = setTimeout(loadStatus, 200);
+        }
       }
     }
 
@@ -63,9 +78,19 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
     }
 
     start();
+    const refreshRuntime = () => {
+      if (cancelled || denied || !enabled || !canRead) return;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(loadStatus, 200);
+    };
+    window.addEventListener("kmvms:camera-runtime-changed", refreshRuntime);
+    window.addEventListener("kmvms:live-runtime-changed", refreshRuntime);
     return () => {
       cancelled = true;
       if (timer) clearInterval(timer);
+      if (refreshTimer) clearTimeout(refreshTimer);
+      window.removeEventListener("kmvms:camera-runtime-changed", refreshRuntime);
+      window.removeEventListener("kmvms:live-runtime-changed", refreshRuntime);
     };
   }, [canRead, currentUser, enabled, userIdentity]);
 

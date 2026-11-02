@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse
 from app.core.config import settings
 from app.models.user import User
 from app.routers.deps import require_permission
+from app.services.camera_previews import TEST_PREVIEW_TOKEN_RE, discard_test_previews
 
 router = APIRouter(prefix="/previews", tags=["previews"])
 
@@ -47,3 +48,17 @@ def camera_test_preview(
     if not _TEST_PREVIEW_RE.fullmatch(token):
         raise HTTPException(status_code=404, detail="Preview not found")
     return _preview_file_response(settings.camera_test_preview_path(token))
+
+
+@router.post("/camera-tests/cleanup")
+def cleanup_camera_test_previews(
+    payload: dict,
+    current_user: User = Depends(require_permission("manage_cameras")),
+):
+    tokens = payload.get("tokens")
+    if not isinstance(tokens, list) or len(tokens) > 128 or any(
+        not isinstance(token, str) or not TEST_PREVIEW_TOKEN_RE.fullmatch(token)
+        for token in tokens
+    ):
+        raise HTTPException(status_code=422, detail="Invalid test preview tokens")
+    return {"removed": discard_test_previews(tokens)}

@@ -443,3 +443,93 @@ def test_storage_retention_and_reconciliation_warnings_still_surface(db, monkeyp
     assert payload["domains"]["reconciliation"]["severity"] == "warning"
     assert "reconciliation_problems_found" in payload["domains"]["reconciliation"]["reason_codes"]
     assert "/redacted/path" not in rendered(payload)
+
+
+@pytest.mark.parametrize("age", [0, 10, 29])
+def test_normal_recording_start_is_not_an_operator_warning(db, age):
+    camera = add_camera(db, status="starting")
+    job = add_job(db, camera, state="starting")
+    job.started_at = datetime.utcnow() - timedelta(seconds=age)
+    db.commit()
+    add_heartbeat(db, recording_cameras=0)
+    item = build_operator_runtime_status(db)["domains"]["cameras"]["items"][0]
+    assert item["severity"] == "ok"
+    assert item["confirmed_recording"] is False
+    assert item["recording_health"] == "starting"
+    assert item["reason_codes"] == ["recording_starting"]
+    assert item["recording_startup_warning_after_seconds"] == 30
+
+
+@pytest.mark.parametrize("age", [30, 60, 3600])
+def test_recording_start_has_a_bounded_grace_not_reset_by_job_updates(db, age):
+    camera = add_camera(db, status="starting")
+    job = add_job(db, camera, state="starting")
+    job.started_at = datetime.utcnow() - timedelta(seconds=age)
+    job.updated_at = datetime.utcnow()
+    db.commit()
+    add_heartbeat(db, recording_cameras=0)
+    item = build_operator_runtime_status(db)["domains"]["cameras"]["items"][0]
+    assert item["severity"] == "warning"
+    assert "recording_start_timeout" in item["reason_codes"]
+    assert item["confirmed_recording"] is False
+
+
+@pytest.mark.parametrize("status", ["created", "enabled"])
+@pytest.mark.parametrize("age", [5, 35])
+def test_new_or_just_enabled_camera_waits_briefly_for_its_job(db, status, age):
+    camera = add_camera(db, status=status)
+    camera.updated_at = datetime.utcnow() - timedelta(seconds=age)
+    db.commit()
+    add_heartbeat(db, active_jobs=0, recording_cameras=0)
+    item = build_operator_runtime_status(db)["domains"]["cameras"]["items"][0]
+    assert item["severity"] == ("ok" if age < 30 else "warning")
+    assert ("recording_starting" if age < 30 else "recording_no_active_job") in item["reason_codes"]
+
+
+@pytest.mark.parametrize("state", ["error", "restarting"])
+def test_real_start_failure_is_immediate_during_grace(db, state):
+    camera = add_camera(db, status="error")
+    add_job(db, camera, state=state, last_error="authentication failed")
+    add_heartbeat(db, recording_cameras=0)
+    item = build_operator_runtime_status(db)["domains"]["cameras"]["items"][0]
+    assert item["severity"] == "error"
+    assert "recording_failed" in item["reason_codes"]
+    assert "auth_failed" in item["reason_codes"]
+
+
+def test_stale_heartbeat_cannot_be_hidden_by_startup_grace(db):
+    camera = add_camera(db, status="starting")
+    add_job(db, camera, state="starting")
+    add_heartbeat(db, recording_cameras=0, age_seconds=runtime_status.HEARTBEAT_STALE_SECONDS + 5)
+    payload = build_operator_runtime_status(db)
+    item = payload["domains"]["cameras"]["items"][0]
+    assert item["severity"] == "warning"
+    assert "recorder_heartbeat_stale" in item["reason_codes"]
+    assert payload["domains"]["recorder"]["severity"] == "error"
+
+
+def test_future_attempt_time_is_not_a_permanent_starting_grace(db):
+    camera = add_camera(db, status="starting")
+    job = add_job(db, camera, state="starting")
+    job.started_at = datetime.utcnow() + timedelta(minutes=5)
+    db.commit()
+    add_heartbeat(db, recording_cameras=0)
+    item = build_operator_runtime_status(db)["domains"]["cameras"]["items"][0]
+    assert item["recording_startup_elapsed_seconds"] is None
+    assert item["severity"] == "warning"
+
+
+def test_live_error_is_distinguishable_from_a_healthy_recording(db, monkeypatch):
+    camera = add_camera(db)
+    add_job(db, camera)
+    add_segment(db, camera)
+    add_heartbeat(db)
+    monkeypatch.setattr(runtime_status.live_manager, "status", lambda: [{
+        "camera_id": camera.id, "stream": "main", "status": "failed", "running": False,
+        "ready": False, "viewers": 1, "viewer_managed": True, "last_error": "connect timeout",
+    }])
+    payload = build_operator_runtime_status(db)
+    item = payload["domains"]["cameras"]["items"][0]
+    assert item["confirmed_recording"] is True
+    assert "live_failed" in item["reason_codes"]
+    assert "recording_failed" not in item["reason_codes"]

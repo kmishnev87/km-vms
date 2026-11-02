@@ -20,6 +20,7 @@ SEGMENT_STATUS_DELETED = "deleted"
 RECORDER_SOURCE = "recorder"
 HEARTBEAT_STALE_SECONDS = 90
 MEDIA_PROGRESS_STALE_SECONDS = 60
+RECORDING_STARTING_WARNING_THRESHOLD_SECONDS = 30
 MAX_RECENT_ITEMS = 50
 SEGMENT_STALE_GRACE_SECONDS = 300
 STALE_CURRENT_SEGMENT_REASON = "recording_segment_not_rotating"
@@ -286,6 +287,12 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
         current_segment = writing_segments.get(camera.id)
         latest_finalized_segment = finalized_segments.get(camera.id)
         job_state = job.state if job else None
+        # A process attempt has a stable UTC start time. Do not use heartbeat or
+        # mutable job.updated_at as a clock that could keep extending the grace.
+        startup_started_at = job.started_at if job and job_state in {"starting", "recording"} else (
+            camera.updated_at or camera.created_at if camera.status in {"created", "enabled"} else None
+        )
+        startup_elapsed = age_seconds(startup_started_at, now) if startup_started_at else None
         job_last_error = compact_error(job.last_error) if job else None
         camera_last_error = compact_error(camera.last_error)
         expected_segment_seconds = expected_segment_duration_seconds(camera)
@@ -384,6 +391,8 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
             "confirmed_recording": confirmed_recording,
             "recording_health": recording_health,
             "recording_health_reason_codes": reason_codes,
+            "recording_startup_elapsed_seconds": startup_elapsed,
+            "recording_startup_warning_after_seconds": RECORDING_STARTING_WARNING_THRESHOLD_SECONDS,
             "current_segment_started_at": iso_or_none(current_segment.started_at if current_segment else None),
             "current_segment_started_at_system": format_system_iso(current_segment.started_at, ctx, local_naive=segment_uses_local_naive_display(current_segment)) if current_segment else None,
             "current_segment_age_seconds": current_segment_age,

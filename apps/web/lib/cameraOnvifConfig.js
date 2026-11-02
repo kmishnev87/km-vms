@@ -69,6 +69,11 @@ export function onvifConfigTruthState(result = {}) {
   return "not_checked";
 }
 
+export function onvifConfigDisplayTruth(state, dirty) {
+  if (state === "mismatch" || state === "unavailable") return state;
+  return dirty ? "changed" : state;
+}
+
 export function normalizeOnvifConfigError(error = {}, copy = {}) {
   const code = String(
     error?.code

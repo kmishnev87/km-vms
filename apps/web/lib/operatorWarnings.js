@@ -145,6 +145,38 @@ export function shouldStopRuntimeStatusPolling(error) {
   return isRuntimeStatusAccessDenied(error);
 }
 
+// Compare meaningful transitions, not every changing age/byte counter. The
+// existing Cameras summary poll can invalidate warnings without a faster poll.
+export function cameraRuntimeWarningKey(summary) {
+  if (!summary) return null;
+  const cameras = (summary.camera_recording_states || []).map((item) => [
+    String(item.camera_id), item.enabled, item.job_state, item.current_failure,
+    item.confirmed_recording, item.recording_health, item.stale_current_segment,
+    item.heartbeat_current, item.recording_health_reason_codes || [],
+    item.enabled && !item.confirmed_recording && item.recording_startup_elapsed_seconds != null
+      && item.recording_startup_elapsed_seconds >= (item.recording_startup_warning_after_seconds || 30),
+  ]).sort((left, right) => left[0].localeCompare(right[0]));
+  return JSON.stringify([summary.health, summary.service_status, summary.heartbeat?.status, summary.heartbeat?.service_status, cameras]);
+}
+
+export function notifyCameraRuntimeChanged() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("kmvms:camera-runtime-changed"));
+}
+
+export function recordingFailureMessage(reason, reasons = [], state = "") {
+  const codes = new Set([reason, ...reasons]);
+  if (codes.has("auth_failed")) return "Камера отклонила логин или пароль.";
+  if (codes.has("recorder_heartbeat_stale")) return "Сервис записи не подтверждает работу.";
+  if (codes.has("camera_unreachable")) return "Нет связи с камерой.";
+  if (codes.has("recording_start_timeout")) return "Запись не началась за 30 секунд.";
+  if (codes.has("recording_no_active_job")) return "Запись включена, но задача записи не запущена.";
+  if (codes.has("recording_segment_not_rotating")) return "Файл записи не сменяется вовремя.";
+  if (codes.has("recording_stale")) return "Не поступают новые видеоданные.";
+  if (state === "restarting") return "Повторяем запуск записи после ошибки.";
+  if (codes.has("recording_failed")) return "Ошибка записи. Проверьте подключение к камере.";
+  return "Нет актуального подтверждения записи.";
+}
+
 function asArray(value) {
   return Array.isArray(value) ? value : [];
 }
@@ -278,6 +310,9 @@ function cameraWarnings(domain, items) {
   const cameraItems = asArray(domain.items).filter((item) => {
     const reasons = asArray(item.reason_codes);
     if (reasons.includes("disabled") || reasons.includes("not_applicable")) return false;
+    // Live has its own named warning. Do not relabel it as a recording failure.
+    if (reasons.some((reason) => String(reason).startsWith("live_"))
+      && !reasons.some((reason) => /^(recording_|recorder_)/.test(reason) || reason === "no_evidence")) return false;
     return ["warning", "error"].includes(item.severity);
   });
   const failed = cameraItems.filter((item) => item.severity === "error");
@@ -290,6 +325,8 @@ function cameraWarnings(domain, items) {
       title: "Есть камеры с ошибкой записи",
       message: `${failed.length} камер требуют проверки записи или доступности сети.`,
       affected_count: failed.length,
+      affected_cameras: failed.map((item) => ({ camera_id: item.camera_id, camera_name: item.name,
+        reason: item.last_safe_error_code, reason_codes: asArray(item.reason_codes), recording_state: item.recording_state })),
       reason_codes: Array.from(new Set(failed.flatMap((item) => asArray(item.reason_codes)))),
       action_hint: "Проверьте сеть камеры и состояние записи.",
     });
@@ -302,6 +339,8 @@ function cameraWarnings(domain, items) {
       title: "Есть предупреждения по записи камер",
       message: `${warning.length} камер без актуального подтверждения записи или со stale-сегментами.`,
       affected_count: warning.length,
+      affected_cameras: warning.map((item) => ({ camera_id: item.camera_id, camera_name: item.name,
+        reason: item.last_safe_error_code, reason_codes: asArray(item.reason_codes), recording_state: item.recording_state })),
       reason_codes: Array.from(new Set(warning.flatMap((item) => asArray(item.reason_codes)))),
       action_hint: "Проверьте режим записи и последние сегменты.",
     });

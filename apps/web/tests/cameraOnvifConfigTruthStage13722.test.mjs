@@ -19,6 +19,7 @@ this.onvifConfigFromResult = onvifConfigFromResult;
 this.onvifConfigValuesEqual = onvifConfigValuesEqual;
 this.buildOnvifConfigDiff = buildOnvifConfigDiff;
 this.onvifConfigTruthState = onvifConfigTruthState;
+this.onvifConfigDisplayTruth = onvifConfigDisplayTruth;
 this.normalizeOnvifConfigError = normalizeOnvifConfigError;`,
   context,
 );
@@ -28,6 +29,7 @@ const {
   onvifConfigValuesEqual,
   buildOnvifConfigDiff,
   onvifConfigTruthState,
+  onvifConfigDisplayTruth,
   normalizeOnvifConfigError,
 } = context;
 
@@ -76,6 +78,10 @@ assert.equal(snapshot.supported, supported);
 assert.equal(onvifConfigTruthState({ status: "ok" }), "current");
 assert.equal(onvifConfigTruthState({ status: "unsupported" }), "current");
 assert.equal(onvifConfigTruthState({ status: "error" }), "unavailable");
+assert.equal(onvifConfigDisplayTruth("mismatch", true), "mismatch");
+assert.equal(onvifConfigDisplayTruth("unavailable", true), "unavailable");
+assert.equal(onvifConfigDisplayTruth("verified", false), "verified");
+assert.equal(onvifConfigDisplayTruth("current", true), "changed");
 
 const rawBackendEnglish = "The camera refused the ONVIF encoder configuration update.";
 for (const [locale, copy] of [
@@ -138,9 +144,9 @@ for (const [locale, copy] of [
   );
 }
 
-const page = fs.readFileSync(resolve(__dirname, "../app/cameras/page.js"), "utf8");
+const page = fs.readFileSync(resolve(__dirname, "../components/cameras/CameraDeviceSettings.js"), "utf8");
 assert.equal(page.includes("setOnvifConfigBaseline(snapshot)"), true);
-assert.equal(page.includes("buildOnvifConfigDiff(\n        onvifConfig,\n        onvifConfigBaseline"), true);
+assert.equal(page.includes("buildOnvifConfigDiff(config, baseline, config.supported)"), true);
 assert.equal(page.includes("result?.verification?.matched ? \"verified\""), true);
 assert.equal(page.includes("video_encoder_configuration_mismatch"), true);
 assert.equal(page.includes("setOnvifConfigTruth(\"unavailable\")"), true);

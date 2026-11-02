@@ -4,7 +4,7 @@ import copy
 import hashlib
 import re
 import time
-from urllib.parse import quote, urlparse, urlsplit, urlunparse, urlunsplit
+from urllib.parse import parse_qs, quote, urlparse, urlsplit, urlunparse, urlunsplit
 
 from onvif import ONVIFCamera
 
@@ -330,49 +330,96 @@ def _get_video_encoder_config_from_profile(media, profile):
     return cfg
 
 
-def _profile_score(item: dict, prefer_sub: bool = False) -> tuple:
-    name = f"{item.get('name') or ''} {item.get('token') or ''}".lower()
-    video = item.get("video") or {}
-    width = int(video.get("width") or 0)
-    height = int(video.get("height") or 0)
-    fps = int(video.get("fps") or 0)
-    pixels = width * height
-    compact_name = re.sub(r"[^a-z0-9]+", "", name)
-    sub_hint = any(value in compact_name for value in ("sub", "secondary", "low", "stream2", "profile2"))
-    main_hint = not sub_hint and any(
-        value in compact_name for value in ("main", "primary", "high", "stream1", "profile1")
+def _profile_stream_metadata(profile: dict) -> dict:
+    """Use source identity and documented stream paths, never opaque profile IDs."""
+    channel = None
+    index = None
+    path = profile.get("stream_path") or profile.get("stream_uri") or ""
+    try:
+        parsed = urlsplit(str(path))
+        query = parse_qs(parsed.query)
+        if parsed.path.lower().rstrip("/") == "/cam/realmonitor":
+            channel_text = (query.get("channel") or [""])[0]
+            index_text = (query.get("subtype") or [""])[0]
+            if channel_text.isdigit() and int(channel_text) > 0:
+                channel = int(channel_text)
+            if index_text.isdigit():
+                index = int(index_text)
+        match = re.fullmatch(r"/streaming/channels/(\d+)/?", parsed.path, re.I)
+        if match and int(match.group(1)) >= 101:
+            value = int(match.group(1))
+            channel = value // 100
+            index = value % 100 - 1 if value % 100 > 0 else None
+    except (TypeError, ValueError):
+        pass
+    source = f"channel:{channel}" if channel is not None else (
+        f"source:{profile['video_source_token']}" if profile.get("video_source_token") else None
     )
+    kind = "main" if index == 0 else "sub" if index is not None and index > 0 else "unknown"
+    evidence = "stream_path" if kind != "unknown" else "unavailable"
+    if kind == "unknown":
+        # 'MainStream' describes a role. 'Profile000' and 'Profile001' do not.
+        name = str(profile.get("name") or "").lower()
+        if re.search(r"mainstream|(?:^|[\s_-])(main|primary|high)(?:$|[\s_-])", name):
+            kind, evidence = "main", "profile_name"
+        elif re.search(r"substream|(?:^|[\s_-])(sub|secondary|low)(?:$|[\s_-])", name):
+            kind, evidence = "sub", "profile_name"
+    return {"source_id": source, "source_channel": channel, "stream_index": index, "stream_kind": kind, "stream_role_evidence": evidence}
 
-    if prefer_sub:
-        return (
-            1 if pixels else 0,
-            -pixels if pixels else 0,
-            -fps if fps else 0,
-            1 if sub_hint else 0,
-            -1 if main_hint else 0,
-            item.get("name") or "",
-        )
-    return (
-        1 if pixels else 0,
-        pixels,
-        fps,
-        1 if main_hint else 0,
-        -1 if sub_hint else 0,
-        item.get("name") or "",
-    )
+
+def _profile_pixels(profile: dict) -> int:
+    video = profile.get("video") or {}
+    return max(0, int(video.get("width") or 0)) * max(0, int(video.get("height") or 0))
+
+
+def _recommend_source_pair(profiles: list[dict]) -> tuple[dict, dict | None, str]:
+    measured = [item for item in profiles if _profile_pixels(item)]
+    if measured:
+        main = max(measured, key=_profile_pixels)
+        basis = "video"
+    else:
+        main = next((item for item in profiles if item["stream_kind"] == "main"), profiles[0])
+        basis = main["stream_role_evidence"]
+    remaining = [item for item in profiles if item.get("token") != main.get("token")]
+    small = [item for item in remaining if _profile_pixels(item)]
+    if small:
+        sub = min(small, key=_profile_pixels)
+    else:
+        secondary = [item for item in remaining if item["stream_kind"] == "sub"]
+        sub = min(secondary, key=lambda item: item["stream_index"] if item["stream_index"] is not None else 999) if secondary else None
+    # Without useful role/quality evidence, offer one provisional stream and ask
+    # the operator to choose. A lexical tie-break is not a recommendation.
+    if basis == "unavailable":
+        sub = None
+    return main, sub, basis
+
+
+def _profile_source_groups(profiles: list[dict]) -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    for profile in profiles:
+        if profile.get("rtsp_ready") is False:
+            continue
+        item = {**profile, **_profile_stream_metadata(profile)}
+        grouped.setdefault(item["source_id"] or "unknown", []).append(item)
+    result = []
+    for source_id, items in grouped.items():
+        main, sub, basis = _recommend_source_pair(items)
+        result.append({
+            "id": source_id,
+            "channel": items[0]["source_channel"],
+            "profile_tokens": [item.get("token") for item in items],
+            "main_profile_token": main.get("token"),
+            "sub_profile_token": sub.get("token") if sub else None,
+            "recommendation_basis": basis,
+        })
+    return result
 
 
 def _suggest_profiles(profiles: list[dict]) -> tuple[str | None, str | None]:
-    if not profiles:
+    groups = _profile_source_groups(profiles)
+    if not groups:
         return None, None
-
-    main = max(profiles, key=lambda item: _profile_score(item, prefer_sub=False))
-    if len(profiles) == 1:
-        return main.get("token"), None
-
-    sub_candidates = [item for item in profiles if item.get("token") != main.get("token")]
-    sub = max(sub_candidates, key=lambda item: _profile_score(item, prefer_sub=True)) if sub_candidates else main
-    return main.get("token"), sub.get("token")
+    return groups[0]["main_profile_token"], groups[0]["sub_profile_token"]
 
 
 def _profile_to_dict(profile, media, username, password, host, port, rtsp_host=None, rtsp_port=None):
@@ -419,7 +466,7 @@ def _profile_to_dict(profile, media, username, password, host, port, rtsp_host=N
     encoding_interval = _safe_number(_safe_attr(rc, "EncodingInterval"))
     quality = _safe_number(_safe_attr(cfg, "Quality"))
 
-    return {
+    item = {
         "token": _safe_text(_safe_attr(profile, "token"), 255),
         "name": _safe_text(_safe_attr(profile, "Name"), 255),
         "suggested_role": "unknown",
@@ -461,6 +508,10 @@ def _profile_to_dict(profile, media, username, password, host, port, rtsp_host=N
         "video_config_state": "ok" if cfg and not cfg_warning else "unavailable",
         "warnings": warnings,
     }
+    source = _safe_attr(profile, "VideoSourceConfiguration")
+    item["video_source_token"] = _safe_text(_safe_attr(source, "SourceToken"), 255)
+    item.update(_profile_stream_metadata(item))
+    return item
 
 
 def fetch_onvif_profiles(host, port, username, password, rtsp_host=None, rtsp_port=None):
@@ -495,6 +546,7 @@ def fetch_onvif_profiles(host, port, username, password, rtsp_host=None, rtsp_po
         "profiles": result,
         "suggested_main_profile_token": suggested_main,
         "suggested_sub_profile_token": suggested_sub,
+        "source_groups": _profile_source_groups(result),
         "rtsp_reachable": {
             "host": rtsp_host or host,
             "port": rtsp_port,
@@ -640,6 +692,7 @@ def probe_onvif_device(host, port=80, username=None, password=None, rtsp_host=No
         "profiles": profile_items[:20],
         "suggested_main_profile_token": suggested_main,
         "suggested_sub_profile_token": suggested_sub,
+        "source_groups": _profile_source_groups(profile_items),
         "raw_secret_exposed": False,
     }
 
