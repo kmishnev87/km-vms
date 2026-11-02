@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.24",
-  "tag": "v0.8.24",
-  "title": "Safe recording format changes",
-  "summary": "Switch MKV and MP4 with an explicit choice, safe file completion and truthful per-camera progress.",
+  "version": "0.8.25",
+  "tag": "v0.8.25",
+  "title": "Reliable managed schema updates",
+  "summary": "Fix migration lifecycle validation so prepared installations can update safely with database changes and retain precise failure diagnostics.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.24",
+  "source_ref": "v0.8.25",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,51 +20,47 @@
     "target_version": 10
   },
   "changelog": [
-    "Choose to switch after current files or finish them gracefully now, without manually disabling cameras.",
-    "Keep existing archive files unchanged and preserve video captured during the switch.",
-    "Persist the desired format, application mode and request time across restarts without a separate queue.",
-    "Show pending, confirmed and failed application per camera with clear safe reasons.",
-    "Avoid unintended format restarts when reading settings temporarily fails; never force-kill a writer solely to change format.",
-    "Add two nullable settings columns through the registered schema 9-to-10 migration.",
-    "Use the prepared runtime compatibility protocol for mandatory registered schema migration and verified application rollback."
+    "Recognize the real updater preparation and activation states in schema validation.",
+    "Keep schema mutation forbidden during activation and rollback, with exact request, release and commit binding.",
+    "Allow a verified completed schema to start the target runtime before overall update completion.",
+    "Retain bounded machine-readable migration failure reasons without exposing sensitive logs.",
+    "Preserve mandatory backups, registered migrations, writer isolation and verified runtime compatibility.",
+    "Include safe MKV/MP4 switching after current files or by graceful completion now, with persistent per-camera progress."
   ],
   "title_i18n": {
-    "en": "Safe recording format changes",
-    "ru": "Безопасная смена формата записи",
-    "zh-CN": "安全切换录像格式"
+    "en": "Reliable managed schema updates",
+    "ru": "Надёжное обновление с изменением базы",
+    "zh-CN": "可靠的托管数据库架构更新"
   },
   "summary_i18n": {
-    "en": "Switch MKV and MP4 with an explicit choice, safe file completion and truthful per-camera progress.",
-    "ru": "Переключение MKV и MP4 с понятным выбором, аккуратным завершением файлов и достоверным состоянием по камерам.",
-    "zh-CN": "明确选择 MKV 与 MP4 的切换时机，正常结束文件，并显示各摄像机的真实进度。"
+    "en": "Fix migration lifecycle validation so prepared installations can update safely with database changes and retain precise failure diagnostics.",
+    "ru": "Исправлена проверка этапов миграции: подготовленные установки могут безопасно обновляться с изменением базы, сохраняя точную причину ошибок.",
+    "zh-CN": "修复迁移生命周期校验，使已准备的安装能够安全地更新数据库架构，并保留准确的失败诊断。"
   },
   "changelog_i18n": {
     "en": [
-      "Choose to switch after current files or finish them gracefully now, without manually disabling cameras.",
-      "Keep existing archive files unchanged and preserve video captured during the switch.",
-      "Persist the desired format, application mode and request time across restarts without a separate queue.",
-      "Show pending, confirmed and failed application per camera with clear safe reasons.",
-      "Avoid unintended format restarts when reading settings temporarily fails; never force-kill a writer solely to change format.",
-      "Add two nullable settings columns through the registered schema 9-to-10 migration.",
-      "Use the prepared runtime compatibility protocol for mandatory registered schema migration and verified application rollback."
+      "Recognize the real updater preparation and activation states in schema validation.",
+      "Keep schema mutation forbidden during activation and rollback, with exact request, release and commit binding.",
+      "Allow a verified completed schema to start the target runtime before overall update completion.",
+      "Retain bounded machine-readable migration failure reasons without exposing sensitive logs.",
+      "Preserve mandatory backups, registered migrations, writer isolation and verified runtime compatibility.",
+      "Include safe MKV/MP4 switching after current files or by graceful completion now, with persistent per-camera progress."
     ],
     "ru": [
-      "Выбор: перейти после текущих файлов или аккуратно завершить их сейчас, без ручного выключения камер.",
-      "Старый архив не преобразуется и не удаляется; видео, полученное во время перехода, сохраняется.",
-      "Выбранный формат, способ применения и время запроса сохраняются после перезапуска без отдельной очереди.",
-      "Для каждой камеры видны ожидание, подтверждённое применение или конкретная безопасная причина ошибки.",
-      "Временный сбой чтения настроек не переключает формат самовольно; ради смены формата запись принудительно не убивается.",
-      "Два необязательных поля настроек добавляются зарегистрированной миграцией схемы 9 → 10.",
-      "Обязательная зарегистрированная миграция базы использует подготовленный механизм совместимости и проверенного возврата программы."
+      "Проверка миграции распознаёт реальные этапы подготовки и запуска обновления.",
+      "Изменение базы запрещено во время запуска и отката; запрос, версия и commit проверяются точно.",
+      "Проверенная завершённая миграция позволяет запустить новый код до завершения всего обновления.",
+      "Конкретная причина ошибки миграции сохраняется безопасным машинным кодом без чувствительных логов.",
+      "Обязательные копии базы, зарегистрированные миграции, остановка записи и проверка совместимости сохранены.",
+      "Включена безопасная смена MKV/MP4 после текущих файлов или аккуратным завершением сейчас, с состоянием по камерам."
     ],
     "zh-CN": [
-      "选择在当前文件完成后切换，或立即正常结束文件，无需手动停用摄像机。",
-      "旧录像不会被转换或删除，切换期间收到的视频仍会保存。",
-      "目标格式、应用方式和请求时间在重启后保留，无需单独的任务队列。",
-      "按摄像机显示等待、确认完成或明确且安全的错误原因。",
-      "临时读取设置失败不会意外切换格式，也不会仅为更改格式而强制终止录像进程。",
-      "通过已注册的数据库架构 9 到 10 迁移，添加两个可空设置字段。",
-      "利用已准备的兼容性协议执行必需的已注册数据库迁移，并验证程序回退。"
+      "数据库迁移校验识别更新程序实际使用的准备和激活状态。",
+      "激活与回退期间禁止修改架构，并严格绑定请求、版本和提交。",
+      "验证已完成迁移后，无需等待整个更新结束即可启动目标程序。",
+      "使用有界机器代码保留迁移失败原因，不暴露敏感日志。",
+      "保留必需的备份、已注册迁移、写入隔离和运行时兼容性验证。",
+      "包含安全的 MKV/MP4 切换，可等待当前文件完成或立即正常结束，并持续显示各摄像机的状态。"
     ]
   }
 }

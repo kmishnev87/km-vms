@@ -147,3 +147,22 @@ def test_update_after_application_rollback_binds_real_schema_not_old_tag_number(
     db.commit()
     with pytest.raises(control.SchemaControlError, match="installed_source_compatibility_not_verified"):
         control.validate_source_lineage(db, request_id="update-" + "1" * 32, target_release="0.8.24", target_commit="b" * 40)
+
+
+def test_pipeline_lock_keeps_one_backend_across_rollback_and_releases(format_database, monkeypatch):
+    from app.services import schema_update_pipeline as pipeline
+    engine, _db = format_database
+    monkeypatch.setattr(pipeline, "engine", engine)
+    with pipeline._pipeline_lock_session() as lock_db:
+        pid = control.acquire_schema_lock(lock_db)
+        try:
+            lock_db.rollback()
+            with engine.connect() as other:
+                assert other.execute(text("SELECT pg_backend_pid()")).scalar_one() != pid
+                assert other.execute(text("SELECT pg_try_advisory_lock(660128)")).scalar_one() is False
+            assert lock_db.execute(text("SELECT pg_backend_pid()")).scalar_one() == pid
+        finally:
+            control.release_schema_lock(lock_db)
+    with engine.connect() as check:
+        assert check.execute(text("SELECT pg_try_advisory_lock(660128)")).scalar_one() is True
+        assert check.execute(text("SELECT pg_advisory_unlock(660128)")).scalar_one() is True

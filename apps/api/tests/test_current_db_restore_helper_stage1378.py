@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from app.services.schema_versioning import CURRENT_SCHEMA_VERSION
 
 
 HELPER_PATH = (
@@ -50,7 +51,7 @@ def _isolate_post_restore_integrity_side_effects(
 def _request(
     *,
     state: str = "claimed",
-    artifact_schema_version: int = 9,
+    artifact_schema_version: int = CURRENT_SCHEMA_VERSION,
 ) -> dict:
     return {
         "schema": helper.RESTORE_REQUEST_SCHEMA,
@@ -125,14 +126,14 @@ def _successful_executor(
 
 def test_restore_request_contract_rejects_extra_control_fields() -> None:
     request = _request()
-    assert helper.CURRENT_PRODUCT_DB_SCHEMA_VERSION == 9
+    assert helper.CURRENT_PRODUCT_DB_SCHEMA_VERSION == CURRENT_SCHEMA_VERSION
     assert helper.validate_restore_request(request) == request
     assert helper.validate_restore_request(
         {**request, "database_url": "postgresql://forbidden"}
     ) is None
 
 
-@pytest.mark.parametrize("schema_version", (8, 10))
+@pytest.mark.parametrize("schema_version", (CURRENT_SCHEMA_VERSION - 1, CURRENT_SCHEMA_VERSION + 1))
 def test_restore_request_contract_rejects_non_current_schema(
     schema_version: int,
 ) -> None:

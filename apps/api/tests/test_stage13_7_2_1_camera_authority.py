@@ -110,7 +110,8 @@ def test_canonical_v7_to_v8_stays_historical_then_v8_to_v9_adds_only_nullable_su
         )
     ).mappings().one()
 
-    assert CURRENT_SCHEMA_VERSION == 9
+    assert STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION.to_version == 9
+    assert CURRENT_SCHEMA_VERSION >= 9
     assert v9["executed_migrations"] == [STAGE13721_CAMERA_SUB_PROFILE_TOKEN_MIGRATION_ID]
     assert v9_column["nullable"] is True
     assert dict(before_row) == {key: after_row[key] for key in before_row}

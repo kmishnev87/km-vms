@@ -245,7 +245,7 @@ def test_compose_env_install_and_gitignore_keep_backup_root_persistent_and_outsi
     assert "KMVMS_DB_BACKUP_ROOT: ${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}" in compose
     assert compose.count(
         "${KMVMS_HOST_DB_BACKUP_ROOT:-${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/backups/db}:${KMVMS_DB_BACKUP_ROOT:-/storage/backups/db}"
-    ) == 2
+    ) == 3  # API, schema-update and restore executor share the persistent root.
     assert "KMVMS_HOST_DB_BACKUP_ROOT=/path/to/km-vms/data/backups/db" in env_example
     assert "KMVMS_DB_BACKUP_ROOT=/storage/backups/db" in env_example
     assert "backup_dir=\"$APP_DIR/data/backups/db\"" in install

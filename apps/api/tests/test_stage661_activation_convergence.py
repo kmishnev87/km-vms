@@ -669,6 +669,20 @@ def test_schema_failure_restores_previous_runtime_before_blocking(
     assert runtime["reconcile"][-1] == PREVIOUS["slot_id"]
 
 
+def test_schema_failure_keeps_precise_safe_reason_in_durable_journal(monkeypatch, runtime):
+    engine = FakeEngine(_journal("quiescing", migration_required=True))
+    reason = "schema_execution_status_invalid_with_complete_authority_pair"
+    def fail(*_args, **_kwargs):
+        raise bridge.BridgeError(reason, "No sensitive traceback is copied")
+    monkeypatch.setattr(bridge, "run_target_schema_migration", fail)
+    monkeypatch.setattr(bridge, "schema_mutation_completed", lambda *_args, **_kwargs: False)
+    result = bridge.converge_activation(engine, Path("/app"), "tnas-vms", REQUEST_ID)
+    assert result["phase"] == "blocked"
+    assert result["failure_category"] == reason
+    assert engine.pointer == PREVIOUS["slot_id"]
+    assert runtime["reconcile"][-1] == PREVIOUS["slot_id"]
+
+
 def test_current_canonical_schema_paths_keep_previous_runtime_compatible() -> None:
     migrations = list(PRODUCTION_MIGRATIONS.migrations)
     assert {

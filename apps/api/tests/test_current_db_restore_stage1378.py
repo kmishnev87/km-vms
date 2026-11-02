@@ -14,6 +14,7 @@ from app.services import current_db_restore as restore
 from app.services import current_db_restore_executor as executor
 from app.services import backup_manager
 from app.services import maintenance_admission as admission
+from app.services.schema_versioning import CURRENT_SCHEMA_VERSION
 
 
 ARTIFACT_A = "kmvms-db-20260729T120000Z-aaaaaaaaaaaa"
@@ -31,7 +32,7 @@ def _evidence(artifact_id: str) -> dict:
     return {
         "artifact_id": artifact_id,
         "artifact_created_at": NOW,
-        "artifact_schema_version": 9,
+        "artifact_schema_version": CURRENT_SCHEMA_VERSION,
         "db_backend": "postgresql",
         "file_size": 1024,
         "integrity_verified": True,
@@ -178,7 +179,7 @@ def test_current_restore_public_contract_is_bounded_and_consistent() -> None:
         "artifact": {
             "artifact_id": ARTIFACT_A,
             "artifact_created_at": NOW,
-            "artifact_schema_version": 9,
+            "artifact_schema_version": CURRENT_SCHEMA_VERSION,
             "db_backend": "postgresql",
         },
         "pre_restore_backup_id": ARTIFACT_B,

@@ -3163,7 +3163,13 @@ def run_target_schema_preflight(
             error_code="schema_preflight_failed",
             error_message="Target schema preflight failed before activation.",
             env=env,
+            check=False,
         )
+        if result.returncode:
+            raise BridgeError(
+                schema_pipeline_failure_reason(result, "schema_preflight_failed"),
+                "Target schema preflight failed before activation.",
+            )
     values: dict[str, str] = {}
     for line in result.stdout.splitlines():
         key, separator, value = line.partition("=")
@@ -3247,6 +3253,16 @@ def run_target_schema_preflight(
     }
 
 
+def schema_pipeline_failure_reason(
+    result: subprocess.CompletedProcess[str], fallback: str,
+) -> str:
+    matches = re.findall(
+        r"^schema_failure_reason=([a-z][a-z0-9_]{0,79})$",
+        result.stderr or "", re.MULTILINE,
+    )
+    return matches[0] if len(matches) == 1 else fallback
+
+
 def run_target_schema_migration(
     app_dir: Path,
     project_name: str,
@@ -3265,7 +3281,7 @@ def run_target_schema_migration(
             override_root=Path(temporary),
             with_image_override=True,
         )
-        run_command(
+        result = run_command(
             [
                 *compose,
                 "run",
@@ -3281,7 +3297,13 @@ def run_target_schema_migration(
             error_code="schema_update_failed",
             error_message="Target database migration did not complete.",
             env=env,
+            check=False,
         )
+        if result.returncode:
+            raise BridgeError(
+                schema_pipeline_failure_reason(result, "schema_update_failed"),
+                "Target database migration did not complete.",
+            )
 
 
 def schema_mutation_completed(
@@ -3840,7 +3862,7 @@ def converge_activation(
                     target["slot_id"],
                     engine=engine,
                 )
-            except BridgeError:
+            except BridgeError as exc:
                 if not schema_mutation_completed(
                     app_dir,
                     request_id=request_id,
@@ -3851,7 +3873,7 @@ def converge_activation(
                         app_dir,
                         project_name,
                         journal,
-                        "schema_update_failed",
+                        exc.code,
                     )
             if not schema_mutation_completed(
                 app_dir,

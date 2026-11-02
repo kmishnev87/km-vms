@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from contextlib import contextmanager
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
@@ -26,6 +27,7 @@ from app.services.schema_update_control import (
     atomic_write,
     load_initial_update_context,
     release_schema_lock,
+    stable_failure_reason,
     utc_now,
     validate_released_source_history,
 )
@@ -197,8 +199,18 @@ def run_update_preflight() -> None:
     )
 
 
+@contextmanager
+def _pipeline_lock_session():
+    # Session.rollback() may return an implicitly acquired connection to the
+    # pool. A session-scoped PostgreSQL advisory lock must stay on one checked-
+    # out connection until it is explicitly released, not migrate between PIDs.
+    with engine.connect() as connection:
+        with Session(connection) as db:
+            yield db
+
+
 def run_update_migration() -> None:
-    with Session(engine) as lock_db:
+    with _pipeline_lock_session() as lock_db:
         lock_backend_pid = acquire_schema_lock(lock_db)
         try:
             context, summary = read_only_update_preflight(lock_db)
@@ -259,7 +271,7 @@ def run_update_migration() -> None:
 def run_default_pipeline() -> None:
     """Run install/post-overlay phases under one advisory lock."""
 
-    with Session(engine) as lock_db:
+    with _pipeline_lock_session() as lock_db:
         lock_backend_pid = acquire_schema_lock(lock_db)
         try:
             _run_phases(lock_backend_pid)
@@ -283,5 +295,17 @@ def main(argv: list[str] | None = None) -> None:
         run_default_pipeline()
 
 
+def cli(argv: list[str]) -> int:
+    try:
+        main(argv)
+    except Exception as exc:
+        # Cross-container diagnostics retain a bounded machine code, never
+        # raw SQL, connection strings, or potentially sensitive tracebacks.
+        reason = stable_failure_reason(exc, "schema_pipeline_unexpected")
+        print(f"schema_failure_reason={reason}", file=sys.stderr, flush=True)
+        return 1
+    return 0
+
+
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    raise SystemExit(cli(sys.argv[1:]))

@@ -85,11 +85,24 @@ ACTIVE_UPDATE_STATUSES = frozenset(
         "restarting",
         "health_check",
         "commit_verification",
+        "preparing",
+        "staging",
+        "activating",
+        "reconnecting",
+        "rolling_back",
     }
 )
 TERMINAL_UPDATE_STATUSES = frozenset(
-    {"completed", "failed", "cancelled", "blocked"}
+    {"completed", "failed", "failed_rolled_back", "cancelled", "blocked"}
 )
+# Recognizing a lifecycle status is not permission to run DDL at that stage.
+SCHEMA_MUTATION_UPDATE_STATUSES = ACTIVE_UPDATE_STATUSES - {
+    "activating", "reconnecting", "rolling_back",
+}
+SCHEMA_COMPLETED_ACTIVATION_STATUSES = frozenset({
+    "preparing", "applying", "restarting", "health_check",
+    "commit_verification", "activating", "reconnecting",
+})
 INACTIVE_UPDATE_STATUSES = frozenset({"idle", "unknown"})
 KNOWN_UPDATE_STATUSES = (
     ACTIVE_UPDATE_STATUSES
@@ -2109,6 +2122,7 @@ def _validate_matching_active_update_status(
     request_target_version: str | None,
     target_release: str,
     target_commit: str,
+    schema_completed: bool = False,
 ) -> None:
     source = payload.get("source")
     target_version_bound = _status_target_version_is_bound(
@@ -2118,7 +2132,10 @@ def _validate_matching_active_update_status(
         target_release=target_release,
     )
     if (
-        payload.get("status") not in ACTIVE_UPDATE_STATUSES
+        payload.get("status") not in (
+            SCHEMA_COMPLETED_ACTIVATION_STATUSES
+            if schema_completed else SCHEMA_MUTATION_UPDATE_STATUSES
+        )
         or payload.get("request_id") != request_id
         or not target_version_bound
         or payload.get("expected_commit") != target_commit
@@ -2594,14 +2611,28 @@ def resolve_schema_execution_mode(db: Session) -> str:
             status = status_payload["status"]
             status_request_id = status_payload.get("request_id")
             if status_request_id == context.request_id:
-                if status != "completed":
+                if status == "completed":
+                    _validate_matching_completed_update_status(
+                        status_payload,
+                        context=context,
+                    )
+                elif status in SCHEMA_COMPLETED_ACTIVATION_STATUSES:
+                    # Signed receipts and the real DB were verified above.
+                    # Activation still needs to start/verify the target API;
+                    # requiring the overall update to be completed deadlocks it.
+                    _validate_matching_active_update_status(
+                        status_payload,
+                        request_id=context.request_id,
+                        request_profile=request_profile,
+                        request_target_version=request_payload.get("source", {}).get("version"),
+                        target_release=context.target_release,
+                        target_commit=context.target_commit,
+                        schema_completed=True,
+                    )
+                else:
                     raise SchemaControlError(
                         "schema_execution_terminal_status_contradictory"
                     )
-                _validate_matching_completed_update_status(
-                    status_payload,
-                    context=context,
-                )
             elif status in ACTIVE_UPDATE_STATUSES:
                 raise SchemaControlError(
                     "schema_execution_foreign_active_status"

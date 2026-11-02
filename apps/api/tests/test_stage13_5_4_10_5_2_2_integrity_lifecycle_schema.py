@@ -1540,7 +1540,7 @@ def test_postgresql_v6_to_v7_width_migration_preserves_rows_and_is_idempotent(
     assert repeated["executed_migrations"] == []
     assert _state_column_length(ctx) == 64
     assert ctx.db.get(SchemaVersionState, CURRENT_STATE_ID).schema_version == 7
-    assert CURRENT_SCHEMA_VERSION == 9
+    assert CURRENT_SCHEMA_VERSION >= 7  # This test exercises a historical 6-to-7 step.
     assert (
         ctx.db.query(SchemaMigrationHistory)
         .filter(

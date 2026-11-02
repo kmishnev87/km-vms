@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import pytest
+from app.services.schema_versioning import CURRENT_SCHEMA_VERSION
 
 
 MODULE_PATH = (
@@ -39,7 +40,7 @@ def _public_status() -> dict:
         "artifact": {
             "artifact_id": ARTIFACT_A,
             "artifact_created_at": NOW,
-            "artifact_schema_version": 9,
+            "artifact_schema_version": CURRENT_SCHEMA_VERSION,
             "db_backend": "postgresql",
         },
         "pre_restore_backup_id": ARTIFACT_B,
@@ -84,7 +85,7 @@ def test_reader_restore_status_is_actor_bound_and_redacted(
     assert "actor_subject" not in safe
     assert "schema" not in safe
     assert "raw_path" not in json.dumps(safe)
-    assert control.CURRENT_PRODUCT_DB_SCHEMA_VERSION == 9
+    assert control.CURRENT_PRODUCT_DB_SCHEMA_VERSION == CURRENT_SCHEMA_VERSION
 
     with pytest.raises(control.ContractError, match="foreign_actor_forbidden"):
         control.restore_public_status({"subject": "other"})
@@ -107,7 +108,7 @@ def test_reader_restore_status_is_actor_bound_and_redacted(
     )
 
 
-@pytest.mark.parametrize("schema_version", (8, 10))
+@pytest.mark.parametrize("schema_version", (CURRENT_SCHEMA_VERSION - 1, CURRENT_SCHEMA_VERSION + 1))
 def test_reader_restore_status_rejects_non_current_schema(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

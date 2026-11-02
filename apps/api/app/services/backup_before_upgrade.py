@@ -73,8 +73,16 @@ def sanitize_error(value: Any) -> str:
     return SENSITIVE_RE.sub(lambda match: match.group(1).split(":")[0] + "=***", str(value or ""))[:300]
 
 
+def _database_url(db: Session):
+    bind = db.get_bind()
+    # A migration session can own a checked-out Connection to pin its lock.
+    # Both ordinary Engine-bound and externally Connection-bound sessions
+    # must use the same URL and credentials, without opening another session.
+    return getattr(bind, "engine", bind).url
+
+
 def detect_db_backend(db: Session) -> str:
-    name = str(db.get_bind().url.get_backend_name()).lower()
+    name = str(_database_url(db).get_backend_name()).lower()
     if name.startswith("postgresql"):
         return "postgresql"
     if name.startswith("sqlite"):
@@ -327,7 +335,7 @@ def _estimate_db_size(db: Session, backend: str) -> dict[str, Any]:
         except Exception:
             return {"estimated_bytes": FALLBACK_ESTIMATE_BYTES, "method": "conservative_fallback"}
     if backend == "sqlite":
-        database = db.get_bind().url.database
+        database = _database_url(db).database
         if database and database != ":memory:" and Path(database).exists():
             return {"estimated_bytes": int(Path(database).stat().st_size), "method": "sqlite_file_size"}
     return {"estimated_bytes": FALLBACK_ESTIMATE_BYTES, "method": "conservative_fallback"}
@@ -374,7 +382,7 @@ def build_backup_plan(
 
 
 def _postgres_command(db: Session, backup_path: Path, pg_dump_path: str) -> tuple[list[str], dict[str, str]]:
-    url = db.get_bind().url
+    url = _database_url(db)
     cmd = [pg_dump_path, "--format=custom", "--file", str(backup_path)]
     if url.host:
         cmd.extend(["--host", url.host])
@@ -402,7 +410,7 @@ def _run_postgres_backup(db: Session, tmp_path: Path, config: BackupExecutionCon
 
 
 def _run_sqlite_backup(db: Session, tmp_path: Path) -> None:
-    database = db.get_bind().url.database
+    database = _database_url(db).database
     if not database or database == ":memory:":
         raise BackupSafetyBlocked(
             "backup_failed",

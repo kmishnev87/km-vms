@@ -41,7 +41,7 @@ def test_schema_preflight_requires_capability_of_exact_previous_api_image(tmp_pa
         if command[:3] == ["docker", "image", "inspect"]:
             assert command[3] == image
             return SimpleNamespace(stdout=previous_protocol)
-        return SimpleNamespace(stdout=output)
+        return SimpleNamespace(stdout=output, stderr="", returncode=0)
     monkeypatch.setattr(bridge, "run_command", run)
     if previous_protocol == "1":
         assert bridge.run_target_schema_preflight(tmp_path, "fixture", "target", engine=object(), previous_slot_id="previous")["migration_required"] is True

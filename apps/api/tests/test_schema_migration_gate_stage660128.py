@@ -114,7 +114,7 @@ def test_pipeline_holds_one_lock_while_running_all_phases(
         def __exit__(self, *_args: object) -> None:
             events.append("session_closed")
 
-    monkeypatch.setattr(pipeline, "Session", LockSession)
+    monkeypatch.setattr(pipeline, "_pipeline_lock_session", lambda: LockSession(None))
     monkeypatch.setattr(
         pipeline,
         "acquire_schema_lock",
@@ -251,7 +251,7 @@ def test_safe_backup_failure_retries_without_duplicate_mutation(
             raise RuntimeError("safe pre-mutation backup failure")
         return {"backup_id": "backup-1"}
 
-    monkeypatch.setattr(pipeline, "Session", LockSession)
+    monkeypatch.setattr(pipeline, "_pipeline_lock_session", lambda: LockSession(None))
     monkeypatch.setattr(pipeline, "acquire_schema_lock", lambda _db: 4242)
     monkeypatch.setattr(
         pipeline,
@@ -351,7 +351,7 @@ def test_failure_before_first_real_mutation_keeps_marker_false(
         events.append("phases_entered")
         raise RuntimeError("pre-mutation phase validation failed")
 
-    monkeypatch.setattr(pipeline, "Session", LockSession)
+    monkeypatch.setattr(pipeline, "_pipeline_lock_session", lambda: LockSession(None))
     monkeypatch.setattr(
         pipeline,
         "acquire_schema_lock",
