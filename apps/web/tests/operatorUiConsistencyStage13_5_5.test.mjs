@@ -27,7 +27,7 @@ const openCreate = cameras.slice(
 );
 assert.doesNotMatch(openCreate, /setDeleteNotice|setDeleteWarning/);
 assert.match(openCreate, /setShowEditor\(true\)/);
-assert.match(cameras, /className="pageWarnings cameraPageWarnings"/);
+assert.match(cameras, /cameraHeaderActions[\s\S]*?<OperatorProblemBanners/);
 assert.doesNotMatch(cameras, /\\u270e|\\u23fb|\\u2713|\\ud83d\\uddd1/);
 for (const icon of ["EditIcon", "PowerIcon", "CheckIcon", "TrashIcon"]) {
   assert.match(icons, new RegExp(`export function ${icon}`));

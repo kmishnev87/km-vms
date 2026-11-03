@@ -44,7 +44,11 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
   const copy = useLocaleText("cameras");
   const editor = useCameraEditor(camera, copy, onSaved);
   const { form, patch, section, setSection, device, preview, operation, error, notice } = editor;
+  const childReturnFocusRef = useRef(null);
+  const childWasOpenRef = useRef(false);
   const [confirm, setConfirm] = useState(null);
+  const [discoveryOpen, setDiscoveryOpen] = useState(false);
+  useEffect(() => { if (editor.discovery) setDiscoveryOpen(true); }, [editor.discovery]);
   const [deviceBusy, setDeviceBusy] = useState(false);
   const dialogRef = useRef(null);
   const pendingAction = useRef(null);
@@ -55,9 +59,21 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
   const imageCache = useRef(new Map());
   useModalBodyScrollLock(true);
 
+  useEffect(() => {
+    const childOpen = Boolean(discoveryOpen || confirm);
+    if (childWasOpenRef.current && !childOpen) {
+      const trigger = childReturnFocusRef.current;
+      const target = trigger?.isConnected && !trigger.disabled ? trigger : dialogRef.current?.querySelector("button:not([disabled]), input:not([disabled])");
+      target?.focus({ preventScroll: true });
+      childReturnFocusRef.current = null;
+    }
+    childWasOpenRef.current = childOpen;
+  }, [discoveryOpen, confirm]);
+
   function requestClose() {
     if (operation === "saving" || deviceBusy) return;
     if (editor.dirty) {
+      childReturnFocusRef.current = document.activeElement;
       pendingAction.current = onClose;
       setConfirm("close");
     } else onClose();
@@ -84,7 +100,7 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
 
   function guardDeviceDraft(action) {
     if (deviceBusy) return;
-    if (editor.settingsDirty) { pendingAction.current = action; setConfirm("device"); }
+    if (editor.settingsDirty) { childReturnFocusRef.current = document.activeElement; pendingAction.current = action; setConfirm("device"); }
     else action();
   }
   function change(key, value) {
@@ -93,10 +109,13 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
   }
   function navigate(nextSection) {
     if (busy || nextSection === section) return;
-    guardDeviceDraft(() => {
-      editor.setError(""); setSection(nextSection);
-      if (camera && nextSection === "video" && !device) editor.check({ all: true, automatic: true, image: !preview });
-      if (nextSection === "video") editor.requestProfileMetadata();
+    guardDeviceDraft(async () => {
+      editor.setError("");
+      if (nextSection === "video") {
+        if (camera && !device && !await editor.check({ all: true, automatic: true, image: !preview })) return;
+        if (!await editor.prepareProfileMetadata()) return;
+      }
+      setSection(nextSection);
     });
   }
   function handleKeyDown(event) {
@@ -184,7 +203,7 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
         onChange={(event) => onvifChoices ? guardDeviceDraft(() => editor.selectPurpose(purpose, event.target.value))
           : patch(purpose === "record" ? "default_record_stream" : "default_live_stream", event.target.value)}>
         {onvifChoices ? <>
-          {!sourceProfiles.some((profile) => profile.token === token) ? <option value={token}>{copy.editorSavedProfile}</option> : null}
+          {!sourceProfiles.some((profile) => profile.token === token) ? <option value={token}>{copy.editorUnlistedStream}</option> : null}
           {sourceProfiles.map((profile, index) => <option key={profile.token} value={profile.token}>{profileLabel(profile, index)}</option>)}
         </> : roles.map((item) => <option key={item} value={item}>{roleLabel(item)}</option>)}
       </StreamChoice>
@@ -197,16 +216,12 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
   function renderConnection() {
     return <section>
       <div className="cameraFlowSectionHead"><h3>{copy.editorConnectCamera}</h3>
-        {form.protocol === "onvif" ? <button type="button" className="cameraFlowTextButton" onClick={editor.discover} disabled={editor.searching || busy}>{editor.searching ? copy.searching : copy.editorSearch}</button> : null}
+        {form.protocol === "onvif" ? <button type="button" className="cameraFlowTextButton" onClick={(event) => { childReturnFocusRef.current = event.currentTarget; editor.discover(); }} disabled={editor.searching || busy}>{editor.searching ? copy.searching : copy.editorSearch}</button> : null}
       </div>
       {!camera ? <div className="cameraFlowMethods" aria-label={copy.protocol}>
         {[["onvif", copy.editorOnvifHelp], ["rtsp", copy.editorRtspHelp]].map(([protocol, description]) => <button key={protocol} type="button" aria-pressed={form.protocol === protocol} disabled={busy} onClick={() => change("protocol", protocol)}>
           <strong>{protocol.toUpperCase()}</strong><span>{description}</span>
         </button>)}
-      </div> : null}
-      {editor.discovery && form.protocol === "onvif" ? <div className="cameraFlowDiscovery">
-        <p>{editor.discovery.candidates?.length ? copy.editorChooseDiscovered : copy.editorDiscoveryEmpty}</p>
-        {(editor.discovery.candidates || []).map((candidate) => <button type="button" key={candidate.id || `${candidate.host}:${candidate.port}`} disabled={busy} onClick={() => guardDeviceDraft(() => editor.selectCandidate(candidate))}>{candidate.host}:{candidate.port || 80}</button>)}
       </div> : null}
       <div className="cameraFlowFields">
         {input("name", copy.cameraName, { wide: true })}
@@ -277,14 +292,15 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
 
   const primaryAction = camera || section === "review" ? editor.save
     : section === "connection" && !editor.connectionReady && !form.manual_confirm_unverified ? () => editor.check() : editor.next;
-  const primaryLabel = operation === "saving" ? copy.saving : busy ? copy.checking : camera ? copy.editorSaveChanges
+  const preparing = editor.metadataPreparing && section === "connection" && editor.connectionReady && !form.manual_confirm_unverified;
+  const primaryLabel = operation === "saving" ? copy.saving : busy ? copy.checking : preparing ? copy.editorPreparingStreams : camera ? copy.editorSaveChanges
     : section === "review" ? copy.editorAddCamera : section === "connection"
       ? editor.connectionReady || form.manual_confirm_unverified ? copy.editorContinue : copy.editorCheckConnection : copy.editorContinue;
-  const feedback = error || (busy ? operation === "preview" ? copy.editorLoadingImage : copy.checking
+  const feedback = error || (busy ? operation === "preview" ? copy.editorLoadingImage : copy.checking : preparing ? copy.editorPreparingStreams
     : section === "review" ? form.manual_confirm_unverified ? copy.editorUnverifiedNotice : "" : notice);
 
   return <div className="cameraFlowBackdrop" role="presentation">
-    <div className="cameraFlow" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="camera-flow-title" aria-busy={busy} onKeyDown={handleKeyDown}>
+    <div className="cameraFlow" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="camera-flow-title" aria-busy={busy} aria-hidden={discoveryOpen || confirm ? true : undefined} inert={discoveryOpen || confirm ? true : undefined} onKeyDown={handleKeyDown}>
       <header className="cameraFlowHeader"><div><h2 id="camera-flow-title">{camera ? `${copy.editTitle}: ${camera.name}` : copy.addTitle}</h2>
         <p>{camera ? copy.editorEditSubtitle : copy.editorAddSubtitle}</p></div>
         <button type="button" className="cameraFlowClose" onClick={requestClose} disabled={operation === "saving" || deviceBusy} aria-label={copy.close}>×</button>
@@ -319,9 +335,15 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
       <footer className="cameraFlowFooter"><span>{camera ? copy.editorChangesLocal : copy.editorNotSavedYet}</span><div>
         <button type="button" className="cameraFlowTextButton" disabled={operation === "saving" || deviceBusy} onClick={requestClose}>{copy.cancel}</button>
         {!camera && section !== "connection" ? <button type="button" className="button secondary" disabled={busy} onClick={() => navigate(section === "review" ? "video" : "connection")}>{copy.editorBack}</button> : null}
-        <button type="button" className="button" disabled={busy} onClick={primaryAction}>{primaryLabel}</button>
+        <button type="button" className="button" disabled={busy || preparing} onClick={primaryAction}>{primaryLabel}</button>
       </div></footer>
     </div>
+    <OperationDialog dialog={discoveryOpen ? {
+      id: "camera-discovery", title: copy.editorSearch, closeLabel: copy.close, tone: "neutral",
+      content: <div className="cameraFlowDiscovery"><p>{editor.discovery?.candidates?.length ? copy.editorChooseDiscovered : copy.editorDiscoveryEmpty}</p>
+        {(editor.discovery?.candidates || []).map((candidate) => <button type="button" key={candidate.id || `${candidate.host}:${candidate.port}`} disabled={busy} onClick={() => { setDiscoveryOpen(false); guardDeviceDraft(() => editor.selectCandidate(candidate)); }}>{candidate.host}:{candidate.port || 80}</button>)}
+      </div>,
+    } : null} onClose={() => setDiscoveryOpen(false)} />
     <OperationDialog dialog={confirm ? {
       id: "camera-editor-discard", presentation: "compact-confirmation", tone: "warning",
       title: confirm === "device" ? copy.editorDeviceUnsaved : copy.editorUnsavedTitle,

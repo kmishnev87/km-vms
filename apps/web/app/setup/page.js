@@ -593,7 +593,7 @@ export default function SetupPage() {
                   <strong>{t.status}</strong>
                   <span>{storageStatusText(storageState.confirmation?.status || storageState.preview?.status)}</span>
                   <strong>{t.nextAction}</strong>
-                  <span>{nextActionText(storageState.confirmation?.next_action)}</span>
+                  <span className="setupStorageFeedbackCell" role={storageState.error || storageState.previewError ? "alert" : "status"}>{storageState.error || storageState.previewError || storageState.message || nextActionText(storageState.confirmation?.next_action)}</span>
                   <strong>{t.storageFolderState}</strong>
                   <span>{storageState.preview?.exists ? t.storageFolderExists : t.storageFolderWillBeCreated}</span>
                   {selectedCandidate ? (
@@ -602,10 +602,6 @@ export default function SetupPage() {
                       <span>{formatBytes(selectedCandidate.free_bytes)}</span>
                     </>
                   ) : null}
-                  {storageState.message ? <span className="setupStatusNote">{storageState.message}</span> : null}
-                  {storageState.previewError ? <span className="setupStatusError">{storageState.previewError}</span> : null}
-                  {storageState.error ? <span className="setupStatusError">{storageState.error}</span> : null}
-                  {!storageReady ? <span className="setupStatusNote">{storageDisabledReason() || storageState.previewError || t.storageActionReady}</span> : null}
                 </div>
               </div>
             </section>
@@ -675,8 +671,9 @@ export default function SetupPage() {
           ) : null}
         </div>
 
-        {error ? <div className="authError">{error}</div> : null}
-        {submitState === "timeout" ? <div className="settingsAlert error">{t.setupSubmitTimeoutHelp}</div> : null}
+        <div className="setupFeedback" role={error ? "alert" : undefined} style={error ? undefined : { visibility: "hidden" }}>
+          {error || "\u00a0"}{submitState === "timeout" ? ` ${t.setupSubmitTimeoutHelp}` : ""}
+        </div>
         <div className="setupActions">
           <button className="button secondary" type="button" onClick={() => setStep((current) => Math.max(current - 1, 0))} disabled={busy || step === 0}>
             {t.back}

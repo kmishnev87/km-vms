@@ -67,6 +67,13 @@
   gap: 6px;
 }
 
+/* Context warnings occupy one toolbar slot; details never enter page flow. */
+.operatorProblemAnchor { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 30px; width: 30px; height: 30px; }
+.operatorProblemButton { width: 26px; height: 26px; padding: 0; border: 1px solid #f2cf84; border-radius: 7px; background: #fffbeb; color: #92400e; font-size: 12px; cursor: pointer; }
+.operatorProblemButton.is-error { border-color: #f2b5b5; color: #991b1b; background: #fef2f2; }
+.operatorWarningsDialog { height: min(520px, calc(100dvh - 40px)); }
+.operatorWarningsDialog .operatorWarningDetails { max-height: none; padding: 0; border: 0; overflow: visible; }
+
 .operatorStatusOverview {
   padding: 14px;
   border: 1px solid #dbe3ef;
@@ -664,6 +671,13 @@
   font-weight: 800;
   cursor: pointer;
 }
+
+.authCard .authFeedbackSlot { height: 42px; margin: 0 0 12px; padding: 7px 10px; overflow: auto; font-size: 13px; line-height: 18px; }
+.setupWizard { height: min(800px, calc(100dvh - 32px)); max-height: calc(100dvh - 32px); display: flex; flex-direction: column; }
+.setupWizard .setupWizardBody { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.setupWizard .setupHeader, .setupWizard .setupSteps, .setupWizard .setupActions { flex-shrink: 0; }
+.setupFeedback { flex: 0 0 52px; height: 52px; overflow: auto; padding: 6px 10px; border-radius: 8px; color: #991b1b; background: #fef2f2; font-size: 13px; line-height: 18px; }
+.setupStorageFeedbackCell { height: 54px; overflow: auto; }
 
 .authButton:disabled,
 .button:disabled {

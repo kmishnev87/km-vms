@@ -18,11 +18,18 @@ const UPDATE_APPLY_PRESERVED_TERMINAL_STATUSES = new Set([
   "canceled",
 ]);
 
-export function updateApplyProgressText(applyStatus, t) {
-  const phase = maintenanceStatusText(
-    applyStatus?.current_step || applyStatus?.phase || applyStatus?.status,
+export function updateApplyPhaseText(applyStatus, t) {
+  const preparationPhases = ["staging_source", "validating_compose", "building_images", "pulling_images", "verifying_images", "schema_preflight"];
+  return maintenanceStatusText(
+    preparationPhases.includes(applyStatus?.phase) && t.maintenanceStatuses?.[applyStatus.phase]
+      ? applyStatus.phase
+      : applyStatus?.current_step || applyStatus?.phase || applyStatus?.status,
     t,
   );
+}
+
+export function updateApplyProgressText(applyStatus, t) {
+  const phase = updateApplyPhaseText(applyStatus, t);
   const percent = applyStatus?.progress_percent;
   const current = applyStatus?.progress_current;
   const total = applyStatus?.progress_total;
@@ -168,7 +175,7 @@ export function updateApplyFactRows(updateStatus, applyStatus, t) {
     [labels.releaseSummary || "Summary", summary],
     [labels.status || "Status", maintenanceStatusText(status, t)],
     [labels.verification, verification],
-    [labels.currentStep || "Current step", maintenanceStatusText(applyStatus?.current_step || applyStatus?.phase || status, t)],
+    [labels.currentStep || "Current step", updateApplyPhaseText({ status, ...applyStatus }, t)],
     [labels.lastProgress || "Last progress", formatDurationSeconds(applyStatus?.last_progress_age_seconds)],
     [labels.elapsed || "Elapsed", formatDurationSeconds(applyStatus?.elapsed_seconds)],
   ];

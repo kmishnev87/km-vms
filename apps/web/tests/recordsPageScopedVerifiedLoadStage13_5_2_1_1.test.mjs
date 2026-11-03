@@ -16,11 +16,11 @@ assert.match(recordsPage, /const \[pageSize, setPageSize\] = useState\(DEFAULT_P
 assert.match(recordsPage, /const \[exportCameraOptions, setExportCameraOptions\] = useState\(\[\]\)/);
 assert.match(recordsPage, /params\.set\("limit", String\(pageSize\)\)/);
 assert.match(recordsPage, /params\.set\("offset", String\(Math\.max\(0, \(page - 1\) \* pageSize\)\)\)/);
-assert.match(recordsPage, /setRecordingsLoadState\("loading"\)/);
-assert.match(recordsPage, /setItems\(\[\]\)/);
-assert.match(recordsPage, /const recordingsLoaded = recordingsLoadState === "loaded"/);
-assert.match(recordsPage, /const filteredItems = recordingsLoaded \? items : \[\]/);
-assert.doesNotMatch(recordsPage, /recordingsLoadState === "loaded" \|\| recordingsLoadState === "refreshing"/);
+assert.match(recordsPage, /setRecordingsLoadState\(loadedQueryKey \? "refreshing" : "loading"\)/);
+assert.doesNotMatch(recordsPage, /setItems\(\[\]\)/);
+assert.match(recordsPage, /const recordingsLoaded = Boolean\(loadedQueryKey\)/);
+assert.match(recordsPage, /const filteredItems = items/);
+assert.match(recordsPage, /recordingsActionReady = recordingsLoadState === "loaded" && loadedQueryKey === currentQueryKey/);
 assert.doesNotMatch(recordsPage, /Проверяется|not_checked/);
 
 assert.match(recordsPage, /function isRecordingAvailable\(item\)/);

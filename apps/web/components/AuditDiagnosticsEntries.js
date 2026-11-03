@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { OperationDialog, OperationToast } from "./OperationFeedback";
+import { OperationDialog, OperationToast, OperationRefreshButton } from "./OperationFeedback";
 import { apiFetch, apiFetchBlob, forbiddenMessage } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { useI18n } from "../lib/i18n";
@@ -88,10 +88,16 @@ export function SecurityJournalEntry() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const canReadAudit = Boolean(currentUser?.permissions?.includes("manage_settings"));
+  const [operationToast, setOperationToast] = useState(null);
+  const requestRef = useRef(0);
 
   useEffect(() => {
     setFilters(parsed.filters);
     setOffset(0);
+  }, [parsed]);
+
+  useEffect(() => {
+    if (parsed.unsupported.length || parsed.invalid.length) setOperationToast({ id: "journal-filters", title: t("securityJournal.unsupportedFilters"), tone: "warning" });
   }, [parsed]);
 
   const queryPath = useMemo(() => buildAuditEventsPath(filters, 0), [filters]);
@@ -107,19 +113,23 @@ export function SecurityJournalEntry() {
   }
 
   async function loadEvents(nextOffset = 0) {
+    const request = ++requestRef.current;
     setBusy(true);
     setError("");
     try {
       const data = await apiFetch(buildAuditEventsPath(filters, nextOffset));
+      if (request !== requestRef.current) return;
       const nextItems = Array.isArray(data?.items) ? data.items : [];
       setItems(nextOffset > 0 ? (current) => [...current, ...nextItems] : nextItems);
       setOffset(nextOffset + nextItems.length);
       setHasMore(nextItems.length === AUDIT_LIMIT);
     } catch (err) {
-      if (nextOffset === 0) setItems([]);
+      if (request !== requestRef.current) return;
+      if ([401, 403].includes(err?.status)) setItems([]);
       setError(String(err?.message || t("securityJournal.error")));
+      setOperationToast({ id: `journal-error-${Date.now()}`, title: t("securityJournal.error"), message: err?.message, tone: "error" });
     } finally {
-      setBusy(false);
+      if (request === requestRef.current) setBusy(false);
     }
   }
 
@@ -131,16 +141,12 @@ export function SecurityJournalEntry() {
   }
 
   return (
-    <section className="settingsSecurityModalSection auditEntrySurface">
+    <section className="settingsSecurityModalSection auditEntrySurface" aria-busy={busy}>
       <div className="settingsSecurityModalSectionHead auditEntrySectionHead">
         <h2>{t("securityJournal.contentTitle")}</h2>
+        <OperationRefreshButton busy={busy} error={error} label={t("common.refresh")} onClick={() => loadEvents(0)} />
       </div>
 
-      {(parsed.unsupported.length || parsed.invalid.length) ? (
-        <div className="settingsJournalEmpty warning">
-          {t("securityJournal.unsupportedFilters")}
-        </div>
-      ) : null}
 
       <div className="settingsAuditFilters" aria-label={t("securityJournal.filters")}>
         <label>
@@ -186,7 +192,7 @@ export function SecurityJournalEntry() {
 
       {busy && !items.length ? (
         <div className="settingsJournalEmpty">{t("securityJournal.loading")}</div>
-      ) : error ? (
+      ) : error && !items.length ? (
         <div className="settingsJournalEmpty error">{error}</div>
       ) : items.length ? (
         <>
@@ -230,6 +236,7 @@ export function SecurityJournalEntry() {
       ) : (
         <div className="settingsJournalEmpty">{t("securityJournal.empty")}</div>
       )}
+      <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
     </section>
   );
 }
@@ -238,7 +245,6 @@ export function DiagnosticsEntry() {
   const { currentUser, loading } = useCurrentUser();
   const { locale, t } = useI18n();
   const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
   const [operationToast, setOperationToast] = useState(null);
   const [archiveChoiceOpen, setArchiveChoiceOpen] = useState(false);
   const [bugText, setBugText] = useState("");
@@ -248,7 +254,6 @@ export function DiagnosticsEntry() {
     if (busy) return;
     setArchiveChoiceOpen(false);
     setBusy(`archive-${mode}`);
-    setError("");
     try {
       const { blob, filename } = await apiFetchBlob(`/settings/logs/archive?mode=${encodeURIComponent(mode)}`);
       downloadBlob(blob, filename || `km-vms-logs-${mode}.zip`);
@@ -258,7 +263,7 @@ export function DiagnosticsEntry() {
         tone: "success",
       });
     } catch (err) {
-      setError(String(err?.message || t("diagnosticsEntry.failed")));
+      setOperationToast({ id: `diagnostics-error-${Date.now()}`, title: t("diagnosticsEntry.failed"), message: err?.message, tone: "error" });
     } finally {
       setBusy("");
     }
@@ -267,7 +272,6 @@ export function DiagnosticsEntry() {
   async function createBugReport() {
     if (busy || !bugText.trim()) return;
     setBusy("bug-report");
-    setError("");
     try {
       const { blob, filename } = await apiFetchBlob("/settings/bug-report", {
         method: "POST",
@@ -281,7 +285,7 @@ export function DiagnosticsEntry() {
         tone: "success",
       });
     } catch (err) {
-      setError(String(err?.message || t("diagnosticsEntry.failed")));
+      setOperationToast({ id: `diagnostics-error-${Date.now()}`, title: t("diagnosticsEntry.failed"), message: err?.message, tone: "error" });
     } finally {
       setBusy("");
     }
@@ -328,8 +332,6 @@ export function DiagnosticsEntry() {
           </button>
         </section>
       </div>
-      {error ? <div className="settingsJournalEmpty error">{error}</div> : null}
-      <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
       <OperationDialog
         dialog={archiveChoiceOpen ? {
           id: "diagnostics-entry-archive-choice",
@@ -366,6 +368,7 @@ export function DiagnosticsEntry() {
         } : null}
         onClose={() => setArchiveChoiceOpen(false)}
       />
+      <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
     </section>
   );
 }

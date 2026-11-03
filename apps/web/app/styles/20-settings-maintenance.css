@@ -790,9 +790,18 @@
   background: #ffffff;
   box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
   padding: 16px;
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  height: min(680px, calc(100dvh - 36px));
+  max-height: calc(100dvh - 36px);
+  overflow: hidden;
   gap: 12px;
 }
+
+.settingsUserModalBody { display: grid; align-content: start; gap: 12px; min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.settingsUserModal > .settingsUserModalHeader, .settingsUserModal > .settingsModalActions { flex-shrink: 0; }
+.settingsModalOverlay > .settingsSecurityModal { height: min(760px, calc(100dvh - 36px)); }
+.settingsSecurityModal, .settingsUsersModal { overscroll-behavior: contain; scrollbar-gutter: stable; }
 
 .settingsSecurityModal {
   width: min(100%, 760px);
@@ -2856,6 +2865,8 @@
 }
 
 .settingsModalFieldError {
+  height: 18px;
+  overflow: auto;
   color: #b91c1c;
   font-size: 12px;
   line-height: 1.35;
@@ -2880,6 +2891,8 @@
 }
 
 .settingsModalError {
+  height: 42px;
+  overflow: auto;
   border-radius: 10px;
   background: #fef2f2;
   color: #991b1b;
@@ -3009,12 +3022,16 @@
   max-height: min(90vh, 900px);
   padding: 0;
   gap: 0;
-  overflow: auto;
+  overflow: hidden;
+  height: min(760px, calc(100dvh - 36px));
+  display: flex;
+  flex-direction: column;
   border-radius: 14px;
 }
 
 .settingsMaintenanceModalHeader {
   top: 0;
+  flex-shrink: 0;
   margin: 0;
   padding: 16px 20px;
 }
@@ -3027,7 +3044,26 @@
 .settingsMaintenanceContent {
   gap: 18px;
   padding: 20px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
+
+.settingsMaintenanceContent > * { flex-shrink: 0; }
+.operationFeedbackOverlay.settingsMaintenanceDetailOverlay { z-index: 9500; }
+.operationFeedbackDialog.settingsMaintenanceDetailDialog { width: min(820px, 100%); height: min(640px, calc(100dvh - 40px)); }
+.settingsMaintenancePill:is(button) { cursor: pointer; font-family: inherit; white-space: nowrap; }
+.maintenanceDetailFacts { display: grid; gap: 8px; margin: 0; }
+.maintenanceDetailFacts > div { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(0, 1fr); gap: 12px; }
+.maintenanceDetailFacts dt { color: #64748b; }
+.maintenanceDetailFacts dd { margin: 0; overflow-wrap: anywhere; }
+.settingsMaintenanceDetailDialog .settingsUpdateApplyTimeline { overflow: visible; }
+.settingsMaintenanceDetailDialog .settingsUpdateApplyTimeline ol { min-width: 0; }
+.settingsCurrentRestoreDialog { height: min(680px, calc(100dvh - 40px)); }
 
 .settingsMaintenanceOverall {
   display: flex;

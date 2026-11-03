@@ -5,7 +5,7 @@ import { apiFetch } from "../../lib/api";
 import { onvifConfigFromResult } from "../../lib/cameraOnvifConfig";
 import {
   CAMERA_CONNECTION_FIELDS, CAMERA_MANAGEMENT_FIELDS, assignCameraProfile, assignCameraPurposeProfile, cameraPreviewIdentity,
-  cameraProfileHasMetadata, cameraProfilePath,
+  cameraProfileHasMetadata, cameraProfilePath, cameraSelectedSource,
   cameraCheckIsCurrent, cameraChecksReady, cameraConnectionChanged, cameraDraftWithProfiles,
   cameraEditorChanges, cameraEditorDraft, cameraEditorError, cameraEditorPayload,
   cameraEditorProblem, cameraManagementKey, cameraSavePayload, cameraStreamKey, cameraDraftForSource, cameraSourceConflict,
@@ -55,6 +55,9 @@ export default function useCameraEditor(camera, copy, onSaved) {
   const metadataRequested = useRef(false);
   const metadataRun = useRef(null);
   const metadataActive = useRef(null);
+  const metadataScope = useRef(null);
+  const metadataGeneration = useRef(0);
+  const [metadataPreparing, setMetadataPreparing] = useState(false);
 
   useEffect(() => {
     alive.current = true;
@@ -113,6 +116,7 @@ export default function useCameraEditor(camera, copy, onSaved) {
       setError(""); setNotice("");
       if (CAMERA_MANAGEMENT_FIELDS.has(key)) { setDevice(null); setSettingsDirty(false); showPreview(null); }
       if (key === "onvif_channel_id") showPreview(null);
+      if (CAMERA_MANAGEMENT_FIELDS.has(key) || ["rtsp_transport", "onvif_channel_id"].includes(key)) invalidateMetadata();
     }
     replaceForm(restoreChecks(patchCameraEditor(previous, key, value)));
   }
@@ -133,9 +137,12 @@ export default function useCameraEditor(camera, copy, onSaved) {
     revision.current += 1;
     const next = cameraDraftForSource(formRef.current, deviceRef.current, sourceId);
     showPreview(previewCache.current.get(cameraPreviewIdentity(next, deviceRef.current)) || null);
+    // A -> B -> A is a NEW read, even if the original A request is still in flight.
+    checkCache.current.clear();
     replaceForm(restoreChecks(next));
+    startMetadataScope({ restart: true, refresh: true });
     setError(""); setNotice("");
-    return check({ automatic: true, image: true });
+    return check({ automatic: true, image: true, force: true });
   }
   function selectCandidate(candidate) {
     revision.current += 1;
@@ -147,6 +154,7 @@ export default function useCameraEditor(camera, copy, onSaved) {
     })) next = patchCameraEditor(next, key, value);
     replaceForm(next);
     setDevice(null); showPreview(null); setSettingsDirty(false); setError(""); setNotice(copy.editorCandidateSelected);
+    invalidateMetadata();
   }
 
   async function discover() {
@@ -165,53 +173,96 @@ export default function useCameraEditor(camera, copy, onSaved) {
   function stillCurrent(request) { return alive.current && revision.current === request; }
 
   function metadataKey() {
-    return JSON.stringify([cameraManagementKey(formRef.current), formRef.current.rtsp_transport]);
+    return JSON.stringify([cameraManagementKey(formRef.current), formRef.current.rtsp_transport,
+      cameraSelectedSource(formRef.current, deviceRef.current)?.id || formRef.current.onvif_channel_id || "single"]);
   }
-  function pendingMetadataProfile() {
+  function metadataProfiles() {
+    const data = deviceRef.current;
+    const source = cameraSelectedSource(formRef.current, data);
+    return (data?.profiles || []).filter((profile) => source ? source.profile_tokens.includes(profile.token) : !(data?.source_groups?.length > 1));
+  }
+  function metadataIsCurrent(scope) {
+    return alive.current && scope && scope === metadataScope.current && scope.key === metadataKey();
+  }
+  function pendingMetadataProfile(scope = metadataScope.current) {
+    if (!metadataIsCurrent(scope)) return null;
+    return metadataProfiles().find((profile) => cameraProfilePath(profile)
+      && !(profile.metadata_status?.generation === scope.generation && ["done", "failed"].includes(profile.metadata_status.state))
+      && (scope.refresh || (!cameraProfileHasMetadata(profile) && !profile.rtsp_probe)));
+  }
+  function invalidateMetadata() {
+    metadataScope.current = null;
+    metadataRequested.current = false;
+    setMetadataPreparing(false);
+  }
+  function startMetadataScope({ restart = false, refresh = false } = {}) {
+    if (formRef.current.protocol !== "onvif" || !deviceRef.current) return null;
     const key = metadataKey();
-    return (deviceRef.current?.profiles || []).find((profile) => cameraProfilePath(profile)
-      && !cameraProfileHasMetadata(profile) && !profile.rtsp_probe
-      && !(profile.metadata_status?.key === key && ["done", "failed"].includes(profile.metadata_status.state)));
+    if (restart || metadataScope.current?.key !== key) {
+      metadataScope.current = { key, generation: ++metadataGeneration.current, refresh };
+      if (refresh) {
+        const tokens = new Set(metadataProfiles().map((profile) => profile.token));
+        setDevice((previous) => ({ ...previous, profiles: previous.profiles.map((profile) => {
+          if (!tokens.has(profile.token)) return profile;
+          const { rtsp_probe, metadata_status, ...base } = profile;
+          return base;
+        }) }));
+      }
+    }
+    metadataRequested.current = true;
+    setMetadataPreparing(Boolean(pendingMetadataProfile()));
+    return metadataScope.current;
   }
-  function updateProfileMetadata(token, key, changes) {
-    if (!alive.current || key !== metadataKey()) return;
+  function updateProfileMetadata(token, scope, changes) {
+    if (!metadataIsCurrent(scope)) return;
     setDevice((previous) => previous ? { ...previous, profiles: (previous.profiles || []).map((profile) => (
       profile.token === token ? { ...profile, ...changes } : profile
     )) } : previous);
+    setMetadataPreparing(Boolean(pendingMetadataProfile(scope)));
   }
   async function loadProfileMetadata() {
-    if (!alive.current || !metadataRequested.current || metadataRun.current || checking.current || formRef.current.protocol !== "onvif") return;
+    if (metadataRun.current) return metadataRun.current;
+    if (!alive.current || !metadataRequested.current || checking.current || formRef.current.protocol !== "onvif") return;
+    const scope = metadataScope.current;
     const work = (async () => {
-      while (alive.current && metadataRequested.current && !checking.current && formRef.current.protocol === "onvif") {
-        const profile = pendingMetadataProfile();
+      while (metadataIsCurrent(scope) && metadataRequested.current && !checking.current) {
+        const profile = pendingMetadataProfile(scope);
         if (!profile) break;
-        const key = metadataKey();
         const source = assignCameraProfile(formRef.current, "main", profile);
         source.onvif_channel_id = String(profile.source_channel ?? source.onvif_channel_id ?? "");
-        updateProfileMetadata(profile.token, key, { metadata_status: { key, state: "loading" } });
+        updateProfileMetadata(profile.token, scope, { metadata_status: { generation: scope.generation, state: "loading" } });
         const request = post("/cameras/test", { ...cameraEditorPayload(source, camera?.id), stream_role: "main", metadata_only: true });
         metadataActive.current = request;
         try {
           const result = await request;
           if (!result?.ok || !result.video) throw new Error("camera_video_not_verified");
-          updateProfileMetadata(profile.token, key, { rtsp_probe: { video: result.video, audio: result.audio }, metadata_status: { key, state: "done" } });
+          updateProfileMetadata(profile.token, scope, { rtsp_probe: { video: result.video, audio: result.audio }, metadata_status: { generation: scope.generation, state: "done" } });
         } catch (err) {
-          updateProfileMetadata(profile.token, key, { metadata_status: { key, state: "failed" } });
+          updateProfileMetadata(profile.token, scope, { metadata_status: { generation: scope.generation, state: "failed" } });
         } finally { if (metadataActive.current === request) metadataActive.current = null; }
-        // A changed endpoint or a foreground check takes priority over the catalog.
-        if (key !== metadataKey()) break;
       }
     })();
     metadataRun.current = work;
     try { await work; }
     finally {
       if (metadataRun.current === work) metadataRun.current = null;
+      if (alive.current) setMetadataPreparing(Boolean(pendingMetadataProfile()));
       if (alive.current && metadataRequested.current && !checking.current && pendingMetadataProfile()) loadProfileMetadata();
     }
   }
   function requestProfileMetadata() {
-    metadataRequested.current = true;
+    startMetadataScope();
     loadProfileMetadata();
+  }
+  async function prepareProfileMetadata() {
+    if (checking.current) return false;
+    const request = revision.current;
+    const scope = startMetadataScope();
+    if (!scope) return true; // RTSP/manual/offline editing has no ONVIF catalog prerequisite.
+    while (stillCurrent(request) && metadataIsCurrent(scope) && pendingMetadataProfile(scope)) {
+      await loadProfileMetadata();
+    }
+    return stillCurrent(request) && metadataIsCurrent(scope);
   }
 
   async function probe(source, request) {
@@ -223,6 +274,7 @@ export default function useCameraEditor(camera, copy, onSaved) {
     const next = cameraDraftWithProfiles(formRef.current, result);
     replaceForm({ ...next, onvif_probe_token: result.onvif_probe_token });
     rememberCheck("management", { token: result.onvif_probe_token, key: cameraManagementKey(next), at: Date.now() });
+    startMetadataScope({ restart: true });
     return formRef.current;
   }
 
@@ -254,7 +306,9 @@ export default function useCameraEditor(camera, copy, onSaved) {
     setStreamErrors((previous) => ({ ...previous, [role]: null }));
     const token = source[role === "main" ? "onvif_profile_token" : "onvif_sub_profile_token"];
     setDevice((previous) => previous ? { ...previous, profiles: (previous.profiles || []).map((profile) => (
-      profile.token === token ? { ...profile, rtsp_probe: { video: result.video, audio: result.audio } } : profile
+      profile.token === token && (!fromCache || !profile.rtsp_probe) ? { ...profile,
+        rtsp_probe: { video: result.video, audio: result.audio },
+        metadata_status: { generation: metadataScope.current?.generation, state: "done" } } : profile
     )) } : previous);
     const next = { ...formRef.current, [`${role}_validation_token`]: result.validation_token };
     if (role === "main") next.validation_token = result.validation_token;
@@ -286,6 +340,7 @@ export default function useCameraEditor(camera, copy, onSaved) {
       if (source.protocol === "onvif") {
         source = await probe(source, request);
         if (!source || !stillCurrent(request)) return false;
+        startMetadataScope();
       }
       const roles = cameraStreamRoles(source);
       if (!roles.length) { setError(copy.editorPathRequired); return false; }
@@ -311,6 +366,7 @@ export default function useCameraEditor(camera, copy, onSaved) {
   }
 
   async function next() {
+    const request = revision.current;
     setError("");
     if (settingsDirty) { setError(copy.editorDeviceUnsaved); return; }
     const problem = cameraEditorProblem(formRef.current, copy, section === "connection" ? "connection" : "all");
@@ -322,10 +378,9 @@ export default function useCameraEditor(camera, copy, onSaved) {
         !cameraCheckIsCurrent(checksRef.current[role], cameraStreamKey(formRef.current, role))
         || (formRef.current.protocol === "onvif" && !cameraCheckIsCurrent(checksRef.current.management, cameraManagementKey(formRef.current)))
       ) && !await check()) return;
+      if (!stillCurrent(request) || !await prepareProfileMetadata() || !stillCurrent(request)) return;
       setSection("video");
-      metadataRequested.current = true;
       if (!formRef.current.manual_confirm_unverified) check({ all: true, automatic: true, image: false });
-      else loadProfileMetadata();
     } else {
       if (!formRef.current.manual_confirm_unverified && !cameraChecksReady(formRef.current, checksRef.current) && !await check({ all: true })) return;
       setSection("review");
@@ -365,6 +420,8 @@ export default function useCameraEditor(camera, copy, onSaved) {
     checksRef.current = { management: checksRef.current.management };
     setChecks(checksRef.current);
     replaceForm({ ...formRef.current, preview_token: previewRef.current?.preview_token || null, validation_token: null, main_validation_token: null, sub_validation_token: null });
+    startMetadataScope({ restart: true, refresh: true });
+    loadProfileMetadata();
     setNotice(copy.editorVideoChanged);
   }
 
@@ -381,7 +438,7 @@ export default function useCameraEditor(camera, copy, onSaved) {
     dirty: Object.keys(cameraEditorChanges(form, baseline.current)).length > 0 || settingsDirty,
     checks, device, discovery, preview, operation, searching, error, notice, streamErrors,
     setError, settingsDirty, setSettingsDirty, selectProfile, selectPurpose, selectSource, selectCandidate, discover, check, next, save,
-    invalidateVideo, refreshProfile, requestProfileMetadata, connectionChanged, verified: cameraChecksReady(form, checks),
+    invalidateVideo, refreshProfile, requestProfileMetadata, prepareProfileMetadata, metadataPreparing, connectionChanged, verified: cameraChecksReady(form, checks),
     connectionReady: cameraStreamRoles(form).some((role) => cameraCheckIsCurrent(checks[role], cameraStreamKey(form, role)))
       && (form.protocol !== "onvif" || cameraCheckIsCurrent(checks.management, cameraManagementKey(form))),
   };

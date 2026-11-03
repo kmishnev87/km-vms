@@ -20,7 +20,7 @@ assert.match(
   surface,
   /updateApplyErrors,\s*updatePeerCheckUnavailable,\s*maintenanceBackupOverview/,
 );
-assert.match(surface, /\{updatePeerCheckUnavailable \? \(/);
+assert.match(surface, /\{updatePeerCheckUnavailable \?/);
 assert.doesNotMatch(surface, /updateTransportErrors/);
 
 console.log("settings maintenance emergency V5 contract: PASS");

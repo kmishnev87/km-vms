@@ -12,6 +12,51 @@ def read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def test_source_dir_restores_exact_public_files_without_relaxing_private_excludes(tmp_path):
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    source.mkdir()
+    target.mkdir()
+    product_paths = (
+        ".env.example", "docker-compose.yml", "apps/web/app/recordings/page.js",
+        "apps/web/public/camera.png", "scripts/install.sh",
+    )
+    private_paths = (
+        ".env", ".env.production", "data/postgres/private", "recordings/video.mkv",
+        "Working folder/access.txt", "tmp/private-secret.txt", ".git/config",
+        "apps/web/.env.local", "apps/web/node_modules/package/index.js",
+        "apps/api/secrets/private.txt", "apps/api/key.pem",
+        "apps/api/private-credentials.txt", "apps/api/private-secret.txt",
+        "apps/web/app/recordings/private-secret.txt",
+    )
+    for relative in (*product_paths, *private_paths):
+        path = source / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture\n", encoding="utf-8")
+    function = read("scripts/install.sh").split("copy_source_dir() {", 1)[1].split("\nclone_repo()", 1)[0]
+    harness = tmp_path / "copy.sh"
+    harness.write_text(
+        '#!/bin/sh\nset -eu\ninfo() { :; }\nacquisition_fail() { exit 90; }\n'
+        + 'copy_source_dir() {' + function + '\ncopy_source_dir\n', encoding="utf-8",
+    )
+    def run():
+        return subprocess.run(
+            ["sh", str(harness)],
+            env={**os.environ, "SOURCE_DIR": str(source), "APP_DIR": str(target)},
+            capture_output=True, text=True, check=False,
+        )
+    result = run()
+    assert result.returncode == 0, result.stderr
+    for relative in product_paths:
+        assert (target / relative).read_bytes() == (source / relative).read_bytes(), relative
+    for relative in private_paths:
+        assert not (target / relative).exists(), relative
+    # An exact-path exception must not follow a link into private data.
+    (source / ".env.example").unlink()
+    (source / ".env.example").symlink_to(source / ".env")
+    assert run().returncode != 0
+
+
 def test_install_script_exposes_private_github_no_git_contract():
     script = read("scripts/install.sh")
     helper = read("scripts/km-vms-compose-common.sh")

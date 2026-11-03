@@ -24,12 +24,13 @@ const component = read("components/OperatorProblemBanners.js");
 const css = read("app/styles/10-dashboard-auth-setup.css");
 const responsiveCss = read("app/styles/60-responsive-shared.css");
 
-assert.match(component, /operatorWarningStrip/);
+assert.match(component, /operatorProblemAnchor/);
+assert.match(component, /<OperationDialog dialog=\{detailsOpen/);
 assert.match(component, /usePathname/);
 assert.match(component, /actionForContext/);
 assert.match(component, /routeSection/);
 assert.match(component, /detailsOpen, setDetailsOpen\] = useState\(false\)/);
-assert.match(component, /aria-expanded=\{detailsOpen\}/);
+assert.match(component, /aria-haspopup="dialog"/);
 assert.match(component, /onClick=\{\(\) => setDetailsOpen/);
 assert.match(component, /operatorWarningDetails/);
 assert.match(component, /groupedWarnings\.map/);

@@ -67,7 +67,7 @@ assert.doesNotMatch(page, /status\?\.migration_preview/);
 assert.match(page, /const \[migrationPlan, setMigrationPlan\] = useState\(null\);/);
 assert.match(page, /const \[migrationOperation, setMigrationOperation\] = useState\(null\);/);
 assert.doesNotMatch(page, /migrationPreviewState/);
-assert.match(page, /if \(silent && statusRef\.current\)/, "silent refresh retains the last valid status");
+assert.match(page, /if \(statusRef\.current\)/, "manual and silent refresh retain the last valid status");
 
 assert.match(page, /<ArchiveManagementCenter/);
 assert.doesNotMatch(page, /storageOpsRetentionScenarioRow/);

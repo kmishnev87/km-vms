@@ -4414,6 +4414,7 @@ def _activate_or_resume(args: argparse.Namespace) -> int:
             require_http=True,
             require_helper_image=True,
         )
+        write_activation_progress(request_id, status="preparing", phase="schema_preflight", current_step="preflight")
         schema = run_target_schema_preflight(
             app_dir,
             project_name,
@@ -4590,6 +4591,7 @@ def prepare_trusted_target_slot(args: argparse.Namespace) -> int:
             "slot_activation_unavailable",
             "Trusted target release does not provide the Stage C activation engine.",
         )
+    write_activation_progress(request_id, status="staging", phase="staging_source", current_step="preflight")
     stage_payload = _parse_command_json(
         run_command(
             [
@@ -4653,6 +4655,7 @@ def prepare_trusted_target_slot(args: argparse.Namespace) -> int:
         source_dir=staged_source,
         include_archive_override=True,
     )
+    write_activation_progress(request_id, status="staging", phase="validating_compose", current_step="preflight")
     config = run_command(
         [*compose, "config", "--format", "json"],
         timeout=60,
@@ -4667,6 +4670,7 @@ def prepare_trusted_target_slot(args: argparse.Namespace) -> int:
             "Trusted target Compose plan lacks a required service.",
         )
     image_refs = _compose_image_refs(compose, env=target_env)
+    write_activation_progress(request_id, status="staging", phase="building_images", current_step="preflight")
     run_command(
         [*compose, "build", *TARGET_BUILD_SERVICES],
         timeout=3600,
@@ -4695,6 +4699,7 @@ def prepare_trusted_target_slot(args: argparse.Namespace) -> int:
         check=False,
     )
     if nginx_present.returncode != 0:
+        write_activation_progress(request_id, status="staging", phase="pulling_images", current_step="preflight")
         run_command(
             [*compose, "pull", "nginx"],
             timeout=600,
@@ -4702,6 +4707,7 @@ def prepare_trusted_target_slot(args: argparse.Namespace) -> int:
             error_message="Trusted target Nginx image could not be prepared.",
             env=target_env,
         )
+    write_activation_progress(request_id, status="staging", phase="verifying_images", current_step="preflight")
     raw_images: dict[str, Any] = {"schema_version": 1, "services": {}}
     for service in TARGET_EVIDENCE_SERVICES:
         image_ref = image_refs.get(service)

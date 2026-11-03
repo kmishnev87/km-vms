@@ -153,7 +153,8 @@ const supportEnd = settingsPage.indexOf("</section>", supportStart);
 const supportMarkup = settingsPage.slice(supportStart, supportEnd);
 const supportButtonCount = (supportMarkup.match(/<button\b/g) || []).length;
 
-assert.equal(supportButtonCount, 1);
+assert.equal(supportButtonCount, 2, "one diagnostics action and one fixed warning-details trigger");
+assert.equal((supportMarkup.match(/onClick=\{onOpenDiagnosticChoice\}/g) || []).length, 1);
 assert.equal(supportMarkup.includes("downloadMaintenanceReport"), false);
 assert.equal(supportMarkup.includes("onOpenDiagnosticChoice"), true);
 assert.equal(supportMarkup.includes("viewMaintenanceReport"), false);

@@ -77,9 +77,12 @@ assert.match(storage, /if \(completed\) \{[\s\S]*?setArchiveRootDialog[\s\S]*?se
 assert.doesNotMatch(storage, /const operationId = archiveRootDialog\?\.activationOperationId/);
 
 assert.match(cameras, /const cleanupPartial = deleteFiles/);
-assert.match(cameras, /if \(cleanupPartial\) \{[\s\S]*?setDeleteWarning\(cleanupMessage\)/);
+assert.match(cameras, /if \(cleanupPartial\) \{[\s\S]*?setDeleteResult\(/);
+assert.doesNotMatch(cameras, /deleteWarning &&/);
+assert.match(cameras, /<OperationDialog dialog=\{deleteResult\}/);
 assert.match(cameras, /setOperationToast\(\{[\s\S]*?camera-delete-/);
-assert.match(cameras, /if \(!result\?\.camera_removed\)/);
+assert.match(cameras, /if \(!result\?\.camera_removed && !cleanupPartial\)/);
+assert.match(cameras, /!result\?\.camera_removed \|\| result\?\.status !== "deleted"/);
 
 assert.match(settings, /sessionStorage\.setItem\(CREDENTIALS_CHANGED_NOTICE_KEY, "credentials_changed"\)/);
 assert.match(login, /sessionStorage\.getItem\(CREDENTIALS_CHANGED_NOTICE_KEY\)/);
@@ -87,7 +90,7 @@ assert.match(login, /sessionStorage\.removeItem\(CREDENTIALS_CHANGED_NOTICE_KEY\
 assert.match(login, /<OperationToast toast=\{operationToast\}/);
 assert.equal((i18n.match(/credentialsChanged:/g) || []).length, 3);
 
-assert.match(diagnostics, /const \[error, setError\]/);
+assert.match(diagnostics, /const \[error, setError\]/); // journal data state, not an action banner
 assert.match(diagnostics, /diagnostics-archive-[\s\S]*?tone:\s*"success"/);
 assert.match(diagnostics, /diagnostics-bug-report-[\s\S]*?tone:\s*"success"/);
 assert.match(diagnostics, /settingsJournalEmpty error/);

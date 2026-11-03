@@ -23,7 +23,8 @@ assert.match(recordingsPage, /operation_id:\s*operationId,\s*items:\s*selectedIt
 assert.match(recordingsPage, /recordingIdentityQuery\(item\).*operation_id=/s);
 assert.match(recordingsPage, /result\?\.ok === true && result\?\.status === "completed"/);
 assert.match(recordingsPage, /result\?\.skipped_reason_counts|skipped_reason_counts/);
-assert.match(recordingsPage, /<OperationDialog dialog=\{deleteDialog\}/);
+assert.match(recordingsPage, /<OperationDialog dialog=\{deleteDialog \? \{ \.\.\.deleteDialog, className:/);
+assert.match(recordingsPage, /recordingsDeletionFlow/);
 assert.match(recordingsPage, /<OperationToast toast=\{operationToast\}/);
 
 for (const contract of [

@@ -447,8 +447,10 @@ test("closed-stage interaction markers remain protected", () => {
   assert.equal(recordsPage.includes("PAGE_SIZE_OPTIONS = [15, 30, 50, 100]"), true);
   assert.equal(recordsPage.includes("recordsPageScopedVerifiedLoad"), false);
   assert.equal(recordsPage.includes("recordingsViewerBackdrop"), true);
-  assert.equal(recordsPage.includes('body.style.position = "fixed"'), true);
-  assert.equal(recordsPage.includes("window.scrollTo(scrollX, scrollY)"), true);
+  assert.equal(recordsPage.includes("useModalBodyScrollLock(viewerOpen, { freezePosition: true })"), true);
+  const scrollLock = read("lib/modalScrollLock.js");
+  assert.equal(scrollLock.includes('position: "fixed"'), true);
+  assert.equal(scrollLock.includes("window.scrollTo(saved.x, saved.y)"), true);
 
   for (const source of [livePlayer, archivePlayer]) {
     assert.equal(source.includes("CompactVideoCanvas"), true);

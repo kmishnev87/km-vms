@@ -19,7 +19,9 @@ const backendHistory = fs.readFileSync(resolve(repoRoot, "apps/api/app/services/
 
 const context = storageOperations;
 
-const overview = page.slice(page.indexOf("<section className={`storageOpsOverview"), page.indexOf("{refreshWarning ?"));
+const overviewStart = page.indexOf("<section className={`storageOpsOverview");
+assert.ok(overviewStart >= 0);
+const overview = page.slice(overviewStart, page.indexOf("</section>", overviewStart));
 assert.equal((overview.match(/<TopMetric/g) || []).length, 3);
 assert.match(overview, /label=\{copy\.archiveAccess\}/);
 assert.match(overview, /label=\{`\$\{copy\.free\} \$\{formatPercent\(capacity\.free_percent\)\}`\}/);

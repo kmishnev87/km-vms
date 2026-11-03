@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.26",
-  "tag": "v0.8.26",
-  "title": "Update recovery and archive workflow",
-  "summary": "Verify recovery before retrying updates, download prepared clips through the browser, and improve chronology continuity and touch controls.",
+  "version": "0.8.27",
+  "tag": "v0.8.27",
+  "title": "Stable interface and camera workflows",
+  "summary": "Keep interface layouts stable, verify backups without extra dialogs, reliably delete camera recordings, and prepare stream details for the selected camera lens.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.26",
+  "source_ref": "v0.8.27",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,55 +20,59 @@
     "target_version": 10
   },
   "changelog": [
-    "Verify the previous database and runtime before completing rollback and allowing another update attempt.",
-    "Keep unknown database states protected and preserve the original failure cause.",
-    "Separate clip preparation from native browser downloads, with ready-result reuse and current permission checks.",
-    "Verify exported clip integrity once per download without buffering the entire file in page memory.",
-    "Keep unchanged chronology players running when other tiles are added, removed or reordered.",
-    "Space timeline labels by actual width and retain camera and archive time context in fullscreen.",
-    "Separate one-finger scrolling, drag handles and two-finger video gestures.",
-    "Align the timeline badge with its axis and refresh archive ranges without flicker or duplicate in-flight requests."
+    "Keep lists, video frames and overlapping dialogs stable during loading, errors and operation feedback.",
+    "Check database backups in the existing list without opening confirmation or result dialogs; retain real trial-restore validation.",
+    "Stop recording before deleting a camera archive, report exact outcomes and allow safe retry after a correctable failure.",
+    "Keep the system-health indicator stable during navigation while isolating sessions and permission failures.",
+    "Read stream characteristics on the connection step for the selected lens only; reject stale results after every lens switch.",
+    "Remove misleading saved-profile labels and reconcile recreated ONVIF profile tokens by exact stream path.",
+    "Show actual update preparation and build phases without invented percentages or extra background checks.",
+    "Preserve source acquisition for first installation when an external source directory has a runtime-like name.",
+    "Refresh historical frontend regression checks for current touch, timezone and shared-helper contracts."
   ],
   "title_i18n": {
-    "en": "Update recovery and archive workflow",
-    "ru": "Восстановление обновлений и работа с архивом",
-    "zh-CN": "更新恢复与录像归档操作"
+    "en": "Stable interface and camera workflows",
+    "ru": "Стабильный интерфейс и работа с камерами",
+    "zh-CN": "稳定界面与摄像机操作流程"
   },
   "summary_i18n": {
-    "en": "Verify recovery before retrying updates, download prepared clips through the browser, and improve chronology continuity and touch controls.",
-    "ru": "Проверка восстановления перед повторным обновлением, скачивание готовых клипов средствами браузера и улучшение непрерывности Хронологии и жестов.",
-    "zh-CN": "重试更新前验证恢复状态，通过浏览器下载已准备的片段，并改进时间轴播放连续性与触控操作。"
+    "en": "Keep interface layouts stable, verify backups without extra dialogs, reliably delete camera recordings, and prepare stream details for the selected camera lens.",
+    "ru": "Устойчивый интерфейс, проверка резервных копий без лишних окон, надёжное удаление записей камеры и предварительное чтение потоков выбранного объектива.",
+    "zh-CN": "保持界面布局稳定，无需额外对话框即可验证备份，可靠删除摄像机录像，并提前读取所选镜头的码流参数。"
   },
   "changelog_i18n": {
     "en": [
-      "Verify the previous database and runtime before completing rollback and allowing another update attempt.",
-      "Keep unknown database states protected and preserve the original failure cause.",
-      "Separate clip preparation from native browser downloads, with ready-result reuse and current permission checks.",
-      "Verify exported clip integrity once per download without buffering the entire file in page memory.",
-      "Keep unchanged chronology players running when other tiles are added, removed or reordered.",
-      "Space timeline labels by actual width and retain camera and archive time context in fullscreen.",
-      "Separate one-finger scrolling, drag handles and two-finger video gestures.",
-      "Align the timeline badge with its axis and refresh archive ranges without flicker or duplicate in-flight requests."
+      "Keep lists, video frames and overlapping dialogs stable during loading, errors and operation feedback.",
+      "Check database backups in the existing list without opening confirmation or result dialogs; retain real trial-restore validation.",
+      "Stop recording before deleting a camera archive, report exact outcomes and allow safe retry after a correctable failure.",
+      "Keep the system-health indicator stable during navigation while isolating sessions and permission failures.",
+      "Read stream characteristics on the connection step for the selected lens only; reject stale results after every lens switch.",
+      "Remove misleading saved-profile labels and reconcile recreated ONVIF profile tokens by exact stream path.",
+      "Show actual update preparation and build phases without invented percentages or extra background checks.",
+      "Preserve source acquisition for first installation when an external source directory has a runtime-like name.",
+      "Refresh historical frontend regression checks for current touch, timezone and shared-helper contracts."
     ],
     "ru": [
-      "База и прежняя программа проверяются перед завершением возврата и новой попыткой обновления.",
-      "Неизвестное состояние базы остаётся защищённым, исходная причина отказа сохраняется.",
-      "Подготовка клипа отделена от скачивания браузером; готовый результат можно использовать повторно с проверкой действующих прав.",
-      "Целостность клипа проверяется один раз на скачивание, без загрузки всего файла в память страницы.",
-      "Неизменённые плееры Хронологии продолжают работать при добавлении, закрытии или перестановке других плиток.",
-      "Подписи шкалы учитывают её фактическую ширину; в полном экране видны камера и время архива.",
-      "Прокрутка одним пальцем, захваты перетаскивания и жесты видео двумя пальцами разделены.",
-      "Подпись Хронологии выровнена с осью; диапазоны архива обновляются без мерцания и дублирования незавершённых запросов."
+      "Списки, видеоблоки и перекрывающиеся окна сохраняют расположение при загрузке, ошибках и показе результатов действий.",
+      "Проверка резервной копии выполняется в текущем списке без окон подтверждения и результата; настоящее пробное восстановление сохранено.",
+      "Перед удалением архива камеры запись останавливается; результат точный, после устранимого отказа действие можно безопасно повторить.",
+      "Значок состояния системы не мерцает при навигации; смена входа и отказы в доступе изолированы.",
+      "Характеристики потоков выбранного объектива читаются на шаге подключения; после каждого переключения устаревшие ответы отбрасываются.",
+      "Убрана ложная надпись о сохранённом профиле; изменившийся ONVIF token сопоставляется только по точному пути потока.",
+      "Обновление показывает реальные подэтапы подготовки и сборки без выдуманных процентов и дополнительного фонового опроса.",
+      "Первая установка корректно получает исходники из внешнего каталога с именем, похожим на служебную runtime-папку.",
+      "Регрессионные тесты актуализированы под действующие жесты, передачу времени и контракты общих вспомогательных модулей."
     ],
     "zh-CN": [
-      "完成回退并允许再次更新之前，验证原数据库与运行时。",
-      "保护未知数据库状态，并保留原始失败原因。",
-      "将片段准备与浏览器原生下载分离，复用就绪结果并检查当前权限。",
-      "每次下载只验证一次片段完整性，不将整个文件缓存在页面内存中。",
-      "添加、关闭或重排其他画面时，保持未改变的时间轴播放器运行。",
-      "依据实际宽度安排时间标签，并在全屏中显示摄像机与录像时间。",
-      "分离单指滚动、拖动手柄和双指视频手势。",
-      "使时间轴标签与轴线居中对齐，刷新录像范围时避免闪烁和重复的在途请求。"
+      "加载、出错及操作反馈时，保持列表、视频区域和重叠对话框的布局稳定。",
+      "在当前列表中检查备份，不打开确认或结果对话框，并保留真实的临时数据库恢复验证。",
+      "删除摄像机归档前停止录像，准确报告结果，并允许在可修正的故障后安全重试。",
+      "导航时系统健康图标不再闪烁，同时隔离登录会话变化和权限拒绝。",
+      "在连接步骤仅读取所选镜头的码流参数，每次切换后丢弃过期响应。",
+      "移除误导性的已保存配置提示，仅依据准确的码流路径关联重新生成的 ONVIF 配置标识。",
+      "显示更新准备与构建的真实子阶段，不虚构进度百分比，也不增加后台轮询。",
+      "首次安装可正确从名称类似运行目录的外部目录获取源码。",
+      "更新前端回归测试，以覆盖当前的触控、时间传递和共享辅助模块契约。"
     ]
   }
 }

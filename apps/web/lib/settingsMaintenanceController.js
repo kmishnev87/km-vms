@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "./api";
+import { acquireModalScrollLock } from "./modalScrollLock";
 import {
   BACKUP_OPERATION_PENDING_STORAGE_KEY,
   MAINTENANCE_DRY_RUN_ENDPOINTS,
@@ -64,27 +65,6 @@ const CURRENT_RESTORE_LEGACY_REASON_PHASES = {
   automatic_rollback_recorder_recovery_failed: "post_restore_check",
 };
 
-let settingsBodyScrollLockCount = 0;
-let settingsBodyPreviousOverflow = "";
-
-function acquireSettingsBodyScrollLock() {
-  if (typeof document === "undefined") return () => {};
-  if (settingsBodyScrollLockCount === 0) {
-    settingsBodyPreviousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-  }
-  settingsBodyScrollLockCount += 1;
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    settingsBodyScrollLockCount = Math.max(0, settingsBodyScrollLockCount - 1);
-    if (settingsBodyScrollLockCount === 0) {
-      document.body.style.overflow = settingsBodyPreviousOverflow;
-      settingsBodyPreviousOverflow = "";
-    }
-  };
-}
 function monotonicWallNow() {
   if (typeof performance !== "undefined" && Number.isFinite(performance.timeOrigin) && typeof performance.now === "function") {
     return performance.timeOrigin + performance.now();
@@ -131,6 +111,7 @@ export function useSettingsMaintenanceController({
   const [maintenanceOverview, setMaintenanceOverview] = useState(null);
   const [maintenanceBackupDetail, setMaintenanceBackupDetail] = useState(null);
   const [maintenanceBackupDetailOpen, setMaintenanceBackupDetailOpen] = useState(false);
+  const [maintenanceDetail, setMaintenanceDetail] = useState(null);
   const [maintenanceLoading, setMaintenanceLoading] = useState(false);
   const [maintenanceError, setMaintenanceError] = useState("");
   const [maintenanceBusy, setMaintenanceBusy] = useState("");
@@ -206,6 +187,7 @@ export function useSettingsMaintenanceController({
     || currentRestoreDialog
     || updateApplyDialog
     || diagnosticChoiceOpen
+    || maintenanceDetail
   );
   const maintenanceOverall = useMemo(
     () => maintenanceOverallHealthModel({
@@ -360,14 +342,14 @@ export function useSettingsMaintenanceController({
 
   useEffect(() => {
     if (!maintenanceModalOpen) return undefined;
-    return acquireSettingsBodyScrollLock();
+    return acquireModalScrollLock();
   }, [maintenanceModalOpen]);
 
   useEffect(() => {
     if (!maintenanceModalOpen) return undefined;
     const container = maintenanceDialogRef.current;
     const initial = focusableElements(container)[0];
-    initial?.focus();
+    initial?.focus({ preventScroll: true });
     function onKeyDown(event) {
       if (event.defaultPrevented || maintenanceChildDialogOpenRef.current) return;
       if (event.key === "Escape" && !maintenanceBusyRef.current) {
@@ -391,7 +373,7 @@ export function useSettingsMaintenanceController({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      if (!maintenanceChildDialogOpenRef.current) maintenanceTriggerRef.current?.focus();
+      if (!maintenanceChildDialogOpenRef.current) maintenanceTriggerRef.current?.focus({ preventScroll: true });
     };
   }, [maintenanceModalOpen]);
 
@@ -404,6 +386,7 @@ export function useSettingsMaintenanceController({
     if (maintenanceChildDialogOpenRef.current) return;
     setMaintenanceModalOpen(false);
     setMaintenanceBackupDetailOpen(false);
+    setMaintenanceDetail(null);
     setMaintenanceActionResult(null);
     setMaintenanceBackupResult(null);
     setMaintenanceConfirm(null);
@@ -948,6 +931,7 @@ export function useSettingsMaintenanceController({
       setMaintenanceOverview(overview);
     } catch (err) {
       setMaintenanceError(humanErrorText(String(err?.message || ""), t.maintenanceLoadError));
+      showToast({ variant: "error", title: t.maintenanceOverview, text: humanErrorText(String(err?.message || ""), t.maintenanceLoadError) });
     } finally {
       setMaintenanceLoading(false);
     }
@@ -1149,15 +1133,7 @@ export function useSettingsMaintenanceController({
 
   function requestCheckMaintenanceBackup(artifact) {
     if (!artifact?.id || maintenanceBusy || maintenanceBackupPendingRef.current || currentRestorePending) return;
-    setMaintenanceConfirm({
-      kind: "backup-check",
-      title: t.maintenanceBackupCheck,
-      text: t.maintenanceBackupCheckConfirm.replace("{date}", artifact.createdAt || "-"),
-      confirmLabel: t.maintenanceBackupCheck,
-      danger: false,
-      artifact,
-      onConfirm: () => performMaintenanceBackupOperation("check", artifact),
-    });
+    return performMaintenanceBackupOperation("check", artifact);
   }
 
   function requestDeleteMaintenanceBackup(artifact) {
@@ -1199,6 +1175,7 @@ export function useSettingsMaintenanceController({
     maintenanceBackupRecoveryRef.current = false;
     setMaintenanceBusy(`backup-${kind}`);
     setMaintenanceConfirm(null);
+    if (kind !== "check") setMaintenanceDetail("backup");
     setMaintenanceActionResult(null);
     setMaintenanceBackupResult(null);
     let endpoint = "/system/backup/create";
@@ -1332,6 +1309,7 @@ export function useSettingsMaintenanceController({
       return;
     }
     setUpdateApplyDialog(null);
+    setMaintenanceDetail("update");
     setMaintenanceBusy("update-apply");
     setMaintenanceActionResult(null);
     commitUpdateApplyPending(pending);
@@ -1390,6 +1368,8 @@ export function useSettingsMaintenanceController({
     maintenanceOverview,
     maintenanceBackupDetail,
     maintenanceBackupDetailOpen,
+    maintenanceDetail,
+    setMaintenanceDetail,
     maintenanceLoading,
     maintenanceError,
     maintenanceBusy,

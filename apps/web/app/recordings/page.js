@@ -543,6 +543,9 @@ export default function RecordingsPage() {
   const [sortDir, setSortDir] = useState("desc");
   const [currentPage, setCurrentPage] = useState(1);
   const [error, setError] = useState("");
+  const [loadedQueryKey, setLoadedQueryKey] = useState("");
+  const currentQueryKey = JSON.stringify([selectedCamera, selectedDate, currentPage, pageSize, sortBy, sortDir]);
+  const recordingsActionReady = recordingsLoadState === "loaded" && loadedQueryKey === currentQueryKey;
   const [deleteDialog, setDeleteDialog] = useState(null);
   const [operationToast, setOperationToast] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -591,8 +594,8 @@ export default function RecordingsPage() {
 
   async function loadRecordings(camera = "__all__", dateValue = selectedDate, page = currentPage) {
     const requestId = ++requestIdRef.current;
-    setRecordingsLoadState("loading");
-    setItems([]);
+    const requestedQueryKey = JSON.stringify([camera, dateValue, page, pageSize, sortBy, sortDir]);
+    setRecordingsLoadState(loadedQueryKey ? "refreshing" : "loading");
     setSelectedPaths([]);
     const params = new URLSearchParams();
     if (camera && camera !== "__all__") params.set("camera", camera);
@@ -612,10 +615,12 @@ export default function RecordingsPage() {
       setRecordingsPagination(data.pagination || { limit: pageSize, offset: 0, total_count: data.items?.length || 0, has_more: false });
       setProductTimezone(data?.timezone?.id || "UTC");
       setError("");
+      setLoadedQueryKey(requestedQueryKey);
       setRecordingsLoadState("loaded");
     } catch (err) {
       if (requestId !== requestIdRef.current) return;
       setError(normalizeRecordingError(err.message));
+      showRecordingActionError(err);
       setRecordingsLoadState("error");
     }
   }
@@ -630,7 +635,7 @@ export default function RecordingsPage() {
       setError("");
       await Promise.all([loadCameras(), loadRecorderStatus()]);
     } catch (err) {
-      setError(normalizeRecordingError(err.message));
+      showRecordingActionError(err);
     }
   }
 
@@ -675,11 +680,12 @@ export default function RecordingsPage() {
       }
       await loadRecordings(effectiveCamera, selectedDate, effectivePage);
     } catch (err) {
-      setError(normalizeRecordingError(err.message));
+      showRecordingActionError(err);
     }
   }
 
   function toggleSelected(path) {
+    if (!recordingsActionReady) return;
     setSelectedPaths((prev) =>
       prev.includes(path) ? prev.filter((x) => x !== path) : [...prev, path]
     );
@@ -714,9 +720,9 @@ export default function RecordingsPage() {
     setCurrentPage(nextPage);
   }
 
-  const recordingsLoaded = recordingsLoadState === "loaded";
+  const recordingsLoaded = Boolean(loadedQueryKey);
   const recordingsFirstLoading = recordingsLoadState === "idle" || recordingsLoadState === "loading";
-  const filteredItems = recordingsLoaded ? items : [];
+  const filteredItems = items;
 
   const pageCount = Math.max(1, Math.ceil(Number(recordingsPagination?.total_count || recordingsSummary?.count || 0) / pageSize));
 
@@ -779,52 +785,7 @@ export default function RecordingsPage() {
     [viewerResolution, viewerRect, viewerFullscreen]
   );
 
-  useEffect(() => {
-    if (!viewerOpen || typeof document === "undefined" || typeof window === "undefined") return undefined;
-    const root = document.documentElement;
-    const body = document.body;
-    const scrollX = Number(window.scrollX || 0);
-    const scrollY = Number(window.scrollY || 0);
-    const previous = {
-      rootOverflow: root.style.overflow,
-      rootOverscrollBehavior: root.style.overscrollBehavior,
-      bodyPosition: body.style.position,
-      bodyTop: body.style.top,
-      bodyLeft: body.style.left,
-      bodyRight: body.style.right,
-      bodyWidth: body.style.width,
-      bodyOverflow: body.style.overflow,
-      bodyOverscrollBehavior: body.style.overscrollBehavior,
-      bodyPaddingRight: body.style.paddingRight,
-    };
-    const scrollbarGap = Math.max(0, Number(window.innerWidth || 0) - Number(root.clientWidth || 0));
-    const currentPaddingRight = Number.parseFloat(window.getComputedStyle(body).paddingRight || "0") || 0;
-
-    root.style.overflow = "hidden";
-    root.style.overscrollBehavior = "none";
-    body.style.position = "fixed";
-    body.style.top = `-${scrollY}px`;
-    body.style.left = `-${scrollX}px`;
-    body.style.right = "0";
-    body.style.width = "100%";
-    body.style.overflow = "hidden";
-    body.style.overscrollBehavior = "none";
-    if (scrollbarGap > 0) body.style.paddingRight = `${currentPaddingRight + scrollbarGap}px`;
-
-    return () => {
-      root.style.overflow = previous.rootOverflow;
-      root.style.overscrollBehavior = previous.rootOverscrollBehavior;
-      body.style.position = previous.bodyPosition;
-      body.style.top = previous.bodyTop;
-      body.style.left = previous.bodyLeft;
-      body.style.right = previous.bodyRight;
-      body.style.width = previous.bodyWidth;
-      body.style.overflow = previous.bodyOverflow;
-      body.style.overscrollBehavior = previous.bodyOverscrollBehavior;
-      body.style.paddingRight = previous.bodyPaddingRight;
-      window.scrollTo(scrollX, scrollY);
-    };
-  }, [viewerOpen]);
+  useModalBodyScrollLock(viewerOpen, { freezePosition: true });
 
   useEffect(() => {
     if (!viewerOpen) return;
@@ -858,12 +819,17 @@ export default function RecordingsPage() {
   }, [viewerOpen]);
 
   function toggleSelectAll() {
+    if (!recordingsActionReady) return;
     if (allVisibleSelected) {
       setSelectedPaths((prev) => prev.filter((path) => !visiblePaths.includes(path)));
       return;
     }
 
     setSelectedPaths((prev) => Array.from(new Set([...prev, ...visiblePaths])));
+  }
+
+  function showRecordingActionError(err) {
+    setOperationToast({ id: `recordings-error-${Date.now()}`, title: t.unavailable, message: normalizeRecordingError(err?.message), tone: "error" });
   }
 
   async function handleDownload(item) {
@@ -879,7 +845,7 @@ export default function RecordingsPage() {
       a.click();
       a.remove();
     } catch (err) {
-      setError(normalizeRecordingError(err.message));
+      showRecordingActionError(err);
     }
   }
 
@@ -960,7 +926,7 @@ export default function RecordingsPage() {
       viewerRefreshInFlightRef.current = false;
       setViewerOpen(true);
     } catch (err) {
-      setError(normalizeRecordingError(err.message));
+      showRecordingActionError(err);
     }
   }
 
@@ -1181,6 +1147,7 @@ export default function RecordingsPage() {
   }
 
   function handleDeleteOne(item) {
+    if (!recordingsActionReady) return;
     if (!canDelete) return;
     const operationId = newClientOperationId("recording-single");
     setDeleteDialog({
@@ -1203,6 +1170,7 @@ export default function RecordingsPage() {
   }
 
   function handleDeleteSelected() {
+    if (!recordingsActionReady) return;
     if (!canDelete || !selectedPaths.length) return;
     const selectedItems = paginatedItems
       .filter((item) => selectedPaths.includes(recordingIdentityKey(item)))
@@ -1304,11 +1272,13 @@ export default function RecordingsPage() {
   }
 
   function handleDeleteByCamera() {
+    if (!recordingsActionReady) return;
     if (!canDelete || !selectedCamera || selectedCamera === "__all__") return;
     prepareDynamicDeletion("camera", selectedCamera);
   }
 
   function handleDeleteAll() {
+    if (!recordingsActionReady) return;
     if (!canDelete) return;
     prepareDynamicDeletion("all");
   }
@@ -1323,11 +1293,6 @@ export default function RecordingsPage() {
         </div>
       </div>
 
-      {error ? (
-        <div className="badge err recordingsErrorBadge">
-          {error}
-        </div>
-      ) : null}
       <div className="card recordingsFilterCard">
         <div className="recordingsFilterBar">
           <div className="recordingsFilterGroup">
@@ -1381,7 +1346,7 @@ export default function RecordingsPage() {
                 <button
                   className="button secondary small recordingsActionButton recordingsToolbarIconButton"
                   onClick={handleDeleteSelected}
-                  disabled={!selectedPaths.length || busy}
+                  disabled={!selectedPaths.length || busy || !recordingsActionReady}
                   title={t.deleteSelected}
                   aria-label={t.deleteSelected}
                 >
@@ -1406,7 +1371,7 @@ export default function RecordingsPage() {
                       <button
                         className="recordingsDangerItem"
                         onClick={handleDeleteByCamera}
-                        disabled={selectedCamera === "__all__" || busy}
+                        disabled={selectedCamera === "__all__" || busy || !recordingsActionReady}
                         role="menuitem"
                       >
                         {t.deleteCamera}
@@ -1414,7 +1379,7 @@ export default function RecordingsPage() {
                       <button
                         className="recordingsDangerItem recordingsDangerItemAlert"
                         onClick={handleDeleteAll}
-                        disabled={busy}
+                        disabled={busy || !recordingsActionReady}
                         role="menuitem"
                       >
                         {t.deleteAll}
@@ -1432,17 +1397,16 @@ export default function RecordingsPage() {
         <div className="badge">{t.totalFiles}: {recordingsLoaded ? visibleSummary.count : t.loading}</div>
         <div className="badge">{t.totalSize}: {recordingsLoaded ? visibleSummary.size_human : t.loading}</div>
         <div className="badge">{t.page}: {recordingsLoaded ? `${currentPage} / ${pageCount}` : t.loading}</div>
-        {selectedPaths.length ? (
-          <div className="badge ok">{t.selected}: {selectedPaths.length}</div>
-        ) : null}
+        <div className="badge ok" style={selectedPaths.length ? undefined : { visibility: "hidden" }}>{t.selected}: {selectedPaths.length}</div>
       </div>
 
-      <div className="card recordingsTableCard">
+      <div className="card recordingsTableCard" aria-busy={!recordingsActionReady}>
         <div className="recordingsMobileControls">
           {canDelete ? (
             <label className="recordingsMobileSelectAll">
               <input
                 type="checkbox"
+                disabled={!recordingsActionReady}
                 checked={allVisibleSelected}
                 onChange={toggleSelectAll}
                 aria-label={t.pickAllPage}
@@ -1459,7 +1423,7 @@ export default function RecordingsPage() {
             <span aria-hidden="true">{sortBy === SORT_OPTIONS.size_bytes.key ? (sortDir === "asc" ? ICONS.up : ICONS.down) : ICONS.sort}</span>
           </button>
         </div>
-        <div className="recordingsTableWrap">
+        <div className="recordingsTableWrap" inert={recordingsActionReady ? undefined : true}>
           <table className="table recordingsTable">
             <colgroup>
               <col className="recordingsSelectCol" />
@@ -1654,11 +1618,6 @@ export default function RecordingsPage() {
 
             <div style={{ marginBottom: 14, color: "#475569" }}>{viewerTitle}</div>
 
-            {viewerPlaybackError ? (
-              <div className="recordingPlaybackNotice">
-                {t.playbackError}
-              </div>
-            ) : (
               <div
                 ref={viewerFrameRef}
                 className={`recordingVideoFrame ${viewerAdaptiveHighRes ? "adaptiveHighRes" : ""}`}
@@ -1701,8 +1660,8 @@ export default function RecordingsPage() {
                     onError={refreshViewerUrlAfterMediaError}
                   />
                 </VideoZoomPanSurface>
+                {viewerPlaybackError ? <div className="recordingPlaybackNotice" role="alert">{t.playbackError}</div> : null}
               </div>
-            )}
 
             <div className="actions">
               {viewerItem ? (
@@ -1790,7 +1749,7 @@ export default function RecordingsPage() {
           </div>
         </div>
       ) : null}
-      <OperationDialog dialog={deleteDialog} onClose={closeDeleteDialog} />
+      <OperationDialog dialog={deleteDialog ? { ...deleteDialog, className: deleteDialog.presentation ? undefined : "recordingsDeletionFlow" } : null} onClose={closeDeleteDialog} />
       <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
       </div>
     </Layout>

@@ -1,26 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { acquireModalScrollLock } from "../lib/modalScrollLock";
 
-let bodyScrollLockCount = 0;
-let bodyOverflowBeforeLock = "";
-
-export function useModalBodyScrollLock(active) {
+export function useModalBodyScrollLock(active, { freezePosition = false } = {}) {
   useEffect(() => {
-    if (!active || typeof document === "undefined") return undefined;
-    if (bodyScrollLockCount === 0) {
-      bodyOverflowBeforeLock = document.body.style.overflow;
-      document.body.style.overflow = "hidden";
-    }
-    bodyScrollLockCount += 1;
-    return () => {
-      bodyScrollLockCount = Math.max(0, bodyScrollLockCount - 1);
-      if (bodyScrollLockCount === 0) {
-        document.body.style.overflow = bodyOverflowBeforeLock;
-        bodyOverflowBeforeLock = "";
-      }
-    };
-  }, [active]);
+    return active ? acquireModalScrollLock({ freezePosition }) : undefined;
+  }, [active, freezePosition]);
 }
 
 function focusableElements(container) {
@@ -128,17 +114,20 @@ export function OperationDialog({ dialog, onClose }) {
       >
         <div className="operationFeedbackHead">
           <h2 id={titleId}>{dialog.title}</h2>
-          {canClose ? (
+          {(
             <button
               ref={closeRef}
               className="operationFeedbackClose"
               type="button"
               onClick={requestClose}
+              disabled={!canClose}
+              style={canClose ? undefined : { visibility: "hidden" }}
+              aria-hidden={canClose ? undefined : true}
               aria-label={dialog.closeLabel || dialog.cancelLabel || "Close"}
             >
               ×
             </button>
-          ) : null}
+          )}
         </div>
         <div id={descriptionId} className="operationFeedbackBody" aria-live={dialog.busy ? "polite" : undefined}>
           {dialog.message ? <p>{dialog.message}</p> : null}
@@ -230,6 +219,12 @@ export function OperationDialog({ dialog, onClose }) {
       </div>
     </div>
   );
+}
+
+export function OperationRefreshButton({ busy = false, error = "", label, onClick }) {
+  return <button type="button" className={`operationRefreshButton${error ? " hasError" : ""}`} onClick={onClick}
+    title={error || label} aria-label={error ? `${label}: ${error}` : label} aria-busy={busy || undefined}
+    disabled={busy}>{error ? "!" : "↻"}</button>;
 }
 
 export function OperationToast({ toast, onClose }) {

@@ -14,7 +14,7 @@ export default function ArchiveExportResult({ controller, onClose }) {
   useEffect(() => {
     const modal = resultRef.current?.closest(".archiveExportModal");
     const previous = document.activeElement;
-    modal?.querySelector("select")?.focus();
+    modal?.querySelector("select")?.focus({ preventScroll: true });
     const handleKey = (event) => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeRef.current?.(); return; }
       if (event.key !== "Tab" || !modal) return;
@@ -24,7 +24,7 @@ export default function ArchiveExportResult({ controller, onClose }) {
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
     };
     document.addEventListener("keydown", handleKey, true);
-    return () => { document.removeEventListener("keydown", handleKey, true); if (previous?.isConnected) previous.focus?.(); };
+    return () => { document.removeEventListener("keydown", handleKey, true); if (previous?.isConnected) previous.focus?.({ preventScroll: true }); };
   }, []);
   return (
     <div className="archiveExportResult" data-export-phase={phase} ref={resultRef}>

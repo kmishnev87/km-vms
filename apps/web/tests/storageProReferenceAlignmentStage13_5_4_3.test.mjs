@@ -68,7 +68,7 @@ const unknownHealth = context.storageTopHealthModel({ operations: { status: "ava
 assert.equal(unknownHealth.status, "unknown");
 
 assert.match(storagePage, /isStorageAccessDeniedError\(err\)/);
-assert.match(storagePage, /if \(silent && statusRef\.current\)/);
+assert.match(storagePage, /if \(statusRef\.current\)/);
 assert.match(storagePage, /setRefreshWarning\(/);
 assert.match(storagePage, /archiveRootScenarioModel/);
 assert.match(storagePage, /retentionOperationPresentation/);

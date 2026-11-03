@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
 import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
-import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
+import { OperationDialog, OperationToast, OperationRefreshButton, useModalBodyScrollLock } from "../../components/OperationFeedback";
 import RecordingFormatChangeStatus from "../../components/RecordingFormatChangeStatus";
 import { recordingFormatCopy, recordingFormatError, recordingFormatNotice, recordingFormatNotificationKey, shouldWatchRecordingFormat } from "../../lib/recordingFormatChange";
 import {
@@ -594,7 +594,13 @@ const TEXT = {
       no_artifacts: "Нет артефактов",
       not_configured: "Не настроено",
       not_cancelable: "Отмена недоступна",
-      preflight: "Предпроверка",
+      preflight: "Подготовка",
+      staging_source: "Подготовка исходников новой версии",
+      validating_compose: "Проверка конфигурации запуска",
+      building_images: "Сборка приложения и зависимостей",
+      pulling_images: "Получение базовых образов",
+      verifying_images: "Проверка собранных компонентов",
+      schema_preflight: "Проверка совместимости базы данных",
       queued: "В очереди",
       rebuilding: "Пересборка",
       preparing: "Подготовка",
@@ -1289,7 +1295,13 @@ const TEXT = {
       no_artifacts: "No artifacts",
       not_configured: "Not configured",
       not_cancelable: "Not cancelable",
-      preflight: "Preflight",
+      preflight: "Preparation",
+      staging_source: "Preparing the new source",
+      validating_compose: "Checking deployment configuration",
+      building_images: "Building the application and dependencies",
+      pulling_images: "Downloading base images",
+      verifying_images: "Verifying built components",
+      schema_preflight: "Checking database compatibility",
       queued: "Queued",
       rebuilding: "Rebuilding",
       preparing: "Preparing",
@@ -1969,7 +1981,13 @@ const ZH_TEXT_OVERRIDES = {
     no_artifacts: "无工件",
     not_configured: "未配置",
     not_cancelable: "不可取消",
-    preflight: "预检查",
+    preflight: "准备",
+    staging_source: "准备新版本源文件",
+    validating_compose: "检查部署配置",
+    building_images: "构建应用和依赖项",
+    pulling_images: "下载基础镜像",
+    verifying_images: "验证已构建的组件",
+    schema_preflight: "检查数据库兼容性",
     queued: "排队中",
     rebuilding: "重建中",
     preparing: "准备中",
@@ -2113,8 +2131,10 @@ export default function SettingsPage() {
   const [auditFilters, setAuditFilters] = useState({ category: "", severity: "", actor: "", target: "", since: "1440", q: "" });
   const [auditLoading, setAuditLoading] = useState(false);
   const [auditError, setAuditError] = useState("");
+  const auditRequestRef = useRef(0);
   const [bugReportText, setBugReportText] = useState("");
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
+  useModalBodyScrollLock(Boolean(usersModalOpen || userModal || securityModalOpen));
   const lang = languageOf(draft || savedDraft);
   const t = settingsTextFor(lang);
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
@@ -2267,19 +2287,23 @@ export default function SettingsPage() {
   }
 
   async function loadAuditEvents(offset = 0) {
+    const request = ++auditRequestRef.current;
     setAuditLoading(true);
     setAuditError("");
     try {
       const data = await apiFetch(auditQuery(offset));
+      if (request !== auditRequestRef.current) return;
       const items = Array.isArray(data?.items) ? data.items : [];
       setAuditEvents(offset > 0 ? (current) => [...current, ...items] : items);
       setAuditOffset(offset + items.length);
       setAuditHasMore(items.length === AUDIT_LIMIT);
     } catch (err) {
-      if (offset === 0) setAuditEvents([]);
+      if (request !== auditRequestRef.current) return;
+      if ([401, 403].includes(err?.status)) setAuditEvents([]);
       setAuditError(humanErrorText(String(err?.message || ""), t.journalError || "Event journal is unavailable."));
+      showToast(normalizedError(err, lang));
     } finally {
-      setAuditLoading(false);
+      if (request === auditRequestRef.current) setAuditLoading(false);
     }
   }
 
@@ -2439,7 +2463,7 @@ export default function SettingsPage() {
     setUserModal((current) => ({
       ...current,
       [key]: value,
-      error: "",
+      error: key === "error" ? value : "",
       fieldErrors: {
         ...(current?.fieldErrors || {}),
         [key]: "",
@@ -2925,7 +2949,7 @@ export default function SettingsPage() {
                 <h2>{userModal.mode === "create" ? t.addUser : t.editUser}</h2>
                 <button type="button" className="settingsModalClose" onClick={() => setUserModal(null)} aria-label={t.close}>×</button>
               </div>
-
+              <div className="settingsUserModalBody">
               <label className="settingsModalField">
                 <span>{t.username}</span>
                 <input className="input" value={userModal.username} onChange={(event) => patchUserModal("username", event.target.value)} disabled={userBusy} />
@@ -2940,19 +2964,19 @@ export default function SettingsPage() {
                 <span>{userModal.mode === "create" ? t.password : userModal.id === currentUser?.id ? t.passwordOptional : t.resetPasswordLabel}</span>
                 <input className="input" type="password" value={userModal.password} onChange={(event) => patchUserModal("password", event.target.value)} disabled={userBusy} autoComplete="new-password" />
                 <small className="settingsModalHint">{passwordHint(lang)}</small>
-                {userModal.fieldErrors?.password ? <small className="settingsModalFieldError">{userModal.fieldErrors.password}</small> : null}
+                <small className="settingsModalFieldError" role={userModal.fieldErrors?.password ? "alert" : undefined}>{userModal.fieldErrors?.password || "\u00a0"}</small>
               </label>
 
               <label className="settingsModalField">
                 <span>{lang === "en" ? "Repeat password" : "Повторите пароль"}</span>
                 <input className="input" type="password" value={userModal.password_confirm || ""} onChange={(event) => patchUserModal("password_confirm", event.target.value)} disabled={userBusy || (userModal.mode === "edit" && !userModal.password)} autoComplete="new-password" />
-                {userModal.fieldErrors?.password_confirm ? <small className="settingsModalFieldError">{userModal.fieldErrors.password_confirm}</small> : null}
+                <small className="settingsModalFieldError" role={userModal.fieldErrors?.password_confirm ? "alert" : undefined}>{userModal.fieldErrors?.password_confirm || "\u00a0"}</small>
               </label>
 
-              {userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password ? (
-                <label className="settingsModalField">
+              {userModal.mode === "edit" && userModal.id === currentUser?.id ? (
+                <label className="settingsModalField" style={userModal.password ? undefined : { visibility: "hidden" }}>
                   <span>{t.currentPasswordRequired}</span>
-                  <input className="input" type="password" value={userModal.current_password} onChange={(event) => patchUserModal("current_password", event.target.value)} disabled={userBusy} autoComplete="current-password" />
+                  <input className="input" type="password" value={userModal.current_password} onChange={(event) => patchUserModal("current_password", event.target.value)} disabled={userBusy || !userModal.password} autoComplete="current-password" />
                 </label>
               ) : null}
 
@@ -2972,7 +2996,8 @@ export default function SettingsPage() {
                 </label>
               </div>
 
-              {userModal.error ? <div className="settingsModalError">{userModal.error}</div> : null}
+              <div className="settingsModalError" role={userModal.error ? "alert" : undefined} style={userModal.error ? undefined : { visibility: "hidden" }}>{userModal.error || "\u00a0"}</div>
+              </div>
 
               <div className="settingsModalActions">
                 <button type="button" className="button secondary small" onClick={() => setUserModal(null)} disabled={userBusy}>{t.cancel}</button>
@@ -3038,6 +3063,7 @@ export default function SettingsPage() {
               <section className="settingsSecurityModalSection">
                 <div className="settingsSecurityModalSectionHead">
                   <h3>{t.logJournal}</h3>
+                  <OperationRefreshButton busy={auditLoading} error={auditError} label={t.maintenanceRefresh} onClick={() => loadAuditEvents(0)} />
                 </div>
                 <div className="settingsAuditFilters" aria-label={t.journalFilters}>
                   <label>
@@ -3080,9 +3106,9 @@ export default function SettingsPage() {
                     <input className="input" value={auditFilters.q} onChange={(event) => patchAuditFilter("q", event.target.value)} />
                   </label>
                 </div>
-                {auditLoading ? (
+                {auditLoading && !auditEvents.length ? (
                   <div className="settingsJournalEmpty">{t.journalLoading || "Loading journal..."}</div>
-                ) : auditError ? (
+                ) : auditError && !auditEvents.length ? (
                   <div className="settingsJournalEmpty error">{auditError}</div>
                 ) : auditEvents.length ? (
                   <>

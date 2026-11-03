@@ -59,7 +59,7 @@ export default function SystemStatusPage() {
   const { currentUser, status: currentUserStatus, loading } = useCurrentUser();
   const { locale, t, text } = useI18n();
   const systemHealth = useSystemHealthStatus(currentUser, { enabled: Boolean(currentUser) });
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState(() => Boolean(currentUser) && !loading);
 
   useEffect(() => {
     if (!getAuthToken() || currentUserStatus === "no_token" || currentUserStatus === "denied") {
@@ -74,7 +74,7 @@ export default function SystemStatusPage() {
   const canRead = systemHealth.canRead && !systemHealth.accessDenied;
   const summary = systemHealth.summary;
   const summaryLoaded = Boolean(summary);
-  const severity = safeSeverity(summary?.severity || "unknown");
+  const severity = systemHealth.stale ? "unknown" : safeSeverity(summary?.severity || "unknown");
   const hasProblems = severity === "warning" || severity === "error";
   const problemCount = summary?.problem_count || 0;
   const rows = DOMAIN_ORDER.map((domain) => {
@@ -116,10 +116,10 @@ export default function SystemStatusPage() {
               />
               <div>
                 <div className="systemStatusEyebrow">{t("systemStatus.eyebrow")}</div>
-                <h1>{summary ? (hasProblems ? t("systemStatus.problemTitle") : t("systemStatus.okTitle")) : t("systemStatus.loading")}</h1>
-                <p>{summary ? (hasProblems ? t("systemStatus.problemSummary") : t("systemStatus.okSummary")) : t("systemStatus.loading")}</p>
+                <h1>{systemHealth.stale ? t("systemStatus.stale") : summary ? (hasProblems ? t("systemStatus.problemTitle") : t("systemStatus.okTitle")) : t("systemStatus.loading")}</h1>
+                <p>{systemHealth.stale ? t("systemStatus.staleHint") : summary ? (hasProblems ? t("systemStatus.problemSummary") : t("systemStatus.okSummary")) : t("systemStatus.loading")}</p>
               </div>
-              <div className={`systemStatusScore ${summaryLoaded ? (hasProblems ? "problem" : "ok") : "unknown"}`}>
+              <div className={`systemStatusScore ${systemHealth.stale ? "unknown" : summaryLoaded ? (hasProblems ? "problem" : "ok") : "unknown"}`}>
                 <strong>{summaryLoaded ? problemCount : "..."}</strong>
                 <span>{problemCountLabel(problemCount, t)}</span>
               </div>

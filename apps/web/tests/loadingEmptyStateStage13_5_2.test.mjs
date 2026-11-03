@@ -26,11 +26,13 @@ assert.doesNotMatch(camerasPage, /\{\s*!cameras\.length \? \(\s*<div className="
 
 assert.match(recordsPage, /loading: "\\u0417\\u0430\\u0433\\u0440\\u0443\\u0437\\u043a\\u0430\.\.\."/);
 assert.match(recordsPage, /const \[recordingsLoadState, setRecordingsLoadState\] = useState\("idle"\)/);
-assert.match(recordsPage, /setRecordingsLoadState\("loading"\)/);
+assert.match(recordsPage, /setRecordingsLoadState\(loadedQueryKey \? "refreshing" : "loading"\)/);
 assert.match(recordsPage, /try \{\s*const data = await apiFetch\(`\/recordings\$\{query\}`\)/s);
 assert.match(recordsPage, /setRecordingsLoadState\("loaded"\)/);
 assert.match(recordsPage, /setRecordingsLoadState\("error"\)/);
-assert.match(recordsPage, /const recordingsLoaded = recordingsLoadState === "loaded"/);
+assert.match(recordsPage, /const recordingsLoaded = Boolean\(loadedQueryKey\)/);
+assert.doesNotMatch(recordsPage, /setItems\(\[\]\)/);
+assert.match(recordsPage, /recordingsActionReady = recordingsLoadState === "loaded" && loadedQueryKey === currentQueryKey/);
 assert.match(recordsPage, /const recordingsFirstLoading = recordingsLoadState === "idle" \|\| recordingsLoadState === "loading"/);
 assert.match(recordsPage, /\(\) => recordingsLoaded && !filteredItems\.length && hasActiveRecordingJobs\(recorderStatus, selectedCamera\)/);
 assert.match(recordsPage, /\{t\.totalFiles\}: \{recordingsLoaded \? visibleSummary\.count : t\.loading\}/);
@@ -41,7 +43,7 @@ assert.doesNotMatch(recordsPage, /\{activeRecordingEmpty \? t\.recordingActiveEm
 
 assert.match(systemStatusPage, /const summaryLoaded = Boolean\(summary\)/);
 assert.match(systemStatusPage, /row\.severity === "unknown"\) return t\("systemStatus\.loading"\)/);
-assert.match(systemStatusPage, /systemStatusScore \$\{summaryLoaded \? \(hasProblems \? "problem" : "ok"\) : "unknown"\}/);
+assert.match(systemStatusPage, /systemStatusScore \$\{systemHealth.stale \? "unknown" : summaryLoaded/);
 assert.match(systemStatusPage, /!summaryLoaded \? \(\s*<article className="systemStatusIncident unknown">/s);
 assert.match(storagePage, /loading \? \(\s*<div className="storageOpsState">\{copy\.loading\}<\/div>/s);
 

@@ -1,7 +1,7 @@
 import sys
 import tempfile
 import stat
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -286,19 +286,16 @@ def test_camera_delete_without_files_removes_camera_and_retains_recordings(db):
     assert db.get(RecordingSegment, segment.id) is not None
 
 
-def test_camera_delete_with_files_without_recording_permission_removes_camera_and_skips_archive(db):
+def test_camera_delete_with_files_without_recording_permission_preserves_camera_and_archive(db):
     camera = add_camera(db)
     segment, file_path = add_segment(db, camera)
 
-    result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("operator"))
-
-    assert result["ok"] is True
-    assert result["camera_removed"] is True
-    assert result["status"] == "deleted_archive_cleanup_partial"
-    assert result["recordings"]["reason_counts"]["delete_recordings_permission_missing"] == 1
+    with pytest.raises(HTTPException) as exc:
+        delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("operator"))
+    assert exc.value.status_code == 403
     assert file_path.exists()
     assert db.get(Camera, camera.id) is not None
-    assert db.get(Camera, camera.id).deleted_at is not None
+    assert db.get(Camera, camera.id).deleted_at is None
     assert db.get(RecordingSegment, segment.id) is not None
 
 
@@ -383,53 +380,36 @@ def test_camera_delete_partial_cleanup_terminal_replay_preserves_product_truth(d
         current_user=actor("owner"),
     )
 
-    assert first["status"] == "deleted_archive_cleanup_partial"
+    assert first["status"] == "blocked"
     assert "replayed" not in first
-    assert second["status"] == "deleted_archive_cleanup_partial"
-    assert second["ok"] is True
-    assert second["camera_removed"] is True
+    assert second["status"] == "blocked"
+    assert second["ok"] is False
+    assert second["camera_removed"] is False
     assert second["replayed"] is True
     assert second["camera_name"] == first["camera_name"]
     assert second["recordings"]["reason_counts"] == first["recordings"]["reason_counts"]
     assert second["warnings"] == first["warnings"]
     assert file_path.exists()
     operation = db.query(StorageOperation).filter(StorageOperation.operation_type == "camera_delete_with_files").one()
-    assert operation.status == "partial"
+    assert operation.status == "blocked"
+    assert db.get(Camera, camera.id).deleted_at is None
     assert db.query(AuditEvent).count() == audit_count_after_first
 
 
-def test_camera_delete_without_recording_permission_replays_partial_outcome(db):
+def test_camera_delete_without_recording_permission_never_creates_a_partial_outcome(db):
     camera = add_camera(db, name="stage41012_camera_permission_replay")
     _segment, file_path = add_segment(db, camera)
     operation_id = "stage41012-camera-delete-permission-replay"
 
-    first = delete_camera(
-        camera.id,
-        FakeRequest(),
-        delete_files=True,
-        operation_id=operation_id,
-        db=db,
-        current_user=actor("operator"),
-    )
+    with pytest.raises(HTTPException) as first:
+        delete_camera(camera.id, FakeRequest(), delete_files=True, operation_id=operation_id, db=db, current_user=actor("operator"))
     audit_count_after_first = db.query(AuditEvent).count()
-    second = delete_camera(
-        camera.id,
-        FakeRequest(),
-        delete_files=True,
-        operation_id=operation_id,
-        db=db,
-        current_user=actor("operator"),
-    )
-
-    assert first["status"] == "deleted_archive_cleanup_partial"
-    assert second["status"] == first["status"]
-    assert second["ok"] is True
-    assert second["camera_removed"] is True
-    assert second["replayed"] is True
-    assert second["recordings"]["status"] == first["recordings"]["status"] == "blocked"
-    assert second["recordings"]["reason_counts"] == first["recordings"]["reason_counts"]
+    with pytest.raises(HTTPException) as second:
+        delete_camera(camera.id, FakeRequest(), delete_files=True, operation_id=operation_id, db=db, current_user=actor("operator"))
+    assert first.value.status_code == second.value.status_code == 403
     assert file_path.exists()
-    assert db.query(StorageOperation).filter(StorageOperation.operation_type == "camera_delete_with_files").count() == 1
+    assert db.query(StorageOperation).filter(StorageOperation.operation_type == "camera_delete_with_files").count() == 0
+    assert db.get(Camera, camera.id).deleted_at is None
     assert db.query(AuditEvent).count() == audit_count_after_first
 
 
@@ -535,7 +515,8 @@ def test_camera_delete_failed_terminal_replay_preserves_failure_truth(db, monkey
     assert db.query(AuditEvent).count() == audit_count
 
 
-def test_camera_delete_with_files_skips_active_recording_but_removes_camera(db):
+def test_camera_delete_stop_timeout_keeps_camera_and_archive(db, monkeypatch):
+    monkeypatch.setattr(cameras_module, "CAMERA_DELETE_STOP_WAIT_SECONDS", 0)
     camera = add_camera(db)
     job = RecordingJob(
         id="stage1_delete_test_job",
@@ -549,45 +530,162 @@ def test_camera_delete_with_files_skips_active_recording_but_removes_camera(db):
 
     result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
 
-    assert result["ok"] is True
-    assert result["camera_removed"] is True
-    assert result["status"] == "deleted_archive_cleanup_partial"
-    assert result["recordings"]["reason_counts"]["active_job"] == 1
+    assert result["ok"] is False
+    assert result["camera_removed"] is False
+    assert result["status"] == "blocked"
+    assert result["recordings"]["reason_counts"]["camera_recording_not_stopped"] == 1
     assert file_path.exists()
     assert db.get(Camera, camera.id) is not None
-    assert db.get(Camera, camera.id).deleted_at is not None
+    assert db.get(Camera, camera.id).deleted_at is None
     assert db.get(RecordingSegment, segment.id) is not None
 
 
-def test_camera_delete_with_files_skips_foreign_and_removes_camera(db):
+def test_camera_delete_with_files_blocks_foreign_and_keeps_camera(db):
     camera = add_camera(db)
     segment, file_path = add_segment(db, camera, ownership="third_party")
 
     result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
 
-    assert result["ok"] is True
-    assert result["camera_removed"] is True
-    assert result["status"] == "deleted_archive_cleanup_partial"
+    assert result["ok"] is False
+    assert result["camera_removed"] is False
+    assert result["status"] == "blocked"
     assert result["recordings"]["reason_counts"]["unowned"] == 1
     assert file_path.exists()
     assert db.get(Camera, camera.id) is not None
-    assert db.get(Camera, camera.id).deleted_at is not None
+    assert db.get(Camera, camera.id).deleted_at is None
     assert db.get(RecordingSegment, segment.id) is not None
 
 
-def test_camera_delete_with_files_skips_path_traversal_and_removes_camera(db):
+def test_camera_delete_with_files_blocks_path_traversal_and_keeps_camera(db):
     camera = add_camera(db)
     segment, _file_path = add_segment(db, camera, relative_path="../stage1_delete_test_escape.mkv", file_exists=False)
 
     result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
 
-    assert result["ok"] is True
-    assert result["camera_removed"] is True
-    assert result["status"] == "deleted_archive_cleanup_partial"
+    assert result["ok"] is False
+    assert result["camera_removed"] is False
+    assert result["status"] == "blocked"
     assert result["recordings"]["reason_counts"]["path_outside_storage"] == 1
     assert db.get(Camera, camera.id) is not None
-    assert db.get(Camera, camera.id).deleted_at is not None
+    assert db.get(Camera, camera.id).deleted_at is None
     assert db.get(RecordingSegment, segment.id) is not None
+
+
+def test_camera_delete_ignores_deleted_history_and_accepts_already_absent_files(db):
+    camera = add_camera(db)
+    old, old_path = add_segment(db, camera, relative_path=f"kmvms/recordings/camera_{camera.id}/old.mkv", status="deleted", file_exists=False)
+    old.deleted_at = datetime.utcnow()
+    missing, missing_path = add_segment(db, camera, relative_path=f"kmvms/recordings/camera_{camera.id}/missing.mkv", integrity_status="missing_file", file_exists=False)
+    current, current_path = add_segment(db, camera, relative_path=f"kmvms/recordings/camera_{camera.id}/current.mkv")
+    db.commit()
+    result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
+    assert result["status"] == "deleted"
+    assert result["recordings"]["requested_count"] == result["recordings"]["deleted_count"] == 2
+    assert result["recordings"]["failed_count"] == result["recordings"]["skipped_count"] == 0
+    assert result["recordings"]["reason_counts"]["already_absent"] == 1
+    assert result["recordings"]["bytes_freed"] == 6
+    assert all(not path.exists() for path in (old_path, missing_path, current_path))
+    assert all(db.get(RecordingSegment, item.id).deleted_at is not None for item in (old, missing, current))
+
+
+@pytest.mark.parametrize(("segment_status", "integrity_status"), [
+    ("finalized", "corrupted_file"), ("failed", "partial_file"),
+    ("ready", "zero_size_file"), ("writing", "stale_writing_segment"),
+])
+def test_camera_delete_removes_owned_stopped_damaged_files(db, segment_status, integrity_status):
+    camera = add_camera(db)
+    segment, path = add_segment(db, camera, status=segment_status, integrity_status=integrity_status)
+    if segment_status == "writing":
+        segment.started_at = segment.updated_at = datetime.utcnow() - timedelta(days=1)
+        db.commit()
+    result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
+    assert result["status"] == "deleted"
+    assert result["recordings"]["deleted_count"] == 1
+    assert not path.exists()
+
+
+def test_camera_delete_waits_for_recorder_and_includes_its_last_segment(db, monkeypatch):
+    camera = add_camera(db)
+    camera.enabled = True
+    job = RecordingJob(id="delete-stop-ack", camera_id=camera.id, state="recording", started_at=datetime.utcnow())
+    db.add(job)
+    db.commit()
+    writing, path = add_segment(db, camera, status="writing", job_id=job.id)
+    final_paths = [path]
+    calls = []
+
+    def acknowledge_stop(_seconds):
+        db.refresh(camera)
+        assert camera.enabled is False
+        assert camera.deleted_at is None
+        assert path.exists(), "no file may be deleted while the recorder is running"
+        calls.append(True)
+        job.state = "disabled"
+        writing.status = "finalized"
+        writing.finalized_at = datetime.utcnow()
+        camera.status = "disabled"
+        db.add_all([job, writing, camera])
+        db.commit()
+        _, final_path = add_segment(db, camera, relative_path=f"kmvms/recordings/camera_{camera.id}/last.mkv", job_id=job.id)
+        final_paths.append(final_path)
+
+    monkeypatch.setattr(cameras_module.time, "sleep", acknowledge_stop)
+    result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
+    assert len(calls) == 1
+    assert result["status"] == "deleted"
+    assert result["recordings"]["deleted_count"] == 2
+    assert all(not item.exists() for item in final_paths)
+
+
+def test_camera_delete_partial_io_failure_keeps_camera_and_new_attempt_completes(db, monkeypatch):
+    camera = add_camera(db)
+    _, first_path = add_segment(db, camera, relative_path=f"kmvms/recordings/camera_{camera.id}/first.mkv")
+    _, second_path = add_segment(db, camera, relative_path=f"kmvms/recordings/camera_{camera.id}/second.mkv")
+    unlink = Path.unlink
+
+    def refuse_one_file(path, *args, **kwargs):
+        if path == second_path:
+            raise PermissionError("controlled write refusal")
+        return unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", refuse_one_file)
+        first = delete_camera(camera.id, FakeRequest(), delete_files=True, operation_id="delete-io-first", db=db, current_user=actor("owner"))
+    assert first["status"] == "partial"
+    assert first["camera_removed"] is False
+    assert first["retry_allowed"] is True
+    assert first["recordings"]["deleted_count"] == first["recordings"]["failed_count"] == 1
+    assert db.get(Camera, camera.id).deleted_at is None
+    assert not first_path.exists() and second_path.exists()
+    replay = delete_camera(camera.id, FakeRequest(), delete_files=True, operation_id="delete-io-first", db=db, current_user=actor("owner"))
+    assert replay["replayed"] is True and replay["camera_removed"] is False
+    assert second_path.exists(), "replay reports the original outcome rather than silently repeating work"
+    second = delete_camera(camera.id, FakeRequest(), delete_files=True, operation_id="delete-io-retry", db=db, current_user=actor("owner"))
+    assert second["status"] == "deleted"
+    assert second["recordings"]["deleted_count"] == 1
+    assert not second_path.exists()
+    assert db.get(Camera, camera.id).deleted_at is not None
+
+
+def test_camera_delete_does_not_treat_unavailable_storage_as_absent_files(db, monkeypatch):
+    import app.services.recording_retention as retention_module
+    camera = add_camera(db)
+    _, path = add_segment(db, camera)
+    monkeypatch.setattr(retention_module, "archive_root_runtime_access_state", lambda _root: {"read_access_state": "unavailable"})
+    result = delete_camera(camera.id, FakeRequest(), delete_files=True, db=db, current_user=actor("owner"))
+    assert result["status"] == "blocked"
+    assert result["camera_removed"] is False
+    assert result["recordings"]["reason_counts"]["storage_unavailable"] == 1
+    assert path.exists()
+    assert db.get(Camera, camera.id).deleted_at is None
+
+
+def test_camera_delete_result_does_not_truncate_reason_counts_to_sample_size():
+    result = cameras_module.compact_deletion_result({
+        "ok": True, "reason_counts": {"camera_delete_with_files": 237},
+        "items": [{"reason": "camera_delete_with_files"}] * 100,
+    })
+    assert result["reason_counts"]["camera_delete_with_files"] == 237
 
 
 def test_disabled_offline_camera_without_recordings_deletes_with_and_without_file_flag(db):

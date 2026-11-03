@@ -33,6 +33,9 @@ assert.equal(recommended.onvif_sub_profile_token, "low");
 assert.equal(recommended.default_live_stream, "sub");
 const manual = { ...recommended, rtsp_main_url: "/manual", onvif_profile_token: "manual", rtsp_sub_url: "", onvif_sub_profile_token: "" };
 assert.deepEqual(plain(m.cameraDraftWithProfiles(manual, profiles)), plain(manual), "rechecking may not replace choices or reintroduce deliberately removed Sub");
+const recreatedTokens = m.cameraDraftWithProfiles({ ...recommended, onvif_profile_token: "obsolete-token" }, profiles);
+assert.equal(recreatedTokens.onvif_profile_token, "high", "exact stream path recovers a recreated ONVIF token");
+assert.equal(recreatedTokens.rtsp_main_url, recommended.rtsp_main_url);
 const single = m.cameraDraftWithProfiles(form, { profiles: profiles.profiles.slice(0, 1), suggested_main_profile_token: "high" });
 assert.deepEqual(plain(m.cameraStreamRoles(single)), ["main"]);
 assert.equal(single.default_live_stream, "main");
@@ -165,8 +168,9 @@ await success.render().next();
 assert.equal(success.render().section, "video");
 await success.render().next();
 assert.equal(success.render().section, "review");
-assert.deepEqual(success.requests.map((request) => request.path), ["/cameras/onvif/probe", "/cameras/test", "/cameras/test"]);
-assert.equal(success.requests[2].body.stream_role, "sub");
+assert.deepEqual(success.requests.map((request) => request.path), ["/cameras/onvif/probe", "/cameras/test", "/cameras/test", "/cameras/test"]);
+assert.equal(success.requests[2].body.metadata_only, true, "catalog starts on connection, before Next");
+assert.equal(success.requests[3].body.stream_role, "sub");
 assert.equal(success.render().verified, true);
 success.render().invalidateVideo();
 assert.equal(success.render().verified, false);
@@ -210,6 +214,7 @@ let finishSecondLens;
 switching.scope.reply = async (request) => request.path.endsWith("probe")
   ? { ok: true, onvif_probe_token: "probe", ...dual }
   : request.path.endsWith("cleanup") ? { removed: request.body.tokens.length }
+  : request.body.metadata_only ? { ok: true, video: { codec: "h264", width: 640, height: 360, fps: "25/1" } }
   : request.body.onvif_profile_token === "two-main"
     ? await new Promise((resolve) => { finishSecondLens = resolve; })
     : { ok: true, tested_role: request.body.stream_role, validation_token: "lens1-proof", preview_token: "lens1-image", preview_url: "/lens1.jpg", video: { codec: "h264", width: 1920, height: 1080 } };
@@ -225,10 +230,12 @@ assert.equal(await toSecond, false);
 assert.equal(await backToFirst, true);
 assert.equal(switching.render().preview.preview_url, "/lens1.jpg", "a late response must not replace the selected lens");
 assert.equal(switching.requests.filter((request) => request.path.endsWith("probe")).length, 1);
-assert.equal(switching.requests.filter((request) => request.path === "/cameras/test").length, 2, "return uses a valid cached check, not another RTSP read");
+assert.equal(switching.requests.filter((request) => request.path === "/cameras/test" && !request.body.metadata_only).length, 3, "each lens selection starts a fresh check, including return to the first");
 assert(switching.requests.some((request) => request.path.endsWith("cleanup") && request.body.tokens.includes("lens2-late-image")));
 switching.scope.reply = async (request) => request.path.endsWith("cleanup") ? { removed: request.body.tokens.length }
-  : { ok: true, tested_role: "main", validation_token: "lens2-proof", preview_token: "lens2-image", preview_url: "/lens2.jpg", video: { codec: "h264" } };
+  : request.body.metadata_only ? { ok: true, video: { codec: "h264", width: 640, height: 360, fps: "25/1" } }
+  : { ok: true, tested_role: "main", validation_token: "lens-proof", preview_token: request.body.onvif_profile_token,
+    preview_url: request.body.onvif_profile_token === "one-main" ? "/lens1.jpg" : "/lens2.jpg", video: { codec: "h264" } };
 assert.equal(await switching.render().selectSource("channel:2"), true);
 assert.equal(await switching.render().selectSource("channel:1"), true);
 const cachedTwo = switching.render().selectSource("channel:2");
@@ -270,7 +277,8 @@ catalog.scope.reply = async (request) => {
 };
 await editor.check();
 const selectedBeforeCatalog = plain(catalog.render().form);
-catalog.render().requestProfileMetadata();
+assert.equal(catalog.render().section, "connection");
+assert(catalog.requests.some((request) => request.body.metadata_only), "single-lens catalog starts without visiting step two");
 for (let tick = 0; tick < 200; tick += 1) await Promise.resolve();
 assert.equal(catalog.requests.filter((request) => request.body.metadata_only).length, 9, "all remaining nine streams are read automatically");
 assert.equal(catalogMaximum, 1, "catalog requests are serialized");
@@ -334,6 +342,71 @@ assert.equal(changedCatalog.render().device, null, "late metadata cannot populat
 assert.equal(changedCatalog.requests.length, beforeChanged);
 changedCatalog.unmount();
 
+// Deliberately late A -> B -> A replies exercise the real hook, not a replacement
+// algorithm. Only the selected lens is read; the second A has its own generation.
+const racing = hookHarness();
+editor = fillNew(racing);
+const raceData = plain(dual);
+for (const [index, group] of raceData.source_groups.entries()) {
+  const token = `${index ? "two" : "one"}-extra`;
+  raceData.profiles.push({ token, source_id: group.id, stream_path: `/channel${index + 1}/extra` });
+  group.profile_tokens.push(token);
+}
+const delayedMetadata = [];
+let firstLensReads = 0;
+racing.scope.reply = async (request) => {
+  if (request.path.endsWith("probe")) return { ok: true, onvif_probe_token: "race-proof", ...raceData };
+  if (request.path.endsWith("cleanup")) return { removed: request.body.tokens.length };
+  if (request.body.metadata_only) return await new Promise((resolve) => delayedMetadata.push({ request, resolve }));
+  const first = request.body.onvif_profile_token.startsWith("one-");
+  if (first && request.body.stream_role === "main") firstLensReads += 1;
+  return { ok: true, tested_role: request.body.stream_role, validation_token: `fresh-${firstLensReads}`,
+    preview_token: `frame-${first}-${firstLensReads}`, preview_url: first ? "/one.jpg" : "/two.jpg",
+    video: { codec: "h264", width: first ? 1100 + firstLensReads : 2200, height: 1080, fps: "25/1" } };
+};
+const drain = async () => { for (let tick = 0; tick < 60; tick += 1) await Promise.resolve(); };
+await editor.check();
+assert.equal(delayedMetadata.length, 1, "preparation begins on the connection page");
+assert.equal(delayedMetadata[0].request.body.onvif_profile_token, "one-sub");
+assert.equal(racing.render().metadataPreparing, true);
+const abandonedNext = racing.render().next();
+await drain();
+assert.equal(racing.render().section, "connection", "Next cannot reveal unfinished stream details");
+const raceToSecond = racing.render().selectSource("channel:2");
+assert.equal(racing.render().form.onvif_profile_token, "two-main");
+assert.equal(delayedMetadata.length, 1, "lens switches do not open parallel probes");
+delayedMetadata.shift().resolve({ ok: true, video: { codec: "stale-A", width: 9999, height: 9999, fps: "99/1" } });
+assert.equal(await raceToSecond, true);
+await abandonedNext;
+await drain();
+assert.equal(racing.render().section, "connection", "an old Next cannot advance a new lens selection");
+assert.equal(delayedMetadata[0].request.body.onvif_profile_token, "two-sub");
+assert.equal(racing.requests.some((request) => request.body.metadata_only && request.body.onvif_profile_token === "one-extra"), false, "old lens queue stops after the in-flight request");
+const raceBackToFirst = racing.render().selectSource("channel:1");
+assert.equal(racing.render().preview.preview_url, "/one.jpg", "identification image remains independent from the catalog");
+delayedMetadata.shift().resolve({ ok: true, video: { codec: "stale-B", width: 8888, height: 8888, fps: "88/1" } });
+assert.equal(await raceBackToFirst, true);
+await drain();
+assert.equal(firstLensReads, 2, "A -> B -> A restarts A instead of accepting its old check");
+assert.equal(delayedMetadata[0].request.body.onvif_profile_token, "one-sub");
+assert.equal(racing.render().device.profiles.find((profile) => profile.token === "one-sub").rtsp_probe, undefined, "late first-A metadata cannot populate second A");
+const currentNext = racing.render().next();
+await drain();
+assert.equal(racing.render().section, "connection");
+delayedMetadata.shift().resolve({ ok: true, video: { codec: "fresh-A", width: 1202, height: 720, fps: "25/1" } });
+await drain();
+assert.equal(delayedMetadata[0].request.body.onvif_profile_token, "one-extra");
+assert.equal(racing.render().section, "connection", "all current lens streams must finish before step two");
+delayedMetadata.shift().resolve({ ok: false }); // A missing optional stream ends in 'unavailable', not an infinite retry.
+await currentNext;
+await drain();
+assert.equal(racing.render().section, "video");
+assert.equal(racing.render().metadataPreparing, false);
+assert.equal(racing.render().device.profiles.find((profile) => profile.token === "one-extra").metadata_status.state, "failed");
+assert.equal(racing.render().device.profiles.some((profile) => profile.rtsp_probe?.video?.width === 9999 || profile.rtsp_probe?.video?.width === 8888), false);
+assert.equal(racing.requests.some((request) => request.body.metadata_only && request.body.onvif_profile_token === "two-extra"), false);
+racing.unmount();
+
 for (const locale of ["ru", "en", "zhCN"]) {
   const dictionary = read(`lib/i18n/${locale}.js`);
   for (const key of read("components/cameras/CameraEditor.js").matchAll(/copy\.(editor\w+)/g)) assert(dictionary.includes(`${key[1]}:`), `${locale}: ${key[1]}`);
@@ -346,6 +419,8 @@ assert(component.includes("beforeunload"));
 assert(!component.includes("cameraFlowPreviewChoices"));
 assert(!component.includes("cameraFlowSourceContext"), "lens caption is shown once, next to its image");
 assert(component.includes("cameraFlowStreamSelected"), "closed stream controls show wrapping name and metadata");
+assert(!component.includes("editorSavedProfile"), "a missing discovered token must not be described as a saved camera");
+assert(component.includes("disabled={busy || preparing}"), "Continue waits in its existing footer, without changing layout");
 assert(!component.includes("scrollIntoView"), "status changes cannot force scrolling");
 assert.equal((component.match(/\{renderSourceChoice\(\)\}/g) || []).length, 1);
 assert(component.includes('renderPurposeChoice("record", copy.recordStream)'));

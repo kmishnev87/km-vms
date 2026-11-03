@@ -1024,8 +1024,9 @@ function StorageOperationsPageContent() {
         setError(forbiddenMessage(language));
         return false;
       }
-      if (silent && statusRef.current) {
+      if (statusRef.current) {
         setRefreshWarning(t("storagePage.refreshFailedStale", { time: formatDateTime(statusRef.current?.storage_operations?.checked_at, language) }));
+        if (!silent) setOperationToast({ id: `storage-refresh-${Date.now()}`, title: t("systemStatus.stale"), message: copy.loadFailed, tone: "error" });
         return false;
       }
       setError(err?.message || copy.loadFailed);
@@ -1348,7 +1349,14 @@ function StorageOperationsPageContent() {
     };
   }, [copy.integrityLoadFailed, integrityDialogOpen, integrityScan?.scan_id, integrityScan?.status, language, loadStatus]);
 
+  function requireFreshStorageStatus() {
+    if (!refreshWarning) return true;
+    setOperationToast({ id: `storage-stale-${Date.now()}`, title: t("systemStatus.stale"), message: refreshWarning, tone: "warning", action: { label: copy.refresh, onClick: () => loadStatus() } });
+    return false;
+  }
+
   function requestAutoFreeSpace(nextEnabled) {
+    if (!requireFreshStorageStatus()) return;
     if (!manageSettingsPermission.allowed) {
       setArchiveRootDialog({
         id: "auto-free-permission",
@@ -1399,6 +1407,7 @@ function StorageOperationsPageContent() {
   }
 
   async function setAutoFreeSpace(nextEnabled, { acknowledge = false } = {}) {
+    if (!requireFreshStorageStatus()) return;
     setRootAction("auto-free");
     if (acknowledge) {
       setArchiveRootDialog((current) => ({
@@ -1457,6 +1466,7 @@ function StorageOperationsPageContent() {
   }
 
   async function addRoot() {
+    if (!requireFreshStorageStatus()) return;
     const payload = archiveRootSelectionPayload();
     if (!payload.candidate_id || !payload.discovery_snapshot_id || !payload.folder_name) return;
     if (!manageSettingsPermission.allowed) {
@@ -1493,6 +1503,7 @@ function StorageOperationsPageContent() {
   }
 
   function requestActivateRoot(root) {
+    if (!requireFreshStorageStatus()) return;
     if (!root?.id) return;
     if (!manageSettingsPermission.allowed) {
       setArchiveRootDialog({
@@ -1521,6 +1532,7 @@ function StorageOperationsPageContent() {
   }
 
   async function activateRoot(rootId, recovery = false) {
+    if (!recovery && !requireFreshStorageStatus()) return;
     if (!rootId) return;
     if (!manageSettingsPermission.allowed) {
       setArchiveRootDialog({
@@ -1635,6 +1647,7 @@ function StorageOperationsPageContent() {
   }
 
   function requestDeleteRoot(root) {
+    if (!requireFreshStorageStatus()) return;
     if (!root?.id || root.is_active) return;
     if (!manageSettingsPermission.allowed) {
       setArchiveRootDialog({
@@ -1686,6 +1699,7 @@ function StorageOperationsPageContent() {
   }
 
   async function deleteRoot(rootId, operationId) {
+    if (!requireFreshStorageStatus()) return;
     if (!rootId) return;
     setRootAction(`delete-${rootId}`);
     try {
@@ -1867,6 +1881,7 @@ function StorageOperationsPageContent() {
   }
 
   async function prepareIntegrityAction(finding) {
+    if (!requireFreshStorageStatus()) return;
     const presentation = archiveIntegrityFindingPresentation(finding);
     const contract = archiveIntegrityActionContract(presentation.actionKey);
     if (!presentation.actionAllowed || !contract.planKind) return;
@@ -1893,6 +1908,7 @@ function StorageOperationsPageContent() {
   }
 
   async function applyIntegrityAction() {
+    if (!requireFreshStorageStatus()) return;
     if (!integrityPlan?.plan_id || !integritySelectedFinding) return;
     const presentation = archiveIntegrityFindingPresentation(integritySelectedFinding);
     const contract = archiveIntegrityActionContract(presentation.actionKey);
@@ -1986,6 +2002,7 @@ function StorageOperationsPageContent() {
   }
 
   async function prepareMigrationPlan() {
+    if (!requireFreshStorageStatus()) return;
     if (!manageSettingsPermission.allowed) {
       setMigrationMessage(manageSettingsPermission.reason);
       return;
@@ -2018,6 +2035,7 @@ function StorageOperationsPageContent() {
   }
 
   async function applyMigration() {
+    if (!requireFreshStorageStatus()) return;
     if (!migrationScenario.canApply || !migrationPlan?.plan_id || !migrationPlan?.canonical_hash) return;
     setMigrationBusy(true);
     setMigrationMessage("");
@@ -2296,7 +2314,7 @@ function StorageOperationsPageContent() {
               <div className="pageSubtitle storageOpsHeaderSubtitle">{copy.subtitle}</div>
               <div className="storageOpsHeaderActions">
                 <span>{copy.lastCheck}: {formatDateTime(operations.checked_at, language)}</span>
-                <button className="button secondary small storageOpsRefreshButton" type="button" onClick={() => loadStatus()} disabled={refreshing || loading || accessDenied}>
+                <button className="button secondary small storageOpsRefreshButton" type="button" onClick={() => loadStatus()} disabled={refreshing || loading || accessDenied} title={refreshWarning || copy.refresh} aria-busy={refreshing}>
                   {refreshing ? copy.refreshing : copy.refresh}
                 </button>
               </div>
@@ -2316,8 +2334,8 @@ function StorageOperationsPageContent() {
               <div className="storageOpsHealthMain">
                 <div className={`storageOpsHealthMark storageOpsHealthMark-${tone}`} aria-hidden="true">!</div>
                 <div>
-                  <strong>{healthTitle(copy, tone)}</strong>
-                  <p>{healthReason}</p>
+                  <strong>{refreshWarning ? t("systemStatus.stale") : healthTitle(copy, tone)}</strong>
+                  <p>{refreshWarning || healthReason}</p>
                 </div>
               </div>
               <div className="storageOpsTopMetrics" aria-label={copy.firstScreenMetrics}>
@@ -2333,7 +2351,6 @@ function StorageOperationsPageContent() {
                 />
               </div>
             </section>
-            {refreshWarning ? <div className="storageOpsState storageOpsState-warning">{refreshWarning}</div> : null}
 
             <div className="storageOpsDashboard">
               <Section title={copy.archiveSpace} className="storageOpsSection-archive">

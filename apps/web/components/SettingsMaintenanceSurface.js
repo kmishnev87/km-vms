@@ -1,6 +1,7 @@
 "use client";
 
-import { OperationDialog } from "./OperationFeedback";
+import { OperationDialog, OperationRefreshButton } from "./OperationFeedback";
+import { updateApplyFactRows } from "../lib/settingsUpdateApplyHelpers";
 import {
   formatMaintenanceMessage,
   maintenanceStatusClass,
@@ -319,6 +320,24 @@ export function SettingsMaintenanceModal({
     loadMaintenanceBackupPage,
   } = controller;
 
+  const { maintenanceDetail, setMaintenanceDetail } = controller;
+  const updateDetails = <>
+    <p role="status">{updateApplyOperator.summary}</p>
+    <dl className="maintenanceDetailFacts">{updateApplyFactRows(updateStatus, updateApplyStatus, t).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+    <div className="settingsUpdateApplyTimeline" aria-label={t.updateApplyProgress}><ol>{updateApplyOperator.timeline.map((step) => <li className={`is-${step.status}`} key={step.name}>
+      <span className="settingsUpdateApplyTimelineDot" aria-hidden="true">{step.icon === "alert" ? "!" : step.icon === "check" ? "✓" : "•"}</span><strong>{step.label}</strong><small>{step.timeLabel || "\u00a0"}</small>
+    </li>)}</ol></div>
+    {updateApplyOperator.releaseSummary ? <p>{updateApplyOperator.releaseSummary}</p> : null}
+    {updateApplyOperator.releaseChangelog.length ? <ul>{updateApplyOperator.releaseChangelog.map((item, index) => <li key={index}>{item}</li>)}</ul> : null}
+    {updateApplyLaunchNotice ? <p>{updateApplyLaunchNotice}</p> : null}
+    {updatePeerCheckUnavailable ? <p>{t.updateApplyPeerCheckUnavailable}</p> : null}
+    {updateApplyErrors.map((message) => <p role="alert" key={message}>{message}</p>)}
+  </>;
+  const actionDetails = maintenanceActionResult ? <>
+    <strong>{t.maintenanceFlows?.[maintenanceActionResult.flowKey] || maintenanceActionResult.flowKey}: {maintenanceStatusText(maintenanceActionResult.status, t)}</strong>
+    <p>{maintenanceActionResult.displayReason || formatMaintenanceMessage(maintenanceActionResult.reason, t, lang, "action")}</p>
+  </> : <p>{maintenanceDatabase.summary}</p>;
+
   return (
     <>
       {maintenanceModalOpen ? (
@@ -336,22 +355,12 @@ export function SettingsMaintenanceModal({
             <div className="settingsMaintenanceModalHeader">
               <h2>{t.maintenanceOverview}</h2>
               <div className="settingsMaintenanceModalActions">
-                <button
-                  type="button"
-                  className="settingsMaintenanceIconButton"
-                  onClick={refreshMaintenanceSurface}
-                  disabled={maintenanceLoading || Boolean(maintenanceBusy)}
-                  title={t.maintenanceRefresh}
-                  aria-label={t.maintenanceRefresh}
-                >
-                  ↻
-                </button>
+                <OperationRefreshButton busy={maintenanceLoading || Boolean(maintenanceBusy)} error={maintenanceError} label={t.maintenanceRefresh} onClick={refreshMaintenanceSurface} />
                 <button type="button" className="settingsMaintenanceIconButton" onClick={closeMaintenanceModal} disabled={maintenanceChildDialogOpen} aria-label={t.close}>×</button>
               </div>
             </div>
 
-            {maintenanceError ? <div className="settingsJournalEmpty error">{maintenanceError}</div> : null}
-            {maintenanceLoading && !maintenanceOverview && !updateStatus && !updateApplyStatus ? <div className="settingsJournalEmpty">{t.checking}</div> : null}
+            {!maintenanceOverview && !updateStatus && !updateApplyStatus ? <div className="settingsMaintenanceContent" role="status">{maintenanceError || t.checking}</div> : null}
 
             {maintenanceOverview || updateStatus || updateApplyStatus ? (
               <div className="settingsMaintenanceContent">
@@ -368,9 +377,7 @@ export function SettingsMaintenanceModal({
                 <section className="settingsUpdateApplyPanel">
                   <div className="settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned">
                     <h3>{t.updateApplyTitle}</h3>
-                    <span className={`settingsMaintenancePill is-${updateApplyOperator.severity}`}>
-                      {updateApplyOperator.headline}
-                    </span>
+                    <button type="button" className={`settingsMaintenancePill is-${updateApplyOperator.severity}`} onClick={() => setMaintenanceDetail("update")} title={`${t.open}: ${t.updateApplyTitle}`}>{updateApplyOperator.headline}{updateApplyOperator.availableVersion ? ` ${updateApplyOperator.availableVersion}` : ""}</button>
                   </div>
                   <div className="settingsUpdateApplyCompact">
                     <div className="settingsUpdateApplyRelease">
@@ -379,18 +386,6 @@ export function SettingsMaintenanceModal({
                           <dt>{t.updateApplyInstalledVersion}</dt>
                           <dd>{updateApplyOperator.currentVersion}</dd>
                         </div>
-                        {updateApplyOperator.availableVersion ? (
-                          <div>
-                            <dt>{t.updateApplyAvailableVersion}</dt>
-                            <dd>{updateApplyOperator.availableVersion}</dd>
-                          </div>
-                        ) : null}
-                        {updateApplyOperator.publishedAt ? (
-                          <div>
-                            <dt>{t.updateApplyPublishedAt}</dt>
-                            <dd>{updateApplyOperator.publishedAt}</dd>
-                          </div>
-                        ) : null}
                         <div>
                           <dt>{t.maintenanceLastUpdate}</dt>
                           <dd>{updateApplyOperator.installedAt}</dd>
@@ -420,60 +415,15 @@ export function SettingsMaintenanceModal({
                     </div>
                   </div>
 
-                  {updateApplyRunning || updateApplyOperator.stateUnknown || updateApplyOperator.reconnecting || updateApplyOperator.severity === "blocked" ? (
-                    <>
-                      <p className={`settingsUpdateApplyCompactMessage is-${updateApplyOperator.severity}`}>
-                        {updateApplyOperator.summary}
-                      </p>
-                      <div className="settingsUpdateApplyTimeline" aria-label={t.updateApplyProgress}>
-                        <ol>
-                          {updateApplyOperator.timeline.map((step) => (
-                            <li className={`is-${step.status}`} key={step.name}>
-                              <span className="settingsUpdateApplyTimelineDot" aria-hidden="true">
-                                {step.icon === "alert" ? "!" : step.icon === "pulse" ? "•" : step.icon === "check" ? "✓" : ""}
-                              </span>
-                              <strong>{step.label}</strong>
-                              {step.timeLabel ? <small>{step.timeLabel}</small> : null}
-                            </li>
-                          ))}
-                        </ol>
-                      </div>
-                    </>
-                  ) : null}
-
-                  {(updateApplyOperator.canApply || updateApplyRunning || updateApplyOperator.severity === "blocked")
-                    && (updateApplyOperator.releaseSummary || updateApplyOperator.releaseChangelog.length) ? (
-                    <div className="settingsUpdateApplySummaryGrid">
-                      <section>
-                      <span>{t.updateApplyReleaseChanges}</span>
-                      {updateApplyOperator.releaseSummary ? (
-                        <p>{updateApplyOperator.releaseSummary}</p>
-                      ) : null}
-                      {updateApplyOperator.releaseChangelog.length ? (
-                        <ul>
-                          {updateApplyOperator.releaseChangelog.map((item, index) => (
-                            <li key={`${index}-${item}`}>{item}</li>
-                          ))}
-                        </ul>
-                      ) : null}
-                      </section>
-                    </div>
-                  ) : null}
-
-                  {updateApplyLaunchNotice ? <div className="settingsUpdateApplyNotice">{updateApplyLaunchNotice}</div> : null}
-                  {updatePeerCheckUnavailable ? (
-                    <div className="settingsUpdateApplyNotice">{t.updateApplyPeerCheckUnavailable}</div>
-                  ) : null}
-                  {updateApplyErrors.map((message) => <small className="settingsUpdateApplyError" key={message}>{message}</small>)}
                 </section>
 
                 <div className="settingsMaintenanceCoreGrid">
                   <section className={`settingsMaintenanceCoreCard is-${maintenanceDatabase.tone}`}>
                     <div className="settingsMaintenanceCardHeading">
                       <h3>{t.maintenanceDatabaseTitle}</h3>
-                      <span className={`settingsMaintenancePill is-${maintenanceDatabase.tone}`}>
+                      <button type="button" className={`settingsMaintenancePill is-${maintenanceDatabase.tone}`} onClick={() => setMaintenanceDetail("result")} title={`${t.open}: ${t.maintenanceDatabaseTitle}`}>
                         {maintenanceDatabase.statusLabel}
-                      </span>
+                      </button>
                     </div>
                     {maintenanceDatabase.facts.length ? (
                       <dl className="settingsMaintenanceCoreFacts">
@@ -519,9 +469,9 @@ export function SettingsMaintenanceModal({
                   <div className="settingsMaintenanceBackupHead">
                     <div className="settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned">
                       <h3>{t.maintenanceBackupsTitle}</h3>
-                      <span className={`settingsMaintenancePill is-${maintenanceBackupOverview.tone}`}>
-                        {maintenanceBackupOverview.statusText}
-                      </span>
+                      <button type="button" className={`settingsMaintenancePill is-${maintenanceBackupOverview.tone}`} onClick={() => setMaintenanceDetail("backup")} title={`${t.open}: ${t.maintenanceBackupsTitle}`}>
+                        {maintenanceBackupPending || maintenanceBackupResult?.recovering ? t.checking : maintenanceBackupOverview.statusText}
+                      </button>
                     </div>
                   </div>
                   <p className="settingsMaintenanceBackupTotals">
@@ -566,9 +516,6 @@ export function SettingsMaintenanceModal({
                       </button>
                     </div>
                   </div>
-                  {maintenanceBackupPending || maintenanceBackupResult?.recovering ? (
-                    <div className="settingsMaintenanceBackupPending" role="status">{maintenanceBackupProgressText}</div>
-                  ) : null}
                 </section>
                 </div>
 
@@ -577,11 +524,11 @@ export function SettingsMaintenanceModal({
                     <div className="settingsMaintenanceSupportCopy">
                       <div className="settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned">
                         <h3>{t.maintenanceSupportTitle}</h3>
-                        <span className={`settingsMaintenancePill ${maintenanceWarnings.groups.actionable ? "is-warning" : "is-ok"}`}>
+                        <button type="button" className={`settingsMaintenancePill ${maintenanceWarnings.groups.actionable ? "is-warning" : "is-ok"}`} onClick={() => setMaintenanceDetail("warnings")} title={`${t.open}: ${t.maintenanceSupportTitle}`}>
                           {maintenanceWarnings.groups.actionable
                             ? `${t.maintenanceWarningActionable}: ${maintenanceWarnings.groups.actionable}`
                             : t.maintenanceSupportStatusOk}
-                        </span>
+                        </button>
                       </div>
                       <p>{t.maintenanceSupportText}</p>
                     </div>
@@ -598,20 +545,6 @@ export function SettingsMaintenanceModal({
                       <img src="/assets/icons/ui/download-report.svg" alt="" aria-hidden="true" />
                     </button>
                   </div>
-                  {maintenanceWarnings.groups.actionable ? (
-                    <div className="settingsMaintenanceWarningsList">
-                      {maintenanceWarnings.items
-                        .filter((item) => item.classification === "actionable")
-                        .slice(0, 3)
-                        .map((item) => (
-                        <article className={`is-${item.classification}`} key={`${item.code}-${item.title}`}>
-                          <strong>{item.title}</strong>
-                          <p>{item.summary}</p>
-                          <small>{item.action}</small>
-                        </article>
-                        ))}
-                    </div>
-                  ) : null}
                 </section>
                   </>
                 ) : (
@@ -643,9 +576,6 @@ export function SettingsMaintenanceModal({
                       </button>
                     </div>
                     <p className="settingsMaintenanceBackupScope">{t.maintenanceBackupScope}</p>
-                    {maintenanceBackupPending || maintenanceBackupResult?.recovering ? (
-                      <div className="settingsMaintenanceBackupPending" role="status">{maintenanceBackupProgressText}</div>
-                    ) : null}
                     {maintenanceBusy === "backup-page" && !maintenanceBackupDetail ? (
                       <div className="settingsJournalEmpty">{t.checking}</div>
                     ) : maintenanceBackupManager.artifacts.length ? (
@@ -766,28 +696,23 @@ export function SettingsMaintenanceModal({
                         </div>
                       </div>
                     ) : <div className="settingsJournalEmpty">{t.maintenanceBackupStatusEmpty}</div>}
-                    {maintenanceBackupResultModel ? (
-                      <small className="settingsMaintenanceBackupResult">
-                        {maintenanceBackupResultModel.label}: {maintenanceBackupResultModel.text}
-                      </small>
-                    ) : null}
                   </section>
                 )}
 
-                {maintenanceActionResult ? (
-                  <div className={`settingsMaintenanceResult ${maintenanceStatusClass(maintenanceActionResult.status)}`}>
-                    <strong>{t.maintenanceFlows?.[maintenanceActionResult.flowKey] || maintenanceActionResult.flowKey}: {maintenanceStatusText(maintenanceActionResult.status, t)}</strong>
-                    {maintenanceActionResult.reason ? (
-                      <span>{maintenanceActionResult.displayReason || formatMaintenanceMessage(maintenanceActionResult.reason, t, lang, "action")}</span>
-                    ) : null}
-                  </div>
-                ) : null}
 
               </div>
             ) : null}
           </div>
         </div>
       ) : null}
+      <OperationDialog dialog={maintenanceModalOpen && maintenanceDetail ? {
+        id: "maintenance-detail", className: "settingsMaintenanceDetailDialog", overlayClassName: "settingsMaintenanceDetailOverlay", tone: "neutral", closeLabel: t.close,
+        title: maintenanceDetail === "update" ? t.updateApplyTitle : maintenanceDetail === "backup" ? t.maintenanceBackupsTitle : maintenanceDetail === "warnings" ? t.maintenanceSupportTitle : t.maintenanceDatabaseTitle,
+        content: maintenanceDetail === "update" ? <>{updateDetails}{maintenanceActionResult?.flowKey === "update" ? actionDetails : null}</>
+          : maintenanceDetail === "backup" ? <div role="status"><p>{maintenanceBackupPending || maintenanceBackupResult?.recovering ? maintenanceBackupProgressText : maintenanceBackupResultModel?.text || maintenanceBackupOverview.statusText}</p>{maintenanceBackupResultModel ? <strong>{maintenanceBackupResultModel.label}</strong> : null}</div>
+          : maintenanceDetail === "warnings" ? <div>{maintenanceWarnings.items.filter((item) => item.classification === "actionable").map((item) => <article key={`${item.code}-${item.title}`}><strong>{item.title}</strong><p>{item.summary}</p><small>{item.action}</small></article>)}</div>
+          : actionDetails,
+      } : null} onClose={() => setMaintenanceDetail(null)} />
     </>
   );
 }

@@ -115,7 +115,7 @@ export default function LoginPage() {
           </span>
         </label>
 
-        {error ? <div className="authError">{error}</div> : null}
+        <div className={error ? "authError authFeedbackSlot" : "authFeedbackSlot"} role={error ? "alert" : undefined} style={error ? undefined : { visibility: "hidden" }}>{error || "\u00a0"}</div>
 
         <button type="submit" disabled={busy} className="authButton">
           {busy ? text.busy : text.submit}

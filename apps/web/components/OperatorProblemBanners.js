@@ -7,6 +7,7 @@ import { apiFetch, canAccessPath } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { useI18n } from "../lib/i18n";
 import { liveFailureMessage } from "../lib/livePlaybackRecovery";
+import { OperationDialog } from "./OperationFeedback";
 import {
   buildDashboardStatusSummary,
   buildOperatorWarnings,
@@ -117,13 +118,16 @@ export default function OperatorProblemBanners({
   const [runtimeStatus, setRuntimeStatus] = useState(null);
   const [accessDenied, setAccessDenied] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [stale, setStale] = useState(false);
   const pathname = usePathname();
   const sharedCurrentUser = useCurrentUser();
-  const { text } = useI18n();
+  const { text, t } = useI18n();
   const effectiveCurrentUser = currentUser === undefined ? sharedCurrentUser.currentUser : currentUser;
   const currentUserReady = currentUser !== undefined || !sharedCurrentUser.loading;
 
   useEffect(() => {
+    setRuntimeStatus(null);
+    setStale(false);
     let cancelled = false;
     let timer = null;
     let refreshTimer = null;
@@ -139,19 +143,21 @@ export default function OperatorProblemBanners({
         const data = await apiFetch("/system/runtime/status");
         if (!cancelled) {
           setRuntimeStatus(data);
+          setStale(false);
           setAccessDenied(false);
         }
         return true;
       } catch (error) {
         if (!cancelled) {
-          setRuntimeStatus(null);
+          setStale(true);
           if (shouldStopRuntimeStatusPolling(error)) {
+            setRuntimeStatus(null);
             denied = true;
             setAccessDenied(true);
             if (timer) clearInterval(timer);
           }
         }
-        return false;
+        return !shouldStopRuntimeStatusPolling(error);
       } finally {
         inFlight = false;
         if (refreshPending && !cancelled && !denied) {
@@ -214,8 +220,6 @@ export default function OperatorProblemBanners({
   );
 
   if (accessDenied) return null;
-  if (!showOverview && !warnings.length) return null;
-  if (showOverview && !warnings.length) return null;
 
   const visibleWarnings = showOverview && overview?.problems?.length ? overview.problems : warnings;
   const totalCount = visibleWarnings.length;
@@ -240,12 +244,15 @@ export default function OperatorProblemBanners({
   })).filter((group) => group.items.length > 0);
 
   return (
-    <section className={`operatorStatus operatorStatusCompact ${showOverview ? "operatorStatus-dashboard" : ""} ${className}`.trim()} aria-label={text("Предупреждения оператора")}>
-      <div className={`operatorWarningStrip operatorWarningStrip-${highestSeverity}`}>
-        <span className="operatorWarningStripIcon" aria-hidden="true">{highestSeverity === "error" ? "!" : "i"}</span>
-        <strong className="operatorWarningStripTitle">
-          {warningCountLabel(totalCount, text)}
-        </strong>
+    <section className={`operatorProblemAnchor ${className}`.trim()} aria-label={text("Предупреждения оператора")}>
+      <button type="button" className={`operatorProblemButton is-${stale ? "warning" : highestSeverity}`}
+        style={totalCount || stale ? undefined : { visibility: "hidden" }} disabled={!totalCount && !stale}
+        title={stale ? t("systemStatus.stale") : warningCountLabel(totalCount, text)}
+        aria-label={stale ? t("systemStatus.stale") : warningCountLabel(totalCount, text)}
+        aria-haspopup="dialog" onClick={() => setDetailsOpen(true)}>{totalCount || "!"}</button>
+      <OperationDialog dialog={detailsOpen ? {
+        id: "operator-problems", title: text("Предупреждения оператора"), tone: "warning", closeLabel: text("Закрыть"), className: "operatorWarningsDialog",
+        content: <>
         <div className="operatorWarningChips" aria-label={text("Группы предупреждений")}>
           {domainCounts.map((item) => (
             <span className="operatorWarningChip" key={item.domain}>{text(item.label)} {item.count}</span>
@@ -256,18 +263,7 @@ export default function OperatorProblemBanners({
             </span>
           ))}
         </div>
-        <button
-          className="operatorWarningToggle"
-          type="button"
-          aria-expanded={detailsOpen}
-          onClick={() => setDetailsOpen((value) => !value)}
-        >
-          {detailsOpen ? text("Скрыть детали") : text("Показать детали")}
-          <span aria-hidden="true">{detailsOpen ? "⌃" : "⌄"}</span>
-        </button>
-      </div>
-
-      {detailsOpen ? (
+        {stale ? <p role="status">{t("systemStatus.stale")}</p> : null}
         <div className="operatorWarningDetails">
           {groupedWarnings.map((group) => (
             <section className="operatorWarningGroup" key={group.domain} aria-label={text(group.label)}>
@@ -296,8 +292,8 @@ export default function OperatorProblemBanners({
             </section>
           ))}
           {overview?.diagnostics_hint ? <div className="operatorWarningDetailsHint">{text(overview.diagnostics_hint)}</div> : null}
-        </div>
-      ) : null}
+        </div></>,
+      } : null} onClose={() => setDetailsOpen(false)} />
     </section>
   );
 }

@@ -87,7 +87,9 @@ const t = {
 assert.equal(settingsPage.includes("settingsUpdateApplyHero"), false);
 assert.equal(settingsPage.includes("settingsUpdateApplyCompact"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceOverall"), true);
-assert.equal(settingsPage.includes("settingsUpdateApplySummaryGrid"), true);
+assert.equal(settingsPage.includes('id: "maintenance-detail"'), true);
+assert.equal(settingsPage.includes('className="maintenanceDetailFacts"'), true);
+assert.equal(settingsPage.includes("updateApplyFactRows(updateStatus, updateApplyStatus, t)"), true);
 assert.equal(settingsPage.includes("settingsUpdateApplySupport"), false);
 assert.equal(settingsPage.includes("settingsMaintenanceModalHeader"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceBackupManager"), true);
@@ -127,10 +129,8 @@ assert.equal(css.includes(".settingsUpdateApplyProgressRule"), false);
 assert.equal(settingsPage.includes("{t.updateApplyLastState}"), false);
 assert.match(cssRule(".settingsUpdateApplySummaryGrid"), /grid-template-columns: minmax\(0, 1fr\)/);
 assert.equal(settingsPage.includes("updateApplyOperator.releaseChangelog.map"), true);
-assert.match(
-  settingsPage,
-  /updateApplyInstalledVersion[\s\S]*?updateApplyAvailableVersion[\s\S]*?updateApplyPublishedAt[\s\S]*?releaseTitle/,
-);
+assert.match(settingsPage, /updateApplyInstalledVersion[\s\S]*?releaseTitle/);
+assert.match(settingsPage, /updateApplyOperator\.availableVersion/);
 
 assert.equal(updateApplyRecoveryText("provider_unavailable", {}, t), "Provider-specific recovery");
 assert.equal(updateApplyRecoveryText("trusted_snapshot_stale", {}, t), "Refresh-required recovery");

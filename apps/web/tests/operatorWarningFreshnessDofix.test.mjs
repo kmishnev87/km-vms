@@ -36,16 +36,19 @@ const settle = async () => { for (let tick = 0; tick < 25; tick += 1) await Prom
 function effectHarness(path, canRead = true) {
   const source = read(path);
   const from = source.indexOf("  useEffect(() => {");
-  const end = source.indexOf(path.includes("OperatorProblem") ? "\n  const warnings" : "\n  const summary", from);
+  const end = source.indexOf(path.includes("OperatorProblem") ? "\n  const warnings" : "\n  const ownsStatus", from);
   assert(from >= 0 && end > from);
   const listeners = new Map(), timers = new Map(), intervals = new Map(), requests = [];
-  let next = 0, cleanup, runtime = null, accessDenied = false, loading = false;
+  let next = 0, cleanup, runtime = null, accessDenied = false, loading = false, stale = false;
   const user = { id: 1, permissions: canRead ? ["run_diagnostics"] : [] };
   const context = {
     ...h, DEFAULT_REFRESH_MS: 30000, REFRESH_MS: 30000,
     currentUser: user, effectiveCurrentUser: user, currentUserReady: true, userIdentity: "1", canRead, enabled: true,
+    cacheIdentity: "user-1", authSession: "test-session", runtimeStatusCache: { read: () => null, write() {} },
+    setStatusOwner() {},
     useEffect(effect) { cleanup = effect(); },
     setRuntimeStatus(value) { runtime = value; }, setAccessDenied(value) { accessDenied = value; },
+    setStale(value) { stale = value; },
     setDeniedUserIdentity(value) { if (typeof value !== "function") accessDenied = Boolean(value); }, setLoading(value) { loading = value; },
     apiFetch(path) { return new Promise((resolve, reject) => requests.push({ path, resolve, reject })); },
     setTimeout(fn, ms) { const id = ++next; timers.set(id, { fn, ms }); return id; },
@@ -61,6 +64,7 @@ function effectHarness(path, canRead = true) {
   return { requests, timers, intervals, dispatch(name) { for (const fn of listeners.get(name) || []) fn(); },
     flush() { const work = [...timers.values()]; timers.clear(); for (const item of work) item.fn(); },
     get runtime() { return runtime; }, get denied() { return accessDenied; }, unmount() { cleanup(); },
+    get stale() { return stale; },
     get listenerCount() { return [...listeners.values()].reduce((sum, items) => sum + items.size, 0); },
   };
 }
@@ -78,10 +82,15 @@ for (const component of ["components/OperatorProblemBanners.js", "components/Sys
   assert.equal([...effect.intervals.values()][0].ms, 30000, "background polling is not accelerated");
   effect.dispatch("kmvms:camera-runtime-changed"); effect.dispatch("kmvms:camera-runtime-changed"); effect.flush();
   assert.equal(effect.requests.length, 3, "bursts coalesce into one refresh");
-  effect.requests[2].reject({ status: 403 }); await settle();
+  effect.requests[2].reject({ status: 503 }); await settle();
+  assert.equal(effect.runtime.generation, "after-change", "a transport failure keeps the last known snapshot");
+  assert.equal(effect.stale, true);
+  assert.equal(effect.intervals.size, 1, "a temporary transport failure does not stop retries");
+  effect.dispatch("kmvms:camera-runtime-changed"); effect.flush();
+  effect.requests[3].reject({ status: 403 }); await settle();
   assert.equal(effect.denied, true); assert.equal(effect.intervals.size, 0);
   effect.dispatch("kmvms:camera-runtime-changed"); effect.flush();
-  assert.equal(effect.requests.length, 3, "access denial stops event-triggered retries too");
+  assert.equal(effect.requests.length, 4, "access denial stops event-triggered retries too");
   effect.unmount(); assert.equal(effect.listenerCount, 0); assert.equal(effect.timers.size, 0);
 
   const restricted = effectHarness(component, false);

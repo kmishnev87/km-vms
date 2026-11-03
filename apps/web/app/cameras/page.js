@@ -50,14 +50,16 @@ function normalizeRuntimeError(message, copy) {
 }
 
 function archiveCleanupMessage(result, copy) {
+  const recordings = result?.archive_cleanup || result?.recordings || {};
   const warnings = result?.warnings || result?.archive_cleanup?.warnings || result?.recordings?.warnings || [];
   const reasons = result?.archive_cleanup?.reason_counts || result?.recordings?.reason_counts || {};
-  if (!result?.camera_removed) return "";
-  if (!warnings.length && !Object.keys(reasons).length) return copy.cameraDeleted;
+  if (result?.camera_removed && result?.status === "deleted" && recordings.ok !== false) {
+    return warnings.includes("archive_retained") ? copy.archiveRetained : copy.cameraDeleted;
+  }
   if (reasons.delete_recordings_permission_missing) {
     return copy.archiveDeleteNoPermission;
   }
-  if (reasons.active_job) {
+  if (reasons.active_job || reasons.camera_recording_not_stopped) {
     return copy.archiveDeleteActiveJob;
   }
   if (reasons.unowned) {
@@ -69,6 +71,10 @@ function archiveCleanupMessage(result, copy) {
   if (warnings.includes("archive_retained") || reasons.recordings_exist_delete_files_false_requires_safe_policy) {
     return copy.archiveRetained;
   }
+  if (reasons.storage_unavailable || reasons.root_unresolved || reasons.root_unresolved_inaccessible) {
+    return copy.archiveDeleteStorageUnavailable;
+  }
+  if (reasons.delete_failed) return copy.archiveDeleteFileFailed;
   return copy.archiveCleanupPartial;
 }
 
@@ -144,7 +150,7 @@ export default function CamerasPage() {
   const [showEditor, setShowEditor] = useState(false);
   const [editorCamera, setEditorCamera] = useState(null);
   const [error, setError] = useState("");
-  const [deleteWarning, setDeleteWarning] = useState("");
+  const [deleteResult, setDeleteResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [operationToast, setOperationToast] = useState(null);
 
@@ -155,6 +161,8 @@ export default function CamerasPage() {
   const recorderWarningKeyRef = useRef(null);
   const camerasRequestRef = useRef(0);
   const secondaryRequestRef = useRef(0);
+  const camerasHaveDataRef = useRef(false);
+  const camerasLoadWarningRef = useRef("");
 
   async function load() {
     const request = ++camerasRequestRef.current;
@@ -163,11 +171,17 @@ export default function CamerasPage() {
       const cams = await apiFetch("/cameras");
       if (request !== camerasRequestRef.current) return;
       setCameras(cams);
+      camerasHaveDataRef.current = true;
+      camerasLoadWarningRef.current = "";
       setError("");
       setCamerasLoadState("loaded");
     } catch (err) {
       if (request !== camerasRequestRef.current) return;
       setError(normalizeCameraError(err.message, copy));
+      if (camerasHaveDataRef.current && camerasLoadWarningRef.current !== err.message) {
+        camerasLoadWarningRef.current = err.message;
+        setOperationToast({ id: `camera-refresh-${Date.now()}`, title: t("common.requestError"), message: normalizeCameraError(err.message, copy), tone: "error", action: { label: t("common.refresh"), onClick: load } });
+      }
       setCamerasLoadState((prev) => (prev === "loaded" || prev === "refreshing" ? "loaded" : "error"));
     }
   }
@@ -256,7 +270,6 @@ export default function CamerasPage() {
   }
 
   async function toggleCamera(camera) {
-    setError("");
     try {
       await apiFetch(`/cameras/${camera.id}/${camera.enabled ? "disable" : "enable"}`, {
         method: "POST",
@@ -264,35 +277,49 @@ export default function CamerasPage() {
       await Promise.all([load(), loadSecondaryStatus()]);
       notifyCameraRuntimeChanged();
     } catch (err) {
-      setError(normalizeCameraError(err.message, copy));
+      setOperationToast({ id: `camera-toggle-${Date.now()}`, title: camera.name, message: normalizeCameraError(err.message, copy), tone: "error" });
     }
   }
 
   async function confirmDeleteCamera() {
     if (!cameraToDelete || busy) return;
 
-    setError("");
     setBusy(true);
+    const requestedCamera = cameraToDelete;
+    const cameraName = cameraToDelete.name;
     try {
       const result = await apiFetch(
         `/cameras/${cameraToDelete.id}?delete_files=${deleteFiles ? "true" : "false"}&operation_id=${encodeURIComponent(newCameraDeleteOperationId())}`,
         { method: "DELETE" }
       );
-      if (!result?.camera_removed) {
-        closeDeleteModal();
-        setError(copy.actionFailed);
-        return;
-      }
       const cleanupMessage = archiveCleanupMessage(result, copy) || copy.cameraDeleted;
       const cleanupPartial = deleteFiles && (
-        result?.status === "deleted_archive_cleanup_partial"
-        || cleanupMessage !== copy.cameraDeleted
+        !result?.camera_removed || result?.status !== "deleted" || result?.recordings?.ok === false
       );
+      if (!result?.camera_removed && !cleanupPartial) throw new Error(copy.actionFailed);
       closeDeleteModal();
       if (cleanupPartial) {
-        setDeleteWarning(cleanupMessage);
+        const counts = result.recordings || result.archive_cleanup || {};
+        setDeleteResult({
+          id: "camera-delete-result",
+          title: result?.camera_removed ? copy.archiveCleanupPartialTitle : copy.cameraDeleteIncomplete,
+          message: `${cameraName}: ${cleanupMessage}`,
+          tone: "warning",
+          summary: [[copy.deletedRecordings, counts.deleted_count], [copy.skippedRecordings, counts.skipped_count], [copy.failedRecordings, counts.failed_count]]
+            .filter(([, value]) => Number.isFinite(value) && value >= 0).map(([label, value]) => ({ label, value })),
+          detail: copy.archiveCleanupFollowup,
+          actions: result?.camera_removed ? [] : [{
+            id: "retry-camera-delete", label: copy.retryDelete,
+            onClick: () => {
+              setDeleteResult(null);
+              setCameraToDelete(requestedCamera);
+              setDeleteFiles(true);
+              setDeleteModalOpen(true);
+            },
+          }],
+          closeLabel: copy.close,
+        });
       } else {
-        setDeleteWarning("");
         setOperationToast({
           id: `camera-delete-${Date.now()}`,
           title: copy.cameraDeleted,
@@ -303,7 +330,7 @@ export default function CamerasPage() {
       await Promise.all([load(), loadSecondaryStatus()]);
       notifyCameraRuntimeChanged();
     } catch (err) {
-      setError(normalizeCameraError(err.message, copy));
+      setOperationToast({ id: `camera-delete-error-${Date.now()}`, title: cameraName, message: normalizeCameraError(err.message, copy), tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -318,6 +345,7 @@ export default function CamerasPage() {
           <div className="pageSubtitle">{copy.subtitle}</div>
         </div>
         <div className="cameraHeaderActions">
+          <OperatorProblemBanners domains={["cameras", "recorder", "live"]} limit={4} />
           <div className="cameraViewToggle" role="group" aria-label={copy.displayMode}>
             <button type="button" className={viewMode === "list" ? "active" : ""} onClick={() => setViewMode("list")}>{copy.list}</button>
             <button type="button" className={viewMode === "cards" ? "active" : ""} onClick={() => setViewMode("cards")}>{copy.cards}</button>
@@ -326,10 +354,6 @@ export default function CamerasPage() {
         </div>
       </div>
 
-      <OperatorProblemBanners domains={["cameras", "recorder", "live"]} className="pageWarnings cameraPageWarnings" limit={4} />
-
-      {error && !showEditor ? <div className="badge err" style={{ marginBottom: 14 }}>{error}</div> : null}
-      {deleteWarning && !showEditor ? <div className="badge warn" style={{ marginBottom: 14 }}>{deleteWarning}</div> : null}
 
       <div className={viewMode === "cards" ? "cameraTileGrid" : "cameraCards"}>
         {camerasFirstLoading ? (
@@ -488,6 +512,7 @@ export default function CamerasPage() {
         onClose={closeDeleteModal}
       />
       <OperationToast toast={operationToast} onClose={() => setOperationToast(null)} />
+      <OperationDialog dialog={deleteResult} onClose={() => setDeleteResult(null)} />
       </div>
     </Layout>
   );

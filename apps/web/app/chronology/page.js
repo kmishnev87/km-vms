@@ -364,8 +364,8 @@ export default function ChronologyPage() {
   const [tiles, setTiles] = useState([]);
   const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
   const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
-  const [error, setError] = useState("");
   const [operationToast, setOperationToast] = useState(null);
+  const cameraLoadErrorRef = useRef("");
   const [dragState, setDragState] = useState(null);
   const [resizeState, setResizeState] = useState(null);
   const [draggedSidebarCameraId, setDraggedSidebarCameraId] = useState("");
@@ -401,13 +401,20 @@ export default function ChronologyPage() {
   const [downloadChooserOpen, setDownloadChooserOpen] = useState(false);
   const [downloadResults, setDownloadResults] = useState([]);
 
+  function showWorkspaceError(message) {
+    setOperationToast({ id: `chronology-action-error-${Date.now()}`, title: message || TEXT.loadError, tone: "error" });
+  }
+
   async function loadCameras() {
     try {
-      setError("");
       const data = await apiFetch("/viewer/cameras");
+      cameraLoadErrorRef.current = "";
       setCameras(Array.isArray(data) ? data : []);
     } catch (err) {
-      setError(err.message || TEXT.loadError);
+      if (cameraLoadErrorRef.current !== (err.message || TEXT.loadError)) {
+        cameraLoadErrorRef.current = err.message || TEXT.loadError;
+        showWorkspaceError(cameraLoadErrorRef.current);
+      }
     } finally {
       setCamerasLoaded(true);
     }
@@ -465,7 +472,7 @@ export default function ChronologyPage() {
       setTiles(readSavedTiles());
       setSidebarCameraOrder([]);
       setLastPersistedSidebarCameraOrder([]);
-      setError((prev) => prev || err.message || TEXT.loadError);
+      showWorkspaceError(err.message || TEXT.loadError);
     } finally {
       hydratedRef.current = true;
     }
@@ -514,7 +521,7 @@ export default function ChronologyPage() {
         lastBackendLayoutPayloadRef.current = JSON.stringify(backendPayload(saved?.tiles || tiles, savedOrder));
       } catch (err) {
         setSidebarCameraOrder(lastPersistedSidebarCameraOrder);
-        setError((prev) => prev || err.message || TEXT.loadError);
+        showWorkspaceError(err.message || TEXT.loadError);
       }
     }, 500);
   }, [tiles, sidebarCameraOrder, lastPersistedSidebarCameraOrder]);
@@ -853,7 +860,6 @@ export default function ChronologyPage() {
         });
         return prev;
       }
-      setError("");
       return [
         ...prev,
         {
@@ -926,7 +932,6 @@ export default function ChronologyPage() {
           })
         );
       if (!additions.length) return prev;
-      setError("");
       return layoutTiles([...active, ...additions], workspaceBounds());
     });
   }
@@ -1436,7 +1441,6 @@ export default function ChronologyPage() {
     const center = timelineTs || currentTs || new Date(normalizeTargetTs());
     const start = new Date(center.getTime() - 15_000);
     const end = new Date(center.getTime() + 15_000);
-    setError("");
     setExportModal({
       cameraId: "",
       title: `${TEXT.exportEvidence} ${formatPlaybackDateTime(center)}`,
@@ -1463,7 +1467,6 @@ export default function ChronologyPage() {
       setOperationToast({ id: `clip-validation-${Date.now()}`, title: validation, tone: "warning" });
       return;
     }
-    setError("");
     const payload = buildArchiveExportPayload(exportModal);
     const result = await exportController.prepare(payload);
     if (result) {
@@ -1492,7 +1495,6 @@ export default function ChronologyPage() {
   async function startQuickDownloadForCamera(cameraId, { notify = true } = {}) {
     setDownloadChooserOpen(false);
     try {
-      setError("");
       setQuickDownloadBusy(true);
       const timestamp = quickDownloadTimestamp();
       await startChronologyCurrentRecordingDownload(cameraId, timestamp);
@@ -1510,7 +1512,7 @@ export default function ChronologyPage() {
       const message = normalizeChronologyDownloadError(err.message);
       const name = quickDownloadCameraNames[cameraId] || selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
       setDownloadResults((prev) => [...prev, { cameraId, name, status: message }].slice(-12));
-      setError(message);
+      showWorkspaceError(`${name}: ${message}`);
     } finally {
       setQuickDownloadBusy(false);
     }
@@ -1955,7 +1957,6 @@ export default function ChronologyPage() {
             </div>
           </div>
 
-          {error ? <div className="chronologyError">{error}</div> : null}
 
           <div className="chronologyCameraList">
             {orderedCameras.map((camera) => {

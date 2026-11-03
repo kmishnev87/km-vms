@@ -249,8 +249,8 @@ export default function LivePage() {
   const [tiles, setTiles] = useState([]);
   const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
   const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
-  const [error, setError] = useState("");
   const [operationToast, setOperationToast] = useState(null);
+  const cameraLoadErrorRef = useRef("");
   const [dragState, setDragState] = useState(null);
   const [resizeState, setResizeState] = useState(null);
   const [draggedSidebarCameraId, setDraggedSidebarCameraId] = useState("");
@@ -264,13 +264,20 @@ export default function LivePage() {
   const [audioRequestId, setAudioRequestId] = useState(0);
   const [audioFactsByTileId, setAudioFactsByTileId] = useState({});
 
+  function showWorkspaceError(message) {
+    setOperationToast({ id: `live-action-error-${Date.now()}`, title: message || TEXT.loadError, tone: "error" });
+  }
+
   async function loadCameras() {
     try {
-      setError("");
       const data = await apiFetch("/viewer/cameras");
+      cameraLoadErrorRef.current = "";
       setCameras(Array.isArray(data) ? data : []);
     } catch (err) {
-      setError(err.message || TEXT.loadError);
+      if (cameraLoadErrorRef.current !== (err.message || TEXT.loadError)) {
+        cameraLoadErrorRef.current = err.message || TEXT.loadError;
+        showWorkspaceError(cameraLoadErrorRef.current);
+      }
     } finally {
       setCamerasLoaded(true);
     }
@@ -318,7 +325,7 @@ export default function LivePage() {
       setTiles(readSavedTiles());
       setSidebarCameraOrder([]);
       setLastPersistedSidebarCameraOrder([]);
-      setError((prev) => prev || err.message || TEXT.loadError);
+      showWorkspaceError(err.message || TEXT.loadError);
     } finally {
       hydratedRef.current = true;
     }
@@ -355,7 +362,7 @@ export default function LivePage() {
         lastBackendLayoutPayloadRef.current = JSON.stringify(backendPayload(saved?.tiles || tiles, savedOrder));
       } catch (err) {
         setSidebarCameraOrder(lastPersistedSidebarCameraOrder);
-        setError((prev) => prev || err.message || TEXT.loadError);
+        showWorkspaceError(err.message || TEXT.loadError);
       }
     }, 500);
   }, [tiles, sidebarCameraOrder, lastPersistedSidebarCameraOrder]);
@@ -418,7 +425,6 @@ export default function LivePage() {
         });
         return prev;
       }
-      setError("");
       return [
         ...prev,
         {
@@ -526,7 +532,6 @@ export default function LivePage() {
           })
         );
       if (!additions.length) return prev;
-      setError("");
       return layoutTiles([...active, ...additions], workspaceBounds());
     });
   }
@@ -953,7 +958,6 @@ export default function LivePage() {
 
   return (
     <Layout>
-      <OperatorProblemBanners domains={["live"]} className="liveWorkspaceWarnings" limit={3} />
       <div
         ref={shellRef}
         className={`liveWorkspaceShell ${isSystemFullscreen ? "systemFullscreen" : ""} ${isSidebarCollapsed ? "sidebarCollapsed" : "sidebarOpen"}`}
@@ -998,6 +1002,7 @@ export default function LivePage() {
           <div className="liveWorkspacePanelHeader">
             <div className="liveWorkspacePanelTitle">{TEXT.cameras}</div>
             <div className="liveWorkspacePanelActions">
+              <OperatorProblemBanners domains={["live"]} limit={3} />
               <button
                 type="button"
                 className="liveWorkspaceAlignButton"
@@ -1028,7 +1033,6 @@ export default function LivePage() {
               </button>
             </div>
           </div>
-          {error ? <div className="liveWorkspaceError">{error}</div> : null}
 
           <div className="liveWorkspaceCameraList">
             {orderedCameras.map((camera) => {

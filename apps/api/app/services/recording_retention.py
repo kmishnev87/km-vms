@@ -330,7 +330,7 @@ def validate_segment_for_deletion(
         return False, "outside_kmvms_namespace", file_path, 0
     if require_file and not file_path.exists():
         return False, "file_missing", file_path, 0
-    if require_file and not file_path.is_file():
+    if file_path.exists() and not file_path.is_file():
         return False, "not_file", file_path, 0
     return True, "eligible", file_path, _segment_size(segment, file_path)
 
@@ -719,6 +719,7 @@ def execute_segments(
     manage_outer_operation: bool = True,
     allowed_integrity_statuses: set[str] | frozenset[str] | None = None,
     allowed_segment_statuses: set[str] | frozenset[str] | None = None,
+    allow_missing_files: bool = False,
 ) -> dict:
     if policy not in {
         EXECUTION_POLICY_AUTOMATIC_BOUNDED,
@@ -800,6 +801,7 @@ def execute_segments(
                 manage_outer_operation=False,
                 allowed_integrity_statuses=allowed_integrity_statuses,
                 allowed_segment_statuses=allowed_segment_statuses,
+                allow_missing_files=allow_missing_files,
             )
             managed_lifecycle.finish_result(
                 finished,
@@ -863,6 +865,7 @@ def execute_segments(
                             expected_identities=expected_identities,
                             allowed_integrity_statuses=allowed_integrity_statuses,
                             allowed_segment_statuses=allowed_segment_statuses,
+                            allow_missing_files=allow_missing_files,
                         )
                 return _execute_segments_with_lease(
                     db,
@@ -883,6 +886,7 @@ def execute_segments(
                     expected_identities=expected_identities,
                     allowed_integrity_statuses=allowed_integrity_statuses,
                     allowed_segment_statuses=allowed_segment_statuses,
+                    allow_missing_files=allow_missing_files,
                 )
         except DestructiveScopeConflict as exc:
             _add_item(
@@ -917,6 +921,7 @@ def execute_segments(
         expected_identities=expected_identities,
         allowed_integrity_statuses=allowed_integrity_statuses,
         allowed_segment_statuses=allowed_segment_statuses,
+        allow_missing_files=allow_missing_files,
     )
 
 
@@ -940,6 +945,7 @@ def _execute_segments_with_lease(
     expected_identities: dict[int, dict] | None,
     allowed_integrity_statuses: set[str] | frozenset[str] | None,
     allowed_segment_statuses: set[str] | frozenset[str] | None,
+    allow_missing_files: bool,
 ) -> dict:
     if policy == EXECUTION_POLICY_AUTOMATIC_BOUNDED:
         max_candidates = min(int(max_candidates or DEFAULT_MAX_CANDIDATES), HARD_MAX_CANDIDATES)
@@ -979,6 +985,7 @@ def _execute_segments_with_lease(
             block_active_job=operation.startswith("camera_delete"),
             allowed_integrity_statuses=allowed_integrity_statuses,
             allowed_segment_statuses=allowed_segment_statuses,
+            require_file=not allow_missing_files,
         )
         if not ok or file_path is None:
             _add_item(result, _item(segment, action="skipped", reason=item_reason, size_bytes=size))
@@ -1045,6 +1052,7 @@ def _execute_segments_with_lease(
                         block_active_job=operation.startswith("camera_delete"),
                         allowed_integrity_statuses=allowed_integrity_statuses,
                         allowed_segment_statuses=allowed_segment_statuses,
+                        require_file=not allow_missing_files,
                     )
                     if not ok or file_path is None:
                         _add_item(result, _item(fresh, action="skipped", reason=final_reason, size_bytes=final_size))
@@ -1056,7 +1064,14 @@ def _execute_segments_with_lease(
                             _item(fresh, action="skipped", reason=file_facts_reason, size_bytes=final_size),
                         )
                         continue
-                    file_path.unlink()
+                    deletion_reason = reason
+                    try:
+                        file_path.unlink()
+                    except FileNotFoundError:
+                        if not allow_missing_files:
+                            raise
+                        final_size = 0
+                        deletion_reason = "already_absent"
                     try:
                         _mark_deleted(db, fresh, actor=actor, reason=reason, source=operation)
                         db.commit()
@@ -1102,7 +1117,7 @@ def _execute_segments_with_lease(
                 )
                 continue
 
-            _add_item(result, _item(fresh, action="deleted", reason=reason, size_bytes=final_size))
+            _add_item(result, _item(fresh, action="deleted", reason=deletion_reason, size_bytes=final_size))
             if operation.startswith("manual") and write_item_audit:
                 _audit(
                     db,
@@ -1308,6 +1323,9 @@ def preview_segments(
     *,
     operation: str,
     reason: str,
+    allow_missing_files: bool = False,
+    allowed_integrity_statuses: set[str] | frozenset[str] | None = None,
+    allowed_segment_statuses: set[str] | frozenset[str] | None = None,
 ) -> dict:
     result = _base_result(operation, dry_run=True)
     active_job_ids = _active_job_ids(db)
@@ -1317,12 +1335,16 @@ def preview_segments(
             segment,
             active_job_ids=active_job_ids,
             block_active_job=operation.startswith("camera_delete"),
+            require_file=not allow_missing_files,
+            allowed_integrity_statuses=allowed_integrity_statuses,
+            allowed_segment_statuses=allowed_segment_statuses,
         )
         if ok:
             result["planned_count"] += 1
             result["candidates_count"] += 1
             result["bytes_freed"] += int(size or 0)
             result["estimated_freed_bytes"] = result["bytes_freed"]
+            _add_reason_count(result, reason)
             _append_sample(result, _item(segment, action="candidate", reason=reason, size_bytes=size))
             camera_key = str(segment.camera_id)
             row = result["per_camera"].setdefault(

@@ -15,7 +15,8 @@ from app.core.permissions import user_has_permission
 from app.core.security import encrypt_text, decrypt_text
 from app.db.session import get_db
 from app.models.camera import Camera
-from app.models.recording import RecordingSegment
+from app.models.recording import RecordingJob, RecordingSegment
+from app.models.storage_operation import StorageOperation
 from app.models.user import User
 from app.routers.camera_connection_helpers import (
     ONVIF_PROBE_PROOFS,
@@ -82,6 +83,7 @@ from app.services.storage_operation_conflicts import (
     terminal_result_summary,
 )
 from app.services.storage_operations_foundation import StorageOperationContractError, claim_operation, safe_reason_code
+from app.services.recording_storage import resolve_segment_file_path
 
 router = APIRouter(prefix="/cameras", tags=["cameras"])
 viewer_router = APIRouter(prefix="/viewer/cameras", tags=["viewer-cameras"])
@@ -91,6 +93,16 @@ CAMERA_DELETE_FILES_REASON = "camera_delete_with_files"
 CAMERA_DELETE_NO_FILES_BLOCK_REASON = "recordings_exist_delete_files_false_requires_safe_policy"
 CAMERA_DELETE_UNSAFE_WITH_FILES_REASON = "camera_delete_with_files_requires_all_segments_safe"
 CAMERA_DELETE_NO_PERMISSION_REASON = "delete_recordings_permission_missing"
+CAMERA_DELETE_STOP_WAIT_SECONDS = 20.0
+CAMERA_DELETE_STOP_POLL_SECONDS = 0.25
+CAMERA_DELETE_ACTIVE_JOB_STATES = ("starting", "recording", "stopping", "restarting")
+# Deletion does not require playable video. Ownership, path/root identity and
+# active-writer guards remain mandatory, including for these damaged files.
+CAMERA_DELETE_INTEGRITY_STATUSES = frozenset({
+    "missing_file", "zero_size_file", "partial_file", "corrupted_file",
+    "stale_writing_segment", "unreadable_file", "orphan_metadata",
+})
+CAMERA_DELETE_SEGMENT_STATUSES = frozenset({"finalized", "ready", "failed", "error", "writing"})
 CONNECTION_SENSITIVE_FIELDS = {
     "protocol",
     "host",
@@ -469,25 +481,78 @@ def attach_test_preview_to_camera(token: str | None, camera_id: int) -> None:
 def camera_recording_segments(db: Session, camera_id: int) -> list[RecordingSegment]:
     return (
         db.query(RecordingSegment)
-        .filter(RecordingSegment.camera_id == int(camera_id))
+        .filter(
+            RecordingSegment.camera_id == int(camera_id),
+            RecordingSegment.deleted_at.is_(None),
+            RecordingSegment.status != "deleted",
+        )
         .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
         .all()
     )
 
 
+def camera_delete_has_active_job(db: Session, camera_id: int) -> bool:
+    return db.query(RecordingJob.id).filter(
+        RecordingJob.camera_id == int(camera_id),
+        RecordingJob.state.in_(CAMERA_DELETE_ACTIVE_JOB_STATES),
+    ).first() is not None
+
+
+def stop_recording_before_camera_delete(db: Session, camera: Camera) -> bool:
+    """Persist disabled intent, then wait for the recorder's stop acknowledgement."""
+    wait_for_ack = bool(camera.enabled) or camera_delete_has_active_job(db, camera.id)
+    camera.enabled = False
+    camera.status = "deleting"
+    db.add(camera)
+    db.commit()
+    deadline = time.monotonic() + CAMERA_DELETE_STOP_WAIT_SECONDS
+    while True:
+        db.expire_all()
+        db.refresh(camera)
+        if camera.enabled or camera.deleted_at is not None:
+            return False
+        if not camera_delete_has_active_job(db, camera.id) and (
+            not wait_for_ack or camera.status == "disabled"
+        ):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(CAMERA_DELETE_STOP_POLL_SECONDS)
+
+
+def assert_camera_delete_stopped(db: Session, camera: Camera) -> None:
+    db.refresh(camera)
+    if camera.enabled or camera.deleted_at is not None or camera_delete_has_active_job(db, camera.id):
+        raise StorageOuterConflict({"reason_code": "camera_recording_not_stopped", "retryable": True})
+
+
+def camera_delete_blocked_recordings(segments: list[RecordingSegment], reason: str) -> dict:
+    return {
+        "ok": False, "status": "blocked", "operation": "camera_delete_with_files", "dry_run": False,
+        "requested_count": len(segments), "planned_count": 0, "deleted_count": 0,
+        "skipped_count": len(segments), "failed_count": 0, "not_found_count": 0,
+        "bytes_freed": 0, "estimated_freed_bytes": 0, "reason_counts": {reason: len(segments) or 1},
+        "active_blockers": 1 if reason == "camera_recording_not_stopped" else 0,
+        "limit_exceeded": False, "warnings": [reason], "items": [],
+    }
+
+
 def deletion_reason_counts(result: dict) -> dict:
-    counts = {}
+    # Full execution counters are authoritative; items is only a bounded sample.
+    counts = {reason: int(value or 0) for reason, value in (result.get("reason_counts") or {}).items()}
+    sampled_counts = {}
     for item in result.get("items") or []:
         reason = item.get("reason") or "unknown"
-        counts[reason] = int(counts.get(reason) or 0) + 1
-    for reason, value in (result.get("reason_counts") or {}).items():
-        counts.setdefault(reason, int(value or 0))
+        sampled_counts[reason] = int(sampled_counts.get(reason) or 0) + 1
+    for reason, value in sampled_counts.items():
+        counts.setdefault(reason, value)
     return counts
 
 
 def compact_deletion_result(result: dict) -> dict:
     return {
         "ok": bool(result.get("ok")),
+        "status": result.get("status"),
         "operation": result.get("operation"),
         "dry_run": bool(result.get("dry_run")),
         "requested_count": int(result.get("requested_count") or 0),
@@ -958,6 +1023,9 @@ def preview_delete_camera(
                     segments,
                     operation="camera_delete_preview",
                     reason=CAMERA_DELETE_FILES_REASON,
+                    allow_missing_files=True,
+                    allowed_integrity_statuses=CAMERA_DELETE_INTEGRITY_STATUSES,
+                    allowed_segment_statuses=CAMERA_DELETE_SEGMENT_STATUSES,
                 )
             )
         )
@@ -1072,6 +1140,29 @@ def delete_camera(
             raise HTTPException(status_code=404, detail="Камера не найдена")
         raise HTTPException(status_code=409, detail=claim_state_detail(replay_claim))
 
+    if delete_files:
+        # A request for both actions must not silently become camera-only deletion.
+        require_recording_delete_permission_for_camera_delete(current_user)
+        operation_id = operation_id or f"camera-delete-{uuid4().hex}"
+        existing_operation = db.get(StorageOperation, operation_id)
+        if existing_operation is not None and existing_operation.status in {
+            "completed", "partial", "blocked", "failed", "cancelled",
+        }:
+            try:
+                existing_claim = claim_operation_with_conflicts(
+                    db, operation_type="camera_delete_with_files", scope=storage_scope,
+                    request_identity={"camera_id": camera.id, "delete_files": True},
+                    actor=current_user, operation_id=operation_id, idempotency_key=operation_id,
+                    owner_instance_id=operation_instance_id("camera-delete-replay"),
+                )
+            except StorageOuterConflict as exc:
+                raise HTTPException(status_code=409, detail=exc.detail) from exc
+            if existing_claim.get("state") == "terminal":
+                return camera_delete_replay_response(
+                    camera=camera, delete_files=True, terminal=terminal_replay_result(existing_claim),
+                    operation_status=(existing_claim.get("operation") or {}).get("status"),
+                )
+
     if not delete_files:
         recordings = {
             "ok": True,
@@ -1102,37 +1193,13 @@ def delete_camera(
             ],
         }
     else:
-        if not user_has_permission(getattr(current_user, "role", ""), "delete_recordings"):
-            recordings = {
-                "ok": len(segments) == 0,
-                "status": "completed" if len(segments) == 0 else "blocked",
-                "operation": "camera_delete_with_files",
-                "dry_run": False,
-                "requested_count": len(segments),
-                "planned_count": 0,
-                "deleted_count": 0,
-                "skipped_count": len(segments),
-                "failed_count": 0,
-                "not_found_count": 0,
-                "bytes_freed": 0,
-                "estimated_freed_bytes": 0,
-                "reason_counts": {CAMERA_DELETE_NO_PERMISSION_REASON: len(segments)} if segments else {},
-                "active_blockers": 0,
-                "limit_exceeded": False,
-                "warnings": [CAMERA_DELETE_NO_PERMISSION_REASON] if segments else [],
-                "items": [
-                    {
-                        "segment_id": segment.id,
-                        "camera_id": segment.camera_id,
-                        "action": "skipped",
-                        "reason": CAMERA_DELETE_NO_PERMISSION_REASON,
-                        "size_bytes": int(segment.size_bytes or 0),
-                        "error": None,
-                    }
-                    for segment in segments[:100]
-                ],
-            }
+        if not stop_recording_before_camera_delete(db, camera):
+            segments = camera_recording_segments(db, camera.id)
+            recordings = camera_delete_blocked_recordings(segments, "camera_recording_not_stopped")
         else:
+            # Stopping may have finalized one last segment after the initial list.
+            segments = camera_recording_segments(db, camera.id)
+            storage_scope = camera_delete_operation_scope(camera, segments)
             preview = mark_camera_delete_preview_unsafe(
                 compact_deletion_result(
                     preview_segments(
@@ -1140,6 +1207,9 @@ def delete_camera(
                         segments,
                         operation="camera_delete_preview",
                         reason=CAMERA_DELETE_FILES_REASON,
+                        allow_missing_files=True,
+                        allowed_integrity_statuses=CAMERA_DELETE_INTEGRITY_STATUSES,
+                        allowed_segment_statuses=CAMERA_DELETE_SEGMENT_STATUSES,
                     )
                 )
             )
@@ -1190,12 +1260,25 @@ def delete_camera(
                             scope={"type": "camera", "segment_ids": [], "camera_ids": [camera.id], "root_ids": []},
                             outer_operation_handle=outer_handle,
                             manage_outer_operation=False,
+                            operation_heartbeat=lambda: assert_camera_delete_stopped(db, camera),
+                            allow_missing_files=True,
+                            allowed_integrity_statuses=CAMERA_DELETE_INTEGRITY_STATUSES,
+                            allowed_segment_statuses=CAMERA_DELETE_SEGMENT_STATUSES,
                         )
                     )
                     if recordings["failed_count"] or recordings["skipped_count"] or recordings["limit_exceeded"]:
                         recordings["ok"] = False
                         if "archive_cleanup_partial" not in recordings["warnings"]:
                             recordings["warnings"].append("archive_cleanup_partial")
+                    # Success is a verified empty target, not just a successful loop.
+                    if recordings["ok"]:
+                        remaining_metadata = camera_recording_segments(db, camera.id)
+                        remaining_files = sum(1 for segment in segments if resolve_segment_file_path(db, segment).exists())
+                        if remaining_metadata or remaining_files:
+                            recordings["ok"] = False
+                            recordings["status"] = "partial"
+                            recordings["warnings"].append("camera_archive_not_empty")
+                            recordings["reason_counts"]["camera_archive_not_empty"] = max(len(remaining_metadata), remaining_files)
                 except Exception as exc:
                     outer_lifecycle.__exit__(type(exc), exc, exc.__traceback__)
                     raise
@@ -1225,6 +1308,34 @@ def delete_camera(
         )
 
     try:
+        if delete_files and not recordings.get("ok"):
+            # Preserve the visible camera and retry entry point until all requested
+            # files are gone. A terminal operation is evidence, not a retry ban.
+            camera.status = "disabled"
+            db.add(camera)
+            db.commit()
+            status_value = recordings.get("status")
+            if status_value not in {"blocked", "failed", "partial"}:
+                status_value = "partial" if recordings.get("deleted_count") else "blocked"
+            audit_camera_delete(
+                db, actor=current_user, request=request, event_type="cameras.delete_failed",
+                severity="warning", camera=camera, delete_files=True,
+                status_value=status_value, recordings=recordings,
+            )
+            response = camera_delete_response(
+                camera=camera, delete_files=True, status_value=status_value, recordings=recordings,
+            )
+            response["retry_allowed"] = True
+            response["retry_mode"] = "immediate"
+            terminal_recordings = {**recordings, "camera_delete_status": status_value, "camera_removed": False,
+                                   "camera_id": camera.id, "camera_name": camera.name, "delete_files": True}
+            if outer_lifecycle is not None:
+                outer_lifecycle.finish(
+                    status=status_value, result=terminal_result_summary(terminal_recordings),
+                    reason_code=safe_reason_code((recordings.get("warnings") or [None])[0]),
+                    next_action="retry_camera_delete", retry_allowed=True, retry_mode="immediate",
+                )
+            return response
         preview_deleted = delete_camera_preview(camera.id)
         status_value = "deleted" if recordings.get("ok") else "deleted_archive_cleanup_partial"
         original_camera_name = camera.name

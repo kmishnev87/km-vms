@@ -1880,6 +1880,9 @@
   margin-bottom: 12px;
 }
 
+.recordingsStatsRow > .badge:last-child { min-width: 120px; }
+.recordingsTableCard[aria-busy="true"] .recordingsTableWrap { opacity: .6; }
+
 .recordingsTableCard {
   padding: 12px;
 }
@@ -3551,9 +3554,12 @@ a.appIllustratedAction:focus-visible {
 }
 
 .operationFeedbackDialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   width: min(560px, 100%);
   max-height: min(760px, calc(100vh - 40px));
-  overflow: auto;
+  overflow: hidden;
   border: 1px solid #dbe3ed;
   border-top: 4px solid #d97706;
   border-radius: 8px;
@@ -3588,6 +3594,7 @@ a.appIllustratedAction:focus-visible {
 
 .operationFeedbackHead,
 .operationFeedbackFooter {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -3621,7 +3628,15 @@ a.appIllustratedAction:focus-visible {
 }
 
 .operationFeedbackBody {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   display: grid;
+  grid-auto-rows: max-content;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  overflow-wrap: anywhere;
   gap: 12px;
   padding: 16px;
   color: #334155;
@@ -3763,6 +3778,10 @@ a.appIllustratedAction:focus-visible {
 }
 
 .operationFeedbackBusy {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
   height: 4px;
   overflow: hidden;
   border-radius: 999px;
@@ -3820,6 +3839,10 @@ a.appIllustratedAction:focus-visible {
   pointer-events: auto;
 }
 
+.operationRefreshButton { display: inline-grid; place-items: center; width: 32px; height: 32px; flex: 0 0 32px; padding: 0; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: #334155; font-size: 19px; cursor: pointer; }
+.operationRefreshButton.hasError { color: #991b1b; border-color: #f3baba; background: #fef2f2; }
+.operationRefreshButton:disabled { opacity: .5; cursor: default; }
+
 .operationFeedbackToast-success {
   border-color: #86efac;
   background: #f0fdf4;
@@ -3847,7 +3870,10 @@ a.appIllustratedAction:focus-visible {
 /* Stage 13.5 / 4.10.4 durable archive-migration flow. */
 .archiveMigrationDialog {
   width: min(720px, 100%);
+  height: min(680px, calc(100dvh - 40px));
 }
+
+.archiveOperationHistoryDialog, .recordingsDeletionFlow { height: min(600px, calc(100dvh - 40px)); }
 
 .archiveMigrationWizard {
   display: grid;
@@ -4217,6 +4243,7 @@ a.appIllustratedAction:focus-visible {
 }
 
 .storageIntegrityDialog {
+  height: min(680px, calc(100dvh - 36px));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   width: min(900px, 100%);

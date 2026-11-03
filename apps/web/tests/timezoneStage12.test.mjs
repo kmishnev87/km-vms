@@ -24,7 +24,8 @@ assert.equal(recordsPage.includes("formatDateInputFromCreatedAt(item.created_at)
 
 assert.equal(chronologyPage.includes("formatProductTimestampParam"), true);
 assert.equal(chronologyPage.includes("productLocalInputToApi(formatLocalNaiveTs(dt))"), true);
-assert.equal(chronologyPage.includes("formatProductTimestampParam(new Date(fromMs))"), true);
+assert.equal(chronologyPage.includes("formatProductTimestampParam(new Date(window.fromMs))"), true);
+assert.equal(chronologyPage.includes("formatProductTimestampParam(new Date(window.toMs))"), true);
 
 assert.equal(settingsHelpers.includes("return timezone || \"UTC\";"), true);
 assert.equal(settingsPage.includes("<option value={draft.timezone}>{draft.timezone}</option>"), true);

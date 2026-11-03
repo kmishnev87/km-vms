@@ -35,7 +35,10 @@ export default function CameraDeviceSettings({ cameraId, form, profiles, copy, o
   async function loadOnvifProfileConfig(token = selected) {
     if (!token || busy) return;
     const requestId = ++currentRequest.current;
-    setSelected(token); setBusy(true); setError(""); setConfig({ supported: {} }); setOnvifConfigTruth("not_checked");
+    const sameProfile = token === selected;
+    setSelected(token); setBusy(true); setError("");
+    if (!sameProfile) setConfig({ supported: {} });
+    setOnvifConfigTruth("not_checked");
     try {
       const result = await request("/cameras/onvif/profile_config", token);
       if (!active.current || requestId !== currentRequest.current) return;

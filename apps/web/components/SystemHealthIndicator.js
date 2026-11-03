@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch } from "../lib/api";
+import { apiFetch, getAuthToken } from "../lib/api";
+import { runtimeStatusCache } from "../lib/runtimeStatusCache";
 import {
   buildDashboardStatusSummary,
   runtimeStatusUserIdentity,
@@ -14,19 +15,30 @@ import {
 const REFRESH_MS = 30000;
 
 export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
-  const [runtimeStatus, setRuntimeStatus] = useState(null);
-  const [deniedUserIdentity, setDeniedUserIdentity] = useState(null);
-  const [loading, setLoading] = useState(false);
   const userIdentity = runtimeStatusUserIdentity(currentUser);
   const canRead = userCanReadRuntimeStatus(currentUser);
+  const cacheIdentity = currentUser ? JSON.stringify([userIdentity, currentUser.role, [...(currentUser.permissions || [])].sort()]) : null;
+  const authSession = getAuthToken();
+  const cached = enabled && canRead ? runtimeStatusCache.read(cacheIdentity, authSession) : null;
+  const [statusOwner, setStatusOwner] = useState(() => ({ identity: cacheIdentity, session: authSession }));
+  const [runtimeStatus, setRuntimeStatus] = useState(() => cached?.runtimeStatus || null);
+  const [deniedUserIdentity, setDeniedUserIdentity] = useState(() => cached?.denied ? userIdentity : null);
+  const [loading, setLoading] = useState(false);
+  const [stale, setStale] = useState(() => Boolean(cached?.stale));
 
   useEffect(() => {
+    const previous = enabled && canRead ? runtimeStatusCache.read(cacheIdentity, authSession) : null;
+    setStatusOwner({ identity: cacheIdentity, session: authSession });
+    setRuntimeStatus(previous?.runtimeStatus || null);
+    setStale(Boolean(previous?.stale));
+    setDeniedUserIdentity(previous?.denied ? userIdentity : null);
+    let latestRuntimeStatus = previous?.runtimeStatus || null;
     let cancelled = false;
     let timer = null;
     let refreshTimer = null;
     let inFlight = false;
     let refreshPending = false;
-    let denied = false;
+    let denied = Boolean(previous?.denied);
 
     async function loadStatus() {
       if (cancelled || denied) return false;
@@ -45,14 +57,19 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
       try {
         const data = await apiFetch("/system/runtime/status");
         if (!cancelled) {
+          latestRuntimeStatus = data;
+          runtimeStatusCache.write(cacheIdentity, authSession, data);
           setRuntimeStatus(data);
+          setStale(false);
           setDeniedUserIdentity(null);
         }
         return true;
       } catch (error) {
         if (!cancelled) {
-          setRuntimeStatus(null);
+          setStale(true);
+          runtimeStatusCache.write(cacheIdentity, authSession, latestRuntimeStatus, { stale: true, denied: shouldStopRuntimeStatusPolling(error) });
           if (shouldStopRuntimeStatusPolling(error)) {
+            setRuntimeStatus(null);
             denied = true;
             setDeniedUserIdentity(userIdentity);
             if (timer) clearInterval(timer);
@@ -92,27 +109,32 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
       window.removeEventListener("kmvms:camera-runtime-changed", refreshRuntime);
       window.removeEventListener("kmvms:live-runtime-changed", refreshRuntime);
     };
-  }, [canRead, currentUser, enabled, userIdentity]);
+  }, [canRead, enabled, userIdentity, cacheIdentity, authSession]);
+
+  const ownsStatus = enabled && canRead && statusOwner.identity === cacheIdentity && statusOwner.session === authSession;
+  const visibleRuntimeStatus = ownsStatus ? runtimeStatus : null;
 
   const summary = useMemo(
-    () => runtimeStatus ? buildDashboardStatusSummary(runtimeStatus, { limit: 8 }) : null,
-    [runtimeStatus]
+    () => visibleRuntimeStatus ? buildDashboardStatusSummary(visibleRuntimeStatus, { limit: 8 }) : null,
+    [visibleRuntimeStatus]
   );
 
-  const accessDenied = Boolean(canRead && deniedUserIdentity && deniedUserIdentity === userIdentity);
+  const accessDenied = Boolean(ownsStatus && deniedUserIdentity && deniedUserIdentity === userIdentity);
   const model = systemHealthIndicatorModel({
     user: currentUser,
     summary,
-    runtimeStatusKnown: runtimeStatus !== null,
+    runtimeStatusKnown: visibleRuntimeStatus !== null && !stale,
     permissionDenied: accessDenied,
   });
 
   return {
-    runtimeStatus,
+    runtimeStatus: visibleRuntimeStatus,
     summary,
     loading,
     accessDenied,
     ...model,
+    stale,
+    hasProblems: model.hasProblems || Boolean(stale && summary?.problem_count),
   };
 }
 

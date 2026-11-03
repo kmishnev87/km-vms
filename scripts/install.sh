@@ -673,6 +673,7 @@ copy_source_dir() {
       --exclude='./.env.*' --exclude='*/.env.*' \
       --exclude='./node_modules' --exclude='*/node_modules' \
       --exclude='./.next' --exclude='*/.next' \
+      --exclude='./tmp' --exclude='./.agents' --exclude='./.codex' --exclude='./.playwright-mcp' \
       --exclude='./dist' --exclude='*/dist' \
       --exclude='./build' --exclude='*/build' \
       --exclude='./coverage' --exclude='*/coverage' \
@@ -708,6 +709,17 @@ copy_source_dir() {
       --exclude='./km-vms-stage1-0-1-*' --exclude='*/km-vms-stage1-0-1-*' \
       -cf - .
   ) | (cd "$APP_DIR" && tar -xf -) || acquisition_fail "Source-dir acquisition failed."
+  # Two known public product files overlap the conservative runtime excludes.
+  # Restore only these exact regular files; do not relax private-data filters.
+  for product_file in .env.example apps/web/app/recordings/page.js; do
+    if [ -L "$SOURCE_DIR/$product_file" ]; then
+      acquisition_fail "Public product file must not be a symlink: $product_file"
+    fi
+    if [ -f "$SOURCE_DIR/$product_file" ]; then
+      mkdir -p "$APP_DIR/$(dirname "$product_file")" || acquisition_fail "Cannot create product directory."
+      cp "$SOURCE_DIR/$product_file" "$APP_DIR/$product_file" || acquisition_fail "Cannot copy public product file."
+    fi
+  done
 }
 
 clone_repo() {

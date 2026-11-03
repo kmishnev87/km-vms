@@ -174,6 +174,14 @@ export function cameraDraftWithProfiles(draft, data) {
   const main = profiles.find((profile) => profile.token === data?.suggested_main_profile_token) || profiles[0];
   const sub = profiles.find((profile) => profile.token === data?.suggested_sub_profile_token && profile.token !== main?.token);
   let next = draft;
+  // A camera can recreate ONVIF tokens without changing the actual stream path.
+  // Reconcile by exact path only; never invent a saved profile or guess a new stream.
+  for (const role of cameraStreamRoles(draft)) {
+    const token = draft[role === "main" ? "onvif_profile_token" : "onvif_sub_profile_token"];
+    if (profiles.some((profile) => profile.token === token)) continue;
+    const matches = profiles.filter((profile) => cameraProfilePath(profile) === draft[`rtsp_${role}_url`]);
+    if (matches.length === 1) next = assignCameraProfile(next, role, matches[0]);
+  }
   // Recommendations fill empty roles only. Reading must never overwrite a saved/manual choice.
   if (!draft.rtsp_main_url && main) next = assignCameraProfile(next, "main", main);
   if (!cameraStreamRoles(draft).length && sub) {
