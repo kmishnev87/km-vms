@@ -2,17 +2,21 @@ from pathlib import Path
 from collections.abc import Mapping
 import copy
 import hashlib
+import math
 import re
 import time
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, quote, urlparse, urlsplit, urlunparse, urlunsplit
 
-from onvif import ONVIFCamera
+from onvif import ONVIFCamera as _LibraryCamera
+import requests
+from requests.auth import HTTPDigestAuth
+from zeep.transports import Transport
+from app.services.onvif_media2 import MEDIA1_NS, MEDIA2_NS, Media2Service
 
 MEDIA_XADDR_KEYS = (
     "media",
-    "media2",
     "http://www.onvif.org/ver10/media/wsdl",
-    "http://www.onvif.org/ver20/media/wsdl",
 )
 
 PTZ_MAX_DURATION_SECONDS = 2.0
@@ -50,13 +54,41 @@ ONVIF_VIDEO_CONFIG_FIELDS = (
     "bitrate",
     "iframe_interval",
     "quality",
+    "bitrate_mode",
+    "codec_profile",
 )
 
 
 class OnvifConfigurationError(RuntimeError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, current=None):
         self.code = code
+        self.current = current
         super().__init__(message)
+
+
+class ONVIFCamera(_LibraryCamera):
+    """Use the pinned SDK without its automatic Events subscription side effect."""
+    def __init__(self, host, port, username, password, wsdl):
+        session = requests.Session()
+        session.auth = HTTPDigestAuth(username, password)
+        transport = Transport(session=session, timeout=5, operation_timeout=5)
+        super().__init__(host, port, username, password, wsdl, transport=transport)
+
+    def update_xaddrs(self):
+        # The SDK's default implementation creates a PullPoint subscription on
+        # every construction. Reading a camera is not permission to subscribe.
+        self.dt_diff = None
+        self.xaddrs = {}
+        self.devicemgmt = self.create_devicemgmt_service()
+
+
+def _align_client_clock(cam):
+    """Retry timestamp authentication using camera time; never set device time."""
+    value = cam.devicemgmt.GetSystemDateAndTime().UTCDateTime
+    camera_time = datetime(value.Date.Year, value.Date.Month, value.Date.Day,
+                           value.Time.Hour, value.Time.Minute, value.Time.Second, tzinfo=timezone.utc)
+    cam.dt_diff = camera_time - datetime.now(timezone.utc)
+    cam.devicemgmt.zeep_client.wsse.dt_diff = cam.dt_diff
 
 
 def wsdl_dir():
@@ -105,12 +137,12 @@ def _safe_number(value):
     if value is None:
         return None
     try:
-        return int(value)
-    except (TypeError, ValueError):
-        try:
-            return float(value)
-        except (TypeError, ValueError):
+        number = float(value)
+        if not math.isfinite(number):
             return None
+        return int(number) if number.is_integer() else number
+    except (TypeError, ValueError):
+        return None
 
 
 def _safe_bool(value) -> bool:
@@ -186,7 +218,11 @@ def _rewrite_xaddr(xaddr: str | None, host: str, port: int, fallback_path: str):
     parsed = urlparse(str(xaddr))
     scheme = parsed.scheme or "http"
     path = parsed.path or fallback_path
-    return urlunparse((scheme, f"{host}:{port}", path, "", "", ""))
+    # A service can legitimately use another port on this same camera. Keep the
+    # explicitly reached host for NAT, never follow a camera to an unrelated host.
+    service_port = parsed.port or (443 if scheme == "https" else 80)
+    target_port = service_port if parsed.hostname == host else port
+    return urlunparse((scheme, f"{host}:{target_port}", path, "", "", ""))
 
 
 def _try_force_service_address(service, address: str):
@@ -242,18 +278,43 @@ def _prepare_camera(host: str, port: int, username: str, password: str):
     services = []
     try:
         services = cam.devicemgmt.GetServices({"IncludeCapability": False})
-    except Exception:
-        services = []
+    except Exception as exc:
+        if any(word in str(exc).lower() for word in ("401", "403", "notauthorized", "failedauthentication")):
+            try:
+                _align_client_clock(cam)
+                services = cam.devicemgmt.GetServices({"IncludeCapability": False})
+            except Exception:
+                raise OnvifConfigurationError("onvif_authentication_failed", "ONVIF authentication or permission failed.") from None
+        else:
+            services = []
 
     media_candidates = []
+    advertised_media = []
 
     for s in services:
         ns = (getattr(s, "Namespace", "") or "").lower()
-        if "media" in ns:
-            media_candidates.append(_rewrite_xaddr(getattr(s, "XAddr", None), host, int(port), "/onvif/media_service"))
+        raw_address = _safe_attr(s, "XAddr")
+        if raw_address:
+            if not hasattr(cam, "xaddrs"):
+                cam.xaddrs = {}
+            cam.xaddrs[_safe_attr(s, "Namespace") or ns] = _rewrite_xaddr(raw_address, host, int(port), "/onvif/device_service")
+        if ns in (MEDIA1_NS, MEDIA2_NS):
+            address = _rewrite_xaddr(_safe_attr(s, "XAddr"), host, int(port), "/onvif/media_service")
+            advertised_media.append((ns, address))
+            if ns == MEDIA1_NS:
+                media_candidates.append(address)
+    # Service namespaces are not interchangeable, even if their URLs look alike.
+    cam._km_media_services = advertised_media
+    cam._km_media_credentials = (username, password)
 
     try:
         caps = cam.devicemgmt.GetCapabilities({"Category": "All"})
+        for name, namespace in (("PTZ", "http://www.onvif.org/ver20/ptz/wsdl"),
+                                ("Imaging", "http://www.onvif.org/ver20/imaging/wsdl"),
+                                ("Events", "http://www.onvif.org/ver10/events/wsdl")):
+            address = _safe_attr(_safe_attr(caps, name), "XAddr")
+            if address and namespace not in cam.xaddrs:
+                cam.xaddrs[namespace] = _rewrite_xaddr(address, host, int(port), "/onvif/device_service")
         media_caps = _safe_attr(caps, "Media")
         if media_caps:
             media_candidates.append(_rewrite_xaddr(_safe_attr(media_caps, "XAddr"), host, int(port), "/onvif/media_service"))
@@ -280,6 +341,21 @@ def _prepare_camera(host: str, port: int, username: str, password: str):
 def _get_media_service(cam, candidates: list[str]):
     last_error = None
 
+    for namespace, address in getattr(cam, "_km_media_services", []):
+        if namespace != MEDIA2_NS:
+            continue
+        try:
+            username, password = cam._km_media_credentials
+            client = cam.devicemgmt.zeep_client
+            service = Media2Service(address, username, password, wsse=client.wsse,
+                                    session=client.transport.session)
+            if service.GetProfiles():
+                return service, address
+        except Exception as exc:
+            if getattr(exc, "code", None) == "onvif_authentication_failed":
+                raise
+            last_error = exc
+
     for address in candidates:
         try:
             _set_media_xaddr(cam, address)
@@ -293,7 +369,7 @@ def _get_media_service(cam, candidates: list[str]):
             last_error = e
             continue
 
-    raise RuntimeError(f"Не удалось подключиться к ONVIF Media service. Последняя ошибка: {last_error}")
+    raise RuntimeError("Не удалось подключиться к ONVIF Media service.") from last_error
 
 
 def _find_profile(media, profile_token):
@@ -441,7 +517,7 @@ def _profile_to_dict(profile, media, username, password, host, port, rtsp_host=N
                 "Stream": "RTP-Unicast",
                 "Transport": {"Protocol": "RTSP"},
             },
-            "ProfileToken": profile.token,
+            "ProfileToken": _safe_attr(profile, "token"),
         })
         raw_uri = _safe_attr(stream_resp, "Uri")
         stream_path = rtsp_path_from_uri(raw_uri)
@@ -464,6 +540,7 @@ def _profile_to_dict(profile, media, username, password, host, port, rtsp_host=N
     fps = _safe_number(_safe_attr(rc, "FrameRateLimit"))
     bitrate = _safe_number(_safe_attr(rc, "BitrateLimit"))
     encoding_interval = _safe_number(_safe_attr(rc, "EncodingInterval"))
+    values = _config_values(cfg)
     quality = _safe_number(_safe_attr(cfg, "Quality"))
 
     item = {
@@ -482,12 +559,12 @@ def _profile_to_dict(profile, media, username, password, host, port, rtsp_host=N
             "bitrate": bitrate,
             "bitrate_limit": bitrate,
             "max_bitrate": bitrate,
-            "bitrate_type": None,
+            "bitrate_type": values["bitrate_mode"],
             "encoding_interval": encoding_interval,
-            "iframe_interval": encoding_interval,
-            "gop": encoding_interval,
-            "gov_length": encoding_interval,
-            "codec_profile": _safe_text(_safe_attr(cfg, "H264Profile") or _safe_attr(cfg, "Profile"), 80),
+            "iframe_interval": values["iframe_interval"],
+            "gop": values["iframe_interval"],
+            "gov_length": values["iframe_interval"],
+            "codec_profile": values["codec_profile"],
             "encode_strategy": None,
         },
         "audio": {
@@ -772,9 +849,16 @@ def _safe_set(obj, name: str, value) -> None:
 def _range_meta(value):
     if value is None:
         return None
-    minimum = _safe_attr(value, "Min")
-    maximum = _safe_attr(value, "Max")
-    step = _safe_attr(value, "Step")
+    if isinstance(value, str):
+        value = value.split()
+    if isinstance(value, (tuple, list)):
+        if len(value) != 2:
+            return None
+        minimum, maximum = (_safe_number(item) for item in value)
+        return {"min": minimum, "max": maximum} if minimum is not None and maximum is not None else None
+    minimum = _safe_number(_safe_attr(value, "Min"))
+    maximum = _safe_number(_safe_attr(value, "Max"))
+    step = _safe_number(_safe_attr(value, "Step"))
     if minimum is None and maximum is None and step is None:
         return None
     result = {"min": minimum, "max": maximum}
@@ -795,12 +879,15 @@ def _option_roots(options):
     return roots
 
 
-def _encoding_options(options, encoding):
+def _encoding_options(options, encoding, resolution=None):
     if not options or not encoding:
         return None
     matches = []
     candidates = {str(encoding).lower()}
     for root in _option_roots(options):
+        if str(_safe_attr(root, "Encoding") or "").lower() in candidates:
+            if not resolution or resolution in _resolution_options(root):
+                matches.append(root)
         for key in ("H264", "H265", "JPEG", "MPEG4"):
             if key.lower() not in candidates:
                 continue
@@ -826,14 +913,53 @@ def _resolution_options(encoding_options):
 
 
 def _single_range(encoding_options, *names: str):
-    options = _as_list(encoding_options)
-    if len(options) != 1:
-        return None
+    ranges = []
     for name in names:
-        value_range = _range_meta(_safe_attr(options[0], name))
-        if value_range is not None:
-            return value_range
-    return None
+        ranges = [_range_meta(_safe_attr(item, name)) for item in _as_list(encoding_options)]
+        ranges = [value for value in ranges if value is not None]
+        if ranges:
+            break
+    if not ranges:
+        return None
+    # Media1's extension augments the base options. Equal/complementary ranges
+    # must not make a field unsupported. For alternatives expose their common
+    # range, not an unsafe Cartesian product of unrelated options.
+    minima = [value["min"] for value in ranges if value.get("min") is not None]
+    maxima = [value["max"] for value in ranges if value.get("max") is not None]
+    minimum, maximum = max(minima) if minima else None, min(maxima) if maxima else None
+    if minimum is not None and maximum is not None and minimum > maximum:
+        return None
+    return {"min": minimum, "max": maximum}
+
+
+def _option_list(value):
+    if value is None:
+        return []
+    return value.split() if isinstance(value, str) else _as_list(value)
+
+
+def _common_options(encoding_options, *names, numeric=False):
+    lists = []
+    for item in _as_list(encoding_options):
+        for name in names:
+            raw = _option_list(_safe_attr(item, name))
+            if raw:
+                values = [_safe_number(value) if numeric else str(value) for value in raw]
+                lists.append([value for value in values if value is not None])
+                break
+    return [value for value in lists[0] if all(value in other for other in lists[1:])] if lists else []
+
+
+def _available_encodings(options):
+    values = []
+    for root in _option_roots(options):
+        direct = _safe_text(_safe_attr(root, "Encoding"), 40)
+        if direct and direct not in values:
+            values.append(direct)
+        for name in ("H264", "H265", "JPEG", "MPEG4"):
+            if _safe_attr(root, name) is not None and name not in values:
+                values.append(name)
+    return values
 
 
 def _top_level_range(options, name: str):
@@ -891,7 +1017,7 @@ def _value_in_range(name: str, value, value_range: dict | None) -> None:
 
 
 def _validate_profile_config_request(config: dict, supported: dict) -> dict:
-    allowed = {"codec", "resolution", "fps", "bitrate", "iframe_interval", "quality"}
+    allowed = set(ONVIF_VIDEO_CONFIG_FIELDS)
     requested = {key: value for key, value in (config or {}).items() if value not in (None, "")}
     unknown = sorted(set(requested) - allowed)
     if unknown:
@@ -902,9 +1028,15 @@ def _validate_profile_config_request(config: dict, supported: dict) -> dict:
         meta = supported.get(key) or {}
         if not meta.get("writable"):
             raise ValueError(f"ONVIF setting is not writable: {key}")
-        options = [str(item) for item in (meta.get("options") or [])]
-        if options and str(value) not in options:
+        options = meta.get("options") or []
+        if options and not any(_config_values_equal(key, value, option) for option in options):
             raise ValueError(f"ONVIF setting value is not supported: {key}")
+        if key in {"fps", "bitrate", "iframe_interval", "quality"}:
+            numeric = _safe_number(value)
+            if isinstance(value, bool) or numeric is None:
+                raise ValueError(f"{key} must be a finite number")
+            if key in {"bitrate", "iframe_interval"} and not float(numeric).is_integer():
+                raise ValueError(f"{key} must be an integer")
         _value_in_range(key, value, meta.get("range"))
         validated[key] = value
     if not validated:
@@ -928,7 +1060,7 @@ def _configuration_token(cfg, profile=None):
 
 def _codec_specific_config(cfg):
     encoding = str(_safe_attr(cfg, "Encoding") or "").upper()
-    for name in (encoding, "H264", "H265", "MPEG4"):
+    for name in (encoding,):
         if not name:
             continue
         value = _safe_attr(cfg, name)
@@ -948,9 +1080,13 @@ def _config_values(cfg) -> dict:
         if width is not None and height is not None
         else None
     )
-    iframe_interval = _safe_number(_safe_attr(codec_specific, "GovLength"))
+    iframe_interval = _safe_number(_safe_attr(cfg, "GovLength"))
     if iframe_interval is None:
-        iframe_interval = _safe_number(_safe_attr(rc, "EncodingInterval"))
+        iframe_interval = _safe_number(_safe_attr(codec_specific, "GovLength"))
+    constant = _safe_attr(rc, "ConstantBitRate")
+    average_bitrate = _safe_number(_safe_attr(rc, "AverageBitRate"))
+    bitrate_mode = "ABR" if average_bitrate and average_bitrate > 0 else None if constant is None else "CBR" if str(constant).lower() in ("true", "1") else "VBR"
+    codec_profile = _safe_attr(cfg, "Profile") or _safe_attr(codec_specific, "H264Profile") or _safe_attr(codec_specific, "Mpeg4Profile")
     return {
         "codec": _safe_text(_safe_attr(cfg, "Encoding"), 40),
         "width": width,
@@ -960,20 +1096,13 @@ def _config_values(cfg) -> dict:
         "bitrate": _safe_number(_safe_attr(rc, "BitrateLimit")),
         "iframe_interval": iframe_interval,
         "quality": _safe_number(_safe_attr(cfg, "Quality")),
+        "bitrate_mode": bitrate_mode,
+        "codec_profile": _safe_text(codec_profile, 40),
     }
 
 
 def _empty_config_values() -> dict:
-    return {
-        "codec": None,
-        "width": None,
-        "height": None,
-        "resolution": None,
-        "fps": None,
-        "bitrate": None,
-        "iframe_interval": None,
-        "quality": None,
-    }
+    return {name: None for name in (*ONVIF_VIDEO_CONFIG_FIELDS, "width", "height")}
 
 
 def _encoder_options_with_state(media, cfg, profile_token=None):
@@ -1012,6 +1141,8 @@ def _supported_video_fields(
     current_reason=None,
     options=_OPTIONS_UNSET,
     options_reason=None,
+    encoding_override=None,
+    resolution_override=None,
 ) -> dict:
     values = _config_values(cfg) if cfg is not None else _empty_config_values()
     token = config_token or _configuration_token(cfg)
@@ -1021,29 +1152,30 @@ def _supported_video_fields(
             cfg,
             profile_token,
         )
-    encoding = values["codec"]
-    encoding_options = _encoding_options(options, encoding)
-    codec_options = [
-        codec
-        for codec in ("H264", "H265", "JPEG", "MPEG4")
-        if _encoding_options(options, codec) is not None
-    ]
-    resolution_options = _resolution_options(encoding_options)
+    encoding = encoding_override or values["codec"]
+    all_encoding_options = _encoding_options(options, encoding)
+    encoding_options = _encoding_options(options, encoding, resolution_override or values["resolution"]) or all_encoding_options
+    codec_options = _available_encodings(options)
+    resolution_options = _resolution_options(all_encoding_options)
+    fps_options = _common_options(encoding_options, "FrameRatesSupported", numeric=True)
     fps_range = _single_range(encoding_options, "FrameRateRange")
     bitrate_range = _single_range(encoding_options, "BitrateRange")
     iframe_range = _single_range(
         encoding_options,
         "GovLengthRange",
-        "EncodingIntervalRange",
     )
-    quality_range = _top_level_range(options, "QualityRange")
+    quality_range = _single_range(encoding_options, "QualityRange") or _top_level_range(options, "QualityRange")
+    profile_options = _common_options(encoding_options, "ProfilesSupported", "H264ProfilesSupported", "Mpeg4ProfilesSupported")
+    constant_supported = any(str(_safe_attr(item, "ConstantBitRateSupported")).lower() in ("true", "1") for item in _as_list(encoding_options))
     capabilities = {
         "codec": (codec_options, None),
         "resolution": (resolution_options, None),
-        "fps": ([], fps_range),
+        "fps": (fps_options, fps_range),
         "bitrate": ([], bitrate_range),
         "iframe_interval": ([], iframe_range),
         "quality": ([], quality_range),
+        "bitrate_mode": (["VBR", "CBR"] if constant_supported else [], None),
+        "codec_profile": (profile_options, None),
     }
 
     result = {}
@@ -1160,6 +1292,21 @@ def _profile_config_payload(
         status = "ok"
     else:
         status = "unsupported"
+    options_by_codec = {}
+    for encoding in _available_encodings(options):
+        resolutions = _resolution_options(_encoding_options(options, encoding))
+        def fields_for(resolution=None):
+            return _supported_video_fields(media, cfg, profile_token=profile_token,
+                config_token=config_token, current_reason=current_reason, options=options,
+                options_reason=options_reason, encoding_override=encoding, resolution_override=resolution)
+        options_by_codec[encoding] = {
+            "fields": fields_for(),
+            "by_resolution": {resolution: fields_for(resolution) for resolution in resolutions},
+        }
+    shared_tokens = []
+    if config_token and (_safe_number(_safe_attr(cfg, "UseCount")) or 0) > 1:
+        shared_tokens = [_safe_attr(item, "token") for item in media.GetProfiles()
+                         if _configuration_token(_safe_attr(item, "VideoEncoderConfiguration"), item) == config_token]
     return {
         "profile_token": profile_token,
         "name": _safe_text(_safe_attr(profile, "Name"), 255),
@@ -1170,6 +1317,11 @@ def _profile_config_payload(
         "options_read": options_reason is None and options is not None,
         "config": _config_values(cfg) if cfg is not None else _empty_config_values(),
         "supported": supported,
+        "options_by_codec": options_by_codec,
+        "configuration_token": config_token,
+        "video_source_token": _safe_attr(_safe_attr(profile, "VideoSourceConfiguration"), "SourceToken"),
+        "shared_profile_tokens": shared_tokens,
+        "media_service_type": getattr(media, "protocol", "media"),
     }
 
 
@@ -1191,9 +1343,9 @@ def get_onvif_profile_config(host, port, username, password, profile_token):
 
 
 def _normalize_requested_value(name: str, value):
-    if name in {"fps", "bitrate", "iframe_interval"}:
+    if name in {"bitrate", "iframe_interval"}:
         return int(value)
-    if name == "quality":
+    if name in {"fps", "quality"}:
         return float(value)
     return str(value)
 
@@ -1211,7 +1363,19 @@ def _config_values_equal(name: str, left, right) -> bool:
 
 def _apply_video_config_diff(cfg, requested: dict) -> None:
     if "codec" in requested:
+        old_values = _config_values(cfg)
         _safe_set(cfg, "Encoding", str(requested["codec"]))
+        # Media1 has codec-specific elements; Media2 has common attributes.
+        if _safe_attr(cfg, "GovLength") is None and str(requested["codec"]).upper() in {"H264", "MPEG4"}:
+            codec = str(requested["codec"]).upper()
+            if _safe_attr(cfg, codec) is None:
+                profile_key = "H264Profile" if codec == "H264" else "Mpeg4Profile"
+                _safe_set(cfg, codec, {"GovLength": requested.get("iframe_interval", old_values["iframe_interval"]),
+                                       profile_key: requested.get("codec_profile", old_values["codec_profile"])})
+        if _safe_attr(cfg, "GovLength") is None:
+            for codec in ("H264", "MPEG4"):
+                if codec != str(requested["codec"]).upper() and _safe_attr(cfg, codec) is not None:
+                    _safe_set(cfg, codec, None)
     if "resolution" in requested:
         resolution = str(requested["resolution"])
         if "x" not in resolution.lower():
@@ -1235,15 +1399,15 @@ def _apply_video_config_diff(cfg, requested: dict) -> None:
             "The camera did not return a writable rate-control object.",
         )
     if "fps" in requested:
-        _safe_set(rate_control, "FrameRateLimit", int(requested["fps"]))
+        _safe_set(rate_control, "FrameRateLimit", _safe_number(requested["fps"]))
     if "bitrate" in requested:
         _safe_set(rate_control, "BitrateLimit", int(requested["bitrate"]))
     if "iframe_interval" in requested:
         codec_specific = _codec_specific_config(cfg)
-        if codec_specific is not None and _safe_attr(codec_specific, "GovLength") is not None:
+        if _safe_attr(cfg, "GovLength") is not None:
+            _safe_set(cfg, "GovLength", int(requested["iframe_interval"]))
+        elif codec_specific is not None and _safe_attr(codec_specific, "GovLength") is not None:
             _safe_set(codec_specific, "GovLength", int(requested["iframe_interval"]))
-        elif rate_control is not None and _safe_attr(rate_control, "EncodingInterval") is not None:
-            _safe_set(rate_control, "EncodingInterval", int(requested["iframe_interval"]))
         else:
             raise OnvifConfigurationError(
                 "video_encoder_configuration_shape_unsupported",
@@ -1251,6 +1415,21 @@ def _apply_video_config_diff(cfg, requested: dict) -> None:
             )
     if "quality" in requested:
         _safe_set(cfg, "Quality", float(requested["quality"]))
+    if "bitrate_mode" in requested:
+        if rate_control is None or _safe_attr(rate_control, "ConstantBitRate") is None:
+            raise OnvifConfigurationError("video_encoder_configuration_shape_unsupported", "No bitrate mode field was returned by the camera.")
+        _safe_set(rate_control, "ConstantBitRate", str(requested["bitrate_mode"]).upper() == "CBR")
+        if _safe_number(_safe_attr(rate_control, "AverageBitRate")):
+            _safe_set(rate_control, "AverageBitRate", 0)
+    if "codec_profile" in requested:
+        if _safe_attr(cfg, "Profile") is not None:
+            _safe_set(cfg, "Profile", str(requested["codec_profile"]))
+        else:
+            target = _codec_specific_config(cfg)
+            key = "H264Profile" if str(_safe_attr(cfg, "Encoding")).upper() == "H264" else "Mpeg4Profile"
+            if target is None:
+                raise OnvifConfigurationError("video_encoder_configuration_shape_unsupported", "No encoder profile field was returned by the camera.")
+            _safe_set(target, key, str(requested["codec_profile"]))
 
 
 def update_onvif_profile(host, port, username, password, profile_token, config):
@@ -1276,9 +1455,23 @@ def update_onvif_profile(host, port, username, password, profile_token, config):
         cfg,
         profile_token=profile_token,
         config_token=config_token,
+        encoding_override=(config or {}).get("codec"),
+        resolution_override=(config or {}).get("resolution"),
     )
     requested = _validate_profile_config_request(config or {}, supported)
     current_values = _config_values(cfg)
+    if "codec" in requested or "resolution" in requested:
+        # Validate the resulting combination, not just the fields present in the
+        # diff. A codec change must not silently keep an incompatible old profile.
+        resulting = {**current_values, **requested}
+        for name, meta in supported.items():
+            value = resulting.get(name)
+            if value is None or name in requested:
+                continue
+            choices = meta.get("options") or []
+            if choices and not any(_config_values_equal(name, value, choice) for choice in choices):
+                raise OnvifConfigurationError("video_encoder_values_incompatible", "Select compatible values for the new codec and resolution.")
+            _value_in_range(name, value, meta.get("range"))
     changed = {
         name: _normalize_requested_value(name, value)
         for name, value in requested.items()
@@ -1308,6 +1501,7 @@ def update_onvif_profile(host, port, username, password, profile_token, config):
     except Exception:
         vendor_configuration = cfg
     _apply_video_config_diff(vendor_configuration, changed)
+    set_error = None
     try:
         media.SetVideoEncoderConfiguration(
             {
@@ -1316,30 +1510,37 @@ def update_onvif_profile(host, port, username, password, profile_token, config):
             }
         )
     except Exception as exc:
-        raise OnvifConfigurationError(
-            "video_encoder_configuration_set_failed",
-            "The camera refused the ONVIF encoder configuration update.",
-        ) from exc
+        set_error = exc
 
-    verified_cfg, verified_token, verified_reason = _get_video_encoder_config_truth(
-        media,
-        profile,
-    )
+    # A lost Set reply does not prove a refusal. Read back before deciding, and
+    # allow a short bounded settling period only for this explicit user action.
+    for attempt in range(3):
+        if attempt:
+            time.sleep(0.2 * attempt)
+        verified_cfg, verified_token, verified_reason = _get_video_encoder_config_truth(media, profile)
+        verified_values = _config_values(verified_cfg) if verified_cfg is not None else {}
+        mismatched = [name for name, value in changed.items()
+                      if not _config_values_equal(name, verified_values.get(name), value)]
+        if not verified_reason and not mismatched:
+            break
     if verified_reason or verified_cfg is None:
-        raise OnvifConfigurationError(
-            verified_reason or "video_encoder_configuration_verify_failed",
-            "The updated ONVIF encoder configuration could not be verified.",
-        )
-    verified_values = _config_values(verified_cfg)
-    mismatched = [
-        name
-        for name, value in changed.items()
-        if not _config_values_equal(name, verified_values.get(name), value)
-    ]
+        raise OnvifConfigurationError("video_encoder_configuration_result_unknown",
+            "The camera update result is unknown. Read current settings before retrying.")
+    if set_error and mismatched:
+        uncertain_codes = {"onvif_media_timeout", "onvif_media_unreachable", "onvif_media_response_invalid", "onvif_media_http_error"}
+        if getattr(set_error, "code", None) in uncertain_codes or any(
+            marker in str(set_error).lower() for marker in ("timed out", "timeout", "connection reset", "connection aborted")
+        ):
+            raise OnvifConfigurationError("video_encoder_configuration_result_unknown",
+                "The camera update result is unknown. Read current settings before retrying.") from None
+        raise OnvifConfigurationError("video_encoder_configuration_set_failed",
+            "The camera refused the ONVIF encoder configuration update.") from None
     if mismatched:
         raise OnvifConfigurationError(
             "video_encoder_configuration_mismatch",
             "The camera returned different encoder values after the update.",
+            current=_profile_config_payload(media, profile, profile_token, selected_media_xaddr,
+                cfg=verified_cfg, config_token=verified_token or config_token),
         )
     payload = _profile_config_payload(
         media,
@@ -1357,6 +1558,13 @@ def update_onvif_profile(host, port, username, password, profile_token, config):
             "verification": {"status": "matched", "matched": True},
         }
     )
+    if hasattr(media, "GetStreamUri"):
+        try:
+            stream = media.GetStreamUri({"ProfileToken": profile_token,
+                "StreamSetup": {"Stream": "RTP-Unicast", "Transport": {"Protocol": "RTSP"}}})
+            payload["stream_path"] = rtsp_path_from_uri(_safe_attr(stream, "Uri"))
+        except Exception:
+            payload["stream_path_refresh_failed"] = True
     return payload
 
 

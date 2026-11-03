@@ -56,7 +56,8 @@
     "0.8.23": "dd175fd5c5158d7f3fc942d2c9c9a538040d2817",
     "0.8.24": "a8e93811627e9fe29cd37964f05993ad79c55576",
     "0.8.25": "e7c4d1ffe3f26eb28b937e36f312478ce922d857",
-    "0.8.26": "2f38d7cea936624663f77c056d9bca902a96d311"
+    "0.8.26": "2f38d7cea936624663f77c056d9bca902a96d311",
+    "0.8.27": "db32ae36edd0aa13f309bdf549dc8ac4a2039ca7"
   },
   "schema_versions": {
     "0.7.2": 1,
@@ -113,7 +114,8 @@
     "0.8.23": 9,
     "0.8.24": 10,
     "0.8.25": 10,
-    "0.8.26": 10
+    "0.8.26": 10,
+    "0.8.27": 10
   },
   "shape_fingerprints": {
     "0.7.2": "7006f5b00ce1c82240ee43e6778a5730e8d2195523b1a93081694f5c7b77a0cf",
@@ -170,7 +172,8 @@
     "0.8.23": "ecc7ccf61e781477ceec853414d0b4ff90da7f45b4a73052885db4a57093fdcb",
     "0.8.24": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f",
     "0.8.25": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f",
-    "0.8.26": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f"
+    "0.8.26": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f",
+    "0.8.27": "1161a42b16d7ae0946c7ee04dc3fb1de32a61ac91738c6b5ce357189b51cbb0f"
   },
   "shape_alternates": {
     "0.7.24": [
@@ -219,6 +222,9 @@
       "eb1a1004514c6b4e903531096f4693bee74ffed169a1fbfe33a02aea6c2f7f0f"
     ],
     "0.8.26": [
+      "eb1a1004514c6b4e903531096f4693bee74ffed169a1fbfe33a02aea6c2f7f0f"
+    ],
+    "0.8.27": [
       "eb1a1004514c6b4e903531096f4693bee74ffed169a1fbfe33a02aea6c2f7f0f"
     ]
   }

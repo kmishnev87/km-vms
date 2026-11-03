@@ -346,10 +346,17 @@ export function useSettingsMaintenanceController({
   }, [maintenanceModalOpen]);
 
   useEffect(() => {
+    if (!maintenanceModalOpen || maintenanceChildDialogOpen || maintenanceBusy) return undefined;
+    const container = maintenanceDialogRef.current;
+    if (!container?.contains(document.activeElement) || document.activeElement?.matches(":disabled")) {
+      const initial = focusableElements(container)[0] || container;
+      initial?.focus({ preventScroll: true });
+    }
+  }, [maintenanceModalOpen, maintenanceChildDialogOpen, maintenanceBusy]);
+
+  useEffect(() => {
     if (!maintenanceModalOpen) return undefined;
     const container = maintenanceDialogRef.current;
-    const initial = focusableElements(container)[0];
-    initial?.focus({ preventScroll: true });
     function onKeyDown(event) {
       if (event.defaultPrevented || maintenanceChildDialogOpenRef.current) return;
       if (event.key === "Escape" && !maintenanceBusyRef.current) {
@@ -362,7 +369,10 @@ export function useSettingsMaintenanceController({
       if (!focusable.length) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
+      if (!container?.contains(document.activeElement)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus({ preventScroll: true });
+      } else if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
       } else if (!event.shiftKey && document.activeElement === last) {
@@ -1175,7 +1185,6 @@ export function useSettingsMaintenanceController({
     maintenanceBackupRecoveryRef.current = false;
     setMaintenanceBusy(`backup-${kind}`);
     setMaintenanceConfirm(null);
-    if (kind !== "check") setMaintenanceDetail("backup");
     setMaintenanceActionResult(null);
     setMaintenanceBackupResult(null);
     let endpoint = "/system/backup/create";

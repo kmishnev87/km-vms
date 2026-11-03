@@ -363,7 +363,7 @@ export function SettingsMaintenanceModal({
             {!maintenanceOverview && !updateStatus && !updateApplyStatus ? <div className="settingsMaintenanceContent" role="status">{maintenanceError || t.checking}</div> : null}
 
             {maintenanceOverview || updateStatus || updateApplyStatus ? (
-              <div className="settingsMaintenanceContent">
+              <div className={`settingsMaintenanceContent${maintenanceBackupDetailOpen ? " is-backup-list" : ""}`}>
                 {!maintenanceBackupDetailOpen ? (
                   <>
                 <section className={`settingsMaintenanceOverall is-${maintenanceOverall.tone}`}>
@@ -576,10 +576,7 @@ export function SettingsMaintenanceModal({
                       </button>
                     </div>
                     <p className="settingsMaintenanceBackupScope">{t.maintenanceBackupScope}</p>
-                    {maintenanceBusy === "backup-page" && !maintenanceBackupDetail ? (
-                      <div className="settingsJournalEmpty">{t.checking}</div>
-                    ) : maintenanceBackupManager.artifacts.length ? (
-                      <div className="settingsMaintenanceBackupList">
+                    <div className="settingsMaintenanceBackupList">
                         <div className="settingsMaintenanceBackupListHead">
                           <span>{t.maintenanceBackupList}</span>
                           <span>
@@ -589,7 +586,10 @@ export function SettingsMaintenanceModal({
                               .replace("{total}", String(maintenanceBackupManager.totalCount))}
                           </span>
                         </div>
-                        {maintenanceBackupManager.artifacts.map((artifact) => (
+                        <div className="settingsMaintenanceBackupRows">
+                        {maintenanceBusy === "backup-page" && !maintenanceBackupDetail ? (
+                          <div className="settingsJournalEmpty" role="status">{t.checking}</div>
+                        ) : maintenanceBackupManager.artifacts.length ? maintenanceBackupManager.artifacts.map((artifact) => (
                           <article className={`settingsMaintenanceBackupItem ${artifact.hasProblem ? "is-problem" : ""}`} key={artifact.id}>
                             <div className="settingsMaintenanceBackupItemBody">
                               <div className="settingsMaintenanceBackupItemHead">
@@ -660,16 +660,14 @@ export function SettingsMaintenanceModal({
                                   </span>
                                 </div>
                               </div>
-                              {artifact.checkedAt || artifact.validatedAt ? (
-                                <small className="settingsMaintenanceBackupEvidenceTime">
-                                  {artifact.checkedAt ? t.maintenanceBackupCheckedAt.replace("{date}", artifact.checkedAt) : ""}
-                                  {artifact.checkedAt && artifact.validatedAt ? " · " : ""}
-                                  {artifact.validatedAt ? t.maintenanceBackupValidatedAt.replace("{date}", artifact.validatedAt) : ""}
-                                </small>
-                              ) : null}
+                              <small className="settingsMaintenanceBackupEvidenceTime">
+                                <span>{artifact.checkedAt ? t.maintenanceBackupCheckedAt.replace("{date}", artifact.checkedAt) : ""}</span>
+                                <span>{artifact.validatedAt ? t.maintenanceBackupValidatedAt.replace("{date}", artifact.validatedAt) : ""}</span>
+                              </small>
                             </div>
                           </article>
-                        ))}
+                        )) : <div className="settingsJournalEmpty">{t.maintenanceBackupStatusEmpty}</div>}
+                        </div>
                         <div className="settingsMaintenanceBackupPagination">
                           <span className="settingsMaintenanceIconAction" title={t.maintenanceBackupPrevious}>
                             <button
@@ -694,8 +692,7 @@ export function SettingsMaintenanceModal({
                             </button>
                           </span>
                         </div>
-                      </div>
-                    ) : <div className="settingsJournalEmpty">{t.maintenanceBackupStatusEmpty}</div>}
+                    </div>
                   </section>
                 )}
 

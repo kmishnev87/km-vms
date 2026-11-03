@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.27",
-  "tag": "v0.8.27",
-  "title": "Stable interface and camera workflows",
-  "summary": "Keep interface layouts stable, verify backups without extra dialogs, reliably delete camera recordings, and prepare stream details for the selected camera lens.",
+  "version": "0.8.28",
+  "tag": "v0.8.28",
+  "title": "ONVIF camera settings and stable maintenance",
+  "summary": "Read and change supported ONVIF camera settings through Media1 or Media2, verify the applied values, and keep backup operations in a stable maintenance list.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.27",
+  "source_ref": "v0.8.28",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,59 +20,51 @@
     "target_version": 10
   },
   "changelog": [
-    "Keep lists, video frames and overlapping dialogs stable during loading, errors and operation feedback.",
-    "Check database backups in the existing list without opening confirmation or result dialogs; retain real trial-restore validation.",
-    "Stop recording before deleting a camera archive, report exact outcomes and allow safe retry after a correctable failure.",
-    "Keep the system-health indicator stable during navigation while isolating sessions and permission failures.",
-    "Read stream characteristics on the connection step for the selected lens only; reject stale results after every lens switch.",
-    "Remove misleading saved-profile labels and reconcile recreated ONVIF profile tokens by exact stream path.",
-    "Show actual update preparation and build phases without invented percentages or extra background checks.",
-    "Preserve source acquisition for first installation when an external source directory has a runtime-like name.",
-    "Refresh historical frontend regression checks for current touch, timezone and shared-helper contracts."
+    "Read and change ONVIF video settings through discovered Media1 or Media2 services, including separate lenses and shared encoders.",
+    "Respect codec-dependent resolutions, frame rates, bitrates, GOP, quality and codec profiles while preserving the rest of the camera configuration.",
+    "Verify camera changes by reading them back; report refusals, mismatches and unknown results without inventing success or blindly resending writes.",
+    "Keep ONVIF controls in clear pairs: codec/profile, resolution/FPS, bitrate type/value and quality/GOP; remove the optional heading marker.",
+    "Keep backup creation, checks and deletion in the current maintenance list; retain deliberate confirmations and real trial-restore validation.",
+    "Stabilize backup rows, timestamps, badges, scrolling, pagination and keyboard focus without automatic result windows or frequent background checks.",
+    "Initialize camera clients without unnecessary event subscriptions; handle authentication clock offsets on the client without changing camera time."
   ],
   "title_i18n": {
-    "en": "Stable interface and camera workflows",
-    "ru": "Стабильный интерфейс и работа с камерами",
-    "zh-CN": "稳定界面与摄像机操作流程"
+    "en": "ONVIF camera settings and stable maintenance",
+    "ru": "Настройки ONVIF и устойчивое обслуживание",
+    "zh-CN": "ONVIF 摄像机设置与稳定维护界面"
   },
   "summary_i18n": {
-    "en": "Keep interface layouts stable, verify backups without extra dialogs, reliably delete camera recordings, and prepare stream details for the selected camera lens.",
-    "ru": "Устойчивый интерфейс, проверка резервных копий без лишних окон, надёжное удаление записей камеры и предварительное чтение потоков выбранного объектива.",
-    "zh-CN": "保持界面布局稳定，无需额外对话框即可验证备份，可靠删除摄像机录像，并提前读取所选镜头的码流参数。"
+    "en": "Read and change supported ONVIF camera settings through Media1 or Media2, verify the applied values, and keep backup operations in a stable maintenance list.",
+    "ru": "Чтение и изменение поддерживаемых настроек камер через ONVIF Media1/Media2, проверка применённых значений и устойчивый список резервных копий без лишних окон.",
+    "zh-CN": "通过 ONVIF Media1 或 Media2 读取和修改摄像机支持的设置，回读验证实际结果，并在稳定的维护列表中完成备份操作。"
   },
   "changelog_i18n": {
     "en": [
-      "Keep lists, video frames and overlapping dialogs stable during loading, errors and operation feedback.",
-      "Check database backups in the existing list without opening confirmation or result dialogs; retain real trial-restore validation.",
-      "Stop recording before deleting a camera archive, report exact outcomes and allow safe retry after a correctable failure.",
-      "Keep the system-health indicator stable during navigation while isolating sessions and permission failures.",
-      "Read stream characteristics on the connection step for the selected lens only; reject stale results after every lens switch.",
-      "Remove misleading saved-profile labels and reconcile recreated ONVIF profile tokens by exact stream path.",
-      "Show actual update preparation and build phases without invented percentages or extra background checks.",
-      "Preserve source acquisition for first installation when an external source directory has a runtime-like name.",
-      "Refresh historical frontend regression checks for current touch, timezone and shared-helper contracts."
+      "Read and change ONVIF video settings through discovered Media1 or Media2 services, including separate lenses and shared encoders.",
+      "Respect codec-dependent resolutions, frame rates, bitrates, GOP, quality and codec profiles while preserving the rest of the camera configuration.",
+      "Verify camera changes by reading them back; report refusals, mismatches and unknown results without inventing success or blindly resending writes.",
+      "Keep ONVIF controls in clear pairs: codec/profile, resolution/FPS, bitrate type/value and quality/GOP; remove the optional heading marker.",
+      "Keep backup creation, checks and deletion in the current maintenance list; retain deliberate confirmations and real trial-restore validation.",
+      "Stabilize backup rows, timestamps, badges, scrolling, pagination and keyboard focus without automatic result windows or frequent background checks.",
+      "Initialize camera clients without unnecessary event subscriptions; handle authentication clock offsets on the client without changing camera time."
     ],
     "ru": [
-      "Списки, видеоблоки и перекрывающиеся окна сохраняют расположение при загрузке, ошибках и показе результатов действий.",
-      "Проверка резервной копии выполняется в текущем списке без окон подтверждения и результата; настоящее пробное восстановление сохранено.",
-      "Перед удалением архива камеры запись останавливается; результат точный, после устранимого отказа действие можно безопасно повторить.",
-      "Значок состояния системы не мерцает при навигации; смена входа и отказы в доступе изолированы.",
-      "Характеристики потоков выбранного объектива читаются на шаге подключения; после каждого переключения устаревшие ответы отбрасываются.",
-      "Убрана ложная надпись о сохранённом профиле; изменившийся ONVIF token сопоставляется только по точному пути потока.",
-      "Обновление показывает реальные подэтапы подготовки и сборки без выдуманных процентов и дополнительного фонового опроса.",
-      "Первая установка корректно получает исходники из внешнего каталога с именем, похожим на служебную runtime-папку.",
-      "Регрессионные тесты актуализированы под действующие жесты, передачу времени и контракты общих вспомогательных модулей."
+      "Чтение и изменение видеонастроек через обнаруженные Media1/Media2, включая отдельные объективы и общие конфигурации кодирования.",
+      "Допустимые разрешения, FPS, битрейт, GOP, качество и профиль зависят от кодека; остальные настройки камеры сохраняются.",
+      "Результат изменения подтверждается повторным чтением; отказ, несовпадение и неизвестный результат не выдаются за успех, команда не повторяется вслепую.",
+      "Поля сгруппированы: кодек/профиль, разрешение/FPS, тип/значение битрейта, качество/GOP; отметка «Необязательно» убрана из заголовка.",
+      "Создание, проверка и удаление копий остаются в текущем списке; подтверждения действий и настоящее пробное восстановление сохранены.",
+      "Строки, даты, статусы, прокрутка, кнопки страниц и клавиатурный фокус устойчивы; автоматических окон результата и нового частого опроса нет.",
+      "Клиент камеры не создаёт лишние Events-подписки; расхождение часов при авторизации учитывается на стороне клиента без изменения времени камеры."
     ],
     "zh-CN": [
-      "加载、出错及操作反馈时，保持列表、视频区域和重叠对话框的布局稳定。",
-      "在当前列表中检查备份，不打开确认或结果对话框，并保留真实的临时数据库恢复验证。",
-      "删除摄像机归档前停止录像，准确报告结果，并允许在可修正的故障后安全重试。",
-      "导航时系统健康图标不再闪烁，同时隔离登录会话变化和权限拒绝。",
-      "在连接步骤仅读取所选镜头的码流参数，每次切换后丢弃过期响应。",
-      "移除误导性的已保存配置提示，仅依据准确的码流路径关联重新生成的 ONVIF 配置标识。",
-      "显示更新准备与构建的真实子阶段，不虚构进度百分比，也不增加后台轮询。",
-      "首次安装可正确从名称类似运行目录的外部目录获取源码。",
-      "更新前端回归测试，以覆盖当前的触控、时间传递和共享辅助模块契约。"
+      "通过自动发现的 Media1/Media2 服务读取和修改视频设置，正确区分镜头并识别共享编码器配置。",
+      "按编码格式处理分辨率、帧率、码率、GOP、质量和编码档次的有效选项，同时保留摄像机的其他配置。",
+      "写入后回读验证，准确区分拒绝、值不一致和结果未知，不虚报成功或盲目重复写入。",
+      "按编码/档次、分辨率/FPS、码率类型/数值、质量/GOP 配对排列控件，并移除标题中的可选提示。",
+      "创建、验证和删除备份均留在当前列表，保留必要的操作确认和真实的临时数据库恢复验证。",
+      "保持备份行、时间、状态、滚动、分页按钮和键盘焦点稳定，不自动打开结果窗口，也不新增频繁轮询。",
+      "初始化客户端时不创建多余的事件订阅；认证时在客户端处理时钟偏差，不修改摄像机时间。"
     ]
   }
 }

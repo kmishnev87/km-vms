@@ -169,11 +169,14 @@ def test_dahua_object_mapping_wrapper_and_zeep_shapes_return_current_truth(monke
         "bitrate": 4096,
         "iframe_interval": 50,
         "quality": 5.0,
+        "bitrate_mode": None,
+        "codec_profile": "High",
     }
     assert result["supported"]["resolution"]["options"] == ["3840x2160", "1920x1080"]
     assert result["supported"]["bitrate"]["range"] == {"min": 32, "max": 8192}
-    assert all(result["supported"][name]["readable"] for name in service.ONVIF_VIDEO_CONFIG_FIELDS)
-    assert all(result["supported"][name]["writable"] for name in service.ONVIF_VIDEO_CONFIG_FIELDS)
+    assert all(result["supported"][name]["readable"] for name in ("codec", "resolution", "fps", "bitrate", "iframe_interval", "quality", "codec_profile"))
+    assert all(result["supported"][name]["writable"] for name in ("codec", "resolution", "fps", "bitrate", "iframe_interval", "quality"))
+    assert result["supported"]["bitrate_mode"]["readable"] is False
     assert {"name", "value", "readable", "writable", "options", "range"} <= set(result["supported"]["codec"])
 
 

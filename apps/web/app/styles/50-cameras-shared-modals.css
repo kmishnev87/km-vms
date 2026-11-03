@@ -99,6 +99,9 @@
 .cameraFlowDevice > summary { font-weight: 600; }
 .cameraFlowDevice > summary span { margin-left: 8px; color: #64748b; font-weight: 400; font-size: 11px; }
 .cameraFlowDeviceBody { padding-top: 4px; }
+.cameraFlowDeviceBody .cameraFlowSettings > label { display: grid; grid-template-rows: minmax(17px, auto) 17px 39px; align-content: start; gap: 5px; min-height: 89px; }
+.cameraFlowDeviceBody .cameraFlowSettings :is(.input, .select, .cameraFlowReadonly) { height: 39px; min-height: 39px; }
+.cameraFlowSharedEncoder { display: block; color: #92400e; }
 .cameraFlowDeviceActions { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; margin: 14px 0; }
 .cameraFlowDeviceActions label { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; font-size: 12px; }
 .cameraFlowReadonly { display: block; padding: 9px 10px; background: #f1f5f9; border-radius: 6px; overflow-wrap: anywhere; }

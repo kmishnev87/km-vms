@@ -41,11 +41,14 @@ router = APIRouter()
 
 
 def onvif_config_http_detail(exc: Exception) -> dict:
-    return {
+    detail = {
         "code": getattr(exc, "code", None) or onvif_error_code(exc),
         "message": safe_onvif_error(exc),
         "raw_secret_exposed": False,
     }
+    if isinstance(exc, OnvifConfigurationError) and exc.current is not None:
+        detail["current"] = exc.current
+    return detail
 
 
 def get_active_camera_or_404(db: Session, camera_id: int) -> Camera:

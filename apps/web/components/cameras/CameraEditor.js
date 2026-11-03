@@ -29,13 +29,14 @@ function Field({ label, hint, children, wide = false }) {
 function streamDescription(profile, result, copy) {
   const measured = result?.video || profile?.rtsp_probe?.video;
   const video = measured || profile?.video;
-  const current = measured ? null : profile?.current || profile?.settings;
-  const rawFps = current?.fps || video?.fps;
+  const current = profile?.current || profile?.settings;
+  const configuredFps = current?.fps || (profile?.video_config_state === "ok" ? profile?.video?.fps : null);
+  const rawFps = configuredFps || video?.fps;
   const fraction = String(rawFps || "").match(/^(\d+)\/(\d+)$/);
   const fps = fraction && Number(fraction[2]) ? Math.round(Number(fraction[1]) / Number(fraction[2]) * 100) / 100 : rawFps;
   const parts = [current?.codec || video?.codec,
     current?.resolution || (video?.width && video?.height ? `${video.width} × ${video.height}` : ""),
-    fps ? `${fps} FPS` : "",
+    fps ? configuredFps ? copy.profileConfigFrameRateLimit.replace("{fps}", fps) : `${fps} FPS` : "",
   ].filter(Boolean);
   return parts.length ? parts.join(" · ") : copy.videoParametersUnavailable;
 }

@@ -427,9 +427,22 @@ export default function useCameraEditor(camera, copy, onSaved) {
 
   function refreshProfile(result) {
     const current = onvifConfigFromResult(result);
+    const oldProfile = deviceRef.current?.profiles?.find((profile) => profile.token === result.profile_token);
     setDevice((previous) => previous ? { ...previous, profiles: (previous.profiles || []).map((profile) => (
-      profile.token === result.profile_token ? { ...profile, current, settings: current, supported: result.supported || {} } : profile
+      profile.token === result.profile_token || result.shared_profile_tokens?.includes(profile.token) ? {
+        ...profile, current, settings: current, supported: result.supported || {},
+        video: { ...profile.video, ...Object.fromEntries(Object.entries(result.config || {}).filter(([, value]) => value != null)) },
+        ...(result.stream_path && profile.token === result.profile_token ? { stream_path: result.stream_path } : {}),
+      } : profile
     )) } : previous);
+    if (result.changed && result.stream_path && oldProfile) {
+      const updated = { ...formRef.current };
+      for (const role of ["main", "sub"]) {
+        if (updated[`onvif_${role === "main" ? "profile" : "sub_profile"}_token`] === result.profile_token
+          && updated[`rtsp_${role}_url`] === cameraProfilePath(oldProfile)) updated[`rtsp_${role}_url`] = result.stream_path;
+      }
+      replaceForm(updated);
+    }
   }
 
   const connectionChanged = deviceVideoChanged || cameraConnectionChanged(form, baseline.current, camera?.id);
