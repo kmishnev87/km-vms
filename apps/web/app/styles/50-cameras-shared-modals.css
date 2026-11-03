@@ -210,9 +210,11 @@
 }
 
 .videoZoomPanSurface.isZoomed {
-  touch-action: none;
+  touch-action: pan-y;
   cursor: grab;
 }
+
+.videoZoomPanSurface[data-video-zoom-fullscreen="true"] { touch-action: none; }
 
 .videoZoomPanSurface.isZoomed:active {
   cursor: grabbing;
@@ -343,6 +345,10 @@
 
 .archiveExportModal {
   width: min(720px, calc(100vw - 32px));
+  box-sizing: border-box;
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 22px;
   border-radius: 22px;
 }
@@ -403,7 +409,13 @@
 }
 
 .archiveExportStatus {
-  min-height: 34px;
+  height: 80px;
+  box-sizing: border-box;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
   padding: 8px 10px;
   border: 1px solid #bfdbfe;
   background: #eff6ff;
@@ -412,6 +424,12 @@
   font-size: 13px;
   font-weight: 700;
 }
+
+.archiveExportStatus.error { color: #b91c1c; border-color: #fecaca; background: #fef2f2; }
+.archiveExportResult { display: grid; gap: 10px; min-width: 0; }
+.archiveExportFile { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+.archiveExportResultActions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; }
+.archiveExportResultActions .select { min-width: 0; width: 100%; }
 
 .archiveExportModal .actions {
   margin-top: 4px;
@@ -427,6 +445,10 @@
 }
 
 @media (max-width: 720px) {
+  .archiveExportStatus { height: 100px; }
+  .archiveExportResultActions { grid-template-columns: 1fr 1fr; }
+  .archiveExportResultActions .select { grid-column: 1 / -1; }
+  .archiveExportResultActions .button { padding-inline: 8px; min-width: 0; font-size: 12px; }
   .archiveExportModal {
     width: calc(100vw - 24px);
     padding: 18px;

@@ -4,18 +4,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import ArchiveTilePlayer from "../../components/ArchiveTilePlayer";
 import ChronologyTimeline from "../../components/ChronologyTimeline";
-import { OperationToast } from "../../components/OperationFeedback";
+import ArchiveExportResult from "../../components/ArchiveExportResult";
+import useArchiveExport from "../../lib/useArchiveExport";
+import { reconcilePlaybackMembership, timelineRangeWindow, timelineRangeWindowCovers, timelineRangesNeedReload } from "../../lib/workspaceContinuity";
+import { OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
 import { apiFetch } from "../../lib/api";
 import {
   buildArchiveExportPayload,
   canExportRecordings,
   describeArchiveExportLimits,
-  downloadArchiveManifest,
   getArchiveExportLimits,
   normalizeChronologyDownloadError,
-  normalizeArchiveExportError,
-  runArchiveExportWorkflow,
-  saveBlobDownload,
   startChronologyCurrentRecordingDownload,
   validateArchiveExportSelection,
 } from "../../lib/archiveExports";
@@ -341,6 +340,7 @@ export default function ChronologyPage() {
   const playbackRequestIdRef = useRef(0);
   const rangesRequestIdRef = useRef(0);
   const loadedRangesWindowRef = useRef(null);
+  const rangesInFlightRef = useRef(null);
   const seekActionIdRef = useRef(0);
   const activeSeekActionRef = useRef(null);
   const playbackCoordinatorIdRef = useRef(0);
@@ -392,9 +392,10 @@ export default function ChronologyPage() {
   const [isTimelineCollapsed, setIsTimelineCollapsed] = useState(false);
   const [currentUser, setCurrentUser] = useState(null);
   const [exportModal, setExportModal] = useState(null);
-  const [exportBusy, setExportBusy] = useState(false);
-  const [exportStatus, setExportStatus] = useState("");
-  const [lastExportId, setLastExportId] = useState("");
+  const exportController = useArchiveExport();
+  const exportDraftRef = useRef(null);
+  const exportBusy = exportController.busy;
+  useModalBodyScrollLock(Boolean(exportModal));
   const [exportLimits, setExportLimits] = useState(null);
   const [quickDownloadBusy, setQuickDownloadBusy] = useState(false);
   const [downloadChooserOpen, setDownloadChooserOpen] = useState(false);
@@ -487,6 +488,8 @@ export default function ChronologyPage() {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       clearPlaybackCoordinatorTimers();
+      rangesInFlightRef.current?.controller.abort();
+      rangesRequestIdRef.current += 1;
     };
   }, []);
 
@@ -610,9 +613,9 @@ export default function ChronologyPage() {
     return result;
   }, [quickDownloadCameraIds, cameraMap]);
 
-  const selectedCameraKey = selectedCameraIds.join(",");
+  const selectedCameraKey = selectedCameraIds.slice().sort().join(",");
   const quickDownloadCameraKey = quickDownloadCameraIds.join(",");
-  const tileSourceKey = visibleTiles.map((tile) => `${tile.id}:${tile.cameraId}`).join("|");
+  const tileSourceKey = visibleTiles.map((tile) => `${tile.id}:${tile.cameraId}`).sort().join("|");
   const timelineTs = previewTs || currentTs;
   const canExport = canExportRecordings(currentUser);
 
@@ -1019,8 +1022,10 @@ export default function ChronologyPage() {
 
   function startSidebarPointerDrag(event, camera) {
     if (event.button !== 0) return;
-    if (event.target?.closest?.("button, select, input, textarea, a")) return;
-    if (event.pointerType !== "mouse") event.preventDefault();
+    const handle = Boolean(event.target?.closest?.("[data-sidebar-drag-handle]"));
+    if (!handle && event.target?.closest?.("button, select, input, textarea, a")) return;
+    const dragAllowed = event.pointerType !== "touch" || handle;
+    if (event.pointerType !== "mouse" && dragAllowed) event.preventDefault();
     if (event.pointerType === "mouse" && !event.nativeEvent?.sourceCapabilities?.firesTouchEvents) {
       sidebarTouchDoubleTapSuppressionRef.current = null;
     }
@@ -1032,8 +1037,10 @@ export default function ChronologyPage() {
       startX: event.clientX,
       startY: event.clientY,
       active: false,
+      dragAllowed,
+      handle,
     };
-    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    if (dragAllowed) event.currentTarget?.setPointerCapture?.(event.pointerId);
   }
 
   function updateSidebarPointerDrag(event) {
@@ -1041,6 +1048,7 @@ export default function ChronologyPage() {
     if (!state || state.pointerId !== event.pointerId) return;
     const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
     if (!state.active && distance < POINTER_DRAG_THRESHOLD_PX) return;
+    if (!state.dragAllowed) { sidebarPointerDragRef.current = null; lastSidebarTapRef.current = null; return; }
 
     if (!state.active) {
       state.active = true;
@@ -1090,6 +1098,7 @@ export default function ChronologyPage() {
     }
 
     clearSidebarPointerDrag();
+    if (state.handle) return;
     if (event.pointerType === "mouse") return;
     const now = Date.now();
     const point = { x: event.clientX, y: event.clientY };
@@ -1357,7 +1366,7 @@ export default function ChronologyPage() {
     const requestId = ++playbackRequestIdRef.current;
     const sourceTiles = tilesRef.current;
     const results = await Promise.all(
-      sourceTiles.map(async (tile) => [tile.id, await fetchPlaybackForTile(tile, ts, forceReload)])
+      sourceTiles.map(async (tile) => [tile.id, { ...await fetchPlaybackForTile(tile, ts, forceReload), sourceCameraId: String(tile.cameraId) }])
     );
 
     if (requestId !== playbackRequestIdRef.current) {
@@ -1368,6 +1377,7 @@ export default function ChronologyPage() {
     results.forEach(([tileId, value]) => {
       nextMap[tileId] = value;
     });
+    playbackMapRef.current = nextMap;
     setPlaybackMap(nextMap);
     return { applied: true };
   }
@@ -1422,12 +1432,11 @@ export default function ChronologyPage() {
 
   function openExportModal() {
     if (!canExport || exportBusy) return;
+    if (exportDraftRef.current) { setExportModal(exportDraftRef.current); return; }
     const center = timelineTs || currentTs || new Date(normalizeTargetTs());
     const start = new Date(center.getTime() - 15_000);
     const end = new Date(center.getTime() + 15_000);
     setError("");
-    setLastExportId("");
-    setExportStatus("");
     setExportModal({
       cameraId: "",
       title: `${TEXT.exportEvidence} ${formatPlaybackDateTime(center)}`,
@@ -1438,63 +1447,31 @@ export default function ChronologyPage() {
   }
 
   function closeExportModal() {
-    if (exportBusy) return;
+    exportDraftRef.current = exportModal;
+    exportController.stopWaiting();
     setExportModal(null);
-    setExportStatus("");
-    setLastExportId("");
   }
 
   async function submitExport() {
     if (!exportModal || exportBusy) return;
     if (!exportModal.cameraId) {
-      setError(TEXT.exportPickCamera);
-      setExportStatus(TEXT.exportPickCamera);
+      setOperationToast({ id: `clip-validation-${Date.now()}`, title: TEXT.exportPickCamera, tone: "warning" });
       return;
     }
     const validation = validateArchiveExportSelection(exportModal, exportLimits);
     if (validation) {
-      setError(validation);
-      setExportStatus(validation);
+      setOperationToast({ id: `clip-validation-${Date.now()}`, title: validation, tone: "warning" });
       return;
     }
-    try {
-      setError("");
-      setExportBusy(true);
-      setLastExportId("");
-      const payload = buildArchiveExportPayload(exportModal);
-      const result = await runArchiveExportWorkflow(payload, {
-        onStatus: (message, job) => {
-          setExportStatus(message);
-          if (job?.id) setLastExportId(job.id);
-        },
-      });
-      if (result?.job?.id) setLastExportId(result.job.id);
-      saveBlobDownload(result.clip.blob, result.clip.filename || "km-vms-clip.mkv");
-      setExportStatus(TEXT.exportReady);
+    setError("");
+    const payload = buildArchiveExportPayload(exportModal);
+    const result = await exportController.prepare(payload);
+    if (result) {
       setOperationToast({
         id: `chronology-clip-${result?.job?.id || Date.now()}`,
         title: TEXT.exportReady,
         tone: "success",
       });
-    } catch (err) {
-      const message = normalizeArchiveExportError(err.message);
-      setError(message);
-      setExportStatus(message);
-    } finally {
-      setExportBusy(false);
-    }
-  }
-
-  async function downloadLastManifest() {
-    if (!lastExportId || exportBusy) return;
-    try {
-      setExportBusy(true);
-      const manifest = await downloadArchiveManifest(lastExportId);
-      saveBlobDownload(manifest.blob, manifest.filename || "km-vms-clip-passport.json");
-    } catch (err) {
-      setError(normalizeArchiveExportError(err.message));
-    } finally {
-      setExportBusy(false);
     }
   }
 
@@ -1665,12 +1642,21 @@ export default function ChronologyPage() {
   }
 
   useEffect(() => {
-    if (!currentTs || !tileSourceKey) {
-      setPlaybackMap({});
-      return;
-    }
-
-    resolvePlaybackForTimestamp(formatProductTimestampParam(currentTs), true);
+    // Membership is not a seek. Keep every unchanged player's source/key and
+    // current position; only resolve newly added or reassigned tiles.
+    const requestId = ++playbackRequestIdRef.current;
+    const sourceTiles = tilesRef.current;
+    const { retained, missing } = reconcilePlaybackMembership(sourceTiles, playbackMapRef.current);
+    playbackMapRef.current = retained;
+    setPlaybackMap(retained);
+    if (!currentTs || !missing.length) return;
+    Promise.all(missing.map(async (tile) => [tile.id, { ...await fetchPlaybackForTile(tile, formatProductTimestampParam(currentTs), false), sourceCameraId: String(tile.cameraId) }]))
+      .then((results) => {
+        if (requestId !== playbackRequestIdRef.current) return;
+        const next = { ...retained, ...Object.fromEntries(results) };
+        playbackMapRef.current = next;
+        setPlaybackMap(next);
+      });
   }, [tileSourceKey]);
 
   useEffect(() => {
@@ -1679,11 +1665,12 @@ export default function ChronologyPage() {
   }, [currentTs, isPlaying]);
 
   useEffect(() => {
-    const requestId = ++rangesRequestIdRef.current;
-
     async function loadRanges() {
       if (!currentTs || !selectedCameraIds.length || isScrubbingRef.current) {
         if (!selectedCameraIds.length) {
+          rangesInFlightRef.current?.controller.abort();
+          rangesInFlightRef.current = null;
+          rangesRequestIdRef.current += 1;
           setRangesData({});
           setRangesLoading(false);
           setRangesError(false);
@@ -1699,21 +1686,29 @@ export default function ChronologyPage() {
       const fromMs = centerMs - halfMs;
       const toMs = centerMs + halfMs;
       const loaded = loadedRangesWindowRef.current;
-      const needsReload =
-        !loaded ||
-        loaded.zoomKey !== zoomKey ||
-        loaded.cameraKey !== selectedCameraKey ||
-        fromMs < loaded.fromMs ||
-        toMs > loaded.toMs ||
-        Math.abs(centerMs - loaded.centerMs) > spanMs * 0.25;
-
-      if (!needsReload) return;
+      const desired = { fromMs, toMs, zoomKey, cameraKey: selectedCameraKey };
+      if (timelineRangeWindowCovers(rangesInFlightRef.current, desired)) return;
+      if (rangesInFlightRef.current) {
+        rangesInFlightRef.current.controller.abort();
+        rangesInFlightRef.current = null;
+        rangesRequestIdRef.current += 1;
+      }
+      if (!timelineRangesNeedReload(loaded, desired, Date.now())) {
+        setRangesLoading(false);
+        return;
+      }
+      const requestId = ++rangesRequestIdRef.current;
+      const controller = new AbortController();
+      const window = { ...timelineRangeWindow(centerMs, spanMs), zoomKey, cameraKey: selectedCameraKey, controller };
+      rangesInFlightRef.current = window;
+      const hasCurrentData = loaded?.cameraKey === selectedCameraKey;
 
       try {
-        setRangesLoading(true);
-        setRangesError(false);
+        setRangesLoading(!timelineRangeWindowCovers(loaded, desired));
+        if (!hasCurrentData) { setRangesData({}); setRangesError(false); }
         const response = await apiFetch(
-          `/chronology/ranges?camera_ids=${selectedCameraKey}&from=${encodeURIComponent(formatProductTimestampParam(new Date(fromMs)))}&to=${encodeURIComponent(formatProductTimestampParam(new Date(toMs)))}`
+          `/chronology/ranges?camera_ids=${selectedCameraKey}&from=${encodeURIComponent(formatProductTimestampParam(new Date(window.fromMs)))}&to=${encodeURIComponent(formatProductTimestampParam(new Date(window.toMs)))}`,
+          { signal: controller.signal }
         );
 
         if (requestId !== rangesRequestIdRef.current) return;
@@ -1721,18 +1716,18 @@ export default function ChronologyPage() {
         setRangesData(response?.items || {});
         setRangesError(false);
         loadedRangesWindowRef.current = {
-          fromMs,
-          toMs,
-          centerMs,
+          fromMs: window.fromMs,
+          toMs: window.toMs,
+          fetchedAt: Date.now(),
           zoomKey,
           cameraKey: selectedCameraKey,
         };
       } catch (_) {
-        if (requestId !== rangesRequestIdRef.current) return;
-        setRangesData({});
+        if (requestId !== rangesRequestIdRef.current || controller.signal.aborted) return;
         setRangesError(true);
       } finally {
         if (requestId === rangesRequestIdRef.current) {
+          rangesInFlightRef.current = null;
           setRangesLoading(false);
         }
       }
@@ -2016,6 +2011,13 @@ export default function ChronologyPage() {
                 }}
               >
                 <div className="chronologyCameraName">{camera.name}</div>
+                <button type="button" className="workspaceSidebarDragHandle" data-sidebar-drag-handle="true" title="Перетащить камеру" aria-label={`Перетащить камеру: ${camera.name}`} onKeyDown={(event) => {
+                  if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+                  event.preventDefault();
+                  const index = orderedCameras.findIndex((item) => String(item.id) === String(camera.id));
+                  const target = orderedCameras[index + (event.key === "ArrowUp" ? -1 : 1)];
+                  if (target) reorderSidebarCamera(target.id, event.key === "ArrowUp" ? "before" : "after", camera.id);
+                }}>⠿</button>
                 <div className="chronologyCameraMeta">{camera.host}:{camera.port}</div>
               </div>
               );
@@ -2229,6 +2231,7 @@ export default function ChronologyPage() {
                       type="button"
                       className="chronologyTileButton"
                       title={TEXT.close}
+                      aria-label={TEXT.close}
                       onPointerDown={(event) => event.stopPropagation()}
                       onClick={() => removeTile(tile.id)}
                     >
@@ -2270,6 +2273,12 @@ export default function ChronologyPage() {
                       <div className="chronologyMissing">{TEXT.missing}</div>
                     )}
 
+                    {fullscreenTileId === tile.id ? (
+                      <div className="chronologyFullscreenIdentity" hidden={fullscreenControlsVisible} data-fullscreen-archive-context="true">
+                        <strong title={camera?.name || TEXT.camera}>{camera?.name || TEXT.camera}</strong>
+                        <span>Архив — {formatPlaybackDateTime(currentTs)}{!playback.hasVideo ? ` — ${TEXT.noArchiveAtTime}` : ""}</span>
+                      </div>
+                    ) : null}
                     {fullscreenTileId === tile.id ? (
                       <div
                         className="chronologyFullscreenControlsLayer"
@@ -2376,10 +2385,10 @@ export default function ChronologyPage() {
       </div>
       {exportModal ? (
         <div className="modalBackdrop">
-          <div className="modal archiveExportModal" onClick={(event) => event.stopPropagation()}>
+          <div className="modal archiveExportModal" role="dialog" aria-modal="true" aria-label={TEXT.exportTitle} onClick={(event) => event.stopPropagation()}>
             <div className="modalHeader">
               <h2 className="archiveExportTitle">{TEXT.exportTitle}</h2>
-              <button type="button" className="iconCloseButton" onClick={closeExportModal} disabled={exportBusy} aria-label={TEXT.close}>
+              <button type="button" className="iconCloseButton" onClick={closeExportModal} aria-label={TEXT.close}>
                 {"\u00d7"}
               </button>
             </div>
@@ -2437,13 +2446,10 @@ export default function ChronologyPage() {
                   />
                 </label>
               </div>
-              {exportStatus ? <div className="archiveExportStatus">{exportStatus}</div> : null}
+              <ArchiveExportResult controller={exportController} onClose={closeExportModal} />
               <div className="actions archiveExportActions">
                 <button type="button" className="button primary" onClick={submitExport} disabled={exportBusy}>
                   {TEXT.exportRun}
-                </button>
-                <button type="button" className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy} title={TEXT.exportManifestHelp}>
-                  {TEXT.exportManifest}
                 </button>
               </div>
             </div>

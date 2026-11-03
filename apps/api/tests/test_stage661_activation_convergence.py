@@ -192,6 +192,8 @@ def runtime(monkeypatch: pytest.MonkeyPatch):
         "schema_mutation_completed",
         lambda *_args, **_kwargs: True,
     )
+    monkeypatch.setattr(bridge, "verify_rollback_database", lambda *_args, **_kwargs: {"mode": "verified_original_schema"})
+    monkeypatch.setattr(bridge, "previous_runtime_ready", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(
         bridge,
         "attempt_terminal_release_cleanup",
@@ -262,7 +264,7 @@ def test_pointer_exception_before_replace_restores_previous_runtime(
         REQUEST_ID,
     )
 
-    assert result["phase"] == "blocked"
+    assert result["phase"] == "failed_rolled_back"
     assert result["failure_category"] == "active_pointer_switch_failed"
     assert engine.pointer == PREVIOUS["slot_id"]
     assert engine.switches == []
@@ -663,7 +665,7 @@ def test_schema_failure_restores_previous_runtime_before_blocking(
         REQUEST_ID,
     )
 
-    assert result["phase"] == "blocked"
+    assert result["phase"] == "failed_rolled_back"
     assert result["failure_category"] == "schema_update_failed"
     assert engine.pointer == PREVIOUS["slot_id"]
     assert runtime["reconcile"][-1] == PREVIOUS["slot_id"]
@@ -677,7 +679,7 @@ def test_schema_failure_keeps_precise_safe_reason_in_durable_journal(monkeypatch
     monkeypatch.setattr(bridge, "run_target_schema_migration", fail)
     monkeypatch.setattr(bridge, "schema_mutation_completed", lambda *_args, **_kwargs: False)
     result = bridge.converge_activation(engine, Path("/app"), "tnas-vms", REQUEST_ID)
-    assert result["phase"] == "blocked"
+    assert result["phase"] == "failed_rolled_back"
     assert result["failure_category"] == reason
     assert engine.pointer == PREVIOUS["slot_id"]
     assert runtime["reconcile"][-1] == PREVIOUS["slot_id"]

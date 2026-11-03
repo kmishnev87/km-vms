@@ -2,18 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
-import { OperationDialog, OperationToast } from "../../components/OperationFeedback";
+import { OperationDialog, OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
 import VideoZoomPanSurface from "../../components/VideoZoomPanSurface";
+import ArchiveExportResult from "../../components/ArchiveExportResult";
+import useArchiveExport from "../../lib/useArchiveExport";
 import { apiFetch, canDeleteRecordings, issueRecordingMediaToken } from "../../lib/api";
 import {
   buildArchiveExportPayload,
   canExportRecordings,
   describeArchiveExportLimits,
-  downloadArchiveManifest,
   getArchiveExportLimits,
-  normalizeArchiveExportError,
-  runArchiveExportWorkflow,
-  saveBlobDownload,
   validateArchiveExportSelection,
 } from "../../lib/archiveExports";
 import { useCurrentUser } from "../../lib/currentUser";
@@ -562,9 +560,10 @@ export default function RecordingsPage() {
   const [viewerRect, setViewerRect] = useState({ width: 0, height: 0 });
   const [viewerFullscreen, setViewerFullscreen] = useState(false);
   const [exportModal, setExportModal] = useState(null);
-  const [exportBusy, setExportBusy] = useState(false);
-  const [exportStatus, setExportStatus] = useState("");
-  const [lastExportId, setLastExportId] = useState("");
+  const exportController = useArchiveExport();
+  const exportDraftRef = useRef(null);
+  const exportBusy = exportController.busy;
+  useModalBodyScrollLock(Boolean(exportModal));
   const [exportLimits, setExportLimits] = useState(null);
 
   const requestIdRef = useRef(0);
@@ -890,10 +889,9 @@ export default function RecordingsPage() {
 
   function openExportModal() {
     if (!canExport) return;
+    if (exportDraftRef.current) { setExportModal(exportDraftRef.current); return; }
     const { startTs, endTs } = defaultClipRange(selectedDate, exportLimits);
     setError("");
-    setLastExportId("");
-    setExportStatus("");
     setExportModal({
       cameraId: "",
       title: t.createClip,
@@ -904,10 +902,9 @@ export default function RecordingsPage() {
   }
 
   function closeExportModal() {
-    if (exportBusy) return;
+    exportDraftRef.current = exportModal;
+    exportController.stopWaiting();
     setExportModal(null);
-    setExportStatus("");
-    setLastExportId("");
   }
 
   async function submitExport() {
@@ -921,59 +918,28 @@ export default function RecordingsPage() {
       exportLimits
     );
     if (!exportModal.cameraId) {
-      setError(t.exportPickCamera);
-      setExportStatus(t.exportPickCamera);
+      setOperationToast({ id: `clip-validation-${Date.now()}`, title: t.exportPickCamera, tone: "warning" });
       return;
     }
     if (validation) {
-      setError(validation);
-      setExportStatus(validation);
+      setOperationToast({ id: `clip-validation-${Date.now()}`, title: validation, tone: "warning" });
       return;
     }
-    try {
-      setError("");
-      setExportBusy(true);
-      setLastExportId("");
-      const payload = buildArchiveExportPayload({
+    setError("");
+    const payload = buildArchiveExportPayload({
         cameraId: exportModal.cameraId,
         startTs: exportModal.startTs,
         endTs: exportModal.endTs,
         title: exportModal.title,
         reason: exportModal.reason,
       });
-      const result = await runArchiveExportWorkflow(payload, {
-        onStatus: (message, job) => {
-          setExportStatus(message);
-          if (job?.id) setLastExportId(job.id);
-        },
-      });
-      if (result?.job?.id) setLastExportId(result.job.id);
-      saveBlobDownload(result.clip.blob, result.clip.filename || "km-vms-clip.mkv");
-      setExportStatus(t.exportReady);
+    const result = await exportController.prepare(payload);
+    if (result) {
       setOperationToast({
         id: `recordings-clip-${result?.job?.id || Date.now()}`,
         title: t.exportReady,
         tone: "success",
       });
-    } catch (err) {
-      const message = normalizeArchiveExportError(err.message);
-      setError(message);
-      setExportStatus(message);
-    } finally {
-      setExportBusy(false);
-    }
-  }
-
-  async function downloadLastManifest() {
-    if (!lastExportId || exportBusy) return;
-    try {
-      setExportBusy(true);
-      const manifest = await downloadArchiveManifest(lastExportId);
-      saveBlobDownload(manifest.blob, manifest.filename || "km-vms-clip-passport.json");
-    } catch (err) {
-      setError(normalizeArchiveExportError(err.message));
-    } finally {
-      setExportBusy(false);
     }
   }
 
@@ -1753,10 +1719,10 @@ export default function RecordingsPage() {
       ) : null}
       {exportModal ? (
         <div className="modalBackdrop">
-          <div className="modal archiveExportModal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal archiveExportModal" role="dialog" aria-modal="true" aria-label={t.exportTitle} onClick={(e) => e.stopPropagation()}>
             <div className="modalHeader">
               <h2 className="archiveExportTitle">{t.exportTitle}</h2>
-              <button className="iconCloseButton" onClick={closeExportModal} disabled={exportBusy} aria-label={t.close}>
+              <button className="iconCloseButton" onClick={closeExportModal} aria-label={t.close}>
                 {ICONS.close}
               </button>
             </div>
@@ -1814,13 +1780,10 @@ export default function RecordingsPage() {
                   />
                 </label>
               </div>
-              {exportStatus ? <div className="archiveExportStatus">{exportStatus}</div> : null}
+              <ArchiveExportResult controller={exportController} onClose={closeExportModal} />
               <div className="actions archiveExportActions">
                 <button className="button primary" onClick={submitExport} disabled={exportBusy}>
                   {t.exportRun}
-                </button>
-                <button className="button secondary" onClick={downloadLastManifest} disabled={!lastExportId || exportBusy} title={t.exportManifestHelp}>
-                  {t.exportManifest}
                 </button>
               </div>
             </div>

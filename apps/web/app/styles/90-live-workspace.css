@@ -261,13 +261,14 @@
 }
 
 .liveWorkspaceCameraItem {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: start;
   border: 1px solid #dbe3ef;
   border-radius: 10px;
   background: #f8fafc;
-  padding: 8px;
+  padding: 8px 34px 8px 8px;
   cursor: grab;
   touch-action: none;
   user-select: none;
@@ -598,8 +599,15 @@
 
 .liveWorkspaceTile.fullscreen .videoZoomPanSurface,
 .liveWorkspaceTileVideo:fullscreen .videoZoomPanSurface {
-  touch-action: none;
+  touch-action: pan-y;
 }
+
+.workspaceSidebarDragHandle {
+  position: absolute; right: 4px; top: calc(50% - 14px); width: 26px; height: 28px;
+  padding: 0; border: 0; border-radius: 6px; background: transparent; color: #64748b;
+  font-size: 22px; line-height: 1; cursor: grab; touch-action: none;
+}
+.workspaceSidebarDragHandle:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
 
 .liveWorkspaceTileVideo:fullscreen {
   width: 100vw;
@@ -735,12 +743,8 @@
 }
 
 @media (max-width: 1100px) {
-  .chronologyTimelineTimeLayer {
-    left: 10px;
-  }
-
-  .chronologyTimelineHeaderCenter {
-    left: 10px;
+  .chronologyTimelineFrame {
+    --chronology-axis-left: 10px;
   }
 
   .chronologyTimelineTrackRow {
@@ -758,6 +762,17 @@
 
   .chronologyTimelineStatus {
     left: 10px;
+  }
+}
+
+@media (max-width: 640px) {
+  .chronologyTimelineHeader {
+    height: 82px;
+    align-items: flex-start;
+  }
+
+  .chronologyTimelineHeaderCenter {
+    top: 34px;
   }
 }
 

@@ -26,7 +26,9 @@ from app.services.archive_exports import (
     prepare_archive_manifest_download,
     read_archive_export_manifest,
     serialize_archive_export_job,
+    archive_export_generation_active,
 )
+from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 
 router = APIRouter(prefix="/archive/exports", tags=["archive-exports"])
 
@@ -129,17 +131,18 @@ def get_export(
     job = db.get(ArchiveExportJob, export_id)
     if not job:
         raise HTTPException(status_code=404, detail="Export job not found")
-    return serialize_archive_export_job(job)
+    return {**serialize_archive_export_job(job), "can_resume": job.status == "running" and not archive_export_generation_active(db, job.id)}
 
 
 @router.post("/{export_id}/generate")
 def generate_export(
     export_id: str,
     request: Request,
+    resume: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
 ):
-    job = generate_archive_export_job(db, export_id=export_id, actor=current_user, request=request)
+    job = generate_archive_export_job(db, export_id=export_id, actor=current_user, request=request, resume_interrupted=resume)
     return serialize_archive_export_job(job)
 
 
@@ -176,6 +179,49 @@ def download_export(
         request=request,
     )
     return FileResponse(path, media_type=media_type, filename=filename)
+
+
+@router.post("/{export_id}/download-token")
+def issue_export_download_token(
+    export_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_permission(PERMISSION_EXPORT_RECORDINGS)),
+):
+    job = db.get(ArchiveExportJob, export_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Export job not found")
+    metadata = serialize_archive_export_job(job)
+    if not metadata["download_ready"]:
+        raise HTTPException(status_code=409, detail="manifest_not_ready")
+    # The file is fully verified on /file, once per download, not while issuing
+    # a small capability. Tokens are per artifact and recheck current user rights.
+    token, expires_at = create_media_token(
+        user=current_user, scope="archive-export-download",
+        resource={"export_id": export_id, "checksum": job.internal_checksum, "action": "download"},
+    )
+    return {**media_token_response(token, expires_at), "export_id": export_id,
+            "filename": metadata["filename"], "size_bytes": metadata["output_size_bytes"]}
+
+
+@router.get("/{export_id}/file")
+def download_export_file(
+    export_id: str, request: Request,
+    media_token: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    job = db.get(ArchiveExportJob, export_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Export job not found")
+    actor = validate_media_token(
+        db, token=media_token, scope="archive-export-download",
+        resource={"export_id": export_id, "checksum": job.internal_checksum, "action": "download"},
+        permission=PERMISSION_EXPORT_RECORDINGS, request=request, media_area="archive-export-download",
+    )
+    path, filename, media_type, _size = prepare_archive_export_download(
+        db, export_id=export_id, actor=actor, request=request,
+    )
+    return FileResponse(path, media_type=media_type, filename=filename,
+                        headers={"Cache-Control": "private, no-store", "Referrer-Policy": "no-referrer"})
 
 
 @router.get("/{export_id}/manifest/download")

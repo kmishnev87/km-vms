@@ -413,7 +413,7 @@
   align-items: center;
   justify-content: flex-start;
   gap: 10px;
-  min-height: 28px;
+  height: 48px;
   margin-bottom: 6px;
   position: relative;
 }
@@ -469,25 +469,27 @@
 
 .chronologyTimelineFrame {
   position: relative;
+  --chronology-axis-left: 188px;
+  --chronology-axis-right: 10px;
 }
 
 .chronologyTimelineTimeLayer {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 188px;
-  right: 10px;
+  left: var(--chronology-axis-left, 188px);
+  right: var(--chronology-axis-right, 10px);
   z-index: 4;
   pointer-events: none;
 }
 
 .chronologyTimelineHeaderCenter {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 188px;
-  right: 10px;
+  inset: 0 var(--chronology-axis-right, 10px) 0 var(--chronology-axis-left, 188px);
+  min-width: 0;
   pointer-events: none;
+  display: grid;
+  justify-items: center;
 }
 
 .chronologyTimelineAxis {
@@ -579,10 +581,8 @@
 }
 
 .chronologyTimelineCenterLabel {
-  position: absolute;
-  top: 2px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: static;
+  transform: none;
   z-index: 15;
   min-height: 22px;
   padding: 2px 8px;
@@ -592,13 +592,20 @@
   color: #1d4ed8;
   font-size: 11px;
   font-weight: 700;
-  display: inline-flex;
+  display: grid;
+  justify-items: center;
   align-items: center;
-  gap: 6px;
+  gap: 0;
+  line-height: 1.2;
+  box-sizing: border-box;
+  max-width: 100%;
+  width: max-content;
   white-space: nowrap;
   pointer-events: none;
   box-shadow: 0 6px 16px rgba(15, 23, 42, 0.08);
 }
+
+.chronologyTimelineOriginalTime { display: block; max-width: 100%; font-size: 9px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
 
 .chronologyTimelineCenterLabel.preview {
   border-color: rgba(14, 165, 233, 0.4);

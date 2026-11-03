@@ -198,7 +198,8 @@ function createNetworkError() {
 async function requestWithSafeNetworkError(url, options) {
   try {
     return await fetch(url, options);
-  } catch {
+  } catch (error) {
+    if (error?.name === "AbortError") throw error;
     throw createNetworkError();
   }
 }

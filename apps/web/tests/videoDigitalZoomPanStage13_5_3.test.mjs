@@ -427,7 +427,9 @@ test("Live, Chronology and Records use the shared zoom surface without permanent
   assert.equal(surface.includes("fullscreenMedia.style.transform = transform"), true);
   assert.equal(surface.includes("data-video-zoom-surface"), true);
   assert.equal(css.includes(".videoZoomPanIndicator"), true);
-  assert.match(css, /\.videoZoomPanSurface\.isZoomed \{[\s\S]*?touch-action: none;/);
+  assert.match(css, /\.videoZoomPanSurface\.isZoomed \{[\s\S]*?touch-action: pan-y;/);
+  assert.match(css, /data-video-zoom-fullscreen="true"[\s\S]*?touch-action: none;/);
+  assert.match(surface, /panEnabled: stateRef\.current\.scale > 1\.001 && surfaceFullscreenRef\.current/);
   assert.doesNotMatch(css, /\.videoZoomPan.*button/i);
 });
 

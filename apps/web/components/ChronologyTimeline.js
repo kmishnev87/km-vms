@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { selectTimelineLabels } from "../lib/workspaceContinuity";
 
 const ZOOM_OPTIONS = [
   { key: "24h", label: "24ч", hours: 24, majorEveryMinutes: 60, minorEveryMinutes: 30 },
@@ -89,8 +90,20 @@ export default function ChronologyTimeline({
   compact = false,
 }) {
   const rootRef = useRef(null);
+  const axisRef = useRef(null);
   const dragStateRef = useRef(null);
   const [dragging, setDragging] = useState(false);
+  const [axisWidth, setAxisWidth] = useState(0);
+  useEffect(() => {
+    const axis = axisRef.current;
+    if (!axis) return;
+    const measure = () => setAxisWidth(axis.getBoundingClientRect().width);
+    measure();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
+    observer?.observe(axis);
+    window.addEventListener("resize", measure);
+    return () => { observer?.disconnect(); window.removeEventListener("resize", measure); };
+  }, []);
 
   const zoom = ZOOM_OPTIONS.find((item) => item.key === zoomKey) || ZOOM_OPTIONS[0];
   const committedMs = committedTs ? committedTs.getTime() : Number.NaN;
@@ -125,6 +138,7 @@ export default function ChronologyTimeline({
       axisMarks: marks,
     };
   }, [currentTs, zoom]);
+  const labeledMarks = useMemo(() => selectTimelineLabels(axisMarks, axisWidth), [axisMarks, axisWidth]);
 
   const committedLeftPct = Number.isFinite(committedMs)
     ? ((committedMs - startMs) / (endMs - startMs)) * 100
@@ -155,13 +169,15 @@ export default function ChronologyTimeline({
   function handlePointerDown(event) {
     if (event.button !== 0) return;
 
-    const rect = rootRef.current?.getBoundingClientRect();
-    if (!rect) return;
+    if (event.target?.closest?.(".chronologyTimelineTrackLabel")) return;
+    const rect = axisRef.current?.getBoundingClientRect();
+    if (!rect || event.clientX < rect.left || event.clientX > rect.right) return;
 
     event.currentTarget?.setPointerCapture?.(event.pointerId);
     dragStateRef.current = {
       pointerId: event.pointerId,
       startClientX: event.clientX,
+      startClientY: event.clientY,
       startCenterMs: currentTs ? currentTs.getTime() : Date.now(),
       startMs,
       endMs,
@@ -176,6 +192,11 @@ export default function ChronologyTimeline({
     if (!state || state.pointerId !== event.pointerId) return;
 
     const deltaX = event.clientX - state.startClientX;
+    if (!state.active && event.pointerType === "touch" && Math.abs(event.clientY - state.startClientY) > Math.max(DRAG_THRESHOLD_PX, Math.abs(deltaX))) {
+      dragStateRef.current = null;
+      event.currentTarget?.releasePointerCapture?.(event.pointerId);
+      return;
+    }
     if (!state.active && Math.abs(deltaX) < DRAG_THRESHOLD_PX) {
       return;
     }
@@ -251,6 +272,7 @@ export default function ChronologyTimeline({
             <div className={`chronologyTimelineCenterLabel ${isPreviewing ? "preview" : ""}`}>
               <span className="chronologyTimelineStateText">{isPreviewing ? "Предпросмотр" : "Выбрано"}</span>
               <span>{currentTimeLabel || "—"}</span>
+              <small className="chronologyTimelineOriginalTime">{isPreviewing ? `Было: ${committedTimeLabel || "—"}` : "\u00a0"}</small>
             </div>
           </div>
         </div>
@@ -259,13 +281,14 @@ export default function ChronologyTimeline({
           ref={rootRef}
           className={`chronologyTimelineBody ${dragging ? "isDragging" : ""}`}
           data-chronology-timeline-pointer="true"
+          aria-busy={rangesLoading}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={(event) => finishPointerInteraction(event)}
           onPointerCancel={(event) => finishPointerInteraction(event, true)}
         >
           <div className="chronologyTimelineTimeLayer">
-            <div className="chronologyTimelineAxis">
+            <div className="chronologyTimelineAxis" ref={axisRef}>
               {axisMarks.map((mark) => (
                 <div
                   key={`${mark.ms}-${mark.isMajor ? "major" : "minor"}`}
@@ -273,7 +296,7 @@ export default function ChronologyTimeline({
                   style={{ left: `${mark.leftPct}%` }}
                 >
                   <div className="chronologyTimelineAxisLine" />
-                  {mark.isMajor && mark.tickLabel ? (
+                  {labeledMarks.has(mark.ms) ? (
                     <div className={`chronologyTimelineAxisLabel ${mark.tickLabel.multiline ? "multiline" : ""}`}>
                       <span>{mark.tickLabel.primary}</span>
                       {mark.tickLabel.secondary ? <span>{mark.tickLabel.secondary}</span> : null}
@@ -285,17 +308,12 @@ export default function ChronologyTimeline({
 
             <div className="chronologyTimelineCenterLine" />
             {showCommittedMarker ? (
-              <div className="chronologyTimelineCommittedMarker" style={{ left: `${committedLeftPct}%` }}>
+              <div className="chronologyTimelineCommittedMarker" style={{ left: `${committedLeftPct}%` }} title={`Выбрано: ${committedTimeLabel || "—"}`}>
                 <div className="chronologyTimelineCommittedLine" />
-                <div className="chronologyTimelineCommittedLabel">
-                  <span>Выбрано</span>
-                  <span>{committedTimeLabel || "—"}</span>
-                </div>
               </div>
             ) : null}
           </div>
 
-          {rangesLoading ? <div className="chronologyTimelineStatus">Загружаем диапазоны архива...</div> : null}
           {rangesError ? <div className="chronologyTimelineStatus error">Диапазоны архива сейчас недоступны</div> : null}
           {showNoRangeState ? <div className="chronologyTimelineStatus">Нет архивных диапазонов в выбранном окне</div> : null}
 

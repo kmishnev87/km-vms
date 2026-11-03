@@ -681,8 +681,8 @@ def resolve_authority(
         code = getattr(active_error, "code", "active_pointer_missing")
         raise BootstrapError(code, "Canonical active release is unavailable.")
     phase = journal["phase"]
-    if phase == "blocked":
-        raise BootstrapError("activation_blocked", "Activation is blocked and cannot be guessed.")
+    if phase == "blocked" and not repair:
+        raise BootstrapError("activation_blocked", "Activation needs verified recovery before retrying.")
     if phase in {"completed", "failed_rolled_back"}:
         binding = journal["target"] if phase == "completed" else journal["previous"]
         if not _binding_matches(engine, app_dir, binding):
@@ -714,7 +714,7 @@ def resolve_authority(
             app_dir / "data/update-runtime/slots" / active[0],
             expected_slot_id=active[0],
         )
-    if phase not in NONTERMINAL_ACTIVATION_PHASES:
+    if phase not in NONTERMINAL_ACTIVATION_PHASES and phase != "blocked":
         raise BootstrapError("activation_phase_invalid", "Activation phase is unsupported.")
     if not repair:
         raise BootstrapError(
@@ -751,6 +751,9 @@ def resolve_authority(
     )
     if result.returncode != 0:
         raise BootstrapError("activation_recovery_failed", "Existing activation convergence failed.")
+    recovered = engine.read_activation_journal(app_dir)
+    if recovered["phase"] == "blocked":
+        raise BootstrapError("activation_blocked", "Database recovery is still required. Restore a verified backup or complete recovery before retrying; failure history is preserved.")
     return resolve_authority(app_dir, project_name=project, repair=True)
 
 

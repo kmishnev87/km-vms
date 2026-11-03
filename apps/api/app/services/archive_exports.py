@@ -6,13 +6,14 @@ import shutil
 import subprocess
 import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import or_
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -131,6 +132,44 @@ def _generation_lock(job_id: str) -> threading.Lock:
             lock = threading.Lock()
             _GENERATION_LOCKS[job_id] = lock
         return lock
+
+
+def _generation_lease_key(export_id: str) -> int:
+    # Session-scoped, per export; not the global schema lock. No new table,
+    # queue, heartbeat process or durable lock-file collection.
+    import hashlib
+    return int.from_bytes(hashlib.sha256(("km-vms-export:" + export_id).encode()).digest()[:8], "big", signed=True)
+
+
+@contextmanager
+def _generation_database_lease(db: Session, export_id: str):
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        yield
+        return
+    with bind.connect() as connection:
+        acquired = connection.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": _generation_lease_key(export_id)}).scalar_one()
+        if not acquired:
+            raise _safe_error(409, "Export job is already generating")
+        connection.commit()
+        try:
+            yield
+        finally:
+            connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _generation_lease_key(export_id)})
+            connection.commit()
+
+
+def archive_export_generation_active(db: Session, export_id: str) -> bool:
+    if _generation_lock(export_id).locked():
+        return True
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return False
+    with bind.connect() as connection:
+        acquired = connection.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": _generation_lease_key(export_id)}).scalar_one()
+        if acquired:
+            connection.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": _generation_lease_key(export_id)})
+        return not acquired
 
 
 def _safe_public_message(error_code: str) -> str:
@@ -650,11 +689,16 @@ def generate_archive_export_job(
     export_id: str,
     actor: User,
     request=None,
+    resume_interrupted: bool = False,
 ) -> ArchiveExportJob:
     lock = _generation_lock(export_id)
     if not lock.acquire(blocking=False):
         raise _safe_error(409, "Export job is already generating")
+    lease = _generation_database_lease(db, export_id)
+    lease_acquired = False
     try:
+        lease.__enter__()
+        lease_acquired = True
         job = db.get(ArchiveExportJob, export_id)
         if not job:
             raise _safe_error(404, "Export job not found")
@@ -664,9 +708,9 @@ def generate_archive_export_job(
             return job
         if job.status == EXPORT_STATUS_EXPIRED:
             raise _safe_error(409, "Export job is expired")
-        if job.status == EXPORT_STATUS_RUNNING:
+        if job.status == EXPORT_STATUS_RUNNING and not resume_interrupted:
             raise _safe_error(409, "Export job is already generating")
-        if job.status != EXPORT_STATUS_QUEUED:
+        if job.status not in {EXPORT_STATUS_QUEUED, EXPORT_STATUS_RUNNING}:
             raise _safe_error(409, "Export job status does not allow generation")
 
         output_path: Path | None = None
@@ -702,7 +746,15 @@ def generate_archive_export_job(
             root = _export_root()
             output_dir = _safe_child(root, EXPORT_OUTPUT_DIR)
             output_dir.mkdir(parents=True, exist_ok=True)
-            temp_dir = _safe_child(root, EXPORT_TEMP_DIR, f"stage11_stage2_{uuid.uuid4().hex}")
+            temp_root = _safe_child(root, EXPORT_TEMP_DIR)
+            # Only directories named for this exact job, from an interrupted
+            # previous generation. Never touch source recordings or other jobs.
+            if resume_interrupted and temp_root.is_dir():
+                for stale in temp_root.iterdir():
+                    if stale.name.startswith(f"stage11_stage2_{job.id}_") and stale.is_dir() and not stale.is_symlink():
+                        _safe_child(root, EXPORT_TEMP_DIR, stale.name)
+                        shutil.rmtree(stale)
+            temp_dir = _safe_child(root, EXPORT_TEMP_DIR, f"stage11_stage2_{job.id}_{uuid.uuid4().hex}")
             temp_dir.mkdir(parents=True, exist_ok=False)
             output_path = _safe_child(output_dir, f"stage11_clip_{job.id}.mkv")
             part_paths = [_safe_child(temp_dir, f"part_{index:03d}.mkv") for index, _source in enumerate(sources)]
@@ -804,7 +856,11 @@ def generate_archive_export_job(
             if temp_dir and temp_dir.exists():
                 shutil.rmtree(temp_dir, ignore_errors=True)
     finally:
-        lock.release()
+        try:
+            if lease_acquired:
+                lease.__exit__(None, None, None)
+        finally:
+            lock.release()
 
 
 def _manifest_output_metadata(db: Session, job: ArchiveExportJob) -> tuple[Path, dict[str, Any]]:
@@ -1049,6 +1105,12 @@ def read_archive_export_manifest(db: Session, *, export_id: str) -> dict[str, An
     job = db.get(ArchiveExportJob, export_id)
     if not job:
         raise _safe_error(404, "Export job not found")
+    _output_path, output = _manifest_output_metadata(db, job)
+    return _read_manifest_for_validated_output(job, output)
+
+
+def _read_manifest_for_validated_output(job: ArchiveExportJob, output: dict[str, Any]) -> dict[str, Any]:
+    """Reuse one file verification within a request, never skip integrity checks."""
     try:
         manifest_path = _path_from_internal(job.internal_manifest_path)
     except RuntimeError as exc:
@@ -1056,7 +1118,6 @@ def read_archive_export_manifest(db: Session, *, export_id: str) -> dict[str, An
     if not manifest_path or not manifest_path.exists() or not manifest_path.is_file():
         raise _safe_error(409, "manifest_missing")
     manifest = _read_manifest_file(manifest_path)
-    _output_path, output = _manifest_output_metadata(db, job)
     manifest_checksum = str((manifest.get("integrity") or {}).get("generated_clip_sha256") or "")
     if manifest_checksum != output["sha256"] or str((manifest.get("output") or {}).get("sha256") or "") != output["sha256"]:
         raise _safe_error(409, "checksum_mismatch")
@@ -1071,7 +1132,7 @@ def prepare_archive_export_download(db: Session, *, export_id: str, actor: User,
         raise _safe_error(404, "Export job not found")
     output_path, output = _manifest_output_metadata(db, job)
     try:
-        read_archive_export_manifest(db, export_id=export_id)
+        _read_manifest_for_validated_output(job, output)
     except HTTPException as exc:
         if exc.status_code == 409 and exc.detail == "manifest_missing":
             raise _safe_error(409, "manifest_not_ready") from exc
@@ -1256,6 +1317,7 @@ def serialize_archive_export_job(job: ArchiveExportJob) -> dict[str, Any]:
         "clip_ready": ready,
         "manifest_ready": bool(ready and manifest_exists),
         "download_ready": bool(ready and manifest_exists),
+        "filename": _safe_download_filename(job, output_container or "mkv") if ready else None,
         "output_container": output_container,
         "output_size_bytes": output_size,
     }

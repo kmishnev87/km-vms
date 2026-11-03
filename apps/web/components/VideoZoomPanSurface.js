@@ -62,6 +62,8 @@ export default function VideoZoomPanSurface({
   const onZoomActiveChangeRef = useRef(onZoomActiveChange);
   const styledFullscreenMediaRef = useRef(null);
   const [fullscreenMedia, setFullscreenMedia] = useState(null);
+  const [surfaceFullscreen, setSurfaceFullscreen] = useState(false);
+  const surfaceFullscreenRef = useRef(false);
   const [zoomState, setZoomState] = useState({ ...DEFAULT_VIDEO_ZOOM_STATE });
 
   onZoomActiveChangeRef.current = onZoomActiveChange;
@@ -116,6 +118,22 @@ export default function VideoZoomPanSurface({
   useEffect(() => {
     const element = surfaceRef.current;
     if (!element) return undefined;
+    // Claim only a two-finger video gesture. A single finger remains normal
+    // page scroll, including when the inline video was previously zoomed.
+    const ownMultiTouch = (event) => {
+      if (event.touches.length >= 2) { event.preventDefault(); event.stopPropagation(); }
+    };
+    element.addEventListener("touchstart", ownMultiTouch, { passive: false });
+    element.addEventListener("touchmove", ownMultiTouch, { passive: false });
+    return () => {
+      element.removeEventListener("touchstart", ownMultiTouch);
+      element.removeEventListener("touchmove", ownMultiTouch);
+    };
+  }, []);
+
+  useEffect(() => {
+    const element = surfaceRef.current;
+    if (!element) return undefined;
     const handleNativeDoubleClickCapture = (event) => {
       consumeTouchCompatibilityDoubleClick(event);
     };
@@ -152,6 +170,9 @@ export default function VideoZoomPanSurface({
     function handleFullscreenChange() {
       const surface = surfaceRef.current;
       const fullscreenElement = document.fullscreenElement;
+      const active = Boolean(surface && fullscreenElement && (fullscreenElement === surface || fullscreenElement.contains(surface) || surface.contains(fullscreenElement)));
+      surfaceFullscreenRef.current = active;
+      setSurfaceFullscreen(active);
       if (!surface || !fullscreenElement || !surface.contains(fullscreenElement)) {
         setFullscreenMedia(null);
         return;
@@ -269,7 +290,7 @@ export default function VideoZoomPanSurface({
       pointerId: pointer.id,
       point: { x: pointer.clientX, y: pointer.clientY },
       time: now,
-      panEnabled: stateRef.current.scale > 1.001,
+      panEnabled: stateRef.current.scale > 1.001 && surfaceFullscreenRef.current,
     });
     touchGestureRef.current = transition.state;
     if (isTouchDoubleTap(lastTouchTapRef.current, {
@@ -454,6 +475,7 @@ export default function VideoZoomPanSurface({
       data-video-zoom-scale={zoomState.scale.toFixed(3)}
       data-video-zoom-pan={`${Math.round(zoomState.panX)},${Math.round(zoomState.panY)}`}
       data-video-zoom-max={String(maxZoom)}
+      data-video-zoom-fullscreen={surfaceFullscreen ? "true" : "false"}
       data-video-touch-owner="true"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}

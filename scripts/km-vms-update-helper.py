@@ -880,6 +880,7 @@ def error_payload(category: str) -> dict[str, str]:
         "previous_recovery_failed": "The previous release could not be restored after a pre-activation failure.",
         "activation_pointer_conflict": "Release activation state is contradictory.",
         "activation_journal_invalid": "Release activation state is unavailable or invalid.",
+        "activation_recovery_required": "Previous update requires verified recovery.",
     }
     if category in {
         "target_health_failed",
@@ -889,6 +890,8 @@ def error_payload(category: str) -> dict[str, str]:
         operator_action = (
             "The previous release was restored. Review the target failure before retrying."
         )
+    elif category == "activation_recovery_required":
+        operator_action = "Verify database and deployment configuration, complete recovery, then retry. Failure history is preserved."
     elif category == "slot_adoption_conflict":
         operator_action = (
             "Verify the installed source and runtime state before retrying."
@@ -1379,8 +1382,10 @@ def resolve_update_source_dir(app_dir: Path) -> Path:
             env=os.environ.copy(),
             text=True,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
+            stderr=subprocess.PIPE,
+            # Canonical recovery can verify/restart the previous runtime. It
+            # has its own bounded deadline; do not kill its owner at 10 seconds.
+            timeout=1860,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1398,6 +1403,8 @@ def resolve_update_source_dir(app_dir: Path) -> Path:
         or "\n" in source_text
         or "\r" in source_text
     ):
+        if resolved.returncode != 0 and re.search(r"^ERROR \[activation_blocked\]:", resolved.stderr or "", re.MULTILINE):
+            raise HelperError("activation_recovery_required", "Previous update requires verified recovery. Check database and deployment configuration before retrying; failure history is preserved.")
         raise HelperError(
             "helper_active_source_resolver_failed",
             "Active release source could not be resolved.",

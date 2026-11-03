@@ -624,8 +624,10 @@ export default function LivePage() {
 
   function startSidebarPointerDrag(event, camera, stream) {
     if (event.button !== 0) return;
-    if (event.target?.closest?.("button, select, input, textarea, a")) return;
-    if (event.pointerType !== "mouse") event.preventDefault();
+    const handle = Boolean(event.target?.closest?.("[data-sidebar-drag-handle]"));
+    if (!handle && event.target?.closest?.("button, select, input, textarea, a")) return;
+    const dragAllowed = event.pointerType !== "touch" || handle;
+    if (event.pointerType !== "mouse" && dragAllowed) event.preventDefault();
     if (event.pointerType === "mouse" && !event.nativeEvent?.sourceCapabilities?.firesTouchEvents) {
       sidebarTouchDoubleTapSuppressionRef.current = null;
     }
@@ -638,8 +640,10 @@ export default function LivePage() {
       startX: event.clientX,
       startY: event.clientY,
       active: false,
+      dragAllowed,
+      handle,
     };
-    event.currentTarget?.setPointerCapture?.(event.pointerId);
+    if (dragAllowed) event.currentTarget?.setPointerCapture?.(event.pointerId);
   }
 
   function updateSidebarPointerDrag(event) {
@@ -647,6 +651,7 @@ export default function LivePage() {
     if (!state || state.pointerId !== event.pointerId) return;
     const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
     if (!state.active && distance < POINTER_DRAG_THRESHOLD_PX) return;
+    if (!state.dragAllowed) { sidebarPointerDragRef.current = null; lastSidebarTapRef.current = null; return; }
 
     if (!state.active) {
       state.active = true;
@@ -696,6 +701,7 @@ export default function LivePage() {
     }
 
     clearSidebarPointerDrag();
+    if (state.handle) return;
     if (event.pointerType === "mouse") return;
     const now = Date.now();
     const point = { x: event.clientX, y: event.clientY };
@@ -1084,6 +1090,13 @@ export default function LivePage() {
                   }}
                 >
                   <div className="liveWorkspaceCameraName">{camera.name}</div>
+                  <button type="button" className="workspaceSidebarDragHandle" data-sidebar-drag-handle="true" title="Перетащить камеру" aria-label={`Перетащить камеру: ${camera.name}`} onKeyDown={(event) => {
+                    if (!["ArrowUp", "ArrowDown"].includes(event.key)) return;
+                    event.preventDefault();
+                    const index = orderedCameras.findIndex((item) => String(item.id) === String(camera.id));
+                    const target = orderedCameras[index + (event.key === "ArrowUp" ? -1 : 1)];
+                    if (target) reorderSidebarCamera(target.id, event.key === "ArrowUp" ? "before" : "after", camera.id);
+                  }}>⠿</button>
                   <div className="liveWorkspaceCameraMeta">
                     <span className="liveWorkspaceCameraEndpoint">{camera.host}:{camera.port}</span>
                     <span className="liveWorkspaceStreamInfo" aria-label="Streams">
@@ -1195,6 +1208,7 @@ export default function LivePage() {
                     type="button"
                     className="liveWorkspaceIconButton"
                     title={TEXT.close}
+                    aria-label={TEXT.close}
                     onPointerDown={(event) => event.stopPropagation()}
                     onClick={() => removeTile(tile.id)}
                   >

@@ -1236,6 +1236,36 @@ def _normalized_compose_digest(
     source_dir: Path,
 ) -> str:
     normalized = rendered.replace("\r\n", "\n")
+    try:
+        payload = json.loads(normalized)
+    except (TypeError, ValueError):
+        payload = None  # Older NAS Compose can still return YAML for --format json.
+    if isinstance(payload, dict):
+        def defaults(value: Any) -> Any:
+            if isinstance(value, list):
+                return [defaults(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            result = {key: defaults(item) for key, item in value.items()}
+            if result.get("type") == "bind" and "source" in result and "target" in result:
+                # Compose's documented default is true. Explicit false and all
+                # other mount/security settings remain part of the fingerprint.
+                result["bind"] = {"create_host_path": True, **result.get("bind", {})}
+            return result
+        payload = defaults(payload)
+        for service in payload.get("services", {}).values():
+            environment = service.get("environment", {})
+            for key in ("KMVMS_UPDATE_SOURCE_PRIVATE", "KM_VMS_GITHUB_PRIVATE"):
+                if key in environment and str(environment[key]).lower() in {"0", "1", "true", "false"}:
+                    environment[key] = str(environment[key]).lower() in {"1", "true"}
+            if "KM_VMS_UPDATE_CONTROL_REQUEST_ID" in environment:
+                request = str(environment["KM_VMS_UPDATE_CONTROL_REQUEST_ID"] or "")
+                if request and not REQUEST_ID_RE.fullmatch(request):
+                    raise BridgeError("slot_compose_evidence_failed", "Compose request authority is invalid.")
+                # Per-operation identity is checked against the journal/request,
+                # not treated as an immutable installation configuration option.
+                environment["KM_VMS_UPDATE_CONTROL_REQUEST_ID"] = REQUEST_ID_COMPOSE_TOKEN
+        normalized = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     source_text = str(source_dir.resolve())
     app_text = str(app_dir.resolve())
     mapped_source_text = str(
@@ -1529,7 +1559,7 @@ def capture_pre_update_slot_evidence(
         include_archive_override=True,
     )
     config = run_command(
-        [*compose, "config"],
+        [*compose, "config", "--format", "json"],
         timeout=60,
         error_code="slot_compose_evidence_failed",
         error_message="Current Compose plan could not be captured before target build.",
@@ -1926,7 +1956,7 @@ def prepare_legacy_adopted_slot(
             include_archive_override=True,
         )
         slot_config = run_command(
-            [*slot_compose, "config"],
+            [*slot_compose, "config", "--format", "json"],
             timeout=60,
             error_code="slot_compose_evidence_failed",
             error_message="Adopted slot Compose plan could not be validated.",
@@ -2556,7 +2586,7 @@ def canonical_slot_deployment_context(
         with_image_override=False,
     )
     config = run_command(
-        [*compose, "config"],
+        [*compose, "config", "--format", "json"],
         timeout=60,
         error_code="slot_compose_evidence_failed",
         error_message="Release-slot Compose plan is unavailable.",
@@ -2732,6 +2762,10 @@ def verify_slot_runtime(
                 )
             return
         except BridgeError as exc:
+            if exc.code in {"slot_runtime_evidence_mismatch", "slot_runtime_identity_mismatch", "slot_runtime_image_mismatch"}:
+                # A deterministic identity/config mismatch cannot heal by
+                # repeating the same comparison for three minutes.
+                raise
             last_error = exc
             time.sleep(2)
     if last_error is not None:
@@ -3402,6 +3436,13 @@ def block_activation(
     *,
     rollback_trigger: str | None = None,
 ) -> dict[str, Any]:
+    existing = engine.read_activation_journal(app_dir)
+    # The first failure is immutable history. A failed recovery must not erase
+    # it or make the journal invalid by replacing its bounded cause.
+    if existing.get("failure_category"):
+        category = existing["failure_category"]
+    if existing.get("rollback_trigger"):
+        rollback_trigger = existing["rollback_trigger"]
     return transition_journal(
         engine,
         app_dir,
@@ -3410,6 +3451,127 @@ def block_activation(
         failure_category=category,
         rollback_trigger=rollback_trigger,
     )
+
+
+# Executed in the immutable PREVIOUS API image, against its actual reader/writer
+# contract. A read-only transaction plus the existing schema advisory lock keeps
+# this a proof, never a repair or a schema downgrade. No target request is edited.
+ROLLBACK_DATABASE_PROBE = r'''
+import json, sys
+from sqlalchemy import inspect, text
+from sqlalchemy.orm import Session
+from app.db.session import engine
+from app.models.schema_version import SchemaVersionState
+from app.services.schema_migrations import validate_current_target_schema
+from app.services.schema_versioning import schema_version_status
+from app.services import schema_update_control as control
+
+binding = json.loads(sys.argv[1])
+with engine.connect() as connection:
+    with Session(connection) as db:
+        db.execute(text('SET TRANSACTION READ ONLY'))
+        db.execute(text("SET LOCAL statement_timeout = '10s'"))
+        if db.execute(text('SELECT pg_try_advisory_lock(660128)')).scalar_one() is not True:
+            raise RuntimeError('rollback_schema_operation_still_active')
+        try:
+            state = db.get(SchemaVersionState, 'current')
+            if state is None or schema_version_status(db).get('status') != 'current':
+                raise RuntimeError('rollback_schema_state_unverified')
+            validate_current_target_schema(db)
+            actual = state.schema_version
+            if actual not in {binding['schema']['source_version'], binding['schema']['target_version']}:
+                raise RuntimeError('rollback_schema_lineage_unverified')
+            if actual > control.TARGET_SCHEMA_VERSION:
+                # Signed completed DDL/history/control certificate, not a mere
+                # additive-column guess or the mutable mutation-state marker.
+                control.validate_exact_target_noop(db)
+                mode = 'verified_forward_compatible'
+            else:
+                exact, shape = control.target_shape_is_exact(db)
+                if not exact or actual != control.TARGET_SCHEMA_VERSION:
+                    raise RuntimeError('rollback_schema_shape_unverified')
+                control.validate_released_source_history(db, source_schema_version=actual, allow_target_rows=False)
+                tables = set(inspect(connection).get_table_names())
+                if bool(tables & {'schema_migration_control','schema_migration_attempts'}) and not {'schema_migration_control','schema_migration_attempts'} <= tables:
+                    raise RuntimeError('rollback_control_partial')
+                rows = db.execute(text('SELECT * FROM schema_migration_control')).mappings().all() if 'schema_migration_control' in tables else []
+                attempts = db.execute(text('SELECT status FROM schema_migration_attempts')).scalars().all() if 'schema_migration_attempts' in tables else []
+                if any(status == 'started' for status in attempts):
+                    raise RuntimeError('rollback_migration_incomplete')
+                if not rows or (len(rows) == 1 and rows[0]['state'] == 'completed'):
+                    control.validate_exact_target_noop(db)
+                else:
+                    if len(rows) != 1:
+                        raise RuntimeError('rollback_control_unverified')
+                    row = rows[0]
+                    if (row['id'] != 'current' or row['state'] != 'failed'
+                        or row['request_id'] != binding['request_id']
+                        or row['target_commit'] != binding['target']['commit']
+                        or row['installed_commit'] != binding['previous']['commit']
+                        or row['source_schema_version'] != actual
+                        or row['source_shape_fingerprint'] != shape):
+                        raise RuntimeError('rollback_control_binding_unverified')
+                    receipts = [control.read_signed(path, required=False) for path in
+                                (control.GATE_RECEIPT_PATH, control.RECOVERY_RECEIPT_PATH, control.PREPARATION_RECEIPT_PATH)]
+                    verified = False
+                    for receipt in receipts:
+                        if receipt is None:
+                            continue
+                        if (receipt.get('request_id') != row['request_id']
+                            or receipt.get('target_commit') != row['target_commit']
+                            or receipt.get('registry_fingerprint') != row['registry_fingerprint']
+                            or receipt.get('plan_fingerprint') != row['plan_fingerprint']
+                            or receipt.get('fencing_generation') != row['fencing_generation']):
+                            raise RuntimeError('rollback_receipt_binding_unverified')
+                        evidence = receipt.get('details', {}).get('retry_evidence', {})
+                        if receipt.get('retryable') is True and control.classify_retry(receipt.get('error_code'), evidence).retryable:
+                            verified = True
+                    if not verified:
+                        raise RuntimeError('rollback_transaction_unverified')
+                mode = 'verified_original_schema'
+            print(json.dumps({'request_id': binding['request_id'], 'previous_commit': binding['previous']['commit'], 'schema_version': actual, 'mode': mode}, sort_keys=True))
+        finally:
+            db.rollback()
+            control.release_schema_lock(db)
+'''
+
+
+def verify_rollback_database(
+    engine: Any, app_dir: Path, project_name: str, journal: dict[str, Any],
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="km-vms-rollback-db-proof-") as temporary:
+        compose, env, _source, _manifest = slot_compose(
+            app_dir, project_name, journal["previous"]["slot_id"],
+            engine=engine, override_root=Path(temporary), with_image_override=True,
+        )
+        result = run_command(
+            [*compose, "run", "--rm", "--no-deps", "schema-update", "python3", "-B", "-c",
+             ROLLBACK_DATABASE_PROBE, json.dumps({k: journal[k] for k in ("request_id", "previous", "target", "schema")})],
+            timeout=180, env=env, check=False,
+            error_code="rollback_database_unverified",
+            error_message="Previous database contract could not be verified; use verified database recovery before retrying.",
+        )
+    try:
+        proof = json.loads(result.stdout.strip()) if result.returncode == 0 else None
+    except (TypeError, ValueError):
+        proof = None
+    if (type(proof) is not dict or proof.get("request_id") != journal["request_id"]
+        or proof.get("previous_commit") != journal["previous"]["commit"]
+        or type(proof.get("schema_version")) is not int
+        or proof.get("mode") not in {"verified_original_schema", "verified_forward_compatible"}):
+        raise BridgeError("rollback_database_unverified", "Database state is not safe for automatic rollback; restore a verified backup or complete database recovery, then retry recovery.")
+    return proof
+
+
+def previous_runtime_ready(engine: Any, app_dir: Path, project_name: str, previous: dict[str, Any]) -> bool:
+    try:
+        observed = capture_slot_runtime_binding(app_dir, project_name, previous["slot_id"], engine=engine,
+                                               require_http=True, require_helper_image=True)
+    except BridgeError:
+        return False
+    if observed != previous:
+        raise BridgeError("slot_runtime_evidence_mismatch", "Previous deployment configuration differs from captured evidence; verify configuration before recovery.")
+    return True
 
 
 def rollback_activation(
@@ -3432,13 +3594,16 @@ def rollback_activation(
             "rollback_pointer_conflict",
             rollback_trigger=trigger,
         )
-    transition_journal(
-        engine,
-        app_dir,
-        request_id,
-        "rolling_back",
-        rollback_trigger=trigger,
-    )
+    try:
+        verify_rollback_database(engine, app_dir, project_name, journal)
+    except BridgeError:
+        return block_activation(engine, app_dir, request_id, "rollback_database_unverified", rollback_trigger=trigger)
+    try:
+        ready = observed == previous["slot_id"] and previous_runtime_ready(engine, app_dir, project_name, previous)
+    except BridgeError:
+        return block_activation(engine, app_dir, request_id, "rollback_configuration_unverified", rollback_trigger=trigger)
+    transition_journal(engine, app_dir, request_id, "rolling_back",
+                       rollback_trigger=trigger, rollback_database_verified=True)
     write_activation_progress(
         request_id,
         status="rolling_back",
@@ -3458,20 +3623,9 @@ def rollback_activation(
             "rolling_back",
             rollback_trigger=trigger,
         )
-        reconcile_slot_runtime(
-            app_dir,
-            project_name,
-            previous["slot_id"],
-            engine=engine,
-            allow_writer_isolation=True,
-        )
-        verify_slot_runtime(
-            app_dir,
-            project_name,
-            previous,
-            engine=engine,
-            require_helper_image=True,
-        )
+        if not ready:
+            reconcile_slot_runtime(app_dir, project_name, previous["slot_id"], engine=engine, allow_writer_isolation=True)
+            verify_slot_runtime(app_dir, project_name, previous, engine=engine, require_helper_image=True)
         terminal = transition_journal(
             engine,
             app_dir,
@@ -3479,7 +3633,7 @@ def rollback_activation(
             "failed_rolled_back",
             previous_verified=True,
             rollback_trigger=trigger,
-            failure_category=trigger,
+            failure_category=engine.read_activation_journal(app_dir).get("failure_category") or trigger,
         )
         set_writer_policy_fence(
             app_dir,
@@ -3526,54 +3680,9 @@ def block_after_restoring_previous(
     journal: dict[str, Any],
     category: str,
 ) -> dict[str, Any]:
-    try:
-        if _observed_slot_id(engine, app_dir) not in {
-            None,
-            journal["previous"]["slot_id"],
-        }:
-            return block_activation(
-                engine,
-                app_dir,
-                journal["request_id"],
-                "activation_pointer_conflict",
-            )
-        reconcile_slot_runtime(
-            app_dir,
-            project_name,
-            journal["previous"]["slot_id"],
-            engine=engine,
-            allow_writer_isolation=True,
-        )
-        verify_slot_runtime(
-            app_dir,
-            project_name,
-            journal["previous"],
-            engine=engine,
-            require_helper_image=True,
-        )
-    except Exception:
-        return block_activation(
-            engine,
-            app_dir,
-            journal["request_id"],
-            "previous_recovery_failed",
-        )
-    terminal = block_activation(
-        engine,
-        app_dir,
-        journal["request_id"],
-        category,
-    )
-    set_writer_policy_fence(
-        app_dir,
-        project_name,
-        enabled=False,
-    )
-    engine.publish_installed_slot_projection(
-        app_dir,
-        binding=journal["previous"],
-    )
-    return terminal
+    # One rollback owner for failures before and after pointer switching. It
+    # verifies the real database before restarting any previous writer.
+    return rollback_activation(engine, app_dir, project_name, journal, trigger=category)
 
 
 def cleanup_unprotected_slot_images(
@@ -3795,7 +3904,10 @@ def converge_activation(
             )
             return journal
         if phase == "blocked":
-            return journal
+            return rollback_activation(
+                engine, app_dir, project_name, journal,
+                trigger=journal.get("rollback_trigger") or journal["failure_category"],
+            )
         previous = journal["previous"]
         target = journal["target"]
         schema = journal["schema"]
@@ -4241,7 +4353,7 @@ def _activate_or_resume(args: argparse.Namespace) -> int:
             "Prepared activation slot identity is invalid.",
         ) from exc
     starting_new = journal is None or (
-        journal["phase"] in {"completed", "failed_rolled_back", "blocked"}
+        journal["phase"] in {"completed", "failed_rolled_back"}
         and journal["request_id"] != request_id
     )
     if starting_new:
@@ -4542,7 +4654,7 @@ def prepare_trusted_target_slot(args: argparse.Namespace) -> int:
         include_archive_override=True,
     )
     config = run_command(
-        [*compose, "config"],
+        [*compose, "config", "--format", "json"],
         timeout=60,
         error_code="slot_compose_evidence_failed",
         error_message="Trusted target Compose plan could not be validated.",
@@ -4755,7 +4867,7 @@ def prepare_initial_install_slot(args: argparse.Namespace) -> int:
         else:
             os.environ["KM_VMS_ALLOW_PREBOOTSTRAP_COMPOSE"] = previous_prebootstrap
     config = run_command(
-        [*compose, "config"],
+            [*compose, "config", "--format", "json"],
         timeout=60,
         error_code="slot_compose_evidence_failed",
         error_message="Initial Compose plan could not be validated.",

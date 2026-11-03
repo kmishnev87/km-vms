@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.25",
-  "tag": "v0.8.25",
-  "title": "Reliable managed schema updates",
-  "summary": "Fix migration lifecycle validation so prepared installations can update safely with database changes and retain precise failure diagnostics.",
+  "version": "0.8.26",
+  "tag": "v0.8.26",
+  "title": "Update recovery and archive workflow",
+  "summary": "Verify recovery before retrying updates, download prepared clips through the browser, and improve chronology continuity and touch controls.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.25",
+  "source_ref": "v0.8.26",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,51 +20,55 @@
     "target_version": 10
   },
   "changelog": [
-    "Recognize the real updater preparation and activation states in schema validation.",
-    "Keep schema mutation forbidden during activation and rollback, with exact request, release and commit binding.",
-    "Allow a verified completed schema to start the target runtime before overall update completion.",
-    "Retain bounded machine-readable migration failure reasons without exposing sensitive logs.",
-    "Preserve mandatory backups, registered migrations, writer isolation and verified runtime compatibility.",
-    "Include safe MKV/MP4 switching after current files or by graceful completion now, with persistent per-camera progress.",
-    "Keep recording settings compact, with non-shifting notifications, on-demand camera details and aligned controls."
+    "Verify the previous database and runtime before completing rollback and allowing another update attempt.",
+    "Keep unknown database states protected and preserve the original failure cause.",
+    "Separate clip preparation from native browser downloads, with ready-result reuse and current permission checks.",
+    "Verify exported clip integrity once per download without buffering the entire file in page memory.",
+    "Keep unchanged chronology players running when other tiles are added, removed or reordered.",
+    "Space timeline labels by actual width and retain camera and archive time context in fullscreen.",
+    "Separate one-finger scrolling, drag handles and two-finger video gestures.",
+    "Align the timeline badge with its axis and refresh archive ranges without flicker or duplicate in-flight requests."
   ],
   "title_i18n": {
-    "en": "Reliable managed schema updates",
-    "ru": "Надёжное обновление с изменением базы",
-    "zh-CN": "可靠的托管数据库架构更新"
+    "en": "Update recovery and archive workflow",
+    "ru": "Восстановление обновлений и работа с архивом",
+    "zh-CN": "更新恢复与录像归档操作"
   },
   "summary_i18n": {
-    "en": "Fix migration lifecycle validation so prepared installations can update safely with database changes and retain precise failure diagnostics.",
-    "ru": "Исправлена проверка этапов миграции: подготовленные установки могут безопасно обновляться с изменением базы, сохраняя точную причину ошибок.",
-    "zh-CN": "修复迁移生命周期校验，使已准备的安装能够安全地更新数据库架构，并保留准确的失败诊断。"
+    "en": "Verify recovery before retrying updates, download prepared clips through the browser, and improve chronology continuity and touch controls.",
+    "ru": "Проверка восстановления перед повторным обновлением, скачивание готовых клипов средствами браузера и улучшение непрерывности Хронологии и жестов.",
+    "zh-CN": "重试更新前验证恢复状态，通过浏览器下载已准备的片段，并改进时间轴播放连续性与触控操作。"
   },
   "changelog_i18n": {
     "en": [
-      "Recognize the real updater preparation and activation states in schema validation.",
-      "Keep schema mutation forbidden during activation and rollback, with exact request, release and commit binding.",
-      "Allow a verified completed schema to start the target runtime before overall update completion.",
-      "Retain bounded machine-readable migration failure reasons without exposing sensitive logs.",
-      "Preserve mandatory backups, registered migrations, writer isolation and verified runtime compatibility.",
-      "Include safe MKV/MP4 switching after current files or by graceful completion now, with persistent per-camera progress.",
-      "Keep recording settings compact, with non-shifting notifications, on-demand camera details and aligned controls."
+      "Verify the previous database and runtime before completing rollback and allowing another update attempt.",
+      "Keep unknown database states protected and preserve the original failure cause.",
+      "Separate clip preparation from native browser downloads, with ready-result reuse and current permission checks.",
+      "Verify exported clip integrity once per download without buffering the entire file in page memory.",
+      "Keep unchanged chronology players running when other tiles are added, removed or reordered.",
+      "Space timeline labels by actual width and retain camera and archive time context in fullscreen.",
+      "Separate one-finger scrolling, drag handles and two-finger video gestures.",
+      "Align the timeline badge with its axis and refresh archive ranges without flicker or duplicate in-flight requests."
     ],
     "ru": [
-      "Проверка миграции распознаёт реальные этапы подготовки и запуска обновления.",
-      "Изменение базы запрещено во время запуска и отката; запрос, версия и commit проверяются точно.",
-      "Проверенная завершённая миграция позволяет запустить новый код до завершения всего обновления.",
-      "Конкретная причина ошибки миграции сохраняется безопасным машинным кодом без чувствительных логов.",
-      "Обязательные копии базы, зарегистрированные миграции, остановка записи и проверка совместимости сохранены.",
-      "Включена безопасная смена MKV/MP4 после текущих файлов или аккуратным завершением сейчас, с состоянием по камерам.",
-      "Настройки остаются компактными: уведомления не двигают страницу, подробности по камерам открываются отдельно, элементы выровнены."
+      "База и прежняя программа проверяются перед завершением возврата и новой попыткой обновления.",
+      "Неизвестное состояние базы остаётся защищённым, исходная причина отказа сохраняется.",
+      "Подготовка клипа отделена от скачивания браузером; готовый результат можно использовать повторно с проверкой действующих прав.",
+      "Целостность клипа проверяется один раз на скачивание, без загрузки всего файла в память страницы.",
+      "Неизменённые плееры Хронологии продолжают работать при добавлении, закрытии или перестановке других плиток.",
+      "Подписи шкалы учитывают её фактическую ширину; в полном экране видны камера и время архива.",
+      "Прокрутка одним пальцем, захваты перетаскивания и жесты видео двумя пальцами разделены.",
+      "Подпись Хронологии выровнена с осью; диапазоны архива обновляются без мерцания и дублирования незавершённых запросов."
     ],
     "zh-CN": [
-      "数据库迁移校验识别更新程序实际使用的准备和激活状态。",
-      "激活与回退期间禁止修改架构，并严格绑定请求、版本和提交。",
-      "验证已完成迁移后，无需等待整个更新结束即可启动目标程序。",
-      "使用有界机器代码保留迁移失败原因，不暴露敏感日志。",
-      "保留必需的备份、已注册迁移、写入隔离和运行时兼容性验证。",
-      "包含安全的 MKV/MP4 切换，可等待当前文件完成或立即正常结束，并持续显示各摄像机的状态。",
-      "保持设置紧凑，通过不改变布局的通知、按需摄像机详情和对齐的控件显示状态。"
+      "完成回退并允许再次更新之前，验证原数据库与运行时。",
+      "保护未知数据库状态，并保留原始失败原因。",
+      "将片段准备与浏览器原生下载分离，复用就绪结果并检查当前权限。",
+      "每次下载只验证一次片段完整性，不将整个文件缓存在页面内存中。",
+      "添加、关闭或重排其他画面时，保持未改变的时间轴播放器运行。",
+      "依据实际宽度安排时间标签，并在全屏中显示摄像机与录像时间。",
+      "分离单指滚动、拖动手柄和双指视频手势。",
+      "使时间轴标签与轴线居中对齐，刷新录像范围时避免闪烁和重复的在途请求。"
     ]
   }
 }

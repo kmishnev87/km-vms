@@ -187,10 +187,11 @@ ACTIVATION_TRANSITIONS = {
         "quiescing",
         "schema_preparing",
         "activating",
+        "rolling_back",
         "blocked",
     },
-    "quiescing": {"schema_preparing", "activating", "blocked"},
-    "schema_preparing": {"activating", "blocked"},
+    "quiescing": {"schema_preparing", "activating", "rolling_back", "blocked"},
+    "schema_preparing": {"activating", "rolling_back", "blocked"},
     "activating": {"verifying_target", "rolling_back", "blocked"},
     "verifying_target": {
         "committing_target",
@@ -201,7 +202,7 @@ ACTIVATION_TRANSITIONS = {
     "rolling_back": {"failed_rolled_back", "blocked"},
     "completed": set(),
     "failed_rolled_back": set(),
-    "blocked": set(),
+    "blocked": {"rolling_back"},
 }
 
 MAX_INVENTORY_ENTRIES = 200_000
@@ -2750,6 +2751,7 @@ def transition_activation_journal(
     previous_verified: bool | None = None,
     rollback_trigger: str | None = None,
     failure_category: str | None = None,
+    rollback_database_verified: bool = False,
 ) -> dict[str, Any]:
     app_dir = resolve_app_dir(app_dir)
     request_id = require_request_id(request_id)
@@ -2765,6 +2767,9 @@ def transition_activation_journal(
             "activation_transition_invalid",
             "Activation phase is invalid.",
         )
+    if (phase == "rolling_back" and current["phase"] in {"target_prepared", "quiescing", "schema_preparing", "blocked"}
+        and rollback_database_verified is not True):
+        raise SlotError("activation_rollback_proof_required", "Recovery must verify the previous database contract before rollback.")
     if (
         phase != current["phase"]
         and phase not in ACTIVATION_TRANSITIONS[current["phase"]]

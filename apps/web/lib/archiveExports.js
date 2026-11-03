@@ -15,7 +15,7 @@ const STATUS_MESSAGES = {
   done: "Клип готов.",
   failed: "Не удалось подготовить клип.",
   manifest_ready: "Паспорт клипа подготовлен.",
-  download_ready: "Скачивание клипа начато.",
+  download_ready: "Клип готов к скачиванию.",
 };
 
 export function canExportRecordings(user) {
@@ -34,6 +34,8 @@ export function normalizeArchiveExportError(message) {
   if (text.includes("source_gap_detected")) return "В выбранном диапазоне есть разрыв архива.";
   if (text.includes("incompatible_segments")) return "Фрагменты нельзя безопасно объединить.";
   if (text.includes("generation_failed")) return "Не удалось сгенерировать клип.";
+  if (text.includes("download is unavailable")) return "Скачивание сейчас недоступно. Повторите попытку.";
+  if (text.includes("too many active export jobs")) return "Уже подготавливаются три клипа. Дождитесь результата или продолжите прежний клип.";
   if (text.includes("manifest_not_ready") || text.includes("manifest_missing")) return "Паспорт клипа еще не готов.";
   if (text.includes("checksum_mismatch")) return "Проверка целостности клипа не прошла.";
   if (text.includes("expired_job") || text.includes("expired")) return "Срок хранения клипа истек.";
@@ -132,31 +134,88 @@ export function validateArchiveExportSelection({ startTs, endTs, estimatedSource
   return "";
 }
 
-export async function runArchiveExportWorkflow(payload, { onStatus } = {}) {
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw new DOMException("Waiting stopped", "AbortError");
+}
+
+function waitForExportPoll(signal) {
+  return new Promise((resolve, reject) => {
+    throwIfAborted(signal);
+    const cancel = () => { clearTimeout(timer); reject(new DOMException("Waiting stopped", "AbortError")); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", cancel); resolve(); }, 3000);
+    signal?.addEventListener("abort", cancel, { once: true });
+  });
+}
+
+export async function runArchiveExportWorkflow(payload, { onStatus, signal, exportId } = {}) {
+  throwIfAborted(signal);
   onStatus?.(archiveExportStatusMessage("queued"), null, "queued");
-  const created = await apiFetch("/archive/exports", {
+  const created = exportId ? await apiFetch(`/archive/exports/${encodeURIComponent(exportId)}`, { signal }) : await apiFetch("/archive/exports", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    signal,
   });
   onStatus?.(archiveExportStatusMessage(created?.status || "queued"), created, created?.status || "queued");
 
-  const generated = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}/generate`, {
-    method: "POST",
-  });
+  let generated = created;
+  if (generated.status === "queued") {
+    onStatus?.(archiveExportStatusMessage("running"), created, "running");
+    try {
+      generated = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}/generate`, { method: "POST", signal });
+    } catch (error) {
+      throwIfAborted(signal);
+      // An interrupted response is not proof that server preparation failed.
+      // Read its durable job instead of creating another expensive export.
+      generated = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}`, { signal });
+      if (!["running", "done"].includes(generated?.status)) throw error;
+    }
+  }
+  while (generated?.status === "running") {
+    onStatus?.(archiveExportStatusMessage("running"), generated, "running");
+    if (generated.can_resume) {
+      try {
+        generated = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}/generate?resume=true`, { method: "POST", signal });
+        continue;
+      } catch (error) {
+        throwIfAborted(signal);
+        // A second tab may have resumed it first. Re-read durable truth.
+        const current = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}`, { signal });
+        if (current?.status !== "running" || current.can_resume) throw error;
+        generated = current;
+      }
+    }
+    await waitForExportPoll(signal);
+    generated = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}`, { signal });
+  }
   onStatus?.(archiveExportStatusMessage(generated?.status || "running"), generated, generated?.status || "running");
   if (generated?.status !== "done") {
     throw new Error(generated?.error_message || generated?.error_code || "generation_failed");
   }
 
   const manifest = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}/manifest`, {
-    method: "POST",
+    method: generated.manifest_ready ? "GET" : "POST",
+    signal,
   });
   onStatus?.(archiveExportStatusMessage("manifest_ready"), manifest, "manifest_ready");
 
-  const clip = await apiFetchBlob(`/archive/exports/${encodeURIComponent(created.id)}/download`);
-  onStatus?.(archiveExportStatusMessage("download_ready"), generated, "download_ready");
-  return { job: generated, manifest, clip };
+  throwIfAborted(signal);
+  const job = { ...generated, manifest_ready: true, download_ready: true };
+  onStatus?.(archiveExportStatusMessage("download_ready"), job, "download_ready");
+  return { job, manifest };
+}
+
+export async function startArchiveExportDownload(exportId) {
+  const info = await apiFetch(`/archive/exports/${encodeURIComponent(exportId)}/download-token`, { method: "POST" });
+  if (!info?.media_token) throw new Error("Download is unavailable");
+  const anchor = document.createElement("a");
+  anchor.href = `/api/archive/exports/${encodeURIComponent(exportId)}/file?media_token=${encodeURIComponent(info.media_token)}`;
+  anchor.download = info.filename || "km-vms-clip.mkv";
+  anchor.referrerPolicy = "no-referrer";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  return { filename: info.filename, size_bytes: info.size_bytes };
 }
 
 export async function downloadArchiveManifest(exportId) {
