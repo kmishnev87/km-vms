@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -22,7 +23,7 @@ import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanc
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const settingsPage = readSettingsMaintenanceSources();
-const settingsCss = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
+const settingsCss = readProductSourceFile(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
 
 assert.equal(settingsPage.includes("settingsMaintenanceBackupManager"), true);
 assert.equal(settingsPage.includes('className="settingsMaintenanceBackupCreate"'), false);

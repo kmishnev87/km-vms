@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -7,8 +8,8 @@ import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanc
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
-const readText = (relative) => fs.readFileSync(resolve(webRoot, relative), "utf8");
-const readBinary = (relative) => fs.readFileSync(resolve(webRoot, relative));
+const readText = (relative) => readProductSourceFile(resolve(webRoot, relative), "utf8");
+const readBinary = (relative) => readProductSourceFile(resolve(webRoot, relative));
 
 function decodeRgbaPng(relative) {
   const png = readBinary(relative);

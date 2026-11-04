@@ -361,7 +361,7 @@ def test_confirmed_recording_requires_current_instance_media_progress(stage48):
     assert states[stale.id]["confirmed_recording"] is False
     snapshot, ignored = archive_root_activation._activation_camera_snapshot(db, "op-evidence")
     assert [row["camera_id"] for row in snapshot] == [confirmed.id]
-    assert ignored == 2
+    assert ignored == 1  # The previous Recorder's job is already excluded upstream.
 
 
 def test_activation_ownership_is_atomic_and_state_transition_rejects_stale_revision(stage48, monkeypatch):
@@ -1286,6 +1286,8 @@ def test_root_delete_blocks_unresolved_metadata_and_preserves_foreign_sentinel(s
 def test_archive_export_and_camera_delete_are_root_aware_with_duplicate_paths(stage48):
     camera_a = _camera(stage48.db, "consumer-a")
     camera_b = _camera(stage48.db, "consumer-b")
+    camera_a.enabled = False  # No Recorder exists in this filesystem-only fixture.
+    camera_a.status = "disabled"
     relative = "kmvms/recordings/consumer-duplicate.mkv"
     path_a = _write(stage48.root_a_path, relative, b"root-a-export")
     path_b = _write(stage48.root_b_path, relative, b"root-b-keep")

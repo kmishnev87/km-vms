@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -12,7 +13,7 @@ import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanc
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const settingsPage = readSettingsMaintenanceSources();
-const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
+const css = readProductSourceFile(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
 
 function cssRule(selector) {
   const start = css.lastIndexOf(`${selector} {`);

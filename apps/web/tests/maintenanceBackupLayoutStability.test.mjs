@@ -1,7 +1,8 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+const read = (path) => readProductSourceFile(new URL(`../${path}`, import.meta.url), "utf8");
 const controller = read("lib/settingsMaintenanceController.js");
 const surface = read("components/SettingsMaintenanceSurface.js");
 const css = read("app/styles/20-settings-maintenance.css");

@@ -717,6 +717,23 @@ def _build_reconciliation_domain(storage_summary: dict[str, Any], ctx) -> dict[s
     }
 
 
+def _health_rollup_severity(domain_name: str, domain: dict[str, Any]) -> str:
+    """An unrequested optional check is not missing operational-service evidence."""
+    severity = domain.get("severity", "unknown")
+    if domain_name == "live" and not domain.get("items") and severity in {"ok", "unknown"}:
+        return "ok"
+    reasons = set(domain.get("reason_codes") or [])
+    if (
+        domain_name == "reconciliation" and severity == "unknown"
+        and domain.get("status") == "no_evidence" and "no_evidence" in reasons
+        and reasons <= {"no_evidence", "reconciliation_unknown"}
+        and not domain.get("problem_file_count") and not domain.get("cleanup_candidate_count")
+        and not domain.get("partial") and not domain.get("scan_limited")
+    ):
+        return "ok"
+    return severity
+
+
 def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     now = _utc_now()
     ctx = timezone_context(db)
@@ -730,11 +747,11 @@ def build_operator_runtime_status(db: Session) -> dict[str, Any]:
     reconciliation_domain = _build_reconciliation_domain(storage_summary, ctx)
     domain_severities = [
         cameras_domain["severity"],
-        live_domain["severity"],
+        _health_rollup_severity("live", live_domain),
         recorder_domain["severity"],
         storage_domain["severity"],
         retention_domain["severity"],
-        reconciliation_domain["severity"],
+        _health_rollup_severity("reconciliation", reconciliation_domain),
     ]
     severity = _rollup(domain_severities)
     problem_count = sum(

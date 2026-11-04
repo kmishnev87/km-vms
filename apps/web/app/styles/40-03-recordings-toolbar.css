@@ -1,0 +1,80 @@
+
+.recordingsToolbar {
+  gap: 10px;
+}
+
+.recordingsActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+
+.recordingsCreateClipButton {
+  color: #1f2937;
+}
+
+.recordingsCreateClipButton:hover:not(:disabled) {
+  border-color: #0f172a;
+  background: #eef2ff;
+}
+
+.recordingsCreateClipButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.recordingsUiIcon {
+  display: block;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.recordingsUiIcon circle {
+  fill: currentColor;
+  stroke: none;
+}
+
+.recordingsToolbarSvgIcon {
+  width: 19px;
+  height: 19px;
+}
+
+.recordingsToolbarIconButton .recordingsUiIcon,
+.recordingsDangerTrigger .recordingsUiIcon {
+  color: #1f2937;
+}
+
+.recordingsRowSvgIcon {
+  width: 21px;
+  height: 21px;
+}
+
+.recordingsIconButton .recordingsUiIcon {
+  color: #1f2937;
+}
+
+.recordingsTrashIcon {
+  width: 22px;
+  height: 22px;
+}
+
+.recordingsToolbarSvgIcon.recordingsTrashIcon {
+  width: 19px;
+  height: 19px;
+}
+
+.recordingsPlayIcon {
+  fill: currentColor;
+  stroke: currentColor;
+  stroke-width: 1.35;
+}
+
+.recordingsCreateClipButton .recordingsUiIcon circle {
+  fill: #f8fafc;
+  stroke: currentColor;
+  stroke-width: 1.8;
+}

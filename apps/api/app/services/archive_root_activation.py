@@ -50,6 +50,10 @@ from app.services.storage_operations_foundation import (
     safe_reason_code,
 )
 
+from app.services.activation_errors import ActivationStateConflict
+from app.services.activation_camera_intent import CameraPauseCoordinator
+from app.services.activation_runtime_verifier import ActivationRuntimeVerifier
+
 logger = logging.getLogger(__name__)
 _WORKER_LEASE_THREAD_GUARD = threading.RLock()
 
@@ -81,8 +85,6 @@ class ArchiveRootMutationConflict(RuntimeError):
         self.blocker = blocker
 
 
-class ActivationStateConflict(RuntimeError):
-    pass
 
 
 class WorkerLeaseLost(ActivationStateConflict):
@@ -573,74 +575,32 @@ def _mark_recovery_required(
     )
 
 
+def _camera_pause_coordinator() -> CameraPauseCoordinator:
+    return CameraPauseCoordinator(
+        list_camera_recording_states, _worker_side_effect_fence, _assert_worker_session, STOP_WAIT_SECONDS, STOP_POLL_SECONDS,
+    )
+
+
+def _activation_runtime_verifier() -> ActivationRuntimeVerifier:
+    return ActivationRuntimeVerifier(
+        storage_confirmation_status, _assert_worker_session, _worker_side_effect_fence, _touch_mutation_lock, _root_access, _root_by_id, _runtime_binding_matches_root, HELPER_WAIT_SECONDS, HELPER_POLL_SECONDS,
+    )
+
+
 def _confirmed_recording_camera_ids(db: Session) -> set[int]:
-    return {
-        int(item["camera_id"])
-        for item in list_camera_recording_states(db)
-        if bool(item.get("confirmed_recording"))
-        and bool(item.get("enabled"))
-        and str(item.get("recording_mode") or "").lower() == "always"
-    }
+    return _camera_pause_coordinator()._confirmed_recording_camera_ids(db)
 
 
 def _activation_camera_snapshot(db: Session, operation_id: str) -> tuple[list[dict[str, Any]], int]:
-    snapshots: list[dict[str, Any]] = []
-    ignored_active_looking = 0
-    for item in list_camera_recording_states(db):
-        active_looking = str(item.get("job_state") or "") in ACTIVE_JOB_STATES
-        if active_looking and not bool(item.get("confirmed_recording")):
-            ignored_active_looking += 1
-        if not (
-            bool(item.get("confirmed_recording"))
-            and bool(item.get("enabled"))
-            and str(item.get("recording_mode") or "").lower() == "always"
-        ):
-            continue
-        snapshots.append(
-            {
-                "operation_id": operation_id,
-                "camera_id": int(item["camera_id"]),
-                "name": str(item.get("camera_name") or item["camera_id"]),
-                "enabled_intent": True,
-                "recording_mode": str(item.get("recording_mode") or "always"),
-                "pre_operation_camera_status": item.get("camera_status"),
-                "pre_operation_recording_health": item.get("recording_health"),
-                "eligibility_reason": "confirmed_current_instance_media_progress",
-                "confirmed_evidence_at": item.get("media_progress_at"),
-                "confirmed_segment_id": item.get("current_segment_id"),
-                "confirmed_job_id": item.get("job_id"),
-                "confirmed_recorder_instance_id": item.get("recorder_instance_id"),
-                "changed_by_operation": False,
-            }
-        )
-    return snapshots, ignored_active_looking
+    return _camera_pause_coordinator()._activation_camera_snapshot(db, operation_id)
 
 
 def _writing_segments_count(db: Session, camera_ids: list[int]) -> int:
-    if not camera_ids:
-        return 0
-    return (
-        db.query(RecordingSegment)
-        .filter(
-            RecordingSegment.camera_id.in_(camera_ids),
-            RecordingSegment.status.in_(("writing", "starting")),
-            RecordingSegment.deleted_at.is_(None),
-        )
-        .count()
-    )
+    return _camera_pause_coordinator()._writing_segments_count(db, camera_ids)
 
 
 def _paused_camera_rows(db: Session, camera_ids: list[int]) -> list[Camera]:
-    if not camera_ids:
-        return []
-    return (
-        db.query(Camera)
-        .filter(Camera.id.in_(camera_ids), Camera.deleted_at.is_(None))
-        .order_by(Camera.id.asc())
-        .populate_existing()
-        .with_for_update()
-        .all()
-    )
+    return _camera_pause_coordinator()._paused_camera_rows(db, camera_ids)
 
 
 def _restore_cameras(
@@ -650,21 +610,7 @@ def _restore_cameras(
     reason: str,
     snapshot_by_id: dict[int, dict[str, Any]] | None = None,
 ) -> dict[str, list[int]]:
-    restored: list[int] = []
-    failed: list[int] = []
-    for camera in _paused_camera_rows(db, camera_ids):
-        snapshot = (snapshot_by_id or {}).get(int(camera.id), {})
-        if not snapshot or not snapshot.get("enabled_intent", False) or not snapshot.get("changed_by_operation", False):
-            continue
-        try:
-            camera.enabled = True
-            camera.status = "enabled"
-            camera.updated_at = datetime.utcnow()
-            db.add(camera)
-            restored.append(int(camera.id))
-        except Exception:
-            failed.append(int(camera.id))
-    return {"restored": restored, "failed": failed}
+    return _camera_pause_coordinator()._restore_cameras(db, camera_ids, reason=reason, snapshot_by_id=snapshot_by_id)
 
 
 def _wait_for_recordings_to_stop(
@@ -673,25 +619,7 @@ def _wait_for_recordings_to_stop(
     *,
     worker_session: WorkerLeaseSession | None = None,
 ) -> dict[str, Any]:
-    deadline = time.monotonic() + STOP_WAIT_SECONDS
-    last_confirmed = 0
-    last_writing = 0
-    while True:
-        _assert_worker_session(worker_session)
-        db.expire_all()
-        last_confirmed = sum(
-            1
-            for item in list_camera_recording_states(db)
-            if int(item.get("camera_id") or 0) in camera_ids and bool(item.get("confirmed_recording"))
-        )
-        last_writing = _writing_segments_count(db, camera_ids)
-        if last_confirmed == 0 and last_writing == 0:
-            _assert_worker_session(worker_session)
-            return {"ok": True, "confirmed_recordings": 0, "writing_segments": 0}
-        if time.monotonic() >= deadline:
-            _assert_worker_session(worker_session)
-            return {"ok": False, "confirmed_recordings": int(last_confirmed), "writing_segments": int(last_writing)}
-        time.sleep(STOP_POLL_SECONDS)
+    return _camera_pause_coordinator()._wait_for_recordings_to_stop(db, camera_ids, worker_session=worker_session)
 
 
 def _new_operation_state(
@@ -1114,12 +1042,7 @@ def _target_preflight(
 
 
 def _confirmation_for_request(operation_id: str, request_id: str | None) -> dict[str, Any]:
-    confirmation = storage_confirmation_status()
-    if str(confirmation.get("operation_id") or "") != operation_id:
-        return {"matched": False, "status": "stale_operation_result"}
-    if not request_id or str(confirmation.get("runtime_request_id") or "") != str(request_id):
-        return {"matched": False, "status": "stale_runtime_request_result"}
-    return {"matched": True, **confirmation}
+    return _activation_runtime_verifier()._confirmation_for_request(operation_id, request_id)
 
 
 def _wait_for_helper(
@@ -1128,35 +1051,7 @@ def _wait_for_helper(
     *,
     worker_session: WorkerLeaseSession | None = None,
 ) -> dict[str, Any]:
-    deadline = time.monotonic() + HELPER_WAIT_SECONDS
-    last: dict[str, Any] = {"matched": False, "status": "waiting"}
-    while time.monotonic() < deadline:
-        _assert_worker_session(worker_session)
-        last = _confirmation_for_request(operation_id, request_id)
-        if last.get("matched"):
-            status = str(last.get("apply_status") or last.get("status") or "")
-            if status == "active":
-                _assert_worker_session(worker_session)
-                return {**last, "ok": True}
-            if status in {"activation_failed", "failed", "validation_failed"}:
-                apply_state = last.get("apply_state") if isinstance(last.get("apply_state"), dict) else {}
-                configuration_consistent = apply_state.get("configuration_consistent")
-                _assert_worker_session(worker_session)
-                return {
-                    **last,
-                    "ok": False,
-                    "reason_code": (
-                        "persistent_storage_config_recovery_failed"
-                        if configuration_consistent is False
-                        else "runtime_activation_failed"
-                    ),
-                    "configuration_consistent": configuration_consistent,
-                }
-        with _worker_side_effect_fence(worker_session):
-            _touch_mutation_lock(operation_id)
-        time.sleep(HELPER_POLL_SECONDS)
-    _assert_worker_session(worker_session)
-    return {**last, "ok": False, "reason_code": "runtime_activation_timeout"}
+    return _activation_runtime_verifier()._wait_for_helper(operation_id, request_id, worker_session=worker_session)
 
 
 def _verify_effective_root(
@@ -1168,61 +1063,11 @@ def _verify_effective_root(
     request_id: str | None = None,
     worker_session: WorkerLeaseSession | None = None,
 ) -> dict[str, Any]:
-    _assert_worker_session(worker_session)
-    confirmation = storage_confirmation_status()
-    if operation_id and str(confirmation.get("operation_id") or "") != operation_id:
-        return {"ok": False, "reason_code": "effective_root_operation_mismatch"}
-    if request_id and str(confirmation.get("runtime_request_id") or "") != request_id:
-        return {"ok": False, "reason_code": "effective_root_request_mismatch"}
-    if str(confirmation.get("apply_status") or "") != "active":
-        return {"ok": False, "reason_code": "effective_root_not_active"}
-    if str(confirmation.get("selected_host_path") or "") != str(expected_host_path or ""):
-        return {"ok": False, "reason_code": "effective_root_path_mismatch"}
-    root = _root_by_id(db, root_id)
-    if not _runtime_binding_matches_root(root):
-        return {"ok": False, "reason_code": "effective_root_runtime_binding_mismatch"}
-    access = _root_access(root, require_write=True)
-    _assert_worker_session(worker_session)
-    return {
-        **access,
-        "root_id": getattr(root, "id", None),
-        "root_label": getattr(root, "label", None),
-    }
+    return _activation_runtime_verifier()._verify_effective_root(db, root_id=root_id, expected_host_path=expected_host_path, operation_id=operation_id, request_id=request_id, worker_session=worker_session)
 
 
 def _detect_effective_root(db: Session, state: dict[str, Any] | None = None) -> dict[str, Any]:
-    confirmation = storage_confirmation_status()
-    selected = str(confirmation.get("selected_host_path") or "")
-    if state:
-        candidates = (
-            (state.get("target_root_id"), state.get("target_root_label"), state.get("target_host_path")),
-            (state.get("previous_root_id"), state.get("previous_root_label"), state.get("previous_host_path")),
-        )
-        for root_id, root_label, host_path in candidates:
-            root = _root_by_id(db, root_id)
-            if not _runtime_binding_matches_root(root):
-                continue
-            access = _root_access(root, require_write=True)
-            if access.get("ok"):
-                return {
-                    **access,
-                    "root_id": str(root_id),
-                    "root_label": str(root_label or root_id),
-                    "confirmation_path_matched": selected == str(host_path or ""),
-                }
-        return {"ok": False, "reason_code": "effective_root_unknown"}
-    for root in db.query(ArchiveRoot).filter(ArchiveRoot.retired_at.is_(None)).all():
-        if not _runtime_binding_matches_root(root):
-            continue
-        access = _root_access(root, require_write=True)
-        if access.get("ok"):
-            return {
-                **access,
-                "root_id": str(root.id),
-                "root_label": str(root.label or root.id),
-                "confirmation_path_matched": archive_root_host_display_path(root) == selected,
-            }
-    return {"ok": False, "reason_code": "effective_root_unknown"}
+    return _activation_runtime_verifier()._detect_effective_root(db, state)
 
 
 def _set_active_root(
@@ -1255,59 +1100,15 @@ def _pause_operation_cameras(
     *,
     worker_session: WorkerLeaseSession | None = None,
 ) -> tuple[list[int], list[dict[str, Any]]]:
-    snapshots = [dict(item) for item in state.get("camera_snapshots") or [] if isinstance(item, dict)]
-    snapshot_by_id = {int(item["camera_id"]): item for item in snapshots}
-    if not snapshots:
-        return [], []
-    with _worker_side_effect_fence(worker_session):
-        operation = _pause_owner(db, state)
-        progress = dict(operation.progress or {})
-        changed = set(progress.get("activation_paused_camera_ids") or [])
-        for camera in _paused_camera_rows(db, sorted(snapshot_by_id)):
-            snapshot = snapshot_by_id[int(camera.id)]
-            if bool(camera.enabled) and bool(snapshot.get("enabled_intent")):
-                camera.enabled = False
-                camera.status = "storage_switch_paused"
-                camera.updated_at = datetime.utcnow()
-                db.add(camera)
-                snapshot["changed_by_operation"] = True
-                changed.add(int(camera.id))
-            if int(camera.id) in changed:
-                snapshot["changed_by_operation"] = True
-        operation.progress = bounded_payload(
-            {**progress, "activation_paused_camera_ids": sorted(changed)},
-            max_bytes=OPERATION_PROGRESS_MAX_BYTES, field="progress",
-        )
-        db.add(operation)
-        # Camera mutation and its durable owner proof commit together. JSON is
-        # only the projection: replay recovers these ids after a lost reply.
-        db.commit()
-    return sorted(changed), snapshots
+    return _camera_pause_coordinator()._pause_operation_cameras(db, state, worker_session=worker_session)
 
 
 def _pause_owner(db: Session, state: dict[str, Any], *, required: bool = True) -> StorageOperation | None:
-    operation = db.query(StorageOperation).filter(
-        StorageOperation.id == str(state.get("operation_id") or ""),
-        StorageOperation.operation_type == "archive_root_activation",
-    ).populate_existing().with_for_update().first()
-    if operation is None and required:
-        raise ActivationStateConflict("archive_root_activation_pause_owner_missing")
-    return operation
+    return _camera_pause_coordinator()._pause_owner(db, state, required=required)
 
 
 def preserve_manual_camera_disable(db: Session, camera_id: int) -> None:
-    """Stage an explicit user disable in the same transaction as its camera."""
-    operations = db.query(StorageOperation).filter(
-        StorageOperation.operation_type == "archive_root_activation",
-        StorageOperation.status.in_(("queued", "running", "cancel_requested", "partial")),
-    ).populate_existing().with_for_update().all()
-    for operation in operations:
-        progress = dict(operation.progress or {})
-        ids = list(progress.get("activation_paused_camera_ids") or [])
-        if int(camera_id) in ids:
-            progress["activation_paused_camera_ids"] = [item for item in ids if item != int(camera_id)]
-            operation.progress = progress
-            db.add(operation)
+    return _camera_pause_coordinator().preserve_manual_camera_disable(db, camera_id)
 
 
 def _restore_operation_cameras(
@@ -1317,49 +1118,7 @@ def _restore_operation_cameras(
     reason: str,
     worker_session: WorkerLeaseSession | None = None,
 ) -> dict[str, list[int]]:
-    snapshots = [item for item in state.get("camera_snapshots") or [] if isinstance(item, dict)]
-    by_id = {int(item["camera_id"]): item for item in snapshots}
-    with _worker_side_effect_fence(worker_session):
-        if not snapshots and not state.get("paused_camera_ids"):
-            return {"restored": [], "failed": []}
-        operation = _pause_owner(db, state, required=False)
-        # A pre-existing completed JSON proof remains readable; all newly
-        # performed pauses require the transactionally persisted owner above.
-        progress = dict(operation.progress or {}) if operation is not None else {}
-        if "activation_paused_camera_ids" in progress:
-            camera_ids = [int(item) for item in progress["activation_paused_camera_ids"]]
-        else:
-            # Existing pre-fix operations can carry a completed JSON proof.
-            camera_ids = [int(item) for item in state.get("paused_camera_ids") or []]
-        for camera_id in camera_ids:
-            if camera_id in by_id and "activation_paused_camera_ids" in progress:
-                by_id[camera_id] = {**by_id[camera_id], "changed_by_operation": True}
-        result = _restore_cameras(
-            db,
-            camera_ids,
-            reason=reason,
-            snapshot_by_id=by_id,
-        )
-        previous_restored = set(progress.get("activation_restored_camera_ids") or [])
-        previous_restored.update(result["restored"])
-        if operation is not None:
-            operation.progress = bounded_payload({
-                **progress,
-                "activation_paused_camera_ids": [item for item in camera_ids if item not in result["restored"]],
-                "activation_restored_camera_ids": sorted(previous_restored),
-            }, max_bytes=OPERATION_PROGRESS_MAX_BYTES, field="progress")
-            db.add(operation)
-        db.commit()
-        if result["restored"]:
-            create_event(
-                db=db, actor=None, category="storage",
-                event_type="archive_root.activation_recordings_restored", severity="info",
-                message_ru="Archive root activation restored paused recordings",
-                message_en="Archive root activation restored paused recordings",
-                metadata={"camera_ids": result["restored"], "reason": reason},
-            )
-        result["restored"] = sorted(previous_restored)
-    return result
+    return _camera_pause_coordinator()._restore_operation_cameras(db, state, reason=reason, worker_session=worker_session)
 
 
 def _verify_all_configured_roots(

@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,19 +7,20 @@ import test from "node:test";
 const root = path.resolve(import.meta.dirname, "..");
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(root, relativePath), "utf8");
+  return readProductSourceFile(path.join(root, relativePath), "utf8");
 }
 
 test("Chronology owns a bounded playback coordinator for seek and startup", () => {
   const page = read("app/chronology/page.js");
 
-  assert.equal(page.includes("PLAYBACK_COORDINATOR_SOFT_TIMEOUT_MS = 3500"), true);
-  assert.equal(page.includes("PLAYBACK_COORDINATOR_HARD_TIMEOUT_MS = 7000"), true);
+  const coordinator = read("lib/chronologyPlaybackCoordinator.js");
+  assert.equal(coordinator.includes("softTimeoutMs = 3500"), true);
+  assert.equal(coordinator.includes("hardTimeoutMs = 7000"), true);
   assert.equal(page.includes("startPlaybackCoordinator"), true);
   assert.equal(page.includes("handleTilePlaybackState"), true);
-  assert.equal(page.includes("coordinatorBarrierComplete"), true);
+  assert.equal(coordinator.includes("coordinatorBarrierComplete"), true);
   assert.equal(page.includes("releasePlaybackCoordinator"), true);
-  assert.equal(page.includes("markCoordinatorTimeout"), true);
+  assert.equal(coordinator.includes("timeout(id)"), true);
 });
 
 test("Chronology seek starts coordinator only after playback metadata is applied", () => {

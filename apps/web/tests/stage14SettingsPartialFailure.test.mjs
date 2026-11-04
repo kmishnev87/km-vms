@@ -1,9 +1,14 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-const source=fs.readFileSync(new URL('../app/settings/page.js',import.meta.url),'utf8');
-const load=source.slice(source.indexOf('  async function load()'),source.indexOf('  async function loadUsers()'));
-const patch=source.slice(source.indexOf('  function patch(key,'),source.indexOf('  function reset',source.indexOf('  function patch(key,')));
+const source=fs.readFileSync(new URL('../lib/useSettingsFormLoader.js',import.meta.url),'utf8');
+function ownedFunction(marker) {
+  const start=source.indexOf(marker),end=source.indexOf('\n  }\n',start);
+  assert.ok(start>=0 && end>start);
+  return source.slice(start,end+4);
+}
+const load=ownedFunction('  async function load()');
 for(const failedPath of ['/settings','/hardware/capabilities','/users/me']){
   const state={},pending={};const ctx={loadGenerationRef:{current:0},pendingLanguageRef:{current:'en'},
     apiFetch:path=>new Promise((resolve,reject)=>pending[path]={resolve,reject}),
@@ -20,12 +25,11 @@ for(const failedPath of ['/settings','/hardware/capabilities','/users/me']){
   }
   await done;
   if(failedPath!=='/settings'){assert.equal(state.saved.timezone,'UTC');assert.equal(state.draft.timezone,'UTC');assert.equal(state.draft.language,'en');}
-  if(failedPath!=='/users/me'){assert.ok(state.user);assert.equal(state.users,true);}
+  if(failedPath!=='/users/me') assert.ok(state.user);
   if(failedPath!=='/hardware/capabilities')assert.ok(state.hardware);
 }
 // The real field updater must not construct a language-only settings draft.
-const start=source.indexOf('  function patch(key,');
-const fn=source.slice(start,source.indexOf('\n  function ',start+5));
+const fn=ownedFunction('  function patch(key,');
 let draft=null;
 vm.runInNewContext(fn+';patch("language","en");',{setDraft:updater=>draft=updater(draft)});
 assert.equal(draft,null);

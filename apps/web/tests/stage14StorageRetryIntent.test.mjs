@@ -1,8 +1,13 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
-const source=fs.readFileSync(new URL('../app/storage/page.js',import.meta.url),'utf8');
-const code=source.slice(source.indexOf('  async function retryMigration()'),source.indexOf('  function openArchiveRootSetup()'));
+const source=fs.readFileSync(new URL('../lib/useStorageMigrationController.js',import.meta.url),'utf8');
+const code=['retryMigration','takeoverMigrationCleanup'].map(name=>{
+  const start=source.indexOf('  async function '+name+'('),end=source.indexOf('\n  }\n',start);
+  assert.ok(start>=0 && end>start);
+  return source.slice(start,end+4);
+}).join('\n');
 let serial=0,lost=true;const requests=[];
 const ctx={migrationOperation:{operation_id:'parent-A'},migrationPlan:{plan_id:'plan-A',canonical_hash:'hash-A'},
   migrationScenario:{canRetry:true,canCleanupTakeover:true},migrationRetryRequestKeyRef:{current:null},

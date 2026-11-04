@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import {formatDurationSeconds,updateElapsedSeconds,updateApplyOperatorModel} from '../lib/settingsUpdateApplyHelpers.js';
+for(const value of [null,undefined,'',false]) assert.equal(formatDurationSeconds(value),'-');
+assert.equal(formatDurationSeconds(0),'0s');
+const completed={status:'completed',started_at:'2026-11-04T10:31:17.516212Z',finished_at:'2026-11-04T10:32:27.183111Z',elapsed_seconds:null};
+assert.equal(updateElapsedSeconds(completed),69);
+assert.equal(updateElapsedSeconds({...completed,elapsed_seconds:999999}),69,'saved endpoints override a stale running counter');
+assert.equal(updateElapsedSeconds({}),null);
+assert.equal(updateApplyOperatorModel({},completed,{}).elapsed,'1m 9s');
+assert.equal(updateApplyOperatorModel({},{status:'idle',last_apply_summary:completed},{}).elapsed,'1m 9s');

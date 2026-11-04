@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -6,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
-const read = (relative) => fs.readFileSync(resolve(root, relative), "utf8");
+const read = (relative) => readProductSourceFile(resolve(root, relative), "utf8");
 
 const feedback = read("components/OperationFeedback.js");
 const icons = read("components/CompactActionIcons.js");

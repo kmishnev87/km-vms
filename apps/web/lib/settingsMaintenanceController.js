@@ -148,6 +148,7 @@ export function useSettingsMaintenanceController({
 
   const updateApplyHasUnknownLaunch = Boolean(updateApplyPending);
   const updateApplyOperator = updateApplyOperatorModel(updateStatus, updateApplyStatus, t, lang, {
+    checking: maintenanceBusy === "update",
     updateError: updateTransportErrors.update,
     applyError: updateTransportErrors.apply,
     reconnectTiming: updateApplyReconnectSnapshot,

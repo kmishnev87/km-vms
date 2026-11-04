@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -6,8 +7,8 @@ import { dirname, resolve } from "node:path";
 import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const routePermissionsSource = fs.readFileSync(resolve(__dirname, "../lib/routePermissions.js"), "utf8");
-const storagePage = fs.readFileSync(resolve(__dirname, "../app/storage/page.js"), "utf8");
+const routePermissionsSource = readProductSourceFile(resolve(__dirname, "../lib/routePermissions.js"), "utf8");
+const storagePage = readProductSourceFile(resolve(__dirname, "../app/storage/page.js"), "utf8");
 const storageContext = storageOperations;
 
 const routeContext = {};

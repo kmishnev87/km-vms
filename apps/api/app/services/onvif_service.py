@@ -297,13 +297,16 @@ def _prepare_camera(host: str, port: int, username: str, password: str, onvif_pa
     cam = ONVIFCamera(host, int(port), username, password, wsdl_dir(), **({"onvif_path": onvif_path} if onvif_path else {}))
 
     services = []
+    services_read = False
     try:
         services = cam.devicemgmt.GetServices({"IncludeCapability": False})
+        services_read = True
     except Exception as exc:
         if any(word in str(exc).lower() for word in ("401", "403", "notauthorized", "failedauthentication")):
             try:
                 _align_client_clock(cam)
                 services = cam.devicemgmt.GetServices({"IncludeCapability": False})
+                services_read = True
             except Exception:
                 raise OnvifConfigurationError("onvif_authentication_failed", "ONVIF authentication or permission failed.") from None
         else:
@@ -328,8 +331,10 @@ def _prepare_camera(host: str, port: int, username: str, password: str, onvif_pa
     cam._km_media_services = advertised_media
     cam._km_media_credentials = (username, password)
 
+    capabilities_read = False
     try:
         caps = cam.devicemgmt.GetCapabilities({"Category": "All"})
+        capabilities_read = True
         for name, namespace in (("PTZ", "http://www.onvif.org/ver20/ptz/wsdl"),
                                 ("Imaging", "http://www.onvif.org/ver20/imaging/wsdl"),
                                 ("Events", "http://www.onvif.org/ver10/events/wsdl")):
@@ -341,6 +346,11 @@ def _prepare_camera(host: str, port: int, username: str, password: str, onvif_pa
             media_candidates.append(_rewrite_xaddr(_safe_attr(media_caps, "XAddr"), host, int(port), "/onvif/media_service"))
     except Exception:
         pass
+
+    cam._km_ptz_absence_confirmed = bool(
+        services_read and capabilities_read
+        and not getattr(cam, "xaddrs", {}).get("http://www.onvif.org/ver20/ptz/wsdl")
+    )
 
     media_candidates.extend([
         f"http://{host}:{int(port)}/onvif/media_service",
@@ -1657,6 +1667,8 @@ def _normalize_ptz_node(node) -> dict:
 
 def _prepare_ptz_context(host, port, username, password, onvif_path=None):
     cam, media_candidates = _prepare_camera(host, port, username or "", password or "", onvif_path)
+    if getattr(cam, "_km_ptz_absence_confirmed", False):
+        raise OnvifConfigurationError("onvif_ptz_not_advertised", "Camera does not advertise a PTZ service.")
     ptz = cam.create_ptz_service()
     media, _selected_media_xaddr = _get_media_service(cam, media_candidates)
     profiles = media.GetProfiles()
@@ -1668,8 +1680,7 @@ def get_onvif_ptz_capabilities(host, port, username, password, onvif_path=None) 
     try:
         _cam, ptz, profile_token = _prepare_ptz_context(host, port, username, password, *([onvif_path] if onvif_path else []))
     except Exception as exc:
-        text = str(exc).lower()
-        if "ptz" in text or "service" in text or "wsdl" in text:
+        if getattr(exc, "code", None) == "onvif_ptz_not_advertised":
             return {
                 "ok": True,
                 "supported": False,
@@ -1690,7 +1701,13 @@ def get_onvif_ptz_capabilities(host, port, username, password, onvif_path=None) 
     try:
         nodes = [_normalize_ptz_node(node) for node in _as_list(ptz.GetNodes())]
     except Exception:
-        warnings.append("ptz_nodes_unavailable")
+        return {
+            "ok": False, "supported": None, "source": "unknown",
+            "can_pan_tilt": None, "can_zoom": None, "can_stop": None,
+            "can_presets": None, "limits": _ptz_limits(),
+            "warnings": ["ptz_nodes_unavailable"], "unsupported_reasons": [],
+            "raw_secret_exposed": False,
+        }
 
     can_pan_tilt = any(item.get("can_pan_tilt") for item in nodes)
     can_zoom = any(item.get("can_zoom") for item in nodes)
@@ -1841,6 +1858,7 @@ def summarize_main_sub_assignment(camera, profiles: list[dict] | None = None) ->
     main_path = rtsp_path_from_uri(getattr(camera, "rtsp_main_url", None)) or getattr(camera, "rtsp_main_url", None)
     sub_path = rtsp_path_from_uri(getattr(camera, "rtsp_sub_url", None)) or getattr(camera, "rtsp_sub_url", None)
     main_token = getattr(camera, "onvif_profile_token", None)
+    sub_token = getattr(camera, "onvif_sub_profile_token", None)
     path_counts: dict[str, int] = {}
     token_counts: dict[str, int] = {}
     for profile in profiles:
@@ -1866,14 +1884,21 @@ def summarize_main_sub_assignment(camera, profiles: list[dict] | None = None) ->
         main_confidence = "not_configured"
         reason_codes.append("main_stream_not_configured")
 
-    if sub_path and path_counts.get(str(sub_path), 0) == 1:
+    if sub_token and token_counts.get(str(sub_token), 0) == 1:
+        sub_confidence = "token_exact"
+    elif sub_token and token_counts.get(str(sub_token), 0) > 1:
+        sub_confidence = "token_ambiguous"
+        reason_codes.append("sub_profile_token_not_unique")
+    elif sub_path and path_counts.get(str(sub_path), 0) == 1:
         sub_confidence = "path_unique"
+        if sub_token:
+            reason_codes.append("sub_profile_token_not_seen")
     elif sub_path and path_counts.get(str(sub_path), 0) > 1:
         sub_confidence = "path_ambiguous"
         reason_codes.append("sub_stream_path_not_unique")
-    elif sub_path:
-        sub_confidence = "path_unverified"
-        reason_codes.append("sub_stream_path_not_seen")
+    elif sub_token or sub_path:
+        sub_confidence = "token_unverified" if sub_token else "path_unverified"
+        reason_codes.append("sub_profile_token_not_seen" if sub_token else "sub_stream_path_not_seen")
     else:
         sub_confidence = "not_configured"
         reason_codes.append("sub_stream_not_configured")
@@ -1901,6 +1926,8 @@ def normalize_ptz_compatibility(ptz_result: dict | None) -> dict:
         return compatibility_domain("unknown", ["ptz_not_checked"])
     if ptz_result.get("source") == "not_onvif":
         return compatibility_domain("not_checked", ["not_onvif"], "static", supported=False)
+    if ptz_result.get("supported") is None or ptz_result.get("source") in {"unknown", "unreachable", "error"}:
+        return compatibility_domain("unknown", ptz_result.get("warnings") or ["ptz_check_failed"], "real_runtime", supported=None)
     if not ptz_result.get("supported"):
         return compatibility_domain("unsupported", ptz_result.get("unsupported_reasons") or ["ptz_unsupported"], "real_runtime", supported=False)
     nodes = ptz_result.get("nodes") or []
@@ -1928,8 +1955,11 @@ def normalize_ptz_compatibility(ptz_result: dict | None) -> dict:
 def check_onvif_events_feasibility(host, port, username, password, onvif_path=None) -> dict:
     cam = ONVIFCamera(host, int(port), username or "", password or "", wsdl_dir(), **({"onvif_path": onvif_path} if onvif_path else {}))
     services = []
+    services_read = False
+    capabilities_read = False
     try:
         services = cam.devicemgmt.GetServices({"IncludeCapability": True}) or []
+        services_read = True
     except Exception:
         services = []
 
@@ -1943,6 +1973,7 @@ def check_onvif_events_feasibility(host, port, username, password, onvif_path=No
     if not event_services:
         try:
             caps = cam.devicemgmt.GetCapabilities({"Category": "Events"})
+            capabilities_read = True
             events = _safe_attr(caps, "Events")
             if events:
                 event_services.append(events)
@@ -1958,9 +1989,9 @@ def check_onvif_events_feasibility(host, port, username, password, onvif_path=No
             "raw_secret_exposed": False,
         }
     return {
-        "events_supported": False,
-        "events_status": "unsupported",
-        "reason_codes": ["event_service_not_reported"],
+        "events_supported": False if services_read and capabilities_read else None,
+        "events_status": "unsupported" if services_read and capabilities_read else "unknown",
+        "reason_codes": ["event_service_not_reported" if services_read and capabilities_read else "events_feasibility_check_failed"],
         "limitations": ["feasibility_only_no_subscription_started"],
         "raw_secret_exposed": False,
     }
@@ -2085,10 +2116,10 @@ def build_onvif_health_contract(
     if events_result:
         events_status = events_result.get("events_status") or "unknown"
         events_domain = compatibility_domain(
-            "ok" if events_status == "supported" else "unsupported",
+            "ok" if events_status == "supported" else "unsupported" if events_status == "unsupported" else "unknown",
             events_result.get("reason_codes") or [],
             "real_runtime",
-            events_supported=bool(events_result.get("events_supported")),
+            events_supported=events_result.get("events_supported") if events_status in {"supported", "unsupported"} else None,
             limitations=events_result.get("limitations") or [],
         )
     else:

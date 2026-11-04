@@ -1098,7 +1098,7 @@ def test_settings_and_status_do_not_expose_ack_actor_or_raw_physical_identity(st
 
 
 def test_recorder_finalization_source_advances_signal_in_same_transaction():
-    source = Path(__file__).resolve().parents[2] / "recorder" / "main.py"
+    source = Path(__file__).resolve().parents[2] / "recorder" / "recorder_core" / "segment_accounting.py"
     text = source.read_text(encoding="utf-8")
     function = text[text.index("def finalize_segment_path"):text.index("def mark_segment_failed")]
 

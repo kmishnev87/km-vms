@@ -20,6 +20,7 @@ from app.models.camera import Camera
 from app.services.recorder_runtime_status import age_seconds
 
 live_module = importlib.import_module("app.services.live_engine.manager")
+live_instance_module = importlib.import_module("app.services.live_engine.stream_instance")
 
 
 class Process:
@@ -243,7 +244,7 @@ def test_network_failure_does_not_mark_hardware_failed_or_fall_back_to_cpu(live,
 
 def test_live_retries_are_capped_not_exhausted_and_reset_after_real_recovery(live, monkeypatch):
     now = 1000.0
-    monkeypatch.setattr(live_module, "time", types.SimpleNamespace(time=lambda: now))
+    monkeypatch.setattr(live_instance_module, "time", types.SimpleNamespace(time=lambda: now))
     for attempt in range(1, 9):
         live.next_retry_at = None
         live._schedule_retry_locked("camera_unreachable")

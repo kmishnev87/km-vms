@@ -1,12 +1,13 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const page = fs.readFileSync(resolve(__dirname, "../app/recordings/page.js"), "utf8");
-const baseCss = fs.readFileSync(resolve(__dirname, "../app/styles/40-storage-records-shared.css"), "utf8");
-const responsiveCss = fs.readFileSync(resolve(__dirname, "../app/styles/60-responsive-shared.css"), "utf8");
+const page = readProductSourceFile(resolve(__dirname, "../app/recordings/page.js"), "utf8");
+const baseCss = readProductSourceFile(resolve(__dirname, "../app/styles/40-storage-records-shared.css"), "utf8");
+const responsiveCss = readProductSourceFile(resolve(__dirname, "../app/styles/60-responsive-shared.css"), "utf8");
 
 assert.match(page, /className="table recordingsTable"/);
 assert.match(page, /className="recordingsMobileControls"/);

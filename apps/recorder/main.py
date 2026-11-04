@@ -19,6 +19,33 @@ from typing import Any
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
+from recorder_core.contracts import (
+    OWNERSHIP_KM_VMS,
+    METADATA_SOURCE_RECORDER,
+    SEGMENT_STATUS_WRITING,
+    SEGMENT_STATUS_FINALIZED,
+    SEGMENT_STATUS_FAILED,
+    SEGMENT_STATUS_STALE_WRITING,
+    STORAGE_NAMESPACE,
+    DEFAULT_ARCHIVE_ROOT_ID,
+    RECORDING_FORMATS,
+    DEFAULT_RECORDING_FORMAT,
+    FORMAT_METADATA,
+    RETENTION_SIGNAL_TYPE,
+    RETENTION_SIGNAL_SCOPE,
+    RETENTION_SIGNAL_SCOPE_JSON,
+    RETENTION_SIGNAL_SCOPE_KEY,
+    RECORDER_RECEIPT_CONTRACT_VERSION,
+    RECEIPT_FINGERPRINT_CHUNK_BYTES,
+    SEGMENT_METADATA_BATCH_SIZE,
+    SEGMENT_DISCOVERY_REFRESH_SECONDS,
+    RecorderState,
+    UNSET,
+    ERROR_CLEARING_STATES,
+    EXIT_CODE_CLEARING_STATES,
+)
+from recorder_core.job_store import RecordingJobStore
+from recorder_core.segment_accounting import SegmentAccounting, bounded_file_fingerprint, receipt_object_identity
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 STORAGE_ROOT = Path(os.getenv("STORAGE_ROOT", "/storage/archive"))
@@ -35,43 +62,6 @@ MEDIA_STALL_SAMPLES = 2
 RECOVERY_STABLE_SECONDS = 60
 BLOCKED_RETRY_SECONDS = 300
 MEDIA_PROGRESS_HEARTBEAT_GRACE_SECONDS = MEDIA_STALL_SECONDS
-OWNERSHIP_KM_VMS = "KM VMS"
-METADATA_SOURCE_RECORDER = "recorder"
-SEGMENT_STATUS_WRITING = "writing"
-SEGMENT_STATUS_FINALIZED = "finalized"
-SEGMENT_STATUS_FAILED = "failed"
-SEGMENT_STATUS_STALE_WRITING = "stale_writing"
-STORAGE_NAMESPACE = "kmvms/recordings"
-DEFAULT_ARCHIVE_ROOT_ID = "default"
-RECORDING_FORMATS = {"mkv", "mp4"}
-DEFAULT_RECORDING_FORMAT = "mkv"
-FORMAT_METADATA = {
-    "mkv": {"container_format": "mkv", "file_extension": ".mkv", "mime_type": "video/x-matroska", "segment_format": "matroska"},
-    "mp4": {"container_format": "mp4", "file_extension": ".mp4", "mime_type": "video/mp4", "segment_format": "mp4"},
-}
-RETENTION_SIGNAL_TYPE = "retention_evaluate"
-RETENTION_SIGNAL_SCOPE = {
-    "camera_ids": [],
-    "global": True,
-    "physical_volume_ids": [],
-    "root_ids": [],
-    "scope_escalated": False,
-    "segment_ids": [],
-}
-RETENTION_SIGNAL_SCOPE_JSON = json.dumps(
-    RETENTION_SIGNAL_SCOPE,
-    sort_keys=True,
-    ensure_ascii=True,
-    separators=(",", ":"),
-)
-RETENTION_SIGNAL_SCOPE_KEY = (
-    "scope:"
-    + hashlib.sha256(RETENTION_SIGNAL_SCOPE_JSON.encode("utf-8")).hexdigest()[:32]
-)
-RECORDER_RECEIPT_CONTRACT_VERSION = 1
-RECEIPT_FINGERPRINT_CHUNK_BYTES = 64 * 1024
-SEGMENT_METADATA_BATCH_SIZE = 64
-SEGMENT_DISCOVERY_REFRESH_SECONDS = 60
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -83,34 +73,6 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 RECORDER_INSTANCE_ID = os.getenv("RECORDER_INSTANCE_ID") or f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
 RECORDER_STARTED_AT = time.time()
 
-
-class RecorderState:
-    IDLE = "idle"
-    STARTING = "starting"
-    RECORDING = "recording"
-    STOPPING = "stopping"
-    STOPPED = "stopped"
-    RESTARTING = "restarting"
-    ERROR = "error"
-    DISABLED = "disabled"
-
-
-UNSET = object()
-ERROR_CLEARING_STATES = {
-    RecorderState.STARTING,
-    RecorderState.RECORDING,
-    RecorderState.STOPPING,
-    RecorderState.STOPPED,
-    RecorderState.IDLE,
-    RecorderState.DISABLED,
-}
-EXIT_CODE_CLEARING_STATES = {
-    RecorderState.STARTING,
-    RecorderState.RECORDING,
-    RecorderState.STOPPED,
-    RecorderState.IDLE,
-    RecorderState.DISABLED,
-}
 
 
 ERROR_INVALID_RTSP = "invalid_rtsp"
@@ -249,28 +211,8 @@ def truncate_error(value: str | None) -> str:
     return text_value[-MAX_ERROR_LENGTH:]
 
 
-def bounded_file_fingerprint(file_path: Path, stat_result: os.stat_result) -> str:
-    digest = hashlib.sha256()
-    digest.update(f"v1:{int(stat_result.st_size)}:{int(stat_result.st_mtime_ns)}".encode("ascii"))
-    with file_path.open("rb") as handle:
-        digest.update(handle.read(RECEIPT_FINGERPRINT_CHUNK_BYTES))
-        if stat_result.st_size > RECEIPT_FINGERPRINT_CHUNK_BYTES:
-            handle.seek(max(0, int(stat_result.st_size) - RECEIPT_FINGERPRINT_CHUNK_BYTES))
-            digest.update(handle.read(RECEIPT_FINGERPRINT_CHUNK_BYTES))
-    return digest.hexdigest()
 
 
-def receipt_object_identity(root_id: str, relative_path: str, stat_result: os.stat_result) -> str:
-    canonical = ":".join(
-        (
-            "v1",
-            str(root_id),
-            str(relative_path),
-            str(int(stat_result.st_dev)),
-            str(int(stat_result.st_ino)),
-        )
-    )
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def redact_text(value: str | None) -> str:
@@ -631,73 +573,24 @@ def input_fingerprint(row) -> str:
     return truncate_error(f"{scheme}:{host}{path}" if scheme else f"{host}{path}")[:255]
 
 
-def create_recording_job(row, job: RecordingJob) -> str:
-    if job.db_job_id:
-        return job.db_job_id
+def recording_job_store() -> RecordingJobStore:
+    return RecordingJobStore(
+        engine, RECORDER_INSTANCE_ID, selected_source_stream, input_fingerprint,
+        redact_text, truncate_error, log_event,
+    )
 
-    job_id = job.pending_db_job_id or str(uuid.uuid4())
-    job.pending_db_job_id = job_id
-    source_stream = selected_source_stream(row)
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                INSERT INTO recording_jobs (
-                    id,
-                    camera_id,
-                    camera_name_snapshot,
-                    camera_folder_snapshot,
-                    state,
-                    source_stream,
-                    input_fingerprint,
-                    recorder_instance_id,
-                    started_at,
-                    created_by,
-                    ownership,
-                    source,
-                    created_at,
-                    updated_at
-                )
-                VALUES (
-                    :id,
-                    :camera_id,
-                    :camera_name,
-                    :camera_folder,
-                    :state,
-                    :source_stream,
-                    :input_fingerprint,
-                    :recorder_instance_id,
-                    timezone('UTC', NOW()),
-                    :created_by,
-                    :ownership,
-                    :source,
-                    NOW(),
-                    NOW()
-                )
-                ON CONFLICT (id) DO NOTHING
-                """
-            ),
-            {
-                "id": job_id,
-                "camera_id": job.camera_id,
-                "camera_name": redact_text(job.camera_name),
-                "camera_folder": job.folder_name,
-                "state": RecorderState.STARTING,
-                "source_stream": source_stream,
-                "input_fingerprint": input_fingerprint(row),
-                "recorder_instance_id": RECORDER_INSTANCE_ID,
-                "created_by": OWNERSHIP_KM_VMS,
-                "ownership": OWNERSHIP_KM_VMS,
-                "source": METADATA_SOURCE_RECORDER,
-            },
-        )
-    # Publish authority only after commit; reuse the pending id if its reply was
-    # lost so that retry cannot create a second owner or launch an orphan writer.
-    job.db_job_id = job_id
-    job.pending_db_job_id = None
-    job.source_stream = source_stream
-    log_event("info", "recording_job_created", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job_id)
-    return job_id
+
+def segment_accounting() -> SegmentAccounting:
+    return SegmentAccounting(
+        engine, DEFAULT_RECORD_STREAM, MEDIA_STALL_SECONDS,
+        storage_relative_path, parse_segment_start_time, path_format_metadata,
+        remember_processed_segment, redact_text, truncate_error, classify_error,
+        log_event, write_audit_event,
+    )
+
+
+def create_recording_job(row, job: RecordingJob) -> str:
+    return recording_job_store().create_recording_job(row, job)
 
 
 def update_recording_job(
@@ -711,48 +604,11 @@ def update_recording_job(
     ffmpeg_pid: Any = UNSET,
     last_exit_code: Any = UNSET,
 ) -> None:
-    job_id = job.db_job_id or job.pending_db_job_id
-    if not job_id:
-        return
-    sanitized_last_error = (
-        truncate_error(redact_text(last_error))
-        if last_error is not UNSET and last_error
-        else None
+    recording_job_store().update_recording_job(
+        job, state=state, stop_reason=stop_reason, stopped=stopped,
+        last_error=last_error, last_error_type=last_error_type,
+        ffmpeg_pid=ffmpeg_pid, last_exit_code=last_exit_code,
     )
-
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                UPDATE recording_jobs
-                SET state = COALESCE(:state, state),
-                    stopped_at = CASE WHEN :stopped THEN timezone('UTC', NOW()) ELSE stopped_at END,
-                    stop_reason = CASE WHEN :stop_reason_set THEN :stop_reason ELSE stop_reason END,
-                    last_error = CASE WHEN :last_error_set THEN :last_error ELSE last_error END,
-                    last_error_type = CASE WHEN :last_error_type_set THEN :last_error_type ELSE last_error_type END,
-                    ffmpeg_pid = CASE WHEN :ffmpeg_pid_set THEN :ffmpeg_pid ELSE ffmpeg_pid END,
-                    last_exit_code = CASE WHEN :last_exit_code_set THEN :last_exit_code ELSE last_exit_code END,
-                    updated_at = timezone('UTC', NOW())
-                WHERE id = :id
-                """
-            ),
-            {
-                "id": job_id,
-                "state": state,
-                "stopped": stopped,
-                "stop_reason_set": stop_reason is not UNSET,
-                "stop_reason": None if stop_reason is UNSET else stop_reason,
-                "last_error_set": last_error is not UNSET,
-                "last_error": sanitized_last_error,
-                "last_error_type_set": last_error_type is not UNSET,
-                "last_error_type": None if last_error_type is UNSET else last_error_type,
-                "ffmpeg_pid_set": ffmpeg_pid is not UNSET,
-                "ffmpeg_pid": None if ffmpeg_pid is UNSET else ffmpeg_pid,
-                "last_exit_code_set": last_exit_code is not UNSET,
-                "last_exit_code": None if last_exit_code is UNSET else last_exit_code,
-            },
-        )
-    log_event("info", "recording_job_updated", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, state=state)
 
 
 def close_recording_job(job: RecordingJob, *, state: str, reason: str, error: str | None = None) -> None:
@@ -777,22 +633,7 @@ def close_recording_job(job: RecordingJob, *, state: str, reason: str, error: st
 
 
 def clear_recording_job_error(job: RecordingJob) -> None:
-    if not job.db_job_id:
-        return
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                UPDATE recording_jobs
-                SET last_error = NULL,
-                    last_error_type = NULL,
-                    last_exit_code = NULL,
-                    updated_at = timezone('UTC', NOW())
-                WHERE id = :id
-                """
-            ),
-            {"id": job.db_job_id},
-        )
+    recording_job_store().clear_recording_job_error(job)
 
 
 def active_archive_root() -> tuple[str, Path]:
@@ -985,529 +826,19 @@ def remember_processed_segment(job: RecordingJob, file_path: Path) -> None:
 
 
 def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> None:
-    if not job.db_job_id or not job.archive_root_id:
-        return
-    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
-    if not rel_path or rel_path in job.segment_baseline_paths:
-        return
-    if rel_path in job.known_segment_paths:
-        return
-
-    try:
-        stat = file_path.stat()
-    except Exception as exc:
-        log_event("warning", "metadata_write_failed", camera_id=job.camera_id, camera_name=job.camera_name, path=str(file_path), error=str(exc))
-        return
-
-    started_at = parse_segment_start_time(file_path)
-    media_metadata = path_format_metadata(file_path)
-    with engine.begin() as conn:
-        existing = conn.execute(
-            text(
-                """
-                SELECT id, status
-                FROM recording_segments
-                WHERE (job_id = :job_id AND relative_path = :relative_path)
-                   OR (
-                        relative_path = :relative_path
-                        AND archive_root_id = :archive_root_id
-                        AND ownership = :ownership
-                        AND source = :source
-                   )
-                LIMIT 1
-                """
-            ),
-            {
-                "job_id": job.db_job_id,
-                "relative_path": rel_path,
-                "archive_root_id": job.archive_root_id,
-                "ownership": OWNERSHIP_KM_VMS,
-                "source": METADATA_SOURCE_RECORDER,
-            },
-        ).first()
-        if existing:
-            job.known_segment_paths.add(rel_path)
-            if getattr(existing, "status", SEGMENT_STATUS_WRITING) != SEGMENT_STATUS_WRITING:
-                remember_processed_segment(job, file_path)
-            return
-
-        try:
-            content_fingerprint = bounded_file_fingerprint(file_path, stat)
-        except OSError:
-            content_fingerprint = hashlib.sha256(
-                f"unavailable:{int(stat.st_size)}:{int(stat.st_mtime_ns)}".encode("ascii")
-            ).hexdigest()
-        inserted = conn.execute(
-            text(
-                """
-                INSERT INTO recording_segments (
-                    job_id,
-                    camera_id,
-                    camera_name_snapshot,
-                    camera_folder_snapshot,
-                    file_path,
-                    relative_path,
-                    started_at,
-                    ended_at,
-                    duration_sec,
-                    size_bytes,
-                    stream_type,
-                    status,
-                    ownership,
-                    source,
-                    archive_root_id,
-                    archive_root_resolution_status,
-                    archive_root_resolution_detail,
-                    archive_root_resolved_at,
-                    storage_namespace,
-                    container_format,
-                    file_extension,
-                    mime_type,
-                    integrity_status,
-                    file_size_verified_at,
-                    media_progress_at,
-                    file_mtime,
-                    cleanup_candidate,
-                    reconciliation_status,
-                    created_at,
-                    updated_at
-                ) VALUES (
-                    :job_id,
-                    :camera_id,
-                    :camera_name,
-                    :camera_folder,
-                    :file_path,
-                    :relative_path,
-                    :started_at,
-                    NULL,
-                    0,
-                    :size_bytes,
-                    :stream_type,
-                    :status,
-                    :ownership,
-                    :source,
-                    :archive_root_id,
-                    :archive_root_resolution_status,
-                    NULL,
-                    NOW(),
-                    :storage_namespace,
-                    :container_format,
-                    :file_extension,
-                    :mime_type,
-                    :integrity_status,
-                    NOW(),
-                    :media_progress_at,
-                    :file_mtime,
-                    FALSE,
-                    :reconciliation_status,
-                    NOW(),
-                    NOW()
-                )
-                RETURNING id
-                """
-            ),
-            {
-                "job_id": job.db_job_id,
-                "camera_id": job.camera_id,
-                "camera_name": redact_text(job.camera_name),
-                "camera_folder": job.folder_name,
-                "file_path": str(file_path),
-                "relative_path": rel_path,
-                "started_at": started_at,
-                "size_bytes": max(int(stat.st_size), 0),
-                "stream_type": job.source_stream or DEFAULT_RECORD_STREAM,
-                "status": SEGMENT_STATUS_WRITING,
-                "ownership": OWNERSHIP_KM_VMS,
-                "source": METADATA_SOURCE_RECORDER,
-                "archive_root_id": job.archive_root_id,
-                "archive_root_resolution_status": "resolved",
-                "storage_namespace": STORAGE_NAMESPACE,
-                "container_format": media_metadata["container_format"],
-                "file_extension": media_metadata["file_extension"],
-                "mime_type": media_metadata["mime_type"],
-                "integrity_status": SEGMENT_STATUS_WRITING,
-                "media_progress_at": datetime.utcnow() if stat.st_size > 0 else None,
-                "file_mtime": datetime.fromtimestamp(stat.st_mtime, UTC).replace(tzinfo=None),
-                "reconciliation_status": "pending",
-            },
-        ).first()
-        if inserted is None:
-            return
-        physical_identity = conn.execute(
-            text("SELECT physical_identity FROM archive_roots WHERE id = :root_id"),
-            {"root_id": job.archive_root_id},
-        ).scalar()
-        conn.execute(
-            text(
-                """
-                INSERT INTO recorder_file_receipts (
-                    id,
-                    contract_version,
-                    segment_id,
-                    job_id,
-                    camera_id,
-                    root_id,
-                    physical_identity,
-                    relative_path,
-                    state,
-                    object_identity,
-                    device_id,
-                    inode,
-                    size_bytes,
-                    mtime_ns,
-                    content_fingerprint,
-                    created_at,
-                    updated_at
-                ) VALUES (
-                    :id,
-                    :contract_version,
-                    :segment_id,
-                    :job_id,
-                    :camera_id,
-                    :root_id,
-                    :physical_identity,
-                    :relative_path,
-                    'writing',
-                    :object_identity,
-                    :device_id,
-                    :inode,
-                    :size_bytes,
-                    :mtime_ns,
-                    :content_fingerprint,
-                    NOW(),
-                    NOW()
-                )
-                ON CONFLICT (segment_id) DO NOTHING
-                """
-            ),
-            {
-                "id": str(uuid.uuid4()),
-                "contract_version": RECORDER_RECEIPT_CONTRACT_VERSION,
-                "segment_id": int(inserted.id),
-                "job_id": job.db_job_id,
-                "camera_id": job.camera_id,
-                "root_id": job.archive_root_id,
-                "physical_identity": physical_identity,
-                "relative_path": rel_path,
-                "object_identity": receipt_object_identity(job.archive_root_id, rel_path, stat),
-                "device_id": str(int(stat.st_dev)),
-                "inode": str(int(stat.st_ino)),
-                "size_bytes": max(int(stat.st_size), 0),
-                "mtime_ns": int(stat.st_mtime_ns),
-                "content_fingerprint": content_fingerprint,
-            },
-        )
-    job.known_segment_paths.add(rel_path)
-    if stat.st_size > 0:
-        job.last_media_progress_at = time.time()
-        if job.stable_progress_since is None:
-            job.stable_progress_since = job.last_media_progress_at
-        job.current_media_size = int(stat.st_size)
-        job.current_media_relative_path = rel_path
-    log_event("info", "segment_detected", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, size_bytes=stat.st_size)
+    return segment_accounting().create_segment_metadata_if_needed(job, file_path)
 
 
 def update_writing_segment_progress(job: RecordingJob, file_path: Path) -> bool:
-    if not job.db_job_id:
-        return False
-    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
-    if not rel_path or rel_path not in job.known_segment_paths:
-        return False
-    try:
-        stat = file_path.stat()
-    except OSError:
-        return False
-    if stat.st_size <= 0:
-        return False
-    file_mtime = datetime.fromtimestamp(stat.st_mtime, UTC).replace(tzinfo=None)
-    with engine.begin() as conn:
-        result = conn.execute(
-            text(
-                """
-                UPDATE recording_segments
-                SET size_bytes = :size_bytes,
-                    file_mtime = :file_mtime,
-                    file_size_verified_at = timezone('UTC', NOW()),
-                    media_progress_at = timezone('UTC', NOW()),
-                    updated_at = timezone('UTC', NOW())
-                WHERE job_id = :job_id
-                  AND relative_path = :relative_path
-                  AND archive_root_id = :archive_root_id
-                  AND ownership = :ownership
-                  AND source = :source
-                  AND status = :writing
-                  AND (size_bytes <> :size_bytes OR file_mtime IS DISTINCT FROM :file_mtime)
-                """
-            ),
-            {
-                "job_id": job.db_job_id,
-                "relative_path": rel_path,
-                "archive_root_id": job.archive_root_id,
-                "ownership": OWNERSHIP_KM_VMS,
-                "source": METADATA_SOURCE_RECORDER,
-                "writing": SEGMENT_STATUS_WRITING,
-                "size_bytes": int(stat.st_size),
-                "file_mtime": file_mtime,
-            },
-        )
-    if result.rowcount <= 0:
-        return False
-    now = time.time()
-    if job.last_media_progress_at is None or now - job.last_media_progress_at > MEDIA_STALL_SECONDS:
-        job.stable_progress_since = now
-    job.last_media_progress_at = now
-    job.current_media_size = int(stat.st_size)
-    job.current_media_relative_path = rel_path
-    return True
+    return segment_accounting().update_writing_segment_progress(job, file_path)
 
 
 def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
-    if not job.db_job_id:
-        return False
-    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
-    if not rel_path:
-        return False
-    if rel_path in job.segment_baseline_paths or rel_path not in job.known_segment_paths:
-        return False
-    try:
-        stat = file_path.stat()
-    except Exception as exc:
-        mark_segment_failed(job, rel_path, f"segment stat failed: {exc}")
-        remember_processed_segment(job, file_path)
-        return False
-    if stat.st_size <= 0:
-        mark_segment_failed(job, rel_path, "segment file is empty")
-        remember_processed_segment(job, file_path)
-        return False
-
-    started_at = parse_segment_start_time(file_path)
-    ended_at = datetime.fromtimestamp(stat.st_mtime)
-    duration_sec = max(int((ended_at - started_at).total_seconds()), 0)
-    media_metadata = path_format_metadata(file_path)
-    try:
-        final_fingerprint = bounded_file_fingerprint(file_path, stat)
-    except OSError:
-        final_fingerprint = hashlib.sha256(
-            f"unavailable:{int(stat.st_size)}:{int(stat.st_mtime_ns)}".encode("ascii")
-        ).hexdigest()
-    with engine.begin() as conn:
-        result = conn.execute(
-            text(
-                """
-                UPDATE recording_segments
-                SET status = :status,
-                    ended_at = :ended_at,
-                    finalized_at = NOW(),
-                    duration_sec = :duration_sec,
-                    size_bytes = :size_bytes,
-                    error_message = NULL,
-                    storage_namespace = COALESCE(storage_namespace, :storage_namespace),
-                    integrity_status = :integrity_status,
-                    integrity_error = NULL,
-                    last_integrity_check_at = NOW(),
-                    file_size_verified_at = NOW(),
-                    file_mtime = :file_mtime,
-                    content_probe_status = :content_probe_status,
-                    container_format = :container_format,
-                    file_extension = :file_extension,
-                    mime_type = :mime_type,
-                    cleanup_candidate = FALSE,
-                    cleanup_reason = NULL,
-                    reconciliation_status = :reconciliation_status,
-                    reconciliation_checked_at = NOW(),
-                    updated_at = NOW()
-                WHERE job_id = :job_id
-                  AND relative_path = :relative_path
-                  AND archive_root_id = :archive_root_id
-                  AND ownership = :ownership
-                  AND source = :source
-                  AND status = :writing
-                RETURNING id
-                """
-            ),
-            {
-                "job_id": job.db_job_id,
-                "relative_path": rel_path,
-                "archive_root_id": job.archive_root_id,
-                "ownership": OWNERSHIP_KM_VMS,
-                "source": METADATA_SOURCE_RECORDER,
-                "writing": SEGMENT_STATUS_WRITING,
-                "status": SEGMENT_STATUS_FINALIZED,
-                "ended_at": ended_at,
-                "duration_sec": duration_sec,
-                "size_bytes": int(stat.st_size),
-                "storage_namespace": STORAGE_NAMESPACE,
-                "integrity_status": "ok_owned_finalized",
-                "file_mtime": ended_at,
-                "content_probe_status": "stat_ok",
-                "container_format": media_metadata["container_format"],
-                "file_extension": media_metadata["file_extension"],
-                "mime_type": media_metadata["mime_type"],
-                "reconciliation_status": "ok_owned_finalized",
-            },
-        )
-        finalized_row = result.first()
-        if finalized_row is not None:
-            physical_identity = conn.execute(
-                text("SELECT physical_identity FROM archive_roots WHERE id = :root_id"),
-                {"root_id": job.archive_root_id},
-            ).scalar()
-            receipt_result = conn.execute(
-                text(
-                    """
-                    UPDATE recorder_file_receipts
-                    SET state = 'finalized',
-                        physical_identity = :physical_identity,
-                        object_identity = :object_identity,
-                        device_id = :device_id,
-                        inode = :inode,
-                        size_bytes = :size_bytes,
-                        mtime_ns = :mtime_ns,
-                        content_fingerprint = :content_fingerprint,
-                        finalized_at = NOW(),
-                        updated_at = NOW()
-                    WHERE segment_id = :segment_id
-                      AND contract_version = :contract_version
-                      AND root_id = :root_id
-                      AND physical_identity IS NOT DISTINCT FROM :physical_identity
-                      AND relative_path = :relative_path
-                      AND object_identity = :object_identity
-                      AND device_id IS NOT DISTINCT FROM :device_id
-                      AND inode IS NOT DISTINCT FROM :inode
-                      AND state = 'writing'
-                    """
-                ),
-                {
-                    "physical_identity": physical_identity,
-                    "object_identity": receipt_object_identity(job.archive_root_id, rel_path, stat),
-                    "device_id": str(int(stat.st_dev)),
-                    "inode": str(int(stat.st_ino)),
-                    "size_bytes": int(stat.st_size),
-                    "mtime_ns": int(stat.st_mtime_ns),
-                    "content_fingerprint": final_fingerprint,
-                    "segment_id": int(finalized_row.id),
-                    "contract_version": RECORDER_RECEIPT_CONTRACT_VERSION,
-                    "root_id": job.archive_root_id,
-                    "relative_path": rel_path,
-                },
-            )
-            if receipt_result.rowcount != 1:
-                raise RuntimeError("recorder_finalization_receipt_mismatch")
-            conn.execute(
-                text(
-                    """
-                    INSERT INTO storage_work_signals (
-                        signal_type,
-                        scope_key,
-                        scope,
-                        status,
-                        requested_watermark,
-                        consumed_watermark,
-                        claimed_watermark,
-                        owner_token_hash,
-                        owner_instance_id,
-                        fencing_token,
-                        revision,
-                        lease_expires_at,
-                        heartbeat_at,
-                        created_at,
-                        updated_at
-                    ) VALUES (
-                        :signal_type,
-                        :scope_key,
-                        CAST(:scope AS JSON),
-                        'pending',
-                        :watermark,
-                        0,
-                        NULL,
-                        NULL,
-                        NULL,
-                        0,
-                        1,
-                        NULL,
-                        NULL,
-                        NOW(),
-                        NOW()
-                    )
-                    ON CONFLICT (signal_type, scope_key) DO UPDATE SET
-                        requested_watermark = GREATEST(
-                            storage_work_signals.requested_watermark + 1,
-                            :watermark
-                        ),
-                        status = CASE
-                            WHEN storage_work_signals.status = 'running' THEN 'running'
-                            ELSE 'pending'
-                        END,
-                        revision = storage_work_signals.revision + 1,
-                        updated_at = NOW()
-                    """
-                ),
-                {
-                    "signal_type": RETENTION_SIGNAL_TYPE,
-                    "scope_key": RETENTION_SIGNAL_SCOPE_KEY,
-                    "scope": RETENTION_SIGNAL_SCOPE_JSON,
-                    "watermark": int(finalized_row.id),
-                },
-            )
-    remember_processed_segment(job, file_path)
-    if finalized_row is None:
-        return False
-    log_event("info", "segment_finalized", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, size_bytes=stat.st_size, duration_sec=duration_sec)
-    return True
+    return segment_accounting().finalize_segment_path(job, file_path)
 
 
 def mark_segment_failed(job: RecordingJob, rel_path: str, error: str) -> None:
-    if not job.db_job_id:
-        return
-    if rel_path in job.segment_baseline_paths or rel_path not in job.known_segment_paths:
-        return
-    with engine.begin() as conn:
-        result = conn.execute(
-            text(
-                """
-                UPDATE recording_segments
-                SET status = :status,
-                    ended_at = COALESCE(ended_at, NOW()),
-                    error_message = :error_message,
-                    integrity_status = :integrity_status,
-                    integrity_error = :error_message,
-                    last_integrity_check_at = NOW(),
-                    cleanup_candidate = FALSE,
-                    reconciliation_status = :reconciliation_status,
-                    reconciliation_checked_at = NOW(),
-                    updated_at = NOW()
-                WHERE job_id = :job_id
-                  AND relative_path = :relative_path
-                  AND archive_root_id = :archive_root_id
-                  AND ownership = :ownership
-                  AND source = :source
-                  AND status = :writing
-                """
-            ),
-            {
-                "job_id": job.db_job_id,
-                "relative_path": rel_path,
-                "archive_root_id": job.archive_root_id,
-                "ownership": OWNERSHIP_KM_VMS,
-                "source": METADATA_SOURCE_RECORDER,
-                "writing": SEGMENT_STATUS_WRITING,
-                "status": SEGMENT_STATUS_FAILED,
-                "error_message": truncate_error(redact_text(error)),
-                "integrity_status": "partial_file",
-                "reconciliation_status": "partial_file",
-            },
-        )
-    if result.rowcount <= 0:
-        return
-    log_event("warning", "segment_failed", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, error=error)
-    write_audit_event(
-        event_type="segment_failed",
-        severity="warning",
-        message=f"Recorder segment failed for camera {job.camera_name}",
-        camera_id=job.camera_id,
-        camera_name=job.camera_name,
-        metadata={"job_id": job.db_job_id, "error_type": classify_error(error), "segment_name": Path(rel_path).name},
-    )
+    return segment_accounting().mark_segment_failed(job, rel_path, error)
 
 
 def sync_segment_metadata_for_job(job: RecordingJob) -> None:

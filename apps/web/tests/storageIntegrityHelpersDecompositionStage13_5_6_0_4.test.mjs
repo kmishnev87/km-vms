@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -7,7 +8,7 @@ import * as integrityOwner from "../lib/storageArchiveIntegrityHelpers.js";
 import * as shared from "../lib/storageOperationsSharedHelpers.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const read = (relative) => fs.readFileSync(resolve(__dirname, "..", relative), "utf8");
+const read = (relative) => readProductSourceFile(resolve(__dirname, "..", relative), "utf8");
 const facadeSource = read("lib/storageOperations.js");
 const integritySource = read("lib/storageArchiveIntegrityHelpers.js");
 const sharedSource = read("lib/storageOperationsSharedHelpers.js");

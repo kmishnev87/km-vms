@@ -86,9 +86,9 @@ def test_maintenance_overview_is_read_only_sanitized_and_complete(client_db):
         assert isinstance(flow["facts"], list)
     restore = payload["flows"]["restore"]
     assert restore["title_key"] == "backup_restore_check"
-    assert restore["details"]["current_product_restore_supported"] is False
+    assert restore["details"]["current_product_restore_supported"] is True
     restore_facts = {item["key"]: item["value"] for item in restore["facts"]}
-    assert restore_facts["current_product_restore"] is False
+    assert restore_facts["current_product_restore"] is True
     assert payload["upgrade_report"]["available"] is True
     assert payload["upgrade_report"]["download_endpoint"] == "/system/upgrade/report"
     assert payload["history"]["durable_history"] == "limited"

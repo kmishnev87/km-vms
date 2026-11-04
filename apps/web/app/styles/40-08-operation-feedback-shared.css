@@ -1,0 +1,331 @@
+
+/* Stage 13.5 / 4.9 operation feedback and compact storage composition. */
+.operationFeedbackOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.operationFeedbackOverlay-compactConfirmation {
+  z-index: 9000;
+}
+
+.operationFeedbackDialog {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: min(760px, calc(100vh - 40px));
+  overflow: hidden;
+  border: 1px solid #dbe3ed;
+  border-top: 4px solid #d97706;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 22px 64px rgba(15, 23, 42, 0.24);
+}
+
+.operationFeedbackDialog-compactConfirmation {
+  width: min(440px, 100%);
+  max-height: min(640px, calc(100vh - 40px));
+}
+
+.operationFeedbackDialog-neutralChoice {
+  width: min(620px, 100%);
+}
+
+.operationFeedbackDialog-neutral {
+  border-top-color: #94a3b8;
+}
+
+.operationFeedbackDialog-success {
+  border-top-color: #16a34a;
+}
+
+.operationFeedbackDialog-info {
+  border-top-color: #2563eb;
+}
+
+.operationFeedbackDialog-error {
+  border-top-color: #dc2626;
+}
+
+.operationFeedbackHead,
+.operationFeedbackFooter {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.operationFeedbackHead {
+  justify-content: space-between;
+  border-bottom: 1px solid #e5eaf0;
+}
+
+.operationFeedbackHead h2 {
+  margin: 0;
+  color: #111827;
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.operationFeedbackClose {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: #eef2f6;
+  color: #334155;
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.operationFeedbackBody {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  display: grid;
+  grid-auto-rows: max-content;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  overflow-wrap: anywhere;
+  gap: 12px;
+  padding: 16px;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.operationFeedbackBody > p {
+  margin: 0;
+}
+
+.operationFeedbackSummary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.operationFeedbackSummary div {
+  display: grid;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.operationFeedbackSummary dt {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.operationFeedbackSummary dd {
+  margin: 0;
+  color: #0f172a;
+  font-weight: 650;
+}
+
+.operationFeedbackDescriptions {
+  display: grid;
+  gap: 6px;
+}
+
+.operationFeedbackDescriptions p {
+  margin: 0;
+  color: #334155;
+  font-size: 14px;
+  line-height: 1.45;
+  font-weight: 400;
+}
+
+.operationFeedbackDescriptions-neutralChoice {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.operationFeedbackDescriptions-neutralChoice p {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-height: 96px;
+  padding: 12px;
+  border: 1px solid #dbe3ed;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.operationFeedbackDescriptions-neutralChoice strong {
+  color: #1e293b;
+  font-size: 14px;
+}
+
+.operationFeedbackDescriptions-neutralChoice span {
+  color: #64748b;
+  font-size: 13px;
+}
+
+.operationFeedbackList {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.operationFeedbackReasons {
+  display: grid;
+  gap: 8px;
+}
+
+.operationFeedbackReasons > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 10px;
+  padding: 10px 12px;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  background: #fff7ed;
+}
+
+.operationFeedbackReasons p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #475569;
+  font-size: 12px;
+}
+
+.operationFeedbackDetail {
+  padding: 10px 12px;
+  border-radius: 6px;
+  background: #f1f5f9;
+  color: #475569;
+  font-size: 12px;
+}
+
+.operationFeedbackFooter {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  border-top: 1px solid #e5eaf0;
+}
+
+.operationFeedbackFooter-neutralChoice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.operationFeedbackFooter-neutralChoice .button {
+  width: 100%;
+  min-height: 38px;
+}
+
+.compactActionIcon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.operationFeedbackBusy {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.operationFeedbackBusy span {
+  display: block;
+  width: 36%;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  animation: operationFeedbackBusy 1.1s ease-in-out infinite;
+}
+
+@keyframes operationFeedbackBusy {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(310%); }
+}
+
+.operationFeedbackToastRegion {
+  position: fixed;
+  z-index: 10000;
+  top: 50%;
+  left: 50%;
+  width: min(520px, calc(100vw - 28px));
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.operationFeedbackToast {
+  display: grid;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid #93c5fd;
+  border-radius: 8px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  box-shadow: 0 14px 38px rgba(15, 23, 42, 0.18);
+  text-align: center;
+}
+
+.operationFeedbackToast > div {
+  display: grid;
+  gap: 2px;
+}
+
+.operationFeedbackToast span {
+  font-size: 12px;
+}
+
+.operationFeedbackToastAction {
+  justify-self: center;
+  margin-top: 6px;
+  pointer-events: auto;
+}
+
+.operationRefreshButton { display: inline-grid; place-items: center; width: 32px; height: 32px; flex: 0 0 32px; padding: 0; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: #334155; font-size: 19px; cursor: pointer; }
+.operationRefreshButton.hasError { color: #991b1b; border-color: #f3baba; background: #fef2f2; }
+.operationRefreshButton:disabled { opacity: .5; cursor: default; }
+
+.operationFeedbackToast-success {
+  border-color: #86efac;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.operationFeedbackToast-error {
+  border-color: #fca5a5;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+.operationFeedbackToast-warning {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.operationFeedbackToast-info {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+/* Stage 13.5 / 4.10.4 durable archive-migration flow. */

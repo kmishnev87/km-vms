@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -5,7 +6,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const read = (path) => fs.readFileSync(resolve(root, path), "utf8");
+const read = (path) => readProductSourceFile(resolve(root, path), "utf8");
 const scope = {};
 vm.runInNewContext(read("lib/recordingFormatChange.js").replaceAll("export function ", "function ") + "\nthis.h={recordingFormatCopy,recordingFormatError,recordingFormatNotice,recordingFormatCameraText,shouldWatchRecordingFormat,recordingFormatNotificationKey};", scope);
 const h = scope.h;
@@ -35,7 +36,8 @@ assert.equal(h.recordingFormatNotificationKey(failed), h.recordingFormatNotifica
 assert.notEqual(h.recordingFormatNotificationKey(failed), h.recordingFormatNotificationKey({ ...failed, items: [{ ...failed.items[0], reason_code: "finish_timeout" }] }));
 
 const page = read("app/settings/page.js");
-const notification = page.slice(page.indexOf("  function showFormatStatusToast("), page.indexOf("  async function load("));
+const notificationStart = page.indexOf("  function showFormatStatusToast(");
+const notification = page.slice(notificationStart, page.indexOf("\n  }\n", notificationStart) + 4);
 const submit = page.slice(page.indexOf("  async function submitSettings("), page.indexOf("  async function rescanHardware("));
 assert.ok(submit.includes("async function submitSettings"));
 function harness(api) {

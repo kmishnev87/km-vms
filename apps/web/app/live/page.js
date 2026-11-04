@@ -1006,7 +1006,6 @@ export default function LivePage() {
           <div className="liveWorkspacePanelHeader">
             <div className="liveWorkspacePanelTitle">{TEXT.cameras}</div>
             <div className="liveWorkspacePanelActions">
-              <OperatorProblemBanners domains={["live"]} limit={3} />
               <button
                 type="button"
                 className="liveWorkspaceAlignButton"
@@ -1130,6 +1129,7 @@ export default function LivePage() {
           }}
           onDrop={handleDrop}
         >
+          <OperatorProblemBanners domains={["live"]} limit={3} className="liveWorkspaceProblemAnchor" />
           {!visibleTiles.length ? (
             <div className="liveWorkspaceEmpty">
               <div className="liveWorkspaceEmptyTitle">{TEXT.empty}</div>

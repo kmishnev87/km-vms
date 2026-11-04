@@ -111,6 +111,21 @@ scripts/km-vms-bootstrap-dispatch.sh
 "
 
 TARGET_ONLY_PRIVILEGED_FILES="
+scripts/km_vms_slot_core/__init__.py
+scripts/km_vms_slot_core/contracts.py
+scripts/km_vms_slot_core/description.py
+scripts/km_vms_slot_core/inventory.py
+scripts/km_vms_slot_core/state.py
+scripts/km_vms_helper_handlers/__init__.py
+scripts/km_vms_helper_handlers/update.py
+scripts/km_vms_helper_handlers/restore.py
+scripts/km_vms_helper_handlers/rollback.py
+scripts/km_vms_helper_handlers/restore_executor.py
+scripts/km_vms_bridge/__init__.py
+scripts/km_vms_bridge/contracts.py
+scripts/km_vms_bridge/state.py
+scripts/km_vms_bridge/requests.py
+scripts/km_vms_bridge/handoff.py
 release/km-vms-update-lineage.json
 scripts/km-vms-permission-gate.sh
 scripts/km-vms-release-identity.py
@@ -365,6 +380,15 @@ normalize_path() {
 
 if [ "$CONTRACT" = "source" ] || [ "$CONTRACT" = "legacy" ]; then
   PRIVILEGED_DIRECTORIES=". apps apps/update-helper scripts"
+  if [ "$CONTRACT" = "source" ] || [ -e "$APP_DIR/scripts/km_vms_bridge" ] || [ -L "$APP_DIR/scripts/km_vms_bridge" ]; then
+    PRIVILEGED_DIRECTORIES="$PRIVILEGED_DIRECTORIES scripts/km_vms_bridge"
+  fi
+  if [ "$CONTRACT" = "source" ] || [ -e "$APP_DIR/scripts/km_vms_helper_handlers" ] || [ -L "$APP_DIR/scripts/km_vms_helper_handlers" ]; then
+    PRIVILEGED_DIRECTORIES="$PRIVILEGED_DIRECTORIES scripts/km_vms_helper_handlers"
+  fi
+  if [ "$CONTRACT" = "source" ] || [ -e "$APP_DIR/scripts/km_vms_slot_core" ] || [ -L "$APP_DIR/scripts/km_vms_slot_core" ]; then
+    PRIVILEGED_DIRECTORIES="$PRIVILEGED_DIRECTORIES scripts/km_vms_slot_core"
+  fi
 else
   PRIVILEGED_DIRECTORIES=""
 fi
@@ -456,6 +480,12 @@ if [ "$CONTRACT" = "stable-runtime" ]; then
     *) fail "Stable bootstrap bundle escaped its bounded root" ;;
   esac
   check_secure_path "$bundle_real" "data/update-runtime/bootstrap/current" dir
+  if [ -e "$bundle_real/km_vms_slot_core" ] || [ -L "$bundle_real/km_vms_slot_core" ]; then
+    check_secure_path "$bundle_real/km_vms_slot_core" "data/update-runtime/bootstrap/current/km_vms_slot_core" dir
+    for name in __init__.py contracts.py description.py inventory.py state.py; do
+      check_secure_path "$bundle_real/km_vms_slot_core/$name" "data/update-runtime/bootstrap/current/km_vms_slot_core/$name" file
+    done
+  fi
   for name in km-vms-bootstrap.py km-vms-bootstrap-dispatch.sh km-vms-release-slots.py km-vms-compose-common.sh km-vms-restart.sh km-vms-update-launcher.sh km-vms-storage-apply.sh km-vms-setup-activation-helper.sh bootstrap-manifest.json bootstrap-files.sha256 docker-compose.lifecycle.yml; do
     check_secure_path "$bundle_real/$name" "data/update-runtime/bootstrap/current/$name" file
   done

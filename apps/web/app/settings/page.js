@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Layout from "../../components/Layout";
+import useSettingsFormLoader from "../../lib/useSettingsFormLoader";
+import useSettingsUsersController from "../../lib/useSettingsUsersController";
 import { CheckIcon, EditIcon, PowerIcon, TrashIcon } from "../../components/CompactActionIcons";
 import { OperationDialog, OperationToast, OperationRefreshButton, useModalBodyScrollLock } from "../../components/OperationFeedback";
 import RecordingFormatChangeStatus from "../../components/RecordingFormatChangeStatus";
@@ -50,7 +52,6 @@ import {
 
 configureSettingsPageHelpers({ normalizeLocale, translateText });
 
-const CREDENTIALS_CHANGED_NOTICE_KEY = "km_vms_credentials_changed_notice";
 
 function settingsTextFor(lang) {
   if (TEXT[lang]) return TEXT[lang];
@@ -438,6 +439,8 @@ const TEXT = {
     updateApplyButtonHealth: "Тестирование",
     updateApplyButtonVerification: "Проверка commit",
     updateApplyHeadlines: {
+      not_checked: "Не проверяли",
+      checking: "Проверяем",
       current: "Система актуальна",
       available: "Доступно обновление",
       running: "Обновление выполняется",
@@ -446,12 +449,14 @@ const TEXT = {
       unknown: "Статус обновления временно неизвестен",
     },
     updateApplySummaries: {
+      not_checked: "Нажмите «Проверить обновление», чтобы узнать о новых версиях.",
+      checking: "Запрашиваем сведения о доступной версии.",
       current: "Установленная версия совпадает с опубликованным релизом.",
       available: "Проверьте релиз и запустите применение, когда будете готовы.",
       running: "Helper применяет обновление и обновляет прогресс автоматически.",
       completed: "Обновление установлено и подтверждено.",
       blocked: "Применение сейчас заблокировано; подробности есть в диагностике.",
-      unknown: "Последняя полученная информация устарела. Проверка статуса продолжается автоматически.",
+      unknown: "Состояние обновления не подтверждено. Повторите проверку.",
     },
     updateApplyResults: {
       completedVerified: "Завершено успешно",
@@ -1139,6 +1144,8 @@ const TEXT = {
     updateApplyButtonHealth: "Testing",
     updateApplyButtonVerification: "Commit check",
     updateApplyHeadlines: {
+      not_checked: "Not checked",
+      checking: "Checking",
       current: "System is current",
       available: "Update available",
       running: "Update is running",
@@ -1147,12 +1154,14 @@ const TEXT = {
       unknown: "Update status is temporarily unknown",
     },
     updateApplySummaries: {
+      not_checked: "Select Check update to find available releases.",
+      checking: "Requesting information about the available release.",
       current: "Installed version matches the published release.",
       available: "Review the release and apply it when ready.",
       running: "The helper is applying the update and refreshing progress automatically.",
       completed: "Update is installed and verified.",
       blocked: "Apply is currently blocked; diagnostics contain safe details.",
-      unknown: "The last received information is stale. Status checking continues automatically.",
+      unknown: "Update status is not confirmed. Run the check again.",
     },
     updateApplyResults: {
       completedVerified: "Completed successfully",
@@ -1825,6 +1834,8 @@ const ZH_TEXT_OVERRIDES = {
   updateApplyButtonHealth: "测试",
   updateApplyButtonVerification: "Commit 检查",
   updateApplyHeadlines: {
+    not_checked: "尚未检查更新",
+    checking: "正在检查更新",
     current: "系统已是最新",
     available: "有可用更新",
     running: "正在应用更新",
@@ -1833,12 +1844,14 @@ const ZH_TEXT_OVERRIDES = {
     unknown: "更新状态暂时未知",
   },
   updateApplySummaries: {
+    not_checked: "请选择检查更新以查询可用版本。",
+    checking: "正在请求可用版本的信息。",
     current: "已安装版本与已发布版本一致。",
     available: "请检查版本信息，准备好后应用更新。",
     running: "Helper 正在应用更新，并会自动刷新进度。",
     completed: "更新已安装并验证。",
     blocked: "当前无法应用；诊断中包含安全详情。",
-    unknown: "最后收到的信息已过期。系统会自动继续检查状态。",
+    unknown: "更新状态尚未确认，请重新检查。",
   },
   updateApplyResults: {
     completedVerified: "已成功完成",
@@ -2102,28 +2115,15 @@ function InfoTip({ text }) {
 
 export default function SettingsPage() {
   const router = useRouter();
-  const [draft, setDraft] = useState(null);
-  const pendingLanguageRef = useRef(null);
-  const loadGenerationRef = useRef(0);
-  const [savedDraft, setSavedDraft] = useState(null);
-  const [hardware, setHardware] = useState(null);
   const [toast, setToast] = useState(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const formatStatusGeneration = useRef(0);
   const formatNotificationKey = useRef(null);
-  const [formatStatus, setFormatStatus] = useState(null);
   const [formatDetailsOpen, setFormatDetailsOpen] = useState(false);
   const [formatChoice, setFormatChoice] = useState(null);
   const [formatChoiceError, setFormatChoiceError] = useState("");
   const [hardwareChecking, setHardwareChecking] = useState(false);
-  const [currentUser, setCurrentUser] = useState(null);
-  const [users, setUsers] = useState([]);
-  const [usersLoading, setUsersLoading] = useState(false);
-  const [userBusy, setUserBusy] = useState(false);
-  const [usersModalOpen, setUsersModalOpen] = useState(false);
-  const [userModal, setUserModal] = useState(null);
-  const [userDeleteTarget, setUserDeleteTarget] = useState(null);
   const [securityModalOpen, setSecurityModalOpen] = useState(false);
   const [diagnosticChoiceOpen, setDiagnosticChoiceOpen] = useState(false);
   const [securityBusy, setSecurityBusy] = useState(false);
@@ -2136,16 +2136,17 @@ export default function SettingsPage() {
   const auditRequestRef = useRef(0);
   const [bugReportText, setBugReportText] = useState("");
   const [diagnosticArchive, setDiagnosticArchive] = useState(null);
-  useModalBodyScrollLock(Boolean(usersModalOpen || userModal || securityModalOpen));
-  const lang = languageOf(draft || savedDraft);
+  const { draft, setDraft, savedDraft, setSavedDraft, hardware, setHardware, formatStatus, setFormatStatus, currentUser, setCurrentUser, pendingLanguageRef, patch, load, lang } = useSettingsFormLoader({ showToast, normalizedError });
   const t = settingsTextFor(lang);
   const dirty = Boolean(draft && savedDraft && !samePayload(draft, savedDraft));
   const anyBusy = saving || hardwareChecking || Boolean(formatChoice);
   const formatCopy = recordingFormatCopy(lang);
   const canManageMaintenance = Boolean(currentUser?.permissions?.includes("manage_settings"));
-  const canManageUsers = Boolean(currentUser?.permissions?.includes("manage_users"));
-  const sortedUsers = useMemo(() => sortedUsersForTable(users), [users]);
+  const { users, setUsers, usersLoading, setUsersLoading, userBusy, setUserBusy, usersModalOpen, setUsersModalOpen, userModal, setUserModal, userDeleteTarget, setUserDeleteTarget, loadUsers, canManageUsers, sortedUsers, openUsersModal, openCreateUser, openEditUser, patchUserModal, rejectUserPassword, submitUserModal, toggleUserActive, requestDeleteUser, deleteUser } = useSettingsUsersController({
+    currentUser, lang, t, showToast, normalizedError, router,
+  });
   const languageIcon = lang === "en" ? "/assets/icons/ui/language-en.png" : "/assets/icons/ui/language-ru.png";
+  useModalBodyScrollLock(Boolean(usersModalOpen || userModal || securityModalOpen));
   const maintenanceController = useSettingsMaintenanceController({
     canManageMaintenance,
     lang,
@@ -2155,20 +2156,6 @@ export default function SettingsPage() {
     diagnosticChoiceOpen,
   });
 
-  useEffect(() => {
-    load();
-    function onLanguage(event) {
-      if (event.detail) {
-        pendingLanguageRef.current = normalizeLocale(event.detail);
-        patch("language", pendingLanguageRef.current);
-      }
-    }
-    window.addEventListener("km-vms-language", onLanguage);
-    return () => {
-      loadGenerationRef.current += 1;
-      window.removeEventListener("km-vms-language", onLanguage);
-    };
-  }, []);
 
 
   useEffect(() => {
@@ -2247,37 +2234,7 @@ export default function SettingsPage() {
     });
   }
 
-  async function load() {
-    const generation = ++loadGenerationRef.current;
-    const ownsLoad = () => generation === loadGenerationRef.current;
-    const failed = (err) => { if (ownsLoad()) showToast(normalizedError(err, lang)); };
-    await Promise.allSettled([
-      apiFetch("/settings").then((settingsData) => {
-        if (!ownsLoad()) return;
-        const nextDraft = settingsDraftFromApi(settingsData);
-        setSavedDraft(nextDraft);
-        setDraft(pendingLanguageRef.current ? { ...nextDraft, language: pendingLanguageRef.current } : nextDraft);
-        setFormatStatus(settingsData.recording_format_change);
-      }).catch(failed),
-      apiFetch("/hardware/capabilities").then((data) => { if (ownsLoad()) setHardware(data); }).catch(failed),
-      apiFetch("/users/me").then(async (meData) => {
-        if (!ownsLoad()) return;
-        setCurrentUser(meData);
-        if (meData?.permissions?.includes("admin_access")) await loadUsers();
-      }).catch(failed),
-    ]);
-  }
 
-  async function loadUsers() {
-    setUsersLoading(true);
-    try {
-      setUsers(await apiFetch("/users"));
-    } catch (err) {
-      showToast(normalizedError(err, lang, "users"));
-    } finally {
-      setUsersLoading(false);
-    }
-  }
 
   function auditQuery(offset = 0) {
     const params = new URLSearchParams();
@@ -2318,9 +2275,6 @@ export default function SettingsPage() {
     setAuditFilters((current) => ({ ...current, [key]: value }));
   }
 
-  function patch(key, value) {
-    setDraft((current) => current ? ({ ...current, [key]: value }) : current);
-  }
 
   function cancelChanges() {
     if (!savedDraft) return;
@@ -2425,68 +2379,10 @@ export default function SettingsPage() {
     persistLocale(nextLanguage);
   }
 
-  async function openUsersModal() {
-    if (!canManageUsers || usersLoading) return;
-    setUsersModalOpen(true);
-    await loadUsers();
-  }
 
-  function openCreateUser() {
-    const options = roleOptionsFor(currentUser);
-    setUserModal({
-      mode: "create",
-      id: null,
-      username: "",
-      display_name: "",
-      password: "",
-      password_confirm: "",
-      current_password: "",
-      fieldErrors: {},
-      role: options[0] || "viewer",
-      is_active: true,
-      error: "",
-    });
-  }
 
-  function openEditUser(user) {
-    setUserModal({
-      mode: "edit",
-      id: user.id,
-      username: user.username,
-      display_name: user.display_name || "",
-      password: "",
-      password_confirm: "",
-      current_password: "",
-      fieldErrors: {},
-      role: user.role,
-      is_active: Boolean(user.is_active),
-      is_owner: user.role === "owner",
-      error: "",
-    });
-  }
 
-  function patchUserModal(key, value) {
-    setUserModal((current) => ({
-      ...current,
-      [key]: value,
-      error: key === "error" ? value : "",
-      fieldErrors: {
-        ...(current?.fieldErrors || {}),
-        [key]: "",
-      },
-    }));
-  }
 
-  function rejectUserPassword(field, message) {
-    setUserModal((current) => ({
-      ...current,
-      error: "",
-      fieldErrors: {
-        ...(current?.fieldErrors || {}),
-        [field]: message,
-      },
-    }));
-  }
 
   function patchBugReportText(value) {
     setBugReportText(value);
@@ -2501,133 +2397,9 @@ export default function SettingsPage() {
   }
 
 
-  async function submitUserModal(event) {
-    event.preventDefault();
-    if (!userModal || userBusy) return;
-    if (!userModal.username.trim()) {
-      patchUserModal("error", t.usernameRequired);
-      return;
-    }
-    if (userModal.mode === "create" && userModal.password.length < 8) {
-      rejectUserPassword("password", passwordLengthMessage(lang));
-      return;
-    }
-    const availableRoles = userModal.mode === "edit" && userModal.id === currentUser?.id
-      ? [currentUser.role]
-      : userModal.mode === "edit" && userModal.is_owner
-      ? ["owner"]
-      : roleOptionsFor(currentUser);
-    if (!availableRoles.includes(userModal.role)) {
-      patchUserModal("error", t.roleRequired);
-      return;
-    }
-    if (userModal.mode === "edit" && userModal.password && userModal.password.length < 8) {
-      rejectUserPassword("password", passwordLengthMessage(lang));
-      return;
-    }
-    if ((userModal.mode === "create" || userModal.password) && userModal.password !== userModal.password_confirm) {
-      rejectUserPassword("password_confirm", passwordConfirmMessage(lang));
-      return;
-    }
-    if (userModal.mode === "edit" && userModal.id === currentUser?.id && userModal.password && !userModal.current_password) {
-      patchUserModal("error", t.currentPasswordRequired || t.passwordRequired);
-      return;
-    }
 
-    setUserBusy(true);
-    try {
-      const body = {
-        username: userModal.username.trim(),
-        display_name: userModal.display_name.trim(),
-        role: userModal.role,
-        is_active: Boolean(userModal.is_active),
-      };
-      if (userModal.password) body.password = userModal.password;
-      if (userModal.current_password) body.current_password = userModal.current_password;
 
-      const changesOwnCredentials = userModal.mode === "edit"
-        && userModal.id === currentUser?.id
-        && (body.username !== currentUser?.username || Boolean(userModal.password));
 
-      if (userModal.mode === "create") {
-        await apiFetch("/users", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        showToast({ variant: "success", title: t.toasts.userCreatedTitle, text: userModal.username.trim() });
-      } else {
-        await apiFetch(`/users/${userModal.id}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        });
-        if (changesOwnCredentials) {
-          setUserModal(null);
-          try {
-            window.sessionStorage.setItem(CREDENTIALS_CHANGED_NOTICE_KEY, "credentials_changed");
-          } catch (_) {}
-          clearAuthToken();
-          router.replace("/login");
-          return;
-        }
-        showToast({ variant: "success", title: t.toasts.userUpdatedTitle, text: userModal.username.trim() });
-      }
-      setUserModal(null);
-      await loadUsers();
-    } catch (err) {
-      const errorToast = normalizedError(err, lang, "users");
-      showToast(errorToast);
-    } finally {
-      setUserBusy(false);
-    }
-  }
-
-  async function toggleUserActive(user) {
-    if (userBusy || !userCanBeManaged(currentUser, user) || user.id === currentUser?.id) return;
-    setUserBusy(true);
-    try {
-      await apiFetch(`/users/${user.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ is_active: !user.is_active }),
-      });
-      showToast({
-        variant: "success",
-        title: user.is_active ? t.toasts.userDisabledTitle : t.toasts.userEnabledTitle,
-        text: user.username,
-      });
-      await loadUsers();
-    } catch (err) {
-      showToast(normalizedError(err, lang, "users"));
-    } finally {
-      setUserBusy(false);
-    }
-  }
-
-  function requestDeleteUser(user) {
-    if (userBusy || !userCanBeDeleted(currentUser, user, users)) return;
-    setUserDeleteTarget(user);
-  }
-
-  async function deleteUser(user) {
-    if (userBusy || !userCanBeDeleted(currentUser, user, users)) return;
-    setUserBusy(true);
-    try {
-      await apiFetch(`/users/${user.id}`, { method: "DELETE" });
-      showToast({
-        variant: "success",
-        title: t.toasts.userDeletedTitle || (lang === "en" ? "User deleted" : "Пользователь удалён"),
-        text: user.username,
-      });
-      setUserDeleteTarget(null);
-      await loadUsers();
-    } catch (err) {
-      showToast(normalizedError(err, lang, "users"));
-    } finally {
-      setUserBusy(false);
-    }
-  }
 
   function downloadBlob(blob, filename) {
     const url = URL.createObjectURL(blob);

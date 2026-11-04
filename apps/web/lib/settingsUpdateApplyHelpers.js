@@ -115,6 +115,7 @@ export function updateApplyEffectiveStatus(updateStatus, applyStatus, transportC
 }
 
 export function formatDurationSeconds(value) {
+  if (value == null || value === "" || typeof value === "boolean") return "-";
   const seconds = Number(value);
   if (!Number.isFinite(seconds) || seconds < 0) return "-";
   if (seconds < 60) return `${Math.floor(seconds)}s`;
@@ -124,6 +125,17 @@ export function formatDurationSeconds(value) {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return mins ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+export function updateElapsedSeconds(status) {
+  const started = validApplyTimestamp(status?.started_at);
+  const finished = validApplyTimestamp(status?.finished_at);
+  if (started && finished) {
+    return Math.max(0, Math.floor((Date.parse(finished) - Date.parse(started)) / 1000));
+  }
+  const value = status?.elapsed_seconds;
+  return value != null && value !== "" && Number.isFinite(Number(value)) && Number(value) >= 0
+    ? Number(value) : null;
 }
 
 export function shortCommit(value) {
@@ -463,19 +475,26 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     UPDATE_CHECK_BLOCKING_STATES.has(normalizedLastCheckStatus)
   );
   const failed = terminalVerificationIncomplete || helperFailure || (!liveCheckFailedWithCandidate && updateCheckFailure);
-  const severity = failed ? "blocked" : running || stateUnknown || available || liveCheckFailedWithCandidate || context.updateError ? "warning" : "ok";
+  const notChecked = updateStatus?.check_state === "not_checked"
+    || (updateStatus?.projection_source === "installed_identity" && !updateStatus?.last_check_status && !updateStatus?.last_update_check);
+  const checking = Boolean(context.checking || updateStatus?.check_state === "checking");
+  const severity = failed ? "blocked" : running || stateUnknown || available || liveCheckFailedWithCandidate || context.updateError ? "warning" : notChecked && !presentedTerminalSuccess ? "neutral" : "ok";
   const headlineKey = stateUnknown
     ? "unknown"
-    : presentedTerminalSuccess
-    ? "completed"
     : running
       ? "running"
       : failed
           ? "blocked"
+          : checking
+            ? "checking"
           : available || liveCheckFailedWithCandidate
             ? "available"
+            : presentedTerminalSuccess
+              ? "completed"
             : current
               ? "current"
+              : notChecked
+                ? "not_checked"
               : "unknown";
   const headline = t.updateApplyHeadlines?.[headlineKey] || maintenanceStatusText(presentedTerminalSuccess ? "completed" : status, t);
   const recoveryStatus = terminalVerificationIncomplete
@@ -506,11 +525,7 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     : t.updateApplyResults?.[headlineKey] || headline;
   const finishedAt = honestUpdateFinishedAt(updateStatus, lastSummary);
   const releaseNotes = localizedReleaseNotes(updateStatus, t, lang);
-  const elapsed = running
-    ? formatDurationSeconds(applyStatus?.elapsed_seconds)
-    : lastSummary?.elapsed_seconds
-      ? formatDurationSeconds(lastSummary.elapsed_seconds)
-      : "-";
+  const elapsed = formatDurationSeconds(updateElapsedSeconds(running ? applyStatus : lastSummary || applyStatus));
   const liveStepsAvailable = Array.isArray(applyStatus?.steps) && applyStatus.steps.length;
   const historyStepsAvailable = Array.isArray(lastSummary?.steps) && lastSummary.steps.length;
   const stepsSource = liveStepsAvailable

@@ -1,14 +1,15 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const helper = fs.readFileSync(resolve(__dirname, "../lib/timezone.js"), "utf8");
-const recordsPage = fs.readFileSync(resolve(__dirname, "../app/recordings/page.js"), "utf8");
-const chronologyPage = fs.readFileSync(resolve(__dirname, "../app/chronology/page.js"), "utf8");
-const settingsPage = fs.readFileSync(resolve(__dirname, "../app/settings/page.js"), "utf8");
-const settingsHelpers = fs.readFileSync(resolve(__dirname, "../lib/settingsPageHelpers.js"), "utf8");
+const helper = readProductSourceFile(resolve(__dirname, "../lib/timezone.js"), "utf8");
+const recordsPage = readProductSourceFile(resolve(__dirname, "../app/recordings/page.js"), "utf8");
+const chronologyPage = readProductSourceFile(resolve(__dirname, "../app/chronology/page.js"), "utf8");
+const settingsPage = readProductSourceFile(resolve(__dirname, "../app/settings/page.js"), "utf8");
+const settingsHelpers = readProductSourceFile(resolve(__dirname, "../lib/settingsPageHelpers.js"), "utf8");
 
 assert.equal(helper.includes("formatProductDateTime"), true);
 assert.equal(helper.includes("timeZone: normalizeProductTimezone(timezone)"), true);

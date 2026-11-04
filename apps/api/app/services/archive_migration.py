@@ -77,168 +77,74 @@ from app.services.storage_operations_foundation import (
 )
 
 
+from app.services.migration_contracts import (
+    MIGRATION_OPERATION_TYPE,
+    MIGRATION_CLEANUP_CONTINUATION_MODE,
+    MIGRATION_PARENT_SNAPSHOT_MAX_BYTES,
+    MIGRATION_PLAN_SCHEMA_VERSION,
+    PLAN_READY_TTL,
+    PLAN_HISTORY_TTL,
+    PLAN_BATCH_SIZE,
+    PLAN_AUTHORITY_RECHECK_ITEMS,
+    ITEM_PAGE_MAX,
+    WORKER_POLL_SECONDS,
+    WORKER_LEASE_SECONDS,
+    WORKER_CANDIDATE_BATCH_SIZE,
+    WORKER_CANDIDATE_DIAGNOSTIC_INTERVAL_SECONDS,
+    WORKER_CANDIDATE_DIAGNOSTIC_MAX_KEYS,
+    COPY_CHUNK_BYTES,
+    TEMP_CREATE_MODE,
+    THROUGHPUT_MAX_SAMPLES,
+    THROUGHPUT_SAMPLE_INTERVAL_SECONDS,
+    THROUGHPUT_MIN_SAMPLES,
+    THROUGHPUT_MIN_WINDOW_SECONDS,
+    THROUGHPUT_MIN_BYTES,
+    THROUGHPUT_STALE_SECONDS,
+    THROUGHPUT_MAX_BYTES_PER_SECOND,
+    THROUGHPUT_MAX_ETA_SECONDS,
+    RECENT_WRITE_WINDOW,
+    RESERVE_MIN_BYTES,
+    RESERVE_PERCENT,
+    ACTIVE_JOB_STATES,
+    ORPHAN_EXECUTION_AUDIT_EVENTS,
+    INITIAL_ORPHAN_EXECUTION_AUDIT_EVENTS,
+    ELIGIBLE_SEGMENT_STATUSES,
+    PLAN_READY_STATUSES,
+    PLAN_TERMINAL_STATUSES,
+    ITEM_TERMINAL_PHASES,
+    CLEANUP_RECOVERY_ITEM_PHASES,
+    MIGRATION_FILESYSTEM_REASON_CODES,
+    MigrationRecoveryDecision,
+    ArchiveMigrationBlocked,
+    _MigrationAuditPersistenceFailed,
+    ArchiveMigrationPartial,
+    _WorkerCandidateRejected,
+    _CopyThroughputSampler,
+)
+from app.services.migration_manifest import (
+    _sha256_json,
+    _segment_metadata_fingerprint,
+    _item_canonical_payload,
+    _item_snapshot,
+    _item_manifest_valid,
+)
+from app.services.migration_plans import (
+    MigrationPlanBuilder,
+    _active_job_ids,
+    _segment_exclusion_reason,
+    target_snapshot,
+    migration_reserve_bytes,
+    migration_required_free_bytes,
+)
+from app.services.migration_files import MigrationFileExecutor
+from app.services.migration_cleanup_retry import MigrationCleanupRetry
+
 logger = logging.getLogger(__name__)
 
 
-MIGRATION_OPERATION_TYPE = "archive_migration_apply"
-MIGRATION_CLEANUP_CONTINUATION_MODE = "migration_cleanup_same_operation"
-MIGRATION_PARENT_SNAPSHOT_MAX_BYTES = 1024
-MIGRATION_PLAN_SCHEMA_VERSION = 1
-PLAN_READY_TTL = timedelta(hours=2)
-PLAN_HISTORY_TTL = timedelta(days=30)
-PLAN_BATCH_SIZE = 256
-PLAN_AUTHORITY_RECHECK_ITEMS = 16
-ITEM_PAGE_MAX = 100
-WORKER_POLL_SECONDS = 1.0
-WORKER_LEASE_SECONDS = 30
-WORKER_CANDIDATE_BATCH_SIZE = 32
-WORKER_CANDIDATE_DIAGNOSTIC_INTERVAL_SECONDS = 60.0
-WORKER_CANDIDATE_DIAGNOSTIC_MAX_KEYS = 128
-COPY_CHUNK_BYTES = 1024 * 1024
-TEMP_CREATE_MODE = 0o600
-THROUGHPUT_MAX_SAMPLES = 8
-THROUGHPUT_SAMPLE_INTERVAL_SECONDS = 0.5
-THROUGHPUT_MIN_SAMPLES = 3
-THROUGHPUT_MIN_WINDOW_SECONDS = 1.0
-THROUGHPUT_MIN_BYTES = 1024 * 1024
-THROUGHPUT_STALE_SECONDS = 5.0
-THROUGHPUT_MAX_BYTES_PER_SECOND = 10 * 1024**4
-THROUGHPUT_MAX_ETA_SECONDS = 365 * 24 * 60 * 60
-RECENT_WRITE_WINDOW = timedelta(minutes=15)
-RESERVE_MIN_BYTES = 1024 * 1024 * 1024
-RESERVE_PERCENT = 0.01
-ACTIVE_JOB_STATES = frozenset({"starting", "recording", "stopping", "restarting"})
-ORPHAN_EXECUTION_AUDIT_EVENTS = frozenset(
-    {
-        "storage_operation.started",
-        "storage_operation.taken_over",
-        "storage_operation.cancel_requested",
-        "storage_operation.cancelled",
-        "storage_operation.finished",
-    }
-)
-INITIAL_ORPHAN_EXECUTION_AUDIT_EVENTS = frozenset(
-    {
-        "archive_migration.apply_started",
-        "archive_migration.cancel_requested",
-        "archive_migration.operation_completed",
-        "archive_migration.operation_partial",
-        "archive_migration.operation_blocked",
-        "archive_migration.operation_failed",
-        "archive_migration.operation_cancelled",
-    }
-)
 _worker_candidate_state_lock = threading.Lock()
 _worker_candidate_cursor: tuple[datetime, str] | None = None
 _worker_candidate_diagnostics: dict[tuple[str, str], float] = {}
-ELIGIBLE_SEGMENT_STATUSES = frozenset({"finalized"})
-PLAN_READY_STATUSES = frozenset({"ready", "ready_with_exclusions"})
-PLAN_TERMINAL_STATUSES = frozenset({"completed", "partial", "blocked", "failed", "cancelled", "expired"})
-ITEM_TERMINAL_PHASES = frozenset({"completed", "cancelled", "blocked", "failed"})
-CLEANUP_RECOVERY_ITEM_PHASES = frozenset(
-    {
-        "target_temp_create_pending",
-        "copying",
-        "target_temp_written",
-        "target_verified",
-        "target_finalized",
-        "metadata_switched",
-        "source_cleanup_pending",
-        "source_quarantined",
-        "source_delete_committing",
-    }
-)
-
-
-@dataclass(frozen=True)
-class MigrationRecoveryDecision:
-    allowed: bool
-    action: str | None
-    reason_code: str | None = None
-    existing_child_id: str | None = None
-MIGRATION_FILESYSTEM_REASON_CODES = frozenset(
-    {
-        "archive_object_not_regular_file",
-        "archive_path_component_not_directory",
-        "archive_relative_path_invalid",
-        "archive_root_identity_changed",
-        "archive_root_not_readable",
-        "archive_root_not_writable",
-        "archive_root_open_failed",
-        "archive_root_physical_identity_unknown",
-        "archive_root_runtime_not_directory",
-        "archive_root_runtime_unavailable",
-        "archive_target_collision",
-        "migration_internal_identity_invalid",
-        "migration_internal_kind_invalid",
-        "migration_internal_namespace_forbidden",
-    }
-)
-
-
-class ArchiveMigrationBlocked(RuntimeError):
-    def __init__(self, reason_code: str, *, retry_mode: str | None = "refresh"):
-        self.reason_code = safe_reason_code(reason_code, fallback="migration_operation_failed")
-        self.retry_mode = retry_mode
-        super().__init__(self.reason_code)
-
-
-class _MigrationAuditPersistenceFailed(ArchiveMigrationBlocked):
-    def __init__(self):
-        super().__init__("migration_audit_persistence_failed", retry_mode=None)
-
-
-class ArchiveMigrationPartial(ArchiveMigrationBlocked):
-    pass
-
-
-class _WorkerCandidateRejected(RuntimeError):
-    def __init__(self, reason_code: str):
-        self.reason_code = safe_reason_code(
-            reason_code,
-            fallback="migration_worker_candidate_rejected",
-        )
-        super().__init__(self.reason_code)
-
-
-class _CopyThroughputSampler:
-    def __init__(self, *, clock: Callable[[], float] = time.monotonic):
-        self._clock = clock
-        self._samples: deque[tuple[float, int]] = deque(maxlen=THROUGHPUT_MAX_SAMPLES)
-
-    def observe(self, copied_bytes: int) -> None:
-        now = float(self._clock())
-        copied = max(0, int(copied_bytes))
-        if self._samples:
-            previous_time, previous_bytes = self._samples[-1]
-            if copied < previous_bytes:
-                self._samples.clear()
-            elif now - previous_time < THROUGHPUT_SAMPLE_INTERVAL_SECONDS:
-                return
-        self._samples.append((now, copied))
-
-    def values(self, *, remaining_bytes: int) -> tuple[int | None, int | None]:
-        if len(self._samples) < THROUGHPUT_MIN_SAMPLES:
-            return None, None
-        now = float(self._clock())
-        first_time, first_bytes = self._samples[0]
-        last_time, last_bytes = self._samples[-1]
-        elapsed = last_time - first_time
-        copied = last_bytes - first_bytes
-        if (
-            now - last_time > THROUGHPUT_STALE_SECONDS
-            or elapsed < THROUGHPUT_MIN_WINDOW_SECONDS
-            or copied < THROUGHPUT_MIN_BYTES
-        ):
-            return None, None
-        speed = int(copied / elapsed) if elapsed > 0 else 0
-        if speed <= 0 or speed > THROUGHPUT_MAX_BYTES_PER_SECOND:
-            return None, None
-        remaining = max(0, int(remaining_bytes))
-        eta = int(math.ceil(remaining / speed)) if remaining else 0
-        if eta > THROUGHPUT_MAX_ETA_SECONDS:
-            eta = None
-        return speed, eta
 
 
 def _public_migration_reason(exc: Exception, *, fallback: str) -> str:
@@ -251,24 +157,10 @@ def _public_migration_reason(exc: Exception, *, fallback: str) -> str:
     return safe_reason_code(fallback, fallback="migration_operation_failed") or "migration_operation_failed"
 
 
-def migration_reserve_bytes(total_bytes: int) -> int:
-    return max(RESERVE_MIN_BYTES, int(math.ceil(max(0, int(total_bytes)) * RESERVE_PERCENT)))
 
 
-def migration_required_free_bytes(
-    *,
-    same_physical_volume: bool,
-    remaining_not_target_finalized_bytes: int,
-    largest_next_item_size_bytes: int,
-    reserve_bytes: int,
-) -> int:
-    growth = largest_next_item_size_bytes if same_physical_volume else remaining_not_target_finalized_bytes
-    return max(0, int(growth)) + max(0, int(reserve_bytes))
 
 
-def _sha256_json(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _hash_descriptor(descriptor: int, *, progress_callback=None) -> str:
@@ -288,22 +180,6 @@ def _hash_descriptor(descriptor: int, *, progress_callback=None) -> str:
     return digest.hexdigest()
 
 
-def _segment_metadata_fingerprint(segment: RecordingSegment) -> str:
-    return _sha256_json(
-        {
-            "segment_id": int(segment.id),
-            "camera_id": int(segment.camera_id),
-            "archive_root_id": str(segment.archive_root_id or ""),
-            "relative_path": str(segment.relative_path or ""),
-            "status": str(segment.status or ""),
-            "ownership": str(segment.ownership or ""),
-            "source": str(segment.source or ""),
-            "storage_namespace": str(segment.storage_namespace or ""),
-            "deleted_at": segment.deleted_at.isoformat() if segment.deleted_at else None,
-            "finalized_at": segment.finalized_at.isoformat() if segment.finalized_at else None,
-            "updated_at": segment.updated_at.isoformat() if segment.updated_at else None,
-        }
-    )
 
 
 def _plan_identity(plan: ArchiveMigrationPlan) -> dict[str, Any]:
@@ -1335,277 +1211,44 @@ def request_migration_plan(
     return public_migration_plan(plan)
 
 
-def _active_job_ids(db: Session, rows: list[RecordingSegment]) -> set[str]:
-    job_ids = sorted({str(item.job_id) for item in rows if item.job_id})
-    if not job_ids:
-        return set()
-    return {
-        str(value)
-        for (value,) in db.query(RecordingJob.id)
-        .filter(RecordingJob.id.in_(job_ids), RecordingJob.state.in_(tuple(ACTIVE_JOB_STATES)))
-        .all()
-    }
 
 
-def _segment_exclusion_reason(
-    segment: RecordingSegment,
-    *,
-    active_job_ids: set[str],
-    now: datetime,
-) -> str | None:
-    if segment.deleted_at is not None or str(segment.status or "") == "deleted":
-        return "recording_deleted"
-    if segment.ownership != "KM VMS" or segment.source != "recorder":
-        return "recording_ownership_untrusted"
-    if str(segment.status or "") not in ELIGIBLE_SEGMENT_STATUSES:
-        return "recording_not_finalized"
-    anchor = segment.updated_at or segment.finalized_at or segment.created_at or segment.started_at
-    if (segment.job_id and str(segment.job_id) in active_job_ids) or (anchor and now - anchor < RECENT_WRITE_WINDOW):
-        return "recording_active_or_recent"
-    try:
-        relative = normalize_relative_path(str(segment.relative_path or ""))
-    except StorageFilesystemError:
-        return "recording_path_invalid"
-    if is_migration_internal_relative(relative):
-        return "migration_internal_object"
-    if not (
-        relative == KMVMS_RECORDINGS_NAMESPACE
-        or relative.startswith(f"{KMVMS_RECORDINGS_NAMESPACE}/")
-    ):
-        return "recording_path_outside_archive"
-    return None
 
 
-def _item_canonical_payload(item: ArchiveMigrationItem) -> dict[str, Any]:
-    return {
-        "plan_id": str(item.plan_id),
-        "item_index": int(item.item_index),
-        "segment_id": int(item.segment_id),
-        "camera_id": int(item.camera_id),
-        "source_root_id": str(item.source_root_id),
-        "target_root_id": str(item.target_root_id),
-        "source_physical_identity": str(item.source_physical_identity),
-        "target_physical_identity": str(item.target_physical_identity),
-        "source_snapshot_key": str(item.source_snapshot_key),
-        "target_snapshot_key": str(item.target_snapshot_key),
-        "source_access_identity": str(item.source_access_identity),
-        "target_access_identity": str(item.target_access_identity),
-        "source_relative_path": str(item.source_relative_path),
-        "target_final_relative_path": str(item.target_final_relative_path),
-        "target_temp_relative_path": str(item.target_temp_relative_path),
-        "source_quarantine_relative_path": str(item.source_quarantine_relative_path),
-        "source_size_bytes": int(item.source_size_bytes),
-        "source_mtime_ns": int(item.source_mtime_ns),
-        "source_device": int(item.source_device),
-        "source_inode": int(item.source_inode),
-        "source_mode": int(item.source_mode),
-        "source_uid": item.source_uid,
-        "source_gid": item.source_gid,
-        "source_metadata_fingerprint": str(item.source_metadata_fingerprint),
-        "source_sha256": str(item.source_sha256 or ""),
-        "intended_transition": str(item.intended_transition),
-    }
+
+
+def _migration_plan_builder() -> MigrationPlanBuilder:
+    return MigrationPlanBuilder(
+        _require_prepare_authority, _root_by_id, _hash_descriptor, _increment_reason, _snapshot_from_plan, _plan_permission_contract, _audit,
+    )
+
+
+def _migration_file_executor() -> MigrationFileExecutor:
+    return MigrationFileExecutor(
+        _lock_owned_migration_item, _operation_progress, _root_by_id, _require_runtime_authority, _hash_descriptor,
+        heartbeat_operation,
+    )
+
+
+def _migration_cleanup_retry() -> MigrationCleanupRetry:
+    return MigrationCleanupRetry(
+        _cleanup_source, _remove_owned_target_residue, _lock_owned_migration_item, _root_by_id, _operation_progress, _recount_plan, _terminalize_operation,
+        heartbeat_operation,
+    )
 
 
 def _materialize_plan_batch(db: Session, plan: ArchiveMigrationPlan) -> bool:
-    db.refresh(plan)
-    if plan.status != "building" or plan.cancel_requested:
-        return False
-    _require_prepare_authority(db, plan)
-    source = _root_by_id(db, plan.source_root_id)
-    target = _root_by_id(db, plan.target_root_id)
-    source_expected = _snapshot_from_plan(plan, source=True)
-    target_expected = _snapshot_from_plan(plan, source=False)
-    assert_root_snapshot(source, source_expected, require_write=True)
-    assert_root_snapshot(target, target_expected, require_write=True)
-    rows = (
-        db.query(RecordingSegment)
-        .filter(
-            RecordingSegment.archive_root_id == plan.source_root_id,
-            RecordingSegment.id > int(plan.inventory_cursor or 0),
-            RecordingSegment.id <= int(plan.segment_high_watermark or 0),
-        )
-        .order_by(RecordingSegment.id.asc())
-        .limit(PLAN_BATCH_SIZE)
-        .all()
-    )
-    if not rows:
-        _finalize_materialized_plan(db, plan, target_snapshot(target, target_expected))
-        return False
-    now = database_now(db)
-    active_jobs = _active_job_ids(db, rows)
-    with verified_root_fd(source, source_expected, require_write=True) as source_fd:
-        with verified_root_fd(target, target_expected, require_write=True) as target_fd:
-            for row_offset, segment in enumerate(rows):
-                if row_offset % PLAN_AUTHORITY_RECHECK_ITEMS == 0:
-                    db.refresh(plan, attribute_names=["status", "cancel_requested"])
-                    if plan.status != "building" or plan.cancel_requested:
-                        db.rollback()
-                        return False
-                    _require_prepare_authority(db, plan)
-                plan.inventory_cursor = int(segment.id)
-                reason = _segment_exclusion_reason(segment, active_job_ids=active_jobs, now=now)
-                if reason:
-                    plan.excluded_count = int(plan.excluded_count or 0) + 1
-                    plan.excluded_summary = _increment_reason(plan.excluded_summary, reason)
-                    continue
-                relative = normalize_relative_path(str(segment.relative_path))
-                try:
-                    source_stat = stat_relative(source_fd, relative)
-                except (OSError, StorageFilesystemError):
-                    plan.excluded_count = int(plan.excluded_count or 0) + 1
-                    plan.excluded_summary = _increment_reason(plan.excluded_summary, "source_file_unavailable")
-                    continue
-                if not stat.S_ISREG(source_stat.st_mode):
-                    plan.excluded_count = int(plan.excluded_count or 0) + 1
-                    plan.excluded_summary = _increment_reason(plan.excluded_summary, "source_file_not_regular")
-                    continue
-                try:
-                    stat_relative(target_fd, relative)
-                except FileNotFoundError:
-                    pass
-                except (OSError, StorageFilesystemError):
-                    plan.excluded_count = int(plan.excluded_count or 0) + 1
-                    plan.excluded_summary = _increment_reason(plan.excluded_summary, "target_collision")
-                    continue
-                else:
-                    plan.excluded_count = int(plan.excluded_count or 0) + 1
-                    plan.excluded_summary = _increment_reason(plan.excluded_summary, "target_collision")
-                    continue
-                descriptor = open_relative_read(source_fd, relative)
-                try:
-                    source_sha = _hash_descriptor(descriptor)
-                    stable_stat = os.fstat(descriptor)
-                finally:
-                    os.close(descriptor)
-                if (
-                    int(stable_stat.st_dev) != int(source_stat.st_dev)
-                    or int(stable_stat.st_ino) != int(source_stat.st_ino)
-                    or int(stable_stat.st_size) != int(source_stat.st_size)
-                    or int(stable_stat.st_mtime_ns) != int(source_stat.st_mtime_ns)
-                ):
-                    plan.excluded_count = int(plan.excluded_count or 0) + 1
-                    plan.excluded_summary = _increment_reason(plan.excluded_summary, "source_file_changed_during_plan")
-                    continue
-                item_id = str(uuid.uuid4())
-                item_index = int(plan.item_count or 0) + 1
-                item = ArchiveMigrationItem(
-                    id=item_id,
-                    plan_id=str(plan.id),
-                    item_index=item_index,
-                    segment_id=int(segment.id),
-                    camera_id=int(segment.camera_id),
-                    camera_name_snapshot=str(segment.camera_name_snapshot or segment.camera_folder_snapshot or "Camera")[:255],
-                    source_root_id=str(plan.source_root_id),
-                    target_root_id=str(plan.target_root_id),
-                    source_physical_identity=str(plan.source_physical_identity),
-                    target_physical_identity=str(plan.target_physical_identity),
-                    source_snapshot_key=str(plan.source_snapshot_key),
-                    target_snapshot_key=str(plan.target_snapshot_key),
-                    source_access_identity=str(plan.source_access_identity),
-                    target_access_identity=str(plan.target_access_identity),
-                    source_relative_path=relative,
-                    target_final_relative_path=relative,
-                    target_temp_relative_path=migration_internal_relative(str(plan.id), item_id, "target-temp"),
-                    source_quarantine_relative_path=migration_internal_relative(str(plan.id), item_id, "source-quarantine"),
-                    source_size_bytes=int(source_stat.st_size),
-                    source_mtime_ns=int(source_stat.st_mtime_ns),
-                    source_device=int(source_stat.st_dev),
-                    source_inode=int(source_stat.st_ino),
-                    source_mode=int(source_stat.st_mode),
-                    source_uid=int(source_stat.st_uid) if hasattr(source_stat, "st_uid") else None,
-                    source_gid=int(source_stat.st_gid) if hasattr(source_stat, "st_gid") else None,
-                    source_metadata_fingerprint=_segment_metadata_fingerprint(segment),
-                    source_sha256=source_sha,
-                    intended_transition="source_to_target",
-                    phase="planned",
-                    cleanup_pending=False,
-                    cleanup_status="not_started",
-                )
-                item.canonical_hash = _sha256_json(_item_canonical_payload(item))
-                db.add(item)
-                plan.item_count = item_index
-                plan.total_bytes = int(plan.total_bytes or 0) + int(source_stat.st_size)
-                plan.largest_item_bytes = max(int(plan.largest_item_bytes or 0), int(source_stat.st_size))
-    plan.updated_at = now
-    db.add(plan)
-    db.commit()
-    has_more = len(rows) == PLAN_BATCH_SIZE
-    if not has_more:
-        db.refresh(plan)
-        if plan.status != "building" or plan.cancel_requested:
-            return False
-        _finalize_materialized_plan(db, plan, target_snapshot(target, target_expected))
-    return has_more
+    return _migration_plan_builder()._materialize_plan_batch(db, plan)
 
 
-def target_snapshot(target: ArchiveRoot, expected: dict[str, Any]) -> dict[str, Any]:
-    return assert_root_snapshot(target, expected, require_write=True)
 
 
 def _canonical_manifest_hash(db: Session, plan: ArchiveMigrationPlan) -> str:
-    digest = hashlib.sha256()
-    digest.update(
-        json.dumps(
-            {
-                "plan_id": str(plan.id),
-                "schema_version": int(plan.schema_version),
-                "actor_key": str(plan.actor_key),
-                "source_root_id": str(plan.source_root_id),
-                "target_root_id": str(plan.target_root_id),
-                "source_physical_identity": str(plan.source_physical_identity),
-                "target_physical_identity": str(plan.target_physical_identity),
-                "source_snapshot_key": str(plan.source_snapshot_key),
-                "target_snapshot_key": str(plan.target_snapshot_key),
-                "source_access_identity": str(plan.source_access_identity),
-                "target_access_identity": str(plan.target_access_identity),
-                "same_physical_volume": bool(plan.same_physical_volume),
-                "segment_high_watermark": int(plan.segment_high_watermark),
-                "item_count": int(plan.item_count),
-                "total_bytes": int(plan.total_bytes),
-                "permission_contract": _plan_permission_contract(plan),
-            },
-            sort_keys=True,
-            ensure_ascii=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-    )
-    cursor = 0
-    while True:
-        rows = (
-            db.query(ArchiveMigrationItem.item_index, ArchiveMigrationItem.canonical_hash)
-            .filter(ArchiveMigrationItem.plan_id == plan.id, ArchiveMigrationItem.item_index > cursor)
-            .order_by(ArchiveMigrationItem.item_index.asc())
-            .limit(PLAN_BATCH_SIZE)
-            .all()
-        )
-        if not rows:
-            break
-        for item_index, canonical_hash in rows:
-            digest.update(f"\n{int(item_index)}:{str(canonical_hash)}".encode("ascii"))
-            cursor = int(item_index)
-    return digest.hexdigest()
+    return _migration_plan_builder()._canonical_manifest_hash(db, plan)
 
 
 def _manifest_integrity_valid(db: Session, plan: ArchiveMigrationPlan) -> bool:
-    cursor = 0
-    while True:
-        rows = (
-            db.query(ArchiveMigrationItem)
-            .filter(
-                ArchiveMigrationItem.plan_id == plan.id,
-                ArchiveMigrationItem.item_index > cursor,
-            )
-            .order_by(ArchiveMigrationItem.item_index.asc())
-            .limit(PLAN_BATCH_SIZE)
-            .all()
-        )
-        if not rows:
-            break
-        if any(not _item_manifest_valid(item) for item in rows):
-            return False
-        cursor = int(rows[-1].item_index)
-    return bool(plan.canonical_hash and plan.canonical_hash == _canonical_manifest_hash(db, plan))
+    return _migration_plan_builder()._manifest_integrity_valid(db, plan)
 
 
 def _finalize_materialized_plan(
@@ -1613,47 +1256,7 @@ def _finalize_materialized_plan(
     plan: ArchiveMigrationPlan,
     target_current: dict[str, Any],
 ) -> None:
-    plan.capacity_total_bytes = int(target_current["total_bytes"])
-    plan.capacity_free_bytes = int(target_current["free_bytes"])
-    plan.reserve_bytes = migration_reserve_bytes(plan.capacity_total_bytes)
-    plan.required_free_bytes = migration_required_free_bytes(
-        same_physical_volume=bool(plan.same_physical_volume),
-        remaining_not_target_finalized_bytes=int(plan.total_bytes or 0),
-        largest_next_item_size_bytes=int(plan.largest_item_bytes or 0),
-        reserve_bytes=int(plan.reserve_bytes),
-    )
-    plan.canonical_hash = _canonical_manifest_hash(db, plan)
-    now = database_now(db)
-    plan.ready_at = now
-    plan.expires_at = now + PLAN_READY_TTL
-    plan.phase = "ready"
-    if int(plan.item_count or 0) == 0:
-        plan.status = "blocked"
-        plan.reason_code = "migration_no_eligible_recordings"
-        plan.next_action = "refresh_plan"
-    elif int(plan.capacity_free_bytes) < int(plan.required_free_bytes):
-        plan.status = "blocked"
-        plan.reason_code = "migration_insufficient_target_space"
-        plan.next_action = "free_target_space"
-    else:
-        plan.status = "ready_with_exclusions" if int(plan.excluded_count or 0) else "ready"
-        plan.reason_code = None
-        plan.next_action = "confirm_migration"
-    plan.updated_at = now
-    _audit(
-        db,
-        event_type="archive_migration.plan_ready" if plan.status in PLAN_READY_STATUSES else "archive_migration.plan_blocked",
-        plan=plan,
-        severity="info" if plan.status in PLAN_READY_STATUSES else "warning",
-        metadata={
-            "item_count": int(plan.item_count),
-            "total_bytes": int(plan.total_bytes),
-            "excluded_count": int(plan.excluded_count),
-            "reason_code": plan.reason_code,
-        },
-    )
-    db.add(plan)
-    db.commit()
+    return _migration_plan_builder()._finalize_materialized_plan(db, plan, target_current)
 
 
 def _prepare_one_plan(leader=None) -> bool:
@@ -1947,89 +1550,32 @@ def queue_migration_apply(
     }
 
 
-def _item_snapshot(item: ArchiveMigrationItem, *, source: bool) -> dict[str, Any]:
-    prefix = "source" if source else "target"
-    return {
-        "root_id": str(getattr(item, f"{prefix}_root_id")),
-        "physical_identity": str(getattr(item, f"{prefix}_physical_identity")),
-        "snapshot_key": str(getattr(item, f"{prefix}_snapshot_key")),
-        "access_identity": str(getattr(item, f"{prefix}_access_identity")),
-    }
 
 
-def _item_manifest_valid(item: ArchiveMigrationItem) -> bool:
-    return bool(item.canonical_hash == _sha256_json(_item_canonical_payload(item)))
 
 
 def _stat_matches_source(item: ArchiveMigrationItem, current: os.stat_result) -> bool:
-    return bool(
-        int(current.st_dev) == int(item.source_device)
-        and int(current.st_ino) == int(item.source_inode)
-        and int(current.st_size) == int(item.source_size_bytes)
-        and int(current.st_mtime_ns) == int(item.source_mtime_ns)
-    )
+    return _migration_file_executor()._stat_matches_source(item, current)
 
 
 def _stat_matches_target_provenance(item: ArchiveMigrationItem, current: os.stat_result) -> bool:
-    return bool(
-        item.target_device is not None
-        and item.target_inode is not None
-        and int(current.st_dev) == int(item.target_device)
-        and int(current.st_ino) == int(item.target_inode)
-        and int(current.st_size) == int(item.source_size_bytes)
-        and str(item.target_sha256 or "") == str(item.source_sha256 or "")
-    )
+    return _migration_file_executor()._stat_matches_target_provenance(item, current)
 
 
 def _pending_temp_stat_is_exact(current: os.stat_result) -> bool:
-    effective_uid = os.geteuid() if hasattr(os, "geteuid") else int(current.st_uid)
-    return bool(
-        stat.S_ISREG(current.st_mode)
-        and int(current.st_size) == 0
-        and int(current.st_nlink) == 1
-        and int(current.st_uid) == int(effective_uid)
-        and stat.S_IMODE(current.st_mode) == TEMP_CREATE_MODE
-    )
+    return _migration_file_executor()._pending_temp_stat_is_exact(current)
 
 
 def _raise_pending_temp_ambiguous() -> None:
-    raise ArchiveMigrationPartial(
-        "migration_temp_pending_object_ambiguous",
-        retry_mode="cleanup_only",
-    )
+    return _migration_file_executor()._raise_pending_temp_ambiguous()
 
 
 def _stat_pending_temp(root_fd: int, item: ArchiveMigrationItem) -> os.stat_result:
-    try:
-        current = stat_relative(root_fd, item.target_temp_relative_path, allow_internal=True)
-    except StorageFilesystemError:
-        _raise_pending_temp_ambiguous()
-    if not _pending_temp_stat_is_exact(current):
-        _raise_pending_temp_ambiguous()
-    return current
+    return _migration_file_executor()._stat_pending_temp(root_fd, item)
 
 
 def _open_pending_temp_for_recovery(root_fd: int, item: ArchiveMigrationItem) -> int:
-    expected = _stat_pending_temp(root_fd, item)
-    with relative_parent_fd(
-        root_fd,
-        item.target_temp_relative_path,
-        create=False,
-        allow_internal=True,
-    ) as (parent_fd, name):
-        descriptor = os.open(name, os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
-    try:
-        opened = os.fstat(descriptor)
-        if (
-            int(opened.st_dev) != int(expected.st_dev)
-            or int(opened.st_ino) != int(expected.st_ino)
-            or not _pending_temp_stat_is_exact(opened)
-        ):
-            _raise_pending_temp_ambiguous()
-        return descriptor
-    except Exception:
-        os.close(descriptor)
-        raise
+    return _migration_file_executor()._open_pending_temp_for_recovery(root_fd, item)
 
 
 def _stage_temp_create_intent(
@@ -2038,43 +1584,11 @@ def _stage_temp_create_intent(
     item: ArchiveMigrationItem,
     handle: OperationHandle,
 ) -> None:
-    _operation, _locked_plan, item = _lock_owned_migration_item(db, plan, item, handle)
-    if item.phase != "planned":
-        raise ArchiveMigrationPartial("migration_temp_phase_invalid", retry_mode="cleanup_only")
-    item.phase = "target_temp_create_pending"
-    item.operation_id = str(handle.operation_id)
-    item.operation_fencing_token = int(handle.fencing_token)
-    item.attempt_count = int(item.attempt_count or 0) + 1
-    item.target_device = None
-    item.target_inode = None
-    item.target_size_bytes = 0
-    item.transferred_bytes = 0
-    db.add(item)
-    db.commit()
+    return _migration_file_executor()._stage_temp_create_intent(db, plan, item, handle)
 
 
 def _verify_durable_final_target(item: ArchiveMigrationItem, target: ArchiveRoot) -> None:
-    if not item.target_sha256:
-        raise ArchiveMigrationPartial("migration_final_provenance_unknown", retry_mode="cleanup_only")
-    with verified_root_fd(
-        target,
-        _item_snapshot(item, source=False),
-        require_write=True,
-    ) as target_root_fd:
-        try:
-            current = stat_relative(target_root_fd, item.target_final_relative_path)
-        except FileNotFoundError as exc:
-            raise ArchiveMigrationPartial("migration_final_target_missing", retry_mode="cleanup_only") from exc
-        if not _stat_matches_target_provenance(item, current):
-            raise ArchiveMigrationPartial("migration_final_provenance_mismatch", retry_mode="cleanup_only")
-        descriptor = open_relative_read(target_root_fd, item.target_final_relative_path)
-        try:
-            if _hash_descriptor(descriptor) != str(item.target_sha256):
-                raise ArchiveMigrationPartial("migration_final_checksum_mismatch", retry_mode="cleanup_only")
-            if int(current.st_mode) & 0o444 == 0:
-                raise ArchiveMigrationPartial("migration_final_not_readable", retry_mode="cleanup_only")
-        finally:
-            os.close(descriptor)
+    return _migration_file_executor()._verify_durable_final_target(item, target)
 
 
 def _runtime_item_guard(
@@ -2155,253 +1669,7 @@ def _copy_or_resume_temp(
     target: ArchiveRoot,
     handle: OperationHandle,
 ) -> None:
-    source_expected = _item_snapshot(item, source=True)
-    target_expected = _item_snapshot(item, source=False)
-    with verified_root_fd(source, source_expected, require_write=True) as source_root_fd:
-        source_fd = open_relative_read(source_root_fd, item.source_relative_path)
-        try:
-            source_stat = os.fstat(source_fd)
-            if not _stat_matches_source(item, source_stat):
-                raise ArchiveMigrationBlocked("migration_source_changed", retry_mode="refresh_plan")
-            if _hash_descriptor(
-                source_fd,
-                progress_callback=lambda: heartbeat_operation(
-                    db,
-                    handle,
-                    progress=_operation_progress(plan, phase="verifying_source", current_item=item),
-                ),
-            ) != str(item.source_sha256 or ""):
-                raise ArchiveMigrationBlocked("migration_source_checksum_changed", retry_mode="refresh_plan")
-            with verified_root_fd(target, target_expected, require_write=True) as target_root_fd:
-                fresh_intent = False
-                if item.phase == "planned":
-                    try:
-                        stat_relative(target_root_fd, item.target_temp_relative_path, allow_internal=True)
-                    except FileNotFoundError:
-                        pass
-                    except StorageFilesystemError:
-                        _raise_pending_temp_ambiguous()
-                    else:
-                        _raise_pending_temp_ambiguous()
-                    _stage_temp_create_intent(db, plan, item, handle)
-                    fresh_intent = True
-
-                temp_fd: int | None = None
-                try:
-                    if item.phase == "target_temp_create_pending":
-                        _operation, _locked_plan, item = _lock_owned_migration_item(
-                            db,
-                            plan,
-                            item,
-                            handle,
-                        )
-                        if item.phase != "target_temp_create_pending":
-                            raise ArchiveMigrationPartial(
-                                "migration_temp_phase_invalid",
-                                retry_mode="cleanup_only",
-                            )
-                        if fresh_intent:
-                            try:
-                                temp_fd = create_relative_exclusive(
-                                    target_root_fd,
-                                    item.target_temp_relative_path,
-                                    mode=TEMP_CREATE_MODE,
-                                )
-                            except FileExistsError:
-                                _raise_pending_temp_ambiguous()
-                        else:
-                            try:
-                                temp_fd = _open_pending_temp_for_recovery(target_root_fd, item)
-                            except FileNotFoundError:
-                                try:
-                                    temp_fd = create_relative_exclusive(
-                                        target_root_fd,
-                                        item.target_temp_relative_path,
-                                        mode=TEMP_CREATE_MODE,
-                                    )
-                                except FileExistsError:
-                                    _raise_pending_temp_ambiguous()
-                        temp_stat = os.fstat(temp_fd)
-                        if not _pending_temp_stat_is_exact(temp_stat):
-                            _raise_pending_temp_ambiguous()
-                        item.target_device = int(temp_stat.st_dev)
-                        item.target_inode = int(temp_stat.st_ino)
-                        item.phase = "copying"
-                        db.add(item)
-                        try:
-                            db.commit()
-                        except Exception:
-                            db.rollback()
-                            raise
-                    elif item.phase == "copying":
-                        if item.target_device is None or item.target_inode is None:
-                            raise ArchiveMigrationPartial(
-                                "migration_temp_provenance_unknown",
-                                retry_mode="cleanup_only",
-                            )
-                        try:
-                            temp_stat = stat_relative(
-                                target_root_fd,
-                                item.target_temp_relative_path,
-                                allow_internal=True,
-                            )
-                        except FileNotFoundError as exc:
-                            raise ArchiveMigrationPartial(
-                                "migration_temp_missing",
-                                retry_mode="cleanup_only",
-                            ) from exc
-                        if not (
-                            int(temp_stat.st_dev) == int(item.target_device)
-                            and int(temp_stat.st_ino) == int(item.target_inode)
-                            and int(temp_stat.st_nlink) == 1
-                            and int(temp_stat.st_size) <= int(item.source_size_bytes)
-                        ):
-                            raise ArchiveMigrationPartial("migration_temp_collision", retry_mode="cleanup_only")
-                        with relative_parent_fd(
-                            target_root_fd,
-                            item.target_temp_relative_path,
-                            create=False,
-                            allow_internal=True,
-                        ) as (parent_fd, name):
-                            temp_fd = os.open(
-                                name,
-                                os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0),
-                                dir_fd=parent_fd,
-                            )
-                    else:
-                        raise ArchiveMigrationPartial(
-                            "migration_temp_phase_invalid",
-                            retry_mode="cleanup_only",
-                        )
-
-                    temp_stat = os.fstat(temp_fd)
-                    if not (
-                        int(temp_stat.st_dev) == int(item.target_device or -1)
-                        and int(temp_stat.st_ino) == int(item.target_inode or -1)
-                        and int(temp_stat.st_nlink) == 1
-                        and int(temp_stat.st_size) <= int(item.source_size_bytes)
-                    ):
-                        raise ArchiveMigrationPartial("migration_temp_provenance_mismatch", retry_mode="cleanup_only")
-                    offset = int(temp_stat.st_size)
-                    if int(item.transferred_bytes or 0) != offset:
-                        _operation, _locked_plan, item = _lock_owned_migration_item(
-                            db,
-                            plan,
-                            item,
-                            handle,
-                        )
-                        if item.phase != "copying":
-                            raise ArchiveMigrationPartial(
-                                "migration_temp_phase_invalid",
-                                retry_mode="cleanup_only",
-                            )
-                        item.transferred_bytes = offset
-                        db.add(item)
-                        db.commit()
-                    os.lseek(source_fd, offset, os.SEEK_SET)
-                    os.lseek(temp_fd, offset, os.SEEK_SET)
-                    sampler = _CopyThroughputSampler()
-                    sampler.observe(offset)
-                    heartbeat_operation(
-                        db,
-                        handle,
-                        progress=_operation_progress(
-                            plan,
-                            phase="copying",
-                            current_item=item,
-                        ),
-                    )
-                    while offset < int(item.source_size_bytes):
-                        _operation, _locked_plan, item = _lock_owned_migration_item(
-                            db,
-                            plan,
-                            item,
-                            handle,
-                        )
-                        if item.phase != "copying":
-                            raise ArchiveMigrationPartial(
-                                "migration_temp_phase_invalid",
-                                retry_mode="cleanup_only",
-                            )
-                        batch_started = time.monotonic()
-                        batch_bytes = 0
-                        while (
-                            offset < int(item.source_size_bytes)
-                            and batch_bytes < 16 * COPY_CHUNK_BYTES
-                            and time.monotonic() - batch_started < 2.0
-                        ):
-                            chunk = os.read(
-                                source_fd,
-                                min(COPY_CHUNK_BYTES, int(item.source_size_bytes) - offset),
-                            )
-                            if not chunk:
-                                raise ArchiveMigrationPartial(
-                                    "migration_source_short_read",
-                                    retry_mode="cleanup_only",
-                                )
-                            view = memoryview(chunk)
-                            while view:
-                                written = os.write(temp_fd, view)
-                                if written <= 0:
-                                    raise ArchiveMigrationPartial(
-                                        "migration_target_short_write",
-                                        retry_mode="cleanup_only",
-                                    )
-                                view = view[written:]
-                            offset += len(chunk)
-                            batch_bytes += len(chunk)
-                            sampler.observe(offset)
-                        item.transferred_bytes = offset
-                        db.add(item)
-                        speed, eta = sampler.values(
-                            remaining_bytes=max(
-                                0,
-                                int(plan.total_bytes or 0)
-                                - int(plan.completed_bytes or 0)
-                                - offset,
-                            )
-                        )
-                        heartbeat_operation(
-                            db,
-                            handle,
-                            progress=_operation_progress(
-                                plan,
-                                phase="copying",
-                                current_item=item,
-                                speed_bytes_per_second=speed,
-                                eta_seconds=eta,
-                            ),
-                        )
-                    _operation, _locked_plan, item = _lock_owned_migration_item(
-                        db,
-                        plan,
-                        item,
-                        handle,
-                    )
-                    if item.phase != "copying":
-                        raise ArchiveMigrationPartial(
-                            "migration_temp_phase_invalid",
-                            retry_mode="cleanup_only",
-                        )
-                    os.fsync(temp_fd)
-                    try:
-                        os.fchmod(temp_fd, 0o640)
-                        if item.source_uid is not None and item.source_gid is not None and hasattr(os, "fchown"):
-                            os.fchown(temp_fd, int(item.source_uid), int(item.source_gid))
-                    except OSError:
-                        # Runtime user may not be allowed to preserve ownership; readable mode remains mandatory.
-                        os.fchmod(temp_fd, 0o640)
-                    final_temp_stat = os.fstat(temp_fd)
-                    item.transferred_bytes = int(final_temp_stat.st_size)
-                    item.target_size_bytes = int(final_temp_stat.st_size)
-                    item.phase = "target_temp_written"
-                    db.add(item)
-                    db.commit()
-                finally:
-                    if temp_fd is not None:
-                        os.close(temp_fd)
-        finally:
-            os.close(source_fd)
+    return _migration_file_executor()._copy_or_resume_temp(db, plan, item, source, target, handle)
 
 
 def _verify_and_finalize_target(
@@ -2412,87 +1680,7 @@ def _verify_and_finalize_target(
     target: ArchiveRoot,
     handle: OperationHandle,
 ) -> None:
-    source_expected = _item_snapshot(item, source=True)
-    target_expected = _item_snapshot(item, source=False)
-    with verified_root_fd(source, source_expected, require_write=True) as source_root_fd:
-        source_stat = stat_relative(source_root_fd, item.source_relative_path)
-        if not _stat_matches_source(item, source_stat):
-            raise ArchiveMigrationPartial("migration_source_changed_after_copy", retry_mode="cleanup_only")
-    with verified_root_fd(target, target_expected, require_write=True) as target_root_fd:
-        if item.phase == "target_temp_written":
-            temp_fd = open_relative_read(target_root_fd, item.target_temp_relative_path, allow_internal=True)
-            try:
-                temp_stat = os.fstat(temp_fd)
-                if not (
-                    int(temp_stat.st_dev) == int(item.target_device or -1)
-                    and int(temp_stat.st_ino) == int(item.target_inode or -1)
-                    and int(temp_stat.st_size) == int(item.source_size_bytes)
-                ):
-                    raise ArchiveMigrationPartial("migration_temp_provenance_mismatch", retry_mode="cleanup_only")
-                checksum = _hash_descriptor(
-                    temp_fd,
-                    progress_callback=lambda: heartbeat_operation(
-                        db,
-                        handle,
-                        progress=_operation_progress(plan, phase="verifying_target", current_item=item),
-                    ),
-                )
-            finally:
-                os.close(temp_fd)
-            if checksum != str(item.source_sha256 or ""):
-                raise ArchiveMigrationPartial("migration_target_checksum_mismatch", retry_mode="cleanup_only")
-            _operation, _locked_plan, item = _lock_owned_migration_item(
-                db,
-                plan,
-                item,
-                handle,
-            )
-            if item.phase != "target_temp_written":
-                raise ArchiveMigrationPartial("migration_temp_phase_invalid", retry_mode="cleanup_only")
-            item.target_sha256 = checksum
-            item.phase = "target_verified"
-            db.add(item)
-            db.commit()
-
-        if item.phase == "target_verified":
-            _operation, _locked_plan, item = _lock_owned_migration_item(
-                db,
-                plan,
-                item,
-                handle,
-            )
-            if item.phase != "target_verified":
-                raise ArchiveMigrationPartial("migration_temp_phase_invalid", retry_mode="cleanup_only")
-            try:
-                final_stat = stat_relative(target_root_fd, item.target_final_relative_path)
-            except FileNotFoundError:
-                rename_relative(
-                    target_root_fd,
-                    item.target_temp_relative_path,
-                    target_root_fd,
-                    item.target_final_relative_path,
-                    source_internal=True,
-                    target_internal=False,
-                )
-                final_stat = stat_relative(target_root_fd, item.target_final_relative_path)
-            else:
-                # A crash after atomic finalize is recoverable only when the
-                # inode is the exact object previously created for this item.
-                if not _stat_matches_target_provenance(item, final_stat):
-                    raise ArchiveMigrationPartial("migration_target_collision", retry_mode="cleanup_only")
-            if not (
-                int(final_stat.st_dev) == int(item.target_device or -1)
-                and int(final_stat.st_ino) == int(item.target_inode or -1)
-                and int(final_stat.st_size) == int(item.source_size_bytes)
-            ):
-                raise ArchiveMigrationPartial("migration_final_provenance_mismatch", retry_mode="cleanup_only")
-            if int(final_stat.st_mode) & 0o444 == 0:
-                raise ArchiveMigrationPartial("migration_final_not_readable", retry_mode="cleanup_only")
-            item.phase = "target_finalized"
-            item.target_finalized_at = database_now(db)
-            db.add(item)
-            db.commit()
-            _verify_durable_final_target(item, target)
+    return _migration_file_executor()._verify_and_finalize_target(db, plan, item, source, target, handle)
 
 
 def _switch_metadata(
@@ -2501,31 +1689,7 @@ def _switch_metadata(
     item: ArchiveMigrationItem,
     handle: OperationHandle,
 ) -> None:
-    if item.phase != "target_finalized":
-        return
-    _verify_durable_final_target(item, _root_by_id(db, item.target_root_id))
-    _operation, _locked_plan, item = _lock_owned_migration_item(db, plan, item, handle)
-    if item.phase != "target_finalized":
-        raise ArchiveMigrationPartial("migration_metadata_phase_invalid", retry_mode="cleanup_only")
-    segment = db.query(RecordingSegment).filter(RecordingSegment.id == item.segment_id).with_for_update().one()
-    if (
-        str(segment.archive_root_id or "") != str(item.source_root_id)
-        or str(segment.relative_path or "") != str(item.source_relative_path)
-        or _segment_metadata_fingerprint(segment) != str(item.source_metadata_fingerprint)
-    ):
-        raise ArchiveMigrationPartial("migration_metadata_changed_before_switch", retry_mode="cleanup_only")
-    segment.archive_root_id = str(item.target_root_id)
-    segment.relative_path = str(item.target_final_relative_path)
-    segment.file_path = str(item.target_final_relative_path)
-    segment.size_bytes = int(item.source_size_bytes)
-    segment.updated_at = database_now(db)
-    item.phase = "metadata_switched"
-    item.metadata_switched_at = database_now(db)
-    item.cleanup_pending = True
-    item.cleanup_status = "pending"
-    db.add(segment)
-    db.add(item)
-    db.commit()
+    return _migration_file_executor()._switch_metadata(db, plan, item, handle)
 
 
 def _cleanup_source(
@@ -2535,121 +1699,7 @@ def _cleanup_source(
     source: ArchiveRoot,
     handle: OperationHandle,
 ) -> None:
-    _require_runtime_authority(db, plan)
-    _verify_durable_final_target(item, _root_by_id(db, item.target_root_id))
-    if item.phase == "metadata_switched":
-        _operation, _locked_plan, item = _lock_owned_migration_item(db, plan, item, handle)
-        if item.phase != "metadata_switched":
-            raise ArchiveMigrationPartial("migration_cleanup_phase_invalid", retry_mode="cleanup_only")
-        item.phase = "source_cleanup_pending"
-        item.cleanup_pending = True
-        item.cleanup_status = "quarantine_pending"
-        db.add(item)
-        db.commit()
-    source_expected = _item_snapshot(item, source=True)
-    with verified_root_fd(source, source_expected, require_write=True) as source_root_fd:
-        if item.phase == "source_cleanup_pending":
-            _operation, _locked_plan, item = _lock_owned_migration_item(db, plan, item, handle)
-            if item.phase != "source_cleanup_pending":
-                raise ArchiveMigrationPartial("migration_cleanup_phase_invalid", retry_mode="cleanup_only")
-            try:
-                source_stat = stat_relative(source_root_fd, item.source_relative_path)
-            except FileNotFoundError:
-                try:
-                    quarantine_stat = stat_relative(
-                        source_root_fd,
-                        item.source_quarantine_relative_path,
-                        allow_internal=True,
-                    )
-                except FileNotFoundError as exc:
-                    raise ArchiveMigrationPartial("migration_source_cleanup_truth_unknown", retry_mode="cleanup_only") from exc
-                if not _stat_matches_source(item, quarantine_stat):
-                    raise ArchiveMigrationPartial("migration_quarantine_provenance_mismatch", retry_mode="cleanup_only")
-            else:
-                if not _stat_matches_source(item, source_stat):
-                    raise ArchiveMigrationPartial("migration_source_provenance_mismatch", retry_mode="cleanup_only")
-                rename_relative(
-                    source_root_fd,
-                    item.source_relative_path,
-                    source_root_fd,
-                    item.source_quarantine_relative_path,
-                    source_internal=False,
-                    target_internal=True,
-                )
-                quarantine_stat = stat_relative(
-                    source_root_fd,
-                    item.source_quarantine_relative_path,
-                    allow_internal=True,
-                )
-            item.quarantine_device = int(quarantine_stat.st_dev)
-            item.quarantine_inode = int(quarantine_stat.st_ino)
-            item.phase = "source_quarantined"
-            item.source_quarantined_at = database_now(db)
-            item.cleanup_status = "quarantined"
-            db.add(item)
-            db.commit()
-
-        if item.phase == "source_quarantined":
-            _operation, _locked_plan, item = _lock_owned_migration_item(db, plan, item, handle)
-            if item.phase != "source_quarantined":
-                raise ArchiveMigrationPartial("migration_cleanup_phase_invalid", retry_mode="cleanup_only")
-            quarantine_stat = stat_relative(
-                source_root_fd,
-                item.source_quarantine_relative_path,
-                allow_internal=True,
-            )
-            if not (
-                int(quarantine_stat.st_dev) == int(item.quarantine_device or -1)
-                and int(quarantine_stat.st_ino) == int(item.quarantine_inode or -1)
-                and _stat_matches_source(item, quarantine_stat)
-            ):
-                raise ArchiveMigrationPartial("migration_quarantine_provenance_mismatch", retry_mode="cleanup_only")
-            item.phase = "source_delete_committing"
-            item.cleanup_status = "delete_committing"
-            db.add(item)
-            db.commit()
-
-        if item.phase == "source_delete_committing":
-            _operation, _locked_plan, item = _lock_owned_migration_item(db, plan, item, handle)
-            if item.phase != "source_delete_committing":
-                raise ArchiveMigrationPartial("migration_cleanup_phase_invalid", retry_mode="cleanup_only")
-            source_exists = True
-            quarantine_exists = True
-            try:
-                stat_relative(source_root_fd, item.source_relative_path)
-            except FileNotFoundError:
-                source_exists = False
-            try:
-                stat_relative(source_root_fd, item.source_quarantine_relative_path, allow_internal=True)
-            except FileNotFoundError:
-                quarantine_exists = False
-            if quarantine_exists:
-                quarantine_stat = stat_relative(
-                    source_root_fd,
-                    item.source_quarantine_relative_path,
-                    allow_internal=True,
-                )
-                if not (
-                    int(quarantine_stat.st_dev) == int(item.quarantine_device or -1)
-                    and int(quarantine_stat.st_ino) == int(item.quarantine_inode or -1)
-                    and _stat_matches_source(item, quarantine_stat)
-                ):
-                    raise ArchiveMigrationPartial(
-                        "migration_quarantine_provenance_mismatch",
-                        retry_mode="cleanup_only",
-                    )
-                unlink_relative(source_root_fd, item.source_quarantine_relative_path, allow_internal=True)
-                remove_empty_internal_parents(source_root_fd, item.source_quarantine_relative_path)
-                quarantine_exists = False
-            if source_exists or quarantine_exists:
-                raise ArchiveMigrationPartial("migration_source_cleanup_incomplete", retry_mode="cleanup_only")
-            item.phase = "completed"
-            item.cleanup_pending = False
-            item.cleanup_status = "completed"
-            item.result_code = "migrated"
-            item.completed_at = database_now(db)
-            db.add(item)
-            db.commit()
+    return _migration_file_executor()._cleanup_source(db, plan, item, source, handle)
 
 
 def _process_item(
@@ -2683,69 +1733,7 @@ def _remove_owned_target_residue(
     *,
     final: bool,
 ) -> bool:
-    relative = item.target_final_relative_path if final else item.target_temp_relative_path
-    with verified_root_fd(target, _item_snapshot(item, source=False), require_write=True) as target_root_fd:
-        try:
-            current = stat_relative(target_root_fd, relative, allow_internal=not final)
-        except FileNotFoundError:
-            return False
-        except StorageFilesystemError:
-            if not final and item.phase == "target_temp_create_pending":
-                _raise_pending_temp_ambiguous()
-            raise
-        if item.target_device is None or item.target_inode is None:
-            if not final and item.phase == "target_temp_create_pending":
-                if not _pending_temp_stat_is_exact(current):
-                    _raise_pending_temp_ambiguous()
-                descriptor = _open_pending_temp_for_recovery(target_root_fd, item)
-                try:
-                    reopened = os.fstat(descriptor)
-                    if (
-                        int(reopened.st_dev) != int(current.st_dev)
-                        or int(reopened.st_ino) != int(current.st_ino)
-                    ):
-                        _raise_pending_temp_ambiguous()
-                    _operation, _locked_plan, item = _lock_owned_migration_item(
-                        db,
-                        plan,
-                        item,
-                        handle,
-                    )
-                    current = stat_relative(target_root_fd, relative, allow_internal=True)
-                    if (
-                        int(reopened.st_dev) != int(current.st_dev)
-                        or int(reopened.st_ino) != int(current.st_ino)
-                        or not _pending_temp_stat_is_exact(current)
-                    ):
-                        _raise_pending_temp_ambiguous()
-                    unlink_relative(target_root_fd, relative, allow_internal=True)
-                    remove_empty_internal_parents(target_root_fd, relative)
-                    return True
-                finally:
-                    os.close(descriptor)
-            raise ArchiveMigrationPartial("migration_target_residue_provenance_unknown", retry_mode="cleanup_only")
-        if int(current.st_dev) != int(item.target_device) or int(current.st_ino) != int(item.target_inode):
-            raise ArchiveMigrationPartial("migration_target_residue_provenance_mismatch", retry_mode="cleanup_only")
-        if final:
-            if int(current.st_size) != int(item.source_size_bytes) or not item.target_sha256:
-                raise ArchiveMigrationPartial("migration_final_provenance_mismatch", retry_mode="cleanup_only")
-            descriptor = open_relative_read(target_root_fd, relative)
-            try:
-                checksum = _hash_descriptor(descriptor)
-            finally:
-                os.close(descriptor)
-            if checksum != str(item.target_sha256):
-                raise ArchiveMigrationPartial("migration_final_checksum_mismatch", retry_mode="cleanup_only")
-        elif int(current.st_size) > int(item.source_size_bytes):
-            raise ArchiveMigrationPartial("migration_temp_provenance_mismatch", retry_mode="cleanup_only")
-        _operation, _locked_plan, item = _lock_owned_migration_item(db, plan, item, handle)
-        current = stat_relative(target_root_fd, relative, allow_internal=not final)
-        if int(current.st_dev) != int(item.target_device) or int(current.st_ino) != int(item.target_inode):
-            raise ArchiveMigrationPartial("migration_target_residue_provenance_mismatch", retry_mode="cleanup_only")
-        unlink_relative(target_root_fd, relative, allow_internal=not final)
-        if not final:
-            remove_empty_internal_parents(target_root_fd, relative)
-    return True
+    return _migration_file_executor()._remove_owned_target_residue(db, plan, item, target, handle, final=final)
 
 
 def _cleanup_retry_item(
@@ -2754,35 +1742,7 @@ def _cleanup_retry_item(
     item: ArchiveMigrationItem,
     handle: OperationHandle,
 ) -> None:
-    source = _root_by_id(db, item.source_root_id)
-    target = _root_by_id(db, item.target_root_id)
-    assert_root_snapshot(source, _item_snapshot(item, source=True), require_write=True)
-    assert_root_snapshot(target, _item_snapshot(item, source=False), require_write=True)
-    if item.metadata_switched_at or item.phase in {
-        "metadata_switched",
-        "source_cleanup_pending",
-        "source_quarantined",
-        "source_delete_committing",
-    }:
-        if item.phase not in {"metadata_switched", "source_cleanup_pending", "source_quarantined", "source_delete_committing"}:
-            _operation, _locked_plan, item = _lock_owned_migration_item(db, plan, item, handle)
-            item.phase = "source_cleanup_pending"
-            db.add(item)
-            db.commit()
-        _cleanup_source(db, plan, item, source, handle)
-        return
-
-    final_removed = _remove_owned_target_residue(db, plan, item, target, handle, final=True)
-    temp_removed = _remove_owned_target_residue(db, plan, item, target, handle, final=False)
-    _operation, _locked_plan, item = _lock_owned_migration_item(db, plan, item, handle)
-    item.phase = "failed"
-    item.cleanup_pending = False
-    item.cleanup_status = "uncommitted_target_removed" if final_removed or temp_removed else "no_residue_found"
-    item.result_code = "migration_uncommitted_target_cleaned"
-    item.retry_mode = "refresh"
-    item.completed_at = database_now(db)
-    db.add(item)
-    db.commit()
+    return _migration_cleanup_retry()._cleanup_retry_item(db, plan, item, handle)
 
 
 def _execute_cleanup_only_retry(
@@ -2790,51 +1750,7 @@ def _execute_cleanup_only_retry(
     plan: ArchiveMigrationPlan,
     handle: OperationHandle,
 ) -> None:
-    while True:
-        item = (
-            db.query(ArchiveMigrationItem)
-            .filter(
-                ArchiveMigrationItem.plan_id == plan.id,
-                or_(
-                    ArchiveMigrationItem.cleanup_pending.is_(True),
-                    ArchiveMigrationItem.phase.notin_(tuple(ITEM_TERMINAL_PHASES)),
-                ),
-            )
-            .order_by(ArchiveMigrationItem.item_index.asc())
-            .first()
-        )
-        if item is None:
-            break
-        if item.cleanup_pending or item.phase != "planned":
-            _cleanup_retry_item(db, plan, item, handle)
-        else:
-            _operation, _locked_plan, item = _lock_owned_migration_item(
-                db,
-                plan,
-                item,
-                handle,
-                require_runtime_authority=False,
-            )
-            item.phase = "blocked"
-            item.result_code = "migration_not_processed_after_partial"
-            item.retry_mode = "refresh"
-            item.completed_at = database_now(db)
-            db.add(item)
-            db.commit()
-        _recount_plan(db, plan, handle=handle)
-        heartbeat_operation(db, handle, progress=_operation_progress(plan, phase="cleanup_retry"))
-    _recount_plan(db, plan, handle=handle)
-    if int(plan.completed_count or 0) == int(plan.item_count or 0) and not plan.cleanup_pending:
-        _terminalize_operation(db, plan, handle, status="completed")
-    else:
-        _terminalize_operation(
-            db,
-            plan,
-            handle,
-            status="partial" if int(plan.completed_count or 0) else "failed",
-            reason_code="migration_manifest_incomplete",
-            retry_mode="refresh",
-        )
+    return _migration_cleanup_retry()._execute_cleanup_only_retry(db, plan, handle)
 
 
 def _operation_progress(

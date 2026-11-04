@@ -9,7 +9,7 @@ import shutil
 import threading
 import time
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import BigInteger, and_, cast, func, or_
 from sqlalchemy.orm import Session, object_session
 
 from app.core.config import settings
@@ -849,8 +849,10 @@ def useful_storage_operation_history(db: Session) -> dict:
     now = datetime.utcnow()
     since_24h = now - timedelta(hours=24)
     since_history = now - timedelta(days=USEFUL_HISTORY_DAYS)
-    deleted_expr = func.coalesce(StorageOperation.result["deleted_count"].as_integer(), 0)
-    bytes_expr = func.coalesce(StorageOperation.result["bytes_freed"].as_integer(), 0)
+    # PostgreSQL JSON.as_integer() emits INT4, which overflows above 2 GiB.
+    # Count and byte totals are storage quantities, not 32-bit UI counters.
+    deleted_expr = func.coalesce(cast(StorageOperation.result["deleted_count"].as_string(), BigInteger), 0)
+    bytes_expr = func.coalesce(cast(StorageOperation.result["bytes_freed"].as_string(), BigInteger), 0)
 
     aggregate_rows = (
         db.query(

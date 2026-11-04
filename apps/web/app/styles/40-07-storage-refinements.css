@@ -1,0 +1,1100 @@
+.storageOpsPage {
+  padding: 14px var(--page-x-padding) 24px;
+  color: #111827;
+}
+
+.storageOpsHeader {
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.storageOpsHeaderInner {
+  width: 100%;
+}
+
+.storageOpsHeaderMeta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  width: 100%;
+  margin-top: 7px;
+}
+
+.storageOpsHeaderSubtitle {
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.storageOpsHeaderActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.storageOpsOverview,
+.storageOpsSection,
+.storageOpsState {
+  border-radius: 7px;
+  box-shadow: none;
+}
+
+.storageOpsOverview {
+  grid-template-columns: minmax(320px, 1.05fr) minmax(520px, 1.8fr) minmax(260px, 0.82fr);
+  gap: 0;
+  min-height: 118px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.storageOpsOverview-warning {
+  background: #fffdf5;
+}
+
+.storageOpsOverview-error {
+  background: #fff7f7;
+}
+
+.storageOpsOverview-ok {
+  background: #f8fffb;
+}
+
+.storageOpsOverview-unknown {
+  background: #fbfcfe;
+}
+
+.storageOpsHealthMain {
+  gap: 12px;
+  padding: 22px 18px;
+}
+
+.storageOpsHealthMain > div > strong {
+  margin-top: 3px;
+  font-size: 18px;
+  line-height: 1.18;
+}
+
+.storageOpsOverview p,
+.storageOpsNote {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.storageOpsEyebrow {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.storageOpsBadges {
+  margin-top: 8px;
+}
+
+.storageOpsBadge {
+  min-height: 22px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.storageOpsTopMetrics {
+  border-left: 1px solid rgba(148, 163, 184, 0.28);
+  border-right: 1px solid rgba(148, 163, 184, 0.28);
+}
+
+.storageOpsTopMetric {
+  gap: 3px;
+  padding: 0 18px;
+}
+
+.storageOpsTopMetric span,
+.storageOpsTopMetric small {
+  font-size: 12px;
+}
+
+.storageOpsTopMetric strong {
+  font-size: 19px;
+  line-height: 1.08;
+  font-weight: 700;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+
+.storageOpsHealthAction {
+  gap: 5px;
+  padding: 18px;
+}
+
+.storageOpsHealthAction strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.storageOpsHealthAction span {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.storageOpsDashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(390px, 1fr);
+  grid-template-areas:
+    "archive operations"
+    "roots operations"
+    "roots diagnostics"
+    "recent diagnostics";
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 12px;
+}
+
+.storageOpsSection-archive {
+  grid-area: archive;
+}
+
+.storageOpsSection-operations {
+  grid-area: operations;
+}
+
+.storageOpsSection-roots {
+  grid-area: roots;
+}
+
+.storageOpsSection-diagnostics {
+  grid-area: diagnostics;
+}
+
+.storageOpsSection {
+  padding: 12px;
+}
+
+.storageOpsSection-archive,
+.storageOpsSection-operations {
+  padding: 0;
+}
+
+.storageOpsSection-archive .storageOpsSectionHead,
+.storageOpsSection-operations .storageOpsSectionHead,
+.storageOpsSection-secondary .storageOpsSectionHead {
+  padding: 12px 14px 10px;
+}
+
+.storageOpsSection-archive > :not(.storageOpsSectionHead),
+.storageOpsSection-operations > :not(.storageOpsSectionHead) {
+  margin-left: 14px;
+  margin-right: 14px;
+}
+
+.storageOpsSection h2 {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.storageOpsCapacityHeader {
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+
+.storageOpsCapacityHeader strong {
+  font-size: 18px;
+}
+
+.storageOpsCapacityHeader > span {
+  font-size: 12px;
+}
+
+.storageOpsCapacityBar {
+  height: 10px;
+  margin-bottom: 12px;
+}
+
+.storageOpsMiniGrid {
+  gap: 6px;
+}
+
+.storageOpsMiniFact {
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+.storageOpsMiniFact span {
+  font-size: 11px;
+}
+
+.storageOpsMiniFact strong {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.storageOpsSecondaryIntro span {
+  font-size: 11px;
+}
+
+.storageOpsSecondaryIntro strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.storageOpsOperationRow {
+  grid-template-columns: minmax(0, 1fr) 190px;
+  gap: 10px;
+  padding: 10px 0;
+}
+
+.storageOpsOperationMain {
+  gap: 6px;
+}
+
+.storageOpsOperationTitle strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.storageOpsOperationMain p {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.storageOpsStatusPill {
+  min-height: 20px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.storageOpsOperationFacts {
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 0;
+}
+
+.storageOpsOperationFacts .storageOpsMiniFact {
+  padding-right: 8px;
+}
+
+.storageOpsOperationFacts .storageOpsMiniFact span {
+  font-size: 10.5px;
+}
+
+.storageOpsOperationFacts .storageOpsMiniFact strong {
+  font-size: 12px;
+}
+
+.storageOpsOperationActions {
+  gap: 6px;
+}
+
+.storageOpsOperationActions .button,
+.storageOpsPolicyStrip .button,
+.storageOpsHeaderActions .button,
+.storageOpsTable .button {
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.storageOpsHeaderActions .storageOpsRefreshButton {
+  min-height: 26px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.storageOpsPolicyStrip {
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 6px;
+}
+
+.storageOpsPolicyStrip strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.storageOpsPolicyStrip span {
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.storageOpsSecondaryIntro {
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+.storageOpsSummaryRow {
+  gap: 10px;
+  padding-top: 6px;
+  margin-top: 6px;
+}
+
+.storageOpsSummaryRow span,
+.storageOpsTable span {
+  font-size: 11px;
+}
+
+.storageOpsSummaryRow strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.storageOpsTableWrap {
+  border-radius: 6px;
+}
+
+.storageOpsTable {
+  min-width: 760px;
+  table-layout: fixed;
+}
+
+.storageOpsTable-compact {
+  min-width: 540px;
+}
+
+.storageOpsTable th,
+.storageOpsTable td {
+  padding: 7px 10px;
+  vertical-align: middle;
+}
+
+.storageOpsTable th {
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.storageOpsTable td {
+  font-size: 12px;
+  line-height: 1.25;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.storageOpsTable td strong {
+  font-weight: 700;
+}
+
+.storageOpsConfirm {
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.storageOpsDetails {
+  font-size: 12px;
+}
+
+.storageOpsDetails summary,
+.storageOpsInlineDetails summary {
+  font-weight: 700;
+}
+
+.storageOpsInlineDetails {
+  margin-top: 2px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+/* Stage 13.5.4.3 redraw tightening pass. */
+.storageOpsOverview {
+  grid-template-columns: minmax(420px, 1.1fr) minmax(560px, 1.45fr) minmax(300px, 0.78fr);
+  min-height: 104px;
+}
+
+.storageOpsHealthMain {
+  padding: 16px;
+}
+
+.storageOpsHealthMain > div > strong {
+  font-size: 18px;
+  line-height: 1.12;
+}
+
+.storageOpsOverview p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.storageOpsHealthAction {
+  padding: 16px;
+}
+
+.storageOpsHealthAction span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.storageOpsTopMetric {
+  padding: 0 14px;
+}
+
+.storageOpsTopMetric strong {
+  font-size: 18px;
+}
+
+.storageOpsOperationRow {
+  grid-template-columns: minmax(0, 1fr) 176px;
+  gap: 9px;
+  padding: 9px 0;
+}
+
+.storageOpsOperationTitle {
+  gap: 6px;
+}
+
+.storageOpsOperationMain p {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+.storageOpsOperationFacts {
+  display: flex;
+  flex-wrap: nowrap;
+}
+
+.storageOpsOperationFacts .storageOpsMiniFact {
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+.storageOpsOperationActions .button {
+  min-height: 28px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.storageOpsConfirm {
+  align-items: center;
+}
+
+.storageOpsConfirm span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.storageOpsPolicyStrip {
+  grid-template-columns: minmax(0, 1fr) 160px;
+  align-items: center;
+}
+
+.storageOpsPolicyStrip span {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+}
+
+.storageOpsPolicyStrip .button {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.storageOpsInlineDetails {
+  margin-top: 0;
+}
+
+.storageOpsInlineDetails .storageOpsNote,
+.storageOpsSection-operations > .storageOpsNoteStrong {
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.storageOpsSection-operations > .storageOpsNoteStrong {
+  margin-top: 8px;
+}
+
+.storageOpsTable th,
+.storageOpsTable td {
+  padding: 6px 9px;
+}
+
+.storageOpsTable {
+  min-width: 700px;
+}
+
+.storageOpsTable-compact {
+  min-width: 500px;
+}
+
+.storageOpsSection-operations .storageOpsOperationFacts {
+  display: none;
+}
+
+.storageOpsSection-operations > .storageOpsNoteStrong {
+  display: none;
+}
+
+.storageOpsSection-operations .storageOpsOperationRow {
+  min-height: 0;
+}
+
+.storageOpsSection-operations .storageOpsOperationMain p {
+  max-width: 100%;
+}
+
+.storageOpsOperationDetails {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+
+.storageOpsSection-operations .storageOpsOperationDetails {
+  display: grid;
+  gap: 6px;
+}
+
+.storageOpsSection-operations .storageOpsOperationActions {
+  align-self: start;
+}
+
+.storageOpsTopMetric small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.storageOpsHealthAction span {
+  -webkit-line-clamp: 2;
+}
+
+.storageOpsDashboard {
+  grid-template-areas:
+    "archive operations"
+    "roots operations"
+    "recent operations";
+}
+
+.storageOpsArchiveLocation {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.storageOpsArchiveLocation div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.storageOpsArchiveLocation span,
+.storageOpsArchiveLocation small,
+.storageOpsLocationFacts span,
+.storageOpsCameraCard span {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.storageOpsArchiveLocation strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.storageOpsLocationFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.storageOpsSupportDetails {
+  margin-top: 10px;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.storageOpsSupportDetails summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.storageOpsSupportDetails dl {
+  display: grid;
+  gap: 6px;
+  max-width: 760px;
+  margin: 8px 0 0;
+}
+
+.storageOpsSupportDetails div {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.35fr) minmax(0, 1fr);
+  gap: 8px;
+}
+
+.storageOpsSupportDetails dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.storageOpsCameraCards {
+  display: none;
+}
+
+.storageOpsCameraCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(54px, 0.7fr));
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  border: 1px solid #edf2f7;
+  border-radius: 6px;
+}
+
+.storageOpsCameraCard > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.storageOpsCameraCardMetric {
+  justify-items: end;
+  text-align: right;
+}
+
+.storageOpsCameraCardIdentity strong,
+.storageOpsCameraCard strong {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+/* Stage 13.5.4.4.2 product reconstruction pass. */
+.storageOpsHeader {
+  align-items: start;
+}
+
+.storageOpsHeaderActions {
+  margin-top: 8px;
+  justify-content: flex-start;
+}
+
+.storageOpsOverview {
+  grid-template-columns: minmax(360px, 1.05fr) minmax(430px, 1.2fr) minmax(220px, 0.62fr);
+}
+
+.storageOpsOverview p,
+.storageOpsHealthAction span,
+.storageOpsOperationMain p {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+  -webkit-box-orient: unset;
+}
+
+.storageOpsTopMetrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.storageOpsTopMetric {
+  min-height: 88px;
+  justify-content: center;
+}
+
+.storageOpsHealthAction {
+  min-width: 0;
+}
+
+.storageOpsCapacityBar {
+  height: 7px;
+  background: #e5e7eb;
+}
+
+.storageOpsCapacityBar span {
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+}
+
+.storageOpsVolumeGroups {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+.storageOpsVolumeGroup {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.storageOpsVolumeGroup .storageOpsCapacityHeader {
+  margin: 0;
+}
+
+.storageOpsVolumeGroup .storageOpsCapacityHeader > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.storageOpsVolumeGroup .storageOpsCapacityHeader > div > span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.storageOpsVolumeGroup .storageOpsCapacityHeader strong {
+  font-size: 16px;
+}
+
+.storageOpsMiniGrid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.storageOpsSection-operations .storageOpsOperationRow {
+  grid-template-columns: minmax(0, 1fr) 148px;
+  padding: 10px 0;
+}
+
+.storageOpsOperationTitle strong {
+  font-weight: 650;
+}
+
+.storageOpsStatusPill,
+.storageOpsBadge,
+.storageOpsMiniFact strong,
+.storageOpsTable td strong,
+.storageOpsCameraCard strong {
+  font-weight: 650;
+}
+
+.storageOpsOperationActions .button {
+  width: auto;
+  min-width: 126px;
+}
+
+.storageOpsRootList {
+  display: grid;
+  gap: var(--storage-root-spacing, 10px);
+}
+
+.storageOpsRootListRow {
+  display: grid;
+  grid-template-columns: minmax(190px, 1.5fr) 36px repeat(3, minmax(58px, 0.44fr)) minmax(62px, 0.38fr) 36px;
+  column-gap: 8px;
+  row-gap: 8px;
+  align-items: stretch;
+  padding: 9px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.storageOpsRootListRow > div {
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 2px;
+}
+
+.storageOpsRootListRow > div:not(.storageOpsRootPath) {
+  justify-items: center;
+  text-align: center;
+}
+
+.storageOpsRootListRow span {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.storageOpsRootListRow small {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.storageOpsRootListRow strong {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.storageOpsRootPath strong {
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.storageOpsRootListRow .storageOpsBadge {
+  justify-self: center;
+  width: max-content;
+  min-width: 0;
+  min-height: 22px;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.storageOpsBadgeButton {
+  display: inline-flex;
+  justify-self: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.storageOpsBadgeButton:hover .storageOpsBadge {
+  filter: brightness(0.96);
+}
+
+.storageOpsRootActionsCell,
+.storageOpsRootDeleteCell {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+}
+
+.storageOpsRootDeleteCell {
+  justify-self: center;
+  width: 36px;
+}
+
+.storageOpsRootActivateButton,
+.storageOpsRootDeleteButton {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #fff;
+  color: #64748b;
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.storageOpsRootActivateButton {
+  border-width: 2px;
+  border-color: #cbd5e1;
+  background: #fff;
+  color: #94a3b8;
+}
+
+.storageOpsRootActivateButton:disabled,
+.storageOpsRootDeleteButton:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.storageOpsRootActivateButton.isActive {
+  border-color: #9ee4ba;
+  background: #ecfdf3;
+  color: #178449;
+  opacity: 1;
+}
+
+.storageOpsRootActivateButton:not(.isActive):not(:disabled):hover {
+  border-color: #94a3b8;
+  background: #f8fafc;
+}
+
+.storageOpsRootDeleteButton {
+  border-color: #fecaca;
+  background: #fff7f7;
+  color: #b91c1c;
+}
+
+.storageOpsRootDeleteButton:disabled {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.storageOpsRootDeleteButton:not(:disabled):hover {
+  background: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.storageOpsCheckIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.storageOpsTrashIcon {
+  display: block;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  color: inherit;
+}
+
+.storageOpsAdvancedRootBody {
+  grid-template-columns: 1fr;
+}
+
+.storageOpsAdvancedRoot .storageOpsAdvancedRootBody {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.storageOpsAdvancedRootSummaryContent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  width: 100%;
+}
+
+.storageOpsDiscoveryStatus {
+  display: block;
+  min-height: 15px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.storageOpsDiscoveryStatus-ok {
+  color: #15803d;
+}
+
+.storageOpsDiscoveryStatus-warning {
+  color: #a16207;
+}
+
+.storageOpsDiscoveryFeedback {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 30px;
+  margin-top: 8px;
+}
+
+.storageOpsDiscoveryFeedback:empty {
+  display: none;
+}
+
+.storageOpsDiscoveryFeedback .storageOpsNote {
+  min-width: 0;
+  margin: 0;
+}
+
+.storageOpsDiscoveryFeedback .button {
+  flex: 0 0 auto;
+}
+
+.storageOpsAdvancedRootBody > div,
+.storageOpsAdvancedRootBody .storageOpsRootForm-product,
+.storageOpsAdvancedRootBody .storageOpsField,
+.storageOpsAdvancedRootBody .storageOpsActions {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.storageOpsAdvancedRoot .storageOpsRootForm-product {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 12px;
+  width: 100%;
+  margin-top: 0;
+  align-items: end;
+}
+
+.storageOpsAdvancedRoot .storageOpsRootForm-product > .storageOpsField {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  min-width: 0;
+}
+
+.storageOpsAdvancedRoot .storageOpsRootForm-product > .storageOpsActions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  grid-column: 1 / -1;
+  width: 100%;
+}
+
+.storageOpsAdvancedRoot .storageOpsRootForm-product > .storageOpsActions .button {
+  width: 100%;
+  justify-content: center;
+  min-height: 38px;
+}
+
+.storageOpsAdvancedRoot .storageOpsRootAddButton:not(.appIllustratedAction) {
+  align-self: end;
+  justify-self: end;
+  width: auto;
+  min-width: 116px;
+  min-height: 46px;
+  padding-left: 22px;
+  padding-right: 22px;
+}
+
+.storageOpsAdvancedRoot .storageOpsRootForm-product .select,
+.storageOpsAdvancedRoot .storageOpsRootForm-product .input {
+  min-height: 46px;
+}
+
+
+.storageOpsCameraTable .storageOpsTable {
+  min-width: 0;
+}
+
+.storageOpsCameraTable th,
+.storageOpsCameraTable td {
+  text-align: left;
+}
+
+.storageOpsCameraTable th:nth-child(n + 2),
+.storageOpsCameraTable td:nth-child(n + 2) {
+  text-align: right;
+}

@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -5,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const read = (relative) => fs.readFileSync(resolve(__dirname, "..", relative), "utf8");
+const read = (relative) => readProductSourceFile(resolve(__dirname, "..", relative), "utf8");
 const context = storageOperations;
 
 const healthyFacts = {

@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -9,13 +10,13 @@ import * as storageOperations from "../lib/storageOperations.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const repoRoot = resolve(webRoot, "..", "..");
-const read = (relative) => fs.readFileSync(resolve(webRoot, relative), "utf8");
+const read = (relative) => readProductSourceFile(resolve(webRoot, relative), "utf8");
 const page = read("app/storage/page.js");
 const center = read("components/storage/ArchiveManagementCenter.js");
 const css = read("app/styles/40-storage-records-shared.css");
 const i18n = readI18nSource();
 const routes = read("lib/routePermissions.js");
-const backendHistory = fs.readFileSync(resolve(repoRoot, "apps/api/app/services/storage_monitoring.py"), "utf8");
+const backendHistory = readProductSourceFile(resolve(repoRoot, "apps/api/app/services/storage_monitoring.py"), "utf8");
 
 const context = storageOperations;
 
@@ -68,7 +69,7 @@ for (const [asset, approvedSha256] of [
   ["retire-missing-recording.svg", "d2ed980d63be0343553282ab741f1d8f72664c7fce7f9a3c39ec46e9f7aa8320"],
   ["delete-orphan-file.svg", "4c4ef7c5eedbbe6755e48c8970756eb987e61eaf9722d1a22688d8665d189c87"],
 ]) {
-  const product = fs.readFileSync(resolve(webRoot, "public/assets/icons/ui", asset));
+  const product = readProductSourceFile(resolve(webRoot, "public/assets/icons/ui", asset));
   assert.equal(createHash("sha256").update(product).digest("hex"), approvedSha256, `${asset} must keep its approved bytes`);
   assert.match(page, new RegExp(asset.replace(".", "\\.")));
 }

@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -7,9 +8,9 @@ import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanc
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const settingsPage = readSettingsMaintenanceSources();
-const settingsHelpers = fs.readFileSync(resolve(webRoot, "lib/settingsPageHelpers.js"), "utf8");
-const operationFeedback = fs.readFileSync(resolve(webRoot, "components/OperationFeedback.js"), "utf8");
-const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
+const settingsHelpers = readProductSourceFile(resolve(webRoot, "lib/settingsPageHelpers.js"), "utf8");
+const operationFeedback = readProductSourceFile(resolve(webRoot, "components/OperationFeedback.js"), "utf8");
+const css = readProductSourceFile(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
 
 assert.equal(settingsPage.includes("settingsUpdateApplyPanel"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceOverall"), true);

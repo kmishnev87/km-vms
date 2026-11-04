@@ -1617,7 +1617,7 @@ def build_update_status(db: Session, *, now: datetime | None = None) -> dict[str
             _clone_payload(_LAST_RESULT) if _LAST_RESULT else None
         )
         successful["check_state"] = (
-            "warning"
+            "checking" if _CHECK_IN_PROGRESS else "warning"
             if successful["last_check_status"] == "check_failed"
             else "checked"
         )
@@ -1645,7 +1645,9 @@ def build_update_status(db: Session, *, now: datetime | None = None) -> dict[str
     payload["has_last_successful_check"] = _LAST_SUCCESSFUL_RESULT is not None
     payload["last_check_status"] = _LAST_RESULT.get("status") if _LAST_RESULT else None
     payload["last_update_check"] = _LAST_RESULT
-    payload["check_state"] = "recheck_required"
+    payload["check_state"] = "checking" if _CHECK_IN_PROGRESS else (
+        "not_checked" if _LAST_RESULT is None else "recheck_required"
+    )
     payload["projection_source"] = "installed_identity"
     payload = _attach_trusted_apply_candidate(payload, now=now)
     return payload

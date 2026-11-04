@@ -21,6 +21,17 @@ from app.models.user import User
 from app.routers.settings import SetupRequest, setup, setup_storage_discovery, system_status
 from app.services.setup_storage import APPLY_STATUS_FILE, CONTAINER_ARCHIVE_PATH, SELECTION_FILE, SETUP_COMPLETE_FILE
 from app.services.system_settings import get_system_settings
+from app.routers import settings as settings_router
+
+
+@pytest.fixture
+def confirmed_storage_boundary(monkeypatch):
+    # These unit tests own owner creation/rollback, not host activation. Real
+    # storage proof and rejection tests remain in test_storage_recording_contract.
+    monkeypatch.setattr(settings_router, "require_setup_storage_confirmation", lambda db: {
+        "status": "ready", "next_action": "create_owner",
+        "selected_host_path": "/fixture/host-archive", "container_archive_path": CONTAINER_ARCHIVE_PATH,
+    })
 
 
 class FakeRequest:
@@ -133,7 +144,7 @@ def test_setup_rejects_invalid_wizard_values_without_partial_owner(db, field, va
     assert_no_partial_owner(db)
 
 
-def test_successful_setup_creates_exactly_one_owner_and_initializes_system(db):
+def test_successful_setup_creates_exactly_one_owner_and_initializes_system(db, confirmed_storage_boundary):
     write_storage_selection()
     before = system_status(db)
 
@@ -151,7 +162,7 @@ def test_successful_setup_creates_exactly_one_owner_and_initializes_system(db):
     assert owners[0].username == "owner_admin"
 
 
-def test_replay_after_setup_does_not_duplicate_owner_and_closes_setup_endpoints(db):
+def test_replay_after_setup_does_not_duplicate_owner_and_closes_setup_endpoints(db, confirmed_storage_boundary):
     write_storage_selection()
     setup(payload(), db=db, request=FakeRequest())
 
@@ -166,7 +177,7 @@ def test_replay_after_setup_does_not_duplicate_owner_and_closes_setup_endpoints(
     assert system_status(db) == {"initialized": True, "setup_required": False, "language": "en", "timezone": "UTC"}
 
 
-def test_failed_storage_validation_rolls_back_owner_and_initialization(db):
+def test_failed_storage_validation_rolls_back_owner_and_initialization(db, confirmed_storage_boundary):
     write_storage_selection()
     settings.storage_root = str(Path(settings.storage_root) / "not-a-directory")
     Path(settings.storage_root).parent.write_text("blocked", encoding="utf-8")
@@ -178,7 +189,7 @@ def test_failed_storage_validation_rolls_back_owner_and_initialization(db):
     assert_no_partial_owner(db)
 
 
-def test_setup_response_and_audit_metadata_do_not_expose_password_or_hash(db):
+def test_setup_response_and_audit_metadata_do_not_expose_password_or_hash(db, confirmed_storage_boundary):
     write_storage_selection()
     response = setup(payload(), db=db, request=FakeRequest())
     event = db.query(AuditEvent).filter(AuditEvent.event_type == "system.setup_completed").one()
@@ -210,7 +221,7 @@ def test_setup_rejects_naked_container_storage_confirmation(db):
     assert_no_partial_owner(db)
 
 
-def test_concurrent_setup_attempts_create_exactly_one_owner(db):
+def test_concurrent_setup_attempts_create_exactly_one_owner(db, confirmed_storage_boundary):
     write_storage_selection()
     race_db = Path(settings.storage_install_control).parent / "race.db"
     engine = create_engine(f"sqlite:///{race_db}", connect_args={"check_same_thread": False})
@@ -247,7 +258,7 @@ def test_concurrent_setup_attempts_create_exactly_one_owner(db):
         session.close()
 
 
-def test_setup_writes_setup_complete_signal_for_activation_helper(db):
+def test_setup_writes_setup_complete_signal_for_activation_helper(db, confirmed_storage_boundary):
     write_storage_selection()
 
     result = setup(payload(), db=db, request=FakeRequest())

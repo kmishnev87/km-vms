@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import hashlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -359,6 +360,33 @@ def test_safe_restart_reconciles_only_persistent_services(tmp_path: Path) -> Non
         "services:\n  api:\n    image: example.invalid/api\n",
         encoding="utf-8",
     )
+    # This unit test owns the restart command's service scope. Provide the
+    # canonical authority boundary explicitly; real bootstrap/slot validation
+    # is exercised by the dedicated bootstrap and activation suites.
+    slot_source = app / 'data/update-runtime/slots' / ('release-' + 'a' * 40) / 'source'
+    slot_source.mkdir(parents=True)
+    shutil.copyfile(app / 'docker-compose.yml', slot_source / 'docker-compose.yml')
+    derived = app / 'data/update-runtime/derived-compose/test-images.yml'
+    derived.parent.mkdir(parents=True)
+    derived.write_text('services: {}\n')
+    bundle = app / 'data/update-runtime/bootstrap/bundles' / ('b' * 64)
+    bundle.mkdir(parents=True)
+    (bundle.parent.parent / 'current').symlink_to('bundles/' + bundle.name, target_is_directory=True)
+    (bundle / 'km-vms-bootstrap.py').write_text(
+        "from pathlib import Path\nimport sys\n"
+        "root=Path(sys.argv[sys.argv.index('--app-dir')+1])\n"
+        "command=sys.argv[1]\n"
+        "if command=='resolve-project-name': print('stage-test')\n"
+        "elif command=='resolve-path': print(root/'data/update-runtime/slots'/('release-'+'a'*40)/'source')\n"
+        "elif command=='writer-isolation': print('inactive')\n"
+        "elif command=='reconcile-policies': pass\n"
+        "elif command=='image-override-path': print(root/'data/update-runtime/derived-compose/test-images.yml')\n"
+        "else: raise SystemExit(3)\n"
+    )
+    (bundle / 'docker-compose.lifecycle.yml').write_text('services: {}\n')
+    (bundle / 'bootstrap-files.sha256').write_text(''.join(
+        hashlib.sha256((bundle/name).read_bytes()).hexdigest() + '  ' + name + '\n'
+        for name in ['km-vms-bootstrap.py','docker-compose.lifecycle.yml']))
     control_dir = app / "data/install-control"
     control_dir.mkdir(parents=True)
     (control_dir / "docker-compose.archive-roots.yml").write_text(

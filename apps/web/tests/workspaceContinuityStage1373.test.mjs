@@ -1,7 +1,8 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const source = fs.readFileSync(new URL('../lib/workspaceContinuity.js', import.meta.url), 'utf8');
+const source = readProductSourceFile(new URL('../lib/workspaceContinuity.js', import.meta.url), 'utf8');
 const { reconcilePlaybackMembership, selectTimelineLabels, timelineRangeWindow, timelineRangeWindowCovers, timelineRangesNeedReload } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const first = { cameraId: '1', playbackKey: 'existing-one', offsetSec: 12 };
 const second = { sourceCameraId: '2', cameraId: null, playbackKey: 'no-video' };
@@ -37,9 +38,9 @@ for (const hours of [24, 72, 168]) {
   assert.equal(timelineRangesNeedReload(loaded,desired(spanMs),2000),true);
   assert.equal(timelineRangeWindowCovers(loaded,desired(30_000)),true);
 }
-const component = fs.readFileSync(new URL('../components/ChronologyTimeline.js', import.meta.url),'utf8');
-const page = fs.readFileSync(new URL('../app/chronology/page.js', import.meta.url),'utf8');
-const css = fs.readFileSync(new URL('../app/styles/80-chronology-timeline.css', import.meta.url),'utf8');
+const component = readProductSourceFile(new URL('../components/ChronologyTimeline.js', import.meta.url),'utf8');
+const page = readProductSourceFile(new URL('../app/chronology/page.js', import.meta.url),'utf8');
+const css = readProductSourceFile(new URL('../app/styles/80-chronology-timeline.css', import.meta.url),'utf8');
 assert.ok(!component.includes('Загружаем диапазоны архива'));
 assert.ok(component.includes('aria-busy={rangesLoading}'));
 assert.ok(page.includes('timelineRangeWindowCovers(rangesInFlightRef.current, desired)'));

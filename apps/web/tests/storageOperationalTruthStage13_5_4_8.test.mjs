@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -51,9 +52,9 @@ assert.equal(currentDiscovery.current, true);
 assert.equal(currentDiscovery.candidates.length, 1);
 assert.equal(currentDiscovery.snapshotId, "snapshot-current");
 
-const storagePage = fs.readFileSync(resolve(__dirname, "../app/storage/page.js"), "utf8");
-const storageCss = fs.readFileSync(resolve(__dirname, "../app/styles/40-storage-records-shared.css"), "utf8");
-const camerasPage = fs.readFileSync(resolve(__dirname, "../app/cameras/page.js"), "utf8");
+const storagePage = readProductSourceFile(resolve(__dirname, "../app/storage/page.js"), "utf8");
+const storageCss = readProductSourceFile(resolve(__dirname, "../app/styles/40-storage-records-shared.css"), "utf8");
+const camerasPage = readProductSourceFile(resolve(__dirname, "../app/cameras/page.js"), "utf8");
 const loadStatusBlock = storagePage.slice(storagePage.indexOf("const loadStatus"), storagePage.indexOf("const loadArchiveRootDiscovery"));
 const activateBlock = storagePage.slice(storagePage.indexOf("async function activateRoot"), storagePage.indexOf("function showRootProblems"));
 

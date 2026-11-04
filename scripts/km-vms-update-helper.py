@@ -225,6 +225,31 @@ SCHEMA_RETRY_KEYS = {
 }
 
 
+def _load_operation_handlers():
+    directory = Path(__file__).resolve().parent / "km_vms_helper_handlers"
+    name = "_kmvms_helper_" + hashlib.sha256(str(directory).encode()).hexdigest()[:24]
+    spec = importlib.util.spec_from_file_location(
+        name, directory / "__init__.py", submodule_search_locations=[str(directory)],
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("helper_operation_handlers_unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+    return module
+
+
+_operation_handlers = _load_operation_handlers()
+UpdateOperationHandler = _operation_handlers.UpdateOperationHandler
+RestoreOperationHandler = _operation_handlers.RestoreOperationHandler
+RestoreRollbackHandler = _operation_handlers.RestoreRollbackHandler
+RestoreCommandExecutor = _operation_handlers.RestoreCommandExecutor
+
 class HelperError(RuntimeError):
     def __init__(
         self,
@@ -1854,90 +1879,32 @@ def resume_activation(
     return 0
 
 
+def _update_operation_handler() -> UpdateOperationHandler:
+    return UpdateOperationHandler(
+        HelperError, PROGRESS_FILE, STATUS_FILE, activation_journal, base_status, classify_apply_failure, compose_app_dir, publish_activation_outcome, publish_terminal, resolve_update_source_dir, run_child_with_progress, steps_for, update_child_env, verify_installed_commit, write_json,
+    )
+
+
+def _restore_operation_handler() -> RestoreOperationHandler:
+    return RestoreOperationHandler(
+        HelperError, RESTORE_ARTIFACT_ID_RE, RESTORE_DESTRUCTIVE_MARKER_FILE, RESTORE_JOURNAL_FILE, RESTORE_OPERATIONAL_PHASES, finish_restore_request, invalidate_post_restore_integrity, publish_restore_phase, read_json, restart_restore_writers_best_effort, restore_destructive_started, rollback_current_restore, run_restore_executor, safe_text, schedule_post_restore_integrity, start_restore_api, start_restore_recorder_with_proof, stop_restore_writers,
+    )
+
+
+def _restore_rollback_handler() -> RestoreRollbackHandler:
+    return RestoreRollbackHandler(
+        HelperError, RESTORE_ARTIFACT_ID_RE, RESTORE_OPERATIONAL_PHASES, finish_restore_request, invalidate_post_restore_integrity, publish_restore_phase, run_restore_executor, schedule_post_restore_integrity, start_restore_api, start_restore_recorder_with_proof, stop_restore_writers,
+    )
+
+
+def _restore_command_executor() -> RestoreCommandExecutor:
+    return RestoreCommandExecutor(
+        HelperError, MACHINE_CODE_RE, RESTORE_EXECUTOR_RESULT_FILE, read_json, restore_compose_command, restore_destructive_started, safe_text,
+    )
+
+
 def run_update(request: dict[str, Any]) -> int:
-    source = request["source"]
-    update_dir = compose_app_dir()
-    update_source_dir = resolve_update_source_dir(update_dir)
-    expected_commit = str(source["commit"])
-    command = [
-        "sh",
-        str(update_source_dir / "scripts" / "update.sh"),
-        "--github-repo",
-        source["repo"],
-        "--branch",
-        source["apply_ref"],
-        "--trusted-commit",
-        source["commit"],
-        "--yes",
-    ]
-    if (
-        os.getenv("KM_VMS_GITHUB_PRIVATE", "0") == "1"
-        or os.getenv("KMVMS_UPDATE_SOURCE_PRIVATE", "0") == "1"
-    ):
-        command.append("--github-private")
-    env = update_child_env(request)
-    try:
-        PROGRESS_FILE.unlink()
-    except FileNotFoundError:
-        pass
-    write_json(
-        STATUS_FILE,
-        base_status(
-            request,
-            "preflight",
-            "preflight",
-            steps_for("preflight"),
-        ),
-    )
-    applied = run_child_with_progress(
-        command,
-        request,
-        update_dir,
-        env,
-        timeout_seconds=7200,
-        default_step="preflight",
-        status_value="preflight",
-    )
-    journal = activation_journal(request["request_id"])
-    if journal:
-        if publish_activation_outcome(
-            request,
-            journal,
-            update_dir,
-        ):
-            return 0
-        raise HelperError(
-            "activation_journal_invalid",
-            "Release activation did not reach terminal state.",
-        )
-    if applied.returncode != 0:
-        raise classify_apply_failure(update_dir, applied.stderr.strip())
-    write_json(
-        STATUS_FILE,
-        base_status(
-            request,
-            "applying",
-            "commit_verification",
-            steps_for("commit_verification"),
-        ),
-    )
-    installed, expected, release_identity = verify_installed_commit(
-        update_dir,
-        expected_commit,
-    )
-    completed = base_status(
-        request,
-        "completed",
-        "completed",
-        steps_for("completed"),
-    )
-    completed["commit_verified"] = True
-    completed["installed_commit"] = installed
-    completed["expected_commit"] = expected
-    completed["release_identity"] = release_identity
-    completed["finished_at"] = completed["updated_at"]
-    publish_terminal(request, completed)
-    return 0
+    return _update_operation_handler().run_update(request)
 
 
 def run_child_with_progress(
@@ -2683,83 +2650,7 @@ def run_restore_executor(
     final_db_outcome: str | None = None,
     timeout_seconds: int = 1200,
 ) -> dict[str, Any]:
-    command = [
-        "run",
-        "--rm",
-        "--no-deps",
-        "restore-executor",
-        action,
-        "--operation-id",
-        request["operation_id"],
-    ]
-    if artifact_id:
-        command.extend(["--artifact-id", artifact_id])
-    if action == "restore":
-        command.extend(["--mode", mode])
-    if action == "invalidate-integrity":
-        if final_db_outcome not in {"source", "rollback"}:
-            raise HelperError(
-                "restore_integrity_outcome_invalid",
-                "Restore integrity outcome is invalid.",
-            )
-        command.extend(
-            ["--final-db-outcome", final_db_outcome]
-        )
-    if action == "recorder-proof":
-        if recorder_not_before_epoch is None:
-            raise HelperError(
-                "restore_recorder_proof_boundary_missing",
-                "Recorder proof boundary is unavailable.",
-            )
-        command.extend(
-            [
-                "--recorder-not-before-epoch",
-                f"{float(recorder_not_before_epoch):.6f}",
-            ]
-        )
-    result = restore_compose_command(
-        *command,
-        timeout_seconds=timeout_seconds,
-    )
-    payload = read_json(RESTORE_EXECUTOR_RESULT_FILE)
-    if (
-        not isinstance(payload, dict)
-        or payload.get("schema_version") != 1
-        or payload.get("operation_id")
-        != request["operation_id"]
-        or payload.get("action") != action
-        or payload.get("status")
-        not in {"completed", "failed"}
-    ):
-        raise HelperError(
-            "restore_executor_result_invalid",
-            "Restore executor result is unavailable.",
-            diagnostics={
-                "mutation_started": bool(
-                    restore_destructive_started(
-                        request["operation_id"]
-                    )
-                )
-            },
-        )
-    if result.returncode != 0 or payload["status"] != "completed":
-        code = safe_text(
-            payload.get("reason_code"),
-            80,
-        ) or "restore_executor_failed"
-        raise HelperError(
-            code
-            if MACHINE_CODE_RE.fullmatch(code)
-            else "restore_executor_failed",
-            "Restore executor failed.",
-            diagnostics={
-                "mutation_started": bool(
-                    payload.get("mutation_started")
-                )
-            },
-        )
-    details = payload.get("details")
-    return details if isinstance(details, dict) else {}
+    return _restore_command_executor().run_restore_executor(request, action, artifact_id=artifact_id, mode=mode, recorder_not_before_epoch=recorder_not_before_epoch, final_db_outcome=final_db_outcome, timeout_seconds=timeout_seconds)
 
 
 def _restore_integrity_idempotency_key(
@@ -2883,50 +2774,7 @@ def run_restore_api_integrity_executor(
     final_db_outcome: str,
     timeout_seconds: int = 120,
 ) -> dict[str, Any]:
-    command = [
-        "exec",
-        "-T",
-        "api",
-        "python3",
-        "-m",
-        "app.services.current_db_restore_executor",
-        "enqueue-integrity",
-        "--operation-id",
-        request["operation_id"],
-        "--final-db-outcome",
-        final_db_outcome,
-    ]
-    result = restore_compose_command(
-        *command,
-        timeout_seconds=timeout_seconds,
-    )
-    payload = read_json(RESTORE_EXECUTOR_RESULT_FILE)
-    if (
-        not isinstance(payload, dict)
-        or payload.get("schema_version") != 1
-        or payload.get("operation_id") != request["operation_id"]
-        or payload.get("action") != "enqueue-integrity"
-        or payload.get("status") not in {"completed", "failed"}
-    ):
-        raise HelperError(
-            "restore_integrity_enqueue_result_invalid",
-            "Archive integrity scheduling result is unavailable.",
-        )
-    if result.returncode != 0 or payload["status"] != "completed":
-        raise HelperError(
-            "restore_integrity_enqueue_failed",
-            "Archive integrity scan could not be scheduled.",
-        )
-    details = payload.get("details")
-    if not isinstance(details, dict) or not safe_text(
-        details.get("scan_id"),
-        64,
-    ):
-        raise HelperError(
-            "restore_integrity_enqueue_result_invalid",
-            "Archive integrity scheduling result is unavailable.",
-        )
-    return details
+    return _restore_command_executor().run_restore_api_integrity_executor(request, final_db_outcome=final_db_outcome, timeout_seconds=timeout_seconds)
 
 
 def schedule_post_restore_integrity(
@@ -3438,321 +3286,11 @@ def rollback_current_restore(
     reason_code: str,
     failed_phase: str | None = None,
 ) -> None:
-    source_failed_phase = (
-        failed_phase
-        if failed_phase in RESTORE_OPERATIONAL_PHASES
-        else "restore_running"
-    )
-
-    def recovery_required(
-        recovery_reason: str,
-        recovery_phase: str,
-    ) -> None:
-        finish_restore_request(
-            request,
-            result="failed_recovery_required",
-            reason_code=recovery_reason,
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=True,
-            failed_phase=recovery_phase,
-        )
-
-    if (
-        not pre_restore_backup_id
-        or not RESTORE_ARTIFACT_ID_RE.fullmatch(
-            pre_restore_backup_id
-        )
-    ):
-        recovery_required(
-            "pre_restore_backup_missing",
-            "restore_running",
-        )
-        return
-    try:
-        stop_restore_writers()
-    except HelperError:
-        recovery_required(
-            "automatic_rollback_isolation_failed",
-            "writers_paused",
-        )
-        return
-    try:
-        run_restore_executor(
-            request,
-            "restore",
-            artifact_id=pre_restore_backup_id,
-            mode="rollback",
-        )
-        invalidate_post_restore_integrity(
-            request,
-            final_db_outcome="rollback",
-        )
-    except Exception:
-        recovery_required(
-            "automatic_rollback_database_failed",
-            "restore_running",
-        )
-        return
-    publish_restore_phase(
-        request,
-        phase="services_starting",
-        pre_restore_backup_id=pre_restore_backup_id,
-        destructive_started=True,
-    )
-    try:
-        start_restore_api()
-    except Exception:
-        recovery_required(
-            "automatic_rollback_api_recovery_failed",
-            "services_starting",
-        )
-        return
-    publish_restore_phase(
-        request,
-        phase="post_restore_check",
-        pre_restore_backup_id=pre_restore_backup_id,
-        destructive_started=True,
-    )
-    try:
-        run_restore_executor(request, "post-check")
-    except Exception:
-        recovery_required(
-            "automatic_rollback_validation_failed",
-            "post_restore_check",
-        )
-        return
-    try:
-        start_restore_recorder_with_proof(request)
-    except Exception:
-        recovery_required(
-            "automatic_rollback_recorder_recovery_failed",
-            "post_restore_check",
-        )
-        return
-    finish_restore_request(
-        request,
-        result="failed_rolled_back",
-        reason_code=reason_code,
-        pre_restore_backup_id=pre_restore_backup_id,
-        destructive_started=True,
-        failed_phase=source_failed_phase,
-    )
-    schedule_post_restore_integrity(
-        request,
-        final_db_outcome="rollback",
-    )
+    return _restore_rollback_handler().rollback_current_restore(request, pre_restore_backup_id=pre_restore_backup_id, reason_code=reason_code, failed_phase=failed_phase)
 
 
 def run_current_restore(request: dict[str, Any]) -> None:
-    prior_journal = read_json(RESTORE_JOURNAL_FILE)
-    prior_marker = read_json(
-        RESTORE_DESTRUCTIVE_MARKER_FILE
-    )
-    if (
-        isinstance(prior_marker, dict)
-        and prior_marker.get("operation_id")
-        == request["operation_id"]
-        and prior_marker.get("mutation_started") is True
-    ):
-        pre_restore_backup_id = (
-            prior_journal.get("pre_restore_backup_id")
-            if isinstance(prior_journal, dict)
-            else None
-        )
-        rollback_current_restore(
-            request,
-            pre_restore_backup_id=pre_restore_backup_id,
-            reason_code="restore_interrupted_after_mutation",
-            failed_phase=(
-                prior_journal.get("phase")
-                if isinstance(prior_journal, dict)
-                and prior_journal.get("phase")
-                in RESTORE_OPERATIONAL_PHASES
-                else "restore_running"
-            ),
-        )
-        return
-    if (
-        request["state"] == "claimed"
-        and isinstance(prior_journal, dict)
-        and prior_journal.get("operation_id")
-        == request["operation_id"]
-    ):
-        writers_recovered = restart_restore_writers_best_effort(
-            request
-        )
-        finish_restore_request(
-            request,
-            result="blocked",
-            reason_code=(
-                "restore_interrupted_before_mutation"
-                if writers_recovered
-                else "restore_writer_isolation_failed"
-            ),
-            pre_restore_backup_id=prior_journal.get(
-                "pre_restore_backup_id"
-            ),
-            destructive_started=False,
-            failed_phase=(
-                prior_journal.get("phase")
-                if prior_journal.get("phase")
-                in RESTORE_OPERATIONAL_PHASES
-                else "preflight"
-            ),
-        )
-        return
-
-    pre_restore_backup_id: str | None = None
-    writers_isolation_attempted = False
-    destructive_started = False
-    current_phase = "preflight"
-    try:
-        current_phase = "preflight"
-        publish_restore_phase(request, phase="preflight")
-        run_restore_executor(request, "preflight")
-        current_phase = "pre_restore_backup"
-        publish_restore_phase(
-            request,
-            phase="pre_restore_backup",
-        )
-        writers_isolation_attempted = True
-        current_phase = "writers_paused"
-        publish_restore_phase(
-            request,
-            phase="writers_paused",
-        )
-        stop_restore_writers()
-        current_phase = "pre_restore_backup"
-        backup = run_restore_executor(
-            request,
-            "pre-restore-backup",
-        )
-        pre_restore_backup_id = safe_text(
-            backup.get("pre_restore_backup_id"),
-            80,
-        )
-        if (
-            not pre_restore_backup_id
-            or not RESTORE_ARTIFACT_ID_RE.fullmatch(
-                pre_restore_backup_id
-            )
-            or backup.get("verified") is not True
-        ):
-            raise HelperError(
-                "pre_restore_backup_verification_failed",
-                "Pre-restore backup verification failed.",
-            )
-        current_phase = "restore_running"
-        publish_restore_phase(
-            request,
-            phase="restore_running",
-            pre_restore_backup_id=pre_restore_backup_id,
-        )
-        destructive_started = True
-        run_restore_executor(
-            request,
-            "restore",
-            artifact_id=request["artifact"]["artifact_id"],
-            mode="source",
-        )
-        invalidate_post_restore_integrity(
-            request,
-            final_db_outcome="source",
-        )
-        current_phase = "services_starting"
-        publish_restore_phase(
-            request,
-            phase="services_starting",
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=True,
-        )
-        start_restore_api()
-        current_phase = "post_restore_check"
-        publish_restore_phase(
-            request,
-            phase="post_restore_check",
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=True,
-        )
-        run_restore_executor(request, "post-check")
-        start_restore_recorder_with_proof(request)
-        finish_restore_request(
-            request,
-            result="completed",
-            reason_code=None,
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=True,
-        )
-        schedule_post_restore_integrity(
-            request,
-            final_db_outcome="source",
-        )
-        return
-    except HelperError as exc:
-        destructive_started = bool(
-            destructive_started
-            or exc.diagnostics.get("mutation_started")
-            or restore_destructive_started(
-                request["operation_id"]
-            )
-        )
-        if destructive_started:
-            rollback_current_restore(
-                request,
-                pre_restore_backup_id=pre_restore_backup_id,
-                reason_code=exc.category,
-                failed_phase=current_phase,
-            )
-            return
-        writers_recovered = bool(
-            not writers_isolation_attempted
-            or restart_restore_writers_best_effort(request)
-        )
-        finish_restore_request(
-            request,
-            result="blocked",
-            reason_code=(
-                exc.category
-                if writers_recovered
-                else "restore_writer_isolation_failed"
-            ),
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=False,
-            failed_phase=current_phase,
-        )
-        return
-    except Exception:
-        destructive_started = bool(
-            destructive_started
-            or restore_destructive_started(
-                request["operation_id"]
-            )
-        )
-        if destructive_started:
-            rollback_current_restore(
-                request,
-                pre_restore_backup_id=pre_restore_backup_id,
-                reason_code="restore_helper_exception",
-                failed_phase=current_phase,
-            )
-            return
-        writers_recovered = bool(
-            not writers_isolation_attempted
-            or restart_restore_writers_best_effort(request)
-        )
-        finish_restore_request(
-            request,
-            result="blocked",
-            reason_code=(
-                "restore_helper_exception"
-                if writers_recovered
-                else "restore_writer_isolation_failed"
-            ),
-            pre_restore_backup_id=pre_restore_backup_id,
-            destructive_started=False,
-            failed_phase=current_phase,
-        )
-        return
+    return _restore_operation_handler().run_current_restore(request)
 
 
 def converge_unhandled_restore_failure(
@@ -3760,48 +3298,7 @@ def converge_unhandled_restore_failure(
     *,
     reason_code: str,
 ) -> None:
-    journal = read_json(RESTORE_JOURNAL_FILE)
-    pre_restore_backup_id = (
-        journal.get("pre_restore_backup_id")
-        if isinstance(journal, dict)
-        and journal.get("operation_id") == request["operation_id"]
-        else None
-    )
-    if restore_destructive_started(request["operation_id"]):
-        rollback_current_restore(
-            request,
-            pre_restore_backup_id=pre_restore_backup_id,
-            reason_code=reason_code,
-            failed_phase=(
-                journal.get("phase")
-                if isinstance(journal, dict)
-                and journal.get("phase")
-                in RESTORE_OPERATIONAL_PHASES
-                else "restore_running"
-            ),
-        )
-        return
-    writers_recovered = restart_restore_writers_best_effort(
-        request
-    )
-    finish_restore_request(
-        request,
-        result="blocked",
-        reason_code=(
-            reason_code
-            if writers_recovered
-            else "restore_writer_isolation_failed"
-        ),
-        pre_restore_backup_id=pre_restore_backup_id,
-        destructive_started=False,
-        failed_phase=(
-            journal.get("phase")
-            if isinstance(journal, dict)
-            and journal.get("phase")
-            in RESTORE_OPERATIONAL_PHASES
-            else "preflight"
-        ),
-    )
+    return _restore_operation_handler().converge_unhandled_restore_failure(request, reason_code=reason_code)
 
 
 def main() -> int:

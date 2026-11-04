@@ -1,9 +1,10 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { acquireModalScrollLock } from "../lib/modalScrollLock.js";
 import { updateApplyPhaseText, updateApplyProgressText } from "../lib/settingsUpdateApplyHelpers.js";
 
-const read = (path) => fs.readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+const read = (path) => readProductSourceFile(new URL(`../${path}`, import.meta.url), "utf8");
 const style = () => ({ overflow: "", position: "", top: "", left: "", right: "", width: "", overscrollBehavior: "", paddingRight: "5px" });
 const movements = [];
 globalThis.document = { body: { style: style() }, documentElement: { style: style() } };

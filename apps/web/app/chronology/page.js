@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createSerializedLayoutWriter } from "../../lib/serializedLayoutWriter";
-import { createCoalescedPlaybackResolver } from "../../lib/coalescedPlaybackResolver";
+import useChronologyClock from "../../lib/useChronologyClock";
+import useChronologySources from "../../lib/useChronologySources";
+import useChronologyPlaybackCoordinator from "../../lib/useChronologyPlaybackCoordinator";
+import { WORKSPACE_KEY, normalizeTile, readSavedTiles, migrationMarkerKey, saveTiles, dedupeTiles, nextZIndex, chooseAutoGrid, layoutTiles, backendPayload, clamp, MIN_TILE_W, MIN_TILE_H, DEFAULT_W_PCT, DEFAULT_H_PCT } from "../../lib/chronologyWorkspaceLayout";
 import Layout from "../../components/Layout";
 import ArchiveTilePlayer from "../../components/ArchiveTilePlayer";
 import ChronologyTimeline from "../../components/ChronologyTimeline";
@@ -36,22 +39,9 @@ import {
   workspaceCameraIds,
 } from "../../lib/workspaceLayoutCore";
 
-const STORAGE_KEY = "vms_chronology_workspace_v1";
-const LEGACY_STORAGE_KEY = "vms_chronology" + "2_workspace_v1";
-const WORKSPACE_KEY = "chronology";
-const MIGRATION_MARKER_PREFIX = `${STORAGE_KEY}_backend_migrated`;
-const LEGACY_CANVAS_W = 1600;
-const LEGACY_CANVAS_H = 900;
-const MIN_TILE_W = 220;
-const MIN_TILE_H = 150;
-const DEFAULT_W_PCT = 0.32;
-const DEFAULT_H_PCT = 0.34;
-const PLAYBACK_COORDINATOR_SOFT_TIMEOUT_MS = 3500;
-const PLAYBACK_COORDINATOR_HARD_TIMEOUT_MS = 7000;
 const POINTER_DRAG_THRESHOLD_PX = 8;
 const DOUBLE_TAP_MS = 360;
 const DOUBLE_TAP_DISTANCE_PX = 22;
-const TILE_READY_STATES = new Set(["ready", "empty", "error", "unsupported", "timeout"]);
 const ZOOM_KEYS = ["24h", "3d", "7d"];
 const ZOOM_HOURS = {
   "24h": 24,
@@ -156,9 +146,6 @@ function ChronologyDownloadIcon() {
   );
 }
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
 
 function pointerDistance(a, b) {
   if (!a || !b) return Number.POSITIVE_INFINITY;
@@ -193,132 +180,6 @@ function dateTimeFromDate(dt) {
   };
 }
 
-function normalizeTile(tile) {
-  const hasPercent =
-    Number.isFinite(tile?.xPct) &&
-    Number.isFinite(tile?.yPct) &&
-    Number.isFinite(tile?.wPct) &&
-    Number.isFinite(tile?.hPct);
-
-  if (hasPercent) {
-    const wPct = clamp(Number(tile.wPct), 0.05, 1);
-    const hPct = clamp(Number(tile.hPct), 0.05, 1);
-    return {
-      id: String(tile.id || `${tile.cameraId || "camera"}-${Date.now()}`),
-      cameraId: String(tile.cameraId || ""),
-      xPct: clamp(Number(tile.xPct), 0, 1 - wPct),
-      yPct: clamp(Number(tile.yPct), 0, 1 - hPct),
-      wPct,
-      hPct,
-      z: Number(tile.z || 2),
-    };
-  }
-
-  const wPct = clamp(Number(tile?.w || 520) / LEGACY_CANVAS_W, 0.05, 1);
-  const hPct = clamp(Number(tile?.h || 300) / LEGACY_CANVAS_H, 0.05, 1);
-  return {
-    id: String(tile?.id || `${tile?.cameraId || "camera"}-${Date.now()}`),
-    cameraId: String(tile?.cameraId || ""),
-    xPct: clamp(Number(tile?.x || 0) / LEGACY_CANVAS_W, 0, 1 - wPct),
-    yPct: clamp(Number(tile?.y || 0) / LEGACY_CANVAS_H, 0, 1 - hPct),
-    wPct,
-    hPct,
-    z: Number(tile?.z || 2),
-  };
-}
-
-function readSavedTiles() {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY) || "[]";
-    const parsed = JSON.parse(raw);
-    const tiles = Array.isArray(parsed) ? dedupeTiles(parsed.map(normalizeTile)) : [];
-    if (!localStorage.getItem(STORAGE_KEY) && localStorage.getItem(LEGACY_STORAGE_KEY)) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tiles));
-    }
-    return tiles;
-  } catch {
-    return [];
-  }
-}
-
-function migrationMarkerKey(userId) {
-  return `${MIGRATION_MARKER_PREFIX}_${String(userId || "anonymous")}`;
-}
-
-function saveTiles(tiles) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(dedupeTiles(tiles.map(normalizeTile))));
-  } catch {}
-}
-
-function dedupeTiles(tiles) {
-  const seen = new Set();
-  return tiles.filter((tile) => {
-    const cameraId = String(tile?.cameraId || "");
-    if (!cameraId) return true;
-    if (seen.has(cameraId)) return false;
-    seen.add(cameraId);
-    return true;
-  });
-}
-
-function nextZIndex(tiles) {
-  return tiles.reduce((max, tile) => Math.max(max, Number(tile.z || 2)), 2) + 1;
-}
-
-function chooseAutoGrid(count, workspaceW, workspaceH) {
-  if (count <= 1) return { cols: 1, rows: 1 };
-
-  let best = { cols: count, rows: 1, score: -Infinity };
-  const workspaceRatio = workspaceW / Math.max(workspaceH, 1);
-
-  for (let cols = 1; cols <= count; cols += 1) {
-    const rows = Math.ceil(count / cols);
-    const cellRatio = (workspaceRatio * rows) / cols;
-    const areaScore = 1 / (cols * rows);
-    const shapePenalty = Math.abs(Math.log(Math.max(cellRatio, 0.01) / (16 / 9)));
-    const emptyPenalty = (cols * rows - count) * 0.08;
-    const score = areaScore - shapePenalty * 0.03 - emptyPenalty;
-
-    if (score > best.score) {
-      best = { cols, rows, score };
-    }
-  }
-
-  return best;
-}
-
-function layoutTiles(source, workspaceBounds) {
-  const tiles = dedupeTiles(source);
-  if (!tiles.length) return tiles;
-
-  const workspaceW = workspaceBounds?.width || 16;
-  const workspaceH = workspaceBounds?.height || 9;
-  const { cols, rows } = chooseAutoGrid(tiles.length, workspaceW, workspaceH);
-  const wPct = 1 / cols;
-  const hPct = 1 / rows;
-
-  return tiles.map((tile, idx) =>
-    normalizeTile({
-      ...tile,
-      xPct: (idx % cols) * wPct,
-      yPct: Math.floor(idx / cols) * hPct,
-      wPct,
-      hPct,
-      z: idx + 2,
-    })
-  );
-}
-
-function backendPayload(tiles, sidebarCameraOrder = []) {
-  return {
-    layout_version: 1,
-    tiles: dedupeTiles(tiles.map(normalizeTile)),
-    sidebarCameraOrder: sanitizeSidebarCameraOrder(sidebarCameraOrder),
-  };
-}
 
 export default function ChronologyPage() {
   const { text } = useI18n();
@@ -334,22 +195,15 @@ export default function ChronologyPage() {
   const backendReadyRef = useRef(false);
   const saveTimerRef = useRef(null);
   const lastBackendLayoutPayloadRef = useRef("");
-  const currentTsRef = useRef(initialTs);
   const calendarTouchedRef = useRef(false);
   const [productTimezone, setProductTimezone] = useState("UTC");
   const tilesRef = useRef([]);
-  const playbackMapRef = useRef({});
   const isScrubbingRef = useRef(false);
-  const playbackResolverRef = useRef(null);
-  if (!playbackResolverRef.current) playbackResolverRef.current = createCoalescedPlaybackResolver();
   const rangesRequestIdRef = useRef(0);
   const loadedRangesWindowRef = useRef(null);
   const rangesInFlightRef = useRef(null);
   const seekActionIdRef = useRef(0);
   const activeSeekActionRef = useRef(null);
-  const playbackCoordinatorIdRef = useRef(0);
-  const playbackCoordinatorRef = useRef(null);
-  const playbackCoordinatorTimersRef = useRef({ soft: null, hard: null });
   const playWasActiveRef = useRef(false);
   const shellRef = useRef(null);
   const tileRefs = useRef(new Map());
@@ -382,15 +236,13 @@ export default function ChronologyPage() {
   const [sidebarDropTargetCameraId, setSidebarDropTargetCameraId] = useState("");
   const [sidebarPointerDragMode, setSidebarPointerDragMode] = useState("");
   const [sidebarDragPreview, setSidebarDragPreview] = useState(null);
-  const [currentTs, setCurrentTs] = useState(initialTs);
-  const [previewTs, setPreviewTs] = useState(initialTs);
+  const { currentTs, setCurrentTs, currentTsRef, previewTs, setPreviewTs,
+    speed, setSpeed, isPlaying, setIsPlaying } = useChronologyClock(initialTs, isScrubbingRef);
+  const { playbackCoordinator, startPlaybackCoordinator, cancelPlaybackCoordinator,
+    releasePlaybackCoordinator, handleTilePlaybackState } = useChronologyPlaybackCoordinator(setIsPlaying);
   const [date, setDate] = useState(initialForm.date);
   const [time, setTime] = useState(initialForm.time);
-  const [speed, setSpeed] = useState(1);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackCoordinator, setPlaybackCoordinator] = useState(null);
   const [zoomKey, setZoomKey] = useState("24h");
-  const [playbackMap, setPlaybackMap] = useState({});
   const [rangesData, setRangesData] = useState({});
   const [rangesLoading, setRangesLoading] = useState(false);
   const [rangesError, setRangesError] = useState(false);
@@ -513,8 +365,6 @@ export default function ChronologyPage() {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       layoutWriterRef.current.dispose();
-      clearPlaybackCoordinatorTimers();
-      playbackResolverRef.current.invalidate();
       rangesInFlightRef.current?.controller.abort();
       rangesRequestIdRef.current += 1;
     };
@@ -542,43 +392,6 @@ export default function ChronologyPage() {
     }, 500);
   }, [tiles, sidebarCameraOrder, lastPersistedSidebarCameraOrder]);
 
-  useEffect(() => {
-    currentTsRef.current = currentTs;
-  }, [currentTs]);
-
-  useEffect(() => {
-    playbackMapRef.current = playbackMap;
-  }, [playbackMap]);
-
-  useEffect(() => {
-    playbackCoordinatorRef.current = playbackCoordinator;
-  }, [playbackCoordinator]);
-
-  useEffect(() => {
-    if (
-      playbackCoordinator?.id &&
-      playbackCoordinator.releaseState === "holding" &&
-      coordinatorBarrierComplete(playbackCoordinator)
-    ) {
-      releasePlaybackCoordinator(playbackCoordinator.id, "released");
-    }
-  }, [playbackCoordinator]);
-
-  useEffect(() => {
-    if (!isPlaying || !currentTsRef.current) return undefined;
-
-    const timer = setInterval(() => {
-      setCurrentTs((prev) => (prev ? new Date(prev.getTime() + 1000 * Number(speed || 1)) : prev));
-    }, 1000);
-
-    return () => clearInterval(timer);
-  }, [isPlaying, speed]);
-
-  useEffect(() => {
-    if (!isScrubbingRef.current) {
-      setPreviewTs(currentTs);
-    }
-  }, [currentTs]);
 
   const cameraMap = useMemo(() => {
     const map = new Map();
@@ -590,6 +403,14 @@ export default function ChronologyPage() {
     if (!camerasLoaded) return tiles;
     return visibleWorkspaceTiles(tiles, cameras);
   }, [tiles, cameras, camerasLoaded]);
+
+  const tileSourceKey = visibleTiles.map((tile) => `${tile.id}:${tile.cameraId}`).sort().join("|");
+  useEffect(() => {
+    tilesRef.current = visibleTiles;
+  }, [visibleTiles]);
+  const { playbackMap, playbackMapRef, playbackResolverRef, resolvePlaybackForTimestamp } = useChronologySources({
+    tilesRef, tileSourceKey, currentTs, isPlaying, isScrubbingRef, formatProductTimestampParam,
+  });
 
   const orderedCameras = useMemo(
     () => mergeSidebarCameraOrder(cameras, sidebarCameraOrder),
@@ -638,7 +459,6 @@ export default function ChronologyPage() {
 
   const selectedCameraKey = selectedCameraIds.slice().sort().join(",");
   const quickDownloadCameraKey = quickDownloadCameraIds.join(",");
-  const tileSourceKey = visibleTiles.map((tile) => `${tile.id}:${tile.cameraId}`).sort().join("|");
   const timelineTs = previewTs || currentTs;
   const canExport = canExportRecordings(currentUser);
 
@@ -674,10 +494,6 @@ export default function ChronologyPage() {
   useEffect(() => {
     setDownloadChooserOpen(false);
   }, [timelineTs?.getTime?.()]);
-
-  useEffect(() => {
-    tilesRef.current = visibleTiles;
-  }, [visibleTiles]);
 
   function workspaceBounds() {
     return workspaceRef.current?.getBoundingClientRect() || null;
@@ -721,138 +537,6 @@ export default function ChronologyPage() {
     activeSeekActionRef.current = null;
   }
 
-  function clearPlaybackCoordinatorTimers() {
-    const timers = playbackCoordinatorTimersRef.current;
-    if (timers.soft) {
-      clearTimeout(timers.soft);
-      timers.soft = null;
-    }
-    if (timers.hard) {
-      clearTimeout(timers.hard);
-      timers.hard = null;
-    }
-  }
-
-  function terminalTileState(state) {
-    return TILE_READY_STATES.has(String(state || ""));
-  }
-
-  function coordinatorBarrierComplete(coordinator) {
-    if (!coordinator?.expectedTileIds?.length) return true;
-    return coordinator.expectedTileIds.every((tileId) =>
-      terminalTileState(coordinator.tileStates?.[tileId]?.state)
-    );
-  }
-
-  function releasePlaybackCoordinator(id, releaseState = "released") {
-    clearPlaybackCoordinatorTimers();
-    setPlaybackCoordinator((prev) => {
-      if (!prev || prev.id !== id || prev.releaseState !== "holding") return prev;
-      return { ...prev, releaseState, state: releaseState === "partial" ? "partial" : "ready" };
-    });
-    const current = playbackCoordinatorRef.current;
-    if (current?.id === id && current.shouldResume) {
-      setIsPlaying(true);
-    }
-  }
-
-  function markCoordinatorTimeout(id, timeoutState = "timeout") {
-    let nextCoordinator = null;
-    setPlaybackCoordinator((prev) => {
-      if (!prev || prev.id !== id || prev.releaseState !== "holding") return prev;
-      const tileStates = { ...prev.tileStates };
-      prev.expectedTileIds.forEach((tileId) => {
-        if (!terminalTileState(tileStates[tileId]?.state)) {
-          tileStates[tileId] = {
-            ...(tileStates[tileId] || {}),
-            state: timeoutState,
-            facts: { ...(tileStates[tileId]?.facts || {}), timeout: true },
-            updatedAt: Date.now(),
-          };
-        }
-      });
-      nextCoordinator = { ...prev, tileStates, state: "partial" };
-      playbackCoordinatorRef.current = nextCoordinator;
-      return nextCoordinator;
-    });
-    if (nextCoordinator) {
-      playbackCoordinatorRef.current = nextCoordinator;
-    }
-    releasePlaybackCoordinator(id, "partial");
-  }
-
-  function startPlaybackCoordinator({ targetTs, shouldResume, expectedTileIds }) {
-    clearPlaybackCoordinatorTimers();
-    const id = `chronology-${Date.now()}-${++playbackCoordinatorIdRef.current}`;
-    const uniqueTileIds = Array.from(new Set(expectedTileIds.map(String).filter(Boolean)));
-    const tileStates = Object.fromEntries(
-      uniqueTileIds.map((tileId) => [tileId, { state: "pending", updatedAt: Date.now(), facts: {} }])
-    );
-    const coordinator = {
-      id,
-      targetTs,
-      shouldResume: Boolean(shouldResume),
-      expectedTileIds: uniqueTileIds,
-      tileStates,
-      state: "preparing",
-      releaseState: "holding",
-      softTimeoutMs: PLAYBACK_COORDINATOR_SOFT_TIMEOUT_MS,
-      hardTimeoutMs: PLAYBACK_COORDINATOR_HARD_TIMEOUT_MS,
-      createdAt: Date.now(),
-    };
-    playbackCoordinatorRef.current = coordinator;
-    setPlaybackCoordinator(coordinator);
-
-    if (!uniqueTileIds.length) {
-      releasePlaybackCoordinator(id, "released");
-      return coordinator;
-    }
-
-    playbackCoordinatorTimersRef.current.soft = setTimeout(() => {
-      const current = playbackCoordinatorRef.current;
-      if (current?.id === id && current.releaseState === "holding" && !coordinatorBarrierComplete(current)) {
-        setPlaybackCoordinator((prev) => (prev?.id === id ? { ...prev, state: "partial" } : prev));
-      }
-    }, PLAYBACK_COORDINATOR_SOFT_TIMEOUT_MS);
-
-    playbackCoordinatorTimersRef.current.hard = setTimeout(() => {
-      const current = playbackCoordinatorRef.current;
-      if (current?.id === id && current.releaseState === "holding" && !coordinatorBarrierComplete(current)) {
-        markCoordinatorTimeout(id, "timeout");
-      }
-    }, PLAYBACK_COORDINATOR_HARD_TIMEOUT_MS);
-
-    return coordinator;
-  }
-
-  function cancelPlaybackCoordinator(reason = "cancelled") {
-    clearPlaybackCoordinatorTimers();
-    playbackCoordinatorIdRef.current += 1;
-    setPlaybackCoordinator((prev) => {
-      if (!prev || prev.releaseState !== "holding") return prev;
-      const next = { ...prev, state: reason, releaseState: "cancelled" };
-      playbackCoordinatorRef.current = next;
-      return next;
-    });
-  }
-
-  function handleTilePlaybackState(tileId, operationId, state, facts = {}) {
-    if (!operationId || !tileId) return;
-    setPlaybackCoordinator((prev) => {
-      if (!prev || prev.id !== operationId || !prev.expectedTileIds.includes(tileId)) return prev;
-      const tileStates = {
-        ...prev.tileStates,
-        [tileId]: {
-          state,
-          facts,
-          updatedAt: Date.now(),
-        },
-      };
-      const next = { ...prev, tileStates };
-      playbackCoordinatorRef.current = next;
-      return next;
-    });
-  }
 
   function addTile(cameraId, clientX, clientY) {
     const bounds = workspaceBounds();
@@ -1317,86 +1001,6 @@ export default function ChronologyPage() {
     };
   }, [resizeState]);
 
-  async function fetchPlaybackForTile(tile, ts, forceReload = false) {
-    const prev = playbackMapRef.current[tile.id];
-
-    if (!tile.cameraId) {
-      return {
-        hasVideo: false,
-        cameraId: null,
-        relPath: null,
-        offsetSec: 0,
-        playbackKey: forceReload || !prev ? `${tile.id}-empty-${Date.now()}` : prev.playbackKey,
-      };
-    }
-
-    try {
-      const response = await apiFetch(
-        `/chronology/playback?camera_id=${encodeURIComponent(tile.cameraId)}&ts=${encodeURIComponent(ts)}`
-      );
-
-      const hasVideo = Boolean(response?.has_video);
-      const relPath = hasVideo ? (response?.rel_path || null) : null;
-      const segmentId = response?.segment_id || null;
-      const archiveRootId = response?.archive_root_id || null;
-      const playbackRef = response?.playback_ref || null;
-      const availabilityStatus = String(response?.availability_status || (hasVideo ? "available" : "no_recording"));
-      const offsetSec = hasVideo ? Number(response?.offset_sec || 0) : 0;
-      const cameraId = String(tile.cameraId);
-      const containerFormat = hasVideo ? String(response?.container_format || "").toLowerCase() : "";
-      const fileExtension = hasVideo ? String(response?.file_extension || "").toLowerCase() : "";
-      const mimeType = hasVideo ? String(response?.mime_type || "").toLowerCase() : "";
-
-      const sameSource =
-        !forceReload &&
-        prev &&
-        Boolean(prev.hasVideo) === hasVideo &&
-        String(prev.cameraId || "") === String(cameraId || "") &&
-        String(prev.relPath || "") === String(relPath || "") &&
-        String(prev.segmentId || "") === String(segmentId || "") &&
-        String(prev.archiveRootId || "") === String(archiveRootId || "");
-
-      return {
-        hasVideo,
-        cameraId,
-        relPath,
-        segmentId,
-        archiveRootId,
-        playbackRef,
-        availabilityStatus,
-        offsetSec,
-        containerFormat,
-        fileExtension,
-        mimeType,
-        playbackKey: sameSource
-          ? prev.playbackKey
-          : `${tile.id}-${cameraId || "empty"}-${segmentId || relPath || "empty"}-${archiveRootId || "root"}-${availabilityStatus}-${offsetSec}-${containerFormat || fileExtension || "unknown"}-${Date.now()}`,
-      };
-    } catch (_) {
-      return {
-        hasVideo: false,
-        cameraId: null,
-        relPath: null,
-        offsetSec: 0,
-        playbackKey: `${tile.id}-error-${Date.now()}`,
-      };
-    }
-  }
-
-  async function resolvePlaybackForTimestamp(ts, forceReload = false, automatic = false) {
-    const sourceTiles = tilesRef.current;
-    return playbackResolverRef.current.resolve({
-      automatic,
-      run: () => Promise.all(sourceTiles.map(async (tile) => [tile.id, {
-        ...await fetchPlaybackForTile(tile, ts, forceReload), sourceCameraId: String(tile.cameraId),
-      }])),
-      apply: (results) => {
-        const nextMap = Object.fromEntries(results);
-        playbackMapRef.current = nextMap;
-        setPlaybackMap(nextMap);
-      },
-    });
-  }
 
   async function handleFind() {
     invalidateSeekActions();
@@ -1651,29 +1255,6 @@ export default function ChronologyPage() {
     }
   }
 
-  useEffect(() => {
-    // Membership is not a seek. Keep every unchanged player's source/key and
-    // current position; only resolve newly added or reassigned tiles.
-    playbackResolverRef.current.invalidate();
-    const sourceTiles = tilesRef.current;
-    const { retained, missing } = reconcilePlaybackMembership(sourceTiles, playbackMapRef.current);
-    playbackMapRef.current = retained;
-    setPlaybackMap(retained);
-    if (!currentTs || !missing.length) return;
-    playbackResolverRef.current.resolve({
-      run: () => Promise.all(missing.map(async (tile) => [tile.id, { ...await fetchPlaybackForTile(tile, formatProductTimestampParam(currentTs), false), sourceCameraId: String(tile.cameraId) }])),
-      apply: (results) => {
-        const next = { ...retained, ...Object.fromEntries(results) };
-        playbackMapRef.current = next;
-        setPlaybackMap(next);
-      },
-    });
-  }, [tileSourceKey]);
-
-  useEffect(() => {
-    if (!isPlaying || !currentTs || isScrubbingRef.current) return;
-    resolvePlaybackForTimestamp(formatProductTimestampParam(currentTs), false, true);
-  }, [currentTs, isPlaying]);
 
   useEffect(() => {
     async function loadRanges() {

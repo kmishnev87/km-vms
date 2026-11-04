@@ -487,6 +487,16 @@ function effectiveDomainSeverity(domainName, domain) {
   return severity === "info" ? "ok" : severity;
 }
 
+function isPendingIntegrityEvidence(domain) {
+  const data = asObject(domain);
+  const reasons = asArray(data.reason_codes);
+  return data.severity === "unknown" && data.status === "no_evidence"
+    && reasons.includes("no_evidence")
+    && reasons.every((reason) => ["no_evidence", "reconciliation_unknown"].includes(reason))
+    && !countFrom(data.problem_file_count) && !countFrom(data.cleanup_candidate_count)
+    && !data.partial && !data.scan_limited;
+}
+
 export function buildDashboardStatusSummary(runtimeStatus, options = {}) {
   const domains = asObject(runtimeStatus?.domains);
   const warnings = buildOperatorWarnings(runtimeStatus, { limit: options.limit || MAX_BANNERS });
@@ -513,7 +523,8 @@ export function buildDashboardStatusSummary(runtimeStatus, options = {}) {
     ? "error"
     : warnings.some((item) => item.severity === "warning") || problemRows.some((row) => row.severity === "warning")
       ? "warning"
-      : rows.some((row) => row.severity === "unknown") ? "unknown" : "ok";
+      : rows.some((row) => row.severity === "unknown"
+        && !(row.domain === "reconciliation" && isPendingIntegrityEvidence(domains[row.domain]))) ? "unknown" : "ok";
 
   return {
     severity: globalSeverity,

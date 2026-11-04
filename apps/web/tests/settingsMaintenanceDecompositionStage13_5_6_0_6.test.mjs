@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -11,7 +12,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const repoRoot = resolve(webRoot, "../..");
-const read = (relative) => fs.readFileSync(resolve(webRoot, relative), "utf8");
+const read = (relative) => readProductSourceFile(resolve(webRoot, relative), "utf8");
 const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 const occurrences = (source, literal) => source.split(literal).length - 1;
 const counts = (values) => Object.fromEntries(
@@ -581,7 +582,7 @@ const expectedProtected = {
 // Freeze the accepted cumulative baseline, not the historical extraction snapshot.
 // Ignore Git checkout line endings; they do not change the helper contract.
 for (const [relative, expectedHash] of Object.entries(expectedProtected)) {
-  const protectedSource = fs.readFileSync(resolve(repoRoot, relative), "utf8").replace(/\r\n/g, "\n");
+  const protectedSource = readProductSourceFile(resolve(repoRoot, relative), "utf8").replace(/\r\n/g, "\n");
   assert.equal(sha256(protectedSource), expectedHash, `${relative} changed outside scope`);
   const helperSource = protectedSource.toString("utf8");
   assert.equal(helperSource.includes("settingsMaintenanceController"), false);
@@ -589,7 +590,7 @@ for (const [relative, expectedHash] of Object.entries(expectedProtected)) {
 }
 // Stage 14 deliberately changes api.js authentication and request coalescing.
 // Behavioral regressions cover those contracts; retain the dependency boundary.
-const apiSource = fs.readFileSync(resolve(repoRoot, "apps/web/lib/api.js"), "utf8");
+const apiSource = readProductSourceFile(resolve(repoRoot, "apps/web/lib/api.js"), "utf8");
 assert.equal(apiSource.includes("settingsMaintenanceController"), false);
 assert.equal(apiSource.includes("SettingsMaintenanceSurface"), false);
 

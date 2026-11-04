@@ -126,6 +126,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 6px;
+  min-height: 30px;
   margin-bottom: 8px;
 }
 
@@ -435,6 +436,14 @@
 
 .liveWorkspaceCanvas.isEditing {
   user-select: none;
+}
+
+/* Keep contextual warnings outside the camera toolbar and above fullscreen tiles. */
+.liveWorkspaceCanvas > .liveWorkspaceProblemAnchor {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 5200;
 }
 
 .liveWorkspaceEmpty {
@@ -832,4 +841,3 @@
     grid-template-rows: none;
   }
 }
-

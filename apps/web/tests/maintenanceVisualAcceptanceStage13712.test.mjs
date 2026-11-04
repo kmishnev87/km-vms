@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -11,8 +12,8 @@ import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanc
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webRoot = resolve(__dirname, "..");
 const settingsPage = readSettingsMaintenanceSources();
-const css = fs.readFileSync(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
-const responsiveCss = fs.readFileSync(resolve(webRoot, "app/styles/60-responsive-shared.css"), "utf8");
+const css = readProductSourceFile(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
+const responsiveCss = readProductSourceFile(resolve(webRoot, "app/styles/60-responsive-shared.css"), "utf8");
 const stageCss = css.slice(css.indexOf("/* Stage 13.7.11:"));
 
 function cssRule(selector) {

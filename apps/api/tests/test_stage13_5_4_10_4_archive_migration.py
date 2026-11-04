@@ -23,6 +23,7 @@ from app.models.recording import ArchiveRoot, RecordingSegment
 from app.models.storage_operation import StorageOperation
 from app.models.user import User
 from app.services import archive_migration as migration
+from app.services import migration_files
 from app.services.archive_migration import ArchiveMigrationBlocked, ArchiveMigrationPartial
 from app.services.recording_storage import resolve_segment_file_path
 from app.services.schema_migrations import STAGE4104_ARCHIVE_MIGRATION, STAGE4104_TABLES
@@ -900,14 +901,14 @@ def test_recovery_after_physical_cleanup_before_item_persistence_is_idempotent(s
         real_unlink(*args, **kwargs)
         raise OSError("simulated crash after unlink")
 
-    monkeypatch.setattr(migration, "unlink_relative", unlink_then_crash)
+    monkeypatch.setattr(migration_files, "unlink_relative", unlink_then_crash)
     with pytest.raises(OSError, match="simulated crash"):
         migration._cleanup_source(stage4104.db, plan, item, source, handle)
     item = stage4104.db.get(ArchiveMigrationItem, item.id)
     assert item.phase == "source_delete_committing"
     assert not source_file.exists()
 
-    monkeypatch.setattr(migration, "unlink_relative", real_unlink)
+    monkeypatch.setattr(migration_files, "unlink_relative", real_unlink)
     migration._process_item(stage4104.db, plan, item, handle)
     item = stage4104.db.get(ArchiveMigrationItem, item.id)
     stage4104.db.refresh(segment)
@@ -1494,7 +1495,7 @@ def test_temp_create_intent_is_durable_before_exclusive_create(stage4104, monkey
             )
         return real_create(root_fd, relative_path, mode=mode)
 
-    monkeypatch.setattr(migration, "create_relative_exclusive", assert_durable_intent)
+    monkeypatch.setattr(migration_files, "create_relative_exclusive", assert_durable_intent)
     monkeypatch.setattr(migration, "heartbeat_operation", lambda *_args, **_kwargs: None)
     migration._copy_or_resume_temp(
         stage4104.db,
@@ -1738,7 +1739,7 @@ def test_stale_generation_is_fenced_at_finalize_metadata_and_source_cleanup(stag
     def stop_before_unlink(*_args, **_kwargs):
         raise OSError("stop before fenced unlink")
 
-    monkeypatch.setattr(migration, "unlink_relative", stop_before_unlink)
+    monkeypatch.setattr(migration_files, "unlink_relative", stop_before_unlink)
     with pytest.raises(OSError, match="stop before fenced unlink"):
         migration._cleanup_source(
             stage4104.db,
@@ -1761,7 +1762,7 @@ def test_stale_generation_is_fenced_at_finalize_metadata_and_source_cleanup(stag
     assert quarantine_path.exists()
     assert stage4104.db.get(ArchiveMigrationItem, item.id).phase == "source_delete_committing"
 
-    monkeypatch.setattr(migration, "unlink_relative", real_unlink)
+    monkeypatch.setattr(migration_files, "unlink_relative", real_unlink)
     migration._cleanup_source(
         stage4104.db,
         plan,
@@ -1791,7 +1792,7 @@ def test_pending_missing_and_exact_zero_temp_recover_without_guessing(stage4104,
     os.chmod(temp_path, migration.TEMP_CREATE_MODE)
     expected_inode = temp_path.stat().st_ino
     captured = {"fd": None, "closed": False}
-    real_open = migration._open_pending_temp_for_recovery
+    real_open = migration_files.MigrationFileExecutor._open_pending_temp_for_recovery
     real_close = migration.os.close
 
     def capture_open(*args, **kwargs):
@@ -1804,7 +1805,7 @@ def test_pending_missing_and_exact_zero_temp_recover_without_guessing(stage4104,
             captured["closed"] = True
         return real_close(descriptor)
 
-    monkeypatch.setattr(migration, "_open_pending_temp_for_recovery", capture_open)
+    monkeypatch.setattr(migration_files.MigrationFileExecutor, "_open_pending_temp_for_recovery", capture_open)
     monkeypatch.setattr(migration.os, "close", capture_close)
     monkeypatch.setattr(migration, "heartbeat_operation", lambda *_args, **_kwargs: None)
     source, target, _ = migration._runtime_item_guard(stage4104.db, plan, item)
@@ -1847,7 +1848,7 @@ def test_post_create_persistence_failure_closes_fd_and_restart_adopts_exact_temp
             raise RuntimeError("private database detail must stay internal")
         return real_commit()
 
-    monkeypatch.setattr(migration, "create_relative_exclusive", capture_create)
+    monkeypatch.setattr(migration_files, "create_relative_exclusive", capture_create)
     monkeypatch.setattr(migration.os, "close", capture_close)
     monkeypatch.setattr(stage4104.db, "commit", fail_provenance_commit)
     monkeypatch.setattr(migration, "heartbeat_operation", lambda *_args, **_kwargs: None)

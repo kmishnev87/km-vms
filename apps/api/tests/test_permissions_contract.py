@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 
 from app.core.endpoint_permissions import AUTHENTICATED, ENDPOINT_PERMISSIONS, PUBLIC
 from app.core.permissions import (
@@ -60,8 +60,8 @@ def decision(path: str, method: str):
 
 def actual_app_routes():
     routes = set()
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
+    for route in iter_route_contexts(app.routes):
+        if not isinstance(route.original_route, APIRoute):
             continue
         for method in route.methods or []:
             if method in {"HEAD", "OPTIONS"}:

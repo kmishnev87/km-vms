@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -24,7 +25,7 @@ import {
 const root = path.resolve(import.meta.dirname, "..");
 
 function read(relativePath) {
-  return fs.readFileSync(path.join(root, relativePath), "utf8");
+  return readProductSourceFile(path.join(root, relativePath), "utf8");
 }
 
 test("wheel zoom math is bounded and keeps cursor focal point stable", () => {

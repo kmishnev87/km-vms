@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { resolve } from "node:path";
@@ -11,7 +12,7 @@ import {
 const webRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const page = readSettingsMaintenanceSources();
 const { controllerSource, surfaceSource } = readSettingsMaintenanceSourceFiles();
-const css = fs.readFileSync(
+const css = readProductSourceFile(
   resolve(webRoot, "app/styles/20-settings-maintenance.css"),
   "utf8",
 );

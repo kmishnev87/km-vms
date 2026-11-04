@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./readProductSources.mjs";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,7 +13,7 @@ export const settingsMaintenanceSourcePaths = Object.freeze([
 ]);
 
 function read(relative) {
-  return fs.readFileSync(resolve(webRoot, relative), "utf8");
+  return readProductSourceFile(resolve(webRoot, relative), "utf8");
 }
 
 export function readSettingsMaintenanceSourceFiles() {

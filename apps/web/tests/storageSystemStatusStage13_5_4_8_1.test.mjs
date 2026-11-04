@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -8,7 +9,7 @@ import * as storageOperations from "../lib/storageOperations.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
-const read = (relative) => fs.readFileSync(resolve(root, relative), "utf8");
+const read = (relative) => readProductSourceFile(resolve(root, relative), "utf8");
 
 const warningSource = read("lib/operatorWarnings.js")
   .replaceAll("export const ", "const ")

@@ -464,7 +464,7 @@ process_root_cleanup_request() {
   if ! docker run --rm \
     -v "$APP_DIR:/host-app" \
     -v "/:/host:ro,rslave" \
-    docker:27-cli \
+    docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c \
     sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-discovery.sh" --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
     write_root_cleanup_result "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" partial partial_cleanup storage_discovery_refresh_failed "$cleanup_marker_removed" false "" true
     write_root_cleanup_request_status "$cleanup_request_id" "$cleanup_operation_id" "$cleanup_root_id" "$cleanup_host_path" "$cleanup_mount" "$cleanup_folder" "$cleanup_identity" "$cleanup_marker_removed" partial
@@ -485,7 +485,7 @@ process_root_cleanup_request() {
   docker run --rm \
     -v "$APP_DIR:/host-app:ro" \
     -v "$cleanup_mount:/selected-root" \
-    docker:27-cli \
+    docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c \
     sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-root-cleanup.sh" \
       --folder-name "$cleanup_folder" \
       --expected-host-path "$cleanup_host_path" \
@@ -531,7 +531,7 @@ process_discovery_request() {
   if ! docker run --rm \
     -v "$APP_DIR:/host-app" \
     -v "/:/host:ro,rslave" \
-    docker:27-cli \
+    docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c \
     sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-discovery.sh" --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
     write_discovery_result "$discovery_request_id" "failed" "storage_discovery_refresh_failed" "$discovery_candidate_id" "" "" "" "$discovery_folder" false
     write_discovery_request_status "$discovery_request_id" "$discovery_mode" "$discovery_candidate_id" "$discovery_expected_snapshot" "$discovery_expected_identity" "$discovery_folder" "failed"
@@ -583,7 +583,7 @@ process_discovery_request() {
   if ! docker run --rm \
     -v "$APP_DIR:/host-app:ro" \
     -v "$discovery_mount:/selected-root" \
-    docker:27-cli \
+    docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c \
     sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-candidate-validate.sh" --folder-name "$discovery_folder" >"$DISCOVERY_VALIDATION_OUT" 2>"$DISCOVERY_VALIDATION_ERR"; then
     discovery_error=$(read_control_value "$DISCOVERY_VALIDATION_OUT" error || true)
     write_discovery_result "$discovery_request_id" "failed" "${discovery_error:-storage_candidate_revalidation_failed}" "$discovery_candidate_id" "$discovery_snapshot_id" "$discovery_identity" "$discovery_mount" "$discovery_folder" false
@@ -681,7 +681,7 @@ while :; do
     if ! docker run --rm \
       -v "$APP_DIR:/host-app" \
       -v "/:/host:ro,rslave" \
-      docker:27-cli \
+      docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c \
       sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-discovery.sh" --app-dir /host-app --host-root /host >"$DISCOVERY_OUT" 2>"$DISCOVERY_ERR"; then
       fail_status "storage candidate refresh failed before activation" "$selected_path" "$request_id" "$operation_id"
       write_request_control "$request_id" "$selected_path" "failed" "$operation_id" "$attempt_count"
@@ -704,7 +704,7 @@ while :; do
   if ! docker run --rm \
     -v "$APP_DIR:/host-app:ro" \
     -v "$selected_mount:/selected-root" \
-    docker:27-cli \
+    docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c \
     sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-candidate-validate.sh" --folder-name "$folder_name" >"$DISCOVERY_VALIDATION_OUT" 2>"$DISCOVERY_VALIDATION_ERR"; then
     validation_error=$(read_control_value "$DISCOVERY_VALIDATION_OUT" error || true)
     fail_status "${validation_error:-storage candidate revalidation failed before activation}" "$selected_path" "$request_id" "$operation_id"
@@ -744,7 +744,7 @@ while :; do
     -v /var/run/docker.sock:/var/run/docker.sock \
     -e KM_VMS_SELECTED_MOUNT_CONTAINER=/selected-root \
     -e "KM_VMS_SELECTED_PATH_CONTAINER=/selected-root/$folder_name" \
-    docker:27-cli \
+    docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c \
     sh "$SOURCE_CONTAINER_DIR/scripts/km-vms-storage-apply.sh" --app-dir /host-app $storage_apply_mode >"$APPLY_OUT" 2>"$APPLY_ERR"; then
     activation_error=$(cat "$APPLY_ERR" 2>/dev/null || printf 'storage apply failed')
     configuration_consistent=false

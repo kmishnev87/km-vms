@@ -48,6 +48,11 @@ SOURCE_FILES = (
     "km-vms-bootstrap.py",
     "km-vms-bootstrap-dispatch.sh",
     "km-vms-release-slots.py",
+    "km_vms_slot_core/__init__.py",
+    "km_vms_slot_core/contracts.py",
+    "km_vms_slot_core/description.py",
+    "km_vms_slot_core/inventory.py",
+    "km_vms_slot_core/state.py",
     "km-vms-compose-common.sh",
     "km-vms-restart.sh",
     "km-vms-update-launcher.sh",
@@ -245,6 +250,17 @@ def render_lifecycle_override() -> bytes:
     return rendered.encode("utf-8")
 
 
+def _validate_component_parent(root: Path, relative: str) -> None:
+    path = root
+    parts = Path(relative).parts
+    if not parts or Path(relative).is_absolute() or any(part in {".", ".."} for part in parts):
+        raise BootstrapError("bootstrap_path_invalid", "Bootstrap component path is invalid.")
+    for part in parts[:-1]:
+        path = path / part
+        if path.is_symlink() or not path.is_dir():
+            raise BootstrapError("bootstrap_path_invalid", "Bootstrap component directory is unsafe.")
+
+
 def _bundle_payload(bundle_dir: Path) -> dict[str, Any]:
     manifest = read_json(bundle_dir / MANIFEST_NAME)
     assert manifest is not None
@@ -271,6 +287,7 @@ def _bundle_payload(bundle_dir: Path) -> dict[str, Any]:
     ):
         raise BootstrapError("bootstrap_manifest_invalid", "Bootstrap manifest is invalid.")
     for name, digest in manifest["files"].items():
+        _validate_component_parent(bundle_dir, name)
         if type(digest) is not str or not DIGEST_RE.fullmatch(digest):
             raise BootstrapError("bootstrap_manifest_invalid", "Bootstrap file digest is invalid.")
         if sha256_file(bundle_dir / name) != digest:
@@ -330,6 +347,8 @@ def install_bundle(app_dir: Path, source_dir: Path) -> dict[str, Any]:
         file_digests: dict[str, str] = {}
         for name in SOURCE_FILES:
             destination = staging / name
+            _validate_component_parent(scripts, name)
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             shutil.copy2(scripts / name, destination)
             destination.chmod(0o555)
             file_digests[name] = sha256_file(destination)

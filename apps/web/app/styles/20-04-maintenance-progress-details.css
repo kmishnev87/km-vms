@@ -1,0 +1,764 @@
+
+.settingsMaintenanceWarningGroups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 0;
+}
+
+.settingsMaintenanceWarningGroups span {
+  border: 1px solid #e4edf5;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475569;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.settingsMaintenanceWarningsList {
+  grid-column: 1 / -1;
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 14px;
+  right: 14px;
+  z-index: 6;
+  max-height: min(42vh, 340px);
+  overflow: auto;
+  border: 1px solid #dbe6f0;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.14);
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.settingsMaintenanceWarningsList article,
+.settingsMaintenanceWarningsList > p {
+  margin: 0;
+  border: 1px solid #e4edf5;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 9px 10px;
+}
+
+.settingsMaintenanceWarningsList article.is-actionable {
+  border-color: #fecaca;
+  background: #fef2f2;
+}
+
+.settingsMaintenanceWarningsList article.is-informational {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.settingsMaintenanceWarningsList article.is-support {
+  border-color: #fde68a;
+  background: #fffbeb;
+}
+
+.settingsMaintenanceWarningsList strong {
+  color: #142033;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.settingsMaintenanceWarningsList p,
+.settingsMaintenanceWarningsList small {
+  display: block;
+  margin: 3px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settingsUpdateApplyPanel {
+  order: 0;
+  border: 1px solid #dde6ef;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 18px;
+  display: grid;
+  gap: 18px;
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
+}
+
+.settingsUpdateApplyPanel h3 {
+  margin: 0;
+  color: #182335;
+  font-size: 18px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.settingsUpdateApplyHero {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 38px minmax(190px, 0.82fr) minmax(0, 1.75fr) minmax(150px, 0.75fr);
+  column-gap: 14px;
+  align-items: stretch;
+  border: 1px solid #e4edf5;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fbfdff 0%, #f8fbfc 100%);
+  padding: 14px 18px;
+}
+
+.settingsUpdateApplyHeroState {
+  min-width: 0;
+  display: grid;
+  grid-template-rows: repeat(3, auto);
+  gap: 5px;
+  align-content: start;
+}
+
+.settingsUpdateApplyHeroIcon {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #e8f7ee;
+  color: #148045;
+  border: 1px solid #bce8cc;
+  font-size: 18px;
+  font-weight: 650;
+  line-height: 1;
+  align-self: center;
+}
+
+.settingsUpdateApplyHero.is-warning .settingsUpdateApplyHeroIcon {
+  background: #fff7df;
+  border-color: #f6d982;
+  color: #9a6a09;
+}
+
+.settingsUpdateApplyHero.is-blocked .settingsUpdateApplyHeroIcon {
+  background: #fff0f0;
+  border-color: #f4c5c5;
+  color: #b42318;
+}
+
+.settingsUpdateApplyHeroState strong {
+  display: block;
+  color: #142033;
+  font-size: 12px;
+  line-height: 1.25;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyHeroState p {
+  margin: 3px 0 0;
+  color: #6a7685;
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyHeroState small {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyHeroFacts {
+  display: contents;
+}
+
+.settingsUpdateApplyHeroFacts div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  align-content: start;
+}
+
+.settingsUpdateApplyHeroFacts div:nth-child(1) dt {
+  text-align: center;
+}
+
+.settingsUpdateApplyHeroFacts div:nth-child(2) {
+  justify-items: center;
+  text-align: center;
+}
+
+.settingsUpdateApplyHeroFacts dt,
+.settingsUpdateApplySummaryGrid span {
+  color: #7b8797;
+  font-size: 11px;
+  line-height: 1.36;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.settingsUpdateApplyHeroFacts dd {
+  margin: 0;
+  color: #142033;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyHeroFacts small {
+  color: #64748b;
+  font-size: 11px;
+  line-height: 1.2;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyFacts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(3, auto);
+  grid-auto-flow: column;
+  gap: 6px 16px;
+}
+
+.settingsUpdateApplyFacts div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(120px, 0.42fr) minmax(0, 1fr);
+  gap: 12px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.settingsUpdateApplyFacts dt {
+  color: #64748b;
+  font-weight: 500;
+}
+
+.settingsUpdateApplyFacts dd {
+  margin: 0;
+  color: #0f172a;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyTechnical {
+  border-top: 1px solid #e4edf5;
+  padding-top: 12px;
+}
+
+.settingsUpdateApplyTechnical summary {
+  cursor: pointer;
+  color: #536273;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.settingsUpdateApplyTechnical .settingsUpdateApplyFacts {
+  margin-top: 10px;
+}
+
+.settingsUpdateApplyTimeline {
+  overflow-x: auto;
+  padding: 4px 2px 2px;
+}
+
+.settingsUpdateApplyTimeline ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  min-width: 760px;
+  gap: 0;
+  align-items: flex-start;
+}
+
+.settingsUpdateApplyTimeline li {
+  min-width: 0;
+  flex: 1 1 0;
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  text-align: center;
+  padding: 0 8px;
+}
+
+.settingsUpdateApplyTimeline li::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: #dfe8f1;
+}
+
+.settingsUpdateApplyTimeline li:first-child::before {
+  left: 50%;
+}
+
+.settingsUpdateApplyTimeline li:last-child::before {
+  right: 50%;
+}
+
+.settingsUpdateApplyTimelineDot {
+  position: relative;
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #ecfdf3;
+  color: #178449;
+  border: 2px solid #9ee4ba;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.settingsUpdateApplyTimeline li.is-running .settingsUpdateApplyTimelineDot {
+  background: #fff8e5;
+  border-color: #f1ca64;
+  color: #9a6a09;
+}
+
+.settingsUpdateApplyTimeline li.is-failed .settingsUpdateApplyTimelineDot {
+  background: #fff0f0;
+  border-color: #efb5b5;
+  color: #b42318;
+}
+
+.settingsUpdateApplyTimeline li.is-pending .settingsUpdateApplyTimelineDot {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+  color: #94a3b8;
+}
+
+.settingsUpdateApplyTimeline li.is-idle .settingsUpdateApplyTimelineDot {
+  background: #ffffff;
+  border-color: #cbd5e1;
+  color: #94a3b8;
+}
+
+.settingsUpdateApplyTimeline li.is-running {
+  color: #92400e;
+}
+
+.settingsUpdateApplyTimeline li.is-completed {
+  color: #166534;
+}
+
+.settingsUpdateApplyTimeline li.is-failed {
+  color: #991b1b;
+}
+
+.settingsUpdateApplyTimeline li.is-idle {
+  color: #64748b;
+}
+
+.settingsUpdateApplyTimeline strong,
+.settingsUpdateApplyTimeline small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.settingsUpdateApplyTimeline strong {
+  color: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settingsUpdateApplyTimeline small {
+  color: inherit;
+  font-size: 11px;
+  opacity: 0.82;
+}
+
+.settingsUpdateApplySummaryGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+}
+
+.settingsUpdateApplySummaryGrid section {
+  min-width: 0;
+  border: 1px solid #e4edf5;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 14px;
+  display: grid;
+  gap: 9px;
+}
+
+.settingsUpdateApplySummaryGrid p {
+  margin: 0;
+  color: #263447;
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplySummaryGrid ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settingsUpdateApplySummaryGrid li {
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyHint {
+  margin: -4px 0 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settingsUpdateApplyNotice,
+.settingsUpdateApplyWarnings {
+  margin: 0;
+  border: 1px solid #fde68a;
+  border-radius: 8px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settingsUpdateApplyNotice {
+  padding: 8px 10px;
+}
+
+.settingsUpdateApplyWarnings {
+  padding: 8px 10px 8px 28px;
+  display: grid;
+  gap: 4px;
+}
+
+.settingsUpdateApplyWarnings li {
+  overflow-wrap: anywhere;
+}
+
+.settingsUpdateApplyActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.settingsUpdateApplyError {
+  color: #991b1b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settingsMaintenanceSupport {
+  order: 3;
+  position: relative;
+  border: 1px solid #e3ebf3;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 13px 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 12px;
+  align-items: center;
+}
+
+.settingsMaintenanceSupportMain {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.settingsMaintenanceSupportCopy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settingsMaintenanceSupportCopy strong {
+  display: block;
+  color: #182335;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.settingsMaintenanceSupportCopy p {
+  margin: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settingsMaintenanceSupportStatus {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.settingsMaintenanceSupportStatus span {
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  background: #f0fdf4;
+  color: #166534;
+  padding: 4px 9px;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.settingsMaintenanceSupportStatus span.is-attention {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.settingsMaintenanceSupportStatus small {
+  min-width: 0;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.settingsMaintenanceSupportActions {
+  display: grid;
+  grid-template-columns: minmax(128px, 1fr);
+  gap: 6px;
+  align-items: center;
+  justify-content: end;
+  width: 164px;
+  min-width: 164px;
+}
+
+.settingsMaintenanceSupportActions .button {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  height: 38px;
+  padding-left: 10px;
+  padding-right: 10px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.settingsMaintenanceReport div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.settingsMaintenanceReport span,
+.settingsMaintenanceReport small {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settingsMaintenanceReport strong {
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.25;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.settingsMaintenanceResult {
+  order: 4;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 10px 12px;
+  display: grid;
+  gap: 3px;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.settingsMaintenanceResult.ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.settingsMaintenanceResult.warning {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.settingsMaintenanceResult.blocked {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
+@media (max-width: 760px) {
+  .settingsMaintenanceModal {
+    width: calc(100vw - 24px);
+    max-height: min(88vh, 780px);
+  }
+
+  .settingsMaintenanceReport,
+  .settingsMaintenanceFlow,
+  .settingsMaintenanceSupport,
+  .settingsMaintenanceSupport dl,
+  .settingsMaintenanceBackupCreate,
+  .settingsMaintenanceBackupHead,
+  .settingsMaintenanceBackupCounts,
+  .settingsMaintenanceBackupSummary,
+  .settingsMaintenanceBackupListHead,
+  .settingsMaintenanceBackupItem,
+  .settingsUpdateApplyFacts,
+  .settingsUpdateApplyHero,
+  .settingsUpdateApplyHeroFacts,
+  .settingsUpdateApplySummaryGrid,
+  .settingsMaintenanceFlow dl {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsMaintenanceToolbar .button {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .settingsUpdateApplyHero {
+    grid-template-columns: 38px minmax(0, 1fr);
+    column-gap: 11px;
+    row-gap: 12px;
+    padding: 14px;
+  }
+
+  .settingsUpdateApplyHeroState {
+    grid-column: 2;
+  }
+
+  .settingsUpdateApplyHeroIcon {
+    grid-column: 1;
+    align-self: center;
+  }
+
+  .settingsUpdateApplyHeroFacts {
+    grid-column: 1 / -1;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .settingsUpdateApplyHeroFacts div,
+  .settingsUpdateApplyHeroFacts div:nth-child(1) dt,
+  .settingsUpdateApplyHeroFacts div:nth-child(2) {
+    justify-items: start;
+    text-align: left;
+  }
+
+  .settingsMaintenanceFlowActions {
+    grid-column: 1;
+    grid-row: auto;
+    justify-content: stretch;
+  }
+
+  .settingsMaintenanceReadinessItem {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .settingsMaintenanceReadinessItem .button {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
+
+  .settingsMaintenanceSupportActions {
+    display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .settingsMaintenanceBackupCounts {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .settingsMaintenanceBackupStatusGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .settingsMaintenanceBackupActions,
+  .settingsMaintenanceBackupItemActions {
+    justify-content: stretch;
+  }
+
+  .settingsMaintenanceBackupDetailRow {
+    grid-template-columns: 1fr;
+  }
+
+  .settingsMaintenanceBackupItemActions {
+    justify-content: flex-end;
+  }
+
+  .settingsUpdateApplyTimeline {
+    overflow-x: visible;
+  }
+
+  .settingsUpdateApplyTimeline ol {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px 8px;
+  }
+
+  .settingsUpdateApplyTimeline li {
+    padding: 0;
+  }
+
+  .settingsUpdateApplyTimeline li::before {
+    display: none;
+  }
+
+  .settingsMaintenanceFlowActions .button,
+  .settingsMaintenanceReadinessItem .button,
+  .settingsMaintenanceBackupCreate .button,
+  .settingsMaintenanceBackupActions .button,
+  .settingsUpdateApplyActions .button {
+    width: 100%;
+  }
+
+  .settingsMaintenanceSupportActions .settingsMaintenanceSupportActionButton {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .settingsMaintenanceFlow dl div,
+  .settingsUpdateApplyFacts div {
+    grid-template-columns: minmax(96px, 0.42fr) minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 430px) {
+  .settingsMaintenanceBackupStatusGrid {
+    grid-template-columns: 1fr;
+  }
+}

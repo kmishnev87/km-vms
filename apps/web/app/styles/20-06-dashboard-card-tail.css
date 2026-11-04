@@ -1,0 +1,27 @@
+
+.dashboardCardBody {
+  min-width: 0;
+}
+
+.dashboardCardTitle {
+  color: #0f172a;
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1.2;
+}
+
+.dashboardCardText {
+  margin-top: 8px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.dashboardCardArrow {
+  color: #94a3b8;
+  font-size: 20px;
+  line-height: 1;
+  justify-self: end;
+}
+
+/* Stage 13.7.11: final maintenance overview composition. */

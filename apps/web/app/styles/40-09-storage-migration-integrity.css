@@ -1,0 +1,1070 @@
+.archiveMigrationDialog {
+  width: min(720px, 100%);
+  height: min(680px, calc(100dvh - 40px));
+}
+
+.archiveOperationHistoryDialog, .recordingsDeletionFlow { height: min(600px, calc(100dvh - 40px)); }
+
+.archiveMigrationWizard {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.archiveMigrationSteps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.archiveMigrationSteps span {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 11px;
+  text-align: center;
+}
+
+.archiveMigrationSteps span.active {
+  border-color: #93c5fd;
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.archiveMigrationSteps span.done {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.archiveMigrationFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.archiveMigrationFields label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.archiveMigrationFields label > span {
+  color: #475569;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.archiveMigrationFields .select {
+  width: 100%;
+  min-width: 0;
+}
+
+.archiveMigrationHint,
+.archiveMigrationCapacity,
+.archiveMigrationConfirmation,
+.archiveMigrationMessage,
+.archiveMigrationReasons {
+  padding: 10px 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.archiveMigrationHint {
+  padding: 8px 10px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.archiveMigrationFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+}
+
+.archiveMigrationFacts div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.archiveMigrationFacts dt {
+  color: #64748b;
+  font-size: 11px;
+}
+
+.archiveMigrationFacts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.archiveMigrationCapacity,
+.archiveMigrationProgressFacts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 12px;
+}
+
+.archiveMigrationCapacity strong {
+  flex-basis: 100%;
+  color: #0f172a;
+}
+
+.archiveMigrationProgress {
+  display: grid;
+  gap: 8px;
+}
+
+.archiveMigrationProgressHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.archiveMigrationProgressHead span,
+.archiveMigrationProgressFacts {
+  color: #64748b;
+}
+
+.archiveMigrationProgressTrack {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.archiveMigrationProgressTrack > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 0.2s ease;
+}
+
+.archiveMigrationProgress-completed .archiveMigrationProgressTrack > span {
+  background: #16a34a;
+}
+
+.archiveMigrationConfirmation {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.archiveMigrationConfirmation ul {
+  display: grid;
+  gap: 5px;
+  margin: 7px 0 0;
+  padding-left: 19px;
+}
+
+.archiveMigrationReasons,
+.archiveMigrationMessage {
+  display: grid;
+  gap: 5px;
+}
+
+.archiveMigrationReasons span,
+.archiveMigrationMessage span {
+  overflow-wrap: anywhere;
+}
+
+.archiveMigrationReasons-warning,
+.archiveMigrationMessage-warning {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.archiveMigrationMessage-error {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.archiveMigrationMessage-success {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.storageOpsDashboard {
+  grid-template-columns: minmax(0, 1.55fr) minmax(390px, 1fr);
+  grid-template-areas:
+    "archive cameras"
+    "roots operations"
+    "roots operations"
+    "recent operations";
+}
+
+.storageOpsSection-cameras {
+  grid-area: cameras;
+  min-width: 0;
+}
+
+.storageOpsSection-operations .storageOpsOperationList {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
+}
+
+.storageOpsSection-operations .storageOpsOperationRow {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+}
+
+.storageOpsSection-operations .storageOpsOperationActions {
+  justify-content: flex-start;
+}
+
+.storageOpsSection-roots {
+  --storage-root-spacing: 10px;
+  --storage-root-horizontal-margin: 14px;
+  --storage-shared-action-edge: 16px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.storageOpsSection-roots > .storageOpsRootList,
+.storageOpsSection-roots > .storageOpsAdvancedRoot {
+  margin-left: var(--storage-root-horizontal-margin);
+  margin-right: var(--storage-root-horizontal-margin);
+}
+
+.storageOpsSection-roots > .storageOpsRootList {
+  margin-top: var(--storage-root-spacing);
+}
+
+.storageOpsSection-roots > .storageOpsAdvancedRoot {
+  margin-top: var(--storage-root-spacing);
+  margin-bottom: var(--storage-root-spacing);
+  padding-top: var(--storage-root-spacing);
+}
+
+.storageOpsAdvancedRoot > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  list-style: none;
+}
+
+.storageOpsAdvancedRoot > summary::-webkit-details-marker {
+  display: none;
+}
+
+.storageOpsAdvancedRoot > summary::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid #475569;
+  transition: transform 120ms ease;
+}
+
+.storageOpsAdvancedRoot[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.storageOpsAdvancedRootSummaryContent > :first-child {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.storageOpsRootListRow > div:not(.storageOpsRootPath):not(.storageOpsRootActionsCell):not(.storageOpsRootDeleteCell) {
+  grid-template-rows: 14px 30px;
+  align-content: center;
+  align-items: center;
+}
+
+.storageOpsAdvancedRoot .storageOpsRootAddButton:not(.appIllustratedAction),
+.storageOpsAdvancedRoot .storageOpsRootForm-product .select,
+.storageOpsAdvancedRoot .storageOpsRootForm-product .input {
+  min-height: 38px;
+  height: 38px;
+}
+
+.storageOpsAdvancedRoot .storageOpsRootAddButton:not(.appIllustratedAction) {
+  min-width: 92px;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+.storageOpsCameraTable .storageOpsTable th,
+.storageOpsCameraTable .storageOpsTable td {
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
+.storageOpsCameraTable {
+  overflow-x: hidden;
+}
+
+.storageOpsCameraTable .storageOpsTable {
+  width: 100%;
+  min-width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
+}
+
+.storageOpsCameraTable .storageOpsTable th {
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.storageOpsCameraTable .storageOpsTable th:first-child,
+.storageOpsCameraTable .storageOpsTable td:first-child {
+  width: 40%;
+}
+
+.storageOpsCameraTable .storageOpsTable th:nth-child(2),
+.storageOpsCameraTable .storageOpsTable td:nth-child(2) {
+  width: 20%;
+}
+
+.storageOpsCameraTable .storageOpsTable th:nth-child(3),
+.storageOpsCameraTable .storageOpsTable td:nth-child(3) {
+  width: 20%;
+}
+
+.storageOpsCameraTable .storageOpsTable th:nth-child(4),
+.storageOpsCameraTable .storageOpsTable td:nth-child(4) {
+  width: 20%;
+}
+
+.storageOpsCameraTable .storageOpsTable th:nth-child(n + 2),
+.storageOpsCameraTable .storageOpsTable td:nth-child(n + 2) {
+  text-align: center;
+}
+
+.storageOpsCameraProblemButton {
+  min-width: 26px;
+  padding: 2px 8px;
+  border: 1px solid #fdba74;
+  border-radius: 5px;
+  background: #fff7ed;
+  color: #c2410c;
+  font: inherit;
+  cursor: pointer;
+}
+
+.storageIntegrityOverlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1120;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(15, 23, 42, 0.48);
+}
+
+.storageIntegrityDialog {
+  height: min(680px, calc(100dvh - 36px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  width: min(900px, 100%);
+  max-height: min(820px, calc(100vh - 36px));
+  overflow: hidden;
+  border: 1px solid #d9e1eb;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
+}
+
+.storageIntegrityDialogHead,
+.storageIntegrityDialogFooter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+}
+
+.storageIntegrityDialogHead {
+  justify-content: space-between;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.storageIntegrityDialogHead > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.storageIntegrityEyebrow {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.25;
+}
+
+.storageIntegrityDialogHead h2,
+.storageIntegritySectionHead h3 {
+  margin: 0;
+  color: #0f172a;
+  letter-spacing: 0;
+}
+
+.storageIntegrityDialogHead h2 {
+  font-size: 18px;
+  line-height: 1.3;
+}
+
+.storageIntegrityClose {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: #475569;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.storageIntegrityClose:hover:not(:disabled) {
+  border-color: #dbe3ef;
+  background: #f8fafc;
+}
+
+.storageIntegrityDialogBody {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px 16px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.storageIntegrityState {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid #dbe3ef;
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.storageIntegrityState-ok {
+  border-left-color: #22a55b;
+  background: #f5fcf7;
+}
+
+.storageIntegrityState-warning {
+  border-left-color: #d99216;
+  background: #fffaf0;
+}
+
+.storageIntegrityState-error {
+  border-left-color: #dc4c4c;
+  background: #fff7f7;
+}
+
+.storageIntegrityState-unknown,
+.storageIntegrityState-neutral {
+  border-left-color: #94a3b8;
+}
+
+.storageIntegrityStateHead {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.storageIntegrityStateHead > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.storageIntegrityStateHead strong {
+  color: #0f172a;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.storageIntegrityStateHead p,
+.storageIntegrityPlan p {
+  margin: 0;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.storageIntegrityStateHead time {
+  flex: 0 0 auto;
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.storageIntegrityProgress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #e2e8f0;
+}
+
+.storageIntegrityProgress > span {
+  display: block;
+  height: 100%;
+  background: #2d7dd2;
+  transition: width 180ms ease;
+}
+
+.storageIntegrityProgress.isIndeterminate > span {
+  width: 34%;
+  animation: storageIntegrityIndeterminate 1.1s ease-in-out infinite;
+}
+
+@keyframes storageIntegrityIndeterminate {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(310%);
+  }
+}
+
+.storageIntegrityProgressFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.storageIntegrityMessage,
+.storageIntegrityClean {
+  padding: 9px 11px;
+  border: 1px solid #dbe3ef;
+  border-radius: 6px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.storageIntegrityMessage-error {
+  border-color: #fecaca;
+  background: #fff7f7;
+  color: #991b1b;
+}
+
+.storageIntegrityMessage-warning {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #854d0e;
+}
+
+.storageIntegrityClean {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.storageIntegrityCategories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.storageIntegrityCategories > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 7px;
+  border: 1px solid #dbe3ef;
+  border-radius: 5px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.storageIntegrityCategories strong {
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.storageIntegrityFindings,
+.storageIntegrityPlan {
+  display: grid;
+  gap: 9px;
+}
+
+.storageIntegritySectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.storageIntegritySectionHead h3 {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.storageIntegritySectionHead > span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.storageIntegrityFindingList {
+  overflow: hidden;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+}
+
+.storageIntegrityFinding {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 14px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #edf2f7;
+  background: #ffffff;
+}
+
+.storageIntegrityFinding:last-child {
+  border-bottom: 0;
+}
+
+.storageIntegrityFindingHead {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.storageIntegrityFindingHead strong {
+  color: #0f172a;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.storageIntegrityFindingHead span,
+.storageIntegrityFindingAction > span {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.storageIntegrityFinding dl {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 1;
+  gap: 4px 16px;
+  min-width: 0;
+  margin: 0;
+}
+
+.storageIntegrityFinding dl > div {
+  display: flex;
+  gap: 5px;
+  min-width: 0;
+}
+
+.storageIntegrityFinding dt,
+.storageIntegrityFinding dd {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.storageIntegrityFinding dt {
+  color: #64748b;
+}
+
+.storageIntegrityFinding dd {
+  max-width: 280px;
+  overflow-wrap: anywhere;
+  color: #334155;
+}
+
+.storageIntegrityFindingAction {
+  display: flex;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  align-items: center;
+  justify-content: flex-end;
+  width: min(240px, 28vw);
+  text-align: right;
+}
+
+.storageIntegrityFindingAction .button {
+  width: auto;
+  max-width: 100%;
+  min-height: 30px;
+  white-space: normal;
+}
+
+.storageIntegrityLoadMore {
+  justify-self: start;
+}
+
+.storageIntegrityPlan {
+  padding: 12px;
+  border: 1px solid #dbe3ef;
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.storageIntegrityPlan-ok {
+  border-left-color: #22a55b;
+}
+
+.storageIntegrityPlan-warning {
+  border-left-color: #d99216;
+}
+
+.storageIntegrityPlan-error {
+  border-left-color: #dc4c4c;
+}
+
+.storageIntegrityBack {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #2563a7;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.storageIntegrityConfirm {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #334155;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.storageIntegrityConfirm input {
+  margin-top: 2px;
+}
+
+.storageIntegrityPlan > .button {
+  justify-self: start;
+}
+
+.storageIntegrityDialogFooter {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  border-top: 1px solid #e5e7eb;
+  background: #fbfcfe;
+}
+
+.storageIntegrityDialogPrimaryActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.storageIntegrityDialogFooter .button {
+  min-height: 38px;
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .storageIntegrityOverlay {
+    padding: 0;
+  }
+
+  .storageIntegrityDialog {
+    width: 100%;
+    height: 100dvh;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .storageIntegrityDialogHead,
+  .storageIntegrityDialogBody,
+  .storageIntegrityDialogFooter {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+
+  .storageIntegrityStateHead {
+    display: grid;
+    gap: 6px;
+  }
+
+  .storageIntegrityStateHead time {
+    white-space: normal;
+  }
+
+  .storageIntegrityFinding {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .storageIntegrityFinding dl,
+  .storageIntegrityFindingAction {
+    grid-column: 1;
+  }
+
+  .storageIntegrityFindingAction {
+    grid-row: auto;
+    justify-content: flex-start;
+    width: auto;
+    text-align: left;
+  }
+
+  .storageIntegrityFindingAction .button {
+    width: 100%;
+  }
+
+  .storageIntegrityFinding dl > div {
+    width: 100%;
+  }
+
+  .storageIntegrityFinding dd {
+    max-width: none;
+  }
+
+  .storageIntegrityDialogFooter .button {
+    flex: 0 0 auto;
+  }
+
+  .storageIntegrityDialogPrimaryActions {
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+}
+
+/* Keep the final Stage 4.10.5 grid after the historical storage cascade. */
+.storageOpsDashboard {
+  grid-template-columns: minmax(0, 1.55fr) minmax(390px, 1fr);
+  grid-template-areas:
+    "archive cameras"
+    "roots roots"
+    "management management";
+}
+
+.storageOpsSection-archiveManagement {
+  grid-area: management;
+  padding: 0;
+  overflow: hidden;
+}
+
+@media (max-width: 980px) {
+  .storageOpsDashboard {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "archive"
+      "cameras"
+      "roots"
+      "management";
+  }
+}
+
+/* Stage 4.10.6 final cascade ownership. */
+.storageOpsOverview {
+  grid-template-columns: minmax(280px, 1.2fr) minmax(420px, 1.65fr);
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.storageOpsHealthMain {
+  align-items: center;
+  padding: 13px 18px;
+}
+
+.storageOpsHealthMain > div > strong {
+  margin-top: 0;
+  font-size: 18px;
+}
+
+.storageOpsOverview p {
+  margin-top: 4px;
+}
+
+.storageOpsTopMetrics {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-right: 0;
+}
+
+.storageOpsTopMetric {
+  min-height: 70px;
+  justify-items: center;
+  justify-content: stretch;
+  padding: 10px 14px;
+  text-align: center;
+}
+
+.storageOpsTopMetric span,
+.storageOpsTopMetric strong,
+.storageOpsTopMetricValueButton {
+  max-width: 100%;
+  text-align: center;
+}
+
+.storageOpsTopMetricValueButton {
+  min-width: 34px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #0f172a;
+  font: inherit;
+  font-size: 19px;
+  line-height: 1.08;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.storageOpsTopMetric-warning .storageOpsTopMetricValueButton {
+  color: #92400e;
+}
+
+.storageOpsTopMetric-ok .storageOpsTopMetricValueButton {
+  color: #166534;
+}
+
+.storageOpsTopMetricValueButton:hover:not(:disabled) {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.storageOpsTopMetricValueButton:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.28);
+  outline-offset: 2px;
+}
+
+.storageOpsTopMetricValueButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.storageIntegrityFindingAction {
+  width: 40px;
+  min-width: 40px;
+}
+
+.storageIntegrityIconAction,
+.storageIntegrityFindingAction .storageIntegrityIconAction {
+  width: 40px !important;
+  min-width: 40px !important;
+  height: 40px;
+  min-height: 40px !important;
+  padding: 0 !important;
+}
+
+.storageIntegrityIconAction .settingsInfoBubble {
+  top: 50%;
+  right: calc(100% + 8px);
+  bottom: auto;
+  left: auto;
+  transform: translate(4px, -50%);
+}
+
+.storageIntegrityIconAction .settingsInfoBubble::after {
+  top: 50%;
+  right: -4px;
+  left: auto;
+  transform: translateY(-50%) rotate(45deg);
+  border-right: 1px solid #dbe3ef;
+  border-bottom: 0;
+  border-top: 1px solid #dbe3ef;
+}
+
+.storageIntegrityIconAction:hover .settingsInfoBubble,
+.storageIntegrityIconAction:focus .settingsInfoBubble {
+  transform: translate(0, -50%);
+}
+
+.storageOpsSection-roots {
+  --storage-root-action-column: 40px;
+  --storage-root-action-inset: calc(var(--storage-shared-action-edge, 16px) - var(--storage-root-horizontal-margin, 14px));
+}
+
+.storageOpsRootListRow {
+  grid-template-columns: minmax(190px, 1.5fr) 36px repeat(3, minmax(58px, 0.44fr)) minmax(62px, 0.38fr) var(--storage-root-action-column);
+  padding-right: var(--storage-root-action-inset);
+}
+
+.storageOpsRootActionsCell {
+  justify-self: end;
+  width: var(--storage-root-action-column);
+}
+
+.storageOpsAdvancedRoot .storageOpsRootForm-product {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--storage-root-action-column);
+  padding-right: var(--storage-root-action-inset);
+}
+
+.storageOpsAdvancedRoot .storageOpsRootAddButton.appIllustratedAction {
+  justify-self: end;
+  width: var(--storage-root-action-column);
+  min-width: var(--storage-root-action-column);
+}
+
+@media (max-width: 760px) {
+  .storageOpsOverview {
+    grid-template-columns: 1fr;
+  }
+
+  .storageOpsTopMetrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    border: 0;
+  }
+
+  .storageIntegrityFindingAction .storageIntegrityIconAction {
+    width: 40px !important;
+  }
+
+  .storageIntegrityIconAction .settingsInfoBubble {
+    right: auto;
+    left: calc(100% + 8px);
+    transform: translate(-4px, -50%);
+  }
+
+  .storageIntegrityIconAction .settingsInfoBubble::after {
+    right: auto;
+    left: -4px;
+    border-top: 0;
+    border-right: 0;
+    border-bottom: 1px solid #dbe3ef;
+    border-left: 1px solid #dbe3ef;
+  }
+
+  .storageIntegrityIconAction:hover .settingsInfoBubble,
+  .storageIntegrityIconAction:focus .settingsInfoBubble {
+    transform: translate(0, -50%);
+  }
+
+  .storageOpsAdvancedRoot .storageOpsRootForm-product {
+    grid-template-columns: 1fr;
+    padding-right: var(--storage-root-action-inset);
+  }
+
+  .storageOpsAdvancedRoot .storageOpsRootAddButton.appIllustratedAction {
+    justify-self: end;
+  }
+}

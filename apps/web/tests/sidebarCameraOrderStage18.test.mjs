@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
@@ -20,8 +21,8 @@ this.CHRONOLOGY_CAMERA_DROP_MIME = CHRONOLOGY_CAMERA_DROP_MIME;`,
   context
 );
 
-const liveSource = fs.readFileSync(resolve(__dirname, "../app/live/page.js"), "utf8");
-const chronologySource = fs.readFileSync(resolve(__dirname, "../app/chronology/page.js"), "utf8");
+const liveSource = readProductSourceFile(resolve(__dirname, "../app/live/page.js"), "utf8");
+const chronologySource = readProductSourceFile(resolve(__dirname, "../app/chronology/page.js"), "utf8");
 
 const cameras = [
   { id: "10", name: "Zulu" },

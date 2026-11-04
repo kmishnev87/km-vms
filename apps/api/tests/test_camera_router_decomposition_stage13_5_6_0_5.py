@@ -3,7 +3,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from fastapi.routing import APIRoute
+from fastapi.routing import APIRoute, iter_route_contexts
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -70,8 +70,8 @@ ONVIF_FACADE_SYMBOLS = {
 def test_onvif_routes_are_included_once_and_owned_by_extracted_router():
     actual = []
     endpoint_modules = {}
-    for route in app.routes:
-        if not isinstance(route, APIRoute):
+    for route in iter_route_contexts(app.routes):
+        if not isinstance(route.original_route, APIRoute):
             continue
         for method in route.methods or set():
             key = (method, route.path, route.name)

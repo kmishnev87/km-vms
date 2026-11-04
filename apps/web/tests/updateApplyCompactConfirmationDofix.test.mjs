@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -10,8 +11,8 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pageSource = readSettingsMaintenanceSources();
 const { controllerSource, surfaceSource } = readSettingsMaintenanceSourceFiles();
-const cssSource = fs.readFileSync(resolve(__dirname, "../app/styles/20-settings-maintenance.css"), "utf8");
-const operationFeedbackSource = fs.readFileSync(resolve(__dirname, "../components/OperationFeedback.js"), "utf8");
+const cssSource = readProductSourceFile(resolve(__dirname, "../app/styles/20-settings-maintenance.css"), "utf8");
+const operationFeedbackSource = readProductSourceFile(resolve(__dirname, "../components/OperationFeedback.js"), "utf8");
 
 const updateDialogMarker = surfaceSource.indexOf('id: "update-apply-confirm"');
 const dialogStart = surfaceSource.lastIndexOf("<OperationDialog", updateDialogMarker);

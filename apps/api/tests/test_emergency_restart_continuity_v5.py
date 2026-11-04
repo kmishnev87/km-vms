@@ -592,6 +592,7 @@ def test_stable_bootstrap_bundle_covers_manual_update_launcher(tmp_path: Path) -
     scripts = source / "scripts"
     scripts.mkdir(parents=True)
     for name in bootstrap.SOURCE_FILES:
+        scripts.joinpath(name).parent.mkdir(parents=True, exist_ok=True)
         scripts.joinpath(name).write_bytes(REPO_ROOT.joinpath("scripts", name).read_bytes())
 
     installed = bootstrap.install_bundle(app, source)
@@ -616,7 +617,7 @@ def test_stable_bootstrap_bundle_covers_manual_update_launcher(tmp_path: Path) -
 def test_fresh_install_request_identity_is_accepted_by_bridge() -> None:
     install = (REPO_ROOT / "scripts/install.sh").read_text()
     bridge_source = (
-        REPO_ROOT / "scripts/km-vms-update-helper-bridge.py"
+        REPO_ROOT / "scripts/km_vms_bridge/contracts.py"
     ).read_text()
 
     assert 'print("terminal-" + uuid.uuid4().hex)' in install

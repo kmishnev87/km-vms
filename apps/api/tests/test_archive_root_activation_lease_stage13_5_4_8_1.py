@@ -118,7 +118,7 @@ def test_recording_stop_wait_longer_than_stale_threshold_keeps_owner(lease_contr
         return [{"camera_id": 41, "confirmed_recording": True}]
 
     monkeypatch.setattr(archive_root_activation, "list_camera_recording_states", recording_states)
-    monkeypatch.setattr(archive_root_activation, "_writing_segments_count", lambda *_args: 0)
+    monkeypatch.setattr(archive_root_activation.CameraPauseCoordinator, "_writing_segments_count", lambda *_args: 0)
 
     session.start()
     worker = threading.Thread(

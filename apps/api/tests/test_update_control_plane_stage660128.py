@@ -439,7 +439,7 @@ def test_current_product_schema_is_synchronized_across_active_consumers() -> Non
             r"^CURRENT_PRODUCT_DB_SCHEMA_VERSION\s*=\s*(\d+)\s*$",
         ),
         "lineage_bridge": (
-            root / "scripts/km-vms-update-helper-bridge.py",
+            root / "scripts/km_vms_bridge/contracts.py",
             r"^CURRENT_PRODUCT_DB_SCHEMA_VERSION\s*=\s*(\d+)\s*$",
         ),
         "release_cycle": (

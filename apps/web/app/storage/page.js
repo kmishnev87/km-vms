@@ -3,6 +3,11 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Layout from "../../components/Layout";
+import { createSingleFlight } from "../../lib/singleFlight";
+import useStorageMigrationController from "../../lib/useStorageMigrationController";
+import useStorageIntegrityController from "../../lib/useStorageIntegrityController";
+import useStorageActivationController from "../../lib/useStorageActivationController";
+import { newStorageOperationId, blockerText, errorDetailText, archiveRootPath, activationProgressTone, activationProgressStatusText, activationProgressReasonText, activationProgressItems, ACTIVATION_ACK_KEY } from "../../lib/storagePagePresentation";
 import { OperationDialog, OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
 import {
   ArchiveManagementCenter,
@@ -43,14 +48,6 @@ import {
 } from "../../lib/storageOperations";
 
 const REFRESH_MS = 30000;
-const ACTIVATION_ACK_KEY = "kmvms.storage.activation.acknowledged";
-
-function newStorageOperationId(prefix) {
-  const randomPart = globalThis.crypto?.randomUUID
-    ? globalThis.crypto.randomUUID().replaceAll("-", "")
-    : `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 14)}`;
-  return `${prefix}-${randomPart}`;
-}
 
 function Stat({ label, value, tone = "neutral" }) {
   return (
@@ -411,29 +408,6 @@ function Section({ title, children, action = null, className = "" }) {
   );
 }
 
-function blockerText(blockers, copy, language) {
-  const list = Array.isArray(blockers) ? blockers : [];
-  if (!list.length) return copy.noReasons;
-  const labels = list.map((item) => humanBlockerReason(item, language));
-  return Array.from(new Set(labels)).join(" ");
-}
-
-function errorDetailText(error, fallback, language) {
-  const detail = error?.detail || error?.data?.detail || null;
-  if (detail && typeof detail === "object") {
-    if (Array.isArray(detail.blockers) && detail.blockers.length) return blockerText(detail.blockers, { noReasons: fallback }, language);
-    if (detail.reason_code) return humanBlockerReason(detail.reason_code, language);
-    if (detail.error) return humanBlockerReason(detail.error, language);
-    if (detail.reason) return humanBlockerReason(detail.reason, language);
-  }
-  const candidate = typeof detail === "string" ? detail : String(error?.message || "");
-  const normalized = candidate.trim();
-  if (!normalized || normalized.length > 320) return fallback;
-  if (/^(http\s+\d+|[a-z0-9]+(?:[_.:-][a-z0-9]+)+)$/i.test(normalized)) return fallback;
-  if (/[{}\[\]\\]|\/(?:api|storage|volume|app)\//i.test(normalized)) return fallback;
-  return normalized;
-}
-
 function archiveRootDialogText(error, copy, language = "ru") {
   const dict = copy.archiveRootAddDialog || {};
   const detail = error?.data?.detail || error?.detail || null;
@@ -657,10 +631,6 @@ function archiveRootLabel(root, copy) {
   return label || copy.defaultArchive;
 }
 
-function archiveRootPath(root, fallback = "-") {
-  return root?.configured_path || root?.root_path || root?.path || root?.archive_host_path || fallback || "-";
-}
-
 function archiveRootStateText(root, copy) {
   if (root?.is_active) return copy.activeRoot;
   return copy.inactiveRoot || copy.oldInactive;
@@ -680,58 +650,6 @@ function recordingState(operations, pathHealth, policy, copy) {
     return { label: copy.recordingNeedsCheck, detail: copy.recordingNeedsCheckDetail, tone: "warning" };
   }
   return { label: copy.recordingUnknown, detail: copy.recordingUnknownDetail, tone: "unknown" };
-}
-
-function activationProgressTone(status) {
-  if (status?.status === "failed" || status?.status === "failed_recovery_required") return "error";
-  if (status?.status === "completed") return "ok";
-  if (status?.status === "running") return "warning";
-  return "neutral";
-}
-
-function activationProgressStatusText(status, copy) {
-  if (status?.status === "queued" || status?.status === "running") return copy.activationRunning;
-  if (status?.status === "completed") return copy.activationCompleted;
-  if (status?.status === "failed_recovery_required") return copy.activationRecoveryRequired;
-  if (status?.status === "failed") return copy.activationFailed;
-  return copy.activationIdle;
-}
-
-function activationProgressReasonText(status, copy, language) {
-  const model = activationProgressModel(status);
-  const messages = {
-    storage_activation_queued: copy.activationQueued,
-    storage_activation_stopping_recordings: copy.activationStopping,
-    storage_activation_switching_location: copy.activationSwitching,
-    storage_activation_restoring_recordings: copy.activationRestoring,
-    storage_activation_checking_archive_access: copy.activationChecking,
-    storage_activation_completed: copy.activationCompleted,
-    storage_activation_failed_previous_location_preserved: copy.activationFailedPreviousPreserved,
-    storage_activation_failed_previous_location_restored: copy.activationFailedPreviousRestored,
-    storage_activation_restoring_previous_location: copy.activationRollbackRunning,
-    storage_activation_recovery_required: copy.activationRecoveryRequiredDetail,
-    storage_activation_completed_with_archive_access_problem: copy.activationArchiveAccessProblem,
-  };
-  const base = messages[model.presentationKey] || "";
-  if (model.recoveryRequired && model.effectiveRootLabel) {
-    return `${base} ${copy.activationEffectiveRoot.replace("{root}", model.effectiveRootLabel)}`.trim();
-  }
-  return base;
-}
-
-function activationProgressItems(status, copy) {
-  const labels = {
-    recordings_stopped: copy.activationStepStopRecordings,
-    runtime_applied: copy.activationStepApplyRuntime,
-    cameras_restored: copy.activationStepRestoreCameras,
-    archive_access_checked: copy.activationStepCheckAccess,
-  };
-  const model = activationProgressModel(status);
-  const items = model.steps.map((step) => `${step.done ? "✓" : step.active ? "…" : "·"} ${labels[step.key]}`);
-  if (model.rollback.status !== "not_required") {
-    items.push(`${model.rollback.completed ? "✓" : model.rollback.active ? "…" : model.rollback.failed ? "!" : "·"} ${copy.activationStepRollback}`);
-  }
-  return items;
 }
 
 function migrationPhaseText(phase, copy) {
@@ -955,6 +873,8 @@ function StorageOperationsPageContent() {
   const requestedMigrationOperationId = searchParams.get("migration");
   const [status, setStatus] = useState(null);
   const statusRef = useRef(null);
+  const statusReadRef = useRef(null);
+  if (!statusReadRef.current) statusReadRef.current = createSingleFlight();
   const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -970,47 +890,21 @@ function StorageOperationsPageContent() {
   const [operationHistory, setOperationHistory] = useState(null);
   const [operationHistoryLoading, setOperationHistoryLoading] = useState(false);
   const [operationHistoryError, setOperationHistoryError] = useState("");
-  const [trackedActivationOperationId, setTrackedActivationOperationId] = useState(null);
-  const [dismissedActivationOperationId, setDismissedActivationOperationId] = useState(null);
-  const [migrationDialogOpen, setMigrationDialogOpen] = useState(false);
-  const [migrationSourceRootId, setMigrationSourceRootId] = useState("");
-  const [migrationTargetRootId, setMigrationTargetRootId] = useState("");
-  const [migrationPlan, setMigrationPlan] = useState(null);
-  const [migrationOperation, setMigrationOperation] = useState(null);
-  const [migrationBusy, setMigrationBusy] = useState(false);
-  const migrationPlanRequestKeyRef = useRef(null);
-  const migrationApplyRequestKeyRef = useRef(null);
-  const migrationRetryRequestKeyRef = useRef(null);
-  const migrationTakeoverRequestKeyRef = useRef(null);
   const [rootAction, setRootAction] = useState("");
-  const [integrityDialogOpen, setIntegrityDialogOpen] = useState(false);
-  const [integrityScan, setIntegrityScan] = useState(null);
-  const [integrityFindings, setIntegrityFindings] = useState([]);
-  const [integrityNextCursor, setIntegrityNextCursor] = useState(null);
-  const [integrityBusy, setIntegrityBusy] = useState(false);
-  const [integrityError, setIntegrityError] = useState("");
-  const [integritySelectedFinding, setIntegritySelectedFinding] = useState(null);
-  const [integrityPlan, setIntegrityPlan] = useState(null);
-  const [migrationMessage, setMigrationMessage] = useState("");
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { locale: language, t } = useI18n();
   const copy = useLocaleText("storagePage");
 
   const canOpenStorage = currentUser ? canAccessPath(currentUser, "/storage") : false;
 
-  useEffect(() => {
-    try {
-      setDismissedActivationOperationId(window.sessionStorage.getItem(ACTIVATION_ACK_KEY));
-    } catch (_) {}
-  }, []);
 
   const loadStatus = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setRefreshing(true);
     try {
-      const [data, settingsData] = await Promise.all([
+      const [data, settingsData] = await statusReadRef.current.run(() => Promise.all([
         apiFetch("/storage/status"),
         apiFetch("/settings").catch(() => null),
-      ]);
+      ]));
       setStatus(data);
       statusRef.current = data;
       setSettings(settingsData);
@@ -1134,13 +1028,12 @@ function StorageOperationsPageContent() {
     allowed: Boolean(manageSettingsPermission.allowed && retentionPermission.allowed),
     reason: !manageSettingsPermission.allowed ? manageSettingsPermission.reason : !retentionPermission.allowed ? retentionPermission.reason : "",
   };
-  const migrationScenario = migrationScenarioModel({
-    plan: migrationPlan,
-    operation: migrationOperation,
-    preparePermission: manageSettingsPermission,
-    applyPermission: migrationApplyPermission,
-    running: migrationBusy,
-  }, language);
+  const { integrityDialogOpen, setIntegrityDialogOpen, integrityScan, setIntegrityScan, integrityFindings, setIntegrityFindings, integrityNextCursor, setIntegrityNextCursor, integrityBusy, setIntegrityBusy, integrityError, setIntegrityError, integritySelectedFinding, setIntegritySelectedFinding, integrityPlan, setIntegrityPlan, loadIntegrityFindingPage, openIntegrityDialog, startIntegrityScan, cancelIntegrityScan, loadMoreIntegrityFindings, prepareIntegrityAction, applyIntegrityAction, clearIntegrityPlan } = useStorageIntegrityController({
+    diagnosticsPermission, copy, language, loadStatus, requireFreshStorageStatus,
+  });
+  const { migrationDialogOpen, setMigrationDialogOpen, migrationSourceRootId, setMigrationSourceRootId, migrationTargetRootId, setMigrationTargetRootId, migrationPlan, setMigrationPlan, migrationOperation, setMigrationOperation, migrationBusy, setMigrationBusy, migrationMessage, setMigrationMessage, migrationScenario, openMigrationDialog, resetMigrationDraft, selectMigrationSource, selectMigrationTarget, prepareMigrationPlan, applyMigration, cancelMigration, retryMigration, takeoverMigrationCleanup } = useStorageMigrationController({
+    archiveRoots, currentArchiveRoot, currentUser, manageSettingsPermission, migrationApplyPermission, requestedMigrationOperationId, copy, language, loadStatus, requireFreshStorageStatus,
+  });
   const retentionManagement = retentionOperationPresentation(retention);
   const autoFreeManagement = autoFreeOperationPresentation({
     policy,
@@ -1155,6 +1048,10 @@ function StorageOperationsPageContent() {
   const healthReason = healthReasonText(topHealth, recording, copy);
   const archiveRootSelectionReady = archiveRootDiscoveryModel.current && archiveRootFolderName.trim() && archiveRootChoiceId;
 
+  const { trackedActivationOperationId, setTrackedActivationOperationId, dismissedActivationOperationId, setDismissedActivationOperationId, requestActivateRoot, activateRoot } = useStorageActivationController({
+    archiveRootActivation, activationModel, archiveRootActivationReason, copy, language, loadStatus, setArchiveRootDialog, setOperationToast, setRootAction, manageSettingsPermission, requireFreshStorageStatus, archivePathText,
+  });
+
   useEffect(() => {
     if (!archiveRootChoiceId && archiveRootChoices.length) {
       const recommended = archiveRootChoices.find((choice) => choice.recommended) || archiveRootChoices[0];
@@ -1162,194 +1059,8 @@ function StorageOperationsPageContent() {
     }
   }, [archiveRootChoiceId, archiveRootChoices]);
 
-  useEffect(() => {
-    if (!migrationSourceRootId && archiveRoots.length) {
-      setMigrationSourceRootId(String(currentArchiveRoot?.id || archiveRoots[0].id));
-    }
-    if (!migrationTargetRootId && archiveRoots.length > 1) {
-      const target = archiveRoots.find((root) => String(root.id) !== String(migrationSourceRootId || currentArchiveRoot?.id));
-      if (target) setMigrationTargetRootId(String(target.id));
-    }
-  }, [archiveRoots, currentArchiveRoot?.id, migrationSourceRootId, migrationTargetRootId]);
 
-  useEffect(() => {
-    if (!currentUser || !manageSettingsPermission.allowed) return undefined;
-    let cancelled = false;
-    const requestedOperationId = requestedMigrationOperationId;
-    const restore = async () => {
-      try {
-        const data = requestedOperationId
-          ? await apiFetch(`/storage/migration/operations/${encodeURIComponent(requestedOperationId)}`)
-          : await apiFetch("/storage/migration/operations/active");
-        if (cancelled) return;
-        if (data?.plan) {
-          setMigrationPlan(data.plan);
-          setMigrationSourceRootId(String(data.plan.source_root_id || ""));
-          setMigrationTargetRootId(String(data.plan.target_root_id || ""));
-        }
-        if (data?.operation) setMigrationOperation(data.operation);
-        if (requestedOperationId) setMigrationDialogOpen(true);
-      } catch (err) {
-        if (!cancelled && requestedOperationId) {
-          setMigrationMessage(errorDetailText(err, copy.migrationLoadFailed, language));
-          setMigrationDialogOpen(true);
-        }
-      }
-    };
-    restore();
-    return () => { cancelled = true; };
-  }, [currentUser, manageSettingsPermission.allowed, copy.migrationLoadFailed, language, requestedMigrationOperationId]);
 
-  useEffect(() => {
-    const planId = migrationPlan?.plan_id;
-    const operationId = migrationOperation?.operation_id || migrationPlan?.operation_id;
-    const operationStatus = String(migrationOperation?.status || "");
-    const planStatus = String(migrationPlan?.status || "");
-    const pollOperation = operationId && ["queued", "running", "cancel_requested", "interrupted"].includes(operationStatus || planStatus);
-    const pollPlan = !operationId && planId && planStatus === "building";
-    if (!pollOperation && !pollPlan) return undefined;
-    let cancelled = false;
-    let polling = false;
-    const poll = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const data = pollOperation
-          ? await apiFetch(`/storage/migration/operations/${encodeURIComponent(operationId)}`)
-          : { plan: await apiFetch(`/storage/migration/plans/${encodeURIComponent(planId)}`), operation: null };
-        if (cancelled) return;
-        if (data?.plan) setMigrationPlan(data.plan);
-        if (data?.operation) setMigrationOperation(data.operation);
-        setMigrationMessage("");
-        const nextStatus = String(data?.operation?.status || data?.plan?.status || "");
-        if (["completed", "partial", "failed", "blocked", "cancelled", "expired"].includes(nextStatus)) {
-          await loadStatus({ silent: true });
-        }
-      } catch (err) {
-        if (!cancelled) setMigrationMessage(errorDetailText(err, copy.migrationLoadFailed, language));
-      } finally {
-        polling = false;
-      }
-    };
-    poll();
-    const timer = window.setInterval(poll, 1500);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [copy.migrationLoadFailed, language, loadStatus, migrationOperation?.operation_id, migrationOperation?.status, migrationPlan?.operation_id, migrationPlan?.plan_id, migrationPlan?.status]);
-
-  useEffect(() => {
-    publishStorageMigrationActivity({
-      active: migrationScenario.active,
-      plan: migrationPlan,
-      operation: migrationOperation,
-    });
-  }, [
-    migrationOperation,
-    migrationPlan,
-    migrationScenario.active,
-  ]);
-
-  useEffect(() => {
-    if (!["queued", "running"].includes(String(archiveRootActivation?.status || ""))) return undefined;
-    const timer = setInterval(() => loadStatus({ silent: true }), 1500);
-    return () => clearInterval(timer);
-  }, [archiveRootActivation?.status, loadStatus]);
-
-  useEffect(() => {
-    const operationId = activationModel.operationId;
-    if (!operationId) return;
-    if (["queued", "running", "failed_recovery_required"].includes(activationModel.status) && trackedActivationOperationId !== operationId) {
-      setTrackedActivationOperationId(operationId);
-      return;
-    }
-    if (trackedActivationOperationId !== operationId || dismissedActivationOperationId === operationId) return;
-    const recoveryRequired = activationModel.recoveryRequired;
-    const completed = activationModel.status === "completed";
-    const running = ["queued", "running"].includes(activationModel.status);
-    if (completed) {
-      setDismissedActivationOperationId(operationId);
-      try {
-        window.sessionStorage.setItem(ACTIVATION_ACK_KEY, operationId);
-      } catch (_) {}
-      setArchiveRootDialog((current) => current?.activationOperationId === operationId ? null : current);
-      setOperationToast({
-        id: `activation-completed-${operationId}`,
-        title: copy.activationCompletedTitle,
-        message: copy.activationCompletedMessage,
-        tone: "success",
-      });
-      return;
-    }
-    setArchiveRootDialog({
-      id: `activation-${operationId}`,
-      activationOperationId: operationId,
-      presentation: recoveryRequired ? "compact-confirmation" : undefined,
-      title: copy.activationProgressTitle,
-      message: activationProgressStatusText(archiveRootActivation, copy),
-      items: activationProgressItems(archiveRootActivation, copy),
-      action: archiveRootActivationReason || copy.activationProgressHint,
-      confirmLabel: recoveryRequired ? copy.activationRetryRecovery : undefined,
-      cancelLabel: copy.close,
-      closeLabel: copy.close,
-      tone: activationProgressTone(archiveRootActivation),
-      busy: running,
-      dismissible: !running,
-      onConfirm: recoveryRequired
-        ? () => activateRoot(archiveRootActivation.target_root_id || archiveRootActivation.previous_root_id, true)
-        : undefined,
-    });
-  }, [
-    activationModel.operationId,
-    activationModel.status,
-    activationModel.recoveryRequired,
-    archiveRootActivation,
-    archiveRootActivationReason,
-    copy,
-    dismissedActivationOperationId,
-    trackedActivationOperationId,
-  ]);
-
-  useEffect(() => {
-    const scanId = integrityScan?.scan_id;
-    const scanStatus = String(integrityScan?.status || "");
-    if (!integrityDialogOpen || !scanId || !["queued", "running", "cancel_requested", "interrupted"].includes(scanStatus)) {
-      return undefined;
-    }
-    let cancelled = false;
-    let polling = false;
-    const poll = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const next = await apiFetch(`/storage/integrity/scans/${encodeURIComponent(scanId)}`);
-        if (cancelled) return;
-        setIntegrityError("");
-        if (["completed", "partial"].includes(String(next.status || ""))) {
-          const page = await apiFetch(`/storage/integrity/scans/${encodeURIComponent(scanId)}/findings?limit=50`);
-          if (!cancelled) {
-            setIntegrityFindings(page.items || []);
-            setIntegrityNextCursor(page.next_cursor || null);
-            setIntegrityScan(next);
-            await loadStatus({ silent: true });
-          }
-        } else {
-          setIntegrityScan(next);
-        }
-      } catch (err) {
-        if (!cancelled) setIntegrityError(errorDetailText(err, copy.integrityLoadFailed, language));
-      } finally {
-        polling = false;
-      }
-    };
-    const timer = window.setInterval(poll, 1500);
-    poll();
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [copy.integrityLoadFailed, integrityDialogOpen, integrityScan?.scan_id, integrityScan?.status, language, loadStatus]);
 
   function requireFreshStorageStatus() {
     if (!refreshWarning) return true;
@@ -1499,82 +1210,6 @@ function StorageOperationsPageContent() {
       await loadArchiveRootDiscovery();
     } catch (err) {
       setArchiveRootDialog(archiveRootDialogText(err, copy, language));
-    } finally {
-      setRootAction("");
-    }
-  }
-
-  function requestActivateRoot(root) {
-    if (!requireFreshStorageStatus()) return;
-    if (!root?.id) return;
-    if (!manageSettingsPermission.allowed) {
-      setArchiveRootDialog({
-        title: copy.archiveRootAddProblemTitle,
-        message: manageSettingsPermission.reason,
-        action: copy.archiveRootPermissionAction,
-        closeLabel: copy.close,
-        tone: "warning",
-      });
-      return;
-    }
-    setArchiveRootDialog({
-      presentation: "compact-confirmation",
-      title: copy.switchArchiveRootTitle,
-      message: copy.switchConfirm,
-      action: archiveRootPath(root, archivePathText),
-      confirmLabel: copy.makeActive,
-      cancelLabel: copy.cancel,
-      closeLabel: copy.cancel,
-      tone: "warning",
-      onConfirm: () => {
-        setArchiveRootDialog(null);
-        activateRoot(root.id);
-      },
-    });
-  }
-
-  async function activateRoot(rootId, recovery = false) {
-    if (!recovery && !requireFreshStorageStatus()) return;
-    if (!rootId) return;
-    if (!manageSettingsPermission.allowed) {
-      setArchiveRootDialog({
-        title: copy.archiveRootAddProblemTitle,
-        message: manageSettingsPermission.reason,
-        action: copy.archiveRootPermissionAction,
-        closeLabel: copy.close,
-        tone: "warning",
-      });
-      return;
-    }
-    setRootAction(`activate-${rootId}`);
-    setArchiveRootDialog({
-      id: `activation-request-${rootId}`,
-      title: copy.activationProgressTitle,
-      message: recovery ? copy.activationRollbackRunning : copy.activationQueued,
-      action: copy.activationProgressHint,
-      closeLabel: copy.close,
-      tone: "warning",
-      busy: true,
-      dismissible: false,
-    });
-    try {
-      const operation = await apiFetch(`/storage/archive-roots/${encodeURIComponent(rootId)}/activate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true, recovery }),
-      });
-      if (operation?.operation_id) {
-        setTrackedActivationOperationId(operation.operation_id);
-        setDismissedActivationOperationId(null);
-      }
-      await loadStatus({ silent: true });
-    } catch (err) {
-      setArchiveRootDialog({
-        title: copy.rootNotSwitched,
-        message: errorDetailText(err, copy.rootNotSwitched, language),
-        closeLabel: copy.close,
-        tone: "warning",
-      });
     } finally {
       setRootAction("");
     }
@@ -1793,178 +1428,6 @@ function StorageOperationsPageContent() {
     setArchiveRootDialog(null);
   }
 
-  async function loadIntegrityFindingPage(scanId, cursor = null, { append = false } = {}) {
-    if (!scanId) return;
-    const query = new URLSearchParams({ limit: "50" });
-    if (cursor) query.set("cursor", cursor);
-    const page = await apiFetch(`/storage/integrity/scans/${encodeURIComponent(scanId)}/findings?${query.toString()}`);
-    setIntegrityFindings((current) => append ? [...current, ...(page.items || [])] : (page.items || []));
-    setIntegrityNextCursor(page.next_cursor || null);
-  }
-
-  async function openIntegrityDialog(scanId = null) {
-    setIntegrityDialogOpen(true);
-    setIntegrityError("");
-    if (!diagnosticsPermission.allowed) return;
-    setIntegrityBusy(true);
-    try {
-      const requestedScanId = typeof scanId === "string" && scanId ? scanId : null;
-      const latest = await apiFetch(requestedScanId
-        ? `/storage/integrity/scans/${encodeURIComponent(requestedScanId)}`
-        : "/storage/integrity/scans/latest");
-      setIntegrityScan(latest);
-      if (["completed", "partial"].includes(String(latest.status || "")) && latest.scan_id) {
-        await loadIntegrityFindingPage(latest.scan_id);
-      } else {
-        setIntegrityFindings([]);
-        setIntegrityNextCursor(null);
-      }
-    } catch (err) {
-      setIntegrityError(errorDetailText(err, copy.integrityLoadFailed, language));
-    } finally {
-      setIntegrityBusy(false);
-    }
-  }
-
-  async function startIntegrityScan() {
-    if (!diagnosticsPermission.allowed) {
-      setIntegrityError(diagnosticsPermission.reason);
-      return;
-    }
-    setIntegrityBusy(true);
-    setIntegrityError("");
-    setIntegrityFindings([]);
-    setIntegrityNextCursor(null);
-    setIntegritySelectedFinding(null);
-    setIntegrityPlan(null);
-    try {
-      const next = await apiFetch("/storage/integrity/scans", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idempotency_key: newStorageOperationId("integrity-scan") }),
-      });
-      setIntegrityScan(next);
-      if (["completed", "partial"].includes(String(next.status || "")) && next.scan_id) {
-        await loadIntegrityFindingPage(next.scan_id);
-      }
-      await loadStatus({ silent: true });
-    } catch (err) {
-      setIntegrityError(errorDetailText(err, copy.integrityStartFailed, language));
-    } finally {
-      setIntegrityBusy(false);
-    }
-  }
-
-  async function cancelIntegrityScan() {
-    if (!integrityScan?.scan_id) return;
-    setIntegrityBusy(true);
-    setIntegrityError("");
-    try {
-      const next = await apiFetch(`/storage/integrity/scans/${encodeURIComponent(integrityScan.scan_id)}/cancel`, { method: "POST" });
-      setIntegrityScan(next);
-    } catch (err) {
-      setIntegrityError(errorDetailText(err, copy.integrityCancelFailed, language));
-    } finally {
-      setIntegrityBusy(false);
-    }
-  }
-
-  async function loadMoreIntegrityFindings() {
-    if (!integrityScan?.scan_id || !integrityNextCursor) return;
-    setIntegrityBusy(true);
-    setIntegrityError("");
-    try {
-      await loadIntegrityFindingPage(integrityScan.scan_id, integrityNextCursor, { append: true });
-    } catch (err) {
-      setIntegrityError(errorDetailText(err, copy.integrityLoadFailed, language));
-    } finally {
-      setIntegrityBusy(false);
-    }
-  }
-
-  async function prepareIntegrityAction(finding) {
-    if (!requireFreshStorageStatus()) return;
-    const presentation = archiveIntegrityFindingPresentation(finding);
-    const contract = archiveIntegrityActionContract(presentation.actionKey);
-    if (!presentation.actionAllowed || !contract.planKind) return;
-    setIntegrityBusy(true);
-    setIntegrityError("");
-    setIntegritySelectedFinding(finding);
-    setIntegrityPlan(null);
-    try {
-      const plan = await apiFetch(`/storage/integrity/findings/${encodeURIComponent(finding.finding_id)}/${contract.planKind}-plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action_key: presentation.actionKey,
-          idempotency_key: newStorageOperationId("integrity-plan"),
-        }),
-      });
-      setIntegrityPlan(plan);
-    } catch (err) {
-      setIntegritySelectedFinding(null);
-      setIntegrityError(errorDetailText(err, copy.integrityPlanFailed, language));
-    } finally {
-      setIntegrityBusy(false);
-    }
-  }
-
-  async function applyIntegrityAction() {
-    if (!requireFreshStorageStatus()) return;
-    if (!integrityPlan?.plan_id || !integritySelectedFinding) return;
-    const presentation = archiveIntegrityFindingPresentation(integritySelectedFinding);
-    const contract = archiveIntegrityActionContract(presentation.actionKey);
-    if (!contract.planKind) return;
-    setIntegrityBusy(true);
-    setIntegrityError("");
-    try {
-      const result = await apiFetch(`/storage/integrity/remediation-plans/${encodeURIComponent(integrityPlan.plan_id)}/apply-${contract.planKind}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          confirm: true,
-          operation_id: newStorageOperationId("integrity-apply"),
-        }),
-      });
-      setIntegrityPlan(result);
-      const latest = await apiFetch("/storage/integrity/scans/latest");
-      setIntegrityScan(latest);
-      if (latest.scan_id) await loadIntegrityFindingPage(latest.scan_id);
-      await loadStatus({ silent: true });
-    } catch (err) {
-      setIntegrityError(errorDetailText(err, copy.integrityApplyFailed, language));
-    } finally {
-      setIntegrityBusy(false);
-    }
-  }
-
-  async function clearIntegrityPlan() {
-    setIntegritySelectedFinding(null);
-    setIntegrityPlan(null);
-    setIntegrityError("");
-    if (integrityScan?.scan_id && ["completed", "partial"].includes(String(integrityScan.status || ""))) {
-      try {
-        await loadIntegrityFindingPage(integrityScan.scan_id);
-      } catch (err) {
-        setIntegrityError(errorDetailText(err, copy.integrityLoadFailed, language));
-      }
-    }
-  }
-
-  async function openMigrationDialog() {
-    setMigrationDialogOpen(true);
-    if (!manageSettingsPermission.allowed) return;
-    try {
-      const active = await apiFetch("/storage/migration/operations/active");
-      if (active?.plan) {
-        setMigrationPlan(active.plan);
-        setMigrationSourceRootId(String(active.plan.source_root_id || ""));
-        setMigrationTargetRootId(String(active.plan.target_root_id || ""));
-      }
-      if (active?.operation) setMigrationOperation(active.operation);
-    } catch (_) {}
-  }
-
   async function openOperationHistory() {
     setHistoryDialogOpen(true);
     setOperationHistoryLoading(true);
@@ -1976,163 +1439,6 @@ function StorageOperationsPageContent() {
       setOperationHistoryError(errorDetailText(err, copy.operationHistoryUnavailable, language));
     } finally {
       setOperationHistoryLoading(false);
-    }
-  }
-
-  function resetMigrationDraft() {
-    setMigrationPlan(null);
-    setMigrationOperation(null);
-    setMigrationMessage("");
-    migrationPlanRequestKeyRef.current = null;
-    migrationApplyRequestKeyRef.current = null;
-    migrationRetryRequestKeyRef.current = null;
-    migrationTakeoverRequestKeyRef.current = null;
-  }
-
-  function selectMigrationSource(rootId) {
-    const next = String(rootId || "");
-    setMigrationSourceRootId(next);
-    if (next === String(migrationTargetRootId)) {
-      const alternative = archiveRoots.find((root) => String(root.id) !== next);
-      setMigrationTargetRootId(alternative ? String(alternative.id) : "");
-    }
-    resetMigrationDraft();
-  }
-
-  function selectMigrationTarget(rootId) {
-    setMigrationTargetRootId(String(rootId || ""));
-    resetMigrationDraft();
-  }
-
-  async function prepareMigrationPlan() {
-    if (!requireFreshStorageStatus()) return;
-    if (!manageSettingsPermission.allowed) {
-      setMigrationMessage(manageSettingsPermission.reason);
-      return;
-    }
-    if (!migrationSourceRootId || !migrationTargetRootId || migrationSourceRootId === migrationTargetRootId) {
-      setMigrationMessage(copy.migrationChooseSourceTarget);
-      return;
-    }
-    setMigrationBusy(true);
-    setMigrationMessage("");
-    setMigrationOperation(null);
-    const idempotencyKey = migrationPlanRequestKeyRef.current || newStorageOperationId("migration-plan");
-    migrationPlanRequestKeyRef.current = idempotencyKey;
-    try {
-      const plan = await apiFetch("/storage/migration/preview", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source_root_id: migrationSourceRootId,
-          target_root_id: migrationTargetRootId,
-          idempotency_key: idempotencyKey,
-        }),
-      });
-      setMigrationPlan(plan);
-    } catch (err) {
-      setMigrationMessage(errorDetailText(err, copy.migrationPrepareFailed, language));
-    } finally {
-      setMigrationBusy(false);
-    }
-  }
-
-  async function applyMigration() {
-    if (!requireFreshStorageStatus()) return;
-    if (!migrationScenario.canApply || !migrationPlan?.plan_id || !migrationPlan?.canonical_hash) return;
-    setMigrationBusy(true);
-    setMigrationMessage("");
-    const idempotencyKey = migrationApplyRequestKeyRef.current || newStorageOperationId("migration-apply");
-    migrationApplyRequestKeyRef.current = idempotencyKey;
-    try {
-      const result = await apiFetch("/storage/migration/apply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          plan_id: migrationPlan.plan_id,
-          expected_plan_hash: migrationPlan.canonical_hash,
-          idempotency_key: idempotencyKey,
-          confirm: true,
-        }),
-      });
-      setMigrationPlan(result.plan || migrationPlan);
-      setMigrationOperation(result.operation || null);
-      await loadStatus({ silent: true });
-    } catch (err) {
-      setMigrationMessage(errorDetailText(err, copy.applyBlocked, language));
-    } finally {
-      setMigrationBusy(false);
-    }
-  }
-
-  async function cancelMigration() {
-    const operationId = migrationOperation?.operation_id || migrationPlan?.operation_id;
-    const planId = migrationPlan?.plan_id;
-    if (!operationId && !planId) return;
-    setMigrationBusy(true);
-    setMigrationMessage("");
-    try {
-      const result = operationId
-        ? await apiFetch(`/storage/migration/operations/${encodeURIComponent(operationId)}/cancel`, { method: "POST" })
-        : await apiFetch(`/storage/migration/plans/${encodeURIComponent(planId)}/cancel`, { method: "POST" });
-      if (result?.plan) setMigrationPlan(result.plan);
-      if (result?.operation) setMigrationOperation(result.operation);
-    } catch (err) {
-      setMigrationMessage(errorDetailText(err, copy.migrationCancelFailed, language));
-    } finally {
-      setMigrationBusy(false);
-    }
-  }
-
-  async function retryMigration() {
-    const operationId = migrationOperation?.operation_id || migrationPlan?.operation_id;
-    if (!operationId || !migrationScenario.canRetry) return;
-    setMigrationBusy(true);
-    setMigrationMessage("");
-    const scope = JSON.stringify([operationId, migrationPlan?.plan_id, migrationPlan?.canonical_hash, "retry"]);
-    if (migrationRetryRequestKeyRef.current?.scope !== scope) {
-      migrationRetryRequestKeyRef.current = { scope, key: newStorageOperationId("migration-retry") };
-    }
-    const idempotencyKey = migrationRetryRequestKeyRef.current.key;
-    try {
-      const result = await apiFetch(`/storage/migration/operations/${encodeURIComponent(operationId)}/retry`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idempotency_key: idempotencyKey }),
-      });
-      migrationRetryRequestKeyRef.current = null;
-      if (result?.plan) setMigrationPlan(result.plan);
-      if (result?.operation) setMigrationOperation(result.operation);
-    } catch (err) {
-      setMigrationMessage(errorDetailText(err, copy.migrationRetryFailed, language));
-    } finally {
-      setMigrationBusy(false);
-    }
-  }
-
-  async function takeoverMigrationCleanup() {
-    const operationId = migrationOperation?.operation_id || migrationPlan?.operation_id;
-    if (!operationId || !migrationScenario.canCleanupTakeover) return;
-    setMigrationBusy(true);
-    setMigrationMessage("");
-    const scope = JSON.stringify([operationId, migrationPlan?.plan_id, migrationPlan?.canonical_hash, "cleanup-takeover"]);
-    if (migrationTakeoverRequestKeyRef.current?.scope !== scope) {
-      migrationTakeoverRequestKeyRef.current = { scope, key: newStorageOperationId("migration-cleanup-takeover") };
-    }
-    const idempotencyKey = migrationTakeoverRequestKeyRef.current.key;
-    try {
-      const result = await apiFetch(`/storage/migration/operations/${encodeURIComponent(operationId)}/cleanup-takeover`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ idempotency_key: idempotencyKey, confirm: true }),
-      });
-      migrationTakeoverRequestKeyRef.current = null;
-      if (result?.plan) setMigrationPlan(result.plan);
-      if (result?.operation) setMigrationOperation(result.operation);
-    } catch (err) {
-      setMigrationMessage(errorDetailText(err, copy.migrationCleanupTakeoverFailed, language));
-    } finally {
-      setMigrationBusy(false);
     }
   }
 

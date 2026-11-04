@@ -1,4 +1,5 @@
 import json
+import inspect
 import importlib.util
 import os
 import subprocess
@@ -57,15 +58,14 @@ def test_stage620_update_script_writes_sanitized_progress_side_channel():
 
 
 def test_stage620_helper_uses_popen_polling_and_progress_heartbeat():
-    text = (ROOT / "scripts/km-vms-update-helper.py").read_text(encoding="utf-8")
+    text = inspect.getsource(load_update_helper_module().run_child_with_progress)
 
     assert "subprocess.Popen" in text
     assert "stderr=subprocess.PIPE" not in text
     assert "NamedTemporaryFile" in text
     assert "read_stderr_tail" in text
     assert "subprocess.run(common" not in text
-    assert "KM_VMS_UPDATE_PROGRESS_FILE" in text
-    assert "last_progress_age_seconds" not in text
+    assert "POLL_SECONDS" in text
     assert "read_progress" in text
     assert "steps_for" in text
 
@@ -102,7 +102,7 @@ def test_stage621_helper_large_stderr_does_not_deadlock_and_returns_tail(tmp_pat
     request = {
         "request_id": "stage621-large-stderr",
         "requested_at": "2026-06-28T00:00:00Z",
-        "source": {"commit": "a" * 40, "repo": "owner/repo", "ref": "main", "apply_ref": "a" * 40},
+        "source": {"commit": "a" * 40, "repo": "owner/repo", "ref": "main", "apply_ref": "a" * 40, "version":"0.8.29", "channel":"stable", "source_type":"github_tarball"},
     }
 
     result = helper.run_child_with_progress(
@@ -130,7 +130,7 @@ def test_stage621_helper_timeout_is_bounded_and_safe(tmp_path, monkeypatch):
     request = {
         "request_id": "stage621-timeout",
         "requested_at": "2026-06-28T00:00:00Z",
-        "source": {"commit": "a" * 40, "repo": "owner/repo", "ref": "main", "apply_ref": "a" * 40},
+        "source": {"commit": "a" * 40, "repo": "owner/repo", "ref": "main", "apply_ref": "a" * 40, "version":"0.8.29", "channel":"stable", "source_type":"github_tarball"},
     }
 
     try:
@@ -158,9 +158,9 @@ def test_stage621_timeout_uses_last_known_progress_step(tmp_path, monkeypatch):
     monkeypatch.setattr(helper, "PROGRESS_FILE", control / "update-progress.json")
     monkeypatch.setattr(helper, "POLL_SECONDS", 0.01)
     request = {
-        "request_id": "stage621-progress-timeout",
+        "request_id": "update-" + "8" * 32,
         "requested_at": "2026-06-28T00:00:00Z",
-        "source": {"commit": "a" * 40, "repo": "owner/repo", "ref": "main", "apply_ref": "a" * 40},
+        "source": {"commit": "a" * 40, "repo": "owner/repo", "ref": "main", "apply_ref": "a" * 40, "version":"0.8.29", "channel":"stable", "source_type":"github_tarball"},
     }
     (control / "update-progress.json").write_text(
         json.dumps(
@@ -189,9 +189,9 @@ def test_stage621_timeout_uses_last_known_progress_step(tmp_path, monkeypatch):
     except helper.HelperError as exc:
         assert exc.category == "apply_timeout"
         assert exc.phase == "rebuilding"
-        mapped = {step["name"]: step["status"] for step in helper.failed_steps(exc.category, exc.phase)}
-        assert mapped["rebuilding"] == "failed"
-        assert mapped["acquire_source"] == "completed"
+        mapped = {step["name"]: step["status"] for step in helper.steps_for(exc.phase, failed=True)}
+        assert mapped["applying"] == "failed"
+        assert mapped["preflight"] == "completed"
     else:
         raise AssertionError("timeout was expected")
 
@@ -206,7 +206,7 @@ def test_stage620_helper_classifies_jellyfin_and_build_network_failures(tmp_path
     exc = helper.classify_apply_failure(tmp_path, "curl timeout while downloading Jellyfin key")
 
     assert exc.category == "jellyfin_ffmpeg_repo_unavailable"
-    assert "Jellyfin FFmpeg" in str(exc)
+    assert "FFmpeg repository" in str(exc)
     assert "VPN" not in str(exc)
 
 
@@ -214,7 +214,8 @@ def test_stage621_failure_timelines_and_operator_actions_are_product_safe():
     helper = load_update_helper_module()
 
     def statuses(category, phase=None):
-        return {step["name"]: step["status"] for step in helper.failed_steps(category, phase)}
+        step = phase or ("health_check" if category == "health_check_failed" else "commit_verification" if category in {"commit_mismatch", "metadata_invalid"} else "rebuilding")
+        return {item["name"]: item["status"] for item in helper.steps_for(step, failed=True)}
 
     for category in [
         "jellyfin_ffmpeg_repo_unavailable",
@@ -223,16 +224,16 @@ def test_stage621_failure_timelines_and_operator_actions_are_product_safe():
         "schema_update_failed",
     ]:
         mapped = statuses(category)
-        assert mapped["compose_config"] == "completed"
-        assert mapped["rebuilding"] == "failed"
+        assert mapped["preflight"] == "completed"
+        assert mapped["applying"] == "failed"
         assert mapped["health_check"] == "pending"
-    assert statuses("compose_config_failed")["compose_config"] == "failed"
+    assert statuses("compose_config_failed")["applying"] == "failed"
     assert statuses("health_check_failed")["health_check"] == "failed"
     assert statuses("commit_mismatch")["commit_verification"] == "failed"
     assert statuses("metadata_invalid")["commit_verification"] == "failed"
-    assert statuses("apply_timeout", "rebuilding")["rebuilding"] == "failed"
+    assert statuses("apply_timeout", "rebuilding")["applying"] == "failed"
 
-    action = helper.error_payload("jellyfin_ffmpeg_repo_unavailable", "failed")["operator_action"]
+    action = helper.error_payload("jellyfin_ffmpeg_repo_unavailable")["operator_action"]
     assert "VPN" not in action
     assert "WireGuard" not in action
     assert "stage" not in action.lower()
@@ -240,10 +241,10 @@ def test_stage621_failure_timelines_and_operator_actions_are_product_safe():
 
 
 def test_stage621_update_apply_request_id_uses_neutral_prefix():
-    text = (ROOT / "apps/api/app/services/update_apply.py").read_text(encoding="utf-8")
-
-    assert 'request_id = "update-" + uuid.uuid4().hex' in text
-    assert 'request_id = "stage609-" + uuid.uuid4().hex' not in text
+    value = update_apply_module._request_id('00000000-0000-4000-8000-000000000001','a'*40)
+    assert value.startswith('update-') and len(value)==39
+    assert update_apply_module._request_id('00000000-0000-4000-8000-000000000001','a'*40)==value
+    assert update_apply_module._request_id('00000000-0000-4000-8000-000000000002','a'*40)!=value
 
 
 def test_stage622_helper_writes_bounded_sanitized_apply_history(tmp_path, monkeypatch):
@@ -252,7 +253,7 @@ def test_stage622_helper_writes_bounded_sanitized_apply_history(tmp_path, monkey
     monkeypatch.setattr(helper, "APPLY_HISTORY_FILE", history)
 
     for index in range(12):
-        helper.append_apply_history(
+        helper.append_last_history(
             {
                 "request_id": f"update-{index}",
                 "status": "completed",
@@ -269,10 +270,10 @@ def test_stage622_helper_writes_bounded_sanitized_apply_history(tmp_path, monkey
 
     payload = json.loads(history.read_text(encoding="utf-8"))
 
-    assert payload["max_items"] == 10
-    assert len(payload["items"]) == 10
-    assert payload["items"][0]["request_id"] == "update-2"
-    assert payload["items"][-1]["history_detail_status"] == "step_timestamps_unavailable"
+    assert payload["max_items"] == 1
+    assert len(payload["items"]) == 1
+    assert payload["items"][0]["request_id"] == "update-11"
+    assert "time_label" not in payload["items"][0]["steps"][0]
     assert "github_pat_" not in history.read_text(encoding="utf-8")
 
 
@@ -315,6 +316,7 @@ def test_stage622_api_exposes_last_apply_summary_without_fake_step_times(tmp_pat
 
 
 def test_stage620_api_status_derives_stale_running_status(tmp_path, monkeypatch):
+    monkeypatch.setattr(update_apply_module, '_helper_lease_active', lambda: True)
     control = tmp_path / "control"
     control.mkdir()
     stale_time = (datetime.utcnow() - timedelta(seconds=600)).isoformat() + "Z"
@@ -322,7 +324,7 @@ def test_stage620_api_status_derives_stale_running_status(tmp_path, monkeypatch)
         json.dumps(
             {
                 "schema_version": 1,
-                "request_id": "stage620",
+                "request_id": "update-" + "7" * 32,
                 "status": "rebuilding",
                 "phase": "rebuild_recreate",
                 "current_step": "rebuilding",

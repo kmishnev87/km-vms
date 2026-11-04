@@ -1,9 +1,9 @@
-FROM node:20-alpine
+FROM node:24.22.2-alpine3.23@sha256:9b69af715c7f9d038150b54ccccbaeffa9064bbc93e2904c29591ca097316af1
 
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm install
+RUN npm ci --no-fund --no-audit
 
 COPY . .
 

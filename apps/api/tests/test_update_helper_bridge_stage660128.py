@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -612,7 +613,8 @@ def test_legacy_handoff_binds_adopted_slot_as_active_before_returning(
             assert binding["slot_id"] == adopted_slot
 
     engine = Engine()
-    monkeypatch.setattr(bridge, "require_app_dir", lambda _value: tmp_path)
+    handoff_module = sys.modules[bridge.BridgeHandoffExecutor.__module__]
+    monkeypatch.setattr(handoff_module, "require_app_dir", lambda _value: tmp_path)
     monkeypatch.setattr(
         bridge,
         "normalize_archive_roots_override",
@@ -627,7 +629,7 @@ def test_legacy_handoff_binds_adopted_slot_as_active_before_returning(
     )
     monkeypatch.setattr(bridge, "load_slot_engine", lambda _source: engine)
     monkeypatch.setattr(
-        bridge,
+        bridge.BridgeHandoffExecutor,
         "install_stable_bootstrap_for_handoff",
         lambda *_args, **_kwargs: SimpleNamespace(
             reconcile_restart_policies=lambda *_a, **_k: None,
@@ -742,6 +744,7 @@ def test_bridge_prefers_candidate_lineage_over_stale_installed_cwd(
     candidate_bridge = candidate / "scripts/km-vms-update-helper-bridge.py"
     candidate_bridge.parent.mkdir(parents=True)
     candidate_bridge.write_bytes(BRIDGE_PATH.read_bytes())
+    shutil.copytree(BRIDGE_PATH.parent / "km_vms_bridge", candidate_bridge.parent / "km_vms_bridge")
 
     lineage_path = BRIDGE_PATH.parents[1] / "release/km-vms-update-lineage.json"
     lineage = json.loads(lineage_path.read_text(encoding="utf-8"))

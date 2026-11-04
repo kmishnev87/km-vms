@@ -2,7 +2,7 @@ name: ${COMPOSE_PROJECT_NAME:-tnas-vms}
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:4e6e670bb069649261c9c18031f0aded7bb249a5b6664ddec29c013a89310d50
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-postgres
     restart: always
     environment:
@@ -23,7 +23,7 @@ services:
       - vms-net
 
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:7aec734b2bb298a1d769fd8729f13b8514a41bf90fcdd1f38ec52267fbaa8ee6
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-redis
     restart: always
     command: ["redis-server", "--appendonly", "yes"]
@@ -321,7 +321,7 @@ services:
       - vms-net
 
   setup-helper:
-    image: docker:27-cli
+    image: docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-setup-helper
     restart: always
     depends_on:
@@ -423,7 +423,7 @@ services:
       - vms-net
 
   nginx:
-    image: nginx:1.27-alpine
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     container_name: ${KM_VMS_CONTAINER_PREFIX:-vms}-nginx
     restart: always
     depends_on:

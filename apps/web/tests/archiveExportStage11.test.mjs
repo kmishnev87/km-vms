@@ -1,12 +1,13 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const helper = fs.readFileSync(resolve(__dirname, "../lib/archiveExports.js"), "utf8");
-const recordsPage = fs.readFileSync(resolve(__dirname, "../app/recordings/page.js"), "utf8");
-const chronologyPage = fs.readFileSync(resolve(__dirname, "../app/chronology/page.js"), "utf8");
+const helper = readProductSourceFile(resolve(__dirname, "../lib/archiveExports.js"), "utf8");
+const recordsPage = readProductSourceFile(resolve(__dirname, "../app/recordings/page.js"), "utf8");
+const chronologyPage = readProductSourceFile(resolve(__dirname, "../app/chronology/page.js"), "utf8");
 const removedRecordsEvidence = "recordings" + "Evidence";
 const removedManifestJson = "manifest" + " JSON";
 const removedRowModalCall = "openExportModal" + "(item)";
@@ -14,7 +15,7 @@ const removedSilentFirstCamera = "selectedCameraIds" + "[0]";
 const removedBlobFirst = "response" + ".blob()";
 
 function read(relative) {
-  return fs.readFileSync(resolve(__dirname, "..", relative), "utf8");
+  return readProductSourceFile(resolve(__dirname, "..", relative), "utf8");
 }
 
 function readEffectiveCss(relative) {

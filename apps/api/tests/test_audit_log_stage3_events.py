@@ -240,7 +240,13 @@ def test_media_token_denials_are_audited_without_token_values(db):
     assert "Bearer should-not-be-logged" not in rendered
 
 
-def test_setup_completed_and_failed_events_are_safe(db):
+def test_setup_completed_and_failed_events_are_safe(db, monkeypatch):
+    from app.routers import settings as settings_router
+    # Activation is a separately tested boundary; this test owns audit safety.
+    monkeypatch.setattr(settings_router, "require_setup_storage_confirmation", lambda db: {
+        "status": "ready", "next_action": "create_owner",
+        "selected_host_path": "/fixture/host-archive", "container_archive_path": CONTAINER_ARCHIVE_PATH,
+    })
     db.add(SystemSettings(system_initialized=True, timezone="UTC", language="ru", storage_path="/old"))
     db.commit()
     payload = SetupRequest(

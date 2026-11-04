@@ -1696,7 +1696,22 @@ def _read_update_apply_status_unlocked() -> dict[str, Any]:
 
 def read_update_apply_status() -> dict[str, Any]:
     with _admission_guard():
-        return _read_update_apply_status_unlocked()
+        result = _read_update_apply_status_unlocked()
+        _attach_elapsed_seconds(result)
+        return result
+
+
+def _attach_elapsed_seconds(payload: dict[str, Any]) -> None:
+    started = _parse_iso(payload.get("started_at"))
+    finished = _parse_iso(payload.get("finished_at"))
+    terminal = payload.get("status") in TERMINAL_STATUSES
+    end = finished if terminal else _utcnow()
+    payload["elapsed_seconds"] = (
+        max(0, int((end - started).total_seconds())) if started and end else None
+    )
+    history = payload.get("last_apply_summary")
+    if isinstance(history, dict):
+        _attach_elapsed_seconds(history)
 
 
 def _sanitized_source(latest: dict[str, Any]) -> dict[str, Any]:

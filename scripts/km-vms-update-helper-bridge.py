@@ -31,78 +31,85 @@ def _exec_module_without_bytecode(spec: Any, module: Any) -> None:
         sys.dont_write_bytecode = previous
 
 
-MAX_CONTROL_BYTES = 64 * 1024
-MAX_LEGACY_ADMISSION_BYTES = 512 * 1024
-MAX_LEGACY_ADMISSION_ENTRIES = 256
-DEFAULT_TIMEOUT_SECONDS = 7800
-MIN_TIMEOUT_SECONDS = 30
-MAX_TIMEOUT_SECONDS = 9000
-DEFAULT_POLL_SECONDS = 2
-PERMISSION_GATE_TIMEOUT_SECONDS = 300
+def _load_bridge_components():
+    # Resolve beside this exact source, even when loaded by a different slot's
+    # bootstrap. Ambient sys.path must not mix implementations across releases.
+    directory = Path(__file__).resolve().parent / "km_vms_bridge"
+    name = "_kmvms_bridge_" + hashlib.sha256(str(directory).encode()).hexdigest()[:24]
+    spec = importlib.util.spec_from_file_location(
+        name, directory / "__init__.py", submodule_search_locations=[str(directory)],
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("bridge_components_unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    _exec_module_without_bytecode(spec, module)
+    return module
 
-REQUEST_ID_RE = re.compile(
-    r"^(?:update|stage609|terminal)-[0-9a-f]{32}$",
-    re.IGNORECASE,
-)
-PROJECT_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
-HELPER_IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,200}:[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$")
-IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{12,64}$")
-COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
-SLOT_ID_RE = re.compile(
-    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})$",
-    re.IGNORECASE,
-)
-ARCHIVE_RUNTIME_TARGET_RE = re.compile(
-    r"^/storage/archive-roots/[A-Za-z0-9_.-]{1,180}$"
-)
-SUBMISSION_ID_RE = re.compile(
-    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
-    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-    re.IGNORECASE,
-)
 
-LEGACY_REQUIRED_IMAGE_SERVICES = (
-    "api",
-    "recorder",
-    "web",
-    "nginx",
-    "update-helper",
-)
-OPTIONAL_PERSISTENT_IMAGE_SERVICES = (
-    "update-status-reader",
-    "update-retry-admission",
-)
-TARGET_BUILD_SERVICES = (
-    "schema-update",
-    "api",
-    "recorder",
-    "web",
-    "update-helper",
-    "update-status-reader",
-)
-TARGET_EVIDENCE_SERVICES = (
-    *LEGACY_REQUIRED_IMAGE_SERVICES,
-    *OPTIONAL_PERSISTENT_IMAGE_SERVICES,
-    "schema-update",
-)
-ACTIVATION_RUNTIME_SERVICES = (
-    "update-retry-admission",
-    "update-status-reader",
-    "api",
-    "recorder",
-    "web",
-    "nginx",
-    "setup-helper",
-)
-CORE_RUNTIME_SERVICES = ("api", "recorder", "web", "nginx")
-REQUEST_SCOPED_COMPOSE_EVIDENCE_FIELDS = frozenset(
-    {
-        "captured_plan_sha256",
-        "slot_plan_sha256",
-    }
-)
-REQUEST_ID_COMPOSE_TOKEN = "${KM_VMS_UPDATE_CONTROL_REQUEST_ID}"
+_bridge_components = _load_bridge_components()
+MAX_CONTROL_BYTES = _bridge_components.MAX_CONTROL_BYTES
+MAX_LEGACY_ADMISSION_BYTES = _bridge_components.MAX_LEGACY_ADMISSION_BYTES
+MAX_LEGACY_ADMISSION_ENTRIES = _bridge_components.MAX_LEGACY_ADMISSION_ENTRIES
+DEFAULT_TIMEOUT_SECONDS = _bridge_components.DEFAULT_TIMEOUT_SECONDS
+MIN_TIMEOUT_SECONDS = _bridge_components.MIN_TIMEOUT_SECONDS
+MAX_TIMEOUT_SECONDS = _bridge_components.MAX_TIMEOUT_SECONDS
+DEFAULT_POLL_SECONDS = _bridge_components.DEFAULT_POLL_SECONDS
+PERMISSION_GATE_TIMEOUT_SECONDS = _bridge_components.PERMISSION_GATE_TIMEOUT_SECONDS
+REQUEST_ID_RE = _bridge_components.REQUEST_ID_RE
+PROJECT_NAME_RE = _bridge_components.PROJECT_NAME_RE
+HELPER_IMAGE_RE = _bridge_components.HELPER_IMAGE_RE
+IMAGE_ID_RE = _bridge_components.IMAGE_ID_RE
+CONTAINER_ID_RE = _bridge_components.CONTAINER_ID_RE
+COMMIT_SHA_RE = _bridge_components.COMMIT_SHA_RE
+SLOT_ID_RE = _bridge_components.SLOT_ID_RE
+ARCHIVE_RUNTIME_TARGET_RE = _bridge_components.ARCHIVE_RUNTIME_TARGET_RE
+SUBMISSION_ID_RE = _bridge_components.SUBMISSION_ID_RE
+LEGACY_REQUIRED_IMAGE_SERVICES = _bridge_components.LEGACY_REQUIRED_IMAGE_SERVICES
+OPTIONAL_PERSISTENT_IMAGE_SERVICES = _bridge_components.OPTIONAL_PERSISTENT_IMAGE_SERVICES
+TARGET_BUILD_SERVICES = _bridge_components.TARGET_BUILD_SERVICES
+TARGET_EVIDENCE_SERVICES = _bridge_components.TARGET_EVIDENCE_SERVICES
+ACTIVATION_RUNTIME_SERVICES = _bridge_components.ACTIVATION_RUNTIME_SERVICES
+CORE_RUNTIME_SERVICES = _bridge_components.CORE_RUNTIME_SERVICES
+REQUEST_SCOPED_COMPOSE_EVIDENCE_FIELDS = _bridge_components.REQUEST_SCOPED_COMPOSE_EVIDENCE_FIELDS
+REQUEST_ID_COMPOSE_TOKEN = _bridge_components.REQUEST_ID_COMPOSE_TOKEN
+LEGACY_HISTORICAL_REQUEST_FIELDS = _bridge_components.LEGACY_HISTORICAL_REQUEST_FIELDS
+LEGACY_SNAPSHOT_REQUEST_FIELDS = _bridge_components.LEGACY_SNAPSHOT_REQUEST_FIELDS
+SCHEMA_RETRY_REQUEST_FIELDS = _bridge_components.SCHEMA_RETRY_REQUEST_FIELDS
+CURRENT_SINGLE_REQUEST_FIELDS = _bridge_components.CURRENT_SINGLE_REQUEST_FIELDS
+NORMALIZED_REQUEST_FIELDS = _bridge_components.NORMALIZED_REQUEST_FIELDS
+UPDATE_LINEAGE_FILENAME = _bridge_components.UPDATE_LINEAGE_FILENAME
+UPDATE_LINEAGE_MAX_BYTES = _bridge_components.UPDATE_LINEAGE_MAX_BYTES
+CURRENT_PRODUCT_DB_SCHEMA_VERSION = _bridge_components.CURRENT_PRODUCT_DB_SCHEMA_VERSION
+ACTIVE_STATUSES = _bridge_components.ACTIVE_STATUSES
+TERMINAL_STATUSES = _bridge_components.TERMINAL_STATUSES
+INACTIVE_STATUSES = _bridge_components.INACTIVE_STATUSES
+KNOWN_STATUSES = _bridge_components.KNOWN_STATUSES
+RECEIPT_STATUSES = _bridge_components.RECEIPT_STATUSES
+UNBOUND_STATUS_ALLOWED = _bridge_components.UNBOUND_STATUS_ALLOWED
+BridgeError = _bridge_components.BridgeError
+utcnow = _bridge_components.utcnow
+read_json_object = _bridge_components.read_json_object
+atomic_write_json = _bridge_components.atomic_write_json
+read_regular_text = _bridge_components.read_regular_text
+atomic_write_text = _bridge_components.atomic_write_text
+write_receipt = _bridge_components.write_receipt
+extract_active_request = _bridge_components.extract_active_request
+read_status = _bridge_components.read_status
+validate_completed_status = _bridge_components.validate_completed_status
+require_request_id = _bridge_components.require_request_id
+require_project_name = _bridge_components.require_project_name
+require_helper_image = _bridge_components.require_helper_image
+require_image_id = _bridge_components.require_image_id
+require_timeout = _bridge_components.require_timeout
+require_app_dir = _bridge_components.require_app_dir
+validate_receipt_binding = _bridge_components.validate_receipt_binding
+BridgeHandoffExecutor = _bridge_components.BridgeHandoffExecutor
+
+
+
+
+
 
 
 def inventory_bound_source_token(slot_id: str, inventory_sha256: str) -> str:
@@ -125,60 +132,7 @@ def inventory_bound_source_token(slot_id: str, inventory_sha256: str) -> str:
         ).encode("ascii")
     ).hexdigest()[:40]
 
-LEGACY_HISTORICAL_REQUEST_FIELDS = {
-    "schema_version",
-    "request_id",
-    "requested_at",
-    "requested_by",
-    "intent",
-    "source",
-    "confirmed",
-    "preflight_required",
-    "status_path",
-}
-LEGACY_SNAPSHOT_REQUEST_FIELDS = LEGACY_HISTORICAL_REQUEST_FIELDS | {
-    "apply_candidate",
-}
-SCHEMA_RETRY_REQUEST_FIELDS = LEGACY_HISTORICAL_REQUEST_FIELDS | {
-    "retry_of_request_id",
-    "migration_attempt_id",
-}
-CURRENT_SINGLE_REQUEST_FIELDS = {
-    "schema_version",
-    "document_type",
-    "request_id",
-    "submission_id",
-    "requested_at",
-    "updated_at",
-    "requested_by",
-    "intent",
-    "source",
-    "apply_candidate",
-    "confirmed",
-    "preflight_required",
-    "status_path",
-    "state",
-    "claimed_at",
-    "terminal",
-    "audit_event_id",
-}
-NORMALIZED_REQUEST_FIELDS = {
-    "schema_version",
-    "request_id",
-    "submission_id",
-    "requested_at",
-    "requested_by",
-    "intent",
-    "source",
-    "apply_candidate",
-    "confirmed",
-    "preflight_required",
-    "status_path",
-}
 
-UPDATE_LINEAGE_FILENAME = "km-vms-update-lineage.json"
-UPDATE_LINEAGE_MAX_BYTES = 128 * 1024
-CURRENT_PRODUCT_DB_SCHEMA_VERSION = 10
 
 
 def load_update_lineage() -> dict[str, Any]:
@@ -279,143 +233,18 @@ def load_update_lineage() -> dict[str, Any]:
 UPDATE_LINEAGE = load_update_lineage()
 SOURCE_TAG_COMMITS: dict[str, str] = dict(UPDATE_LINEAGE["tag_commits"])
 
-ACTIVE_STATUSES = {
-    "queued",
-    "starting_helper",
-    "preflight",
-    "acquire_source",
-    "downloading",
-    "extracting",
-    "validating_source",
-    "overlay",
-    "applying",
-    "compose_config",
-    "rebuilding",
-    "restarting",
-    "health_check",
-    "commit_verification",
-    "preparing",
-    "staging",
-    "activating",
-    "reconnecting",
-    "rolling_back",
-}
-TERMINAL_STATUSES = {
-    "completed",
-    "failed",
-    "failed_rolled_back",
-    "cancelled",
-    "blocked",
-}
-INACTIVE_STATUSES = {"idle", "unknown"}
-KNOWN_STATUSES = ACTIVE_STATUSES | TERMINAL_STATUSES | INACTIVE_STATUSES
-RECEIPT_STATUSES = {"waiting_for_terminal", "recreating", "completed", "failed"}
-UNBOUND_STATUS_ALLOWED = {"idle", "unknown", "blocked"}
 
 
-class BridgeError(RuntimeError):
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
 
 
-def utcnow() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def read_json_object(
-    path: Path,
-    *,
-    missing_ok: bool = False,
-    max_bytes: int = MAX_CONTROL_BYTES,
-) -> dict[str, Any] | None:
-    try:
-        if path.is_symlink():
-            raise BridgeError("control_file_invalid", "Update control data is not a regular file.")
-        if not path.exists():
-            if missing_ok:
-                return None
-            raise BridgeError("control_file_missing", "Required update control data is missing.")
-        if not path.is_file() or path.is_symlink():
-            raise BridgeError("control_file_invalid", "Update control data is not a regular file.")
-        if path.stat().st_size > max_bytes:
-            raise BridgeError("control_file_too_large", "Update control data exceeds its size limit.")
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except BridgeError:
-        raise
-    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
-        raise BridgeError("control_file_invalid", "Update control data is unavailable or invalid.") from exc
-    if not isinstance(payload, dict):
-        raise BridgeError("control_file_invalid", "Update control data must be a JSON object.")
-    return payload
 
 
-def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    rendered = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    if len(rendered.encode("utf-8")) > MAX_CONTROL_BYTES:
-        raise BridgeError("receipt_too_large", "Update-helper refresh receipt exceeds its size limit.")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with tmp.open("x", encoding="utf-8", newline="\n") as stream:
-            os.chmod(tmp, 0o600)
-            stream.write(rendered)
-            stream.flush()
-            os.fsync(stream.fileno())
-        tmp.replace(path)
-    except OSError as exc:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise BridgeError("receipt_write_failed", "Cannot persist update-helper refresh receipt.") from exc
 
 
-def read_regular_text(path: Path) -> str:
-    try:
-        if path.is_symlink() or not path.is_file():
-            raise BridgeError(
-                "archive_roots_override_invalid",
-                "Generated archive-roots Compose override is not a regular file.",
-            )
-        if path.stat().st_size > MAX_CONTROL_BYTES:
-            raise BridgeError(
-                "archive_roots_override_invalid",
-                "Generated archive-roots Compose override exceeds its size limit.",
-            )
-        return path.read_text(encoding="utf-8")
-    except BridgeError:
-        raise
-    except (OSError, UnicodeError) as exc:
-        raise BridgeError(
-            "archive_roots_override_invalid",
-            "Generated archive-roots Compose override is unavailable.",
-        ) from exc
 
 
-def atomic_write_text(path: Path, rendered: str) -> None:
-    if len(rendered.encode("utf-8")) > MAX_CONTROL_BYTES:
-        raise BridgeError(
-            "archive_roots_override_invalid",
-            "Generated archive-roots Compose override exceeds its size limit.",
-        )
-    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with tmp.open("x", encoding="utf-8", newline="\n") as stream:
-            os.chmod(tmp, 0o600)
-            stream.write(rendered)
-            stream.flush()
-            os.fsync(stream.fileno())
-        tmp.replace(path)
-    except OSError as exc:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise BridgeError(
-            "archive_roots_override_write_failed",
-            "Cannot normalize the generated archive-roots Compose override.",
-        ) from exc
 
 
 def _compose_yaml_quote(value: str) -> str:
@@ -563,130 +392,6 @@ def normalize_archive_roots_override(app_dir: Path) -> bool:
     return True
 
 
-def extract_active_request(
-    authority: dict[str, Any],
-    *,
-    request_id: str,
-) -> dict[str, Any]:
-    schema_version = authority.get("schema_version")
-    if type(schema_version) is int and schema_version == 1:
-        if frozenset(authority) not in {
-            frozenset(LEGACY_HISTORICAL_REQUEST_FIELDS),
-            frozenset(LEGACY_SNAPSHOT_REQUEST_FIELDS),
-            frozenset(SCHEMA_RETRY_REQUEST_FIELDS),
-        }:
-            raise BridgeError(
-                "source_handoff_authority_invalid",
-                "Legacy update request has an unsupported published shape.",
-            )
-        if authority.get("request_id") != request_id:
-            raise BridgeError(
-                "source_handoff_request_mismatch",
-                "Legacy update request does not match the active helper request.",
-            )
-        return authority
-    if type(schema_version) is int and schema_version == 3:
-        source = authority.get("source")
-        if (
-            set(authority) != CURRENT_SINGLE_REQUEST_FIELDS
-            or authority.get("document_type") != "update_apply_request"
-            or authority.get("request_id") != request_id
-            or authority.get("state") != "claimed"
-            or authority.get("terminal") is not None
-            or type(authority.get("submission_id")) is not str
-            or not SUBMISSION_ID_RE.fullmatch(authority["submission_id"])
-            or type(authority.get("claimed_at")) is not str
-            or not authority["claimed_at"]
-            or type(source) is not dict
-            or type(source.get("commit")) is not str
-            or not COMMIT_SHA_RE.fullmatch(source["commit"])
-        ):
-            raise BridgeError(
-                "source_handoff_authority_invalid",
-                "Current update admission is not an exact claimed request.",
-            )
-        return {
-            key: authority[key]
-            for key in NORMALIZED_REQUEST_FIELDS
-        } | {"schema_version": 2}
-    document_fields = {
-        "schema_version",
-        "document_type",
-        "current_submission_id",
-        "entries",
-        "updated_at",
-    }
-    if (
-        set(authority) != document_fields
-        or type(authority.get("schema_version")) is not int
-        or authority["schema_version"] != 2
-        or authority.get("document_type")
-        != "update_apply_admission"
-        or type(authority.get("entries")) is not list
-        or len(authority["entries"]) > MAX_LEGACY_ADMISSION_ENTRIES
-    ):
-        raise BridgeError(
-            "source_handoff_authority_invalid",
-            "Update admission authority has an unsupported shape.",
-        )
-    entry_fields = {
-        "submission_id",
-        "request_id",
-        "target_version",
-        "target_commit",
-        "requested_at",
-        "updated_at",
-        "state",
-        "request",
-        "audit",
-        "claimed_at",
-        "terminal",
-    }
-    matches = [
-        entry
-        for entry in authority["entries"]
-        if type(entry) is dict
-        and set(entry) == entry_fields
-        and entry.get("request_id") == request_id
-    ]
-    if len(matches) != 1:
-        raise BridgeError(
-            "source_handoff_authority_invalid",
-            "Active update admission is missing or ambiguous.",
-        )
-    entry = matches[0]
-    request = entry.get("request")
-    request_source = (
-        request.get("source")
-        if type(request) is dict
-        else None
-    )
-    entry_commit = entry.get("target_commit")
-    if (
-        authority.get("current_submission_id")
-        != entry.get("submission_id")
-        or type(entry.get("submission_id")) is not str
-        or not entry["submission_id"]
-        or entry.get("state") != "claimed"
-        or type(request) is not dict
-        or request.get("request_id") != request_id
-        or request.get("submission_id") != entry.get("submission_id")
-        or type(request.get("schema_version")) is not int
-        or request["schema_version"] != 2
-        or set(request) != NORMALIZED_REQUEST_FIELDS
-        or type(request_source) is not dict
-        or type(entry_commit) is not str
-        or not COMMIT_SHA_RE.fullmatch(entry_commit)
-        or type(request_source.get("commit")) is not str
-        or entry_commit.lower() != request_source["commit"].lower()
-        or type(entry.get("target_version")) is not str
-        or entry["target_version"] != request_source.get("version")
-    ):
-        raise BridgeError(
-            "source_handoff_authority_invalid",
-            "Active update admission bindings are contradictory.",
-        )
-    return request
 
 
 def capture_installed_source_identity(
@@ -5068,46 +4773,20 @@ def _run_permission_contract(
         )
 
 
+def _bridge_handoff_executor() -> BridgeHandoffExecutor:
+    return BridgeHandoffExecutor(
+        _run_permission_contract, bind_legacy_adopted_slot_as_active, capture_installed_source_identity, capture_slot_runtime_binding, load_slot_engine, load_source_bootstrap, normalize_archive_roots_override, prepare_legacy_adopted_slot, run_command, inspected_container_image,
+    )
+
+
 def _permission_gate_supports_contract(gate: Path) -> bool:
-    if gate.is_symlink() or not gate.is_file():
-        raise BridgeError(
-            "permission_gate_missing",
-            "Installed permission authority is unavailable.",
-        )
-    try:
-        return "--contract" in gate.read_text(
-            encoding="utf-8",
-            errors="strict",
-        )
-    except (OSError, UnicodeError) as exc:
-        raise BridgeError(
-            "permission_gate_invalid",
-            "Installed permission authority cannot be inspected.",
-        ) from exc
+    return _bridge_handoff_executor()._permission_gate_supports_contract(gate)
 
 
 def _installed_entry_supports_project_handoff(
     app_dir: Path,
 ) -> bool:
-    pointer = app_dir / "data/update-runtime/active"
-    update_script = app_dir / "scripts/update.sh"
-    try:
-        if pointer.is_symlink():
-            target = os.readlink(pointer)
-            if re.fullmatch(
-                r"slots/(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})/source",
-                target,
-            ):
-                update_script = app_dir / "data/update-runtime" / target / "scripts/update.sh"
-        if update_script.is_symlink() or not update_script.is_file():
-            return False
-        text = update_script.read_text(encoding="utf-8", errors="strict")
-    except (OSError, UnicodeError):
-        return False
-    return (
-        "resolved_project_name=" in text
-        and "KM_VMS_PROJECT_NAME=\"$PROJECT_NAME\"" in text
-    )
+    return _bridge_handoff_executor()._installed_entry_supports_project_handoff(app_dir)
 
 
 def classify_installed_update_contract(
@@ -5116,44 +4795,7 @@ def classify_installed_update_contract(
     *,
     engine: Any,
 ) -> str:
-    projection_path = (
-        app_dir
-        / "data/update-runtime/installed-projection/installed-slot.json"
-    )
-    if active is None:
-        if projection_path.exists() or projection_path.is_symlink():
-            raise BridgeError(
-                "installed_contract_unknown",
-                "Legacy root contradicts installed-slot projection evidence.",
-            )
-        return "legacy_root"
-
-    slot_id, active_source = active
-    gate = active_source / "scripts/km-vms-permission-gate.sh"
-    family = (
-        "current_contract_slot"
-        if _permission_gate_supports_contract(gate)
-        else "pre_contract_slot"
-    )
-    if projection_path.exists() or projection_path.is_symlink():
-        try:
-            projection = engine.validate_installed_slot_projection(app_dir)
-        except Exception as exc:
-            raise BridgeError(
-                getattr(exc, "code", "installed_projection_invalid"),
-                "Installed-slot projection contradicts the active slot.",
-            ) from exc
-        if projection.get("slot_id") != slot_id:
-            raise BridgeError(
-                "installed_projection_invalid",
-                "Installed-slot projection contradicts the active slot.",
-            )
-    elif family == "current_contract_slot":
-        raise BridgeError(
-            "installed_projection_missing",
-            "Current update contract requires installed-slot projection evidence.",
-        )
-    return family
+    return _bridge_handoff_executor().classify_installed_update_contract(app_dir, active, engine=engine)
 
 
 def install_stable_bootstrap_for_handoff(
@@ -5164,365 +4806,27 @@ def install_stable_bootstrap_for_handoff(
     active_source: Path | None,
     contract_family: str,
 ) -> Any:
-    """Perform the bounded pre-emergency-to-stable-bootstrap migration."""
-
-    target_gate = target_source_dir / "scripts/km-vms-permission-gate.sh"
-    _run_permission_contract(
-        target_gate,
-        target_source_dir,
-        contract="source",
-        action="check",
-    )
-    if contract_family == "current_contract_slot" and active_source is not None:
-        current_gate = active_source / "scripts/km-vms-permission-gate.sh"
-        _run_permission_contract(
-            current_gate,
-            active_source,
-            contract="source",
-            action="check",
-            compatibility=True,
-        )
-    elif contract_family == "pre_contract_slot" and active_source is not None:
-        # The immutable slot manifest/source identity is the bounded authority
-        # for this family.  Its historical gate may require owner-write access,
-        # so invoking it would either fail or force mutation of immutable source.
-        _permission_gate_supports_contract(
-            active_source / "scripts/km-vms-permission-gate.sh"
-        )
-    elif contract_family == "legacy_root" and active_source is None:
-        legacy_gate = app_dir / "scripts/km-vms-permission-gate.sh"
-        _run_permission_contract(
-            legacy_gate,
-            app_dir,
-            contract="legacy",
-            action="check",
-            compatibility=True,
-        )
-    else:
-        raise BridgeError(
-            "installed_contract_unknown",
-            "Installed update contract cannot be classified safely.",
-        )
-    try:
-        engine.ensure_layout(app_dir)
-    except Exception as exc:
-        raise BridgeError(
-            getattr(exc, "code", "slot_layout_invalid"),
-            "Canonical slot layout could not be prepared.",
-        ) from exc
-    _run_permission_contract(
-        target_gate,
-        app_dir,
-        contract="stable-prebootstrap",
-        action="fix",
-    )
-    bootstrap = load_source_bootstrap(target_source_dir)
-    try:
-        bootstrap.install_bundle(app_dir, target_source_dir)
-    except Exception as exc:
-        raise BridgeError(
-            getattr(exc, "code", "stable_bootstrap_install_failed"),
-            "Stable bootstrap migration failed.",
-        ) from exc
-    return bootstrap
+    return _bridge_handoff_executor().install_stable_bootstrap_for_handoff(app_dir, target_source_dir, engine=engine, active_source=active_source, contract_family=contract_family)
 
 
 def handoff(args: argparse.Namespace) -> int:
-    """Bind one admitted request to its exact current release."""
-
-    app_dir = require_app_dir(args.app_dir)
-    target_source_input = Path(args.target_source_dir)
-    try:
-        target_source_input.lstat()
-        target_source_dir = target_source_input.resolve(strict=True)
-    except OSError as exc:
-        raise BridgeError(
-            "target_source_invalid",
-            "The staged target source is unavailable or incomplete.",
-        ) from exc
-    if (
-        target_source_input.is_symlink()
-        or not target_source_dir.is_dir()
-        or target_source_dir.is_symlink()
-        or not (
-            target_source_dir / "release/km-vms-release.json"
-        ).is_file()
-    ):
-        raise BridgeError(
-            "target_source_invalid",
-            "The staged target source is unavailable or incomplete.",
-        )
-    request_id = require_request_id(args.request_id)
-    supplied_project_name = (
-        str(getattr(args, "project_name", None) or "").strip()
-        or os.getenv("KM_VMS_PROJECT_NAME", "").strip()
-    )
-    if (
-        not supplied_project_name
-        and not _installed_entry_supports_project_handoff(app_dir)
-    ):
-        raise BridgeError(
-            "project_identity_recovery_required",
-            "The frozen installed updater cannot receive a resolved Compose project identity before its remaining Compose calls.",
-        )
-    target_bootstrap = load_source_bootstrap(target_source_dir)
-    try:
-        project_name = require_project_name(
-            target_bootstrap.read_project_name(
-                app_dir,
-                supplied_project_name or None,
-            )
-        )
-    except Exception as exc:
-        raise BridgeError(
-            getattr(exc, "code", "project_identity_invalid"),
-            "Compose project identity could not be resolved safely.",
-        ) from exc
-    engine = load_slot_engine(target_source_dir)
-    try:
-        active = engine.read_active_slot(app_dir)
-    except Exception as exc:
-        raise BridgeError(
-            getattr(exc, "code", "active_pointer_invalid"),
-            "Active release pointer is invalid.",
-        ) from exc
-    contract_family = classify_installed_update_contract(
-        app_dir,
-        active,
-        engine=engine,
-    )
-    bootstrap = install_stable_bootstrap_for_handoff(
-        app_dir,
-        target_source_dir,
-        engine=engine,
-        active_source=(active[1] if active is not None else None),
-        contract_family=contract_family,
-    )
-    archive_override_changed = normalize_archive_roots_override(app_dir)
-    terminal_request: dict[str, Any] | None = None
-    if bool(getattr(args, "terminal", False)):
-        trusted_commit = str(
-            getattr(args, "trusted_commit", None) or ""
-        ).lower()
-        declared_version = str(
-            getattr(args, "declared_version", None) or ""
-        )
-        if (
-            not COMMIT_SHA_RE.fullmatch(trusted_commit)
-            or not re.fullmatch(
-                r"[A-Za-z0-9][A-Za-z0-9._+-]{0,79}",
-                declared_version,
-            )
-        ):
-            raise BridgeError(
-                "terminal_request_invalid",
-                "Terminal update target identity is invalid.",
-            )
-        terminal_request = {
-            "schema_version": 1,
-            "request_id": request_id,
-            "requested_at": utcnow(),
-            "intent": "apply_update",
-            "confirmed": True,
-            "source": {
-                "version": declared_version,
-                "commit": trusted_commit,
-            },
-        }
-    if active is not None:
-        previous_slot_id, active_source = active
-        installed_identity = capture_installed_source_identity(
-            app_dir,
-            request_id=request_id,
-            target_source_dir=target_source_dir,
-            installed_source_dir=active_source,
-            request_override=terminal_request,
-        )
-        previous_binding = capture_slot_runtime_binding(
-            app_dir,
-            project_name,
-            previous_slot_id,
-            engine=engine,
-            require_http=True,
-            require_helper_image=True,
-        )
-        slot_result = previous_slot_id
-        handoff_kind = "active_slot"
-    else:
-        installed_identity = capture_installed_source_identity(
-            app_dir,
-            request_id=request_id,
-            target_source_dir=target_source_dir,
-            request_override=terminal_request,
-        )
-        slot_result = prepare_legacy_adopted_slot(
-            app_dir=app_dir,
-            target_source_dir=target_source_dir,
-            request_id=request_id,
-            installed_identity=installed_identity,
-            project_name=project_name,
-        )
-        bind_legacy_adopted_slot_as_active(
-            app_dir=app_dir,
-            slot_id=slot_result,
-            engine=engine,
-        )
-        previous_binding = capture_slot_runtime_binding(
-            app_dir,
-            project_name,
-            slot_result,
-            engine=engine,
-            require_http=True,
-            require_helper_image=True,
-        )
-        handoff_kind = "legacy_adoption"
-    try:
-        engine.publish_installed_slot_projection(
-            app_dir,
-            binding=previous_binding,
-        )
-        _run_permission_contract(
-            target_source_dir / "scripts/km-vms-permission-gate.sh",
-            app_dir,
-            contract="stable-runtime",
-            action="fix",
-        )
-        bootstrap.reconcile_restart_policies(
-            app_dir,
-            project_name,
-        )
-    except Exception as exc:
-        raise BridgeError(
-            getattr(exc, "code", "stable_runtime_migration_failed"),
-            "Stable runtime migration did not converge.",
-        ) from exc
-    print("schema_handoff=PASS")
-    print(f"schema_handoff_request_id={request_id}")
-    print(
-        "archive_roots_override="
-        + ("normalized" if archive_override_changed else "unchanged")
-    )
-    print(f"handoff_kind={handoff_kind}")
-    print(f"update_contract_family={contract_family}")
-    print(f"resolved_project_name={project_name}")
-    print(
-        "activation_owner="
-        + ("terminal_lock" if terminal_request is not None else "update_helper")
-    )
-    print(f"previous_slot={slot_result}")
-    if handoff_kind == "legacy_adoption":
-        print(f"adopted_slot={slot_result}")
-    return 0
+    return _bridge_handoff_executor().handoff(args)
 
 
-def read_status(path: Path) -> tuple[str | None, str, dict[str, Any]] | None:
-    payload = read_json_object(path, missing_ok=True)
-    if payload is None:
-        return None
-    if type(payload.get("schema_version")) is not int or payload.get("schema_version") != 1:
-        raise BridgeError("status_schema_invalid", "Update status has an unsupported schema version.")
-    request_id = payload.get("request_id")
-    status = payload.get("status")
-    if not isinstance(status, str) or status not in KNOWN_STATUSES:
-        raise BridgeError("status_value_invalid", "Update status has an unsupported top-level state.")
-    if request_id is None and status in UNBOUND_STATUS_ALLOWED:
-        return None, status, payload
-    if isinstance(request_id, str) and REQUEST_ID_RE.fullmatch(request_id):
-        return request_id, status, payload
-    if status in TERMINAL_STATUSES or status in INACTIVE_STATUSES:
-        # A pre-canonical historical terminal record is inert. It must not
-        # prevent a normal restart after this bridge is first installed, but
-        # it can never be accepted by a coordinator waiting for a canonical
-        # active request because its returned identity is deliberately None.
-        return None, status, payload
-    raise BridgeError("status_request_invalid", "Update status has no canonical request identity.")
 
 
-def validate_completed_status(payload: dict[str, Any], request_id: str) -> None:
-    if payload.get("request_id") != request_id or payload.get("status") != "completed":
-        raise BridgeError("terminal_status_invalid", "Terminal update completion is not bound to the expected request.")
-    expected_commit = payload.get("expected_commit")
-    installed_commit = payload.get("installed_commit")
-    if (
-        payload.get("commit_verified") is not True
-        or not isinstance(expected_commit, str)
-        or not COMMIT_SHA_RE.fullmatch(expected_commit)
-        or not isinstance(installed_commit, str)
-        or not COMMIT_SHA_RE.fullmatch(installed_commit)
-        or expected_commit.lower() != installed_commit.lower()
-    ):
-        raise BridgeError("terminal_commit_invalid", "Terminal update completion lacks matching verified commit evidence.")
-    terminal_timestamp = payload.get("finished_at")
-    if terminal_timestamp is None:
-        # Legacy helpers use updated_at as the completion timestamp and
-        # synthesize finished_at only in their immutable history item.
-        terminal_timestamp = payload.get("updated_at")
-    try:
-        parsed_terminal_timestamp = datetime.fromisoformat(
-            str(terminal_timestamp).replace("Z", "+00:00")
-        )
-    except (TypeError, ValueError):
-        parsed_terminal_timestamp = None
-    if (
-        not isinstance(terminal_timestamp, str)
-        or not terminal_timestamp
-        or len(terminal_timestamp) > 80
-        or parsed_terminal_timestamp is None
-        or parsed_terminal_timestamp.tzinfo is None
-    ):
-        raise BridgeError("terminal_timestamp_invalid", "Terminal update completion lacks a finish timestamp.")
 
 
-def require_request_id(value: str) -> str:
-    if not REQUEST_ID_RE.fullmatch(value):
-        raise BridgeError("request_id_invalid", "A canonical update request id is required.")
-    return value
 
 
-def require_project_name(value: str) -> str:
-    if not PROJECT_NAME_RE.fullmatch(value):
-        raise BridgeError("project_name_invalid", "A safe Docker Compose project name is required.")
-    return value
 
 
-def require_helper_image(value: str) -> str:
-    if not HELPER_IMAGE_RE.fullmatch(value):
-        raise BridgeError("helper_image_invalid", "A safe target update-helper image reference is required.")
-    return value
 
 
-def require_image_id(value: str) -> str:
-    normalized = value.strip().lower()
-    if not IMAGE_ID_RE.fullmatch(normalized):
-        raise BridgeError("image_id_invalid", "Target update-helper image identity is invalid.")
-    return normalized
 
 
-def require_timeout(value: int) -> int:
-    if value < MIN_TIMEOUT_SECONDS or value > MAX_TIMEOUT_SECONDS:
-        raise BridgeError(
-            "timeout_invalid",
-            f"Refresh timeout must be between {MIN_TIMEOUT_SECONDS} and {MAX_TIMEOUT_SECONDS} seconds.",
-        )
-    return value
 
 
-def require_app_dir(value: str) -> Path:
-    if not value or "\x00" in value or "\n" in value or "\r" in value or ":" in value:
-        raise BridgeError("app_dir_invalid", "A safe absolute host app directory is required.")
-    app_dir = Path(value)
-    if not app_dir.is_absolute() or not app_dir.is_dir():
-        raise BridgeError("app_dir_invalid", "The host app directory is not mounted or is not absolute.")
-    for relative in (
-        "docker-compose.yml",
-        ".env",
-        "scripts/km-vms-permission-gate.sh",
-        "scripts/km-vms-update-helper-bridge.py",
-    ):
-        candidate = app_dir / relative
-        if not candidate.is_file() or candidate.is_symlink():
-            raise BridgeError("app_dir_incomplete", "The host app directory is missing required bridge files.")
-    return app_dir
 
 
 def run_command(
@@ -5611,40 +4915,8 @@ def inspected_container_image(name_or_id: str) -> str | None:
     return require_image_id(result.stdout.strip())
 
 
-def write_receipt(
-    receipt_file: Path,
-    *,
-    request_id: str,
-    status: str,
-    expected_image_id: str,
-    message: str,
-    helper_container_id: str | None = None,
-) -> None:
-    atomic_write_json(
-        receipt_file,
-        {
-            "schema_version": 1,
-            "request_id": request_id,
-            "status": status,
-            "expected_image_id": expected_image_id,
-            "helper_container_id": helper_container_id,
-            "updated_at": utcnow(),
-            "message": message,
-        },
-    )
 
 
-def validate_receipt_binding(receipt_file: Path, request_id: str, expected_image_id: str) -> None:
-    payload = read_json_object(receipt_file, missing_ok=True)
-    if payload is None or payload.get("request_id") != request_id:
-        return
-    status = payload.get("status")
-    if status not in RECEIPT_STATUSES:
-        raise BridgeError("receipt_status_invalid", "Existing helper refresh receipt has an invalid status.")
-    if payload.get("expected_image_id") != expected_image_id:
-        raise BridgeError("receipt_image_mismatch", "Existing helper refresh receipt names another target image.")
-    if status == "completed":
-        raise BridgeError("receipt_state_contradiction", "Helper refresh is completed while the same update remains active.")
 
 
 def run_target_permission_gate(app_dir: Path) -> None:
@@ -5721,75 +4993,7 @@ def schedule_refresh(
     bridge_script: Path | None = None,
     target_slot: str | None = None,
 ) -> str:
-    coordinator_name = f"km-vms-helper-refresh-{request_id.removeprefix('update-').lower()}"
-    existing_image_id = inspected_container_image(coordinator_name)
-    if existing_image_id is not None:
-        if existing_image_id != expected_image_id:
-            raise BridgeError("coordinator_image_mismatch", "Existing helper refresh coordinator uses another image.")
-        return "already_scheduled"
-
-    script_path = bridge_script or (
-        app_dir / "scripts/km-vms-update-helper-bridge.py"
-    )
-    if (
-        not script_path.is_absolute()
-        or script_path.is_symlink()
-        or not script_path.is_file()
-        or not script_path.resolve().is_relative_to(app_dir.resolve())
-    ):
-        raise BridgeError(
-            "coordinator_bridge_invalid",
-            "Helper refresh bridge is unavailable or unsafe.",
-        )
-    command = [
-        "docker",
-        "run",
-        "-d",
-        "--rm",
-        "--name",
-        coordinator_name,
-        "-v",
-        f"{app_dir}:{app_dir}",
-        "-v",
-        "/var/run/docker.sock:/var/run/docker.sock",
-        "-w",
-        str(app_dir),
-        "--entrypoint",
-        "python3",
-        expected_image_id,
-        "-B",
-        str(script_path),
-        "refresh",
-        "--app-dir",
-        str(app_dir),
-        "--project-name",
-        project_name,
-        "--helper-image",
-        helper_image,
-        "--request-id",
-        request_id,
-        "--expected-image-id",
-        expected_image_id,
-        "--timeout-seconds",
-        str(timeout_seconds),
-    ]
-    if target_slot is not None:
-        command.extend(["--target-slot", target_slot])
-    result = run_command(
-        command,
-        timeout=60,
-        error_code="coordinator_start_failed",
-        error_message="Cannot start the detached update-helper refresh coordinator.",
-        check=False,
-    )
-    if result.returncode == 0:
-        return "scheduled"
-
-    # A concurrent bootstrap may have won the atomic Docker container-name race.
-    existing_image_id = inspected_container_image(coordinator_name)
-    if existing_image_id == expected_image_id:
-        return "already_scheduled"
-    raise BridgeError("coordinator_start_failed", "Cannot start the detached update-helper refresh coordinator.")
+    return _bridge_handoff_executor().schedule_refresh(app_dir=app_dir, project_name=project_name, helper_image=helper_image, request_id=request_id, expected_image_id=expected_image_id, timeout_seconds=timeout_seconds, bridge_script=bridge_script, target_slot=target_slot)
 
 
 def bootstrap(args: argparse.Namespace) -> int:

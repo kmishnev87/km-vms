@@ -654,7 +654,7 @@ release_identity_python() {
   "$docker_bin" run --rm --network none \
     -v "$APP_DIR:/km-vms:ro" \
     -w /km-vms \
-    python:3.12-slim \
+    python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159 \
     python "$@"
 }
 

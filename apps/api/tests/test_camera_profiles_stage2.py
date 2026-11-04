@@ -23,9 +23,10 @@ class FakeMedia:
             token=payload["ConfigurationToken"],
             Encoding="H264",
             H264Profile="High",
+            H264=obj(H264Profile="High", GovLength=50),
             Quality=4,
             Resolution=obj(Width=2560, Height=1440),
-            RateControl=obj(FrameRateLimit=25, BitrateLimit=4096, EncodingInterval=50),
+            RateControl=obj(FrameRateLimit=25, BitrateLimit=4096, EncodingInterval=1),
         )
 
     def GetStreamUri(self, payload):

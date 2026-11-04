@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -6,16 +7,31 @@ import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanc
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
-const read = (relative) => fs.readFileSync(resolve(root, relative), "utf8");
+const read = (relative) => readProductSourceFile(resolve(root, relative), "utf8");
 const exists = (relative) => fs.existsSync(resolve(root, relative));
 
 const globals = read("app/globals.css");
 const expectedImports = [
   "styles/00-base-layout-nav.css",
   "styles/10-dashboard-auth-setup.css",
-  "styles/20-settings-maintenance.css",
+  "styles/20-01-settings-forms-users.css",
+  "styles/20-02-maintenance-backup-update.css",
+  "styles/20-03-maintenance-restore.css",
+  "styles/20-04-maintenance-progress-details.css",
+  "styles/20-05-settings-security-format.css",
+  "styles/20-06-dashboard-card-tail.css",
+  "styles/20-07-maintenance-final-layout.css",
+  "styles/20-08-settings-recording-format.css",
   "styles/30-system-status-apk.css",
-  "styles/40-storage-records-shared.css",
+  "styles/40-01-storage-base.css",
+  "styles/40-02-page-layout-shared.css",
+  "styles/40-03-recordings-toolbar.css",
+  "styles/40-04-chronology-help.css",
+  "styles/40-05-recordings-viewer.css",
+  "styles/40-06-controls-modals-shared.css",
+  "styles/40-07-storage-refinements.css",
+  "styles/40-08-operation-feedback-shared.css",
+  "styles/40-09-storage-migration-integrity.css",
   "styles/50-cameras-shared-modals.css",
   "styles/60-responsive-shared.css",
   "styles/70-live.css",

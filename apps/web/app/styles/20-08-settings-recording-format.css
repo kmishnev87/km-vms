@@ -1,0 +1,7 @@
+.settingsRecordingFormatChoice .operationFeedbackBusy { display: none; }
+.settingsRecordingFormatChoice .operationFeedbackFooter button { min-width: 130px; }
+.settingsRecordingFormatChoiceNote { height: 4.5em; overflow: auto; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+
+@media (max-width: 640px) {
+  .settingsRecordingFormatChoice .operationFeedbackFooter button { min-width: 0; }
+}

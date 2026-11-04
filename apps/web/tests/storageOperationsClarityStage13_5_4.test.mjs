@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -5,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const read = (file) => fs.readFileSync(resolve(__dirname, "..", file), "utf8");
+const read = (file) => readProductSourceFile(resolve(__dirname, "..", file), "utf8");
 
 const storagePage = read("app/storage/page.js");
 const settingsPage = read("app/settings/page.js");

@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import { readI18nSource } from "./helpers/readI18nSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -6,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
-const read = (file) => fs.readFileSync(resolve(root, file), "utf8");
+const read = (file) => readProductSourceFile(resolve(root, file), "utf8");
 const { archiveRootCleanupCapabilityModel } = await import(
   pathToFileURL(resolve(root, "lib/storageOperations.js"))
 );

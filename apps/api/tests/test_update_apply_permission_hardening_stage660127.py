@@ -7,6 +7,7 @@ import shutil
 import stat
 import subprocess
 import uuid
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,9 @@ PRIVILEGED_EXECUTABLES = (
     "scripts/km-vms-release-cycle.sh",
     "scripts/km-vms-adopt-release-identity.sh",
     "scripts/km-vms-restart.sh",
+    "scripts/km-vms-update-launcher.sh",
+    "scripts/km-vms-bootstrap.py",
+    "scripts/km-vms-bootstrap-dispatch.sh",
     "scripts/km-vms-storage-apply.sh",
     "scripts/km-vms-storage-discovery.sh",
     "scripts/km-vms-permission-gate.sh",
@@ -33,6 +37,21 @@ PRIVILEGED_EXECUTABLES = (
 )
 
 PRIVILEGED_NON_EXECUTABLES = (
+    "scripts/km_vms_slot_core/__init__.py",
+    "scripts/km_vms_slot_core/contracts.py",
+    "scripts/km_vms_slot_core/description.py",
+    "scripts/km_vms_slot_core/inventory.py",
+    "scripts/km_vms_slot_core/state.py",
+    "scripts/km_vms_bridge/__init__.py",
+    "scripts/km_vms_bridge/contracts.py",
+    "scripts/km_vms_bridge/state.py",
+    "scripts/km_vms_bridge/requests.py",
+    "scripts/km_vms_bridge/handoff.py",
+    "scripts/km_vms_helper_handlers/__init__.py",
+    "scripts/km_vms_helper_handlers/update.py",
+    "scripts/km_vms_helper_handlers/restore.py",
+    "scripts/km_vms_helper_handlers/rollback.py",
+    "scripts/km_vms_helper_handlers/restore_executor.py",
     "docker-compose.yml",
     "apps/update-helper/Dockerfile",
     "release/km-vms-update-lineage.json",
@@ -110,7 +129,27 @@ def permission_tree(tmp_path: Path) -> Path:
     return app
 
 
+@pytest.mark.parametrize("package", ["km_vms_slot_core", "km_vms_bridge", "km_vms_helper_handlers"])
+def test_imported_authority_rejects_missing_world_writable_and_symlink_parent(tmp_path: Path, package: str) -> None:
+    app = permission_tree(tmp_path)
+    assert_pass(run_gate(app, "--fix"))
+    module = app / "scripts" / package / "__init__.py"
+    module.chmod(0o666)
+    assert run_gate(app).returncode != 0
+    assert_pass(run_gate(app, "--fix"))
+    module.unlink()
+    assert run_gate(app).returncode != 0
+    write(module)
+    module.chmod(0o664)
+    directory = module.parent
+    original = directory.with_name(package + "-original")
+    directory.rename(original)
+    directory.symlink_to(original, target_is_directory=True)
+    assert run_gate(app).returncode != 0
+
+
 def safe_acl_tool_dir(base: Path) -> Path:
+    # Nested imported authority is covered by the same bounded gate.
     tool_dir = base / ".safe-acl-tools"
     tool_dir.mkdir(exist_ok=True)
     write_executable(
@@ -458,7 +497,7 @@ def test_existing_contract_allows_target_only_files_to_be_absent(
     )
 
     assert_pass(result)
-    assert "permission_contract=existing" in result.stdout
+    assert "permission_contract=legacy" in result.stdout
 
 
 def test_target_contract_requires_update_helper_bridge(tmp_path: Path) -> None:
@@ -510,7 +549,7 @@ def test_permission_scope_and_update_integrations_are_narrow() -> None:
     assert "helper_acl_runtime_missing" not in bridge
 
     assert "\npreflight_permission_policy\n" in update
-    assert "\napply_permission_policy\n" in update
+    assert "apply_permission_policy" in update
     assert "\napply_permission_policy\n" in install
     assert "def check_permission_policy()" in release_cycle
 
@@ -538,11 +577,13 @@ def test_bridge_runs_permission_fix_and_check_before_activation(
 ) -> None:
     bridge = load_bridge()
     app = permission_tree(tmp_path)
-    calls: list[str] = []
+    calls = []
+    monkeypatch.setattr(bridge, "load_stable_bootstrap", lambda _app: SimpleNamespace(resolve_authority=lambda *args, **kwargs: ('test-slot', app, {})))
 
     def fake_run_command(args, **_kwargs):
-        action = args[2]
-        calls.append(action)
+        action = "--check"
+        contract = args[args.index("--contract") + 1]
+        calls.append((contract, action))
         return subprocess.CompletedProcess(
             args,
             0,
@@ -550,7 +591,7 @@ def test_bridge_runs_permission_fix_and_check_before_activation(
                 "permission_gate=PASS\n"
                 f"permission_action={action.removeprefix('--')}\n"
                 f"permission_app_dir={app}\n"
-                "permission_contract=target\n"
+                f"permission_contract={contract}\n"
             ),
             "",
         )
@@ -559,7 +600,7 @@ def test_bridge_runs_permission_fix_and_check_before_activation(
 
     bridge.run_target_permission_gate(app)
 
-    assert calls == ["--fix", "--check"]
+    assert calls == [("source", "--check"), ("stable-runtime", "--check")], "immutable source is checked, never repaired after activation"
 
 
 def test_bridge_does_not_publish_fix_pass_when_followup_check_fails(
@@ -569,9 +610,10 @@ def test_bridge_does_not_publish_fix_pass_when_followup_check_fails(
 ) -> None:
     bridge = load_bridge()
     app = permission_tree(tmp_path)
+    monkeypatch.setattr(bridge, "load_stable_bootstrap", lambda _app: SimpleNamespace(resolve_authority=lambda *args, **kwargs: ('test-slot', app, {})))
 
     def fake_run_command(args, **_kwargs):
-        action = args[2]
+        action = "--check"
         if action == "--check":
             return subprocess.CompletedProcess(args, 1, "", "check failed\n")
         return subprocess.CompletedProcess(
@@ -601,6 +643,8 @@ def test_v0718_post_overlay_handoff_accepts_host_managed_acl(
 ) -> None:
     bridge = load_bridge()
     app = permission_tree(tmp_path)
+    monkeypatch.setattr(bridge, "load_stable_bootstrap", lambda _app: SimpleNamespace(resolve_authority=lambda *args, **kwargs: ('test-slot', app, {})))
+    assert_pass(run_gate(app, "--fix"))
     shutil.copyfile(GATE, app / "scripts/km-vms-permission-gate.sh")
     shutil.copyfile(
         ROOT / "scripts/km-vms-update-helper-bridge.py",
@@ -628,6 +672,7 @@ def test_v0718_post_overlay_handoff_accepts_host_managed_acl(
 
     def write_json(path: Path, payload: dict) -> None:
         write(path, json.dumps(payload, ensure_ascii=False) + "\n")
+        path.chmod(0o600)  # Control authority is private even under the fixture's permissive umask.
 
     write_json(
         app / "data/update-control/update-request.json",
@@ -682,7 +727,9 @@ def test_v0718_post_overlay_handoff_accepts_host_managed_acl(
         ),
     )
 
-    bridge.run_target_permission_gate(app)
+    # This legacy source fixture has no active immutable deployment. Exercise
+    # its real source ACL gate, not the unrelated stable-runtime authority gate.
+    assert_pass(run_gate(app, use_safe_getfacl=False))
     bridge.capture_installed_source_identity(
         app,
         request_id=request_id,

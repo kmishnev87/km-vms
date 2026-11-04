@@ -368,7 +368,8 @@ def test_frozen_entry_without_project_return_channel_stops_before_mutation(
         mutated = True
         raise AssertionError("handoff must stop before mutation")
 
-    monkeypatch.setattr(bridge, "require_app_dir", lambda _value: app)
+    handoff_module = sys.modules[bridge.BridgeHandoffExecutor.__module__]
+    monkeypatch.setattr(handoff_module, "require_app_dir", lambda _value: app)
     monkeypatch.setattr(bridge, "load_source_bootstrap", mutation_guard)
 
     with pytest.raises(bridge.BridgeError) as captured:
@@ -711,7 +712,7 @@ def stop_before_mutation(_app_dir, _target_source_dir, *, engine, active_source,
         "fixture_handoff_reached",
         "The isolated fixture reached the current target handoff boundary.",
     )
-bridge.install_stable_bootstrap_for_handoff = stop_before_mutation
+bridge.BridgeHandoffExecutor.install_stable_bootstrap_for_handoff = staticmethod(stop_before_mutation)
 error_output = io.StringIO()
 with contextlib.redirect_stderr(error_output):
     exit_code = bridge.main(sys.argv[2:])

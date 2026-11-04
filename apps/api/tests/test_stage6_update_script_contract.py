@@ -1502,7 +1502,7 @@ def test_docs_describe_terminal_update_without_future_stage_claims():
 
 def test_update_permission_bridge_separates_existing_and_target_gates_without_state_reset():
     script = read("scripts/update.sh")
-    bridge = read("scripts/km-vms-update-helper-bridge.py")
+    bridge = read("scripts/km-vms-update-helper-bridge.py") + read("scripts/km_vms_bridge/handoff.py")
 
     assert '--contract source --check --app-dir "$PRODUCT_SOURCE_DIR"' not in script
     assert '--contract stable-runtime --fix --app-dir "$APP_DIR"' not in script
@@ -1598,7 +1598,10 @@ def test_permission_gate_splits_source_stable_and_bounded_legacy_contracts():
 
 
 def test_update_helper_bridge_uses_bounded_json_and_exact_target_image_activation():
-    bridge = read("scripts/km-vms-update-helper-bridge.py")
+    bridge = read("scripts/km-vms-update-helper-bridge.py") + "\n".join(
+        read("scripts/km_vms_bridge/" + name)
+        for name in ("contracts.py", "state.py", "requests.py", "handoff.py")
+    )
     compose = read("docker-compose.yml")
 
     assert "MAX_CONTROL_BYTES = 64 * 1024" in bridge
@@ -1636,8 +1639,8 @@ def test_update_helper_bridge_uses_bounded_json_and_exact_target_image_activatio
     assert "run-role update-helper-bootstrap" in compose
     assert "km-vms-bootstrap-dispatch.sh" in compose
     assert (
-        'expected_image_id,\n        "-B",\n        str(script_path),'
-        in bridge
+        'expected_image_id,"-B",str(script_path),'
+        in "".join(bridge.split())
     )
 
 

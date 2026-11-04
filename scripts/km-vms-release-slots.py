@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -25,277 +26,107 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
-RUNTIME_SCHEMA_VERSION = 1
-MANIFEST_SCHEMA_VERSION = 1
-CANDIDATE_SCHEMA_VERSION = 1
-EVIDENCE_SCHEMA_VERSION = 1
-JOURNAL_SCHEMA_VERSION = 1
-
-RUNTIME_RELATIVE = Path("data/update-runtime")
-SLOTS_RELATIVE = RUNTIME_RELATIVE / "slots"
-STAGING_RELATIVE = RUNTIME_RELATIVE / "staging"
-ACTIVE_RELATIVE = RUNTIME_RELATIVE / "active"
-JOURNAL_RELATIVE = Path("data/update-control/activation-journal.json")
-INITIAL_MATERIALIZATION_RELATIVE = Path(
-    "data/install-control/initial-slot-materialization.json"
-)
-INSTALLED_PROJECTION_RELATIVE = (
-    RUNTIME_RELATIVE / "installed-projection/installed-slot.json"
-)
-MANIFEST_NAME = "slot-manifest.json"
-CANDIDATE_NAME = "candidate-state.json"
-RUNTIME_OVERRIDE_NAME = "docker-compose.runtime-override.yml"
-SOURCE_DIR_NAME = "source"
-
-PRODUCT_PATHS = (
-    "apps",
-    "deploy",
-    "docs",
-    "release",
-    "scripts",
-    "docker-compose.yml",
-    "docker-compose.pytest.yml",
-    ".dockerignore",
-    ".env.example",
-    ".gitattributes",
-    ".gitignore",
-    ".km-vms-release.json",
-    ".km-vms-source.json",
-)
-TRUSTED_REQUIRED_SOURCE_PATHS = (
-    "apps/api",
-    "apps/web",
-    "apps/recorder",
-    "apps/update-helper",
-    "deploy/nginx/default.conf",
-    "release/km-vms-release.json",
-    "scripts/install.sh",
-    "scripts/km-vms-bootstrap.py",
-    "scripts/km-vms-bootstrap-dispatch.sh",
-    "scripts/km-vms-compose-common.sh",
-    "scripts/km-vms-restart.sh",
-    "scripts/km-vms-storage-apply.sh",
-    "scripts/km-vms-setup-activation-helper.sh",
-    "scripts/km-vms-permission-gate.sh",
-    "scripts/km-vms-release-identity.py",
-    "scripts/km-vms-update-helper-bridge.py",
-    "scripts/km-vms-release-slots.py",
-    "docker-compose.yml",
-)
-LEGACY_REQUIRED_SOURCE_PATHS = (
-    "apps/api",
-    "apps/web",
-    "apps/recorder",
-    "apps/update-helper",
-    "deploy/nginx/default.conf",
-    "release/km-vms-release.json",
-    "scripts/install.sh",
-    "scripts/km-vms-compose-common.sh",
-    "scripts/update.sh",
-    "docker-compose.yml",
-)
-ADOPTED_REQUIRED_IMAGE_SERVICES = frozenset(
-    {
-        "api",
-        "recorder",
-        "web",
-        "nginx",
-        "update-helper",
-    }
-)
-TARGET_REQUIRED_IMAGE_SERVICES = ADOPTED_REQUIRED_IMAGE_SERVICES | frozenset(
-    {
-        "schema-update",
-        "update-status-reader",
-        "update-retry-admission",
-    }
-)
-TARGET_BUILT_IMAGE_SERVICES = frozenset(
-    {
-        "schema-update",
-        "api",
-        "recorder",
-        "web",
-        "update-helper",
-        "update-status-reader",
-        "update-retry-admission",
-    }
-)
-REQUIRED_ADOPTED_COMPOSE_SERVICES = ADOPTED_REQUIRED_IMAGE_SERVICES | frozenset(
-    {"postgres", "redis"}
-)
-
-KNOWN_COMPOSE_SERVICES = frozenset(
-    {
-        "postgres",
-        "redis",
-        "update-helper-bootstrap",
-        "update-status-reader",
-        "update-retry-admission",
-        "schema-update",
-        "api",
-        "setup-helper",
-        "update-helper",
-        "recorder",
-        "web",
-        "nginx",
-    }
-)
-
-COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
-REQUEST_RE = re.compile(r"^(?:update|stage609|terminal)-[0-9a-f]{32}$")
-VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$")
-PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$")
-SERVICE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
-IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-TRUSTED_SLOT_RE = re.compile(r"^release-[0-9a-f]{40}$")
-ADOPTED_SLOT_RE = re.compile(r"^adopted-[0-9a-f]{64}$")
-INITIAL_SLOT_RE = re.compile(r"^initial-[0-9a-f]{64}$")
-SLOT_RE = re.compile(
-    r"^(?:release-[0-9a-f]{40}|adopted-[0-9a-f]{64}|initial-[0-9a-f]{64})$"
-)
-MACHINE_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{0,79}$")
-RELEASE_NOTE_LOCALES = frozenset({"en", "ru", "zh-CN"})
-RELEASE_NOTE_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
-RELEASE_NOTE_SENSITIVE_RE = re.compile(
-    r"(github_pat_|ghp_|Bearer\s+|rtsp://[^@\s]+@|"
-    r"postgresql://[^:\s]+:[^@\s]+@|"
-    r"-----BEGIN [^-]*PRIVATE KEY-----)",
-    re.IGNORECASE,
-)
-
-ACTIVATION_PHASES = frozenset(
-    {
-        "target_prepared",
-        "quiescing",
-        "schema_preparing",
-        "activating",
-        "verifying_target",
-        "committing_target",
-        "rolling_back",
-        "completed",
-        "failed_rolled_back",
-        "blocked",
-    }
-)
-TERMINAL_ACTIVATION_PHASES = frozenset(
-    {"completed", "failed_rolled_back", "blocked"}
-)
-ACTIVATION_TRANSITIONS = {
-    "target_prepared": {
-        "quiescing",
-        "schema_preparing",
-        "activating",
-        "rolling_back",
-        "blocked",
-    },
-    "quiescing": {"schema_preparing", "activating", "rolling_back", "blocked"},
-    "schema_preparing": {"activating", "rolling_back", "blocked"},
-    "activating": {"verifying_target", "rolling_back", "blocked"},
-    "verifying_target": {
-        "committing_target",
-        "rolling_back",
-        "blocked",
-    },
-    "committing_target": {"completed", "rolling_back", "blocked"},
-    "rolling_back": {"failed_rolled_back", "blocked"},
-    "completed": set(),
-    "failed_rolled_back": set(),
-    "blocked": {"rolling_back"},
-}
-
-MAX_INVENTORY_ENTRIES = 200_000
-MAX_INVENTORY_BYTES = 4 * 1024 * 1024 * 1024
-MAX_JSON_BYTES = 1024 * 1024
-MAX_LEGACY_PYTHON_CACHE_ENTRIES = 10_000
-
-
-def _source_path_excluded(relative: Path) -> bool:
-    normalized = relative.as_posix()
-    if normalized == ".env.example":
-        return False
-    parts = relative.parts
-    blocked_directories = {
-        ".git",
-        "data",
-        "logs",
-        "log",
-        "node_modules",
-        ".next",
-        "__pycache__",
-        ".pytest_cache",
-        "coverage",
-        "dist",
-        "build",
-        "service-artifacts",
-        "service_artifacts",
-        ".ssh",
-    }
-    if any(part in blocked_directories for part in parts):
-        return True
-    if any(part == ".env" or part.startswith(".env.") for part in parts):
-        return True
-    name = relative.name
-    lowered = name.lower()
-    if lowered in {"id_rsa", "id_ed25519"}:
-        return True
-    if lowered.endswith(
-        (
-            ".zip",
-            ".tar",
-            ".tar.gz",
-            ".tgz",
-            ".rar",
-            ".7z",
-            ".pem",
-            ".key",
-            ".p12",
-            ".pfx",
-            ".crt",
-            ".csr",
-            ".token",
-            ".secret",
-            ".dump",
-            ".sql",
-            ".sqlite",
-            ".db",
-        )
-    ):
-        return True
-    if "credential" in lowered or "password" in lowered:
-        return True
-    if (
-        lowered.endswith(("token.txt", "secret.txt", "secret.json"))
-        or lowered.startswith(
-            ("github-token", "auth-token", "authorization-token")
-        )
-    ):
-        return True
-    return False
-
-
-class SlotError(RuntimeError):
-    def __init__(self, code: str, message: str):
-        self.code = code
-        super().__init__(message)
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def canonical_json(payload: Any) -> bytes:
+def _load_slot_components():
+    directory = Path(__file__).resolve().parent / "km_vms_slot_core"
+    name = "_kmvms_slots_" + hashlib.sha256(str(directory).encode()).hexdigest()[:24]
+    spec = importlib.util.spec_from_file_location(
+        name, directory / "__init__.py", submodule_search_locations=[str(directory)],
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("slot_components_unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
     try:
-        return json.dumps(
-            payload,
-            ensure_ascii=True,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
-        ).encode("utf-8")
-    except (TypeError, ValueError, RecursionError) as exc:
-        raise SlotError("json_invalid", "Evidence cannot be serialized safely.") from exc
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
+    return module
+
+
+_slot_components = _load_slot_components()
+RUNTIME_SCHEMA_VERSION = _slot_components.RUNTIME_SCHEMA_VERSION
+MANIFEST_SCHEMA_VERSION = _slot_components.MANIFEST_SCHEMA_VERSION
+CANDIDATE_SCHEMA_VERSION = _slot_components.CANDIDATE_SCHEMA_VERSION
+EVIDENCE_SCHEMA_VERSION = _slot_components.EVIDENCE_SCHEMA_VERSION
+JOURNAL_SCHEMA_VERSION = _slot_components.JOURNAL_SCHEMA_VERSION
+RUNTIME_RELATIVE = _slot_components.RUNTIME_RELATIVE
+SLOTS_RELATIVE = _slot_components.SLOTS_RELATIVE
+STAGING_RELATIVE = _slot_components.STAGING_RELATIVE
+ACTIVE_RELATIVE = _slot_components.ACTIVE_RELATIVE
+JOURNAL_RELATIVE = _slot_components.JOURNAL_RELATIVE
+INITIAL_MATERIALIZATION_RELATIVE = _slot_components.INITIAL_MATERIALIZATION_RELATIVE
+INSTALLED_PROJECTION_RELATIVE = _slot_components.INSTALLED_PROJECTION_RELATIVE
+MANIFEST_NAME = _slot_components.MANIFEST_NAME
+CANDIDATE_NAME = _slot_components.CANDIDATE_NAME
+RUNTIME_OVERRIDE_NAME = _slot_components.RUNTIME_OVERRIDE_NAME
+SOURCE_DIR_NAME = _slot_components.SOURCE_DIR_NAME
+PRODUCT_PATHS = _slot_components.PRODUCT_PATHS
+TRUSTED_REQUIRED_SOURCE_PATHS = _slot_components.TRUSTED_REQUIRED_SOURCE_PATHS
+LEGACY_REQUIRED_SOURCE_PATHS = _slot_components.LEGACY_REQUIRED_SOURCE_PATHS
+ADOPTED_REQUIRED_IMAGE_SERVICES = _slot_components.ADOPTED_REQUIRED_IMAGE_SERVICES
+TARGET_REQUIRED_IMAGE_SERVICES = _slot_components.TARGET_REQUIRED_IMAGE_SERVICES
+TARGET_BUILT_IMAGE_SERVICES = _slot_components.TARGET_BUILT_IMAGE_SERVICES
+REQUIRED_ADOPTED_COMPOSE_SERVICES = _slot_components.REQUIRED_ADOPTED_COMPOSE_SERVICES
+KNOWN_COMPOSE_SERVICES = _slot_components.KNOWN_COMPOSE_SERVICES
+COMMIT_RE = _slot_components.COMMIT_RE
+DIGEST_RE = _slot_components.DIGEST_RE
+REQUEST_RE = _slot_components.REQUEST_RE
+VERSION_RE = _slot_components.VERSION_RE
+PROJECT_RE = _slot_components.PROJECT_RE
+SERVICE_RE = _slot_components.SERVICE_RE
+IMAGE_ID_RE = _slot_components.IMAGE_ID_RE
+TRUSTED_SLOT_RE = _slot_components.TRUSTED_SLOT_RE
+ADOPTED_SLOT_RE = _slot_components.ADOPTED_SLOT_RE
+INITIAL_SLOT_RE = _slot_components.INITIAL_SLOT_RE
+SLOT_RE = _slot_components.SLOT_RE
+MACHINE_CODE_RE = _slot_components.MACHINE_CODE_RE
+RELEASE_NOTE_LOCALES = _slot_components.RELEASE_NOTE_LOCALES
+RELEASE_NOTE_CONTROL_RE = _slot_components.RELEASE_NOTE_CONTROL_RE
+RELEASE_NOTE_SENSITIVE_RE = _slot_components.RELEASE_NOTE_SENSITIVE_RE
+ACTIVATION_PHASES = _slot_components.ACTIVATION_PHASES
+TERMINAL_ACTIVATION_PHASES = _slot_components.TERMINAL_ACTIVATION_PHASES
+ACTIVATION_TRANSITIONS = _slot_components.ACTIVATION_TRANSITIONS
+MAX_INVENTORY_ENTRIES = _slot_components.MAX_INVENTORY_ENTRIES
+MAX_INVENTORY_BYTES = _slot_components.MAX_INVENTORY_BYTES
+MAX_JSON_BYTES = _slot_components.MAX_JSON_BYTES
+MAX_LEGACY_PYTHON_CACHE_ENTRIES = _slot_components.MAX_LEGACY_PYTHON_CACHE_ENTRIES
+SlotError = _slot_components.SlotError
+utc_now = _slot_components.utc_now
+canonical_json = _slot_components.canonical_json
+_validated_release_note_fields = _slot_components._validated_release_note_fields
+validate_compose_services = _slot_components.validate_compose_services
+validate_compose_evidence = _slot_components.validate_compose_evidence
+validate_image_evidence = _slot_components.validate_image_evidence
+validate_health_evidence = _slot_components.validate_health_evidence
+validate_manifest = _slot_components.validate_manifest
+_payload_digest = _slot_components._payload_digest
+validate_activation_slot_binding = _slot_components.validate_activation_slot_binding
+validate_activation_journal = _slot_components.validate_activation_journal
+_source_path_excluded = _slot_components._source_path_excluded
+_safe_relative = _slot_components._safe_relative
+_hash_file = _slot_components._hash_file
+product_inventory = _slot_components.product_inventory
+_copy_product_source = _slot_components._copy_product_source
+SlotStateStore = _slot_components.SlotStateStore
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def _fsync_directory(path: Path) -> None:
@@ -504,303 +335,14 @@ def require_slot_id(value: str, *, target: bool = False) -> str:
     return normalized
 
 
-def _safe_relative(relative: str) -> Path:
-    path = Path(relative)
-    if (
-        not relative
-        or path.is_absolute()
-        or ".." in path.parts
-        or path.as_posix() != relative
-    ):
-        raise SlotError("product_path_invalid", "Product inventory path is unsafe.")
-    return path
 
 
-def _hash_file(path: Path) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    try:
-        with path.open("rb") as stream:
-            while True:
-                chunk = stream.read(1024 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > MAX_INVENTORY_BYTES:
-                    raise SlotError(
-                        "inventory_too_large",
-                        "Product source inventory exceeds its byte bound.",
-                    )
-                digest.update(chunk)
-    except SlotError:
-        raise
-    except OSError as exc:
-        raise SlotError("inventory_read_failed", "Product source file cannot be read.") from exc
-    return digest.hexdigest(), size
 
 
-def product_inventory(
-    root: Path,
-    *,
-    required_paths: Sequence[str] = TRUSTED_REQUIRED_SOURCE_PATHS,
-) -> dict[str, Any]:
-    try:
-        root = root.resolve(strict=True)
-    except OSError as exc:
-        raise SlotError("source_unavailable", "Product source root is unavailable.") from exc
-    if not root.is_dir():
-        raise SlotError("source_unavailable", "Product source root is not a directory.")
-    for relative in required_paths:
-        path = root / _safe_relative(relative)
-        if not path.exists() or path.is_symlink():
-            raise SlotError(
-                "source_incomplete",
-                f"Required product source path is missing or unsafe: {relative}",
-            )
-
-    entries: list[dict[str, Any]] = []
-    total_bytes = 0
-
-    def add_entry(entry: dict[str, Any]) -> None:
-        if len(entries) >= MAX_INVENTORY_ENTRIES:
-            raise SlotError(
-                "inventory_too_large",
-                "Product source inventory exceeds its entry bound.",
-            )
-        entries.append(entry)
-
-    for relative_text in PRODUCT_PATHS:
-        relative = _safe_relative(relative_text)
-        if _source_path_excluded(relative):
-            continue
-        start = root / relative
-        try:
-            start_info = start.lstat()
-        except FileNotFoundError:
-            continue
-        if stat.S_ISLNK(start_info.st_mode):
-            raise SlotError("source_symlink_forbidden", "Product source contains a symlink.")
-        if stat.S_ISREG(start_info.st_mode):
-            file_digest, file_size = _hash_file(start)
-            total_bytes += file_size
-            if total_bytes > MAX_INVENTORY_BYTES:
-                raise SlotError(
-                    "inventory_too_large",
-                    "Product source inventory exceeds its byte bound.",
-                )
-            add_entry(
-                {
-                    "path": relative.as_posix(),
-                    "type": "file",
-                    "mode": stat.S_IMODE(start_info.st_mode) & ~0o222,
-                    "size": file_size,
-                    "sha256": file_digest,
-                }
-            )
-            continue
-        if not stat.S_ISDIR(start_info.st_mode):
-            raise SlotError(
-                "source_special_file_forbidden",
-                "Product source contains a non-regular filesystem object.",
-            )
-        for current, dirnames, filenames in os.walk(start, topdown=True, followlinks=False):
-            current_path = Path(current)
-            current_info = current_path.lstat()
-            if stat.S_ISLNK(current_info.st_mode) or not stat.S_ISDIR(current_info.st_mode):
-                raise SlotError("source_symlink_forbidden", "Product source contains an unsafe directory.")
-            current_relative = current_path.relative_to(root).as_posix()
-            add_entry(
-                {
-                    "path": current_relative,
-                    "type": "directory",
-                    "mode": stat.S_IMODE(current_info.st_mode) & ~0o222,
-                }
-            )
-            dirnames[:] = sorted(
-                name
-                for name in dirnames
-                if not _source_path_excluded(
-                    (current_path / name).relative_to(root)
-                )
-            )
-            filenames = sorted(
-                name
-                for name in filenames
-                if not _source_path_excluded(
-                    (current_path / name).relative_to(root)
-                )
-            )
-            for name in list(dirnames):
-                child = current_path / name
-                child_info = child.lstat()
-                if stat.S_ISLNK(child_info.st_mode):
-                    raise SlotError("source_symlink_forbidden", "Product source contains a symlink.")
-                if not stat.S_ISDIR(child_info.st_mode):
-                    raise SlotError(
-                        "source_special_file_forbidden",
-                        "Product source contains an unsafe directory entry.",
-                    )
-            for name in filenames:
-                child = current_path / name
-                child_info = child.lstat()
-                if stat.S_ISLNK(child_info.st_mode):
-                    raise SlotError("source_symlink_forbidden", "Product source contains a symlink.")
-                if not stat.S_ISREG(child_info.st_mode):
-                    raise SlotError(
-                        "source_special_file_forbidden",
-                        "Product source contains a non-regular file.",
-                    )
-                file_digest, file_size = _hash_file(child)
-                total_bytes += file_size
-                if total_bytes > MAX_INVENTORY_BYTES:
-                    raise SlotError(
-                        "inventory_too_large",
-                        "Product source inventory exceeds its byte bound.",
-                    )
-                add_entry(
-                    {
-                        "path": child.relative_to(root).as_posix(),
-                        "type": "file",
-                        "mode": stat.S_IMODE(child_info.st_mode) & ~0o222,
-                        "size": file_size,
-                        "sha256": file_digest,
-                    }
-                )
-
-    entries.sort(key=lambda item: (item["path"], item["type"]))
-    return {
-        "schema_version": 1,
-        "sha256": hashlib.sha256(canonical_json(entries)).hexdigest(),
-        "entry_count": len(entries),
-        "file_count": sum(item["type"] == "file" for item in entries),
-        "total_bytes": total_bytes,
-    }
 
 
-def _copy_product_source(source: Path, destination: Path) -> None:
-    destination.mkdir(mode=0o700, parents=True)
-
-    def ignored(current: str, names: list[str]) -> set[str]:
-        current_path = Path(current)
-        return {
-            name
-            for name in names
-            if _source_path_excluded(
-                (current_path / name).relative_to(source)
-            )
-        }
-
-    for relative_text in PRODUCT_PATHS:
-        relative = _safe_relative(relative_text)
-        if _source_path_excluded(relative):
-            continue
-        source_path = source / relative
-        try:
-            info = source_path.lstat()
-        except FileNotFoundError:
-            continue
-        destination_path = destination / relative
-        if stat.S_ISLNK(info.st_mode):
-            raise SlotError("source_symlink_forbidden", "Product source contains a symlink.")
-        try:
-            if stat.S_ISDIR(info.st_mode):
-                shutil.copytree(
-                    source_path,
-                    destination_path,
-                    # Preserve a raced-in symlink as a symlink so the mandatory
-                    # post-copy inventory rejects it instead of following it.
-                    symlinks=True,
-                    copy_function=shutil.copy2,
-                    ignore=ignored,
-                )
-            elif stat.S_ISREG(info.st_mode):
-                destination_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source_path, destination_path)
-            else:
-                raise SlotError(
-                    "source_special_file_forbidden",
-                    "Product source contains a non-regular filesystem object.",
-                )
-        except SlotError:
-            raise
-        except OSError as exc:
-            raise SlotError(
-                "source_copy_failed",
-                "Product source could not be materialized in release staging.",
-            ) from exc
 
 
-def _validated_release_note_fields(
-    descriptor: dict[str, Any],
-) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-
-    def text(value: Any, *, maximum: int, allow_empty: bool = False) -> str:
-        if type(value) is not str:
-            raise SlotError(
-                "release_descriptor_invalid",
-                "Trusted target release notes are invalid.",
-            )
-        normalized = value.strip()
-        if (
-            (not normalized and not allow_empty)
-            or len(normalized) > maximum
-            or RELEASE_NOTE_CONTROL_RE.search(normalized)
-            or RELEASE_NOTE_SENSITIVE_RE.search(normalized)
-        ):
-            raise SlotError(
-                "release_descriptor_invalid",
-                "Trusted target release notes are invalid.",
-            )
-        return normalized
-
-    def entries(value: Any) -> list[str]:
-        if type(value) is not list or len(value) > 20:
-            raise SlotError(
-                "release_descriptor_invalid",
-                "Trusted target release changelog is invalid.",
-            )
-        return [text(item, maximum=180) for item in value]
-
-    for key, maximum in (("title", 160), ("summary", 800)):
-        if key in descriptor:
-            rendered = text(
-                descriptor[key],
-                maximum=maximum,
-                allow_empty=True,
-            )
-            if rendered:
-                result[key] = rendered
-    if "changelog" in descriptor:
-        result["changelog"] = entries(descriptor["changelog"])
-    for key, maximum in (
-        ("title_i18n", 160),
-        ("summary_i18n", 800),
-    ):
-        if key not in descriptor:
-            continue
-        value = descriptor[key]
-        if type(value) is not dict or set(value) != RELEASE_NOTE_LOCALES:
-            raise SlotError(
-                "release_descriptor_invalid",
-                "Trusted target release note locales are invalid.",
-            )
-        result[key] = {
-            locale: text(value[locale], maximum=maximum)
-            for locale in ("en", "ru", "zh-CN")
-        }
-    if "changelog_i18n" in descriptor:
-        value = descriptor["changelog_i18n"]
-        if type(value) is not dict or set(value) != RELEASE_NOTE_LOCALES:
-            raise SlotError(
-                "release_descriptor_invalid",
-                "Trusted target changelog locales are invalid.",
-            )
-        result["changelog_i18n"] = {
-            locale: entries(value[locale])
-            for locale in ("en", "ru", "zh-CN")
-        }
-    return result
 
 
 def _validate_release_descriptor(
@@ -1205,20 +747,6 @@ def stage_initial(
     }
 
 
-def validate_compose_services(value: Any) -> list[str]:
-    if (
-        type(value) is not list
-        or not 1 <= len(value) <= 64
-        or any(type(item) is not str or not SERVICE_RE.fullmatch(item) for item in value)
-        or value != sorted(set(value))
-        or not REQUIRED_ADOPTED_COMPOSE_SERVICES.issubset(value)
-        or not set(value).issubset(KNOWN_COMPOSE_SERVICES)
-    ):
-        raise SlotError(
-            "compose_services_invalid",
-            "Compose service evidence is incomplete or contains an unknown service.",
-        )
-    return list(value)
 
 
 def _yaml_volume(source: Path, target: str, *, read_only: bool = False) -> str:
@@ -1382,231 +910,12 @@ def prepare_adopted_runtime_override(
     }
 
 
-def validate_compose_evidence(value: Any) -> dict[str, Any]:
-    expected = {
-        "schema_version",
-        "project_name",
-        "project_directory",
-        "captured_plan_sha256",
-        "slot_plan_sha256",
-        "archive_override_attached",
-        "archive_override_sha256",
-        "runtime_override_sha256",
-        "shared_root_contract",
-        "services",
-    }
-    if (
-        type(value) is not dict
-        or set(value) != expected
-        or value.get("schema_version") != EVIDENCE_SCHEMA_VERSION
-        or type(value.get("project_name")) is not str
-        or not PROJECT_RE.fullmatch(value["project_name"])
-        or value.get("project_directory") != SOURCE_DIR_NAME
-        or type(value.get("captured_plan_sha256")) is not str
-        or not DIGEST_RE.fullmatch(value["captured_plan_sha256"])
-        or type(value.get("slot_plan_sha256")) is not str
-        or not DIGEST_RE.fullmatch(value["slot_plan_sha256"])
-        or type(value.get("archive_override_attached")) is not bool
-        or value.get("shared_root_contract") != "stable_app_dir_v1"
-    ):
-        raise SlotError("compose_evidence_invalid", "Compose evidence is invalid.")
-    validate_compose_services(value.get("services"))
-    archive_digest = value.get("archive_override_sha256")
-    if value["archive_override_attached"]:
-        if type(archive_digest) is not str or not DIGEST_RE.fullmatch(archive_digest):
-            raise SlotError("compose_evidence_invalid", "Archive-root Compose evidence is invalid.")
-    elif archive_digest is not None:
-        raise SlotError("compose_evidence_invalid", "Absent archive override has contradictory evidence.")
-    runtime_digest = value.get("runtime_override_sha256")
-    if runtime_digest is not None and (
-        type(runtime_digest) is not str or not DIGEST_RE.fullmatch(runtime_digest)
-    ):
-        raise SlotError(
-            "compose_evidence_invalid",
-            "Slot runtime override evidence is invalid.",
-        )
-    return json.loads(json.dumps(value))
 
 
-def validate_image_evidence(value: Any) -> dict[str, Any]:
-    if (
-        type(value) is not dict
-        or set(value) != {"schema_version", "services"}
-        or value.get("schema_version") != EVIDENCE_SCHEMA_VERSION
-        or type(value.get("services")) is not dict
-        or len(value["services"]) > 32
-    ):
-        raise SlotError("image_evidence_invalid", "Immutable image evidence is incomplete.")
-    normalized: dict[str, Any] = {"schema_version": 1, "services": {}}
-    for service, item in sorted(value["services"].items()):
-        if (
-            type(service) is not str
-            or not SERVICE_RE.fullmatch(service)
-            or type(item) is not dict
-            or set(item)
-            != {"image_id", "source_image_ref", "immutable_image_ref"}
-            or type(item.get("image_id")) is not str
-            or not IMAGE_ID_RE.fullmatch(item["image_id"])
-            or any(
-                type(item.get(key)) is not str
-                or not 1 <= len(item[key]) <= 240
-                or any(char in item[key] for char in "\r\n\x00")
-                for key in ("source_image_ref", "immutable_image_ref")
-            )
-        ):
-            raise SlotError("image_evidence_invalid", "Immutable image evidence is invalid.")
-        normalized["services"][service] = dict(item)
-    return normalized
 
 
-def validate_health_evidence(value: Any) -> dict[str, Any]:
-    if (
-        type(value) is not dict
-        or set(value)
-        != {
-            "schema_version",
-            "status",
-            "api_visible_identity_sha256",
-            "core_services",
-        }
-        or value.get("schema_version") != EVIDENCE_SCHEMA_VERSION
-        or value.get("status") != "healthy"
-        or type(value.get("api_visible_identity_sha256")) is not str
-        or not DIGEST_RE.fullmatch(value["api_visible_identity_sha256"])
-        or type(value.get("core_services")) is not list
-        or sorted(value["core_services"]) != ["api", "nginx", "recorder", "web"]
-    ):
-        raise SlotError("health_evidence_invalid", "Pre-update core health evidence is invalid.")
-    return json.loads(json.dumps(value))
 
 
-def validate_manifest(value: Any, *, expected_slot_id: str | None = None) -> dict[str, Any]:
-    expected = {
-        "schema_version",
-        "kind",
-        "slot_id",
-        "declared_identity",
-        "official_source_match",
-        "source_inventory",
-        "compose_evidence",
-        "image_evidence",
-        "pre_update_health",
-        "prepared_at",
-    }
-    if (
-        type(value) is not dict
-        or set(value) != expected
-        or value.get("schema_version") != MANIFEST_SCHEMA_VERSION
-        or value.get("kind")
-        not in {
-            "trusted_release",
-            "adopted_pre_update_snapshot",
-            "initial_install_snapshot",
-        }
-        or type(value.get("slot_id")) is not str
-        or not SLOT_RE.fullmatch(value["slot_id"])
-        or (expected_slot_id is not None and value["slot_id"] != expected_slot_id)
-        or type(value.get("declared_identity")) is not dict
-        or set(value["declared_identity"]) != {"version", "commit"}
-        or type(value["declared_identity"].get("version")) is not str
-        or not VERSION_RE.fullmatch(value["declared_identity"]["version"])
-        or (
-            value["declared_identity"].get("commit") is not None
-            and (
-                type(value["declared_identity"]["commit"]) is not str
-                or not COMMIT_RE.fullmatch(
-                    value["declared_identity"]["commit"]
-                )
-            )
-        )
-        or type(value.get("official_source_match")) is not bool
-        or type(value.get("source_inventory")) is not dict
-        or set(value["source_inventory"])
-        != {"schema_version", "sha256", "entry_count", "file_count", "total_bytes"}
-        or value["source_inventory"].get("schema_version") != 1
-        or type(value["source_inventory"].get("sha256")) is not str
-        or not DIGEST_RE.fullmatch(value["source_inventory"]["sha256"])
-        or any(
-            type(value["source_inventory"].get(key)) is not int
-            or value["source_inventory"][key] < 0
-            for key in ("entry_count", "file_count", "total_bytes")
-        )
-        or type(value.get("prepared_at")) is not str
-        or not value["prepared_at"]
-    ):
-        raise SlotError("slot_manifest_invalid", "Immutable slot manifest is invalid.")
-    if value["kind"] == "trusted_release":
-        if (
-            not TRUSTED_SLOT_RE.fullmatch(value["slot_id"])
-            or value["slot_id"].removeprefix("release-")
-            != value["declared_identity"]["commit"]
-            or value["official_source_match"] is not True
-            or value.get("pre_update_health") is not None
-        ):
-            raise SlotError("slot_manifest_invalid", "Trusted release manifest is contradictory.")
-        required_images = TARGET_REQUIRED_IMAGE_SERVICES
-    elif value["kind"] == "adopted_pre_update_snapshot":
-        if (
-            not ADOPTED_SLOT_RE.fullmatch(value["slot_id"])
-            or value["slot_id"].removeprefix("adopted-")
-            != value["source_inventory"]["sha256"]
-            or value["official_source_match"] is not False
-        ):
-            raise SlotError("slot_manifest_invalid", "Adopted snapshot manifest is contradictory.")
-        validate_health_evidence(value.get("pre_update_health"))
-        required_images = ADOPTED_REQUIRED_IMAGE_SERVICES
-    else:
-        if (
-            not INITIAL_SLOT_RE.fullmatch(value["slot_id"])
-            or value["declared_identity"]["commit"] is not None
-            or value["official_source_match"] is not False
-            or value.get("pre_update_health") is not None
-        ):
-            raise SlotError(
-                "slot_manifest_invalid",
-                "Initial install manifest is contradictory.",
-            )
-        required_images = TARGET_REQUIRED_IMAGE_SERVICES
-    compose = validate_compose_evidence(value.get("compose_evidence"))
-    if value["kind"] in {"trusted_release", "initial_install_snapshot"}:
-        if compose["runtime_override_sha256"] is not None:
-            raise SlotError(
-                "slot_manifest_invalid",
-                "Non-legacy slot has an unexpected runtime override.",
-            )
-    elif (
-        value["kind"] == "adopted_pre_update_snapshot"
-        and compose["runtime_override_sha256"] is None
-    ):
-        raise SlotError(
-            "slot_manifest_invalid",
-            "Adopted snapshot lacks its stable-root runtime override evidence.",
-        )
-    images = validate_image_evidence(value.get("image_evidence"))
-    if not required_images.issubset(images["services"]):
-        raise SlotError(
-            "slot_manifest_invalid",
-            "Release slot lacks required immutable image evidence.",
-        )
-    for service, item in images["services"].items():
-        if not item["immutable_image_ref"].endswith(f":{value['slot_id']}"):
-            raise SlotError(
-                "slot_manifest_invalid",
-                "Release slot image evidence is not namespaced by its immutable slot ID.",
-            )
-        if (
-            value["kind"] in {"trusted_release", "initial_install_snapshot"}
-            and service in TARGET_BUILT_IMAGE_SERVICES
-            and not item["source_image_ref"].endswith(f":{value['slot_id']}")
-        ):
-            raise SlotError(
-                "slot_manifest_invalid",
-                "Target build evidence used a mutable image tag.",
-            )
-    forbidden_roles = {"status", "current", "previous", "candidate", "active"}
-    if forbidden_roles & set(value):
-        raise SlotError("slot_manifest_role_forbidden", "Slot manifest contains a mutable role.")
-    return json.loads(json.dumps(value))
 
 
 def _freeze_slot_tree(slot_root: Path) -> None:
@@ -2062,8 +1371,6 @@ def finalize_candidate(
     }
 
 
-def _payload_digest(payload: Any) -> str:
-    return hashlib.sha256(canonical_json(payload)).hexdigest()
 
 
 def build_activation_slot_binding(
@@ -2125,91 +1432,6 @@ def build_activation_slot_binding(
     }
 
 
-def validate_activation_slot_binding(value: Any) -> dict[str, Any]:
-    expected = {
-        "slot_id",
-        "kind",
-        "official_source_match",
-        "version",
-        "commit",
-        "manifest_sha256",
-        "inventory_sha256",
-        "compose_plan_sha256",
-        "archive_override_sha256",
-        "image_evidence_sha256",
-        "api_identity_sha256",
-    }
-    if (
-        type(value) is not dict
-        or set(value) != expected
-        or type(value.get("slot_id")) is not str
-        or not SLOT_RE.fullmatch(value["slot_id"])
-        or value.get("kind")
-        not in {
-            "trusted_release",
-            "adopted_pre_update_snapshot",
-            "initial_install_snapshot",
-        }
-        or type(value.get("official_source_match")) is not bool
-        or type(value.get("version")) is not str
-        or not VERSION_RE.fullmatch(value["version"])
-        or (
-            value.get("commit") is not None
-            and (
-                type(value["commit"]) is not str
-                or not COMMIT_RE.fullmatch(value["commit"])
-            )
-        )
-        or any(
-            type(value.get(key)) is not str
-            or not DIGEST_RE.fullmatch(value[key])
-            for key in (
-                "manifest_sha256",
-                "inventory_sha256",
-                "compose_plan_sha256",
-                "image_evidence_sha256",
-                "api_identity_sha256",
-            )
-        )
-        or (
-            value.get("archive_override_sha256") is not None
-            and (
-                type(value["archive_override_sha256"]) is not str
-                or not DIGEST_RE.fullmatch(
-                    value["archive_override_sha256"]
-                )
-            )
-        )
-    ):
-        raise SlotError(
-            "activation_slot_binding_invalid",
-            "Activation slot binding is invalid.",
-        )
-    if (
-        value["kind"] == "trusted_release"
-        and (
-            not TRUSTED_SLOT_RE.fullmatch(value["slot_id"])
-            or value["official_source_match"] is not True
-        )
-    ) or (
-        value["kind"] == "adopted_pre_update_snapshot"
-        and (
-            not ADOPTED_SLOT_RE.fullmatch(value["slot_id"])
-            or value["official_source_match"] is not False
-        )
-    ) or (
-        value["kind"] == "initial_install_snapshot"
-        and (
-            not INITIAL_SLOT_RE.fullmatch(value["slot_id"])
-            or value["official_source_match"] is not False
-            or value["commit"] is not None
-        )
-    ):
-        raise SlotError(
-            "activation_slot_binding_invalid",
-            "Activation slot binding contradicts slot identity.",
-        )
-    return json.loads(json.dumps(value))
 
 
 def publish_installed_slot_projection(
@@ -2282,339 +1504,28 @@ def publish_installed_slot_projection(
     return payload
 
 
+def _slot_state_store() -> SlotStateStore:
+    return SlotStateStore(
+        ensure_layout, resolve_app_dir, require_slot_id, require_request_id, validate_slot, _converge_active_slot_legacy_python_cache, _fsync_directory, read_json, atomic_write_json,
+    )
+
+
 def validate_installed_slot_projection(
     app_dir: Path,
     *,
     require_active: bool = True,
 ) -> dict[str, Any]:
-    app_dir = resolve_app_dir(app_dir)
-    path = app_dir / INSTALLED_PROJECTION_RELATIVE
-    payload = read_json(path)
-    assert payload is not None
-    expected = {
-        "schema_version",
-        "document_type",
-        "slot_id",
-        "kind",
-        "identity_mode",
-        "version",
-        "commit",
-        "inventory_sha256",
-        "manifest_sha256",
-        "active_slot_id",
-        "binding",
-        "published_at",
-    }
-    if (
-        set(payload) != expected
-        or payload.get("schema_version") != 1
-        or payload.get("document_type") != "installed_slot_projection"
-        or type(payload.get("slot_id")) is not str
-        or not SLOT_RE.fullmatch(payload["slot_id"])
-        or payload.get("active_slot_id") != payload["slot_id"]
-        or type(payload.get("published_at")) is not str
-        or not payload["published_at"]
-    ):
-        raise SlotError(
-            "installed_projection_invalid",
-            "Installed-slot projection is invalid.",
-        )
-    binding = validate_activation_slot_binding(payload.get("binding"))
-    if binding["slot_id"] != payload["slot_id"]:
-        raise SlotError(
-            "installed_projection_invalid",
-            "Installed-slot projection binding is contradictory.",
-        )
-    manifest = validate_slot(
-        ensure_layout(app_dir)["slots"] / payload["slot_id"],
-        expected_slot_id=payload["slot_id"],
-    )
-    expected_mode = (
-        "inventory_bound"
-        if manifest["kind"] == "initial_install_snapshot"
-        else "trusted_release"
-        if manifest["kind"] == "trusted_release"
-        else "adopted_inventory"
-    )
-    if (
-        payload["kind"] != manifest["kind"]
-        or payload["identity_mode"] != expected_mode
-        or payload["version"] != manifest["declared_identity"]["version"]
-        or payload["commit"] != manifest["declared_identity"]["commit"]
-        or payload["inventory_sha256"] != manifest["source_inventory"]["sha256"]
-        or payload["manifest_sha256"] != _payload_digest(manifest)
-        or binding["manifest_sha256"] != payload["manifest_sha256"]
-        or binding["inventory_sha256"] != payload["inventory_sha256"]
-    ):
-        raise SlotError(
-            "installed_projection_stale",
-            "Installed-slot projection no longer matches its immutable slot.",
-        )
-    if require_active:
-        active = read_active_slot(app_dir)
-        if active is None or active[0] != payload["slot_id"]:
-            raise SlotError(
-                "installed_projection_stale",
-                "Installed-slot projection does not match the active pointer.",
-            )
-    return json.loads(json.dumps(payload))
+    return _slot_state_store().validate_installed_slot_projection(app_dir, require_active=require_active)
 
 
-def validate_activation_journal(value: Any) -> dict[str, Any]:
-    expected = {
-        "schema_version",
-        "document_type",
-        "request_id",
-        "generation",
-        "phase",
-        "previous",
-        "target",
-        "schema",
-        "pointer_slot_id",
-        "target_verified",
-        "previous_verified",
-        "rollback_trigger",
-        "failure_category",
-        "created_at",
-        "updated_at",
-        "terminal_at",
-    }
-    if (
-        type(value) is not dict
-        or set(value) != expected
-        or value.get("schema_version") != JOURNAL_SCHEMA_VERSION
-        or value.get("document_type") != "release_slot_activation"
-        or type(value.get("request_id")) is not str
-        or not REQUEST_RE.fullmatch(value["request_id"])
-        or type(value.get("generation")) is not int
-        or isinstance(value["generation"], bool)
-        or value["generation"] < 1
-        or value.get("phase") not in ACTIVATION_PHASES
-        or type(value.get("schema")) is not dict
-        or set(value["schema"])
-        != {
-            "compatibility",
-            "compatibility_sha256",
-            "source_version",
-            "target_version",
-            "migration_required",
-            "migration_invoked",
-            "migration_completed",
-            "migration_attempt_id",
-        }
-        or value["schema"].get("compatibility") != "compatible"
-        or type(value["schema"].get("compatibility_sha256")) is not str
-        or not DIGEST_RE.fullmatch(
-            value["schema"]["compatibility_sha256"]
-        )
-        or type(value["schema"].get("source_version")) is not int
-        or isinstance(value["schema"]["source_version"], bool)
-        or value["schema"]["source_version"] < 0
-        or type(value["schema"].get("target_version")) is not int
-        or isinstance(value["schema"]["target_version"], bool)
-        or value["schema"]["target_version"] < 0
-        or value["schema"]["source_version"]
-        > value["schema"]["target_version"]
-        or type(value["schema"].get("migration_required")) is not bool
-        or type(value["schema"].get("migration_invoked")) is not bool
-        or type(value["schema"].get("migration_completed")) is not bool
-        or (
-            value["schema"].get("migration_attempt_id") is not None
-            and (
-                type(value["schema"]["migration_attempt_id"]) is not str
-                or not re.fullmatch(
-                    r"^migration-attempt-[0-9a-f]{32}$",
-                    value["schema"]["migration_attempt_id"],
-                )
-            )
-        )
-        or type(value.get("target_verified")) is not bool
-        or type(value.get("previous_verified")) is not bool
-        or type(value.get("created_at")) is not str
-        or not value["created_at"]
-        or type(value.get("updated_at")) is not str
-        or not value["updated_at"]
-    ):
-        raise SlotError(
-            "activation_journal_invalid",
-            "Activation journal is invalid.",
-        )
-    previous = validate_activation_slot_binding(value.get("previous"))
-    target = validate_activation_slot_binding(value.get("target"))
-    if (
-        previous["slot_id"] == target["slot_id"]
-        or target["kind"] != "trusted_release"
-    ):
-        raise SlotError(
-            "activation_journal_invalid",
-            "Activation journal slot roles are contradictory.",
-        )
-    pointer_slot_id = value.get("pointer_slot_id")
-    if pointer_slot_id is not None and pointer_slot_id not in {
-        previous["slot_id"],
-        target["slot_id"],
-    }:
-        raise SlotError(
-            "activation_journal_invalid",
-            "Activation journal pointer evidence is contradictory.",
-        )
-    failure_category = value.get("failure_category")
-    if failure_category is not None and (
-        type(failure_category) is not str
-        or not MACHINE_CODE_RE.fullmatch(failure_category)
-    ):
-        raise SlotError(
-            "activation_journal_invalid",
-            "Activation journal failure category is invalid.",
-        )
-    rollback_trigger = value.get("rollback_trigger")
-    if rollback_trigger is not None and (
-        type(rollback_trigger) is not str
-        or not MACHINE_CODE_RE.fullmatch(rollback_trigger)
-    ):
-        raise SlotError(
-            "activation_journal_invalid",
-            "Activation journal rollback trigger is invalid.",
-        )
-    if rollback_trigger is not None and value["phase"] not in {
-        "rolling_back",
-        "failed_rolled_back",
-        "blocked",
-    }:
-        raise SlotError(
-            "activation_journal_invalid",
-            "Activation journal rollback trigger is contradictory.",
-        )
-    terminal_at = value.get("terminal_at")
-    terminal = value["phase"] in TERMINAL_ACTIVATION_PHASES
-    if terminal != (type(terminal_at) is str and bool(terminal_at)):
-        raise SlotError(
-            "activation_journal_invalid",
-            "Activation journal terminal evidence is contradictory.",
-        )
-    schema = value["schema"]
-    if (
-        schema["migration_completed"]
-        and (
-            not schema["migration_required"]
-            or not schema["migration_invoked"]
-        )
-    ) or (
-        not schema["migration_required"]
-        and (
-            schema["migration_invoked"]
-            or schema["migration_completed"]
-        )
-    ):
-        raise SlotError(
-            "activation_journal_invalid",
-            "Activation journal schema evidence is contradictory.",
-        )
-    if value["target_verified"] and value["phase"] in {
-        "target_prepared",
-        "quiescing",
-        "schema_preparing",
-        "activating",
-    }:
-        raise SlotError(
-            "activation_journal_invalid",
-            "Target verification evidence is contradictory.",
-        )
-    if value["previous_verified"] != (
-        value["phase"] == "failed_rolled_back"
-    ):
-        raise SlotError(
-            "activation_journal_invalid",
-            "Previous verification evidence is contradictory.",
-        )
-    if value["phase"] == "completed" and (
-        not value["target_verified"]
-        or pointer_slot_id != target["slot_id"]
-        or failure_category is not None
-        or rollback_trigger is not None
-    ):
-        raise SlotError(
-            "activation_journal_invalid",
-            "Completed activation evidence is contradictory.",
-        )
-    if value["phase"] == "failed_rolled_back" and (
-        pointer_slot_id != previous["slot_id"]
-        or failure_category is None
-        or rollback_trigger is None
-    ):
-        raise SlotError(
-            "activation_journal_invalid",
-            "Rollback terminal evidence is contradictory.",
-        )
-    if value["phase"] == "blocked" and failure_category is None:
-        raise SlotError(
-            "activation_journal_invalid",
-            "Blocked activation lacks a bounded failure category.",
-        )
-    normalized = json.loads(json.dumps(value))
-    normalized["previous"] = previous
-    normalized["target"] = target
-    return normalized
 
 
 def read_active_slot(app_dir: Path) -> tuple[str, Path] | None:
-    app_dir = resolve_app_dir(app_dir)
-    layout = ensure_layout(app_dir)
-    pointer = layout["active"]
-    try:
-        info = pointer.lstat()
-    except FileNotFoundError:
-        return None
-    if not stat.S_ISLNK(info.st_mode):
-        raise SlotError("active_pointer_invalid", "Active release pointer is not a symlink.")
-    target = os.readlink(pointer)
-    parts = Path(target).parts
-    if len(parts) != 3 or parts[0] != "slots" or parts[2] != SOURCE_DIR_NAME:
-        raise SlotError("active_pointer_invalid", "Active release pointer target is invalid.")
-    slot_id = require_slot_id(parts[1])
-    source = layout["slots"] / slot_id / SOURCE_DIR_NAME
-    try:
-        resolved = source.resolve(strict=True)
-    except OSError as exc:
-        raise SlotError("active_pointer_invalid", "Active release pointer target is unavailable.") from exc
-    expected = (layout["slots"] / slot_id / SOURCE_DIR_NAME).resolve(strict=True)
-    if resolved != expected:
-        raise SlotError("active_pointer_invalid", "Active release pointer escaped its slot.")
-    slot_root = layout["slots"] / slot_id
-    _converge_active_slot_legacy_python_cache(
-        slot_root,
-        expected_slot_id=slot_id,
-    )
-    validate_slot(slot_root, expected_slot_id=slot_id)
-    return slot_id, resolved
+    return _slot_state_store().read_active_slot(app_dir)
 
 
 def atomic_switch_pointer(app_dir: Path, slot_id: str) -> Path:
-    """Atomically select one already-validated immutable release slot."""
-
-    app_dir = resolve_app_dir(app_dir)
-    layout = ensure_layout(app_dir)
-    slot_id = require_slot_id(slot_id)
-    validate_slot(layout["slots"] / slot_id, expected_slot_id=slot_id)
-    replacement = layout["runtime"] / f".active.{uuid.uuid4().hex}.next"
-    relative_target = f"slots/{slot_id}/{SOURCE_DIR_NAME}"
-    try:
-        os.symlink(relative_target, replacement)
-        if os.readlink(replacement) != relative_target:
-            raise SlotError("active_pointer_prepare_failed", "Active pointer replacement verification failed.")
-        _fsync_directory(layout["runtime"])
-        os.replace(replacement, layout["active"])
-        _fsync_directory(layout["runtime"])
-    except SlotError:
-        replacement.unlink(missing_ok=True)
-        raise
-    except OSError as exc:
-        replacement.unlink(missing_ok=True)
-        raise SlotError("active_pointer_switch_failed", "Active release pointer could not be switched atomically.") from exc
-    active = read_active_slot(app_dir)
-    if active is None or active[0] != slot_id:
-        raise SlotError("active_pointer_switch_failed", "Active release pointer verification failed.")
-    return active[1]
+    return _slot_state_store().atomic_switch_pointer(app_dir, slot_id)
 
 
 def read_activation_journal(
@@ -2622,14 +1533,7 @@ def read_activation_journal(
     *,
     missing_ok: bool = False,
 ) -> dict[str, Any] | None:
-    app_dir = resolve_app_dir(app_dir)
-    payload = read_json(
-        ensure_layout(app_dir)["journal"],
-        missing_ok=missing_ok,
-    )
-    if payload is None:
-        return None
-    return validate_activation_journal(payload)
+    return _slot_state_store().read_activation_journal(app_dir, missing_ok=missing_ok)
 
 
 def initialize_activation_journal(
@@ -2644,98 +1548,7 @@ def initialize_activation_journal(
     migration_required: bool,
     migration_attempt_id: str | None = None,
 ) -> dict[str, Any]:
-    app_dir = resolve_app_dir(app_dir)
-    request_id = require_request_id(request_id)
-    previous = validate_activation_slot_binding(previous)
-    target = validate_activation_slot_binding(target)
-    layout = ensure_layout(app_dir)
-    existing = read_activation_journal(app_dir, missing_ok=True)
-    if existing is not None:
-        if existing["request_id"] == request_id:
-            if (
-                existing["previous"] != previous
-                or existing["target"] != target
-                or existing["schema"]["compatibility_sha256"]
-                != compatibility_sha256
-                or existing["schema"]["source_version"]
-                != source_schema_version
-                or existing["schema"]["target_version"]
-                != target_schema_version
-                or existing["schema"]["migration_required"]
-                is not migration_required
-                or existing["schema"]["migration_attempt_id"]
-                != migration_attempt_id
-            ):
-                raise SlotError(
-                    "activation_journal_conflict",
-                    "Existing activation journal contradicts this request.",
-                )
-            return existing
-        if existing["phase"] not in TERMINAL_ACTIVATION_PHASES:
-            raise SlotError(
-                "activation_in_progress",
-                "Another release activation is still active.",
-            )
-        generation = existing["generation"] + 1
-    else:
-        generation = 1
-    if (
-        type(compatibility_sha256) is not str
-        or not DIGEST_RE.fullmatch(compatibility_sha256)
-        or type(source_schema_version) is not int
-        or isinstance(source_schema_version, bool)
-        or source_schema_version < 0
-        or type(target_schema_version) is not int
-        or isinstance(target_schema_version, bool)
-        or target_schema_version < source_schema_version
-    ):
-        raise SlotError(
-            "activation_schema_compatibility_invalid",
-            "Schema compatibility evidence is invalid.",
-        )
-    active = read_active_slot(app_dir)
-    if active is not None and active[0] != previous["slot_id"]:
-        raise SlotError(
-            "activation_pointer_conflict",
-            "Active pointer does not match the captured previous slot.",
-        )
-    if active is None and previous["kind"] != "adopted_pre_update_snapshot":
-        raise SlotError(
-            "activation_pointer_missing",
-            "A trusted previous slot requires an active pointer.",
-        )
-    now = utc_now()
-    journal = validate_activation_journal(
-        {
-            "schema_version": JOURNAL_SCHEMA_VERSION,
-            "document_type": "release_slot_activation",
-            "request_id": request_id,
-            "generation": generation,
-            "phase": "target_prepared",
-            "previous": previous,
-            "target": target,
-            "schema": {
-                "compatibility": "compatible",
-                "compatibility_sha256": compatibility_sha256,
-                "source_version": source_schema_version,
-                "target_version": target_schema_version,
-                "migration_required": migration_required,
-                "migration_invoked": False,
-                "migration_completed": False,
-                "migration_attempt_id": migration_attempt_id,
-            },
-            "pointer_slot_id": active[0] if active is not None else None,
-            "target_verified": False,
-            "previous_verified": False,
-            "rollback_trigger": None,
-            "failure_category": None,
-            "created_at": now,
-            "updated_at": now,
-            "terminal_at": None,
-        }
-    )
-    atomic_write_json(layout["journal"], journal)
-    return journal
+    return _slot_state_store().initialize_activation_journal(app_dir, request_id=request_id, previous=previous, target=target, compatibility_sha256=compatibility_sha256, source_schema_version=source_schema_version, target_schema_version=target_schema_version, migration_required=migration_required, migration_attempt_id=migration_attempt_id)
 
 
 def transition_activation_journal(
@@ -2753,130 +1566,11 @@ def transition_activation_journal(
     failure_category: str | None = None,
     rollback_database_verified: bool = False,
 ) -> dict[str, Any]:
-    app_dir = resolve_app_dir(app_dir)
-    request_id = require_request_id(request_id)
-    current = read_activation_journal(app_dir)
-    assert current is not None
-    if current["request_id"] != request_id:
-        raise SlotError(
-            "activation_request_conflict",
-            "Activation journal belongs to another request.",
-        )
-    if phase not in ACTIVATION_PHASES:
-        raise SlotError(
-            "activation_transition_invalid",
-            "Activation phase is invalid.",
-        )
-    if (phase == "rolling_back" and current["phase"] in {"target_prepared", "quiescing", "schema_preparing", "blocked"}
-        and rollback_database_verified is not True):
-        raise SlotError("activation_rollback_proof_required", "Recovery must verify the previous database contract before rollback.")
-    if (
-        phase != current["phase"]
-        and phase not in ACTIVATION_TRANSITIONS[current["phase"]]
-    ):
-        raise SlotError(
-            "activation_transition_invalid",
-            "Activation phase transition is not legal.",
-        )
-    updated = json.loads(json.dumps(current))
-    updated["phase"] = phase
-    if record_pointer:
-        updated["pointer_slot_id"] = (
-            require_slot_id(pointer_slot_id)
-            if pointer_slot_id is not None
-            else None
-        )
-    schema = updated["schema"]
-    if migration_invoked is not None:
-        if schema["migration_invoked"] and not migration_invoked:
-            raise SlotError(
-                "activation_transition_invalid",
-                "Schema invocation evidence cannot move backwards.",
-            )
-        schema["migration_invoked"] = migration_invoked
-    if migration_completed is not None:
-        if schema["migration_completed"] and not migration_completed:
-            raise SlotError(
-                "activation_transition_invalid",
-                "Schema completion evidence cannot move backwards.",
-            )
-        schema["migration_completed"] = migration_completed
-    if target_verified is not None:
-        if updated["target_verified"] and not target_verified:
-            raise SlotError(
-                "activation_transition_invalid",
-                "Target verification evidence cannot move backwards.",
-            )
-        updated["target_verified"] = target_verified
-    if previous_verified is not None:
-        if updated["previous_verified"] and not previous_verified:
-            raise SlotError(
-                "activation_transition_invalid",
-                "Previous verification evidence cannot move backwards.",
-            )
-        updated["previous_verified"] = previous_verified
-    if failure_category is not None:
-        if not MACHINE_CODE_RE.fullmatch(failure_category):
-            raise SlotError(
-                "activation_transition_invalid",
-                "Activation failure category is invalid.",
-            )
-        if (
-            updated["failure_category"] is not None
-            and updated["failure_category"] != failure_category
-        ):
-            raise SlotError(
-                "activation_transition_invalid",
-                "Activation failure evidence cannot be replaced.",
-            )
-        updated["failure_category"] = failure_category
-    if rollback_trigger is not None:
-        if not MACHINE_CODE_RE.fullmatch(rollback_trigger):
-            raise SlotError(
-                "activation_transition_invalid",
-                "Activation rollback trigger is invalid.",
-            )
-        if (
-            updated["rollback_trigger"] is not None
-            and updated["rollback_trigger"] != rollback_trigger
-        ):
-            raise SlotError(
-                "activation_transition_invalid",
-                "Activation rollback trigger cannot be replaced.",
-            )
-        updated["rollback_trigger"] = rollback_trigger
-    if phase == "completed":
-        updated["failure_category"] = None
-        updated["rollback_trigger"] = None
-    now = utc_now()
-    updated["updated_at"] = now
-    updated["terminal_at"] = (
-        now if phase in TERMINAL_ACTIVATION_PHASES else None
-    )
-    validated = validate_activation_journal(updated)
-    active = read_active_slot(app_dir)
-    observed_pointer = active[0] if active is not None else None
-    if validated["pointer_slot_id"] != observed_pointer:
-        raise SlotError(
-            "activation_pointer_conflict",
-            "Activation journal pointer evidence does not match the active pointer.",
-        )
-    atomic_write_json(ensure_layout(app_dir)["journal"], validated)
-    return validated
+    return _slot_state_store().transition_activation_journal(app_dir, request_id=request_id, phase=phase, pointer_slot_id=pointer_slot_id, record_pointer=record_pointer, migration_invoked=migration_invoked, migration_completed=migration_completed, target_verified=target_verified, previous_verified=previous_verified, rollback_trigger=rollback_trigger, failure_category=failure_category, rollback_database_verified=rollback_database_verified)
 
 
 def protected_slot_ids(app_dir: Path) -> set[str]:
-    app_dir = resolve_app_dir(app_dir)
-    layout = ensure_layout(app_dir)
-    protected: set[str] = set()
-    active = read_active_slot(app_dir)
-    if active:
-        protected.add(active[0])
-    journal = read_activation_journal(app_dir, missing_ok=True)
-    if journal is not None:
-        protected.add(journal["previous"]["slot_id"])
-        protected.add(journal["target"]["slot_id"])
-    return protected
+    return _slot_state_store().protected_slot_ids(app_dir)
 
 
 def cleanup_unprotected_slots(

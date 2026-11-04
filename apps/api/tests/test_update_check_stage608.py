@@ -572,7 +572,7 @@ def test_cache_reset_returns_neutral_recheck_without_persistent_snapshot(
 
     assert after_check == before
     assert after_restart == before
-    assert restarted["check_state"] == "recheck_required"
+    assert restarted["check_state"] == "not_checked"
     assert restarted["projection_source"] == "installed_identity"
     assert restarted["status"] != "check_failed"
     assert restarted["available_release"] is None

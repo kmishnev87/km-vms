@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -5,7 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
-const read = (relative) => fs.readFileSync(resolve(root, relative), "utf8");
+const read = (relative) => readProductSourceFile(resolve(root, relative), "utf8");
 
 function readEffectiveCss(relative) {
   const content = read(relative);

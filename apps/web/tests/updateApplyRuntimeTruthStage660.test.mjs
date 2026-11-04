@@ -1,3 +1,4 @@
+import { readProductSourceFile } from "./helpers/readProductSources.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -19,7 +20,7 @@ import { readSettingsMaintenanceSources } from "./helpers/readSettingsMaintenanc
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pageSource = readSettingsMaintenanceSources();
-const cssSource = fs.readFileSync(resolve(__dirname, "../app/styles/20-settings-maintenance.css"), "utf8");
+const cssSource = readProductSourceFile(resolve(__dirname, "../app/styles/20-settings-maintenance.css"), "utf8");
 assert.equal(UPDATE_APPLY_PENDING_STORAGE_KEY, "km_vms_update_apply_pending_v1");
 
 const t = {

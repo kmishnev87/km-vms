@@ -41,6 +41,29 @@ from app.services.schema_versioning import (
 )
 
 
+from app.services.schema_update_types import (
+    SchemaControlError,
+    stable_failure_reason,
+    UpdateContext,
+    ExecutionStatusObservation,
+    RetryClassification,
+    canonical_bytes,
+)
+from app.services.schema_update_shapes import (
+    _normalize_sql,
+    _constraint_payload,
+    database_shape_payload,
+    database_shape_fingerprint,
+    current_schema_version,
+    database_is_empty,
+    canonical_schema_history_fingerprint,
+)
+from app.services.schema_update_history import SchemaHistoryValidator
+from app.services.schema_update_compatibility import SchemaTransitionCompatibility
+from app.services.schema_update_attempts import SchemaAttemptStore
+from app.services.schema_update_receipts import SchemaStageReceipts
+from app.services.schema_update_execution import SchemaExecutionStatus, _raise_status_observation_error, wait_for_writer_quiescence
+
 CONTROL_ROOT = Path(os.getenv("UPDATE_CONTROL_ROOT") or "/update-control")
 REQUEST_PATH = CONTROL_ROOT / "schema-update-request.json"
 PRE_OVERLAY_IDENTITY_PATH = CONTROL_ROOT / "pre-overlay-source-identity.json"
@@ -431,62 +454,14 @@ CONTROL_DEFINITION_FINGERPRINT = hashlib.sha256(
 REGISTRY_FINGERPRINT = migration_registry_fingerprint()
 
 
-class SchemaControlError(RuntimeError):
-    def __init__(
-        self,
-        reason: str,
-        *,
-        subtype: str | None = None,
-    ) -> None:
-        super().__init__(reason)
-        self.subtype = subtype
 
 
-def stable_failure_reason(
-    exc: BaseException,
-    fallback: str,
-) -> str:
-    value = (
-        str(exc)
-        if isinstance(exc, SchemaControlError)
-        else getattr(exc, "status", "")
-    )
-    if (
-        type(value) is str
-        and re.fullmatch(r"[a-z][a-z0-9_]{0,119}", value)
-    ):
-        return value
-    return fallback
 
 
-@dataclass(frozen=True)
-class UpdateContext:
-    request: dict[str, Any]
-    request_id: str
-    admission_attempt_id: str
-    target_release: str
-    target_commit: str
-    installed_version: str
-    installed_commit: str
-    source_schema_version: int
-    source_shape_fingerprint: str
-    registry_fingerprint: str
-    plan_fingerprint: str
-    source_identity_mode: str = "trusted_release"
-    source_slot_id: str | None = None
-    source_inventory_sha256: str | None = None
 
 
-@dataclass(frozen=True)
-class ExecutionStatusObservation:
-    payload: dict[str, Any] | None
-    invalid_subtype: str | None = None
 
 
-@dataclass(frozen=True)
-class RetryClassification:
-    retryable: bool
-    public_state: str
 
 
 def utc_now() -> str:
@@ -497,14 +472,6 @@ def naive_utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-def canonical_bytes(payload: Any) -> bytes:
-    return json.dumps(
-        payload,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ).encode("utf-8")
 
 
 def bounded_details(payload: dict[str, Any]) -> str:
@@ -1063,131 +1030,45 @@ def write_signed(path: Path, payload: dict[str, Any]) -> None:
     atomic_write(path, sign_payload(payload))
 
 
-def _normalize_sql(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip()
+def _schema_history_validator() -> SchemaHistoryValidator:
+    return SchemaHistoryValidator(
+        TARGET_SCHEMA_VERSION, PRODUCTION_MIGRATIONS,
+    )
 
 
-def _constraint_payload(inspector: Any, table_name: str) -> dict[str, Any]:
-    primary = inspector.get_pk_constraint(table_name, schema="public") or {}
-    unique = [
-        {
-            "name": str(item.get("name") or ""),
-            "columns": sorted(
-                str(column) for column in item.get("column_names") or []
-            ),
-        }
-        for item in inspector.get_unique_constraints(table_name, schema="public")
-    ]
-    foreign = [
-        {
-            "name": str(item.get("name") or ""),
-            "columns": [str(column) for column in item.get("constrained_columns") or []],
-            "referred_schema": str(item.get("referred_schema") or ""),
-            "referred_table": str(item.get("referred_table") or ""),
-            "referred_columns": [
-                str(column) for column in item.get("referred_columns") or []
-            ],
-            "options": {
-                str(key): str(value)
-                for key, value in sorted((item.get("options") or {}).items())
-            },
-        }
-        for item in inspector.get_foreign_keys(table_name, schema="public")
-    ]
-    checks = [
-        {
-            "name": str(item.get("name") or ""),
-            "sql": _normalize_sql(item.get("sqltext")),
-        }
-        for item in inspector.get_check_constraints(table_name, schema="public")
-    ]
-    return {
-        "primary": {
-            "name": str(primary.get("name") or ""),
-            "columns": [
-                str(column) for column in primary.get("constrained_columns") or []
-            ],
-        },
-        "unique": sorted(unique, key=canonical_bytes),
-        "foreign": sorted(foreign, key=canonical_bytes),
-        "checks": sorted(checks, key=canonical_bytes),
-    }
+def _schema_transition_compatibility() -> SchemaTransitionCompatibility:
+    return SchemaTransitionCompatibility(
+        TARGET_SCHEMA_VERSION, TARGET_SHAPE_FINGERPRINTS, REGISTRY_FINGERPRINT, PRODUCTION_MIGRATIONS, current_schema_version, database_shape_fingerprint, expected_source_lineage,
+    )
 
 
-def database_shape_payload(
-    db: Session,
-    *,
-    exclude_tables: Iterable[str] = (),
-) -> dict[str, Any]:
-    inspector = inspect(db.connection())
-    excluded = set(exclude_tables)
-    tables: list[dict[str, Any]] = []
-    for table_name in sorted(
-        set(inspector.get_table_names(schema="public")) - excluded
-    ):
-        columns = [
-            {
-                "name": str(column.get("name") or ""),
-                "type": str(column.get("type") or "").upper(),
-                "nullable": bool(column.get("nullable")),
-                "default": _normalize_sql(column.get("default")),
-            }
-            for column in inspector.get_columns(table_name, schema="public")
-        ]
-        indexes = [
-            {
-                "name": str(index.get("name") or ""),
-                "columns": [
-                    str(column) for column in index.get("column_names") or []
-                ],
-                "unique": bool(index.get("unique")),
-                "predicate": _normalize_sql(
-                    (index.get("dialect_options") or {}).get(
-                        "postgresql_where"
-                    )
-                ),
-            }
-            for index in inspector.get_indexes(table_name, schema="public")
-        ]
-        tables.append(
-            {
-                "table": table_name,
-                "columns": sorted(columns, key=lambda item: item["name"]),
-                "indexes": sorted(indexes, key=lambda item: item["name"]),
-                "constraints": _constraint_payload(inspector, table_name),
-            }
-        )
-    return {"schema_version": 1, "tables": tables}
+def _schema_attempt_store() -> SchemaAttemptStore:
+    return SchemaAttemptStore(
+        inventory_bound_source_token, transition_attempt_id, naive_utc_now, bounded_details,
+    )
 
 
-def database_shape_fingerprint(
-    db: Session,
-    *,
-    exclude_tables: Iterable[str] = (),
-) -> str:
-    return hashlib.sha256(
-        canonical_bytes(
-            database_shape_payload(db, exclude_tables=exclude_tables)
-        )
-    ).hexdigest()
+def _schema_stage_receipts() -> SchemaStageReceipts:
+    return SchemaStageReceipts(
+        TARGET_SCHEMA_VERSION, MAX_DETAILS_BYTES, REQUEST_RE, ATTEMPT_RE, classify_retry, exact_string, parse_utc, utc_now, write_signed,
+    )
 
 
-def current_schema_version(db: Session) -> int | None:
-    exists = db.execute(
-        text(
-            "SELECT to_regclass('public.schema_version_state') "
-            "IS NOT NULL"
-        )
-    ).scalar_one()
-    if not exists:
-        return None
-    value = db.execute(
-        text(
-            "SELECT schema_version FROM schema_version_state "
-            "WHERE id='current'"
-        )
-    ).scalar_one_or_none()
-    return int(value) if value is not None else None
+def _schema_execution_status() -> SchemaExecutionStatus:
+    return SchemaExecutionStatus(
+        UPDATE_STATUS_PATH, MAX_CONTROL_BYTES, KNOWN_UPDATE_STATUSES, REQUEST_RE, UNBOUND_STATUS_SENTINEL_KEY_SETS, UNBOUND_STATUS_SENTINEL_STATUSES, SCHEMA_COMPLETED_ACTIVATION_STATUSES, SCHEMA_MUTATION_UPDATE_STATUSES, LEGACY_STATUS_VERSION_FROM_REQUEST_PROFILES, COMMIT_RE, load_json_bytes, exact_string, parse_utc, validate_terminal_update_request,
+    )
+
+
+
+
+
+
+
+
+
+
+
 
 
 def _regular_file_presence(path: Path) -> bool:
@@ -1225,9 +1106,6 @@ def schema_execution_authority_presence() -> dict[str, bool]:
     }
 
 
-def database_is_empty(db: Session) -> bool:
-    inspector = inspect(db.connection())
-    return not inspector.get_table_names(schema="public")
 
 
 def is_empty_fresh_install(db: Session) -> bool:
@@ -1235,45 +1113,6 @@ def is_empty_fresh_install(db: Session) -> bool:
     return not any(authority.values()) and database_is_empty(db)
 
 
-def canonical_schema_history_fingerprint(db: Session) -> str:
-    rows = (
-        db.query(SchemaMigrationHistory)
-        .order_by(
-            SchemaMigrationHistory.id.asc(),
-            SchemaMigrationHistory.migration_id.asc(),
-        )
-        .all()
-    )
-    payload = [
-        {
-            "id": int(row.id),
-            "migration_id": row.migration_id,
-            "previous_version": row.previous_version,
-            "target_version": row.target_version,
-            "schema_version": row.schema_version,
-            "baseline_id": row.baseline_id,
-            "app_version": row.app_version,
-            "app_build_version": row.app_build_version,
-            "applied_at": (
-                row.applied_at.isoformat()
-                if row.applied_at is not None
-                else None
-            ),
-            "status": row.status,
-            "checksum": row.checksum,
-            "source": row.source,
-            "service_name": row.service_name,
-            "details": row.details,
-            "error_summary": row.error_summary,
-            "created_at": (
-                row.created_at.isoformat()
-                if row.created_at is not None
-                else None
-            ),
-        }
-        for row in rows
-    ]
-    return hashlib.sha256(canonical_bytes(payload)).hexdigest()
 
 
 def _validate_fresh_target_history(
@@ -1282,35 +1121,11 @@ def _validate_fresh_target_history(
     controls: list[SchemaMigrationControl],
     attempts: list[SchemaMigrationAttempt],
 ) -> None:
-    if controls or attempts:
-        raise SchemaControlError(
-            "no_active_fresh_target_control_state_present"
-        )
-    if len(histories) != 1:
-        raise SchemaControlError(
-            "no_active_fresh_target_history_count_invalid"
-        )
-    row = histories[0]
-    if (
-        row.migration_id != CURRENT_MIGRATION_ID
-        or row.previous_version is not None
-        or row.target_version != TARGET_SCHEMA_VERSION
-        or row.schema_version != TARGET_SCHEMA_VERSION
-        or row.baseline_id != CURRENT_BASELINE_ID
-        or row.status != state.status
-        or row.source != "fresh_create_all"
-        or row.error_summary is not None
-    ):
-        raise SchemaControlError(
-            "no_active_fresh_target_history_invalid"
-        )
+    return _schema_history_validator()._validate_fresh_target_history(histories, state, controls, attempts)
 
 
 def _known_history_migrations() -> dict[str, Any]:
-    return {
-        migration.migration_id: migration
-        for migration in PRODUCTION_MIGRATIONS.published_migrations
-    }
+    return _schema_history_validator()._known_history_migrations()
 
 
 def validate_released_source_history(
@@ -1320,125 +1135,7 @@ def validate_released_source_history(
     allow_target_rows: bool,
     histories: Iterable[SchemaMigrationHistory] | None = None,
 ) -> dict[str, int]:
-    """Validate one ordered published migration prefix for a trusted source.
-
-    The caller first binds the installed commit, declared source schema and
-    physical DB shape.  A NULL checksum from an older release is therefore
-    accepted only inside that already-bound source prefix.  New target-side
-    rows always require their canonical fingerprint in the gate.
-    """
-
-    if not 1 <= source_schema_version <= TARGET_SCHEMA_VERSION:
-        raise SchemaControlError("migration_history_version_invalid")
-    if histories is None:
-        if db is None:
-            raise SchemaControlError("migration_history_session_missing")
-        rows = (
-            db.query(SchemaMigrationHistory)
-            .filter(SchemaMigrationHistory.source == MIGRATION_SOURCE)
-            .order_by(SchemaMigrationHistory.id.asc())
-            .all()
-        )
-    else:
-        rows = [
-            row
-            for row in histories
-            if row.source == MIGRATION_SOURCE
-        ]
-    seen_ids: set[str] = set()
-    seen_edges: set[tuple[int, int]] = set()
-    source_edges: list[tuple[int, int]] = []
-    null_checksum_count = 0
-    exact_checksum_count = 0
-    preparation_count = 0
-
-    for row in rows:
-        migration_id = str(row.migration_id)
-        if (
-            migration_id
-            == STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION.preparation_id
-        ):
-            if migration_id in seen_ids:
-                raise SchemaControlError(
-                    "compatibility_preparation_history_duplicate"
-                )
-            seen_ids.add(migration_id)
-            if not (
-                row.status == "applied"
-                and row.previous_version in {5, 6, 7}
-                and row.target_version == row.previous_version
-                and row.schema_version == row.previous_version
-                and row.schema_version <= source_schema_version
-                and row.checksum
-                == preparation_definition_fingerprint(
-                    STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION
-                )
-            ):
-                raise SchemaControlError(
-                    "compatibility_preparation_history_invalid"
-                )
-            preparation_count += 1
-            continue
-
-        if migration_id in seen_ids:
-            raise SchemaControlError("legacy_migration_history_duplicate")
-        seen_ids.add(migration_id)
-        migration = PRODUCTION_MIGRATIONS.published_by_id(migration_id)
-        if migration is None:
-            raise SchemaControlError("legacy_migration_history_unknown_id")
-        edge = (migration.from_version, migration.to_version)
-        if edge in seen_edges:
-            raise SchemaControlError(
-                "legacy_migration_history_duplicate_edge"
-            )
-        seen_edges.add(edge)
-        if (
-            row.status != "applied"
-            or row.previous_version != migration.from_version
-            or row.target_version != migration.to_version
-            or row.schema_version != migration.to_version
-            or PRODUCTION_MIGRATIONS.canonical_for_edge(*edge) is None
-        ):
-            raise SchemaControlError(
-                "legacy_migration_history_lineage_invalid"
-            )
-        if migration.to_version > source_schema_version:
-            if not allow_target_rows:
-                raise SchemaControlError(
-                    "migration_history_ahead_of_source"
-                )
-            continue
-        if row.checksum is None:
-            null_checksum_count += 1
-        elif row.checksum == migration_definition_fingerprint(migration):
-            exact_checksum_count += 1
-        else:
-            raise SchemaControlError(
-                "legacy_migration_history_definition_mismatch"
-            )
-        source_edges.append(edge)
-
-    if source_edges:
-        previous_target = source_edges[0][0]
-        for from_version, to_version in source_edges:
-            if from_version != previous_target:
-                raise SchemaControlError(
-                    "legacy_migration_history_path_inconsistent"
-                )
-            previous_target = to_version
-        if previous_target != source_schema_version:
-            raise SchemaControlError(
-                "legacy_migration_history_path_incomplete"
-            )
-
-    return {
-        "legacy_applied_count": (
-            null_checksum_count + exact_checksum_count
-        ),
-        "legacy_null_checksum_adopted_count": null_checksum_count,
-        "legacy_exact_checksum_count": exact_checksum_count,
-        "compatibility_preparation_count": preparation_count,
-    }
+    return _schema_history_validator().validate_released_source_history(db, source_schema_version=source_schema_version, allow_target_rows=allow_target_rows, histories=histories)
 
 
 def _attempt_inventory_source_evidence(
@@ -1985,68 +1682,7 @@ def _schema_control_row_for_execution(
 
 
 def _read_update_status_for_execution() -> dict[str, Any] | None:
-    try:
-        info = os.lstat(UPDATE_STATUS_PATH)
-    except FileNotFoundError:
-        return None
-    if stat.S_ISLNK(info.st_mode):
-        raise SchemaControlError(
-            "schema_execution_status_invalid",
-            subtype="symlink",
-        )
-    if not stat.S_ISREG(info.st_mode):
-        raise SchemaControlError(
-            "schema_execution_status_invalid",
-            subtype="non_regular",
-        )
-    if info.st_size <= 1 or info.st_size > MAX_CONTROL_BYTES:
-        raise SchemaControlError(
-            "schema_execution_status_invalid",
-            subtype="malformed_json",
-        )
-    with UPDATE_STATUS_PATH.open("rb") as handle:
-        raw = handle.read(MAX_CONTROL_BYTES + 1)
-    if len(raw) > MAX_CONTROL_BYTES:
-        raise SchemaControlError(
-            "schema_execution_status_invalid",
-            subtype="malformed_json",
-        )
-    try:
-        payload = load_json_bytes(raw)
-    except SchemaControlError as exc:
-        raise SchemaControlError(
-            "schema_execution_status_invalid",
-            subtype="malformed_json",
-        ) from exc
-    if (
-        type(payload.get("schema_version")) is not int
-        or payload["schema_version"] != 1
-    ):
-        raise SchemaControlError(
-            "schema_execution_status_invalid",
-            subtype="schema_invalid",
-        )
-    status = payload.get("status")
-    if (
-        type(status) is not str
-        or not status
-        or len(status) > 40
-        or status not in KNOWN_UPDATE_STATUSES
-    ):
-        raise SchemaControlError(
-            "schema_execution_status_invalid",
-            subtype="status_unrecognized",
-        )
-    request_id = payload.get("request_id")
-    if request_id is not None and (
-        type(request_id) is not str
-        or not REQUEST_RE.fullmatch(request_id)
-    ):
-        raise SchemaControlError(
-            "schema_execution_status_invalid",
-            subtype="request_invalid",
-        )
-    return payload
+    return _schema_execution_status()._read_update_status_for_execution()
 
 
 def _observe_update_status_for_execution() -> ExecutionStatusObservation:
@@ -2071,47 +1707,18 @@ def _observe_update_status_for_execution() -> ExecutionStatusObservation:
         )
 
 
-def _raise_status_observation_error(
-    observation: ExecutionStatusObservation,
-    *,
-    pair_state: str,
-) -> None:
-    if observation.invalid_subtype is None:
-        return
-    reason = "schema_execution_status_invalid"
-    if pair_state == "complete":
-        reason = (
-            "schema_execution_status_invalid_with_complete_authority_pair"
-        )
-    elif pair_state == "partial":
-        reason = (
-            "schema_execution_status_invalid_with_partial_authority_pair"
-        )
-    raise SchemaControlError(
-        reason,
-        subtype=observation.invalid_subtype,
-    )
 
 
 def _is_exact_unbound_status_sentinel(
     payload: dict[str, Any],
 ) -> bool:
-    return bool(
-        frozenset(payload) in UNBOUND_STATUS_SENTINEL_KEY_SETS
-        and type(payload.get("schema_version")) is int
-        and payload["schema_version"] == 1
-        and payload.get("status") in UNBOUND_STATUS_SENTINEL_STATUSES
-        and payload.get("request_id") is None
-    )
+    return _schema_execution_status()._is_exact_unbound_status_sentinel(payload)
 
 
 def _status_has_operation_authority(
     payload: dict[str, Any],
 ) -> bool:
-    return bool(
-        payload.get("status") == "unknown"
-        and not _is_exact_unbound_status_sentinel(payload)
-    )
+    return _schema_execution_status()._status_has_operation_authority(payload)
 
 
 def _validate_matching_active_update_status(
@@ -2124,27 +1731,7 @@ def _validate_matching_active_update_status(
     target_commit: str,
     schema_completed: bool = False,
 ) -> None:
-    source = payload.get("source")
-    target_version_bound = _status_target_version_is_bound(
-        payload,
-        request_profile=request_profile,
-        request_target_version=request_target_version,
-        target_release=target_release,
-    )
-    if (
-        payload.get("status") not in (
-            SCHEMA_COMPLETED_ACTIVATION_STATUSES
-            if schema_completed else SCHEMA_MUTATION_UPDATE_STATUSES
-        )
-        or payload.get("request_id") != request_id
-        or not target_version_bound
-        or payload.get("expected_commit") != target_commit
-        or type(source) is not dict
-        or source.get("commit") != target_commit
-    ):
-        raise SchemaControlError(
-            "schema_execution_active_status_mismatch"
-        )
+    return _schema_execution_status()._validate_matching_active_update_status(payload, request_id=request_id, request_profile=request_profile, request_target_version=request_target_version, target_release=target_release, target_commit=target_commit, schema_completed=schema_completed)
 
 
 def _status_target_version_is_bound(
@@ -2154,21 +1741,7 @@ def _status_target_version_is_bound(
     request_target_version: str | None,
     target_release: str,
 ) -> bool:
-    if payload.get("target_version") == target_release:
-        return True
-    if (
-        "target_version" not in payload
-        and request_profile
-        in LEGACY_STATUS_VERSION_FROM_REQUEST_PROFILES
-        and request_target_version == target_release
-    ):
-        # Public updaters through v0.7.23 did not emit target_version in their
-        # active or completed status payload.  Their validated request carries
-        # the version, while status/request/release all bind the same exact
-        # target commit.  Keep that narrow historical path without allowing a
-        # current, retry, or transitional status to omit the field.
-        return True
-    return False
+    return _schema_execution_status()._status_target_version_is_bound(payload, request_profile=request_profile, request_target_version=request_target_version, target_release=target_release)
 
 
 def _validate_matching_completed_update_status(
@@ -2176,78 +1749,7 @@ def _validate_matching_completed_update_status(
     *,
     context: UpdateContext,
 ) -> None:
-    if (
-        payload.get("request_id") != context.request_id
-        or payload.get("status") != "completed"
-        or payload.get("commit_verified") is not True
-        or payload.get("error") is not None
-    ):
-        raise SchemaControlError(
-            "schema_execution_completed_status_invalid"
-        )
-    expected_commit = exact_string(
-        payload.get("expected_commit"),
-        code="schema_execution_completed_status_commit_invalid",
-        max_length=40,
-    ).lower()
-    installed_commit = exact_string(
-        payload.get("installed_commit"),
-        code="schema_execution_completed_status_commit_invalid",
-        max_length=40,
-    ).lower()
-    if (
-        not COMMIT_RE.fullmatch(expected_commit)
-        or not COMMIT_RE.fullmatch(installed_commit)
-        or expected_commit != context.target_commit
-        or installed_commit != context.target_commit
-    ):
-        raise SchemaControlError(
-            "schema_execution_completed_status_commit_mismatch"
-        )
-    phase = exact_string(
-        payload.get("phase"),
-        code="schema_execution_completed_status_phase_invalid",
-        max_length=80,
-    )
-    current_step = exact_string(
-        payload.get("current_step"),
-        code="schema_execution_completed_status_phase_invalid",
-        max_length=80,
-    )
-    if phase != current_step or phase not in {
-        "completed",
-        "commit_verification",
-    }:
-        raise SchemaControlError(
-            "schema_execution_completed_status_phase_invalid"
-        )
-    started_at = parse_utc(payload.get("started_at"))
-    updated_at = parse_utc(payload.get("updated_at"))
-    finished_at = parse_utc(
-        payload.get("finished_at")
-        if payload.get("finished_at") is not None
-        else payload.get("updated_at")
-    )
-    if updated_at < started_at or finished_at < started_at:
-        raise SchemaControlError(
-            "schema_execution_completed_status_timestamp_invalid"
-        )
-    request_profile = validate_terminal_update_request(context.request)
-    request_source = context.request.get("source")
-    request_target_version = (
-        request_source.get("version")
-        if type(request_source) is dict
-        else None
-    )
-    if not _status_target_version_is_bound(
-        payload,
-        request_profile=request_profile,
-        request_target_version=request_target_version,
-        target_release=context.target_release,
-    ):
-        raise SchemaControlError(
-            "schema_execution_completed_status_target_mismatch"
-        )
+    return _schema_execution_status()._validate_matching_completed_update_status(payload, context=context)
 
 
 def _validate_terminal_auth_snapshot(
@@ -2700,43 +2202,6 @@ def resolve_schema_execution_mode(db: Session) -> str:
     return "exact_target_noop"
 
 
-def wait_for_writer_quiescence(
-    db: Session,
-    *,
-    owned_backend_pid: int | None = None,
-    timeout_seconds: int = 30,
-) -> None:
-    if owned_backend_pid is not None and (
-        type(owned_backend_pid) is not int or owned_backend_pid <= 0
-    ):
-        raise SchemaControlError("schema_pipeline_backend_pid_invalid")
-    owned_backend_clause = ""
-    parameters: dict[str, int] = {}
-    if owned_backend_pid is not None:
-        owned_backend_clause = "AND pid <> :owned_backend_pid"
-        parameters["owned_backend_pid"] = owned_backend_pid
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        rows = db.execute(
-            text(
-                f"""
-                SELECT pid
-                FROM pg_stat_activity
-                WHERE datname = current_database()
-                  AND pid <> pg_backend_pid()
-                  {owned_backend_clause}
-                  AND backend_type = 'client backend'
-                ORDER BY pid
-                """
-            ),
-            parameters,
-        ).all()
-        if not rows:
-            return
-        if time.monotonic() >= deadline:
-            raise SchemaControlError("product_database_writer_not_quiescent")
-        db.rollback()
-        time.sleep(0.5)
 
 
 def resolve_schema_pipeline_execution_mode(
@@ -3097,27 +2562,7 @@ def expected_source_lineage(
 
 
 def bind_actual_source_database(db: Session, expected_version: int, expected_shapes: frozenset[str]) -> tuple[int, str]:
-    """After application rollback the DB can truthfully remain newer than its tag.
-
-    This is not arbitrary drift admission: the completed migration certificate
-    must explicitly support the *known installed* reader/writer contract.
-    """
-    actual = current_schema_version(db)
-    if actual == expected_version:
-        shape = database_shape_fingerprint(db)
-        if shape not in expected_shapes:
-            raise SchemaControlError("installed_source_shape_mismatch")
-        return actual, shape
-    if type(actual) is int and expected_version < actual <= TARGET_SCHEMA_VERSION:
-        from app.services.schema_runtime_compatibility import validate_runtime_compatibility
-        state = db.get(SchemaVersionState, CURRENT_STATE_ID)
-        if state is not None:
-            try:
-                proof = validate_runtime_compatibility(db, state, expected_version)
-                return actual, proof["shape_sha256"]
-            except RuntimeError as exc:
-                raise SchemaControlError("installed_source_compatibility_not_verified") from exc
-    raise SchemaControlError("installed_source_schema_version_mismatch")
+    return _schema_transition_compatibility().bind_actual_source_database(db, expected_version, expected_shapes)
 
 
 def validate_source_lineage(
@@ -3127,18 +2572,7 @@ def validate_source_lineage(
     target_release: str,
     target_commit: str,
 ) -> tuple[str, str, int, str]:
-    (
-        installed_version,
-        installed_commit,
-        expected_schema_version,
-        expected_shapes,
-    ) = expected_source_lineage(
-        request_id=request_id,
-        target_release=target_release,
-        target_commit=target_commit,
-    )
-    source_schema_version, shape = bind_actual_source_database(db, expected_schema_version, expected_shapes)
-    return installed_version, installed_commit, source_schema_version, shape
+    return _schema_transition_compatibility().validate_source_lineage(db, request_id=request_id, target_release=target_release, target_commit=target_commit)
 
 
 def plan_fingerprint(
@@ -3151,48 +2585,7 @@ def plan_fingerprint(
     target_commit: str,
     registry_fingerprint_value: str | None = None,
 ) -> str:
-    registry_fingerprint_value = (
-        REGISTRY_FINGERPRINT
-        if registry_fingerprint_value is None
-        else registry_fingerprint_value
-    )
-    if not re.fullmatch(r"[0-9a-f]{64}", registry_fingerprint_value):
-        raise SchemaControlError("plan_registry_fingerprint_invalid")
-    transitions = PRODUCTION_MIGRATIONS.path(
-        source_schema_version,
-        TARGET_SCHEMA_VERSION,
-    )
-    payload = {
-        "schema_version": 1,
-        "installed_version": installed_version,
-        "installed_commit": installed_commit,
-        "source_schema_version": source_schema_version,
-        "source_shape_fingerprint": source_shape_fingerprint,
-        "target_release": target_release,
-        "target_commit": target_commit,
-        "target_schema_version": TARGET_SCHEMA_VERSION,
-        "registry_fingerprint": registry_fingerprint_value,
-        "conditional_preparation": {
-            "preparation_id": (
-                STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION.preparation_id
-            ),
-            "definition_fingerprint": preparation_definition_fingerprint(
-                STAGE660128_REMEDIATION_COMPATIBILITY_PREPARATION
-            ),
-        },
-        "transitions": [
-            {
-                "migration_id": migration.migration_id,
-                "from_version": migration.from_version,
-                "to_version": migration.to_version,
-                "definition_fingerprint": migration_definition_fingerprint(
-                    migration
-                ),
-            }
-            for migration in transitions
-        ],
-    }
-    return hashlib.sha256(canonical_bytes(payload)).hexdigest()
+    return _schema_transition_compatibility().plan_fingerprint(installed_version=installed_version, installed_commit=installed_commit, source_schema_version=source_schema_version, source_shape_fingerprint=source_shape_fingerprint, target_release=target_release, target_commit=target_commit, registry_fingerprint_value=registry_fingerprint_value)
 
 
 def admission_attempt_id(request: dict[str, Any], request_id: str) -> str:
@@ -3427,24 +2820,7 @@ def validate_initial_context_database(
     *,
     context: UpdateContext,
 ) -> None:
-    (
-        installed_version,
-        installed_commit,
-        source_schema,
-        source_shape,
-    ) = validate_source_lineage(
-        db,
-        request_id=context.request_id,
-        target_release=context.target_release,
-        target_commit=context.target_commit,
-    )
-    if (
-        installed_version != context.installed_version
-        or installed_commit != context.installed_commit
-        or source_schema != context.source_schema_version
-        or source_shape != context.source_shape_fingerprint
-    ):
-        raise SchemaControlError("installed_source_context_changed")
+    return _schema_transition_compatibility().validate_initial_context_database(db, context=context)
 
 
 def load_initial_update_context(db: Session) -> UpdateContext:
@@ -4036,101 +3412,7 @@ def start_attempt(
     definition_fingerprint: str,
     before_shape_fingerprint: str,
 ) -> tuple[str, str]:
-    attempt_id = transition_attempt_id(
-        context.admission_attempt_id,
-        transition_id,
-    )
-    existing = db.get(SchemaMigrationAttempt, attempt_id)
-    if existing is not None:
-        exact = (
-            existing.admission_attempt_id == context.admission_attempt_id
-            and existing.request_id == context.request_id
-            and existing.migration_id == transition_id
-            and existing.previous_version == previous_version
-            and existing.target_version == target_version
-            and existing.target_commit == context.target_commit
-            and existing.registry_fingerprint == context.registry_fingerprint
-            and existing.plan_fingerprint == context.plan_fingerprint
-            and existing.definition_fingerprint == definition_fingerprint
-            and existing.before_shape_fingerprint == before_shape_fingerprint
-        )
-        if not exact:
-            raise SchemaControlError("migration_attempt_identity_mismatch")
-        return attempt_id, str(existing.status)
-    source_identity_details: dict[str, Any] = {}
-    identity_mode = getattr(
-        context,
-        "source_identity_mode",
-        "trusted_release",
-    )
-    source_slot_id = getattr(context, "source_slot_id", None)
-    source_inventory_sha256 = getattr(
-        context,
-        "source_inventory_sha256",
-        None,
-    )
-    if identity_mode == "inventory_bound":
-        if (
-            type(source_slot_id) is not str
-            or not re.fullmatch(r"initial-[0-9a-f]{64}", source_slot_id)
-            or type(source_inventory_sha256) is not str
-            or not re.fullmatch(
-                r"[0-9a-f]{64}",
-                source_inventory_sha256,
-            )
-            or context.installed_commit
-            != inventory_bound_source_token(
-                source_slot_id,
-                source_inventory_sha256,
-            )
-        ):
-            raise SchemaControlError(
-                "inventory_source_attempt_evidence_invalid"
-            )
-        source_identity_details = {
-            "source_identity": {
-                "identity_mode": "inventory_bound",
-                "slot_id": source_slot_id,
-                "inventory_sha256": source_inventory_sha256,
-            }
-        }
-    elif (
-        identity_mode != "trusted_release"
-        or source_slot_id is not None
-        or source_inventory_sha256 is not None
-    ):
-        raise SchemaControlError(
-            "trusted_source_attempt_evidence_invalid"
-        )
-    db.add(
-        SchemaMigrationAttempt(
-            attempt_id=attempt_id,
-            admission_attempt_id=context.admission_attempt_id,
-            request_id=context.request_id,
-            migration_id=transition_id,
-            previous_version=previous_version,
-            target_version=target_version,
-            status="started",
-            started_at=naive_utc_now(),
-            completed_at=None,
-            fencing_generation=generation,
-            installed_version=context.installed_version,
-            installed_commit=context.installed_commit,
-            target_release=context.target_release,
-            target_commit=context.target_commit,
-            registry_fingerprint=context.registry_fingerprint,
-            plan_fingerprint=context.plan_fingerprint,
-            definition_fingerprint=definition_fingerprint,
-            before_shape_fingerprint=before_shape_fingerprint,
-            after_shape_fingerprint=None,
-            failure_class=None,
-            failure_summary=None,
-            resumable=False,
-            details=source_identity_details,
-        )
-    )
-    db.flush()
-    return attempt_id, "started"
+    return _schema_attempt_store().start_attempt(db, context=context, generation=generation, transition_id=transition_id, previous_version=previous_version, target_version=target_version, definition_fingerprint=definition_fingerprint, before_shape_fingerprint=before_shape_fingerprint)
 
 
 def finish_attempt(
@@ -4144,57 +3426,7 @@ def finish_attempt(
     failure_summary: str | None = None,
     resumable: bool = False,
 ) -> None:
-    if status not in {"applied", "failed", "blocked", "interrupted"}:
-        raise SchemaControlError("migration_attempt_terminal_status_invalid")
-    existing = db.get(SchemaMigrationAttempt, attempt_id)
-    persisted_details = (
-        getattr(existing, "details", {})
-        if existing is not None
-        else {}
-    )
-    if type(persisted_details) is not dict or type(details) is not dict:
-        raise SchemaControlError("migration_attempt_details_invalid")
-    merged_details = dict(persisted_details)
-    for key, value in details.items():
-        if key == "source_identity" and key in merged_details and merged_details[key] != value:
-            raise SchemaControlError(
-                "migration_attempt_source_identity_conflict"
-            )
-        merged_details[key] = value
-    result = db.execute(
-        text(
-            """
-            UPDATE schema_migration_attempts
-            SET status=:status,
-                completed_at=:completed_at,
-                after_shape_fingerprint=:after_shape,
-                failure_class=:failure_class,
-                failure_summary=:failure_summary,
-                resumable=:resumable,
-                details=CAST(:details AS JSON)
-            WHERE attempt_id=:attempt_id
-              AND status='started'
-            """
-        ),
-        {
-            "status": status,
-            "completed_at": naive_utc_now(),
-            "after_shape": after_shape_fingerprint,
-            "failure_class": (failure_class or "")[:96] or None,
-            "failure_summary": (failure_summary or "")[:300] or None,
-            "resumable": bool(resumable),
-            "details": bounded_details(merged_details),
-            "attempt_id": attempt_id,
-        },
-    )
-    if result.rowcount != 1:
-        existing = db.get(SchemaMigrationAttempt, attempt_id)
-        if (
-            existing is None
-            or str(existing.status) != status
-            or existing.after_shape_fingerprint != after_shape_fingerprint
-        ):
-            raise SchemaControlError("migration_attempt_transition_conflict")
+    return _schema_attempt_store().finish_attempt(db, attempt_id=attempt_id, status=status, after_shape_fingerprint=after_shape_fingerprint, details=details, failure_class=failure_class, failure_summary=failure_summary, resumable=resumable)
 
 
 def bootstrap_or_resume_control(
@@ -4448,36 +3680,7 @@ def update_control_state(
     generation: int,
     state: str,
 ) -> None:
-    if state not in {"prepared", "recovering", "migrating", "completed", "failed"}:
-        raise SchemaControlError("migration_control_state_invalid")
-    result = db.execute(
-        text(
-            """
-            UPDATE schema_migration_control
-            SET state=:state,
-                lease_expires_at=:lease_expires_at,
-                updated_at=:updated_at
-            WHERE id='current'
-              AND owner_attempt_id=:owner_attempt_id
-              AND request_id=:request_id
-              AND fencing_generation=:generation
-              AND target_commit=:target_commit
-              AND plan_fingerprint=:plan_fingerprint
-            """
-        ),
-        {
-            "state": state,
-            "lease_expires_at": naive_utc_now() + timedelta(minutes=15),
-            "updated_at": naive_utc_now(),
-            "owner_attempt_id": context.admission_attempt_id,
-            "request_id": context.request_id,
-            "generation": generation,
-            "target_commit": context.target_commit,
-            "plan_fingerprint": context.plan_fingerprint,
-        },
-    )
-    if result.rowcount != 1:
-        raise SchemaControlError("migration_control_fence_lost")
+    return _schema_attempt_store().update_control_state(db, context=context, generation=generation, state=state)
 
 
 def validate_stage_receipt_payload(
@@ -4487,113 +3690,7 @@ def validate_stage_receipt_payload(
     generation: int,
     expected_state: str | None = None,
 ) -> dict[str, Any]:
-    expected = {
-        "schema_version",
-        "request_id",
-        "admission_attempt_id",
-        "target_version",
-        "target_commit",
-        "target_schema_version",
-        "registry_fingerprint",
-        "plan_fingerprint",
-        "fencing_generation",
-        "attempt_id",
-        "state",
-        "phase",
-        "retryable",
-        "error_code",
-        "summary",
-        "operator_action",
-        "details",
-        "updated_at",
-    }
-    if (
-        type(payload) is not dict
-        or set(payload) != expected
-        or type(payload.get("schema_version")) is not int
-        or payload["schema_version"] != 1
-    ):
-        raise SchemaControlError("stage_receipt_fields_invalid")
-    for key, max_length in (
-        ("request_id", 80),
-        ("admission_attempt_id", 64),
-        ("target_version", 80),
-        ("target_commit", 40),
-        ("attempt_id", 64),
-        ("state", 24),
-        ("phase", 80),
-        ("error_code", 120),
-        ("summary", 300),
-        ("operator_action", 300),
-    ):
-        exact_string(
-            payload.get(key),
-            code=f"stage_receipt_{key}_invalid",
-            max_length=max_length,
-            allow_empty=key == "error_code",
-        )
-    if (
-        not REQUEST_RE.fullmatch(payload["request_id"])
-        or not ATTEMPT_RE.fullmatch(payload["admission_attempt_id"])
-        or not ATTEMPT_RE.fullmatch(payload["attempt_id"])
-        or not re.fullmatch(r"[0-9a-f]{40}", payload["target_commit"])
-        or type(payload.get("target_schema_version")) is not int
-        or payload["target_schema_version"] != TARGET_SCHEMA_VERSION
-        or type(payload.get("fencing_generation")) is not int
-        or payload["fencing_generation"] < 0
-        or type(payload.get("retryable")) is not bool
-        or type(payload.get("details")) is not dict
-    ):
-        raise SchemaControlError("stage_receipt_types_invalid")
-    for key in ("registry_fingerprint", "plan_fingerprint"):
-        value = exact_string(
-            payload.get(key),
-            code=f"stage_receipt_{key}_invalid",
-            max_length=64,
-        )
-        if not re.fullmatch(r"[0-9a-f]{64}", value):
-            raise SchemaControlError(f"stage_receipt_{key}_invalid")
-    if len(canonical_bytes(payload["details"])) > MAX_DETAILS_BYTES:
-        raise SchemaControlError("stage_receipt_details_too_large")
-    bindings = {
-        "request_id": context.request_id,
-        "admission_attempt_id": context.admission_attempt_id,
-        "target_version": context.target_release,
-        "target_commit": context.target_commit,
-        "target_schema_version": TARGET_SCHEMA_VERSION,
-        "registry_fingerprint": context.registry_fingerprint,
-        "plan_fingerprint": context.plan_fingerprint,
-        "fencing_generation": generation,
-    }
-    for key, value in bindings.items():
-        if payload.get(key) != value:
-            raise SchemaControlError(f"stage_receipt_{key}_mismatch")
-    state = payload["state"]
-    if state not in {
-        "completed",
-        "failed",
-        "blocked",
-        "recovery_required",
-    }:
-        raise SchemaControlError("stage_receipt_state_invalid")
-    if expected_state is not None and state != expected_state:
-        raise SchemaControlError("stage_receipt_state_mismatch")
-    retryable = payload["retryable"]
-    if retryable:
-        classification = classify_retry(
-            payload["error_code"],
-            payload["details"].get("retry_evidence", {}),
-        )
-        if state != "failed" or not classification.retryable:
-            raise SchemaControlError(
-                "stage_receipt_retryable_invariant_invalid"
-            )
-    elif state == "completed" and payload["error_code"]:
-        raise SchemaControlError(
-            "stage_receipt_completed_error_invalid"
-        )
-    parse_utc(payload.get("updated_at"))
-    return payload
+    return _schema_stage_receipts().validate_stage_receipt_payload(payload, context=context, generation=generation, expected_state=expected_state)
 
 
 def write_stage_receipt(
@@ -4609,64 +3706,7 @@ def write_stage_receipt(
     operator_action: str,
     details: dict[str, Any] | None = None,
 ) -> None:
-    if type(retryable) is not bool:
-        raise SchemaControlError("stage_receipt_retryable_type_invalid")
-    for value, code, max_length, allow_empty in (
-        (state, "stage_receipt_state_invalid", 24, False),
-        (error_code, "stage_receipt_error_code_invalid", 120, True),
-        (summary, "stage_receipt_summary_invalid", 300, False),
-        (
-            operator_action,
-            "stage_receipt_operator_action_invalid",
-            300,
-            False,
-        ),
-    ):
-        exact_string(
-            value,
-            code=code,
-            max_length=max_length,
-            allow_empty=allow_empty,
-        )
-    details_value = {} if details is None else details
-    if type(details_value) is not dict:
-        raise SchemaControlError("stage_receipt_details_invalid")
-    if retryable:
-        classification = classify_retry(
-            error_code,
-            details_value.get("retry_evidence", {}),
-        )
-        if state != "failed" or not classification.retryable:
-            raise SchemaControlError(
-                "stage_receipt_retryable_invariant_invalid"
-            )
-    elif state in {"completed", "blocked", "recovery_required", "failed"}:
-        pass
-    else:
-        raise SchemaControlError("stage_receipt_state_invalid")
-    write_signed(
-        path,
-        {
-            "schema_version": 1,
-            "request_id": context.request_id,
-            "admission_attempt_id": context.admission_attempt_id,
-            "target_version": context.target_release,
-            "target_commit": context.target_commit,
-            "target_schema_version": TARGET_SCHEMA_VERSION,
-            "registry_fingerprint": context.registry_fingerprint,
-            "plan_fingerprint": context.plan_fingerprint,
-            "fencing_generation": generation,
-            "attempt_id": transition_attempt_id_value,
-            "state": state,
-            "phase": "preparing_database",
-            "retryable": retryable,
-            "error_code": error_code,
-            "summary": summary,
-            "operator_action": operator_action,
-            "details": details_value,
-            "updated_at": utc_now(),
-        },
-    )
+    return _schema_stage_receipts().write_stage_receipt(path, context=context, generation=generation, transition_attempt_id_value=transition_attempt_id_value, state=state, retryable=retryable, error_code=error_code, summary=summary, operator_action=operator_action, details=details)
 
 
 def acquire_schema_lock(db: Session) -> int:
@@ -4686,16 +3726,7 @@ def release_schema_lock(db: Session) -> None:
 
 
 def target_shape_is_exact(db: Session) -> tuple[bool, str]:
-    actual = database_shape_fingerprint(db)
-    if (
-        not TARGET_SHAPE_FINGERPRINTS
-        or any(
-            not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
-            for fingerprint in TARGET_SHAPE_FINGERPRINTS
-        )
-    ):
-        raise SchemaControlError("target_shape_evidence_missing")
-    return actual in TARGET_SHAPE_FINGERPRINTS, actual
+    return _schema_transition_compatibility().target_shape_is_exact(db)
 
 
 def classify_retry(

@@ -314,8 +314,8 @@ def onvif_ptz_capabilities(
         return {
             "camera_id": camera.id,
             "camera_name": camera.name,
-            "ok": True,
-            "supported": False,
+            "ok": False,
+            "supported": None,
             "source": "unreachable",
             "can_pan_tilt": False,
             "can_zoom": False,
@@ -323,7 +323,7 @@ def onvif_ptz_capabilities(
             "can_presets": False,
             "limits": ptz_command_limits(),
             "warnings": [onvif_error_code(e)],
-            "unsupported_reasons": ["onvif_ptz_capability_check_failed"],
+            "unsupported_reasons": [],
             "message": safe_onvif_error(e),
             "raw_secret_exposed": False,
         }
@@ -507,9 +507,9 @@ def onvif_health_check(
             except Exception as exc:
                 reason_codes.append(onvif_error_code(exc))
                 ptz_result = {
-                    "supported": False,
+                    "supported": None,
                     "source": "unknown",
-                    "unsupported_reasons": ["ptz_check_failed"],
+                    "warnings": ["ptz_check_failed"],
                     "raw_secret_exposed": False,
                 }
 
@@ -525,7 +525,7 @@ def onvif_health_check(
             except Exception as exc:
                 reason_codes.append(onvif_error_code(exc))
                 events_result = {
-                    "events_supported": False,
+                    "events_supported": None,
                     "events_status": "unknown",
                     "reason_codes": ["events_feasibility_check_failed"],
                     "limitations": ["feasibility_only_no_subscription_started"],
