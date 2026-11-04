@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
 import { OperationDialog, OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
+import { installModalKeyboard } from "../../lib/modalKeyboard";
 import VideoZoomPanSurface from "../../components/VideoZoomPanSurface";
 import ArchiveExportResult from "../../components/ArchiveExportResult";
 import useArchiveExport from "../../lib/useArchiveExport";
@@ -22,7 +23,7 @@ import {
   normalizeVideoDimensions,
   selectCompactVideoRenderMode,
 } from "../../lib/playbackResolution";
-import { formatProductDateTime, productDateFilterParam, productDateTimeInputValue } from "../../lib/timezone";
+import { formatProductDateTime, productDateFilterParam, productDateTimeInputValue, productInstantInputValue, productCalendarDate, productCalendarInputValue } from "../../lib/timezone";
 
 const DEFAULT_PAGE_SIZE = 30;
 const PAGE_SIZE_OPTIONS = [15, 30, 50, 100];
@@ -147,24 +148,24 @@ function toDateTimeInputParts(dateValue) {
   return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}:${pad2(dt.getSeconds())}`;
 }
 
-function defaultClipRange(selectedDate, exportLimits) {
+function defaultClipRange(selectedDate, exportLimits, timezone = "UTC") {
   const limitMs = Number(exportLimits?.max_duration_seconds || 3 * 60 * 60) * 1000;
   let start;
   if (selectedDate) {
-    start = new Date(`${selectedDate}T00:00:00`);
+    start = productCalendarDate(`${selectedDate}T00:00:00`);
   } else {
-    start = new Date();
-    start.setSeconds(0, 0);
+    start = productCalendarDate(productInstantInputValue(new Date(), timezone));
+    start.setUTCSeconds(0, 0);
     start = new Date(start.getTime() - 60_000);
   }
   if (!Number.isFinite(start.getTime())) {
-    start = new Date();
-    start.setSeconds(0, 0);
+    start = productCalendarDate(productInstantInputValue(new Date(), timezone));
+    start.setUTCSeconds(0, 0);
   }
   const end = new Date(start.getTime() + Math.min(60_000, limitMs));
   return {
-    startTs: toDateTimeInputParts(start),
-    endTs: toDateTimeInputParts(end),
+    startTs: productCalendarInputValue(start),
+    endTs: productCalendarInputValue(end),
   };
 }
 
@@ -573,11 +574,19 @@ export default function RecordingsPage() {
   const dangerMenuRef = useRef(null);
   const dangerTriggerRef = useRef(null);
   const viewerFrameRef = useRef(null);
+  const viewerDialogRef = useRef(null);
   const viewerVideoRef = useRef(null);
   const viewerRestoreStateRef = useRef(null);
   const viewerRefreshInFlightRef = useRef(false);
+  const viewerSelectionRef = useRef({ revision: 0, item: null });
   const canDelete = canDeleteRecordings(currentUser);
   const canExport = canExportRecordings(currentUser);
+
+  useEffect(() => () => {
+    viewerSelectionRef.current = { revision: viewerSelectionRef.current.revision + 1, item: null };
+    viewerRefreshInFlightRef.current = false;
+    viewerRestoreStateRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (!canExport) return;
@@ -788,6 +797,11 @@ export default function RecordingsPage() {
   useModalBodyScrollLock(viewerOpen, { freezePosition: true });
 
   useEffect(() => {
+    if (!viewerOpen || !viewerDialogRef.current) return;
+    return installModalKeyboard(viewerDialogRef.current, closeViewer);
+  }, [viewerOpen]);
+
+  useEffect(() => {
     if (!viewerOpen) return;
     const el = viewerFrameRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -856,7 +870,7 @@ export default function RecordingsPage() {
   function openExportModal() {
     if (!canExport) return;
     if (exportDraftRef.current) { setExportModal(exportDraftRef.current); return; }
-    const { startTs, endTs } = defaultClipRange(selectedDate, exportLimits);
+    const { startTs, endTs } = defaultClipRange(selectedDate, exportLimits, productTimezone);
     setError("");
     setExportModal({
       cameraId: "",
@@ -911,9 +925,14 @@ export default function RecordingsPage() {
 
   async function handleWatch(item) {
     if (!isRecordingAvailable(item)) return;
+    const selection = { revision: viewerSelectionRef.current.revision + 1, item };
+    viewerSelectionRef.current = selection;
+    viewerRefreshInFlightRef.current = false;
+    viewerRestoreStateRef.current = null;
     try {
       setError("");
       const url = await buildRecordingStreamUrl(item);
+      if (viewerSelectionRef.current !== selection) return;
       setViewerTitle(item.filename);
       setViewerUrl(url);
       setViewerItem(item);
@@ -926,11 +945,12 @@ export default function RecordingsPage() {
       viewerRefreshInFlightRef.current = false;
       setViewerOpen(true);
     } catch (err) {
-      showRecordingActionError(err);
+      if (viewerSelectionRef.current === selection) showRecordingActionError(err);
     }
   }
 
   function closeViewer() {
+    viewerSelectionRef.current = { revision: viewerSelectionRef.current.revision + 1, item: null };
     const frame = viewerFrameRef.current;
     if (document.fullscreenElement && frame && (document.fullscreenElement === frame || frame.contains(document.fullscreenElement))) {
       document.exitFullscreen?.().catch(() => {});
@@ -987,6 +1007,8 @@ export default function RecordingsPage() {
   }
 
   async function refreshViewerUrlAfterMediaError() {
+    const selection = viewerSelectionRef.current;
+    if (selection.item !== viewerItem) return;
     if (
       !viewerItem ||
       viewerRefreshAttempted ||
@@ -1008,14 +1030,16 @@ export default function RecordingsPage() {
       viewerRefreshInFlightRef.current = true;
       setViewerRefreshAttempted(true);
       const url = await buildRecordingStreamUrl(viewerItem);
+      if (viewerSelectionRef.current !== selection) return;
       setViewerUrl(url);
       setViewerPlaybackError(false);
     } catch (_) {
+      if (viewerSelectionRef.current !== selection) return;
       viewerRestoreStateRef.current = null;
       setViewerResolution({ width: 0, height: 0 });
       setViewerPlaybackError(true);
     } finally {
-      viewerRefreshInFlightRef.current = false;
+      if (viewerSelectionRef.current === selection) viewerRefreshInFlightRef.current = false;
     }
   }
 
@@ -1604,9 +1628,9 @@ export default function RecordingsPage() {
 
       {viewerOpen ? (
         <div className="modalBackdrop recordingsViewerBackdrop" data-recordings-viewer-open="true">
-          <div className="modal modalWide" onClick={(e) => e.stopPropagation()}>
+          <div ref={viewerDialogRef} className="modal modalWide" role="dialog" aria-modal="true" aria-labelledby="recordings-viewer-title" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
             <div className="modalHeader">
-              <h2 style={{ margin: 0 }}>{t.viewRecord}</h2>
+              <h2 id="recordings-viewer-title" style={{ margin: 0 }}>{t.viewRecord}</h2>
               <button
                 className="iconCloseButton"
                 onClick={closeViewer}

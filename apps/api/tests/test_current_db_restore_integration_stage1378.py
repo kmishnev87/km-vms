@@ -295,6 +295,13 @@ def _bind_helper_paths(
     *,
     run_root: Path,
 ) -> tuple[Path, Path, Path]:
+    # Model the host-app binding required by the real helper, inside this test's
+    # disposable runtime. Do not bypass the product path/authority validation.
+    bootstrap = run_root / "data/update-runtime/bootstrap/current/km-vms-bootstrap.py"
+    bootstrap.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(HELPER_PATH.parent / "km-vms-bootstrap.py", bootstrap)
+    (run_root / ".env").write_text("# isolated restore fixture\n", encoding="utf-8")
+    monkeypatch.setattr(helper, "HOST_APP_DIR", run_root)
     restore_control = run_root / "restore-control"
     restore_public = run_root / "restore-public"
     maintenance_control = run_root / "maintenance-control"
@@ -570,6 +577,9 @@ def _run_flow(
         return ("a" if service == "api" else "b") * 64
 
     monkeypatch.setattr(helper, "restore_compose_command", compose)
+    # This integration target owns subprocesses, not Docker containers. Keep
+    # the restart-policy boundary explicit while testing real DB/Recorder work.
+    monkeypatch.setattr(helper, "set_restore_writer_fence", lambda *, enabled: events.append(f"writers:fence:{enabled}"))
     monkeypatch.setattr(
         helper,
         "_run_existing_restore_service_action",

@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createSerializedLayoutWriter } from "../../lib/serializedLayoutWriter";
 import Layout from "../../components/Layout";
 import OperatorProblemBanners from "../../components/OperatorProblemBanners";
 import { OperationToast } from "../../components/OperationFeedback";
 import TilePlayer from "../../components/TilePlayer";
-import { apiFetch } from "../../lib/api";
+import { apiFetch, getAuthToken } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
 import {
   consumeTouchDoubleTapSuppressionToken,
@@ -249,6 +250,12 @@ export default function LivePage() {
   const [tiles, setTiles] = useState([]);
   const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
   const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
+  const layoutWriterRef = useRef(null);
+  if (!layoutWriterRef.current) {
+    layoutWriterRef.current = createSerializedLayoutWriter((payload) => apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    }));
+  }
   const [operationToast, setOperationToast] = useState(null);
   const cameraLoadErrorRef = useRef("");
   const [dragState, setDragState] = useState(null);
@@ -338,32 +345,29 @@ export default function LivePage() {
     return () => {
       clearInterval(timer);
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      layoutWriterRef.current.dispose();
     };
   }, []);
 
   useEffect(() => {
     if (!hydratedRef.current) return;
+    layoutWriterRef.current.invalidate();
     saveTiles(tiles);
     if (!backendReadyRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(async () => {
-      try {
+    saveTimerRef.current = setTimeout(() => {
         const payload = backendPayload(tiles, sidebarCameraOrder);
         const payloadText = JSON.stringify(payload);
         if (payloadText === lastBackendLayoutPayloadRef.current) return;
-        const saved = await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: payloadText,
-        });
+        const ownerSession = getAuthToken();
+        layoutWriterRef.current.save(payload, (saved) => {
         const savedOrder = sanitizeSidebarCameraOrder(saved?.sidebarCameraOrder);
         setLastPersistedSidebarCameraOrder(savedOrder);
         setSidebarCameraOrder(savedOrder);
         lastBackendLayoutPayloadRef.current = JSON.stringify(backendPayload(saved?.tiles || tiles, savedOrder));
-      } catch (err) {
-        setSidebarCameraOrder(lastPersistedSidebarCameraOrder);
+        }, (err) => {
         showWorkspaceError(err.message || TEXT.loadError);
-      }
+        }, () => getAuthToken() === ownerSession);
     }, 500);
   }, [tiles, sidebarCameraOrder, lastPersistedSidebarCameraOrder]);
 

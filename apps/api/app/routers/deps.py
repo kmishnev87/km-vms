@@ -46,8 +46,8 @@ def get_current_user(
             detail=INVALID_TOKEN_DETAIL,
         )
 
-    username = payload.get("sub")
-    if not username:
+    user_id = payload.get("uid")
+    if type(user_id) is not int or user_id < 1:
         audit_security_denied(
             db=db,
             request=request,
@@ -60,7 +60,7 @@ def get_current_user(
             detail=INVALID_TOKEN_DETAIL,
         )
 
-    user = db.query(User).filter(User.username == username).first()
+    user = db.query(User).filter(User.id == user_id).first()
     if not user or not getattr(user, "is_active", True):
         audit_security_denied(
             db=db,

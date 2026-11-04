@@ -54,13 +54,15 @@ assert.equal(
 
 for (const message of [
   "HTTP 401",
-  "HTTP 403",
   "Not authenticated",
   "Invalid token",
-  "Forbidden",
-  "Section unavailable. User permissions are limited.",
+  "Недействительный токен",
+  "Пользователь не найден",
 ]) {
   assert.equal(isCurrentUserDeniedError(new Error(message)), true);
 }
 
 assert.equal(isCurrentUserDeniedError(new Error("Network failed")), false);
+assert.equal(isCurrentUserDeniedError({status:401,message:'任何本地化文本'}), true);
+assert.equal(isCurrentUserDeniedError({status:403,message:'Forbidden'}), false);
+assert.equal(isCurrentUserDeniedError({status:503,message:'Invalid token in upstream text'}), false);

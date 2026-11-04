@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { DICTIONARIES, TEXT_TRANSLATIONS } from "./i18n/dictionaries.js";
 
 export const DEFAULT_LOCALE = "ru";
@@ -182,16 +182,18 @@ export function I18nProvider({ children }) {
     applyDocumentLanguage(locale);
   }, [locale]);
 
+  const setLocale = useCallback((next) => {
+    const normalized = normalizeLocale(next);
+    setLocaleState(normalized);
+    persistLocale(normalized);
+  }, []);
+
   const value = useMemo(() => ({
     locale,
-    setLocale: (next) => {
-      const normalized = normalizeLocale(next);
-      setLocaleState(normalized);
-      persistLocale(normalized);
-    },
+    setLocale,
     t: (key, params) => translateKey(locale, key, params),
     text: (input, params) => translateText(locale, input, params),
-  }), [locale]);
+  }), [locale, setLocale]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

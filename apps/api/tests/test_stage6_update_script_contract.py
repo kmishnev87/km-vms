@@ -1247,7 +1247,10 @@ def test_update_script_dry_run_preserves_fixture_app_when_source_acquisition_is_
         tarball = Path(tmp) / "source.tar.gz"
         subprocess.run(["tar", "-czf", str(tarball), "-C", str(source.parent), source.name], check=True)
         (bin_dir / "curl").write_text(
-            "#!/usr/bin/env sh\ncp '" + str(tarball) + "' \"$4\"\nprintf 'HTTP/1.1 200 OK\\r\\n\\r\\n' > \"$6\"\n",
+            "#!/usr/bin/env sh\n"
+            "while [ \"$#\" -gt 0 ]; do\n"
+            "  case \"$1\" in -o) output=$2; shift 2;; --dump-header) headers=$2; shift 2;; *) shift;; esac\n"
+            "done\ncp '" + str(tarball) + "' \"$output\"\nprintf 'HTTP/1.1 200 OK\\r\\n\\r\\n' > \"$headers\"\n",
             encoding="utf-8",
         )
         os.chmod(bin_dir / "curl", 0o755)

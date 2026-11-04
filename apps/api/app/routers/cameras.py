@@ -37,6 +37,7 @@ from app.routers.camera_connection_helpers import (
     register_validation_proof,
     require_save_gate,
     resolve_test_connection_payload,
+    resolve_rtsp_management_path,
     safe_int,
     safe_onvif_error,
     safe_preview_token,
@@ -68,6 +69,7 @@ from app.schemas.camera import (
     safe_rtsp_management_value,
 )
 from app.services.audit_log import create_event, request_ip, request_user_agent
+from app.services.archive_root_activation import preserve_manual_camera_disable
 from app.services.camera_previews import purge_expired_test_previews
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.recording_retention import EXECUTION_POLICY_MANUAL_COMPLETE, execute_segments, preview_segments
@@ -312,14 +314,14 @@ def create_camera(
         rtsp_port,
         payload.username,
         payload.password,
-        saved_stream_path(payload.rtsp_main_url),
+        resolve_rtsp_management_path(payload.model_dump(), "main"),
     )
     rtsp_sub_url = assemble_rtsp_url(
         rtsp_host,
         rtsp_port,
         payload.username,
         payload.password,
-        saved_stream_path(payload.rtsp_sub_url),
+        resolve_rtsp_management_path(payload.model_dump(), "sub"),
     )
 
     payload_dict = payload.model_dump()
@@ -501,6 +503,7 @@ def camera_delete_has_active_job(db: Session, camera_id: int) -> bool:
 def stop_recording_before_camera_delete(db: Session, camera: Camera) -> bool:
     """Persist disabled intent, then wait for the recorder's stop acknowledgement."""
     wait_for_ack = bool(camera.enabled) or camera_delete_has_active_job(db, camera.id)
+    preserve_manual_camera_disable(db, camera.id)
     camera.enabled = False
     camera.status = "deleting"
     db.add(camera)
@@ -822,23 +825,23 @@ def update_camera(
 
     submitted_main = data.get("rtsp_main_url", camera.rtsp_main_url)
     submitted_sub = data.get("rtsp_sub_url", camera.rtsp_sub_url)
+    connection_context = {**vars(camera), **data, "password": password_for_rtsp,
+                          "rtsp_host": next_rtsp_host, "rtsp_port": next_rtsp_port,
+                          "onvif_probe_token": onvif_probe_token,
+                          "rtsp_main_url": submitted_main, "rtsp_sub_url": submitted_sub}
     data["rtsp_main_url"] = assemble_rtsp_url(
         host_for_rtsp,
         port_for_rtsp,
         username_for_rtsp,
         password_for_rtsp,
-        saved_stream_path(
-            restore_rtsp_management_value(submitted_main, camera.rtsp_main_url)
-        ),
+        resolve_rtsp_management_path(connection_context, "main", stored=camera.rtsp_main_url),
     )
     data["rtsp_sub_url"] = assemble_rtsp_url(
         host_for_rtsp,
         port_for_rtsp,
         username_for_rtsp,
         password_for_rtsp,
-        saved_stream_path(
-            restore_rtsp_management_value(submitted_sub, camera.rtsp_sub_url)
-        ),
+        resolve_rtsp_management_path(connection_context, "sub", stored=camera.rtsp_sub_url),
     )
 
     if "password" in data and data["password"]:
@@ -888,6 +891,8 @@ def update_camera(
     }
     manual_unverified = require_save_gate(gate_payload, connection_sensitive_change=connection_sensitive_change)
 
+    if data.get("enabled") is False:
+        preserve_manual_camera_disable(db, camera.id)
     for key, value in data.items():
         setattr(camera, key, value)
     camera.rtsp_host = next_rtsp_host
@@ -979,6 +984,7 @@ def disable_camera(
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
 
+    preserve_manual_camera_disable(db, camera.id)
     camera.enabled = False
     camera.status = "disabled"
     camera.last_error = None

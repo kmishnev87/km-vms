@@ -17,3 +17,22 @@ export function createRuntimeStatusCache(now = () => Date.now()) {
 }
 
 export const runtimeStatusCache = createRuntimeStatusCache();
+
+export function createRuntimeStatusRequestCache(now = () => Date.now()) {
+  let current = null;
+  return (session, fetcher, { force = false } = {}) => {
+    if (!session) return Promise.reject(Object.assign(new Error('Sign in required'), { status: 401 }));
+    if (current?.session !== session) current = { session, promise: null, data: null, updatedAt: 0 };
+    const owner = current;
+    if (owner.promise) return owner.promise;
+    if (!force && owner.data && now() - owner.updatedAt < 30000) return Promise.resolve(owner.data);
+    const request = Promise.resolve(fetcher()).then(data => {
+      if (current === owner) { owner.data = data; owner.updatedAt = now(); }
+      return data;
+    }).finally(() => { if (owner.promise === request) owner.promise = null; });
+    owner.promise = request;
+    return request;
+  };
+}
+
+export const runtimeStatusRequestCache = createRuntimeStatusRequestCache();

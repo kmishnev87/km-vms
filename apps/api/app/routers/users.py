@@ -2,6 +2,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from app.core.permissions import (
     PERMISSION_VIEW_LIVE,
@@ -32,6 +33,17 @@ WORKSPACE_PERMISSIONS = {
     "chronology": PERMISSION_VIEW_TIMELINE,
 }
 WORKSPACE_STREAMS = {"main", "sub", "sub2"}
+
+
+def commit_user_change(db: Session) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        if "username" in str(exc.orig).lower():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                                detail="Пользователь с таким логином уже существует") from None
+        raise
 
 
 def serialize_user(user: User) -> UserResponse:
@@ -333,7 +345,7 @@ def create_user(
         is_active=bool(payload.is_active),
     )
     db.add(user)
-    db.commit()
+    commit_user_change(db)
     db.refresh(user)
     create_event(
         db=db,
@@ -424,7 +436,7 @@ def update_user(
     user.updated_at = datetime.utcnow()
 
     db.add(user)
-    db.commit()
+    commit_user_change(db)
     db.refresh(user)
     changes = {}
     if old_username != user.username:

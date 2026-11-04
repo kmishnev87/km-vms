@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch, getAuthToken } from "../lib/api";
+import { getSystemRuntimeStatus, getAuthToken } from "../lib/api";
 import { runtimeStatusCache } from "../lib/runtimeStatusCache";
 import {
   buildDashboardStatusSummary,
@@ -40,7 +40,7 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
     let refreshPending = false;
     let denied = Boolean(previous?.denied);
 
-    async function loadStatus() {
+    async function loadStatus({ force = false } = {}) {
       if (cancelled || denied) return false;
       if (inFlight) { refreshPending = true; return true; }
       if (!enabled || !canRead) {
@@ -55,7 +55,7 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
       inFlight = true;
       setLoading(true);
       try {
-        const data = await apiFetch("/system/runtime/status");
+        const data = await getSystemRuntimeStatus({ force });
         if (!cancelled) {
           latestRuntimeStatus = data;
           runtimeStatusCache.write(cacheIdentity, authSession, data);
@@ -98,7 +98,7 @@ export function useSystemHealthStatus(currentUser, { enabled = true } = {}) {
     const refreshRuntime = () => {
       if (cancelled || denied || !enabled || !canRead) return;
       if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(loadStatus, 200);
+      refreshTimer = setTimeout(() => loadStatus({ force: true }), 200);
     };
     window.addEventListener("kmvms:camera-runtime-changed", refreshRuntime);
     window.addEventListener("kmvms:live-runtime-changed", refreshRuntime);

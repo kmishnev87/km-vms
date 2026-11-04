@@ -2103,6 +2103,8 @@ function InfoTip({ text }) {
 export default function SettingsPage() {
   const router = useRouter();
   const [draft, setDraft] = useState(null);
+  const pendingLanguageRef = useRef(null);
+  const loadGenerationRef = useRef(0);
   const [savedDraft, setSavedDraft] = useState(null);
   const [hardware, setHardware] = useState(null);
   const [toast, setToast] = useState(null);
@@ -2156,10 +2158,14 @@ export default function SettingsPage() {
   useEffect(() => {
     load();
     function onLanguage(event) {
-      if (event.detail) patch("language", normalizeLocale(event.detail));
+      if (event.detail) {
+        pendingLanguageRef.current = normalizeLocale(event.detail);
+        patch("language", pendingLanguageRef.current);
+      }
     }
     window.addEventListener("km-vms-language", onLanguage);
     return () => {
+      loadGenerationRef.current += 1;
       window.removeEventListener("km-vms-language", onLanguage);
     };
   }, []);
@@ -2242,24 +2248,24 @@ export default function SettingsPage() {
   }
 
   async function load() {
-    try {
-      const [settingsData, hardwareData, meData] = await Promise.all([
-        apiFetch("/settings"),
-        apiFetch("/hardware/capabilities"),
-        apiFetch("/users/me"),
-      ]);
-      const nextDraft = settingsDraftFromApi(settingsData);
-      setDraft(nextDraft);
-      setSavedDraft(nextDraft);
-      setFormatStatus(settingsData.recording_format_change);
-      setHardware(hardwareData);
-      setCurrentUser(meData);
-      if (meData?.permissions?.includes("admin_access")) {
-        await loadUsers();
-      }
-    } catch (err) {
-      showToast(normalizedError(err, lang));
-    }
+    const generation = ++loadGenerationRef.current;
+    const ownsLoad = () => generation === loadGenerationRef.current;
+    const failed = (err) => { if (ownsLoad()) showToast(normalizedError(err, lang)); };
+    await Promise.allSettled([
+      apiFetch("/settings").then((settingsData) => {
+        if (!ownsLoad()) return;
+        const nextDraft = settingsDraftFromApi(settingsData);
+        setSavedDraft(nextDraft);
+        setDraft(pendingLanguageRef.current ? { ...nextDraft, language: pendingLanguageRef.current } : nextDraft);
+        setFormatStatus(settingsData.recording_format_change);
+      }).catch(failed),
+      apiFetch("/hardware/capabilities").then((data) => { if (ownsLoad()) setHardware(data); }).catch(failed),
+      apiFetch("/users/me").then(async (meData) => {
+        if (!ownsLoad()) return;
+        setCurrentUser(meData);
+        if (meData?.permissions?.includes("admin_access")) await loadUsers();
+      }).catch(failed),
+    ]);
   }
 
   async function loadUsers() {
@@ -2313,7 +2319,7 @@ export default function SettingsPage() {
   }
 
   function patch(key, value) {
-    setDraft((current) => ({ ...current, [key]: value }));
+    setDraft((current) => current ? ({ ...current, [key]: value }) : current);
   }
 
   function cancelChanges() {
@@ -2730,7 +2736,7 @@ export default function SettingsPage() {
                   <div className="settingsRowIcon"><img src="/assets/icons/ui/hardware.png" alt="" /></div>
                   <div className="settingsRowText">
                     <label htmlFor="settings-hardware">{t.hardware}<InfoTip text={t.tooltips.hardware} /></label>
-                    <span>{hardware?.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.</span>
+                    <span>{hardware === null ? (lang === "en" ? "Acceleration status is not available yet." : lang === "zh-CN" ? "暂时无法获取加速状态。" : "Данные об ускорении пока недоступны.") : hardware.hardware_accel_available ? t.hardwareAvailable : t.hardwareUnavailable} {t.selected}: {backendLabel(selectedHardware, lang)}.</span>
                     <div className="settingsHardwareOptions">
                       {hardwareSummary.map(({ backend, selectable, reason }) => (
                         <span key={backend} className={`settingsBadge settingsBadge-${backend} ${selectable ? "ok" : "disabled"}`} title={reason || t.tooltips[backend]}>

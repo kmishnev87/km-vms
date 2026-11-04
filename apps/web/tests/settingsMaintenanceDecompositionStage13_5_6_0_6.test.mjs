@@ -573,7 +573,6 @@ assert.match(
 );
 
 const expectedProtected = {
-  "apps/web/lib/api.js": "5ac4233176ffe185b409e7192b70b30958d7d746e92e9c9b5e7497825b754c11",
   "apps/web/lib/settingsPageHelpers.js": "adece850f2f049b7b535817c2fad8ec9cc7099d7abdfa0b52d129c909c1eee7c",
   "apps/web/lib/settingsPageSharedHelpers.js": "d8fdc0362c05c1828fda83e2aadb61267378791371391e9222afbefd86c53d0e"
 };
@@ -588,5 +587,10 @@ for (const [relative, expectedHash] of Object.entries(expectedProtected)) {
   assert.equal(helperSource.includes("settingsMaintenanceController"), false);
   assert.equal(helperSource.includes("SettingsMaintenanceSurface"), false);
 }
+// Stage 14 deliberately changes api.js authentication and request coalescing.
+// Behavioral regressions cover those contracts; retain the dependency boundary.
+const apiSource = fs.readFileSync(resolve(repoRoot, "apps/web/lib/api.js"), "utf8");
+assert.equal(apiSource.includes("settingsMaintenanceController"), false);
+assert.equal(apiSource.includes("SettingsMaintenanceSurface"), false);
 
 console.log("Stage 13.5.6.0.6 Settings Maintenance decomposition contract passed.");

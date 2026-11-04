@@ -1,14 +1,14 @@
 {
   "schema_version": 1,
   "product": "KM VMS",
-  "version": "0.8.28",
-  "tag": "v0.8.28",
-  "title": "ONVIF camera settings and stable maintenance",
-  "summary": "Read and change supported ONVIF camera settings through Media1 or Media2, verify the applied values, and keep backup operations in a stable maintenance list.",
+  "version": "0.8.29",
+  "tag": "v0.8.29",
+  "title": "Reliable sessions, recording and archive workflows",
+  "summary": "Stage 14 reliability fixes: stable account identity, recoverable recording and storage operations, bounded background work, consistent archive time and resilient browser interactions.",
   "release_channel": "public-github",
   "source_kind": "github-release",
   "source_repo": "kmishnev87/km-vms",
-  "source_ref": "v0.8.28",
+  "source_ref": "v0.8.29",
   "evidence_model": "semver_tag_resolves_to_commit",
   "commit_sha": null,
   "published_at": null,
@@ -20,51 +20,63 @@
     "target_version": 10
   },
   "changelog": [
-    "Read and change ONVIF video settings through discovered Media1 or Media2 services, including separate lenses and shared encoders.",
-    "Respect codec-dependent resolutions, frame rates, bitrates, GOP, quality and codec profiles while preserving the rest of the camera configuration.",
-    "Verify camera changes by reading them back; report refusals, mismatches and unknown results without inventing success or blindly resending writes.",
-    "Keep ONVIF controls in clear pairs: codec/profile, resolution/FPS, bitrate type/value and quality/GOP; remove the optional heading marker.",
-    "Keep backup creation, checks and deletion in the current maintenance list; retain deliberate confirmations and real trial-restore validation.",
-    "Stabilize backup rows, timestamps, badges, scrolling, pagination and keyboard focus without automatic result windows or frequent background checks.",
-    "Initialize camera clients without unnecessary event subscriptions; handle authentication clock offsets on the client without changing camera time."
+    "Bind sessions to permanent account IDs, validate usernames consistently and handle expired sessions without confusing permission or network errors.",
+    "Create recording jobs transactionally, recover storage pause intentions and process completed segments incrementally without rescanning history.",
+    "Recover archive migration workers after database outages while preserving operation ownership, fencing and retry intent.",
+    "Use the installation timezone consistently for archive calendars and exports; bound archive queries and clean all expired export batches.",
+    "Preserve masked RTSP settings consistently, hide ONVIF address secrets and apply custom ONVIF endpoints to camera operations.",
+    "Repair VAAPI detection and initial live-stream deadlines without imposing a time limit on an established viewing session.",
+    "Protect recordings, chronology, layouts and account data from stale responses; cancel obsolete seek handlers and coalesce repeated requests.",
+    "Keep setup language changes stable, settings sections independent, all storage cameras visible and all-time audit filters truly unbounded.",
+    "Check finalized recording history during integrity scans, distinguish unknown health and restore accessible archive dialog keyboard controls.",
+    "Bound installation and update source downloads and restore retry readiness after failed acquisition."
   ],
   "title_i18n": {
-    "en": "ONVIF camera settings and stable maintenance",
-    "ru": "Настройки ONVIF и устойчивое обслуживание",
-    "zh-CN": "ONVIF 摄像机设置与稳定维护界面"
+    "en": "Reliable sessions, recording and archive workflows",
+    "ru": "Надёжный вход, запись и работа с архивом",
+    "zh-CN": "可靠的会话、录像与归档流程"
   },
   "summary_i18n": {
-    "en": "Read and change supported ONVIF camera settings through Media1 or Media2, verify the applied values, and keep backup operations in a stable maintenance list.",
-    "ru": "Чтение и изменение поддерживаемых настроек камер через ONVIF Media1/Media2, проверка применённых значений и устойчивый список резервных копий без лишних окон.",
-    "zh-CN": "通过 ONVIF Media1 或 Media2 读取和修改摄像机支持的设置，回读验证实际结果，并在稳定的维护列表中完成备份操作。"
+    "en": "Stage 14 reliability fixes: stable account identity, recoverable recording and storage operations, bounded background work, consistent archive time and resilient browser interactions.",
+    "ru": "Исправления этапа 1 главы 14: надёжные сессии, восстановление записи и операций хранилища, снижение фоновой нагрузки, единое время архива и устойчивый интерфейс.",
+    "zh-CN": "第 14 章第一阶段可靠性修复：稳定的账户身份、可恢复的录像与存储操作、受限后台工作量、统一归档时间以及可靠的界面交互。"
   },
   "changelog_i18n": {
     "en": [
-      "Read and change ONVIF video settings through discovered Media1 or Media2 services, including separate lenses and shared encoders.",
-      "Respect codec-dependent resolutions, frame rates, bitrates, GOP, quality and codec profiles while preserving the rest of the camera configuration.",
-      "Verify camera changes by reading them back; report refusals, mismatches and unknown results without inventing success or blindly resending writes.",
-      "Keep ONVIF controls in clear pairs: codec/profile, resolution/FPS, bitrate type/value and quality/GOP; remove the optional heading marker.",
-      "Keep backup creation, checks and deletion in the current maintenance list; retain deliberate confirmations and real trial-restore validation.",
-      "Stabilize backup rows, timestamps, badges, scrolling, pagination and keyboard focus without automatic result windows or frequent background checks.",
-      "Initialize camera clients without unnecessary event subscriptions; handle authentication clock offsets on the client without changing camera time."
+      "Bind sessions to permanent account IDs, validate usernames consistently and handle expired sessions without confusing permission or network errors.",
+      "Create recording jobs transactionally, recover storage pause intentions and process completed segments incrementally without rescanning history.",
+      "Recover archive migration workers after database outages while preserving operation ownership, fencing and retry intent.",
+      "Use the installation timezone consistently for archive calendars and exports; bound archive queries and clean all expired export batches.",
+      "Preserve masked RTSP settings consistently, hide ONVIF address secrets and apply custom ONVIF endpoints to camera operations.",
+      "Repair VAAPI detection and initial live-stream deadlines without imposing a time limit on an established viewing session.",
+      "Protect recordings, chronology, layouts and account data from stale responses; cancel obsolete seek handlers and coalesce repeated requests.",
+      "Keep setup language changes stable, settings sections independent, all storage cameras visible and all-time audit filters truly unbounded.",
+      "Check finalized recording history during integrity scans, distinguish unknown health and restore accessible archive dialog keyboard controls.",
+      "Bound installation and update source downloads and restore retry readiness after failed acquisition."
     ],
     "ru": [
-      "Чтение и изменение видеонастроек через обнаруженные Media1/Media2, включая отдельные объективы и общие конфигурации кодирования.",
-      "Допустимые разрешения, FPS, битрейт, GOP, качество и профиль зависят от кодека; остальные настройки камеры сохраняются.",
-      "Результат изменения подтверждается повторным чтением; отказ, несовпадение и неизвестный результат не выдаются за успех, команда не повторяется вслепую.",
-      "Поля сгруппированы: кодек/профиль, разрешение/FPS, тип/значение битрейта, качество/GOP; отметка «Необязательно» убрана из заголовка.",
-      "Создание, проверка и удаление копий остаются в текущем списке; подтверждения действий и настоящее пробное восстановление сохранены.",
-      "Строки, даты, статусы, прокрутка, кнопки страниц и клавиатурный фокус устойчивы; автоматических окон результата и нового частого опроса нет.",
-      "Клиент камеры не создаёт лишние Events-подписки; расхождение часов при авторизации учитывается на стороне клиента без изменения времени камеры."
+      "Сессии привязаны к постоянному номеру пользователя; логины проверяются единообразно, окончание сессии не смешивается с ошибками прав или сети.",
+      "Задания записи создаются с подтверждением базы; намерения остановки камер восстанавливаются, законченные файлы учитываются без повторного обхода истории.",
+      "Перенос архива возобновляется после потери базы с сохранением владельца, блокировок и намерения повторной попытки.",
+      "Календарь и экспорт используют часовой пояс установки; запросы архива ограничены нужным диапазоном, очищаются все просроченные экспортные задания.",
+      "Скрытые параметры RTSP одинаково восстанавливаются при проверке и сохранении; секреты ONVIF скрыты, заданный путь службы применяется к операциям.",
+      "Исправлены обнаружение VAAPI и предел первоначального запуска онлайн-потока без ограничения уже работающего просмотра.",
+      "Запоздалые ответы не подменяют запись, пользователя или расположение плиток; лишние обработчики перемотки удаляются, одинаковые запросы объединяются.",
+      "Смена языка не сбрасывает установку; разделы настроек независимы, видны все камеры хранилища, фильтр «Любое время» не ограничен сутками.",
+      "Целостность проверяет законченную историю текущей записи; неизвестное состояние не выдаётся за исправное, просмотр записи корректно работает с клавиатурой.",
+      "Загрузка исходников установки и обновления ограничена по времени; неудача освобождает ресурсы для новой попытки."
     ],
     "zh-CN": [
-      "通过自动发现的 Media1/Media2 服务读取和修改视频设置，正确区分镜头并识别共享编码器配置。",
-      "按编码格式处理分辨率、帧率、码率、GOP、质量和编码档次的有效选项，同时保留摄像机的其他配置。",
-      "写入后回读验证，准确区分拒绝、值不一致和结果未知，不虚报成功或盲目重复写入。",
-      "按编码/档次、分辨率/FPS、码率类型/数值、质量/GOP 配对排列控件，并移除标题中的可选提示。",
-      "创建、验证和删除备份均留在当前列表，保留必要的操作确认和真实的临时数据库恢复验证。",
-      "保持备份行、时间、状态、滚动、分页按钮和键盘焦点稳定，不自动打开结果窗口，也不新增频繁轮询。",
-      "初始化客户端时不创建多余的事件订阅；认证时在客户端处理时钟偏差，不修改摄像机时间。"
+      "会话绑定永久账户编号，统一校验用户名，并正确区分会话过期、权限不足和网络错误。",
+      "录像任务仅在数据库确认后启动；持久化暂停摄像机的意图，增量登记已完成片段而不反复扫描历史。",
+      "归档迁移在数据库恢复后自动继续，同时保留操作所有权、隔离保护和重试意图。",
+      "归档日历与导出统一使用安装时区；限定查询范围，分批清理所有过期导出。",
+      "测试和保存一致地恢复隐藏的 RTSP 参数；隐藏 ONVIF 地址秘密，并在摄像机操作中应用自定义服务路径。",
+      "修复 VAAPI 检测和直播首次启动期限，不限制已正常播放的观看时长。",
+      "忽略过期的录像、用户和布局响应；清理旧跳转监听器，并合并重复请求。",
+      "语言切换不再重置安装向导；设置区域独立加载，显示全部存储摄像机，全部时间审计不再限于一天。",
+      "完整性扫描检查当前录像任务的已完成历史，区分未知健康状态，并改进归档对话框的键盘操作。",
+      "限制安装和更新源码下载的等待时间，失败后释放资源并允许重新尝试。"
     ]
   }
 }

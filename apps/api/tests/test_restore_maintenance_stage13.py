@@ -81,7 +81,7 @@ def add_user(db, *, role=ROLE_OWNER, username=None):
 
 
 def auth_headers(user):
-    return {"Authorization": f"Bearer {create_access_token(user.username)}"}
+    return {"Authorization": f"Bearer {create_access_token(user.username, user_id=user.id)}"}
 
 
 @pytest.fixture

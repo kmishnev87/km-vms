@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { selectTimelineLabels } from "../lib/workspaceContinuity";
+import { productCalendarDate } from "../lib/timezone";
 
 const ZOOM_OPTIONS = [
   { key: "24h", label: "24ч", hours: 24, majorEveryMinutes: 60, minorEveryMinutes: 30 },
@@ -16,9 +17,9 @@ function pad(value) {
 }
 
 function buildTickLabel(dt, zoomKey) {
-  const dateLabel = `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}`;
-  const timeLabel = `${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
-  const isMidnight = dt.getHours() === 0 && dt.getMinutes() === 0;
+  const dateLabel = `${pad(dt.getUTCDate())}.${pad(dt.getUTCMonth() + 1)}`;
+  const timeLabel = `${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}`;
+  const isMidnight = dt.getUTCHours() === 0 && dt.getUTCMinutes() === 0;
 
   if (zoomKey === "24h") {
     return {
@@ -51,18 +52,18 @@ function parseNaiveDateTime(value) {
   );
 
   if (!match) {
-    return new Date(value).getTime();
+    return productCalendarDate(value).getTime();
   }
 
   const [, year, month, day, hours, minutes, seconds = "00"] = match;
-  return new Date(
+  return Date.UTC(
     Number(year),
     Number(month) - 1,
     Number(day),
     Number(hours),
     Number(minutes),
     Number(seconds)
-  ).getTime();
+  );
 }
 
 function alignMs(ms, stepMs) {
@@ -157,8 +158,8 @@ export default function ChronologyTimeline({
         return (
           count +
           ranges.filter((range) => {
-            const rangeStart = parseNaiveDateTime(range.start);
-            const rangeEnd = parseNaiveDateTime(range.end);
+            const rangeStart = parseNaiveDateTime(range.start_system || range.start);
+            const rangeEnd = parseNaiveDateTime(range.end_system || range.end);
             return Number.isFinite(rangeStart) && Number.isFinite(rangeEnd) && rangeEnd > startMs && rangeStart < endMs;
           }).length
         );
@@ -332,8 +333,8 @@ export default function ChronologyTimeline({
 
                     <div className="chronologyTimelineTrackLane">
                       {ranges.map((range, index) => {
-                        const rangeStart = parseNaiveDateTime(range.start);
-                        const rangeEnd = parseNaiveDateTime(range.end);
+                        const rangeStart = parseNaiveDateTime(range.start_system || range.start);
+                        const rangeEnd = parseNaiveDateTime(range.end_system || range.end);
 
                         if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd)) {
                           return null;

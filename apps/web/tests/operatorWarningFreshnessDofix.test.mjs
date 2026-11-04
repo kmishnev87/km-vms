@@ -50,7 +50,7 @@ function effectHarness(path, canRead = true) {
     setRuntimeStatus(value) { runtime = value; }, setAccessDenied(value) { accessDenied = value; },
     setStale(value) { stale = value; },
     setDeniedUserIdentity(value) { if (typeof value !== "function") accessDenied = Boolean(value); }, setLoading(value) { loading = value; },
-    apiFetch(path) { return new Promise((resolve, reject) => requests.push({ path, resolve, reject })); },
+    getSystemRuntimeStatus() { return new Promise((resolve, reject) => requests.push({ path: '/system/runtime/status', resolve, reject })); },
     setTimeout(fn, ms) { const id = ++next; timers.set(id, { fn, ms }); return id; },
     clearTimeout(id) { timers.delete(id); },
     setInterval(fn, ms) { const id = ++next; intervals.set(id, { fn, ms }); return id; },

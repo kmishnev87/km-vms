@@ -1,8 +1,10 @@
 import { canUserAccessRoute } from "./routePermissions";
+import { runtimeStatusRequestCache } from "./runtimeStatusCache";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "/api";
 const TOKEN_KEY = "token";
 const TOKEN_EXPIRES_KEY = "token_expires_at";
+let authRevision = 0;
 const FORBIDDEN_RU = "Раздел недоступен. Права пользователя ограничены.";
 const FORBIDDEN_EN = "Section unavailable. User permissions are limited.";
 const FORBIDDEN_ZH_CN = "此部分不可用。用户权限受限。";
@@ -75,6 +77,7 @@ export function getAuthToken() {
 }
 
 function dispatchAuthChanged() {
+  authRevision += 1;
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent("km-vms-auth-changed"));
 }
@@ -207,7 +210,9 @@ async function requestWithSafeNetworkError(url, options) {
 export async function apiFetch(path, options = {}) {
   const url = buildUrl(path);
   const headers = makeHeaders(options.headers || {});
+  const revision = authRevision;
   const response = await requestWithSafeNetworkError(url, { ...options, headers });
+  expireRejectedSession(response, headers, revision, path);
 
   if (response.status === 204) return null;
 
@@ -231,7 +236,9 @@ export async function apiFetch(path, options = {}) {
 export async function apiFetchBlob(path, options = {}) {
   const url = buildUrl(path);
   const headers = makeHeaders(options.headers || {});
+  const revision = authRevision;
   const response = await requestWithSafeNetworkError(url, { ...options, headers });
+  expireRejectedSession(response, headers, revision, path);
 
   if (!response.ok) {
     let data = null;
@@ -251,6 +258,19 @@ export async function apiFetchBlob(path, options = {}) {
   const filename = match ? match[1] : null;
 
   return { blob, filename };
+}
+
+export function getSystemRuntimeStatus(options = {}) {
+  const token = getAuthToken();
+  return runtimeStatusRequestCache(token ? `${authRevision}:${token}` : '', () => apiFetch('/system/runtime/status'), options);
+}
+
+function expireRejectedSession(response, headers, revision, path) {
+  if (/(?:[?&])media_token=/.test(String(path)) || String(path).split('?')[0].endsWith('/auth/login')) return;
+  if (response.status !== 401 || revision !== authRevision) return;
+  const token = getAuthToken();
+  // A late failure from the prior login cannot revoke the current login.
+  if (token && headers.Authorization === `Bearer ${token}`) clearAuthToken();
 }
 
 export async function issueRecordingMediaToken(pathOrItem, action = "stream") {

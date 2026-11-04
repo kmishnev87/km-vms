@@ -21,6 +21,9 @@ let state = {
   error: null,
 };
 let inFlight = null;
+let stateSession = null;
+let sessionGeneration = 0;
+let removeAuthListeners = null;
 const listeners = new Set();
 
 function emit(nextState) {
@@ -30,7 +33,26 @@ function emit(nextState) {
 
 function subscribe(listener) {
   listeners.add(listener);
-  return () => listeners.delete(listener);
+  if (!removeAuthListeners && typeof window !== "undefined") {
+    const onAuthChanged = () => {
+      if (shouldFetchCurrentUser(getAuthToken())) loadCurrentUser({ force: true });
+      else clearCurrentUserState(CURRENT_USER_NO_TOKEN);
+    };
+    const onStorage = (event) => {
+      if (event.key === null || ["token", "token_expires_at"].includes(event.key)) onAuthChanged();
+    };
+    window.addEventListener("km-vms-auth-changed", onAuthChanged);
+    window.addEventListener("storage", onStorage);
+    removeAuthListeners = () => {
+      window.removeEventListener("km-vms-auth-changed", onAuthChanged);
+      window.removeEventListener("storage", onStorage);
+      removeAuthListeners = null;
+    };
+  }
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) removeAuthListeners?.();
+  };
 }
 
 function snapshot() {
@@ -38,6 +60,8 @@ function snapshot() {
 }
 
 export function clearCurrentUserState(status = CURRENT_USER_NO_TOKEN) {
+  sessionGeneration += 1;
+  stateSession = null;
   inFlight = null;
   emit({ status, currentUser: null, error: null });
 }
@@ -48,31 +72,42 @@ export function loadCurrentUser({ force = false } = {}) {
     clearCurrentUserState(CURRENT_USER_NO_TOKEN);
     return Promise.resolve(null);
   }
+  if (stateSession !== token) {
+    sessionGeneration += 1;
+    stateSession = token;
+    inFlight = null;
+    emit({ status: CURRENT_USER_IDLE, currentUser: null, error: null });
+  }
 
   if (!force && state.status === CURRENT_USER_READY && state.currentUser) {
     return Promise.resolve(state.currentUser);
   }
-  if (!force && inFlight) return inFlight;
+  if (inFlight) return inFlight;
 
-  emit({ status: CURRENT_USER_LOADING, currentUser: force ? null : state.currentUser, error: null });
-  inFlight = apiFetch("/auth/me")
+  const generation = sessionGeneration;
+  const isCurrentSession = () => generation === sessionGeneration && stateSession === token && getAuthToken() === token;
+  emit({ status: CURRENT_USER_LOADING, currentUser: state.currentUser, error: null });
+  const request = apiFetch("/auth/me")
     .then((user) => {
+      if (!isCurrentSession()) return null;
       const normalized = normalizeCurrentUser(user);
       emit({ status: CURRENT_USER_READY, currentUser: normalized, error: null });
       return normalized;
     })
     .catch((error) => {
+      if (!isCurrentSession()) return null;
       if (isCurrentUserDeniedError(error)) {
         clearAuthToken();
-        emit({ status: CURRENT_USER_DENIED, currentUser: null, error });
+        if (!getAuthToken()) clearCurrentUserState(CURRENT_USER_DENIED);
         return null;
       }
       emit({ status: CURRENT_USER_UNAVAILABLE, currentUser: null, error });
       return null;
     })
     .finally(() => {
-      inFlight = null;
+      if (inFlight === request) inFlight = null;
     });
+  inFlight = request;
   return inFlight;
 }
 
@@ -82,26 +117,12 @@ export function useCurrentUser() {
   useEffect(() => subscribe(() => setValue(snapshot())), []);
 
   useEffect(() => {
-    if (state.status === CURRENT_USER_IDLE) {
+    if (stateSession !== getAuthToken() || state.status === CURRENT_USER_IDLE) {
       loadCurrentUser();
     } else if (shouldRefreshCurrentUserState(getAuthToken(), state.status)) {
       loadCurrentUser({ force: true });
     }
 
-    function onAuthChanged() {
-      if (shouldFetchCurrentUser(getAuthToken())) {
-        loadCurrentUser({ force: true });
-      } else {
-        clearCurrentUserState(CURRENT_USER_NO_TOKEN);
-      }
-    }
-
-    window.addEventListener("km-vms-auth-changed", onAuthChanged);
-    window.addEventListener("storage", onAuthChanged);
-    return () => {
-      window.removeEventListener("km-vms-auth-changed", onAuthChanged);
-      window.removeEventListener("storage", onAuthChanged);
-    };
   }, []);
 
   return {

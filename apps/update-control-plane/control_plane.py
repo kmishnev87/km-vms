@@ -386,18 +386,24 @@ def decode_jwt(token: str) -> dict[str, Any]:
         raise ContractError("bearer_expired")
     if issued is not None and (type(issued) is not int or issued > int(time.time()) + 60):
         raise ContractError("bearer_issued_at_invalid")
-    if token_type not in {None, "access"}:
+    if token_type != "access":
         raise ContractError("bearer_type_invalid")
+    if type(payload.get("uid")) is not int or payload["uid"] < 1:
+        raise ContractError("bearer_identity_invalid")
     return payload
 
 
-def bearer_subject(headers: Any) -> str:
+def bearer_claims(headers: Any) -> dict[str, Any]:
     value = headers.get("Authorization")
     if type(value) is not str or len(value) > 8192:
         raise ContractError("authorization_required")
     if not value.startswith("Bearer ") or value.count(" ") != 1:
         raise ContractError("authorization_required")
-    subject = decode_jwt(value[7:]).get("sub")
+    return decode_jwt(value[7:])
+
+
+def bearer_subject(headers: Any) -> str:
+    subject = bearer_claims(headers).get("sub")
     assert type(subject) is str
     return subject
 
@@ -1127,8 +1133,9 @@ def active_contract(headers: Any) -> tuple[dict[str, Any], str]:
     if type(expected_schema) is not int or not 1 <= expected_schema <= 2147483647:
         raise ContractError("auth_snapshot_schema_target_invalid")
     contract = validate_failure_contract(contract, expected_schema=expected_schema)
-    subject = bearer_subject(headers)
-    if subject != contract["actor_subject"]:
+    claims = bearer_claims(headers)
+    subject = claims["sub"]
+    if subject != contract["actor_subject"] or str(claims["uid"]) != str(auth.get("actor_user_id")):
         raise ContractError("foreign_actor_forbidden")
     return contract, subject
 
@@ -1554,7 +1561,8 @@ def assert_retry_maintenance_idle() -> None:
 
 
 def restore_public_status(headers: Any) -> dict[str, Any]:
-    subject = bearer_subject(headers)
+    claims = bearer_claims(headers)
+    subject = claims["sub"]
     payload = read_regular_json(RESTORE_PUBLIC_STATUS, required=False)
     if payload is None:
         return {
@@ -1606,6 +1614,14 @@ def restore_public_status(headers: Any) -> dict[str, Any]:
         "post_restore_check",
     }
     if payload.get("actor_subject") != subject:
+        raise ContractError("foreign_actor_forbidden")
+    request = read_regular_json(RESTORE_REQUEST, required=False)
+    if (
+        request is None
+        or request.get("operation_id") != payload.get("operation_id")
+        or request.get("submission_id") != payload.get("submission_id")
+        or request.get("requested_by", {}).get("user_id") != claims["uid"]
+    ):
         raise ContractError("foreign_actor_forbidden")
     if (
         not required.issubset(payload)

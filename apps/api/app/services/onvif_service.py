@@ -68,7 +68,8 @@ class OnvifConfigurationError(RuntimeError):
 
 class ONVIFCamera(_LibraryCamera):
     """Use the pinned SDK without its automatic Events subscription side effect."""
-    def __init__(self, host, port, username, password, wsdl):
+    def __init__(self, host, port, username, password, wsdl, onvif_path=None):
+        self._km_device_path = normalize_onvif_path(onvif_path)
         session = requests.Session()
         session.auth = HTTPDigestAuth(username, password)
         transport = Transport(session=session, timeout=5, operation_timeout=5)
@@ -80,6 +81,26 @@ class ONVIFCamera(_LibraryCamera):
         self.dt_diff = None
         self.xaddrs = {}
         self.devicemgmt = self.create_devicemgmt_service()
+
+
+    def get_definition(self, name, portType=None):
+        address, wsdl, binding = super().get_definition(name, portType)
+        if name == "devicemgmt" and self._km_device_path:
+            origin = urlsplit(address)
+            path = urlsplit(self._km_device_path)
+            address = urlunsplit((origin.scheme, origin.netloc, path.path, path.query, ""))
+        return address, wsdl, binding
+
+
+def normalize_onvif_path(value):
+    if value is None or not str(value).strip():
+        return None
+    value = str(value).strip()
+    parsed = urlsplit(value)
+    if (len(value) > 2048 or not value.startswith("/") or value.startswith("//")
+            or parsed.scheme or parsed.netloc or parsed.fragment or re.search(r"[\x00-\x20\x7f]", value)):
+        raise ValueError("invalid_onvif_path")
+    return value
 
 
 def _align_client_clock(cam):
@@ -272,8 +293,8 @@ def _set_media_xaddr(cam, address: str):
             cam.xaddrs[key] = address
 
 
-def _prepare_camera(host: str, port: int, username: str, password: str):
-    cam = ONVIFCamera(host, int(port), username, password, wsdl_dir())
+def _prepare_camera(host: str, port: int, username: str, password: str, onvif_path=None):
+    cam = ONVIFCamera(host, int(port), username, password, wsdl_dir(), **({"onvif_path": onvif_path} if onvif_path else {}))
 
     services = []
     try:
@@ -591,8 +612,8 @@ def _profile_to_dict(profile, media, username, password, host, port, rtsp_host=N
     return item
 
 
-def fetch_onvif_profiles(host, port, username, password, rtsp_host=None, rtsp_port=None):
-    cam, media_candidates = _prepare_camera(host, port, username, password)
+def fetch_onvif_profiles(host, port, username, password, rtsp_host=None, rtsp_port=None, onvif_path=None):
+    cam, media_candidates = _prepare_camera(host, port, username, password, onvif_path)
     dev = cam.devicemgmt
     media, selected_media_xaddr = _get_media_service(cam, media_candidates)
 
@@ -722,7 +743,7 @@ def discover_onvif_devices(timeout_seconds: int = 5) -> dict:
     }
 
 
-def probe_onvif_device(host, port=80, username=None, password=None, rtsp_host=None, rtsp_port=None, timeout_seconds=5) -> dict:
+def probe_onvif_device(host, port=80, username=None, password=None, rtsp_host=None, rtsp_port=None, timeout_seconds=5, onvif_path=None) -> dict:
     host = str(host or "").strip()
     if not host:
         raise ValueError("host_required")
@@ -730,7 +751,7 @@ def probe_onvif_device(host, port=80, username=None, password=None, rtsp_host=No
     rtsp_host = str(rtsp_host or host).strip()
     rtsp_port = int(rtsp_port or 554)
 
-    cam, media_candidates = _prepare_camera(host, port, username or "", password or "")
+    cam, media_candidates = _prepare_camera(host, port, username or "", password or "", onvif_path)
     info = cam.devicemgmt.GetDeviceInformation()
     media, selected_media_xaddr = _get_media_service(cam, media_candidates)
     profiles = media.GetProfiles()
@@ -1325,8 +1346,8 @@ def _profile_config_payload(
     }
 
 
-def get_onvif_profile_config(host, port, username, password, profile_token):
-    cam, media_candidates = _prepare_camera(host, port, username, password)
+def get_onvif_profile_config(host, port, username, password, profile_token, onvif_path=None):
+    cam, media_candidates = _prepare_camera(host, port, username, password, onvif_path)
     media, selected_media_xaddr = _get_media_service(cam, media_candidates)
     profile = _find_profile(media, profile_token)
     if not profile:
@@ -1432,8 +1453,8 @@ def _apply_video_config_diff(cfg, requested: dict) -> None:
             _safe_set(target, key, str(requested["codec_profile"]))
 
 
-def update_onvif_profile(host, port, username, password, profile_token, config):
-    cam, media_candidates = _prepare_camera(host, port, username, password)
+def update_onvif_profile(host, port, username, password, profile_token, config, onvif_path=None):
+    cam, media_candidates = _prepare_camera(host, port, username, password, onvif_path)
     media, selected_media_xaddr = _get_media_service(cam, media_candidates)
     profile = _find_profile(media, profile_token)
     if not profile:
@@ -1634,8 +1655,8 @@ def _normalize_ptz_node(node) -> dict:
     }
 
 
-def _prepare_ptz_context(host, port, username, password):
-    cam, media_candidates = _prepare_camera(host, port, username or "", password or "")
+def _prepare_ptz_context(host, port, username, password, onvif_path=None):
+    cam, media_candidates = _prepare_camera(host, port, username or "", password or "", onvif_path)
     ptz = cam.create_ptz_service()
     media, _selected_media_xaddr = _get_media_service(cam, media_candidates)
     profiles = media.GetProfiles()
@@ -1643,9 +1664,9 @@ def _prepare_ptz_context(host, port, username, password):
     return cam, ptz, profile_token
 
 
-def get_onvif_ptz_capabilities(host, port, username, password) -> dict:
+def get_onvif_ptz_capabilities(host, port, username, password, onvif_path=None) -> dict:
     try:
-        _cam, ptz, profile_token = _prepare_ptz_context(host, port, username, password)
+        _cam, ptz, profile_token = _prepare_ptz_context(host, port, username, password, *([onvif_path] if onvif_path else []))
     except Exception as exc:
         text = str(exc).lower()
         if "ptz" in text or "service" in text or "wsdl" in text:
@@ -1904,8 +1925,8 @@ def normalize_ptz_compatibility(ptz_result: dict | None) -> dict:
     )
 
 
-def check_onvif_events_feasibility(host, port, username, password) -> dict:
-    cam = ONVIFCamera(host, int(port), username or "", password or "", wsdl_dir())
+def check_onvif_events_feasibility(host, port, username, password, onvif_path=None) -> dict:
+    cam = ONVIFCamera(host, int(port), username or "", password or "", wsdl_dir(), **({"onvif_path": onvif_path} if onvif_path else {}))
     services = []
     try:
         services = cam.devicemgmt.GetServices({"IncludeCapability": True}) or []
@@ -2154,12 +2175,12 @@ def build_onvif_health_contract(
     }
 
 
-def execute_onvif_ptz_command(host, port, username, password, payload: dict) -> dict:
+def execute_onvif_ptz_command(host, port, username, password, payload: dict, onvif_path=None) -> dict:
     command = validate_ptz_command_payload(payload)
     if command["validation_only"] or command["dry_run"]:
         return ptz_validation_response(command)
 
-    _cam, ptz, profile_token = _prepare_ptz_context(host, port, username, password)
+    _cam, ptz, profile_token = _prepare_ptz_context(host, port, username, password, *([onvif_path] if onvif_path else []))
     if not profile_token:
         raise RuntimeError("ptz_profile_token_unavailable")
 

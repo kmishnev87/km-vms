@@ -494,13 +494,13 @@ def _latest_recorder_runtime(engine: Any) -> dict[str, Any] | None:
                        EXTRACT(
                            EPOCH FROM (
                                started_at AT TIME ZONE
-                               current_setting('TimeZone')
+                               'UTC'
                            )
                        ) AS started_at_epoch,
                        EXTRACT(
                            EPOCH FROM (
                                heartbeat_at AT TIME ZONE
-                               current_setting('TimeZone')
+                               'UTC'
                            )
                        ) AS heartbeat_at_epoch,
                        EXTRACT(
@@ -508,7 +508,7 @@ def _latest_recorder_runtime(engine: Any) -> dict[str, Any] | None:
                                CURRENT_TIMESTAMP
                                - (
                                    heartbeat_at AT TIME ZONE
-                                   current_setting('TimeZone')
+                                   'UTC'
                                )
                            )
                        ) AS heartbeat_age_seconds

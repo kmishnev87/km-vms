@@ -1523,7 +1523,7 @@ export function archiveRootScenarioModel({ root = null, permission = { allowed: 
   };
 }
 
-export function cameraStorageRows(rows, limit = 12) {
+export function cameraStorageRows(rows, limit = Infinity) {
   return (Array.isArray(rows) ? rows : [])
     .map((row) => ({
       camera_id: row?.camera_id,

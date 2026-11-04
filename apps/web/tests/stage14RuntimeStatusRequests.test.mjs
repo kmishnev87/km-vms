@@ -1,0 +1,26 @@
+import assert from 'node:assert/strict';
+import { createRuntimeStatusRequestCache } from '../lib/runtimeStatusCache.js';
+
+let now = 1000, count = 0, finish;
+const load = createRuntimeStatusRequestCache(() => now);
+const fetcher = () => { count += 1; return new Promise(resolve => { finish = resolve; }); };
+const a = load('session-a', fetcher);
+const b = load('session-a', fetcher);
+assert.equal(count, 1);
+finish({ marker: 'a' });
+assert.deepEqual(await a, await b);
+now += 5000;
+assert.deepEqual(await load('session-a', fetcher), { marker: 'a' });
+assert.equal(count, 1);
+const forced = load('session-a', fetcher, { force: true });
+assert.equal(count, 2);
+finish({ marker: 'fresh' });
+await forced;
+now += 30001;
+const old = load('session-a', fetcher), finishOld = finish;
+const next = load('session-b', fetcher), finishNext = finish;
+finishNext({ marker: 'new-user' });
+await next;
+finishOld({ marker: 'old-user' });
+await old;
+assert.deepEqual(await load('session-b', fetcher), { marker: 'new-user' });

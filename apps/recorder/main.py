@@ -70,6 +70,8 @@ RETENTION_SIGNAL_SCOPE_KEY = (
 )
 RECORDER_RECEIPT_CONTRACT_VERSION = 1
 RECEIPT_FINGERPRINT_CHUNK_BYTES = 64 * 1024
+SEGMENT_METADATA_BATCH_SIZE = 64
+SEGMENT_DISCOVERY_REFRESH_SECONDS = 60
 
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL is required")
@@ -151,6 +153,7 @@ class RecordingJob:
     next_retry_at: float | None = None
     current_output_path: str | None = None
     db_job_id: str | None = None
+    pending_db_job_id: str | None = None
     source_stream: str | None = None
     recording_format: str = DEFAULT_RECORDING_FORMAT
     format_change_target: str | None = None
@@ -159,6 +162,10 @@ class RecordingJob:
     format_change_retry_at: float = 0
     segment_baseline_paths: set[str] = field(default_factory=set)
     known_segment_paths: set[str] = field(default_factory=set)
+    segment_directory_signature: tuple | None = None
+    segment_directory_checked_at: float = 0
+    segment_discovery_cache: dict[str, Path] = field(default_factory=dict)
+    processed_segment_names: set[str] = field(default_factory=set)
     archive_root_id: str | None = None
     archive_root_path: Path = STORAGE_ROOT
     config_signature: tuple[Any, ...] | None = None
@@ -628,9 +635,9 @@ def create_recording_job(row, job: RecordingJob) -> str:
     if job.db_job_id:
         return job.db_job_id
 
-    job_id = str(uuid.uuid4())
-    job.db_job_id = job_id
-    job.source_stream = selected_source_stream(row)
+    job_id = job.pending_db_job_id or str(uuid.uuid4())
+    job.pending_db_job_id = job_id
+    source_stream = selected_source_stream(row)
     with engine.begin() as conn:
         conn.execute(
             text(
@@ -667,6 +674,7 @@ def create_recording_job(row, job: RecordingJob) -> str:
                     NOW(),
                     NOW()
                 )
+                ON CONFLICT (id) DO NOTHING
                 """
             ),
             {
@@ -675,7 +683,7 @@ def create_recording_job(row, job: RecordingJob) -> str:
                 "camera_name": redact_text(job.camera_name),
                 "camera_folder": job.folder_name,
                 "state": RecorderState.STARTING,
-                "source_stream": job.source_stream,
+                "source_stream": source_stream,
                 "input_fingerprint": input_fingerprint(row),
                 "recorder_instance_id": RECORDER_INSTANCE_ID,
                 "created_by": OWNERSHIP_KM_VMS,
@@ -683,6 +691,11 @@ def create_recording_job(row, job: RecordingJob) -> str:
                 "source": METADATA_SOURCE_RECORDER,
             },
         )
+    # Publish authority only after commit; reuse the pending id if its reply was
+    # lost so that retry cannot create a second owner or launch an orphan writer.
+    job.db_job_id = job_id
+    job.pending_db_job_id = None
+    job.source_stream = source_stream
     log_event("info", "recording_job_created", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job_id)
     return job_id
 
@@ -698,7 +711,8 @@ def update_recording_job(
     ffmpeg_pid: Any = UNSET,
     last_exit_code: Any = UNSET,
 ) -> None:
-    if not job.db_job_id:
+    job_id = job.db_job_id or job.pending_db_job_id
+    if not job_id:
         return
     sanitized_last_error = (
         truncate_error(redact_text(last_error))
@@ -723,7 +737,7 @@ def update_recording_job(
                 """
             ),
             {
-                "id": job.db_job_id,
+                "id": job_id,
                 "state": state,
                 "stopped": stopped,
                 "stop_reason_set": stop_reason is not UNSET,
@@ -754,8 +768,12 @@ def close_recording_job(job: RecordingJob, *, state: str, reason: str, error: st
         last_exit_code=job.last_exit_code if has_current_error else None,
     )
     job.db_job_id = None
+    job.pending_db_job_id = None
     job.segment_baseline_paths.clear()
     job.known_segment_paths.clear()
+    job.segment_directory_signature = None
+    job.segment_discovery_cache.clear()
+    job.processed_segment_names.clear()
 
 
 def clear_recording_job_error(job: RecordingJob) -> None:
@@ -934,9 +952,36 @@ def discover_job_segments(job: RecordingJob) -> list[Path]:
     dir_path = expected_segment_dir(job.current_output_path)
     if not dir_path or not dir_path.exists():
         return []
-    prefix = segment_prefix(job.camera_id, job.camera_name)
-    files = [path for path in dir_path.glob(f"{prefix}*.*") if path.is_file() and path.suffix.lower() in {".mp4", ".mkv"}]
-    return sorted(files, key=lambda path: (parse_segment_start_time(path), path.name))
+    stat = dir_path.stat()
+    signature = (str(dir_path), stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+    now = time.monotonic()
+    if signature != job.segment_directory_signature or now - job.segment_directory_checked_at >= SEGMENT_DISCOVERY_REFRESH_SECONDS:
+        prefix = segment_prefix(job.camera_id, job.camera_name)
+        names = set()
+        pending = {}
+        for path in dir_path.iterdir():
+            if not path.name.startswith(prefix) or path.suffix.lower() not in {".mp4", ".mkv"}:
+                continue
+            names.add(path.name)
+            if path.name not in job.processed_segment_names and path.is_file():
+                pending[path.name] = path
+        # Retention must also release our references to files no longer present.
+        job.processed_segment_names.intersection_update(names)
+        parent = storage_relative_path(dir_path, root=job.archive_root_path)
+        if parent is not None:
+            job.known_segment_paths.intersection_update({f"{parent}/{name}" for name in names})
+        job.segment_discovery_cache = pending
+        job.segment_directory_signature = signature
+        job.segment_directory_checked_at = now
+    return sorted(job.segment_discovery_cache.values(), key=lambda path: (parse_segment_start_time(path), path.name))
+
+
+def remember_processed_segment(job: RecordingJob, file_path: Path) -> None:
+    job.processed_segment_names.add(file_path.name)
+    job.segment_discovery_cache.pop(file_path.name, None)
+    rel_path = storage_relative_path(file_path, root=job.archive_root_path)
+    if rel_path:
+        job.known_segment_paths.discard(rel_path)
 
 
 def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> None:
@@ -956,17 +1001,11 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
 
     started_at = parse_segment_start_time(file_path)
     media_metadata = path_format_metadata(file_path)
-    try:
-        content_fingerprint = bounded_file_fingerprint(file_path, stat)
-    except OSError:
-        content_fingerprint = hashlib.sha256(
-            f"unavailable:{int(stat.st_size)}:{int(stat.st_mtime_ns)}".encode("ascii")
-        ).hexdigest()
     with engine.begin() as conn:
         existing = conn.execute(
             text(
                 """
-                SELECT id
+                SELECT id, status
                 FROM recording_segments
                 WHERE (job_id = :job_id AND relative_path = :relative_path)
                    OR (
@@ -988,8 +1027,16 @@ def create_segment_metadata_if_needed(job: RecordingJob, file_path: Path) -> Non
         ).first()
         if existing:
             job.known_segment_paths.add(rel_path)
+            if getattr(existing, "status", SEGMENT_STATUS_WRITING) != SEGMENT_STATUS_WRITING:
+                remember_processed_segment(job, file_path)
             return
 
+        try:
+            content_fingerprint = bounded_file_fingerprint(file_path, stat)
+        except OSError:
+            content_fingerprint = hashlib.sha256(
+                f"unavailable:{int(stat.st_size)}:{int(stat.st_mtime_ns)}".encode("ascii")
+            ).hexdigest()
         inserted = conn.execute(
             text(
                 """
@@ -1226,9 +1273,11 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
         stat = file_path.stat()
     except Exception as exc:
         mark_segment_failed(job, rel_path, f"segment stat failed: {exc}")
+        remember_processed_segment(job, file_path)
         return False
     if stat.st_size <= 0:
         mark_segment_failed(job, rel_path, "segment file is empty")
+        remember_processed_segment(job, file_path)
         return False
 
     started_at = parse_segment_start_time(file_path)
@@ -1400,6 +1449,7 @@ def finalize_segment_path(job: RecordingJob, file_path: Path) -> bool:
                     "watermark": int(finalized_row.id),
                 },
             )
+    remember_processed_segment(job, file_path)
     if finalized_row is None:
         return False
     log_event("info", "segment_finalized", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, relative_path=rel_path, size_bytes=stat.st_size, duration_sec=duration_sec)
@@ -1465,11 +1515,12 @@ def sync_segment_metadata_for_job(job: RecordingJob) -> None:
         return
     try:
         files = discover_job_segments(job)
-        for file_path in files:
+        batch = files[:-1][:SEGMENT_METADATA_BATCH_SIZE - 1] + files[-1:]
+        for file_path in batch:
             create_segment_metadata_if_needed(job, file_path)
         if files:
             update_writing_segment_progress(job, files[-1])
-        for file_path in files[:-1]:
+        for file_path in batch[:-1]:
             finalize_segment_path(job, file_path)
     except Exception as exc:
         log_event("warning", "metadata_update_failed", camera_id=job.camera_id, camera_name=job.camera_name, db_job_id=job.db_job_id, error=str(exc))
@@ -1572,6 +1623,7 @@ def finalize_segments_for_job(job: RecordingJob) -> None:
         return
     sync_segment_metadata_for_job(job)
     for file_path in discover_job_segments(job):
+        create_segment_metadata_if_needed(job, file_path)
         finalize_segment_path(job, file_path)
 
 
@@ -2006,6 +2058,13 @@ def start_camera(row) -> None:
         create_recording_job(row, job)
     except Exception as exc:
         log_event("warning", "metadata_write_failed", camera_id=job.camera_id, camera_name=job.camera_name, error=str(exc))
+        try:
+            schedule_retry(job, "Recording job metadata could not be committed", ERROR_PROCESS_START_FAILED)
+        except Exception as retry_exc:
+            # Backoff/state were set before persistence. The same pending id is
+            # reconciled on the next attempt even while the DB remains offline.
+            log_event("warning", "metadata_retry_persistence_failed", camera_id=job.camera_id, error=str(retry_exc))
+        return
 
     try:
         cmd, output_pattern = ffmpeg_cmd(row, job)
@@ -2033,6 +2092,9 @@ def start_camera(row) -> None:
     job.current_output_path = output_pattern
     job.segment_baseline_paths = capture_segment_baseline(output_pattern, job.camera_id, job.camera_name, root=job.archive_root_path)
     job.known_segment_paths.clear()
+    job.segment_directory_signature = None
+    job.segment_discovery_cache.clear()
+    job.processed_segment_names.clear()
     job.config_signature = camera_signature(row, job.recording_format)
     update_camera_status_from_job(job)
     update_recording_job(

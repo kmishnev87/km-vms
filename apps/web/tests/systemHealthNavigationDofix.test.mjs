@@ -7,7 +7,7 @@ let now = 1000;
 const cache = createRuntimeStatusCache(() => now);
 const user = { id: 7, role: "owner", permissions: ["run_diagnostics"] };
 const key = JSON.stringify(["7", "owner", ["run_diagnostics"]]);
-const healthy = { domains: { storage: { severity: "ok" } } };
+const healthy = { domains: Object.fromEntries(["storage", "cameras", "live", "recorder", "retention", "reconciliation"].map(name => [name, { severity: "ok" }])) };
 cache.write(key, "session-a", healthy);
 assert.equal(cache.read(key, "session-a").runtimeStatus, healthy);
 assert.equal(cache.read("other-user", "session-a"), null);
@@ -44,7 +44,7 @@ function mount() {
       }
     },
     useMemo: (fn) => fn(),
-    apiFetch: (path) => new Promise((resolve, reject) => requests.push({ path, resolve, reject })),
+    getSystemRuntimeStatus: () => new Promise((resolve, reject) => requests.push({ path: '/system/runtime/status', resolve, reject })),
     setInterval(fn, ms) { const id = ++nextTimer; intervals.set(id, { fn, ms }); return id; },
     clearInterval(id) { intervals.delete(id); },
     setTimeout(fn, ms) { const id = ++nextTimer; timers.set(id, { fn, ms }); return id; },

@@ -5,6 +5,7 @@ from datetime import datetime
 import re
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.camera import Camera
@@ -135,15 +136,19 @@ def _recording_stale_threshold(camera: Camera) -> int:
 
 
 def _latest_segment_by_camera(db: Session, now: datetime, ctx) -> dict[int, dict[str, Any]]:
+    ranked = db.query(
+        RecordingSegment.id.label("segment_id"),
+        func.row_number().over(
+            partition_by=RecordingSegment.camera_id,
+            order_by=(RecordingSegment.finalized_at.desc().nullslast(),
+                      RecordingSegment.ended_at.desc().nullslast(),
+                      RecordingSegment.started_at.desc(), RecordingSegment.id.desc()),
+        ).label("position"),
+    ).filter(RecordingSegment.status != SEGMENT_STATUS_DELETED).subquery()
     rows = (
         db.query(RecordingSegment)
-        .filter(RecordingSegment.status != SEGMENT_STATUS_DELETED)
-        .order_by(
-            RecordingSegment.camera_id.asc(),
-            RecordingSegment.finalized_at.desc().nullslast(),
-            RecordingSegment.ended_at.desc().nullslast(),
-            RecordingSegment.started_at.desc(),
-        )
+        .join(ranked, ranked.c.segment_id == RecordingSegment.id)
+        .filter(ranked.c.position == 1)
         .all()
     )
     result: dict[int, dict[str, Any]] = {}

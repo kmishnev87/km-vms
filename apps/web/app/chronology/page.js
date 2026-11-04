@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createSerializedLayoutWriter } from "../../lib/serializedLayoutWriter";
+import { createCoalescedPlaybackResolver } from "../../lib/coalescedPlaybackResolver";
 import Layout from "../../components/Layout";
 import ArchiveTilePlayer from "../../components/ArchiveTilePlayer";
 import ChronologyTimeline from "../../components/ChronologyTimeline";
@@ -8,7 +10,7 @@ import ArchiveExportResult from "../../components/ArchiveExportResult";
 import useArchiveExport from "../../lib/useArchiveExport";
 import { reconcilePlaybackMembership, timelineRangeWindow, timelineRangeWindowCovers, timelineRangesNeedReload } from "../../lib/workspaceContinuity";
 import { OperationToast, useModalBodyScrollLock } from "../../components/OperationFeedback";
-import { apiFetch } from "../../lib/api";
+import { apiFetch, getAuthToken } from "../../lib/api";
 import {
   buildArchiveExportPayload,
   canExportRecordings,
@@ -18,7 +20,7 @@ import {
   startChronologyCurrentRecordingDownload,
   validateArchiveExportSelection,
 } from "../../lib/archiveExports";
-import { productLocalInputToApi } from "../../lib/timezone";
+import { productLocalInputToApi, productInstantInputValue, productCalendarDate } from "../../lib/timezone";
 import { useI18n } from "../../lib/i18n";
 import {
   consumeTouchDoubleTapSuppressionToken,
@@ -56,7 +58,7 @@ const ZOOM_HOURS = {
   "3d": 72,
   "7d": 168,
 };
-const HYDRATION_INITIAL_TS = new Date(2000, 0, 1, 0, 0, 0);
+const HYDRATION_INITIAL_TS = new Date(Date.UTC(2000, 0, 1, 0, 0, 0));
 
 const SPEED_OPTIONS = [
   { value: 0.25, label: "0.25x" },
@@ -167,18 +169,17 @@ function pad(value) {
   return String(value).padStart(2, "0");
 }
 
-function getNow() {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes(), now.getSeconds());
+function getNow(timezone = "UTC") {
+  return productCalendarDate(productInstantInputValue(new Date(), timezone));
 }
 
 function formatPlaybackDateTime(dt) {
   if (!dt) return "--";
-  return `${pad(dt.getDate())}.${pad(dt.getMonth() + 1)}.${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+  return `${pad(dt.getUTCDate())}.${pad(dt.getUTCMonth() + 1)}.${dt.getUTCFullYear()} ${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}:${pad(dt.getUTCSeconds())}`;
 }
 
 function formatLocalNaiveTs(dt) {
-  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}T${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+  return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}T${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}:${pad(dt.getUTCSeconds())}`;
 }
 
 function formatProductTimestampParam(dt) {
@@ -187,8 +188,8 @@ function formatProductTimestampParam(dt) {
 
 function dateTimeFromDate(dt) {
   return {
-    date: `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`,
-    time: `${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`,
+    date: `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`,
+    time: `${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}:${pad(dt.getUTCSeconds())}`,
   };
 }
 
@@ -334,10 +335,13 @@ export default function ChronologyPage() {
   const saveTimerRef = useRef(null);
   const lastBackendLayoutPayloadRef = useRef("");
   const currentTsRef = useRef(initialTs);
+  const calendarTouchedRef = useRef(false);
+  const [productTimezone, setProductTimezone] = useState("UTC");
   const tilesRef = useRef([]);
   const playbackMapRef = useRef({});
   const isScrubbingRef = useRef(false);
-  const playbackRequestIdRef = useRef(0);
+  const playbackResolverRef = useRef(null);
+  if (!playbackResolverRef.current) playbackResolverRef.current = createCoalescedPlaybackResolver();
   const rangesRequestIdRef = useRef(0);
   const loadedRangesWindowRef = useRef(null);
   const rangesInFlightRef = useRef(null);
@@ -364,6 +368,12 @@ export default function ChronologyPage() {
   const [tiles, setTiles] = useState([]);
   const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
   const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
+  const layoutWriterRef = useRef(null);
+  if (!layoutWriterRef.current) {
+    layoutWriterRef.current = createSerializedLayoutWriter((payload) => apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    }));
+  }
   const [operationToast, setOperationToast] = useState(null);
   const cameraLoadErrorRef = useRef("");
   const [dragState, setDragState] = useState(null);
@@ -479,13 +489,21 @@ export default function ChronologyPage() {
   }
 
   useEffect(() => {
-    const now = getNow();
-    const next = dateTimeFromDate(now);
-    currentTsRef.current = now;
-    setCurrentTs(now);
-    setPreviewTs(now);
-    setDate(next.date);
-    setTime(next.time);
+    let cancelled = false;
+    function initialize(timezone) {
+      if (cancelled) return;
+      setProductTimezone(timezone || "UTC");
+      if (calendarTouchedRef.current || currentTsRef.current !== initialTs) return;
+      const now = getNow(timezone);
+      const next = dateTimeFromDate(now);
+      currentTsRef.current = now;
+      setCurrentTs(now);
+      setPreviewTs(now);
+      setDate(next.date);
+      setTime(next.time);
+    }
+    apiFetch("/system/status").then(status => initialize(status?.timezone)).catch(() => initialize("UTC"));
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -494,7 +512,9 @@ export default function ChronologyPage() {
     loadExportCameras();
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      layoutWriterRef.current.dispose();
       clearPlaybackCoordinatorTimers();
+      playbackResolverRef.current.invalidate();
       rangesInFlightRef.current?.controller.abort();
       rangesRequestIdRef.current += 1;
     };
@@ -502,27 +522,23 @@ export default function ChronologyPage() {
 
   useEffect(() => {
     if (!hydratedRef.current) return;
+    layoutWriterRef.current.invalidate();
     saveTiles(tiles);
     if (!backendReadyRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(async () => {
-      try {
+    saveTimerRef.current = setTimeout(() => {
         const payload = backendPayload(tiles, sidebarCameraOrder);
         const payloadText = JSON.stringify(payload);
         if (payloadText === lastBackendLayoutPayloadRef.current) return;
-        const saved = await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: payloadText,
-        });
+        const ownerSession = getAuthToken();
+        layoutWriterRef.current.save(payload, (saved) => {
         const savedOrder = sanitizeSidebarCameraOrder(saved?.sidebarCameraOrder);
         setLastPersistedSidebarCameraOrder(savedOrder);
         setSidebarCameraOrder(savedOrder);
         lastBackendLayoutPayloadRef.current = JSON.stringify(backendPayload(saved?.tiles || tiles, savedOrder));
-      } catch (err) {
-        setSidebarCameraOrder(lastPersistedSidebarCameraOrder);
+        }, (err) => {
         showWorkspaceError(err.message || TEXT.loadError);
-      }
+        }, () => getAuthToken() === ownerSession);
     }, 500);
   }, [tiles, sidebarCameraOrder, lastPersistedSidebarCameraOrder]);
 
@@ -668,7 +684,7 @@ export default function ChronologyPage() {
   }
 
   function normalizeTargetTs() {
-    const normalizedDate = date || dateTimeFromDate(getNow()).date;
+    const normalizedDate = date || dateTimeFromDate(getNow(productTimezone)).date;
     const normalizedTime = time && time.trim() ? time.trim() : "00:00:00";
     const finalTime = normalizedTime.length === 5 ? `${normalizedTime}:00` : normalizedTime;
     return `${normalizedDate}T${finalTime}`;
@@ -1367,29 +1383,24 @@ export default function ChronologyPage() {
     }
   }
 
-  async function resolvePlaybackForTimestamp(ts, forceReload = false) {
-    const requestId = ++playbackRequestIdRef.current;
+  async function resolvePlaybackForTimestamp(ts, forceReload = false, automatic = false) {
     const sourceTiles = tilesRef.current;
-    const results = await Promise.all(
-      sourceTiles.map(async (tile) => [tile.id, { ...await fetchPlaybackForTile(tile, ts, forceReload), sourceCameraId: String(tile.cameraId) }])
-    );
-
-    if (requestId !== playbackRequestIdRef.current) {
-      return { applied: false };
-    }
-
-    const nextMap = {};
-    results.forEach(([tileId, value]) => {
-      nextMap[tileId] = value;
+    return playbackResolverRef.current.resolve({
+      automatic,
+      run: () => Promise.all(sourceTiles.map(async (tile) => [tile.id, {
+        ...await fetchPlaybackForTile(tile, ts, forceReload), sourceCameraId: String(tile.cameraId),
+      }])),
+      apply: (results) => {
+        const nextMap = Object.fromEntries(results);
+        playbackMapRef.current = nextMap;
+        setPlaybackMap(nextMap);
+      },
     });
-    playbackMapRef.current = nextMap;
-    setPlaybackMap(nextMap);
-    return { applied: true };
   }
 
   async function handleFind() {
     invalidateSeekActions();
-    const targetDate = new Date(normalizeTargetTs());
+    const targetDate = productCalendarDate(normalizeTargetTs());
     const targetTs = formatProductTimestampParam(targetDate);
 
     setIsPlaying(false);
@@ -1398,7 +1409,6 @@ export default function ChronologyPage() {
     commitCurrentTimestamp(targetDate);
     const result = await resolvePlaybackForTimestamp(targetTs, false);
     if (!result.applied) {
-      cancelPlaybackCoordinator("stale-find");
       return;
     }
     const expectedTileIds = tilesRef.current.map((tile) => tile.id);
@@ -1411,9 +1421,9 @@ export default function ChronologyPage() {
   function handlePlay() {
     invalidateSeekActions();
     if (!currentTsRef.current) {
-      commitCurrentTimestamp(new Date(normalizeTargetTs()));
+      commitCurrentTimestamp(productCalendarDate(normalizeTargetTs()));
     }
-    const targetDate = currentTsRef.current || new Date(normalizeTargetTs());
+    const targetDate = currentTsRef.current || productCalendarDate(normalizeTargetTs());
     const expectedTileIds = tilesRef.current.map((tile) => tile.id);
     startPlaybackCoordinator({
       targetTs: formatProductTimestampParam(targetDate),
@@ -1425,12 +1435,13 @@ export default function ChronologyPage() {
 
   function handlePause() {
     invalidateSeekActions();
+    playbackResolverRef.current.invalidate();
     cancelPlaybackCoordinator("paused");
     setIsPlaying(false);
   }
 
   function formatDateTimeLocalInput(value) {
-    const dt = value instanceof Date ? value : new Date(value);
+    const dt = productCalendarDate(value);
     if (!Number.isFinite(dt.getTime())) return "";
     return formatLocalNaiveTs(dt);
   }
@@ -1438,7 +1449,7 @@ export default function ChronologyPage() {
   function openExportModal() {
     if (!canExport || exportBusy) return;
     if (exportDraftRef.current) { setExportModal(exportDraftRef.current); return; }
-    const center = timelineTs || currentTs || new Date(normalizeTargetTs());
+    const center = timelineTs || currentTs || productCalendarDate(normalizeTargetTs());
     const start = new Date(center.getTime() - 15_000);
     const end = new Date(center.getTime() + 15_000);
     setExportModal({
@@ -1489,7 +1500,7 @@ export default function ChronologyPage() {
   }
 
   function quickDownloadTimestamp() {
-    return formatProductTimestampParam(timelineTs || currentTs || new Date(normalizeTargetTs()));
+    return formatProductTimestampParam(timelineTs || currentTs || productCalendarDate(normalizeTargetTs()));
   }
 
   async function startQuickDownloadForCamera(cameraId, { notify = true } = {}) {
@@ -1553,7 +1564,7 @@ export default function ChronologyPage() {
   async function seekBySeconds(seconds) {
     const nextDate = currentTsRef.current
       ? new Date(currentTsRef.current.getTime() + seconds * 1000)
-      : new Date(normalizeTargetTs());
+      : productCalendarDate(normalizeTargetTs());
     const action = startSeekAction();
     const targetTs = formatProductTimestampParam(nextDate);
 
@@ -1564,7 +1575,6 @@ export default function ChronologyPage() {
 
     const result = await resolvePlaybackForTimestamp(targetTs, false);
     if (!result.applied || seekActionIdRef.current !== action.id) {
-      cancelPlaybackCoordinator("stale-seek");
       return;
     }
     const expectedTileIds = tilesRef.current.map((tile) => tile.id);
@@ -1585,7 +1595,6 @@ export default function ChronologyPage() {
 
     const result = await resolvePlaybackForTimestamp(targetTs, false);
     if (!result.applied || seekActionIdRef.current !== action.id) {
-      cancelPlaybackCoordinator("stale-select");
       return;
     }
     const expectedTileIds = tilesRef.current.map((tile) => tile.id);
@@ -1616,7 +1625,7 @@ export default function ChronologyPage() {
     isScrubbingRef.current = true;
     setIsTimelinePreviewing(true);
     playWasActiveRef.current = action.shouldResume;
-    setPreviewTs(currentTsRef.current || new Date(normalizeTargetTs()));
+    setPreviewTs(currentTsRef.current || productCalendarDate(normalizeTargetTs()));
     if (action.shouldResume) {
       setIsPlaying(false);
     }
@@ -1633,7 +1642,6 @@ export default function ChronologyPage() {
 
     const result = await resolvePlaybackForTimestamp(targetTs, false);
     if (!action || !result.applied || seekActionIdRef.current !== action.id) {
-      cancelPlaybackCoordinator("stale-drag");
       return;
     }
     const expectedTileIds = tilesRef.current.map((tile) => tile.id);
@@ -1646,24 +1654,25 @@ export default function ChronologyPage() {
   useEffect(() => {
     // Membership is not a seek. Keep every unchanged player's source/key and
     // current position; only resolve newly added or reassigned tiles.
-    const requestId = ++playbackRequestIdRef.current;
+    playbackResolverRef.current.invalidate();
     const sourceTiles = tilesRef.current;
     const { retained, missing } = reconcilePlaybackMembership(sourceTiles, playbackMapRef.current);
     playbackMapRef.current = retained;
     setPlaybackMap(retained);
     if (!currentTs || !missing.length) return;
-    Promise.all(missing.map(async (tile) => [tile.id, { ...await fetchPlaybackForTile(tile, formatProductTimestampParam(currentTs), false), sourceCameraId: String(tile.cameraId) }]))
-      .then((results) => {
-        if (requestId !== playbackRequestIdRef.current) return;
+    playbackResolverRef.current.resolve({
+      run: () => Promise.all(missing.map(async (tile) => [tile.id, { ...await fetchPlaybackForTile(tile, formatProductTimestampParam(currentTs), false), sourceCameraId: String(tile.cameraId) }])),
+      apply: (results) => {
         const next = { ...retained, ...Object.fromEntries(results) };
         playbackMapRef.current = next;
         setPlaybackMap(next);
-      });
+      },
+    });
   }, [tileSourceKey]);
 
   useEffect(() => {
     if (!isPlaying || !currentTs || isScrubbingRef.current) return;
-    resolvePlaybackForTimestamp(formatProductTimestampParam(currentTs), false);
+    resolvePlaybackForTimestamp(formatProductTimestampParam(currentTs), false, true);
   }, [currentTs, isPlaying]);
 
   useEffect(() => {
@@ -2047,7 +2056,7 @@ export default function ChronologyPage() {
                 value={date}
                 title={TEXT.currentTime}
                 aria-label={TEXT.currentTime}
-                onChange={(event) => setDate(event.target.value)}
+                onChange={(event) => { calendarTouchedRef.current = true; setDate(event.target.value); }}
               />
               <input
                 type="time"
@@ -2056,7 +2065,7 @@ export default function ChronologyPage() {
                 value={time}
                 title={isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}
                 aria-label={isTimelinePreviewing ? TEXT.previewTime : TEXT.currentTime}
-                onChange={(event) => setTime(event.target.value)}
+                onChange={(event) => { calendarTouchedRef.current = true; setTime(event.target.value); }}
               />
               <button type="button" className="chronologyPrimaryButton" onClick={handleFind}>
                 {TEXT.find}

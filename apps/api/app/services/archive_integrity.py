@@ -1123,11 +1123,15 @@ def _classify_metadata_page(
             )
             continue
 
-        # A stale catalog row saying "writing" is not proof of a live Recorder
-        # writer. Only an authoritative active job or the recent-write window
-        # suppresses integrity classification.
-        is_active = bool(segment.job_id and str(segment.job_id) in active_jobs)
+        # A long-running job also owns many finalized files. Protect its actual
+        # writing rows, not the entire history recorded by that job.
+        is_active = bool(
+            segment.job_id and str(segment.job_id) in active_jobs
+            and str(segment.status or "") in ACTIVE_SEGMENT_STATES
+        )
         if is_active or _segment_recent(segment, scan):
+            scan.checked_count -= 1
+            scan.skipped_count = int(scan.skipped_count or 0) + 1
             continue
 
         if not segment_has_resolved_archive_root(segment) or not segment.archive_root_id:
@@ -1156,6 +1160,8 @@ def _classify_metadata_page(
             continue
         root, snapshot, access = root_entry
         if access.get("read_access_state") != "available":
+            scan.checked_count -= 1
+            scan.skipped_count = int(scan.skipped_count or 0) + 1
             continue
 
         relative_ref = _normalize_relative(segment.relative_path)
@@ -1262,6 +1268,8 @@ def _classify_metadata_page(
 
         probe_status: str | None = None
         if stat_module.S_ISREG(target_stat.st_mode) and _file_within_recent_write_window(target_stat):
+            scan.checked_count -= 1
+            scan.skipped_count = int(scan.skipped_count or 0) + 1
             continue
         if stat_module.S_ISLNK(target_stat.st_mode) or not stat_module.S_ISREG(target_stat.st_mode):
             category = "invalid_path"
@@ -1284,6 +1292,8 @@ def _classify_metadata_page(
                 scan.checked_bytes += int(target_stat.st_size)
                 continue
             if convergence_state == "changing":
+                scan.checked_count -= 1
+                scan.skipped_count = int(scan.skipped_count or 0) + 1
                 continue
             category = "stale_writing_segment"
         elif str(segment.status or "") == "finalized":
@@ -1735,7 +1745,8 @@ def _process_directory_unit(
 def _phase_progress_counts(scan: ArchiveIntegrityScan) -> tuple[int, int, int]:
     planned = max(0, int(scan.planned_count or 0))
     checked = max(0, int(scan.checked_count or 0))
-    return planned, min(checked, planned), max(checked - planned, 0)
+    metadata_planned = max(0, planned - int(scan.skipped_count or 0))
+    return planned, min(checked, metadata_planned), max(checked - metadata_planned, 0)
 
 
 def _operation_progress(scan: ArchiveIntegrityScan) -> dict[str, Any]:
@@ -1747,6 +1758,7 @@ def _operation_progress(scan: ArchiveIntegrityScan) -> dict[str, Any]:
         "checked_count": int(scan.checked_count or 0),
         "metadata_checked_count": metadata_checked,
         "filesystem_checked_count": filesystem_checked,
+        "skipped_count": int(scan.skipped_count or 0),
         "found_count": int(scan.found_count or 0),
         "failed_count": int(scan.failed_count or 0),
         "checked_bytes": int(scan.checked_bytes or 0),
@@ -2200,6 +2212,7 @@ def public_scan(
             "checked_count": int(scan.checked_count or 0),
             "metadata_checked_count": metadata_checked,
             "filesystem_checked_count": filesystem_checked,
+            "skipped_count": int(scan.skipped_count or 0),
             "found_count": 0 if stale else int(scan.found_count or 0),
             "failed_count": int(scan.failed_count or 0),
             "checked_bytes": int(scan.checked_bytes or 0),

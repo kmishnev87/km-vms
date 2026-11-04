@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.sanitization import redact_text
 from app.core.security import decrypt_text
 from app.models.camera import Camera
+from app.schemas.camera import restore_rtsp_management_value
 from app.services.onvif_service import rtsp_path_from_uri
 
 
@@ -132,13 +133,21 @@ def register_validation_proof(
     return token
 
 
-def register_onvif_probe_proof(payload: dict) -> str:
-    return register_validation_proof(
+def register_onvif_probe_proof(payload: dict, *, profiles: list | None = None) -> str:
+    token = register_validation_proof(
         ONVIF_PROBE_PROOFS,
         payload,
         fingerprint=management_fingerprint(payload),
         proof_type="onvif_management",
     )
+    if profiles is not None:
+        paths = {str(item["token"]): saved_stream_path(item.get("stream_path") or item.get("stream_uri"))
+                 for item in profiles if isinstance(item, dict) and item.get("token")}
+        ONVIF_PROBE_PROOFS[token]["stream_paths"] = paths
+        previous = payload.get("onvif_probe_token")
+        if store_has_valid_management_proof(previous, payload):
+            ONVIF_PROBE_PROOFS[previous]["stream_paths"] = {**(ONVIF_PROBE_PROOFS[previous].get("stream_paths") or {}), **paths}
+    return token
 
 
 def register_rtsp_test_proof(payload: dict, role: str | None = None) -> str:
@@ -305,6 +314,7 @@ def get_camera_credentials(
     port = payload.get("port")
     rtsp_host = payload.get("rtsp_host")
     rtsp_port = payload.get("rtsp_port")
+    onvif_path = payload.get("onvif_path")
 
     if camera_id is not None and str(camera_id).strip() != "":
         try:
@@ -337,6 +347,8 @@ def get_camera_credentials(
             rtsp_host = camera.rtsp_reachable_host
         if not rtsp_port:
             rtsp_port = camera.rtsp_reachable_port
+        if "onvif_path" not in payload:
+            onvif_path = camera.onvif_path
 
     return {
         "camera_id": camera_id,
@@ -347,6 +359,7 @@ def get_camera_credentials(
         "rtsp_port": rtsp_port,
         "username": username,
         "password": password,
+        "onvif_path": onvif_path,
     }
 
 
@@ -394,9 +407,21 @@ def resolve_test_connection_payload(db: Session, payload: dict) -> dict:
             stream_port,
             resolved.get("username"),
             resolved.get("password"),
-            saved_stream_path(resolved.get(key)),
+            resolve_rtsp_management_path(resolved, role, stored=getattr(camera, key, None)),
         )
     return resolved
+
+
+def resolve_rtsp_management_path(payload: dict, role: str, *, stored: str | None = None) -> str | None:
+    """One server-only path restoration for test and save, including ONVIF secrets."""
+    value = restore_rtsp_management_value(payload.get(f"rtsp_{role}_url"), stored)
+    token = payload.get("onvif_probe_token")
+    if store_has_valid_management_proof(token, payload):
+        profile_key = "onvif_profile_token" if role == "main" else "onvif_sub_profile_token"
+        profile_path = (ONVIF_PROBE_PROOFS[token].get("stream_paths") or {}).get(str(payload.get(profile_key)))
+        if profile_path and saved_stream_path(value) and saved_stream_path(value).split("?", 1)[0] == profile_path.split("?", 1)[0]:
+            value = restore_rtsp_management_value(value, profile_path)
+    return saved_stream_path(value)
 
 
 def saved_stream_path(value: str | None) -> str | None:

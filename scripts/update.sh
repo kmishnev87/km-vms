@@ -346,6 +346,7 @@ apply_generated_archive_roots_compose_if_needed() {
 }
 
 cleanup() {
+  if [ -n "${DOWNLOAD_PID:-}" ]; then stop_download; fi
   if [ "$UPDATE_SUCCEEDED" != "1" ]; then
     attempt_failed_staging_cleanup 2>/dev/null || true
   fi
@@ -367,7 +368,10 @@ cleanup() {
     docker image rm -f "$SCHEMA_CANDIDATE_IMAGE" >/dev/null 2>&1 || true
   fi
 }
-trap cleanup EXIT HUP INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 confirm() {
   prompt="$1"
@@ -629,6 +633,47 @@ require_download_client() {
   fail "curl or wget is required for GitHub tarball acquisition."
 }
 
+stop_download() {
+  if [ -n "${DOWNLOAD_PID:-}" ]; then
+    kill "$DOWNLOAD_PID" 2>/dev/null || true
+    kill -KILL "$DOWNLOAD_PID" 2>/dev/null || true
+    wait "$DOWNLOAD_PID" 2>/dev/null || true
+    DOWNLOAD_PID=""
+  fi
+}
+
+wait_download() {
+  DOWNLOAD_PID="$1"
+  monitored_output="$2"
+  monitored_headers="$3"
+  transfer_limit="$4"
+  transfer_started=$(date +%s)
+  last_growth="$transfer_started"
+  previous_size=0
+  timed_out=0
+  while kill -0 "$DOWNLOAD_PID" 2>/dev/null; do
+    transfer_now=$(date +%s)
+    transfer_size=0
+    if [ -f "$monitored_output" ]; then transfer_size=$(wc -c < "$monitored_output" | tr -d ' '); fi
+    if [ "$transfer_size" -gt "$previous_size" ]; then last_growth="$transfer_now"; previous_size="$transfer_size"; fi
+    if [ $((transfer_now - transfer_started)) -ge "$transfer_limit" ] ||
+       [ $((transfer_now - last_growth)) -ge 60 ]; then
+      timed_out=1
+      stop_download
+      break
+    fi
+    if command -v publish_download_progress >/dev/null 2>&1; then
+      publish_download_progress "$monitored_headers" "$monitored_output"
+    fi
+    sleep 1
+  done
+  if [ "$timed_out" = "1" ]; then return 28; fi
+  transfer_status=0
+  wait "$DOWNLOAD_PID" || transfer_status=$?
+  DOWNLOAD_PID=""
+  return "$transfer_status"
+}
+
 http_download() {
   url="$1"
   output="$2"
@@ -636,7 +681,11 @@ http_download() {
   DOWNLOAD_ATTEMPTS=0
   DOWNLOAD_FAILURE_CATEGORY="source_acquisition_failed"
   attempt=1
+  acquisition_started=$(date +%s)
   while [ "$attempt" -le "$DOWNLOAD_MAX_ATTEMPTS" ]; do
+    remaining=$((1200 - $(date +%s) + acquisition_started))
+    [ "$remaining" -gt 0 ] || return 1
+    if [ "$remaining" -gt 900 ]; then remaining=900; fi
     DOWNLOAD_ATTEMPTS="$attempt"
     headers="$TMP_ROOT/download-headers.$$.${attempt}"
     errors="$TMP_ROOT/download-errors.$$.${attempt}"
@@ -648,19 +697,15 @@ http_download() {
     download_status=0
     if [ "$DOWNLOAD_CLIENT" = "curl" ]; then
       if [ -n "$GITHUB_TOKEN_CONFIG" ]; then
-        curl -sSL --config "$GITHUB_TOKEN_CONFIG" "$url" -o "$output" --dump-header "$headers" 2>"$errors" &
+        curl -sSL --connect-timeout 15 --max-time "$remaining" --speed-limit 1 --speed-time 60 --config "$GITHUB_TOKEN_CONFIG" "$url" -o "$output" --dump-header "$headers" 2>"$errors" &
       else
-        curl -sSL "$url" -o "$output" --dump-header "$headers" 2>"$errors" &
+        curl -sSL --connect-timeout 15 --max-time "$remaining" --speed-limit 1 --speed-time 60 "$url" -o "$output" --dump-header "$headers" 2>"$errors" &
       fi
-      download_pid=$!
-      while kill -0 "$download_pid" 2>/dev/null; do
-        publish_download_progress "$headers" "$output"
-        sleep 1
-      done
-      wait "$download_pid" || download_status=$?
+      wait_download "$!" "$output" "$headers" "$remaining" || download_status=$?
     else
       [ -z "$GITHUB_TOKEN_CONFIG" ] || fail "Private GitHub update requires curl for secure token handling."
-      wget --server-response -qO "$output" "$url" 2>"$headers" || download_status=$?
+      wget --server-response -qO "$output" "$url" 2>"$headers" &
+      wait_download "$!" "$output" "$headers" "$remaining" || download_status=$?
     fi
 
     http_status=$(download_http_status "$headers" 2>/dev/null || true)
@@ -855,14 +900,20 @@ github_api_text() {
   require_download_client
   if [ "$DOWNLOAD_CLIENT" = "curl" ]; then
     if [ -n "$GITHUB_TOKEN_CONFIG" ]; then
-      curl -fsSL --config "$GITHUB_TOKEN_CONFIG" "$url"
+      curl -fsSL --connect-timeout 15 --max-time 30 --retry 1 --retry-max-time 60 --config "$GITHUB_TOKEN_CONFIG" "$url"
     else
-      curl -fsSL "$url"
+      curl -fsSL --connect-timeout 15 --max-time 30 --retry 1 --retry-max-time 60 "$url"
     fi
     return $?
   fi
   [ -z "$GITHUB_TOKEN_CONFIG" ] || fail "Private GitHub API calls require curl for secure token handling."
-  wget -qO- "$url"
+  metadata_output=$(mktemp "$TMP_ROOT/metadata.XXXXXX")
+  wget -qO "$metadata_output" "$url" &
+  metadata_status=0
+  wait_download "$!" "$metadata_output" "" 60 || metadata_status=$?
+  if [ "$metadata_status" = "0" ]; then cat "$metadata_output"; fi
+  rm -f "$metadata_output"
+  return "$metadata_status"
 }
 
 resolve_github_commit_sha() {

@@ -68,7 +68,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
         expires_at = datetime.combine(now_local.date(), time.max, tzinfo=tz).replace(microsecond=0)
         expires_at = expires_at.astimezone(timezone.utc)
 
-    token = create_access_token(user.username, expires_at=expires_at)
+    token = create_access_token(user.username, expires_at=expires_at, user_id=user.id)
     user.last_login_at = datetime.utcnow()
     db.add(user)
     db.commit()

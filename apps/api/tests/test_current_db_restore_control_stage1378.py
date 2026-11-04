@@ -64,6 +64,17 @@ def _write(path: Path, payload: dict) -> None:
     )
 
 
+@pytest.fixture(autouse=True)
+def _restore_identity_binding(tmp_path, monkeypatch):
+    request_path = tmp_path / "restore-request.json"
+    monkeypatch.setattr(control, "RESTORE_REQUEST", request_path)
+    _write(request_path, {
+        "operation_id": _public_status()["operation_id"],
+        "submission_id": SUBMISSION,
+        "requested_by": {"user_id": 1},
+    })
+
+
 def test_reader_restore_status_is_actor_bound_and_redacted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -72,8 +83,8 @@ def test_reader_restore_status_is_actor_bound_and_redacted(
     monkeypatch.setattr(control, "RESTORE_PUBLIC_STATUS", status_path)
     monkeypatch.setattr(
         control,
-        "bearer_subject",
-        lambda headers: headers["subject"],
+        "bearer_claims",
+        lambda headers: {"sub": headers["subject"], "uid": 1},
     )
     _write(status_path, _public_status())
 
@@ -118,8 +129,8 @@ def test_reader_restore_status_rejects_non_current_schema(
     monkeypatch.setattr(control, "RESTORE_PUBLIC_STATUS", status_path)
     monkeypatch.setattr(
         control,
-        "bearer_subject",
-        lambda headers: headers["subject"],
+        "bearer_claims",
+        lambda headers: {"sub": headers["subject"], "uid": 1},
     )
     payload = _public_status()
     payload["artifact"]["artifact_schema_version"] = schema_version
@@ -143,8 +154,8 @@ def test_reader_restore_status_returns_authenticated_idle_before_first_operation
     )
     monkeypatch.setattr(
         control,
-        "bearer_subject",
-        lambda headers: headers["subject"],
+        "bearer_claims",
+        lambda headers: {"sub": headers["subject"], "uid": 1},
     )
 
     assert control.restore_public_status({"subject": "owner"}) == {

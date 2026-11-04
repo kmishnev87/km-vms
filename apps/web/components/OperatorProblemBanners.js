@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { apiFetch, canAccessPath } from "../lib/api";
+import { getSystemRuntimeStatus, canAccessPath } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { useI18n } from "../lib/i18n";
 import { liveFailureMessage } from "../lib/livePlaybackRecovery";
@@ -135,12 +135,12 @@ export default function OperatorProblemBanners({
     let refreshPending = false;
     let denied = false;
 
-    async function loadStatus() {
+    async function loadStatus({ force = false } = {}) {
       if (cancelled || denied) return false;
       if (inFlight) { refreshPending = true; return true; }
       inFlight = true;
       try {
-        const data = await apiFetch("/system/runtime/status");
+        const data = await getSystemRuntimeStatus({ force });
         if (!cancelled) {
           setRuntimeStatus(data);
           setStale(false);
@@ -197,7 +197,7 @@ export default function OperatorProblemBanners({
     const refreshLive = () => {
       if (cancelled || denied || !currentUserReady || !effectiveCurrentUser || !userCanReadRuntimeStatus(effectiveCurrentUser)) return;
       if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(loadStatus, 200);
+      refreshTimer = setTimeout(() => loadStatus({ force: true }), 200);
     };
     window.addEventListener("kmvms:live-runtime-changed", refreshLive);
     window.addEventListener("kmvms:camera-runtime-changed", refreshLive);

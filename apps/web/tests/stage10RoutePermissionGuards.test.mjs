@@ -20,7 +20,7 @@ assert.equal(api.includes("canUserAccessRoute(user, href)"), true);
 assert.equal(layout.includes("canAccessPath(currentUser, pathname)"), true);
 assert.equal(operatorBanners.includes("canAccessPath(user, action.href)"), true);
 assert.equal(systemHealth.includes("userCanReadRuntimeStatus(currentUser)"), true);
-assert.equal(systemHealth.includes('apiFetch("/system/runtime/status")'), true);
+assert.equal(systemHealth.includes("getSystemRuntimeStatus({ force })"), true);
 
 for (const route of ["/system-status", "/security-journal", "/diagnostics", "/storage", "/apk"]) {
   assert.equal(route in entries, true, `${route} missing from frontend route access registry`);

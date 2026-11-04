@@ -1277,6 +1277,17 @@ class StreamInstance:
 
             now = time.time()
             source = self.camera_source
+            # FFmpeg progress or an incomplete playlist is not playable HLS.
+            # This deadline covers startup only; a healthy viewer has no limit.
+            hard_deadline = self.start_hard_deadline or ((self.started_at or now) + STARTUP_HARD_TIMEOUT_SECONDS)
+            if self.last_ready_at is None and now > hard_deadline:
+                previous_mode = self.mode
+                reason = "startup_timeout_no_hls"
+                self.stop(reason=reason, cleanup_files=True)
+                if previous_mode == "hardware_transcode" and source:
+                    return self._retry_next_backend_or_cpu_locked(source, reason, stderr_tail or reason)
+                self._schedule_retry_locked(reason)
+                return True
             if self.last_ready_at is not None and now - self.last_ready_at > LIVE_MEDIA_STALE_SECONDS:
                 self.stop(reason="stream_stalled", cleanup_files=True)
                 self._schedule_retry_locked("stream_stalled")
@@ -1293,6 +1304,11 @@ class StreamInstance:
                     "hardware_fatal_error",
                     stderr_tail or fatal_error,
                 )
+
+            if self.last_ready_at is not None:
+                # A brief readiness loss of an established stream is handled
+                # by the media-staleness window above, not its old start timer.
+                return False
 
             if now <= self.start_deadline:
                 return False

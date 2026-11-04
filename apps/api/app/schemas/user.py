@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from app.core.usernames import normalize_username
 
 from app.core.permissions import ROLE_ADMIN, ROLE_OPERATOR, ROLE_OWNER, ROLE_VIEWER
 
@@ -26,6 +27,11 @@ class UserCreateRequest(BaseModel):
     display_name: str | None = Field(default="", max_length=255)
     is_active: bool = True
 
+    @field_validator("username", mode="before")
+    @classmethod
+    def username_normalized(cls, value):
+        return normalize_username(value)
+
 
 class UserUpdateRequest(BaseModel):
     username: str | None = Field(default=None, min_length=2, max_length=100)
@@ -34,3 +40,8 @@ class UserUpdateRequest(BaseModel):
     is_active: bool | None = None
     password: str | None = Field(default=None, min_length=8, max_length=256)
     current_password: str | None = Field(default=None, max_length=256)
+
+    @field_validator("username", mode="before")
+    @classmethod
+    def username_normalized(cls, value):
+        return None if value is None else normalize_username(value)

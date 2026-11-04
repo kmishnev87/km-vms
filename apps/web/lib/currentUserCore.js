@@ -25,15 +25,15 @@ export function normalizeCurrentUser(user) {
 }
 
 export function isCurrentUserDeniedError(error) {
+  const status = Number(error?.status);
+  if (Number.isInteger(status) && status > 0) return status === 401;
+  if (error?.category === "unauthorized") return true;
   const message = String(error?.message || error || "").toLowerCase();
   return (
     message.includes("401") ||
-    message.includes("403") ||
     message.includes("not authenticated") ||
     message.includes("invalid token") ||
-    message.includes("forbidden") ||
-    message.includes("permission") ||
-    message.includes("недостат") ||
-    message.includes("доступ")
+    message.includes("недействительный токен") ||
+    message.includes("пользователь не найден")
   );
 }

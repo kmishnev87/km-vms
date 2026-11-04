@@ -8,6 +8,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const source = fs
   .readFileSync(resolve(__dirname, "../lib/api.js"), "utf8")
   .replace(/import \{ canUserAccessRoute \} from "\.\/routePermissions";\r?\n/, "function canUserAccessRoute() { return true; }\n")
+  .replace(/^import[^\n]*\n/gm, "")
   .replaceAll("export function ", "function ")
   .replaceAll("export async function ", "async function ");
 

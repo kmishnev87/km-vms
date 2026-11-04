@@ -353,20 +353,66 @@ require_download_client() {
   fail "curl or wget is required for GitHub tarball acquisition."
 }
 
+stop_download() {
+  if [ -n "${DOWNLOAD_PID:-}" ]; then
+    kill "$DOWNLOAD_PID" 2>/dev/null || true
+    kill -KILL "$DOWNLOAD_PID" 2>/dev/null || true
+    wait "$DOWNLOAD_PID" 2>/dev/null || true
+    DOWNLOAD_PID=""
+  fi
+}
+
+wait_download() {
+  DOWNLOAD_PID="$1"
+  monitored_output="$2"
+  monitored_headers="$3"
+  transfer_limit="$4"
+  transfer_started=$(date +%s)
+  last_growth="$transfer_started"
+  previous_size=0
+  timed_out=0
+  while kill -0 "$DOWNLOAD_PID" 2>/dev/null; do
+    transfer_now=$(date +%s)
+    transfer_size=0
+    if [ -f "$monitored_output" ]; then transfer_size=$(wc -c < "$monitored_output" | tr -d ' '); fi
+    if [ "$transfer_size" -gt "$previous_size" ]; then last_growth="$transfer_now"; previous_size="$transfer_size"; fi
+    if [ $((transfer_now - transfer_started)) -ge "$transfer_limit" ] ||
+       [ $((transfer_now - last_growth)) -ge 60 ]; then
+      timed_out=1
+      stop_download
+      break
+    fi
+    if command -v publish_download_progress >/dev/null 2>&1; then
+      publish_download_progress "$monitored_headers" "$monitored_output"
+    fi
+    sleep 1
+  done
+  if [ "$timed_out" = "1" ]; then return 28; fi
+  transfer_status=0
+  wait "$DOWNLOAD_PID" || transfer_status=$?
+  DOWNLOAD_PID=""
+  return "$transfer_status"
+}
+
 http_download() {
   url="$1"
   output="$2"
   require_download_client
   if [ "$DOWNLOAD_CLIENT" = "curl" ]; then
     if [ -n "$GITHUB_TOKEN_CONFIG" ]; then
-      curl -fsSL --config "$GITHUB_TOKEN_CONFIG" "$url" -o "$output" || return 1
+      curl -fsSL --connect-timeout 15 --max-time 900 --speed-limit 1 --speed-time 60 --retry 2 --retry-max-time 900 --config "$GITHUB_TOKEN_CONFIG" "$url" -o "$output" &
     else
-      curl -fsSL "$url" -o "$output" || return 1
+      curl -fsSL --connect-timeout 15 --max-time 900 --speed-limit 1 --speed-time 60 --retry 2 --retry-max-time 900 "$url" -o "$output" &
     fi
-    return 0
+    wait_download "$!" "$output" "" 900 && return 0
+    rm -f "$output"
+    return 1
   fi
   [ -z "$GITHUB_TOKEN_CONFIG" ] || fail "Private GitHub install requires curl for secure token handling."
-  wget -qO "$output" "$url" || return 1
+  wget -qO "$output" "$url" &
+  wait_download "$!" "$output" "" 900 && return 0
+  rm -f "$output"
+  return 1
 }
 
 github_api_text() {
@@ -374,14 +420,20 @@ github_api_text() {
   require_download_client
   if [ "$DOWNLOAD_CLIENT" = "curl" ]; then
     if [ -n "$GITHUB_TOKEN_CONFIG" ]; then
-      curl -fsSL --config "$GITHUB_TOKEN_CONFIG" "$url"
+      curl -fsSL --connect-timeout 15 --max-time 30 --retry 1 --retry-max-time 60 --config "$GITHUB_TOKEN_CONFIG" "$url"
     else
-      curl -fsSL "$url"
+      curl -fsSL --connect-timeout 15 --max-time 30 --retry 1 --retry-max-time 60 "$url"
     fi
     return $?
   fi
   [ -z "$GITHUB_TOKEN_CONFIG" ] || fail "Private GitHub API calls require curl for secure token handling."
-  wget -qO- "$url"
+  metadata_output=$(mktemp "${TMPDIR:-/tmp}/km-vms-metadata.XXXXXX")
+  wget -qO "$metadata_output" "$url" &
+  metadata_status=0
+  wait_download "$!" "$metadata_output" "" 60 || metadata_status=$?
+  if [ "$metadata_status" = "0" ]; then cat "$metadata_output"; fi
+  rm -f "$metadata_output"
+  return "$metadata_status"
 }
 
 resolve_github_commit_sha() {
@@ -849,6 +901,10 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
+trap 'stop_download; clear_github_token' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 prepare_app_dir
 probe_write
 

@@ -97,7 +97,7 @@ assert.equal(layout.indexOf('href="/storage"') < layout.indexOf("<SystemHealthIn
 assert.equal(layout.indexOf("<SystemHealthIndicator") < layout.indexOf('href="/settings"'), true);
 assert.equal(layout.indexOf('href="/settings"') < layout.indexOf("topNavButton"), true);
 
-assert.equal(indicator.includes('apiFetch("/system/runtime/status")'), true);
+assert.equal(indicator.includes("getSystemRuntimeStatus({ force })"), true);
 assert.equal(indicator.includes("userCanReadRuntimeStatus(currentUser)"), true);
 assert.equal(indicator.includes("setInterval(loadStatus, REFRESH_MS)"), true);
 assert.equal(indicator.includes("system-status-base.png"), true);

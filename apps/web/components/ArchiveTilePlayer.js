@@ -34,6 +34,7 @@ export default function ArchiveTilePlayer({
   const coordinationRef = useRef(coordination);
   const currentSourceRef = useRef({ playbackKey: "", relPath: "", cameraId: "" });
   const prepareSequenceRef = useRef(0);
+  const prepareCancelRef = useRef(null);
   const unsupportedDownloadBusyRef = useRef(false);
   const dimensionProbeTimerRef = useRef(null);
   const [status, setStatus] = useState("idle");
@@ -204,6 +205,7 @@ export default function ArchiveTilePlayer({
     reason = "prepare",
     timeoutMs = 6000,
   } = {}) {
+    prepareCancelRef.current?.();
     const video = videoRef.current;
     if (!video) return;
     const sequence = ++prepareSequenceRef.current;
@@ -218,7 +220,12 @@ export default function ArchiveTilePlayer({
       video.removeEventListener("canplay", complete);
       video.removeEventListener("error", fail);
       if (timer) clearTimeout(timer);
+      timer = null;
+      if (prepareCancelRef.current === cancel) prepareCancelRef.current = null;
     };
+
+    const cancel = () => { done = true; cleanup(); };
+    prepareCancelRef.current = cancel;
 
     const currentOperationMatches = () =>
       sequence === prepareSequenceRef.current &&
@@ -231,7 +238,9 @@ export default function ArchiveTilePlayer({
     };
 
     function complete() {
-      if (done || !currentOperationMatches() || !readyEnough()) return;
+      if (done) return;
+      if (!currentOperationMatches()) { cancel(); return; }
+      if (!readyEnough()) return;
       done = true;
       cleanup();
       sampleVideoDimensions(reason);
@@ -251,7 +260,8 @@ export default function ArchiveTilePlayer({
     }
 
     function fail() {
-      if (done || !currentOperationMatches()) return;
+      if (done) return;
+      if (!currentOperationMatches()) { cancel(); return; }
       done = true;
       cleanup();
       setStatus("error");
@@ -277,8 +287,10 @@ export default function ArchiveTilePlayer({
     } catch (_) {}
 
     complete();
+    if (done) return;
     timer = setTimeout(() => {
-      if (done || !currentOperationMatches()) return;
+      if (done) return;
+      if (!currentOperationMatches()) { cancel(); return; }
       if (readyEnough()) {
         complete();
         return;
@@ -318,6 +330,7 @@ export default function ArchiveTilePlayer({
     }
 
     const hardReset = () => {
+      prepareCancelRef.current?.();
       finishRefreshCycle();
       clearDimensionProbe();
       setNaturalResolution({ width: 0, height: 0, source: "missing" });
@@ -450,6 +463,7 @@ export default function ArchiveTilePlayer({
 
     return () => {
       cancelled = true;
+      prepareCancelRef.current?.();
       pendingLoad = null;
       loadSequence += 1;
       finishRefreshCycle();
@@ -463,6 +477,8 @@ export default function ArchiveTilePlayer({
       clearDimensionProbe();
     };
   }, [playback?.playbackKey]);
+
+  useEffect(() => () => { prepareCancelRef.current?.(); }, []);
 
   useEffect(() => {
     const el = wrapRef.current;

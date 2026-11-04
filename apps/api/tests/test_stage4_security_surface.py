@@ -182,7 +182,7 @@ def test_media_token_issue_and_validate_recording_scope(db):
 
 def test_access_tokens_are_explicitly_typed_and_media_tokens_cannot_authenticate_api(db):
     user = add_user(db, role="owner")
-    access_token = create_access_token(user.username)
+    access_token = create_access_token(user.username, user_id=user.id)
     access_payload = decode_access_token(access_token)
     assert access_payload["typ"] == "access"
 
@@ -205,7 +205,7 @@ def test_access_tokens_are_explicitly_typed_and_media_tokens_cannot_authenticate
     assert exc.value.status_code == 401
 
 
-def test_legacy_missing_type_access_token_is_accepted_only_by_access_decoder(db):
+def test_legacy_username_only_access_token_requires_new_login(db):
     user = add_user(db, role="owner")
     now = datetime.now(timezone.utc)
     legacy_access = jwt.encode(
@@ -218,7 +218,8 @@ def test_legacy_missing_type_access_token_is_accepted_only_by_access_decoder(db)
         algorithm="HS256",
     )
 
-    assert decode_access_token(legacy_access)["sub"] == user.username
+    with pytest.raises(jwt.InvalidTokenError):
+        decode_access_token(legacy_access)
     with pytest.raises(HTTPException) as exc:
         validate_media_token(
             db,
@@ -332,7 +333,7 @@ def test_live_media_token_is_bound_to_camera_and_stream(db):
 def test_media_endpoints_reject_access_tokens_and_accept_only_scoped_media_tokens(db, monkeypatch):
     user = add_user(db, role="owner")
     camera, segment = add_segment(db)
-    access_token = create_access_token(user.username)
+    access_token = create_access_token(user.username, user_id=user.id)
 
     playlist_path = Path(settings.storage_previews) / "live" / str(camera.id) / "sub" / "index.m3u8"
     playlist_path.parent.mkdir(parents=True, exist_ok=True)

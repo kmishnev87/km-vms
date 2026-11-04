@@ -20,7 +20,7 @@ from test_schema_migration_runner_stage3 import seed_state
 
 
 def auth_headers(user):
-    return {"Authorization": f"Bearer {create_access_token(user.username)}"}
+    return {"Authorization": f"Bearer {create_access_token(user.username, user_id=user.id)}"}
 
 
 def add_user(db, *, role, username):

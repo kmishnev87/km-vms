@@ -1095,6 +1095,8 @@ function StorageOperationsPageContent() {
   const archiveRootDiscoveryHeader = discoveryHeaderStatusModel(archiveRootDiscovery);
   const archiveRootChoices = archiveRootDiscoveryModel.candidates;
   const cameraRows = useMemo(() => cameraStorageRows(operations.per_camera_usage), [operations.per_camera_usage]);
+  const [cameraRowLimit, setCameraRowLimit] = useState(12);
+  const visibleCameraRows = cameraRows.slice(0, cameraRowLimit);
   const autoFreeConfigured = settings?.auto_free_space_cleanup_enabled ?? policy.auto_free_space_cleanup_enabled ?? autoCleanup.enabled;
   const autoFreeEnabled = settings?.auto_free_space_cleanup_effective ?? policy.auto_free_space_cleanup_effective ?? autoCleanup.effective_enabled ?? null;
   const autoFreeTermsVersion = settings?.auto_free_space_terms_version || policy.terms_version || autoCleanup.terms_version || "";
@@ -1984,6 +1986,7 @@ function StorageOperationsPageContent() {
     migrationPlanRequestKeyRef.current = null;
     migrationApplyRequestKeyRef.current = null;
     migrationRetryRequestKeyRef.current = null;
+    migrationTakeoverRequestKeyRef.current = null;
   }
 
   function selectMigrationSource(rootId) {
@@ -2086,14 +2089,18 @@ function StorageOperationsPageContent() {
     if (!operationId || !migrationScenario.canRetry) return;
     setMigrationBusy(true);
     setMigrationMessage("");
-    const idempotencyKey = migrationRetryRequestKeyRef.current || newStorageOperationId("migration-retry");
-    migrationRetryRequestKeyRef.current = idempotencyKey;
+    const scope = JSON.stringify([operationId, migrationPlan?.plan_id, migrationPlan?.canonical_hash, "retry"]);
+    if (migrationRetryRequestKeyRef.current?.scope !== scope) {
+      migrationRetryRequestKeyRef.current = { scope, key: newStorageOperationId("migration-retry") };
+    }
+    const idempotencyKey = migrationRetryRequestKeyRef.current.key;
     try {
       const result = await apiFetch(`/storage/migration/operations/${encodeURIComponent(operationId)}/retry`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idempotency_key: idempotencyKey }),
       });
+      migrationRetryRequestKeyRef.current = null;
       if (result?.plan) setMigrationPlan(result.plan);
       if (result?.operation) setMigrationOperation(result.operation);
     } catch (err) {
@@ -2108,14 +2115,18 @@ function StorageOperationsPageContent() {
     if (!operationId || !migrationScenario.canCleanupTakeover) return;
     setMigrationBusy(true);
     setMigrationMessage("");
-    const idempotencyKey = migrationTakeoverRequestKeyRef.current || newStorageOperationId("migration-cleanup-takeover");
-    migrationTakeoverRequestKeyRef.current = idempotencyKey;
+    const scope = JSON.stringify([operationId, migrationPlan?.plan_id, migrationPlan?.canonical_hash, "cleanup-takeover"]);
+    if (migrationTakeoverRequestKeyRef.current?.scope !== scope) {
+      migrationTakeoverRequestKeyRef.current = { scope, key: newStorageOperationId("migration-cleanup-takeover") };
+    }
+    const idempotencyKey = migrationTakeoverRequestKeyRef.current.key;
     try {
       const result = await apiFetch(`/storage/migration/operations/${encodeURIComponent(operationId)}/cleanup-takeover`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ idempotency_key: idempotencyKey, confirm: true }),
       });
+      migrationTakeoverRequestKeyRef.current = null;
       if (result?.plan) setMigrationPlan(result.plan);
       if (result?.operation) setMigrationOperation(result.operation);
     } catch (err) {
@@ -2398,7 +2409,7 @@ function StorageOperationsPageContent() {
                           </tr>
                         </thead>
                         <tbody>
-                          {cameraRows.map((row) => (
+                          {visibleCameraRows.map((row) => (
                             <tr key={row.camera_id || row.camera_name}>
                               <td>{row.camera_name}</td>
                               <td>{formatBytes(row.size_bytes)}</td>
@@ -2416,7 +2427,7 @@ function StorageOperationsPageContent() {
                       </table>
                     </div>
                     <div className="storageOpsCameraCards">
-                      {cameraRows.map((row) => (
+                      {visibleCameraRows.map((row) => (
                         <div className="storageOpsCameraCard" key={`card-${row.camera_id || row.camera_name}`}>
                           <div className="storageOpsCameraCardIdentity"><strong>{row.camera_name}</strong></div>
                           <div className="storageOpsCameraCardMetric"><span>{copy.size}</span><strong>{formatBytes(row.size_bytes)}</strong></div>
@@ -2430,6 +2441,11 @@ function StorageOperationsPageContent() {
                         </div>
                       ))}
                     </div>
+                    {cameraRows.length > cameraRowLimit ? (
+                      <button type="button" className="button" onClick={() => setCameraRowLimit((value) => value + 12)}>
+                        {language === "en" ? "Show more" : language === "zh-CN" ? "显示更多" : "Показать ещё"} ({Math.min(cameraRowLimit, cameraRows.length)}/{cameraRows.length})
+                      </button>
+                    ) : null}
                   </>
                 ) : <div className="storageOpsEmpty">{copy.noCameraOwned}</div>}
               </Section>

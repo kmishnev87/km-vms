@@ -134,8 +134,9 @@ def validate_media_token(
         )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
 
-    username = payload.get("sub")
-    user = db.query(User).filter(User.username == username).first() if username else None
+    user_id = payload.get("uid")
+    # Media credentials must not move to another account reusing this name.
+    user = db.query(User).filter(User.id == user_id).first() if type(user_id) is int and user_id > 0 else None
     if not user or not getattr(user, "is_active", True):
         audit_security_denied(
             db=db,

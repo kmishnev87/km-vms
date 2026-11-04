@@ -5133,20 +5133,25 @@ class _WorkerLeaseHeartbeat:
 
 
 def _worker_loop() -> None:
-    while not _worker_stop.wait(WORKER_POLL_SECONDS):
+    failures = 0
+    delay = WORKER_POLL_SECONDS
+    while not _worker_stop.wait(delay):
         handle = None
-        with SessionLocal() as lease_db:
-            handle = acquire_worker_lease(
-                lease_db,
-                worker_key="archive-migration-worker",
-                owner_instance_id=f"api:{os.getpid()}:{threading.get_ident()}",
-                lease_seconds=WORKER_LEASE_SECONDS,
-            )
-        if handle is None:
-            continue
-        leader = _WorkerLeaseHeartbeat(handle)
-        leader.start()
+        leader = None
         try:
+            with SessionLocal() as lease_db:
+                handle = acquire_worker_lease(
+                    lease_db,
+                    worker_key="archive-migration-worker",
+                    owner_instance_id=f"api:{os.getpid()}:{threading.get_ident()}",
+                    lease_seconds=WORKER_LEASE_SECONDS,
+                )
+            if handle is None:
+                failures = 0
+                delay = WORKER_POLL_SECONDS
+                continue
+            leader = _WorkerLeaseHeartbeat(handle)
+            leader.start()
             did_work = _recover_terminal_audit_once()
             leader.assert_owned()
             did_work = _expire_one_ready_plan() or did_work
@@ -5154,15 +5159,26 @@ def _worker_loop() -> None:
             did_work = _prepare_one_plan(leader) or did_work
             leader.assert_owned()
             did_work = _run_one_operation() or did_work
+            failures = 0
+            delay = WORKER_POLL_SECONDS
             if not did_work:
-                time.sleep(0.1)
+                _worker_stop.wait(0.1)
+        except Exception as exc:
+            # Sessions roll back on context exit. Durable operation leases fence
+            # abandoned attempts; the next cycle reclaims only through that API.
+            failures += 1
+            delay = min(30.0, max(WORKER_POLL_SECONDS, 2.0) * (2 ** min(failures - 1, 4)))
+            logger.warning("Archive migration cycle interrupted; retry in %.1fs; failure_type=%s",
+                           delay, type(exc).__name__)
         finally:
-            leader.close()
-            with SessionLocal() as lease_db:
+            if leader is not None:
+                leader.close()
+            if handle is not None:
                 try:
-                    release_worker_lease(lease_db, handle)
-                except Exception:
-                    lease_db.rollback()
+                    with SessionLocal() as lease_db:
+                        release_worker_lease(lease_db, handle)
+                except Exception as exc:
+                    logger.warning("Archive migration lease release deferred; failure_type=%s", type(exc).__name__)
 
 
 def start_archive_migration_worker() -> None:

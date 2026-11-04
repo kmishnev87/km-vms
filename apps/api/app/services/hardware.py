@@ -314,7 +314,9 @@ def detect_hardware_capabilities() -> dict:
 
     candidates = {
         "qsv": bool("qsv" in supported_hwaccels and docker_access_ok and "h264_qsv" in supported_encoders and "hevc_qsv" in supported_decoders),
-        "vaapi": bool("vaapi" in supported_hwaccels and docker_access_ok and "h264_vaapi" in supported_encoders and "hevc_vaapi" in supported_decoders),
+        # VAAPI decoding uses generic codec decoders plus -hwaccel vaapi;
+        # *_vaapi are encoders, not required standalone decoder names.
+        "vaapi": bool("vaapi" in supported_hwaccels and docker_access_ok and "h264_vaapi" in supported_encoders and ("hevc" in supported_decoders or "h264" in supported_decoders)),
         "nvenc": bool("cuda" in supported_hwaccels and "h264_nvenc" in supported_encoders and ("hevc_cuvid" in supported_decoders or "hevc" in supported_decoders)),
         "amf": bool("h264_amf" in supported_encoders and ("hevc" in supported_decoders or "h264" in supported_decoders)),
     }

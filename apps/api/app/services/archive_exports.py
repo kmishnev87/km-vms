@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import or_, text
+from sqlalchemy import case, func, literal_column, or_, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -23,6 +23,7 @@ from app.models.recording import ArchiveExportJob, RecordingSegment
 from app.models.user import User
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.recording_storage import resolve_segment_file_path
+from app.services.timezone_contract import timezone_context
 
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
@@ -302,11 +303,13 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def normalize_export_datetime(value: datetime, field_name: str) -> datetime:
+def normalize_export_datetime(value: datetime, field_name: str, ctx=None) -> datetime:
     if not isinstance(value, datetime):
         raise _safe_error(422, f"Invalid {field_name}")
     if value.tzinfo is not None:
-        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        # Recorder segment boundaries are product-local calendar timestamps.
+        # Normalize incoming instants to that same clock, never rewrite archive.
+        value = value.astimezone((ctx or timezone_context(None)).zone).replace(tzinfo=None)
     return value.replace(microsecond=0)
 
 
@@ -394,10 +397,25 @@ def preflight_source_segments(
     start_ts: datetime,
     end_ts: datetime,
 ) -> ExportPreflight:
+    if db.get_bind().dialect.name == "sqlite":
+        duration_end = func.datetime(RecordingSegment.started_at, func.printf("+%d seconds", RecordingSegment.duration_sec))
+    else:
+        duration_end = RecordingSegment.started_at + RecordingSegment.duration_sec * literal_column("INTERVAL '1 second'")
+    # Same precedence as _segment_end; do not bound the history before finding
+    # overlaps or clips from earlier requested ranges would disappear.
+    segment_end = case(
+        (RecordingSegment.ended_at > RecordingSegment.started_at, RecordingSegment.ended_at),
+        (RecordingSegment.finalized_at > RecordingSegment.started_at, RecordingSegment.finalized_at),
+        (RecordingSegment.duration_sec > 0, duration_end),
+        else_=None,
+    )
+    overlaps_start = (func.julianday(segment_end) > func.julianday(start_ts)
+                      if db.get_bind().dialect.name == "sqlite" else segment_end > start_ts)
     candidates = (
         finalized_export_segments_query(db)
-        .filter(RecordingSegment.camera_id == camera_id, RecordingSegment.started_at < end_ts)
+        .filter(RecordingSegment.camera_id == camera_id, RecordingSegment.started_at < end_ts, overlaps_start)
         .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
+        .limit(MAX_SOURCE_SEGMENTS + 1)
         .all()
     )
 
@@ -485,15 +503,17 @@ def revalidate_job_sources(db: Session, job: ArchiveExportJob) -> list[ResolvedE
     return resolved
 
 
-def validate_export_range(start_ts: datetime, end_ts: datetime) -> tuple[datetime, datetime, int]:
-    start_dt = normalize_export_datetime(start_ts, "start_ts")
-    end_dt = normalize_export_datetime(end_ts, "end_ts")
+def validate_export_range(start_ts: datetime, end_ts: datetime, *, ctx=None) -> tuple[datetime, datetime, int]:
+    ctx = ctx or timezone_context(None)
+    start_dt = normalize_export_datetime(start_ts, "start_ts", ctx)
+    end_dt = normalize_export_datetime(end_ts, "end_ts", ctx)
     if end_dt <= start_dt:
         raise _safe_error(422, "end_ts must be greater than start_ts")
     duration = int((end_dt - start_dt).total_seconds())
     if duration > MAX_EXPORT_DURATION_SECONDS:
         raise _safe_error(413, "Export range is too long")
-    if start_dt > _utcnow_naive() + FUTURE_RANGE_TOLERANCE:
+    start_utc = start_dt.replace(tzinfo=ctx.zone).astimezone(timezone.utc).replace(tzinfo=None)
+    if start_utc > _utcnow_naive() + FUTURE_RANGE_TOLERANCE:
         raise _safe_error(422, "Export range is too far in the future")
     return start_dt, end_dt, duration
 
@@ -524,7 +544,7 @@ def create_archive_export_job(
     format_hint: str | None = None,
     request=None,
 ) -> ArchiveExportJob:
-    start_dt, end_dt, duration = validate_export_range(start_ts, end_ts)
+    start_dt, end_dt, duration = validate_export_range(start_ts, end_ts, ctx=timezone_context(db))
     title_text = clean_optional_text(title, max_length=MAX_TITLE_LENGTH, field_name="title")
     reason_text = clean_optional_text(reason or note, max_length=MAX_NOTE_LENGTH, field_name="reason")
     hint = str(format_hint or "").strip().lower() or None
@@ -1199,9 +1219,14 @@ def cleanup_archive_export_artifacts(
             or_(
                 ArchiveExportJob.status == EXPORT_STATUS_EXPIRED,
                 ArchiveExportJob.expires_at <= now,
-            )
+            ),
+            or_(
+                ArchiveExportJob.status != EXPORT_STATUS_EXPIRED,
+                ArchiveExportJob.internal_output_path.isnot(None),
+                ArchiveExportJob.internal_manifest_path.isnot(None),
+            ),
         )
-        .order_by(ArchiveExportJob.expires_at.asc(), ArchiveExportJob.created_at.asc())
+        .order_by(ArchiveExportJob.updated_at.asc(), ArchiveExportJob.expires_at.asc(), ArchiveExportJob.id.asc())
         .limit(bounded_limit)
         .all()
     )
@@ -1256,6 +1281,9 @@ def cleanup_archive_export_artifacts(
             except OSError:
                 result["errors"] += 1
         if not dry_run:
+            # Failed/unsafe artifacts rotate behind unattempted work instead
+            # of monopolising every bounded cleanup batch.
+            job.updated_at = now
             db.add(job)
 
     if not dry_run:

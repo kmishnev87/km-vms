@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.camera import Camera
 from app.models.recording import ArchiveRoot, RecordingSegment
+from app.models.storage_operation import StorageOperation
 from app.models.user import User
 from app.services.audit_log import create_event
 from app.services.recorder_runtime_status import list_camera_recording_states
@@ -41,6 +42,8 @@ from app.services.storage_operation_conflicts import (
     operation_instance_id,
 )
 from app.services.storage_operations_foundation import (
+    OPERATION_PROGRESS_MAX_BYTES,
+    bounded_payload,
     OperationHandle as StorageOuterHandle,
     finish_operation as finish_storage_outer_operation,
     heartbeat_operation as heartbeat_storage_outer_operation,
@@ -634,6 +637,8 @@ def _paused_camera_rows(db: Session, camera_ids: list[int]) -> list[Camera]:
         db.query(Camera)
         .filter(Camera.id.in_(camera_ids), Camera.deleted_at.is_(None))
         .order_by(Camera.id.asc())
+        .populate_existing()
+        .with_for_update()
         .all()
     )
 
@@ -659,17 +664,6 @@ def _restore_cameras(
             restored.append(int(camera.id))
         except Exception:
             failed.append(int(camera.id))
-    if restored:
-        create_event(
-            db=db,
-            actor=None,
-            category="storage",
-            event_type="archive_root.activation_recordings_restored",
-            severity="info",
-            message_ru="Archive root activation restored paused recordings",
-            message_en="Archive root activation restored paused recordings",
-            metadata={"camera_ids": restored, "reason": reason},
-        )
     return {"restored": restored, "failed": failed}
 
 
@@ -1263,8 +1257,12 @@ def _pause_operation_cameras(
 ) -> tuple[list[int], list[dict[str, Any]]]:
     snapshots = [dict(item) for item in state.get("camera_snapshots") or [] if isinstance(item, dict)]
     snapshot_by_id = {int(item["camera_id"]): item for item in snapshots}
-    changed: list[int] = []
+    if not snapshots:
+        return [], []
     with _worker_side_effect_fence(worker_session):
+        operation = _pause_owner(db, state)
+        progress = dict(operation.progress or {})
+        changed = set(progress.get("activation_paused_camera_ids") or [])
         for camera in _paused_camera_rows(db, sorted(snapshot_by_id)):
             snapshot = snapshot_by_id[int(camera.id)]
             if bool(camera.enabled) and bool(snapshot.get("enabled_intent")):
@@ -1273,9 +1271,43 @@ def _pause_operation_cameras(
                 camera.updated_at = datetime.utcnow()
                 db.add(camera)
                 snapshot["changed_by_operation"] = True
-                changed.append(int(camera.id))
+                changed.add(int(camera.id))
+            if int(camera.id) in changed:
+                snapshot["changed_by_operation"] = True
+        operation.progress = bounded_payload(
+            {**progress, "activation_paused_camera_ids": sorted(changed)},
+            max_bytes=OPERATION_PROGRESS_MAX_BYTES, field="progress",
+        )
+        db.add(operation)
+        # Camera mutation and its durable owner proof commit together. JSON is
+        # only the projection: replay recovers these ids after a lost reply.
         db.commit()
-    return changed, snapshots
+    return sorted(changed), snapshots
+
+
+def _pause_owner(db: Session, state: dict[str, Any], *, required: bool = True) -> StorageOperation | None:
+    operation = db.query(StorageOperation).filter(
+        StorageOperation.id == str(state.get("operation_id") or ""),
+        StorageOperation.operation_type == "archive_root_activation",
+    ).populate_existing().with_for_update().first()
+    if operation is None and required:
+        raise ActivationStateConflict("archive_root_activation_pause_owner_missing")
+    return operation
+
+
+def preserve_manual_camera_disable(db: Session, camera_id: int) -> None:
+    """Stage an explicit user disable in the same transaction as its camera."""
+    operations = db.query(StorageOperation).filter(
+        StorageOperation.operation_type == "archive_root_activation",
+        StorageOperation.status.in_(("queued", "running", "cancel_requested", "partial")),
+    ).populate_existing().with_for_update().all()
+    for operation in operations:
+        progress = dict(operation.progress or {})
+        ids = list(progress.get("activation_paused_camera_ids") or [])
+        if int(camera_id) in ids:
+            progress["activation_paused_camera_ids"] = [item for item in ids if item != int(camera_id)]
+            operation.progress = progress
+            db.add(operation)
 
 
 def _restore_operation_cameras(
@@ -1288,13 +1320,45 @@ def _restore_operation_cameras(
     snapshots = [item for item in state.get("camera_snapshots") or [] if isinstance(item, dict)]
     by_id = {int(item["camera_id"]): item for item in snapshots}
     with _worker_side_effect_fence(worker_session):
+        if not snapshots and not state.get("paused_camera_ids"):
+            return {"restored": [], "failed": []}
+        operation = _pause_owner(db, state, required=False)
+        # A pre-existing completed JSON proof remains readable; all newly
+        # performed pauses require the transactionally persisted owner above.
+        progress = dict(operation.progress or {}) if operation is not None else {}
+        if "activation_paused_camera_ids" in progress:
+            camera_ids = [int(item) for item in progress["activation_paused_camera_ids"]]
+        else:
+            # Existing pre-fix operations can carry a completed JSON proof.
+            camera_ids = [int(item) for item in state.get("paused_camera_ids") or []]
+        for camera_id in camera_ids:
+            if camera_id in by_id and "activation_paused_camera_ids" in progress:
+                by_id[camera_id] = {**by_id[camera_id], "changed_by_operation": True}
         result = _restore_cameras(
             db,
-            [int(item) for item in state.get("paused_camera_ids") or []],
+            camera_ids,
             reason=reason,
             snapshot_by_id=by_id,
         )
+        previous_restored = set(progress.get("activation_restored_camera_ids") or [])
+        previous_restored.update(result["restored"])
+        if operation is not None:
+            operation.progress = bounded_payload({
+                **progress,
+                "activation_paused_camera_ids": [item for item in camera_ids if item not in result["restored"]],
+                "activation_restored_camera_ids": sorted(previous_restored),
+            }, max_bytes=OPERATION_PROGRESS_MAX_BYTES, field="progress")
+            db.add(operation)
         db.commit()
+        if result["restored"]:
+            create_event(
+                db=db, actor=None, category="storage",
+                event_type="archive_root.activation_recordings_restored", severity="info",
+                message_ru="Archive root activation restored paused recordings",
+                message_en="Archive root activation restored paused recordings",
+                metadata={"camera_ids": result["restored"], "reason": reason},
+            )
+        result["restored"] = sorted(previous_restored)
     return result
 
 
@@ -1881,6 +1945,7 @@ def _finish_activation_storage_outer(db: Session, handle: StorageOuterHandle, st
     status = str(state.get("status") or "failed")
     terminal = "completed" if status == "completed" else "partial" if status == "failed_recovery_required" else "failed"
     retry = terminal != "completed"
+    operation = db.get(StorageOperation, handle.operation_id)
     finish_storage_outer_operation(
         db,
         handle,
@@ -1892,6 +1957,7 @@ def _finish_activation_storage_outer(db: Session, handle: StorageOuterHandle, st
             "restore_failed_count": len(state.get("camera_restore_failed_ids") or []),
         },
         progress={
+            **(dict(operation.progress or {}) if operation is not None else {}),
             "planned_count": len(state.get("affected_camera_ids") or []),
             "completed_count": len(state.get("restored_camera_ids") or []),
             "failed_count": len(state.get("camera_restore_failed_ids") or []),

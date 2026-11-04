@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from datetime import datetime
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
@@ -8,6 +9,7 @@ from app.core.security import decrypt_text
 from app.db.session import get_db
 from app.models.camera import Camera
 from app.models.user import User
+from app.schemas.camera import safe_rtsp_management_value
 from app.routers.camera_connection_helpers import (
     apply_profile_assignments,
     get_camera_credentials,
@@ -40,6 +42,31 @@ from app.services.onvif_service import (
 router = APIRouter()
 
 
+def safe_onvif_management_payload(value):
+    """Sanitize only the public projection; real paths stay in server proofs."""
+    if isinstance(value, list):
+        return [safe_onvif_management_payload(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {}
+    for key, item in value.items():
+        if key in {"stream_path", "stream_uri", "display_endpoint"} and isinstance(item, str):
+            path = safe_rtsp_management_value(item)
+            parsed = urlsplit(item)
+            host = parsed.hostname or ""
+            if ":" in host:
+                host = f"[{host}]"
+            netloc = host + (f":{parsed.port}" if parsed.port else "")
+            if key != "stream_path" and parsed.scheme and netloc:
+                safe = urlsplit(path or "/")
+                result[key] = urlunsplit((parsed.scheme, netloc, safe.path, safe.query, ""))
+            else:
+                result[key] = path
+        else:
+            result[key] = safe_onvif_management_payload(item)
+    return result
+
+
 def onvif_config_http_detail(exc: Exception) -> dict:
     detail = {
         "code": getattr(exc, "code", None) or onvif_error_code(exc),
@@ -47,7 +74,7 @@ def onvif_config_http_detail(exc: Exception) -> dict:
         "raw_secret_exposed": False,
     }
     if isinstance(exc, OnvifConfigurationError) and exc.current is not None:
-        detail["current"] = exc.current
+        detail["current"] = safe_onvif_management_payload(exc.current)
     return detail
 
 
@@ -87,6 +114,7 @@ def safe_camera_onvif_credentials(camera: Camera) -> dict:
         "port": int(camera.port or 80),
         "username": camera.username,
         "password": password,
+        **({"onvif_path": camera.onvif_path} if camera.onvif_path else {}),
     }
 
 
@@ -126,12 +154,18 @@ def onvif_profiles(
             password=str(password),
             rtsp_host=str(creds["rtsp_host"] or host),
             rtsp_port=int(creds["rtsp_port"] or 554),
+            **({"onvif_path": creds["onvif_path"]} if creds.get("onvif_path") else {}),
         )
         data = apply_profile_assignments(data, creds.get("camera"))
-        return {
+        proof_payload = {**payload, **creds, "protocol": "onvif", "port": int(port),
+                         "rtsp_host": creds["rtsp_host"] or host, "rtsp_port": creds["rtsp_port"] or 554,
+                         "onvif_path": creds.get("onvif_path")}
+        token = register_onvif_probe_proof(proof_payload, profiles=data.get("profiles"))
+        return safe_onvif_management_payload({
             "ok": True,
             **data,
-        }
+            "onvif_probe_token": token,
+        })
     except Exception as e:
         raise HTTPException(status_code=400, detail=safe_onvif_error(e))
 
@@ -171,7 +205,7 @@ def onvif_probe(
         "rtsp_port": rtsp_port,
         "username": username,
         "password": password,
-        "onvif_path": payload.get("onvif_path") or getattr(camera, "onvif_path", None),
+        "onvif_path": creds.get("onvif_path"),
     }
     try:
         executor = ThreadPoolExecutor(max_workers=1)
@@ -184,13 +218,14 @@ def onvif_probe(
             rtsp_host=rtsp_host,
             rtsp_port=rtsp_port,
             timeout_seconds=timeout,
+            **({"onvif_path": creds["onvif_path"]} if creds.get("onvif_path") else {}),
         )
         try:
             result = future.result(timeout=timeout)
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
-        result["onvif_probe_token"] = register_onvif_probe_proof(request_payload)
-        return result
+        result["onvif_probe_token"] = register_onvif_probe_proof(request_payload, profiles=result.get("profiles"))
+        return safe_onvif_management_payload(result)
     except FutureTimeout:
         raise HTTPException(status_code=400, detail={"code": "timeout", "message": "ONVIF service did not respond in time.", "raw_secret_exposed": False})
     except Exception as exc:
@@ -215,13 +250,14 @@ def onvif_profile_config(
         raise HTTPException(status_code=400, detail="ONVIF profile settings require host, credentials, and profile token.")
 
     try:
-        return get_onvif_profile_config(
+        return safe_onvif_management_payload(get_onvif_profile_config(
             host=str(creds["host"]),
             port=int(creds["port"] or 80),
             username=str(creds["username"]),
             password=str(creds["password"]),
             profile_token=str(payload["profile_token"]),
-        )
+            **({"onvif_path": creds["onvif_path"]} if creds.get("onvif_path") else {}),
+        ))
     except Exception as e:
         raise HTTPException(status_code=400, detail=onvif_config_http_detail(e))
 
@@ -237,14 +273,15 @@ def update_onvif_profile_route(
         raise HTTPException(status_code=400, detail="ONVIF profile update requires host, credentials, and profile token.")
 
     try:
-        return update_onvif_profile(
+        return safe_onvif_management_payload(update_onvif_profile(
             host=str(creds["host"]),
             port=int(creds["port"] or 80),
             username=str(creds["username"]),
             password=str(creds["password"]),
             profile_token=str(payload["profile_token"]),
             config=payload.get("config") or {},
-        )
+            **({"onvif_path": creds["onvif_path"]} if creds.get("onvif_path") else {}),
+        ))
     except Exception as e:
         status_code = 409 if isinstance(e, OnvifConfigurationError) and e.code == "video_encoder_configuration_mismatch" else 400
         raise HTTPException(status_code=status_code, detail=onvif_config_http_detail(e))
@@ -405,6 +442,7 @@ def onvif_health_check(
                     password=str(password),
                     rtsp_host=str(camera.rtsp_reachable_host or camera.host),
                     rtsp_port=int(camera.rtsp_reachable_port or 554),
+                    **({"onvif_path": camera.onvif_path} if camera.onvif_path else {}),
                 )
                 check_status = "reachable"
                 selection = select_profile_config_health_target(
@@ -422,6 +460,7 @@ def onvif_health_check(
                             username=str(camera.username),
                             password=str(password),
                             profile_token=str(selected_profile_token),
+                            **({"onvif_path": camera.onvif_path} if camera.onvif_path else {}),
                         )
                         profile_config_result["profile_source"] = selection.get("source")
                         profile_config_result["reason_codes"] = sorted(
@@ -463,6 +502,7 @@ def onvif_health_check(
                     port=int(camera.port or 80),
                     username=str(camera.username),
                     password=str(password),
+                    **({"onvif_path": camera.onvif_path} if camera.onvif_path else {}),
                 )
             except Exception as exc:
                 reason_codes.append(onvif_error_code(exc))
@@ -480,6 +520,7 @@ def onvif_health_check(
                     port=int(camera.port or 80),
                     username=str(camera.username),
                     password=str(password),
+                    **({"onvif_path": camera.onvif_path} if camera.onvif_path else {}),
                 )
             except Exception as exc:
                 reason_codes.append(onvif_error_code(exc))
@@ -526,4 +567,4 @@ def onvif_health_check(
             "raw_secret_exposed": False,
         },
     )
-    return result
+    return safe_onvif_management_payload(result)

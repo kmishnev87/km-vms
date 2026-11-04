@@ -104,7 +104,7 @@ export function sanitizeAuditFiltersFromEntries(entries) {
     }
     if (key === "since_minutes") {
       const value = sanitizeSinceMinutes(rawValue);
-      if (value) filters.since_minutes = value;
+      if (value || String(rawValue ?? "").trim() === "") filters.since_minutes = value;
       else if (String(rawValue || "").trim()) invalid.push(key);
       continue;
     }

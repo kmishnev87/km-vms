@@ -544,12 +544,8 @@ def audit_setup_failed(db: Session, request: Request, reason: str, status_code: 
 
 
 def validate_setup_username(username: str) -> str:
-    value = str(username or "").strip()
-    if len(value) < 2 or len(value) > 64:
-        raise ValueError("username must be 2-64 characters")
-    if not SETUP_USERNAME_RE.fullmatch(value):
-        raise ValueError("username may contain only letters, numbers, dots, dashes and underscores")
-    return value
+    from app.core.usernames import normalize_username
+    return normalize_username(username)
 
 
 def acquire_setup_lock(db: Session) -> None:

@@ -31,7 +31,9 @@ def verify_password(password: str, password_hash: str) -> bool:
     return pwd_context.verify(password, password_hash)
 
 
-def create_access_token(subject: str, expires_minutes: int = 60 * 12, expires_at: datetime | None = None) -> str:
+def create_access_token(subject: str, expires_minutes: int = 60 * 12, expires_at: datetime | None = None, *, user_id: int) -> str:
+    if type(user_id) is not int or user_id < 1:
+        raise ValueError("A persisted user id is required")
     now = datetime.now(timezone.utc)
     expiry = expires_at or (now + timedelta(minutes=expires_minutes))
     if expiry.tzinfo is None:
@@ -39,6 +41,7 @@ def create_access_token(subject: str, expires_minutes: int = 60 * 12, expires_at
     payload = {
         "typ": ACCESS_TOKEN_TYPE,
         "sub": subject,
+        "uid": user_id,
         "iat": int(now.timestamp()),
         "exp": int(expiry.timestamp()),
     }
@@ -48,8 +51,11 @@ def create_access_token(subject: str, expires_minutes: int = 60 * 12, expires_at
 def decode_access_token(token: str) -> dict:
     payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
     token_type = payload.get("typ")
-    if token_type is not None and token_type != ACCESS_TOKEN_TYPE:
+    if token_type != ACCESS_TOKEN_TYPE:
         raise jwt.InvalidTokenError("Invalid access token type")
+    # A reusable username is display metadata, never the account authority.
+    if type(payload.get("uid")) is not int or payload["uid"] < 1:
+        raise jwt.InvalidTokenError("Invalid access token identity")
     return payload
 
 

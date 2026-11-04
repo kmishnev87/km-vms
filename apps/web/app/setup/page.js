@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { LanguageSelect, localeMetadata, normalizeLocale, useI18n, useLocaleText } from "../../lib/i18n";
 import { UTC_TIMEZONES, offsetFromTimezone, timezoneValueForSettings } from "../../lib/settingsPageHelpers";
@@ -99,6 +99,7 @@ export default function SetupPage() {
   const [busy, setBusy] = useState(false);
   const [submitState, setSubmitState] = useState("idle");
   const [draftLoaded, setDraftLoaded] = useState(false);
+  const draftRestored = useRef(false);
   const [storageState, setStorageState] = useState({
     loading: true,
     candidates: [],
@@ -226,6 +227,8 @@ export default function SetupPage() {
   }, [router]);
 
   useEffect(() => {
+    if (draftRestored.current) return;
+    draftRestored.current = true;
     const draft = safeReadDraft();
     if (!draft) {
       setDraftLoaded(true);

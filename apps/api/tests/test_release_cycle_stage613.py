@@ -30,8 +30,7 @@ def _current_version() -> str:
 
 def _next_patch(version: str) -> str:
     major, minor, patch = (int(item) for item in version.split("."))
-    assert patch < 29
-    return f"{major}.{minor}.{patch + 1}"
+    return f"{major}.{minor + 1}.0" if patch == 29 else f"{major}.{minor}.{patch + 1}"
 
 
 def test_stage613_versions_are_consistent():

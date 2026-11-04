@@ -109,7 +109,7 @@ def add_user(db, *, role=ROLE_ADMIN, username=None):
 
 
 def auth_headers(user):
-    return {"Authorization": f"Bearer {create_access_token(user.username)}"}
+    return {"Authorization": f"Bearer {create_access_token(user.username, user_id=user.id)}"}
 
 
 def add_camera(db, *, deleted=False, name="stage11_export_camera"):

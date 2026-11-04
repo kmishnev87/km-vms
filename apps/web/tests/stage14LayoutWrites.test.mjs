@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import {createSerializedLayoutWriter} from '../lib/serializedLayoutWriter.js';
+const turn=()=>new Promise(resolve=>setImmediate(resolve));
+const requests=[],ui=[];
+const writer=createSerializedLayoutWriter(payload=>new Promise((resolve,reject)=>requests.push({payload,resolve,reject})));
+writer.save('A',value=>ui.push(value),error=>ui.push(error));
+writer.invalidate(); // a drag occurs before the next debounce expires
+requests[0].resolve('old-A');await turn();assert.deepEqual(ui,[]);
+writer.save('B',value=>ui.push(value),error=>ui.push(error));
+writer.save('C',value=>ui.push(value),error=>ui.push(error));
+writer.save('D',value=>ui.push(value),error=>ui.push(error));
+assert.equal(requests.length,2);
+requests[1].reject(new Error('stale error'));await turn();
+assert.equal(requests.length,3);assert.equal(requests[2].payload,'D');assert.deepEqual(ui,[]);
+requests[2].resolve('saved-D');await turn();assert.deepEqual(ui,['saved-D']);
+writer.save('unmounted',value=>ui.push(value),error=>ui.push(error));
+writer.invalidate();requests[3].resolve('late');await turn();assert.deepEqual(ui,['saved-D']);
+
+const writes=[],acks=[],complete=[];
+const durable=createSerializedLayoutWriter(payload=>new Promise(resolve=>{writes.push(payload);complete.push(resolve);}));
+let session='A';
+durable.save('layout-A',value=>acks.push(value),()=>{},()=>session==='A');
+durable.save('latest-A',value=>acks.push(value),()=>{},()=>session==='A');
+durable.dispose();
+complete[0]('old-ack');await turn();
+assert.deepEqual(writes,['layout-A','latest-A'],'navigation does not discard an already queued save');
+complete[1]('latest-ack');await turn();assert.deepEqual(acks,[],'unmounted UI receives no acknowledgements');
+const isolated=createSerializedLayoutWriter(payload=>new Promise(resolve=>{writes.push(payload);complete.push(resolve);}));
+isolated.save('first-A',()=>{},()=>{},()=>session==='A');
+isolated.save('queued-A',()=>{},()=>{},()=>session==='A');
+session='B';complete[2]('late-A');await turn();
+assert.equal(writes.includes('queued-A'),false,'a previous account cannot write into the new account session');

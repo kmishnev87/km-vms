@@ -118,6 +118,9 @@ export function systemHealthIndicatorModel({
   if (!runtimeStatusKnown || !summary) {
     return { visible: true, canRead: true, state: "unknown", hasProblems: false };
   }
+  if (!["ok", "warning", "error"].includes(summary.severity)) {
+    return { visible: true, canRead: true, state: "unknown", hasProblems: false };
+  }
   const hasProblems = summary.severity !== "ok";
   return {
     visible: true,
@@ -510,15 +513,16 @@ export function buildDashboardStatusSummary(runtimeStatus, options = {}) {
     ? "error"
     : warnings.some((item) => item.severity === "warning") || problemRows.some((row) => row.severity === "warning")
       ? "warning"
-      : "ok";
+      : rows.some((row) => row.severity === "unknown") ? "unknown" : "ok";
 
   return {
     severity: globalSeverity,
     severity_label: severityLabel(globalSeverity),
-    title: globalSeverity === "ok" ? "Система работает штатно" : "Требуется внимание оператора",
+    title: globalSeverity === "unknown" ? "Состояние системы уточняется" : globalSeverity === "ok" ? "Система работает штатно" : "Требуется внимание оператора",
     summary: globalSeverity === "ok"
       ? "Критичных предупреждений по камерам, записи, архиву и обслуживанию нет."
-      : "Проблемы сгруппированы по доменам без технических подробностей и секретов.",
+      : globalSeverity === "unknown" ? "По части служб пока нет достоверных данных."
+        : "Проблемы сгруппированы по доменам без технических подробностей и секретов.",
     problem_count: warnings.length,
     affected_domains: problemRows.length,
     rows,

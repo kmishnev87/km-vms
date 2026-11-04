@@ -743,7 +743,15 @@ def read_current_restore_status(*, actor: Any) -> dict[str, Any]:
     validated = restore_public_contract(payload)
     if validated is None:
         raise CurrentRestoreBlocked("restore_status_contract_invalid")
-    if validated.get("actor_subject") != subject:
+    request, request_state = read_bounded_json(restore_request_path())
+    if (
+        validated.get("actor_subject") != subject
+        or request_state == "invalid"
+        or not request
+        or request.get("operation_id") != validated.get("operation_id")
+        or request.get("submission_id") != validated.get("submission_id")
+        or request.get("requested_by", {}).get("user_id") != getattr(actor, "id", None)
+    ):
         raise CurrentRestoreBlocked(
             "restore_status_not_found",
             {"status": "not_found", "reason_code": "restore_status_not_found"},

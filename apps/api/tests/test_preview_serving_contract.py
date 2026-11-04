@@ -17,7 +17,7 @@ from app.routers.previews import camera_preview, camera_test_preview
 
 
 def _auth_headers(user):
-    return {"Authorization": f"Bearer {create_access_token(user.username)}"}
+    return {"Authorization": f"Bearer {create_access_token(user.username, user_id=user.id)}"}
 
 
 @pytest.fixture
