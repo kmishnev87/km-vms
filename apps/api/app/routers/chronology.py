@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import mimetypes
 import re
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -34,6 +35,9 @@ from app.services.timezone_contract import (
 from app.utils.video_stream import stream_video
 
 router = APIRouter(prefix="/chronology", tags=["chronology"])
+MAX_RANGE_CAMERAS = 64
+MAX_RANGE_SEGMENTS = 100_000
+MAX_RANGE_PROCESSING_SECONDS = 5
 
 OWNERSHIP_KM_VMS = "KM VMS"
 RECORDER_SOURCE = "recorder"
@@ -460,12 +464,18 @@ def chronology_ranges(
     current_user: User = Depends(require_permission("view_timeline")),
 ):
     try:
-        parsed_ids = [int(x.strip()) for x in camera_ids.split(",") if x.strip()]
+        if len(camera_ids) > 4096:
+            raise ValueError("camera_ids too long")
+        parsed_ids = list(dict.fromkeys(int(x.strip()) for x in camera_ids.split(",") if x.strip()))
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid camera_ids")
 
     if not parsed_ids:
         raise HTTPException(status_code=400, detail="camera_ids required")
+    if len(parsed_ids) > MAX_RANGE_CAMERAS or any(value < 1 for value in parsed_ids):
+        raise HTTPException(status_code=422, detail="Too many cameras or invalid camera id")
+    remaining = MAX_RANGE_SEGMENTS
+    deadline = time.monotonic() + MAX_RANGE_PROCESSING_SECONDS
 
     ctx = timezone_context(db)
     parsed_from = _parse_ts(from_ts, "from", ctx)
@@ -501,11 +511,17 @@ def chronology_ranges(
                 or_(*windows),
             )
             .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
+            .limit(remaining + 1)
             .yield_per(128)
         )
 
         clipped = []
         for segment in segments:
+            remaining -= 1
+            if remaining < 0 or time.monotonic() > deadline:
+                # Never return a silently incomplete archive map. Normal 7-day
+                # zoom remains supported; excessive requests must be narrowed.
+                raise HTTPException(status_code=422, detail="Archive range is too large; select fewer cameras or a shorter range")
             clipped_segment = _clip_segment_to_range(
                 segment,
                 range_from=range_from,

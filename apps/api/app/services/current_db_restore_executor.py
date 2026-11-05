@@ -17,6 +17,7 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
+from app.core.user_sessions import user_session_generation
 from app.services.backup_before_upgrade import (
     BackupExecutionConfig,
     BackupSafetyBlocked,
@@ -453,6 +454,9 @@ def _restore(
         },
     )
     url = make_url(settings.database_url)
+    # This durable file is not part of pg_dump. A crash or rollback must never
+    # allow a credential to acquire the identity of a restored/recreated row.
+    user_session_generation(rotate=True)
     _reset_postgres_database(url)
     injected_phase = str(
         os.getenv("KMVMS_RESTORE_TEST_FAILURE_PHASE") or ""

@@ -157,10 +157,10 @@ def test_diagnostic_archive_contains_audit_summary_and_redaction_proof(db, monke
     )
 
     monkeypatch.setattr(settings_router, "storage_diagnostics", lambda: {"status": "ok"})
-    monkeypatch.setattr(settings_router, "build_storage_monitoring_summary", lambda db: {"status": "ok"})
+    monkeypatch.setattr(settings_router, "build_lightweight_storage_monitoring_summary", lambda db: {"status": "ok"})
     monkeypatch.setattr(settings_router, "reconciliation_diagnostics", lambda db: {"status": "ok"})
     monkeypatch.setattr(settings_router, "retention_diagnostics", lambda db: {"status": "ok"})
-    monkeypatch.setattr(settings_router, "build_recorder_archive_payloads", lambda db: {})
+    monkeypatch.setattr(settings_router, "build_recorder_archive_payloads", lambda db, **kwargs: {})
     monkeypatch.setattr(settings_router, "get_hardware_capabilities", lambda: {"available_backends": []})
     monkeypatch.setattr(settings_router, "camera_diagnostics", lambda db: [])
     monkeypatch.setattr(settings_router.live_manager, "status", lambda: [])
@@ -218,7 +218,8 @@ def test_diagnostic_archive_contains_audit_summary_and_redaction_proof(db, monke
     assert summary["by_severity"]["warning"] == 1
     assert summary["recent_security_warning_error"][0]["event_type"] == "security.permission_denied"
     assert proof["status"] == "PASS"
-    assert coverage["full_diagnostic_archive"] is True
+    assert coverage["full_diagnostic_archive"] is False
+    assert coverage["docker_logs"]["status"] == "not_requested"
     assert coverage["docker_log_minutes"] == 30
     assert coverage["audit_minutes"] == 30
     assert normal_coverage["docker_log_minutes"] == 10

@@ -390,6 +390,12 @@ def decode_jwt(token: str) -> dict[str, Any]:
         raise ContractError("bearer_type_invalid")
     if type(payload.get("uid")) is not int or payload["uid"] < 1:
         raise ContractError("bearer_identity_invalid")
+    try:
+        generation = (MAINTENANCE_CONTROL_ROOT / "user-sessions" / "user-session-generation").read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError) as exc:
+        raise ContractError("bearer_session_unavailable") from exc
+    if not re.fullmatch(r"[0-9a-f]{32}", generation) or payload.get("usg") != generation:
+        raise ContractError("bearer_session_expired")
     return payload
 
 

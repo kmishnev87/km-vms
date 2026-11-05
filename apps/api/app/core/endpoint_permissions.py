@@ -49,6 +49,7 @@ class EndpointPermission:
 
 ENDPOINT_PERMISSIONS: tuple[EndpointPermission, ...] = (
     EndpointPermission("auth", "POST", "/auth/login", PUBLIC, "public route", "Requires username/password."),
+    EndpointPermission("auth", "POST", "/auth/logout", PUBLIC, "public route", "Clears only this browser's Live cookie; no account mutation."),
     EndpointPermission("auth", "GET", "/auth/me", AUTHENTICATED, "get_current_user"),
     EndpointPermission("audit", "GET", "/audit/events", PERMISSION_MANAGE_SETTINGS, "require_permission"),
     EndpointPermission("users", "GET", "/users/me", AUTHENTICATED, "get_current_user"),

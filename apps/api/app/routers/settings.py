@@ -4,7 +4,6 @@ import io
 import json
 import os
 import re
-import subprocess
 import threading
 import zipfile
 from datetime import datetime
@@ -15,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -23,11 +23,12 @@ from app.core.sanitization import is_sensitive_query_key, redact_text as audit_r
 from app.core.security import hash_password
 from app.db.session import get_db
 from app.models.camera import Camera
+from app.models.recording import RecordingSegment
 from app.models.setup_lock import SetupLock
 from app.models.system_settings import SystemSettings
 from app.models.user import User
 from app.routers.deps import require_permission
-from app.routers.recordings import collect_recording_files
+from app.routers.recordings import collect_recording_files, finalized_segments_query, safe_recording_camera_label
 from app.services.audit_log import audit_summary, create_event, events_as_text, list_events, request_ip, request_user_agent, serialize_event
 from app.services.hardware import get_hardware_capabilities, invalidate_hardware_capabilities
 from app.services.live_engine import manager as live_manager
@@ -41,7 +42,7 @@ from app.services.recorder_diagnostics import (
 )
 from app.services.system_runtime_status import build_operator_runtime_status
 from app.services.recording_format_change import format_change_status, prepare_format_change
-from app.services.storage_monitoring import build_storage_monitoring_summary
+from app.services.storage_monitoring import build_storage_monitoring_summary, build_lightweight_storage_monitoring_summary
 from app.services.system_settings import (
     AUTO_FREE_SPACE_CLEANUP_THRESHOLD_PERCENT,
     AUTO_FREE_SPACE_CRITICAL_THRESHOLD_PERCENT,
@@ -85,6 +86,7 @@ from app.services.update_apply import (
     request_update_apply,
 )
 from app.services.timezone_contract import format_system_iso, timezone_context, timezone_metadata, utc_now_storage
+from app.services.diagnostic_logs import collect_diagnostic_logs
 
 router = APIRouter(tags=["settings"])
 
@@ -1001,20 +1003,26 @@ def storage_diagnostics() -> dict:
 
 def recordings_diagnostics(db: Session) -> dict:
     try:
-        items = collect_recording_files(db, verify_files=True)
+        items = collect_recording_files(db, limit=50, verify_files=True)
+        grouped = finalized_segments_query(db).with_entities(
+            RecordingSegment.camera_id, func.max(RecordingSegment.camera_name_snapshot),
+            func.count(RecordingSegment.id), func.coalesce(func.sum(RecordingSegment.size_bytes), 0),
+        ).group_by(RecordingSegment.camera_id).all()
+        cameras = {row.id: row.name for row in db.query(Camera).all()}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
-    total_size = sum(int(item.get("size_bytes") or 0) for item in items)
     by_camera: dict[str, dict] = {}
-    for item in items:
-        camera = str(item.get("camera") or "unknown")
+    for camera_id, snapshot, count, size in grouped:
+        camera = safe_recording_camera_label(snapshot or cameras.get(camera_id), fallback=str(camera_id))
         row = by_camera.setdefault(camera, {"count": 0, "size_bytes": 0})
-        row["count"] += 1
-        row["size_bytes"] += int(item.get("size_bytes") or 0)
+        row["count"] += int(count)
+        row["size_bytes"] += int(size)
     return {
         "ok": True,
-        "count": len(items),
-        "size_bytes": total_size,
+        "count": sum(row["count"] for row in by_camera.values()),
+        "size_bytes": sum(row["size_bytes"] for row in by_camera.values()),
+        "totals_evidence": "database_metadata",
+        "physical_verification": {"mode": "latest_sample", "limit": 50, "checked": len(items), "full_archive_checked": False},
         "by_camera": by_camera,
         "latest": items[:50],
     }
@@ -1070,42 +1078,19 @@ def chronology_diagnostics(db: Session) -> dict:
     return {"ok": True, "items": [rows[key] for key in sorted(rows)]}
 
 
-def docker_logs_via_cli(container: str, mode: str) -> str:
-    cmd = ["docker", "logs"]
-    if mode == "extended":
-        cmd.extend(["--since", "30m"])
-    else:
-        cmd.extend(["--since", "10m"])
-    cmd.append(container)
-
+def write_docker_logs(bundle: zipfile.ZipFile, mode: str) -> dict:
     try:
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=20,
-            check=False,
-        )
-    except Exception as exc:
-        return f"docker logs failed for {container}: {exc}\n"
-
-    output = result.stdout or ""
-    if result.returncode != 0:
-        output = f"docker logs exit_code={result.returncode}\n{output}"
-    return output
-
-
-def run_docker_logs(container: str, mode: str) -> str:
-    try:
-        return redact_text(docker_logs_via_cli(container, mode))
-    except Exception as cli_exc:
-        return f"Docker logs unavailable for {container}\ncli_error={cli_exc}\n"
-
-
-def write_docker_logs(bundle: zipfile.ZipFile, mode: str) -> None:
+        logs = collect_diagnostic_logs(mode)
+    except Exception:
+        logs = {}
+    coverage = {}
     for container in DIAGNOSTIC_CONTAINERS:
-        bundle.writestr(f"docker/{container}.log", run_docker_logs(container, mode))
+        service = container.removeprefix("vms-")
+        entry = logs.get(service) or {}
+        coverage[service] = entry.get("status", "unavailable")
+        bundle.writestr(f"docker/{container}.log", redact_text(str(entry.get("text") or "Service logs unavailable\n")))
+    return {"status": "available" if all(value == "available" for value in coverage.values()) else "partial" if logs else "unavailable",
+            "services": coverage, "max_bytes_per_service": 16384, "tail_lines": 200, "scope": "this_compose_installation"}
 
 
 def write_file_logs(bundle: zipfile.ZipFile) -> None:
@@ -1249,12 +1234,12 @@ def build_log_archive(
         write_json(bundle, "system/settings.json", serialize_settings(get_system_settings(db)))
         write_json(bundle, "system/timezone.json", time_context)
         write_json(bundle, "system/operator_runtime_status.json", build_operator_runtime_status(db))
-        write_json(bundle, "system/diagnostic_coverage.json", diagnostic_coverage)
         write_json(bundle, "storage/status.json", storage_diagnostics())
-        write_json(bundle, "storage/storage_monitoring_summary.json", build_storage_monitoring_summary(db))
+        storage_summary = build_lightweight_storage_monitoring_summary(db)
+        write_json(bundle, "storage/storage_monitoring_summary.json", storage_summary)
         write_json(bundle, "storage/recording_integrity_summary.json", reconciliation_diagnostics(db))
         write_json(bundle, "storage/retention_summary.json", retention_diagnostics(db))
-        for arcname, payload in build_recorder_archive_payloads(db).items():
+        for arcname, payload in build_recorder_archive_payloads(db, storage_summary=storage_summary).items():
             write_json(bundle, arcname, payload)
         write_json(bundle, "hardware/capabilities.json", get_hardware_capabilities())
         write_json(bundle, "cameras/cameras.json", camera_diagnostics(db))
@@ -1291,7 +1276,12 @@ def build_log_archive(
             bundle.writestr("bug-report.txt", audit_redact_text(report_text.strip()) + "\n")
         if include_logs:
             write_file_logs(bundle)
-            write_docker_logs(bundle, mode)
+            diagnostic_coverage["docker_logs"] = write_docker_logs(bundle, mode)
+        else:
+            diagnostic_coverage["docker_logs"] = {"status": "not_requested"}
+        diagnostic_coverage["full_diagnostic_archive"] = bool(include_logs and diagnostic_coverage["docker_logs"]["status"] == "available")
+        diagnostic_coverage["archive_physical_verification"] = "bounded_sample_not_full_integrity_scan"
+        write_json(bundle, "system/diagnostic_coverage.json", diagnostic_coverage)
     archive.seek(0)
     return archive
 

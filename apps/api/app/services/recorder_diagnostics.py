@@ -59,13 +59,18 @@ def _storage_state(storage_summary: dict[str, Any]) -> dict[str, Any]:
         "checked_at_system": storage_summary.get("checked_at_system"),
         "scan_limited": bool(storage_summary.get("scan_limited")),
         "partial": bool(storage_summary.get("partial")),
+        "scan_mode": storage_summary.get("scan_mode"),
         "warnings_count": len(storage_summary.get("warnings") or []),
         "errors_count": len(storage_summary.get("errors") or []),
         "free_bytes": capacity.get("free_bytes"),
         "available_bytes": capacity.get("available_bytes"),
         "owned_archive": {
             "segments_count": int(owned_archive.get("kmvms_owned_segments_count") or 0),
-            "existing_file_count": int(owned_archive.get("kmvms_owned_existing_file_count") or 0),
+            "existing_file_count": (
+                int(owned_archive["kmvms_owned_existing_file_count"])
+                if owned_archive.get("kmvms_owned_existing_file_count") is not None else None
+            ),
+            "evidence_status": owned_archive.get("evidence_status", "filesystem_observation"),
             "missing_file_count": int(owned_archive.get("kmvms_owned_missing_file_count") or 0),
             "problem_file_count": int(owned_archive.get("kmvms_owned_problem_file_count") or 0),
         },
@@ -131,7 +136,7 @@ def _health_from(
     return "healthy", ["all_checks_passed"]
 
 
-def build_recorder_status(db: Session) -> dict[str, Any]:
+def build_recorder_status(db: Session, *, storage_summary: dict | None = None) -> dict[str, Any]:
     now = _utc_now()
     ctx = timezone_context(db)
     heartbeat = _read_heartbeat(db)
@@ -141,7 +146,8 @@ def build_recorder_status(db: Session) -> dict[str, Any]:
     job_summary = _job_summary(db)
     camera_states = _camera_recording_states(db)
     segment_summary = _segment_summary(db, now)
-    storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=True)
+    if storage_summary is None:
+        storage_summary = build_storage_monitoring_summary(db, include_namespace_observations=True)
     storage_state = _storage_state(storage_summary)
     retention_summary = retention_diagnostics(db)
     retention_state = _retention_state(retention_summary)
@@ -331,8 +337,8 @@ def build_system_runtime_status(db: Session) -> dict[str, Any]:
     )
 
 
-def build_recorder_archive_payloads(db: Session) -> dict[str, Any]:
-    status = build_recorder_status(db)
+def build_recorder_archive_payloads(db: Session, *, storage_summary: dict | None = None) -> dict[str, Any]:
+    status = build_recorder_status(db, storage_summary=storage_summary)
     return {
         "system/runtime_status.json": _system_runtime_from_status(status),
         "recorder/status.json": status,

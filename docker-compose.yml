@@ -88,9 +88,11 @@ services:
       KMVMS_UPDATE_CONTROL_ROOT: /update-control
       KMVMS_UPDATE_PUBLIC_ROOT: /update-public
       KMVMS_RESTORE_PUBLIC_ROOT: /restore-public
+      KMVMS_MAINTENANCE_CONTROL_ROOT: /maintenance-control
     volumes:
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-public:/update-public:ro
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/restore-public:/restore-public:ro
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/maintenance-control:/maintenance-control:ro
     read_only: true
     tmpfs:
       - /tmp
@@ -310,6 +312,7 @@ services:
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/update-control:/update-control:ro
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/restore-control:/restore-control
       - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/maintenance-control:/maintenance-control:ro
+      - ${KM_VMS_HOST_APP_DIR:?KM_VMS_HOST_APP_DIR is required}/data/maintenance-control/user-sessions:/maintenance-control/user-sessions
     read_only: true
     tmpfs:
       - /tmp

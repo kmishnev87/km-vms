@@ -680,15 +680,21 @@ export default function TilePlayer({
     document.addEventListener("visibilitychange", onResume);
     startPlayback();
 
-    return () => {
+    function dispose() {
       cancelled = true;
       generation += 1;
       clearInterval(watchTimer);
       window.removeEventListener("online", onResume);
       document.removeEventListener("visibilitychange", onResume);
       destroyPlayer();
-      closeViewer();
       clearDimensionProbe();
+      return closeViewer();
+    }
+    const beforeLogout = (event) => event.detail.waitUntil(dispose());
+    window.addEventListener("km-vms-before-logout", beforeLogout);
+    return () => {
+      window.removeEventListener("km-vms-before-logout", beforeLogout);
+      dispose();
     };
   }, [cameraId, stream]);
 

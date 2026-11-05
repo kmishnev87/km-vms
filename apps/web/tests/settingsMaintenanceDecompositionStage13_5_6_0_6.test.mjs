@@ -577,11 +577,13 @@ assert.match(
 
 const expectedProtected = {
   "apps/web/lib/settingsPageHelpers.js": "adece850f2f049b7b535817c2fad8ec9cc7099d7abdfa0b52d129c909c1eee7c",
-  "apps/web/lib/settingsPageSharedHelpers.js": "d8fdc0362c05c1828fda83e2aadb61267378791371391e9222afbefd86c53d0e"
+  "apps/web/lib/settingsPageSharedHelpers.js": "8b277ff76692f76da62111f830a57bc93898d4a39c8e88afc92a4098d76dd678"
 };
 // Presentation, shared feedback and phase labels are now explicitly in scope;
 // their concrete behavior is covered by uiFeedbackLayoutStability, not a hash.
 // Freeze the accepted cumulative baseline, not the historical extraction snapshot.
+// The two new dependency-error translations have executable coverage in
+// stage14ArchiveProbeDependency; the helper dependency boundary stays frozen.
 // Ignore Git checkout line endings; they do not change the helper contract.
 for (const [relative, expectedHash] of Object.entries(expectedProtected)) {
   const protectedSource = readProductSourceFile(resolve(repoRoot, relative), "utf8").replace(/\r\n/g, "\n");

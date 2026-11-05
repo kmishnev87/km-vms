@@ -1,4 +1,5 @@
 "use client";
+import { isArchiveRecoveryHealthy } from "../../lib/archivePlaybackRecovery";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Layout from "../../components/Layout";
@@ -564,6 +565,9 @@ export default function RecordingsPage() {
   const [viewerItem, setViewerItem] = useState(null);
   const [viewerPlaybackError, setViewerPlaybackError] = useState(false);
   const [viewerRefreshAttempted, setViewerRefreshAttempted] = useState(false);
+  const viewerRecoveryProgressRef = useRef(null);
+  const viewerRecoveryStableTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(viewerRecoveryStableTimerRef.current), []);
   const [viewerResolution, setViewerResolution] = useState({ width: 0, height: 0 });
   const [viewerRect, setViewerRect] = useState({ width: 0, height: 0 });
   const [viewerFullscreen, setViewerFullscreen] = useState(false);
@@ -1020,6 +1024,7 @@ export default function RecordingsPage() {
   }
 
   async function refreshViewerUrlAfterMediaError() {
+    clearTimeout(viewerRecoveryStableTimerRef.current);
     const selection = viewerSelectionRef.current;
     if (selection.item !== viewerItem) return;
     if (
@@ -1071,6 +1076,14 @@ export default function RecordingsPage() {
     const safeTime = Number.isFinite(duration) && duration > 0
       ? Math.min(targetTime, Math.max(0, duration - 0.25))
       : targetTime;
+    viewerRecoveryProgressRef.current = safeTime;
+    clearTimeout(viewerRecoveryStableTimerRef.current);
+    const selection = viewerSelectionRef.current;
+    viewerRecoveryStableTimerRef.current = setTimeout(() => {
+      if (viewerSelectionRef.current === selection && viewerVideoRef.current === video) {
+        markViewerPlaybackHealthy({ stableReadyMs: 2000 });
+      }
+    }, 2000);
 
     try {
       video.currentTime = safeTime;
@@ -1086,6 +1099,16 @@ export default function RecordingsPage() {
       try {
         video.pause();
       } catch (_) {}
+    }
+  }
+
+  function markViewerPlaybackHealthy({ stableReadyMs = 0 } = {}) {
+    const video = viewerVideoRef.current;
+    const start = viewerRecoveryProgressRef.current;
+    if (isArchiveRecoveryHealthy(video, start, stableReadyMs)) {
+      clearTimeout(viewerRecoveryStableTimerRef.current);
+      viewerRecoveryProgressRef.current = null;
+      setViewerRefreshAttempted(false);
     }
   }
 
@@ -1707,6 +1730,7 @@ export default function RecordingsPage() {
                     className={`recordingVideo ${viewerAdaptiveHighRes ? "recordingVideoAdaptiveHighRes" : ""}`}
                     onLoadedMetadata={restoreViewerPlaybackState}
                     onCanPlay={restoreViewerPlaybackState}
+                    onTimeUpdate={markViewerPlaybackHealthy}
                     onError={refreshViewerUrlAfterMediaError}
                   />
                 </VideoZoomPanSurface>

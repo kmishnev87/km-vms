@@ -375,7 +375,22 @@ def _gap_warnings(intervals: list[tuple[datetime, datetime]]) -> list[dict[str, 
     return warnings[:20]
 
 
+def _coverage_plan(start: datetime, end: datetime, intervals: list[tuple[datetime, datetime]]) -> list[tuple[int, datetime, datetime]]:
+    """Each requested instant appears at most once, including nested sources."""
+    cursor = start
+    plan = []
+    ordered = sorted(enumerate(intervals), key=lambda item: (item[1][0], -(item[1][1]-item[1][0]).total_seconds(), item[0]))
+    for index, (source_start, source_end) in ordered:
+        clip_start, clip_end = max(start, source_start, cursor), min(end, source_end)
+        if clip_end <= clip_start:
+            continue
+        plan.append((index, clip_start, clip_end))
+        cursor = max(cursor, clip_end)
+    return plan
+
+
 def _validate_full_coverage(job: ArchiveExportJob, intervals: list[tuple[datetime, datetime]]) -> list[dict[str, Any]]:
+    intervals = [(start, end) for _, start, end in _coverage_plan(job.start_ts, job.end_ts, intervals)]
     warnings = _gap_warnings(intervals)
     if not intervals:
         raise ValueError("source_gap_detected")
@@ -383,7 +398,7 @@ def _validate_full_coverage(job: ArchiveExportJob, intervals: list[tuple[datetim
     tolerance = timedelta(seconds=GAP_TOLERANCE_SECONDS)
     if ordered[0][0] > job.start_ts + tolerance:
         raise ValueError("source_gap_detected")
-    if ordered[-1][1] < job.end_ts - tolerance:
+    if max(end for _, end in ordered) < job.end_ts - tolerance:
         raise ValueError("source_gap_detected")
     if warnings:
         raise ValueError("source_gap_detected")
@@ -435,6 +450,9 @@ def preflight_source_segments(
         raise _safe_error(404, "No exportable source segments found")
     if len(selected) > MAX_SOURCE_SEGMENTS:
         raise _safe_error(413, "Too many source segments for export")
+    plan = _coverage_plan(start_ts, end_ts, intervals)
+    selected = [selected[index] for index, _, _ in plan]
+    intervals = [(start, end) for _, start, end in plan]
 
     estimated_bytes = 0
     for segment in selected:
@@ -617,9 +635,11 @@ def _trim_segment(
     source: ResolvedExportSegment,
     job: ArchiveExportJob,
     target: Path,
+    clip_start: datetime | None = None,
+    clip_end: datetime | None = None,
 ) -> None:
-    clip_start = max(job.start_ts, source.start_ts)
-    clip_end = min(job.end_ts, source.end_ts)
+    clip_start = max(job.start_ts, source.start_ts, clip_start or job.start_ts)
+    clip_end = min(job.end_ts, source.end_ts, clip_end or job.end_ts)
     if clip_end <= clip_start:
         raise RuntimeError("source_gap_detected")
     offset = max(0.0, (clip_start - source.start_ts).total_seconds())
@@ -777,9 +797,11 @@ def generate_archive_export_job(
             temp_dir = _safe_child(root, EXPORT_TEMP_DIR, f"stage11_stage2_{job.id}_{uuid.uuid4().hex}")
             temp_dir.mkdir(parents=True, exist_ok=False)
             output_path = _safe_child(output_dir, f"stage11_clip_{job.id}.mkv")
-            part_paths = [_safe_child(temp_dir, f"part_{index:03d}.mkv") for index, _source in enumerate(sources)]
-            for source, part_path in zip(sources, part_paths):
-                _trim_segment(source=source, job=job, target=part_path)
+            plan = _coverage_plan(job.start_ts, job.end_ts, [(source.start_ts, source.end_ts) for source in sources])
+            part_paths = [_safe_child(temp_dir, f"part_{index:03d}.mkv") for index, _ in enumerate(plan)]
+            for (source_index, clip_start, clip_end), part_path in zip(plan, part_paths):
+                _trim_segment(source=sources[source_index], job=job, target=part_path,
+                              clip_start=clip_start, clip_end=clip_end)
             if len(part_paths) == 1:
                 shutil.move(str(part_paths[0]), str(output_path))
             else:

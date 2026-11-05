@@ -5,6 +5,37 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || "/api";
 const TOKEN_KEY = "token";
 const TOKEN_EXPIRES_KEY = "token_expires_at";
 let authRevision = 0;
+const pendingLiveCredentials = new Set();
+
+export async function logoutAuthSession() {
+  const ownsSession = captureAuthSession();
+  const controller = new AbortController();
+  let timeout;
+  const cleanup = [];
+  window.dispatchEvent(new CustomEvent("km-vms-before-logout", {
+    detail: { waitUntil: (promise) => cleanup.push(promise) },
+  }));
+  // Stop renewal first. Wait for earlier Set-Cookie responses before expiring
+  // browser authority, so a late refresh cannot undo a successful logout.
+  try {
+    return await Promise.race([
+      (async () => {
+        await Promise.allSettled([...cleanup, ...pendingLiveCredentials]);
+        if (controller.signal.aborted || !ownsSession()) return false;
+        await apiFetch("/auth/logout", { method: "POST", signal: controller.signal });
+        if (controller.signal.aborted || !ownsSession()) return false;
+        clearAuthToken();
+        return true;
+      })(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error(localizedApiError("network_unavailable")));
+        }, 8000);
+      }),
+    ]);
+  } finally { clearTimeout(timeout); }
+}
 const FORBIDDEN_RU = "Раздел недоступен. Права пользователя ограничены.";
 const FORBIDDEN_EN = "Section unavailable. User permissions are limited.";
 const FORBIDDEN_ZH_CN = "此部分不可用。用户权限受限。";
@@ -343,11 +374,16 @@ export async function issueLiveMediaToken(cameraId, stream) {
 }
 
 export async function issueLiveMediaTokenInfo(cameraId, stream) {
-  const data = await apiFetch("/live/media-token", {
+  if (!getAuthToken()) throw new Error("authentication_required");
+  const pending = apiFetch("/live/media-token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ camera_id: Number(cameraId), stream }),
   });
+  pendingLiveCredentials.add(pending);
+  let data;
+  try { data = await pending; }
+  finally { pendingLiveCredentials.delete(pending); }
   return {
     mediaToken: data?.media_token || "",
     expiresAt: data?.expires_at || null,

@@ -8,6 +8,18 @@ from sqlalchemy.engine import Engine
 
 
 @pytest.fixture(autouse=True)
+def _isolate_user_session_generation(tmp_path_factory, monkeypatch):
+    from app.core.config import settings
+    from app.core.user_sessions import user_session_generation
+    session_root = tmp_path_factory.mktemp("auth-session-state")
+    monkeypatch.setattr(settings, "maintenance_control_root", str(session_root))
+    user_session_generation(create=True)
+    for module in tuple(sys.modules.values()):
+        if getattr(module, "__file__", "") and str(module.__file__).endswith("update-control-plane/control_plane.py"):
+            monkeypatch.setattr(module, "MAINTENANCE_CONTROL_ROOT", session_root)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_login_throttle():
     # Each test is a separate synthetic client history. Production keeps its
     # real rolling budget; there is no APP_ENV/test bypass in the login route.

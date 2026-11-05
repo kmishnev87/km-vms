@@ -23,12 +23,17 @@ import uuid
 
 MAX_JSON = 256 * 1024
 PYTHON_IMAGE = "python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159"
+PROBE_IMAGE_PULL_TIMEOUT_SECONDS = 120
 ROOT_ID = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,79}$")
 PROJECT = re.compile(r"^[a-z][a-z0-9_-]{0,62}$")
 
 
 class ArchivePolicyError(RuntimeError):
     code = "archive_roots_manifest_invalid"
+
+
+class ArchiveProbeImageError(ArchivePolicyError):
+    code = "archive_probe_image_unavailable"
 
 
 def _unique(pairs):
@@ -242,6 +247,22 @@ def docker_command(arguments, *, data=None, timeout=20):
     return result.stdout.strip()
 
 
+def ensure_probe_image():
+    # A previous installation need not have the new release's exact base image.
+    # Provision only this source-owned digest; the isolated probe stays offline.
+    inspect_args = ["image", "inspect", "--format", "{{.Id}}", PYTHON_IMAGE]
+    try:
+        docker_command(inspect_args)
+        return
+    except ArchivePolicyError:
+        pass
+    try:
+        docker_command(["pull", "--quiet", PYTHON_IMAGE], timeout=PROBE_IMAGE_PULL_TIMEOUT_SECONDS)
+        docker_command(inspect_args)
+    except ArchivePolicyError:
+        raise ArchiveProbeImageError("Required archive validation image is unavailable.") from None
+
+
 def installed_sources(project_name):
     identifiers = docker_command(["ps", "-aq", "--filter", f"label=com.docker.compose.project={project_name}"])
     trusted = set()
@@ -350,6 +371,7 @@ def materialize(app_dir: Path, project_name: str):
             # a base-image provisioning dependency before its first build.
             approved = _host_probe(payload, host_root="/")
         else:
+            ensure_probe_image()
             output = docker_command(["run", "--rm", "--pull=never", "--network", "none", "--read-only", "--cap-drop", "ALL", "--cap-add", "DAC_READ_SEARCH", "--security-opt", "no-new-privileges:true", "--memory", "64m", "--pids-limit", "32", "--mount", "type=bind,source=/,target=/host,readonly,bind-propagation=rslave", "-i", PYTHON_IMAGE, "python3", "-B", "-c", probe], data=json.dumps(payload), timeout=30)
             approved = json.loads(output)
         if type(approved) is not list or len(approved) > len(probe_items):
@@ -382,6 +404,9 @@ def main():
         if path:
             print(path)
         return 0
+    except ArchiveProbeImageError as exc:
+        print(f"ERROR [{exc.code}]: {exc} Check Docker registry connectivity and retry.", file=sys.stderr)
+        return 1
     except (ArchivePolicyError, OSError, ValueError, TypeError, KeyError):
         print("Archive bindings could not be validated safely; no Compose input was accepted.", file=sys.stderr)
         return 1

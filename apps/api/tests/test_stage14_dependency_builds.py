@@ -70,7 +70,11 @@ def test_updated_jwt_reads_previous_access_token_without_weakening_verification(
         'eyJ0eXAiOiJhY2Nlc3MiLCJzdWIiOiJzdGFnZTE0LWZpeHR1cmUiLCJ1aWQiOjE3LCJleHAiOjQwNzA5MDg4MDB9.'
         'hOVNsqQ_Mu_oU4RTnewTbKfVgOj6xA5XPc8gzuXslZI'
     )
-    assert security.decode_access_token(previous)['uid'] == 17
+    # Library compatibility is unchanged. Product credentials predating the
+    # external restore generation now deliberately require one fresh login.
+    assert jwt.decode(previous, security.settings.jwt_secret, algorithms=['HS256'])['uid'] == 17
+    with pytest.raises(jwt.InvalidTokenError, match='user_session_expired'):
+        security.decode_access_token(previous)
     assert security.decode_access_token(security.create_access_token('fixture', user_id=17))['uid'] == 17
     signed_data, signature = previous.rsplit('.', 1)
     with pytest.raises(jwt.InvalidSignatureError):

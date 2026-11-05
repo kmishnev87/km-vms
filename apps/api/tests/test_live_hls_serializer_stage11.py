@@ -107,6 +107,7 @@ LIVE_STATUS_ALLOWED = {
 
 def test_live_cookie_renews_access_without_changing_playlist_url(client, api_db, monkeypatch):
     from app.routers.live import _live_media_cookie_name
+    from app.core.live_cookies import live_browser_cookie
     db, root = api_db
     user = add_user(db)
     cam = add_camera(db)
@@ -121,25 +122,42 @@ def test_live_cookie_renews_access_without_changing_playlist_url(client, api_db,
     assert any(item.strip() == f"Path=/api/live/{cam.id}/sub/" for item in attributes)
     assert issued.headers["cache-control"] == "no-store"
     cookie_name = _live_media_cookie_name(cam.id, "sub")
-    media_headers = {"Cookie": f"{cookie_name}={issued.json()['media_token']}"}
+    browser_cookie = f"{live_browser_cookie()}={issued.cookies[live_browser_cookie()]}"
+    media_headers = {"Cookie": f"{cookie_name}={issued.json()['media_token']}; {browser_cookie}"}
     url = f"/live/{cam.id}/sub/index.m3u8"
     played = client.get(url, headers=media_headers)
     assert played.status_code == 200
     assert "?media_token=" not in played.text
-    renewed = client.post("/live/media-token", json={"camera_id": cam.id, "stream": "sub"}, headers=auth_headers(user))
+    # The real proxy exposes /api/live/, so the browser sends its authority
+    # cookie. TestClient routes omit /api: supply that scoped cookie explicitly.
+    # A different valid access credential in another tab must not churn it.
+    changed_access = create_access_token(user.username, user_id=user.id, expires_minutes=10)
+    renewed = client.post("/live/media-token", json={"camera_id": cam.id, "stream": "sub"},
+        headers={"Authorization": "Bearer " + changed_access, "Cookie": browser_cookie})
     assert renewed.status_code == 200
-    assert client.get(url, headers={"Cookie": f"{cookie_name}={renewed.json()['media_token']}"}).status_code == 200
+    assert renewed.cookies[live_browser_cookie()] == issued.cookies[live_browser_cookie()]
+    assert client.get(url, headers={"Cookie": f"{cookie_name}={renewed.json()['media_token']}; {browser_cookie}"}).status_code == 200
     # No ambient authentication on an unrelated stream/resource.
     assert client.get(f"/live/{cam.id}/main/index.m3u8", headers=media_headers).status_code == 401
     # An explicitly bad legacy link cannot fall back to a valid browser cookie.
     assert client.get(url + "?media_token=invalid", headers=media_headers).status_code == 401
     # Public, explicitly signed legacy links remain supported.
     assert client.get(url, params={"media_token": issued.json()["media_token"]}).status_code == 200
+    # Current-browser logout removes authority for all old resource cookies;
+    # retaining those scoped cookies alone cannot continue playback.
+    logout = client.post("/auth/logout")
+    assert logout.status_code == 204
+    assert f"{live_browser_cookie()}=\"\"" in logout.headers["set-cookie"]
+    assert "Path=/api/live/" in logout.headers["set-cookie"]
+    assert client.get(url, headers={"Cookie": f"{cookie_name}={issued.json()['media_token']}"}).status_code == 401
+    # A different browser with its own authority is not revoked globally.
+    assert client.get(url, headers=media_headers).status_code == 200
 
 
 def test_live_cookie_still_enforces_expiration_and_active_user(client, api_db, monkeypatch):
     import jwt
     from app.routers.live import _live_media_cookie_name
+    from app.core.live_cookies import live_browser_cookie
     from app.services import media_tokens
     db, root = api_db
     user = add_user(db)
@@ -150,18 +168,29 @@ def test_live_cookie_still_enforces_expiration_and_active_user(client, api_db, m
     issued = client.post("/live/media-token", json={"camera_id": cam.id, "stream": "sub"}, headers=auth_headers(user))
     assert issued.status_code == 200
     token = issued.json()["media_token"]
+    browser_cookie = f"; {live_browser_cookie()}={issued.cookies[live_browser_cookie()]}"
     name = _live_media_cookie_name(cam.id, "sub")
     url = f"/live/{cam.id}/sub/index.m3u8"
     payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
     payload["exp"] = 1
     expired = jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
-    assert client.get(url, headers={"Cookie": f"{name}={expired}"}).status_code == 401
+    assert client.get(url, headers={"Cookie": f"{name}={expired}{browser_cookie}"}).status_code == 401
     with monkeypatch.context() as permission_patch:
         permission_patch.setattr(media_tokens, "user_has_permission", lambda *args: False)
-        assert client.get(url, headers={"Cookie": f"{name}={token}"}).status_code == 403
+        assert client.get(url, headers={"Cookie": f"{name}={token}{browser_cookie}"}).status_code == 403
     user.is_active = False
     db.commit()
-    assert client.get(url, headers={"Cookie": f"{name}={token}"}).status_code == 401
+    assert client.get(url, headers={"Cookie": f"{name}={token}{browser_cookie}"}).status_code == 401
+
+
+def test_live_cookie_names_are_stable_and_installation_scoped(monkeypatch):
+    from app.core.live_cookies import live_browser_cookie
+    from app.routers.live import _live_media_cookie_name
+    first = (_live_media_cookie_name(1, "sub"), live_browser_cookie())
+    assert first == (_live_media_cookie_name(1, "sub"), live_browser_cookie())
+    monkeypatch.setattr(settings, "jwt_secret", "other-installation-secret-not-a-real-key")
+    second = (_live_media_cookie_name(1, "sub"), live_browser_cookie())
+    assert set(first).isdisjoint(second)
 
 
 @pytest.fixture

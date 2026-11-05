@@ -7,6 +7,7 @@ from cryptography.fernet import Fernet
 from passlib.context import CryptContext
 
 from app.core.config import settings
+from app.core.user_sessions import user_session_generation, validate_user_session_generation
 
 ACCESS_TOKEN_TYPE = "access"
 
@@ -42,6 +43,7 @@ def create_access_token(subject: str, expires_minutes: int = 60 * 12, expires_at
         "typ": ACCESS_TOKEN_TYPE,
         "sub": subject,
         "uid": user_id,
+        "usg": user_session_generation(create=True),
         "iat": int(now.timestamp()),
         "exp": int(expiry.timestamp()),
     }
@@ -56,6 +58,10 @@ def decode_access_token(token: str) -> dict:
     # A reusable username is display metadata, never the account authority.
     if type(payload.get("uid")) is not int or payload["uid"] < 1:
         raise jwt.InvalidTokenError("Invalid access token identity")
+    try:
+        validate_user_session_generation(payload)
+    except (ValueError, OSError) as exc:
+        raise jwt.InvalidTokenError("user_session_expired") from exc
     return payload
 
 

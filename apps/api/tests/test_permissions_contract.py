@@ -141,6 +141,7 @@ def test_public_endpoint_allowlist_is_intentional_and_minimal():
         ("GET", "/setup/storage/discovery"),
         ("GET", "/setup/storage/status"),
         ("POST", "/auth/login"),
+        ("POST", "/auth/logout"),
     }
     assert decision("/previews/camera-previews/{camera_id}.jpg", "GET").decision == "manage_cameras"
     assert decision("/previews/camera-tests/{token}.jpg", "GET").decision == "manage_cameras"

@@ -1749,7 +1749,7 @@ function StorageOperationsPageContent() {
                     </div>
                     {cameraRows.length > cameraRowLimit ? (
                       <button type="button" className="button" onClick={() => setCameraRowLimit((value) => value + 12)}>
-                        {language === "en" ? "Show more" : language === "zh-CN" ? "显示更多" : "Показать ещё"} ({Math.min(cameraRowLimit, cameraRows.length)}/{cameraRows.length})
+                        {copy.integrityLoadMore} ({Math.min(cameraRowLimit, cameraRows.length)}/{cameraRows.length})
                       </button>
                     ) : null}
                   </>

@@ -288,10 +288,10 @@ def test_diagnostic_archive_contains_timezone_metadata_and_audit_system_fields(d
     event = add_audit_event(db, datetime(2026, 5, 10, 5, 0, 0))
 
     monkeypatch.setattr(settings_router, "storage_diagnostics", lambda: {"status": "ok"})
-    monkeypatch.setattr(settings_router, "build_storage_monitoring_summary", lambda db: {"status": "ok"})
+    monkeypatch.setattr(settings_router, "build_lightweight_storage_monitoring_summary", lambda db: {"status": "ok"})
     monkeypatch.setattr(settings_router, "reconciliation_diagnostics", lambda db: {"status": "ok"})
     monkeypatch.setattr(settings_router, "retention_diagnostics", lambda db: {"status": "ok"})
-    monkeypatch.setattr(settings_router, "build_recorder_archive_payloads", lambda db: {})
+    monkeypatch.setattr(settings_router, "build_recorder_archive_payloads", lambda db, **kwargs: {})
     monkeypatch.setattr(settings_router, "get_hardware_capabilities", lambda: {"available_backends": []})
     monkeypatch.setattr(settings_router, "camera_diagnostics", lambda db: [])
     monkeypatch.setattr(settings_router.live_manager, "status", lambda: [])

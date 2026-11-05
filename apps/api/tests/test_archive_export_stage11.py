@@ -174,7 +174,7 @@ def require_ffmpeg():
         pytest.skip("ffmpeg/ffprobe are required for Stage 2 generation tests")
 
 
-def write_tiny_media(path: Path, *, seconds=2, color="testsrc") -> int:
+def write_tiny_media(path: Path, *, seconds=2, color="testsrc", gop=None) -> int:
     require_ffmpeg()
     path.parent.mkdir(parents=True, exist_ok=True)
     source = f"{color}=size=64x64:rate=10"
@@ -193,6 +193,7 @@ def write_tiny_media(path: Path, *, seconds=2, color="testsrc") -> int:
             "mpeg4",
             "-q:v",
             "5",
+            *(["-g", str(gop)] if gop else []),
             str(path),
         ],
         check=False,
@@ -206,11 +207,11 @@ def write_tiny_media(path: Path, *, seconds=2, color="testsrc") -> int:
     return path.stat().st_size
 
 
-def add_media_segment(db, camera, *, started=None, seconds=2, name="media.mkv", color="testsrc"):
+def add_media_segment(db, camera, *, started=None, seconds=2, name="media.mkv", color="testsrc", gop=None):
     started = started or (datetime.utcnow() - timedelta(minutes=10))
     relative_path = f"kmvms/recordings/{camera.storage_folder_name}/{name}"
     file_path = Path(settings.storage_root) / relative_path
-    size = write_tiny_media(file_path, seconds=seconds, color=color)
+    size = write_tiny_media(file_path, seconds=seconds, color=color, gop=gop)
     return add_segment(db, camera, started=started, seconds=seconds, write_file=False, name=name, size=size)
 
 

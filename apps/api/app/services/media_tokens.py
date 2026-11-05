@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.user_sessions import user_session_generation, validate_user_session_generation
 from app.core.permissions import user_has_permission
 from app.models.user import User
 from app.routers.deps import FORBIDDEN_DETAIL
@@ -34,6 +35,7 @@ def create_media_token(
         "typ": MEDIA_TOKEN_TYPE,
         "sub": user.username,
         "uid": getattr(user, "id", None),
+        "usg": user_session_generation(create=True),
         "scope": scope,
         "resource": resource,
         "iat": int(now.timestamp()),
@@ -135,6 +137,16 @@ def validate_media_token(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=FORBIDDEN_DETAIL)
 
     user_id = payload.get("uid")
+    try:
+        validate_user_session_generation(payload)
+    except (ValueError, OSError):
+        audit_security_denied(
+            db=db, request=request, event_type="security.media_token_denied",
+            reason="session_expired", status_code=status.HTTP_401_UNAUTHORIZED,
+            required_permission=permission,
+            metadata={"media_area": media_area or scope, "required_scope": scope},
+        )
+        raise _invalid_token() from None
     # Media credentials must not move to another account reusing this name.
     user = db.query(User).filter(User.id == user_id).first() if type(user_id) is int and user_id > 0 else None
     if not user or not getattr(user, "is_active", True):

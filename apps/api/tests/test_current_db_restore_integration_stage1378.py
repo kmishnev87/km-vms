@@ -462,6 +462,13 @@ def _run_flow(
         str(maintenance_control),
     )
     monkeypatch.setenv("KMVMS_DB_BACKUP_ROOT", str(backup_root))
+    from app.core.security import create_access_token, decode_access_token
+    from app.services.media_tokens import create_media_token
+    from app.core.user_sessions import user_session_generation
+    import jwt
+    old_access = create_access_token(actor.username, user_id=actor.id)
+    old_media, _ = create_media_token(user=actor, scope="recording", resource={"path": "synthetic"})
+    original_signing_key = settings.jwt_secret
     request = _restore_request(
         artifact_id=artifact_id,
         actor=actor,
@@ -606,6 +613,12 @@ def _run_flow(
     )
     assert status is not None
     assert restore_public_contract(status) == status
+    # These are real executor subprocesses and real pg_dump/pg_restore, not a
+    # mocked generation change. Both restore and rollback must revoke identity.
+    with pytest.raises(jwt.InvalidTokenError, match="user_session_expired"):
+        decode_access_token(old_access)
+    assert jwt.decode(old_media, settings.jwt_secret, algorithms=["HS256"])["usg"] != user_session_generation()
+    assert settings.jwt_secret == original_signing_key
     return status, events
 
 

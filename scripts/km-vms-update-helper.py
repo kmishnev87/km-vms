@@ -203,7 +203,7 @@ APPLY_FRESHNESS_KEYS = {
     "provider",
 }
 TERMINAL_SUMMARY_KEYS = {"status", "finished_at", "error_category"}
-SAFE_PREFLIGHT_FAILURE_CATEGORIES = frozenset({"slot_adoption_conflict"})
+SAFE_PREFLIGHT_FAILURE_CATEGORIES = frozenset({"slot_adoption_conflict", "archive_probe_image_unavailable"})
 SAFE_ACQUISITION_FAILURE_CATEGORIES = frozenset(
     {"source_acquisition_failed", "source_temporarily_unavailable"}
 )
@@ -881,6 +881,7 @@ def error_payload(category: str) -> dict[str, str]:
         "helper_host_app_dir_invalid": "Update helper application directory is invalid.",
         "helper_host_app_dir_unmounted": "Update helper application directory is unavailable.",
         "preflight_failed": "Update preflight failed.",
+        "archive_probe_image_unavailable": "Required archive validation image is unavailable.",
         "source_acquisition_failed": "Trusted update source acquisition failed.",
         "source_temporarily_unavailable": "Trusted update source is temporarily unavailable.",
         "slot_adoption_conflict": "The preserved previous release no longer matches the current installation.",
@@ -925,6 +926,8 @@ def error_payload(category: str) -> dict[str, str]:
         operator_action = "Wait briefly, then run the update again."
     elif category == "source_acquisition_failed":
         operator_action = "Verify access to the trusted release source, then retry."
+    elif category == "archive_probe_image_unavailable":
+        operator_action = "Check Docker registry connectivity and retry. The current release remains active."
     else:
         operator_action = (
             "Review update status and retry only after the cause is resolved."
@@ -3288,6 +3291,12 @@ def main() -> int:
     RESTORE_PUBLIC_DIR.mkdir(parents=True, exist_ok=True)
     MAINTENANCE_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
     while True:
+        try:
+            if (CONTROL_DIR / "diagnostic-logs" / "request.json").is_file():
+                _operation_handlers.service_log_request(CONTROL_DIR, resolve_helper_project_name())
+        except Exception:
+            # Optional read-only diagnostics cannot stop update/restore polling.
+            pass
         try:
             publish_restore_helper_health()
         except HelperError:

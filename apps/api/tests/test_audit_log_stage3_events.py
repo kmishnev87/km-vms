@@ -186,6 +186,7 @@ def test_media_token_denials_are_audited_without_token_values(db):
     ghost_user_token = jwt.encode(
         {
             "typ": "media",
+            "usg": jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])["usg"],
             "sub": "missing_stage3_user",
             "scope": "live",
             "resource": {"camera_id": 1, "stream": "main"},

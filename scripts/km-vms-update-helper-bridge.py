@@ -259,6 +259,8 @@ def protected_archive_override(app_dir: Path, project_name: str | None = None) -
         _exec_module_without_bytecode(spec, module)
         return module.materialize(app_dir, project_name or resolve_stable_project_name(app_dir))
     except Exception as exc:
+        if getattr(exc, "code", None) == "archive_probe_image_unavailable":
+            raise BridgeError("archive_probe_image_unavailable", "Required archive validation image is unavailable.") from exc
         raise BridgeError("archive_roots_manifest_invalid", "Archive bindings could not be validated safely.") from exc
 
 

@@ -6,7 +6,7 @@ const source=fs.readFileSync(new URL('../app/recordings/page.js',import.meta.url
 const watch=source.slice(source.indexOf('async function handleWatch('),source.indexOf('async function toggleViewerFrameFullscreen('));
 const refresh=source.slice(source.indexOf('async function refreshViewerUrlAfterMediaError('),source.indexOf('function restoreViewerPlaybackState('));
 const requests=[],state={};
-const context={isRecordingAvailable:()=>true,viewerSelectionRef:{current:{revision:0,item:null}},viewerFrameRef:{current:null},
+const context={clearTimeout,viewerRecoveryStableTimerRef:{current:null},isRecordingAvailable:()=>true,viewerSelectionRef:{current:{revision:0,item:null}},viewerFrameRef:{current:null},
   viewerRestoreStateRef:{current:null},viewerRefreshInFlightRef:{current:false},viewerItem:null,viewerRefreshAttempted:false,
   viewerVideoRef:{current:{currentTime:8,playbackRate:2,paused:false,ended:false}},document:{fullscreenElement:null},
   buildRecordingStreamUrl:item=>new Promise((resolve,reject)=>requests.push({item,resolve,reject})),

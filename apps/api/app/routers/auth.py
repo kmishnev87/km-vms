@@ -1,13 +1,14 @@
 from datetime import datetime, time, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.permissions import get_permissions_for_role
 from app.core.login_throttle import LoginThrottled, login_throttle
 from app.core.request_client import ClientIdentityUnavailable, request_client_ip
 from app.core.security import create_access_token, verify_password
+from app.core.live_cookies import live_browser_cookie
 from app.db.session import get_db
 from app.models.user import User
 from app.routers.deps import get_current_user
@@ -16,6 +17,16 @@ from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.system_settings import get_system_settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+@router.post("/logout", status_code=204)
+def logout(request: Request):
+    # Works even for an expired access token; no database/global user revocation.
+    # Stream cookies expire shortly but cannot authorize HLS without this cookie.
+    response = Response(status_code=204, headers={"Cache-Control": "no-store"})
+    response.delete_cookie(live_browser_cookie(), path="/api/live/", httponly=True,
+                           secure=request.url.scheme == "https", samesite="strict")
+    return response
 
 
 @router.post("/login", response_model=TokenResponse)

@@ -103,6 +103,8 @@ def test_control_plane_binds_status_to_user_id_not_recycled_name(monkeypatch):
     spec = importlib.util.spec_from_file_location("stage14_identity_control", path)
     control = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(control)
+    from pathlib import Path
+    monkeypatch.setattr(control, "MAINTENANCE_CONTROL_ROOT", Path(settings.maintenance_control_root))
     contract = {"request_id": "update-" + "a" * 32, "target_version": "0.8.28",
                 "target_commit": "a" * 40, "fencing_generation": 1,
                 "actor_subject": "identity_original"}

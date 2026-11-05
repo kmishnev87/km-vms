@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import hashlib
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.live_cookies import live_cookie_prefix, live_browser_cookie
 from app.core.permissions import PERMISSION_VIEW_LIVE
 from app.db.session import get_db
 from app.models.camera import Camera
@@ -108,7 +110,7 @@ def _live_media_resource(camera_id: int, stream: str) -> dict:
 
 
 def _live_media_cookie_name(camera_id: int, stream: str) -> str:
-    return f"kmvms_live_{int(camera_id)}_{stream}"
+    return f"{live_cookie_prefix()}_{int(camera_id)}_{stream}"
 
 
 def _authorize_live_media_token(media_token: Optional[str], camera_id: int, stream: str, db: Session, request: Request | None = None) -> User:
@@ -116,13 +118,18 @@ def _authorize_live_media_token(media_token: Optional[str], camera_id: int, stre
     # HttpOnly cookie renews access without resetting the media source. Legacy
     # explicit links still validate their own token, never a cookie fallback.
     token = media_token
+    resource = _live_media_resource(camera_id, stream)
     if token is None and request is not None:
+        browser = request.cookies.get(live_browser_cookie())
+        if not browser:
+            raise HTTPException(status_code=401, detail="Media token required")
+        resource["browser"] = browser
         token = request.cookies.get(_live_media_cookie_name(camera_id, stream))
     return validate_media_token(
         db,
         token=token,
         scope="live",
-        resource=_live_media_resource(camera_id, stream),
+        resource=resource,
         permission=PERMISSION_VIEW_LIVE,
         request=request,
         media_area="live",
@@ -357,10 +364,15 @@ def issue_live_media_token(
     current_user: User = Depends(require_permission("view_live")),
 ):
     _get_camera(db, payload.camera_id)
+    # Concurrent first tiles use the same browser authority for this login;
+    # refreshing it must not reset HLS URLs or invalidate another tile.
+    browser = request.cookies.get(live_browser_cookie())
+    if not re.fullmatch(r"[a-f0-9]{64}", browser or ""):
+        browser = hashlib.sha256(str(request.headers.get("authorization") or "").encode()).hexdigest()
     token, expires_at = create_media_token(
         user=current_user,
         scope="live",
-        resource=_live_media_resource(payload.camera_id, payload.stream),
+        resource={**_live_media_resource(payload.camera_id, payload.stream), "browser": browser},
     )
     token_response = media_token_response(token, expires_at)
     response.set_cookie(
@@ -374,6 +386,11 @@ def issue_live_media_token(
         samesite="strict",
     )
     response.headers["Cache-Control"] = "no-store"
+    response.set_cookie(
+        live_browser_cookie(), browser, path="/api/live/", httponly=True,
+        secure=request.url.scheme == "https", samesite="strict",
+        max_age=token_response["expires_in"],
+    )
     return token_response
 
 

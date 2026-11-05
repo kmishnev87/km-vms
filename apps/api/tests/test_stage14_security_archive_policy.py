@@ -131,6 +131,8 @@ def test_materializer_ignores_injected_yaml_and_prunes_registry(host, tmp_path, 
         calls.append(args)
         if args[0] == "info":
             return "/Volume1/docker-data"
+        if args[0] == "image":
+            return "sha256:" + "a" * 64
         assert "--read-only" in args and "none" in args and "--pull=never" in args
         assert "--privileged" not in args and "docker.sock" not in " ".join(args)
         return json.dumps(policy._host_probe(json.loads(data), str(host[0]), str(host[1])))
@@ -157,7 +159,7 @@ def test_literal_dollar_is_escaped_for_compose_and_env_is_not_interpolated(host,
     (app / ".env").write_text("KM_VMS_HOST_APP_DIR=/Volume3/app\nSURVEILLANCE_ROOT='/Volume3/price$HOME'\n")
     (control / "archive-roots-runtime.json").write_text(json.dumps(intent("/Volume3/price$HOME")))
     monkeypatch.setattr(policy, "installed_sources", lambda _: set())
-    monkeypatch.setattr(policy, "docker_command", lambda args, **kw: "/Volume1/docker-data" if args[0] == "info" else json.dumps(policy._host_probe(json.loads(kw["data"]), str(host[0]), str(host[1]))))
+    monkeypatch.setattr(policy, "docker_command", lambda args, **kw: "/Volume1/docker-data" if args[0] == "info" else "sha256:" + "a" * 64 if args[0] == "image" else json.dumps(policy._host_probe(json.loads(kw["data"]), str(host[0]), str(host[1]))))
     assert "price$$HOME" in policy.materialize(app, "fixture").read_text()
     (app / ".env").write_text("SURVEILLANCE_ROOT=/Volume3/price$HOME\n")
     with pytest.raises(policy.ArchivePolicyError, match="literal quoting"):
@@ -175,7 +177,7 @@ def test_missing_intent_cannot_disable_primary_validation(host, tmp_path, monkey
     app.mkdir()
     (app / ".env").write_text("KM_VMS_HOST_APP_DIR=/Volume3/app\nSURVEILLANCE_ROOT=/etc\n")
     monkeypatch.setattr(policy, "installed_sources", lambda _: set())
-    monkeypatch.setattr(policy, "docker_command", lambda args, **kw: "/Volume1/docker-data" if args[0] == "info" else json.dumps(policy._host_probe(json.loads(kw["data"]), str(host[0]), str(host[1]))))
+    monkeypatch.setattr(policy, "docker_command", lambda args, **kw: "/Volume1/docker-data" if args[0] == "info" else "sha256:" + "a" * 64 if args[0] == "image" else json.dumps(policy._host_probe(json.loads(kw["data"]), str(host[0]), str(host[1]))))
     with pytest.raises(ValueError, match="protected host"):
         policy.materialize(app, "fixture")
 
@@ -192,6 +194,8 @@ def test_changed_intent_during_probe_is_not_published(host, tmp_path, monkeypatc
     def docker(args, **kw):
         if args[0] == "info":
             return "/Volume1/docker-data"
+        if args[0] == "image":
+            return "sha256:" + "a" * 64
         result = policy._host_probe(json.loads(kw["data"]), str(host[0]), str(host[1]))
         path.write_text(json.dumps(intent("/Volume3/new")))
         return json.dumps(result)

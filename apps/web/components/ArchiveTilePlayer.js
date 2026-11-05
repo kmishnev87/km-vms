@@ -1,4 +1,5 @@
 "use client";
+import { isArchiveRecoveryHealthy } from "../lib/archivePlaybackRecovery";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import CompactVideoCanvas from "./CompactVideoCanvas";
@@ -315,6 +316,8 @@ export default function ArchiveTilePlayer({
     const offsetSec = Number(playback?.offsetSec || 0);
     let cancelled = false;
     let refreshAttempts = 0;
+    let recoveryProgressStart = null;
+    let stableReadyTimer = null;
     let loadSequence = 0;
     let pendingLoad = null;
     let refreshInFlight = false;
@@ -328,6 +331,7 @@ export default function ArchiveTilePlayer({
     }
 
     function finishRefreshCycle() {
+      clearTimeout(stableReadyTimer);
       refreshInFlight = false;
       clearRefreshWatchdog();
     }
@@ -365,7 +369,13 @@ export default function ArchiveTilePlayer({
         playIntent: loadState.playIntent,
         reason: "source-ready",
       });
+      recoveryProgressStart = loadState.targetTime;
       pendingLoad = null;
+      if (refreshAttempts > 0) {
+        stableReadyTimer = setTimeout(() => {
+          if (loadState.sequence === loadSequence) handleHealthyProgress(2000);
+        }, 2000);
+      }
     }
 
     async function loadFreshMedia({ preserveTime = false, playIntent = playIntentRef.current, targetTime: requestedTime } = {}) {
@@ -446,6 +456,14 @@ export default function ArchiveTilePlayer({
     const handleError = () => {
       retryWithFreshMedia();
     };
+    const handleHealthyProgress = (stableReadyMs = 0) => {
+      if (cancelled || pendingLoad || refreshInFlight) return;
+      if (isArchiveRecoveryHealthy(video, recoveryProgressStart, typeof stableReadyMs === "number" ? stableReadyMs : 0)) {
+        clearTimeout(stableReadyTimer);
+        refreshAttempts = 0;
+        recoveryProgressStart = null;
+      }
+    };
 
     hardReset();
     reportTileState("loading", { reason: "source-load", offsetSec });
@@ -456,6 +474,7 @@ export default function ArchiveTilePlayer({
     video.addEventListener("playing", handleLoaded);
     video.addEventListener("resize", handleLoaded);
     video.addEventListener("error", handleError);
+    video.addEventListener("timeupdate", handleHealthyProgress);
 
     const handleStalledMedia = () => {
       retryWithFreshMedia();
@@ -496,6 +515,7 @@ export default function ArchiveTilePlayer({
       video.removeEventListener("playing", handleLoaded);
       video.removeEventListener("resize", handleLoaded);
       video.removeEventListener("error", handleError);
+      video.removeEventListener("timeupdate", handleHealthyProgress);
       video.removeEventListener("stalled", handleStalledMedia);
       clearDimensionProbe();
     };

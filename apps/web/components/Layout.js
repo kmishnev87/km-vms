@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { apiFetch, canAccessPath, clearAuthToken, getAuthToken } from "../lib/api";
+import { apiFetch, canAccessPath, logoutAuthSession, getAuthToken } from "../lib/api";
 import { useCurrentUser } from "../lib/currentUser";
 import { normalizeLocale, persistLocale, useI18n } from "../lib/i18n";
 import {
@@ -12,6 +12,7 @@ import {
   storageMigrationActivitySnapshot,
 } from "../lib/storageOperations";
 import SystemHealthIndicator from "./SystemHealthIndicator";
+import { OperationToast } from "./OperationFeedback";
 
 const items = [
   { href: "/cameras", labelKey: "nav.cameras", iconSrc: "/assets/icons/ui/camera.png" },
@@ -92,6 +93,8 @@ export default function Layout({ children }) {
   const router = useRouter();
   const { currentUser, status: currentUserStatus } = useCurrentUser();
   const { t } = useI18n();
+  const [logoutBusy, setLogoutBusy] = useState(false);
+  const [logoutError, setLogoutError] = useState(null);
 
   useEffect(() => {
     fetch("/api/system/status")
@@ -114,11 +117,17 @@ export default function Layout({ children }) {
       });
   }, [router]);
 
-  function logout() {
-    clearAuthToken();
-    localStorage.removeItem("vms_login_redirect");
-    sessionStorage.removeItem("vms_login_redirect");
-    router.push("/login");
+  async function logout() {
+    if (logoutBusy) return;
+    setLogoutBusy(true);
+    try {
+      if (!await logoutAuthSession()) return;
+      localStorage.removeItem("vms_login_redirect");
+      sessionStorage.removeItem("vms_login_redirect");
+      router.push("/login");
+    } catch (error) {
+      setLogoutError({ id: `logout-${Date.now()}`, title: t("common.logout"), message: error?.message, tone: "error" });
+    } finally { setLogoutBusy(false); }
   }
 
   const visibleItems = currentUser ? items.filter((item) => canAccessPath(currentUser, item.href)) : [];
@@ -139,6 +148,7 @@ export default function Layout({ children }) {
 
   return (
     <div className="layoutShell">
+      <OperationToast toast={logoutError} onClose={() => setLogoutError(null)} />
       <header className="topNav">
         <div className="topNavInner">
           <Link href="/" className="topBrand" aria-label="KM VMS">
@@ -198,6 +208,7 @@ export default function Layout({ children }) {
             <button
               className="topNavItem topNavButton"
               onClick={logout}
+              disabled={logoutBusy}
               type="button"
               title={t("common.logout")}
               aria-label={t("common.logout")}

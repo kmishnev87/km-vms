@@ -182,7 +182,7 @@ capture_safe_bridge_failure_category() {
     )
   fi
   case "$category" in
-    slot_adoption_conflict|installed_contract_unknown|project_identity_ambiguous|project_identity_conflict|project_identity_missing|project_identity_recovery_required)
+    slot_adoption_conflict|installed_contract_unknown|project_identity_ambiguous|project_identity_conflict|project_identity_missing|project_identity_recovery_required|archive_probe_image_unavailable)
       FAILURE_CATEGORY="$category"
       ;;
     *)

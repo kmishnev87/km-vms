@@ -25,6 +25,8 @@ export function normalizeMaintenanceBackendText(value) {
   if (lower === "review the database schema preparation failure before retrying the update.") return "schema_update_retry_after_cause_resolved";
   if (lower === "the preserved previous release no longer matches the current installation.") return "slot_adoption_conflict";
   if (lower === "verify the installed source and runtime state before retrying.") return "slot_adoption_conflict_action";
+  if (lower === "required archive validation image is unavailable.") return "archive_probe_image_unavailable";
+  if (lower === "check docker registry connectivity and retry. the current release remains active.") return "archive_probe_image_unavailable_action";
   if (lower === "previous update requires verified recovery.") return "activation_recovery_required";
   if (lower === "verify database and deployment configuration, complete recovery, then retry. failure history is preserved.") return "activation_recovery_required_action";
   if (lower === "no valid restore artifacts are available in configured backup root.") return "restore_no_valid_artifacts";
