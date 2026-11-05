@@ -295,7 +295,7 @@ def test_stage2_audit_export_redacts_tokens_credentials_and_raw_ffmpeg_command_t
         assert not any(value in serialized for value in forbidden)
         assert not any(value in exported for value in forbidden)
         assert "Bearer ***" in serialized
-        assert "rtsp://admin:***@host/live" in serialized
+        assert "rtsp://***@host/live" in serialized
     finally:
         close_db(db, tmp, old_root, old_previews, old_exports)
 

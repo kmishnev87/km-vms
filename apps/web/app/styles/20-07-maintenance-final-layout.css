@@ -37,7 +37,7 @@
 .settingsMaintenanceContent > * { flex-shrink: 0; }
 .operationFeedbackOverlay.settingsMaintenanceDetailOverlay { z-index: 9500; }
 .operationFeedbackDialog.settingsMaintenanceDetailDialog { width: min(820px, 100%); height: min(640px, calc(100dvh - 40px)); }
-.settingsMaintenancePill:is(button) { cursor: pointer; font-family: inherit; white-space: nowrap; }
+.settingsMaintenancePill:is(button) { cursor: pointer; font-family: inherit; white-space: normal; text-align: left; }
 .maintenanceDetailFacts { display: grid; gap: 8px; margin: 0; }
 .maintenanceDetailFacts > div { display: grid; grid-template-columns: minmax(120px, .7fr) minmax(0, 1fr); gap: 12px; }
 .maintenanceDetailFacts dt { color: #64748b; }
@@ -130,12 +130,50 @@
 
 .settingsMaintenanceCardHeadingAligned {
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 40px;
   gap: 14px;
 }
 
 .settingsMaintenanceCardHeadingAligned .settingsMaintenancePill {
-  justify-self: start;
+  justify-self: end;
+}
+
+.settingsMaintenanceHeaderTools {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.settingsMaintenanceActivity {
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.settingsMaintenanceDetailsButton svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+}
+
+.settingsUpdateApplyResult {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.settingsUpdateApplyResult.is-completed {
+  color: #166534;
+}
+
+.settingsUpdateApplyResult.is-blocked {
+  color: #ac241b;
 }
 
 .settingsMaintenanceCardHeading h3 {
@@ -192,8 +230,8 @@
 
 .settingsUpdateApplyCompact {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
   gap: 18px;
 }
 
@@ -373,7 +411,7 @@
 .settingsMaintenanceBackupLatestRow {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: 12px;
 }
@@ -401,7 +439,7 @@
   padding: 16px 20px;
   border-color: #dce5ee;
   border-radius: 9px;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px 18px;
 }
 
@@ -608,6 +646,10 @@
     justify-content: stretch;
   }
 
+  .settingsMaintenanceHeaderTools {
+    flex-wrap: wrap;
+  }
+
   .settingsUpdateApplyActions .button {
     flex: 1 1 0;
     min-width: 0;
@@ -649,6 +691,11 @@
     gap: 7px;
   }
 
+  .settingsMaintenanceHeaderTools {
+    justify-self: end;
+    max-width: 100%;
+  }
+
   .settingsMaintenancePill {
     font-size: 11px;
   }
@@ -665,16 +712,18 @@
   }
 
   .settingsUpdateApplyActions {
-    flex-direction: column;
-    align-items: stretch;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
   }
 
   .settingsUpdateApplyActions .button {
-    width: 100%;
+    width: auto;
   }
 
   .settingsMaintenanceBackupLatestRow {
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .settingsMaintenanceCoreFacts {

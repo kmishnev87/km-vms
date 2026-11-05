@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import or_
+from sqlalchemy import and_, case, func, literal_column, or_
 from sqlalchemy.orm import Session
 from starlette.responses import FileResponse
 
@@ -119,6 +119,7 @@ def _finalized_segments_query(db: Session):
         RecordingSegment.ownership == OWNERSHIP_KM_VMS,
         RecordingSegment.source == RECORDER_SOURCE,
         RecordingSegment.status == SEGMENT_STATUS_FINALIZED,
+        RecordingSegment.deleted_at.is_(None),
         RecordingSegment.relative_path.isnot(None),
         or_(
             RecordingSegment.integrity_status.is_(None),
@@ -160,18 +161,82 @@ def _max_query_ts(target: ParsedTimestamp) -> datetime:
     return max(values)
 
 
-def _segment_covering_timestamp(db: Session, *, camera_id: int, target: ParsedTimestamp) -> RecordingSegment | None:
+def _segment_overlap_sql(db: Session, start: datetime, end: datetime, *, point: bool = False):
+    """A conservative SQL candidate filter; existing Python time semantics decide.
+
+    SQLite datetime arithmetic rounds sub-seconds. One second of lower-bound
+    slack avoids dropping a duration-only segment; it never broadens playback
+    because _contains_target/_clip_segment_to_range still compare exact dates.
+    """
+    if db.get_bind().dialect.name == "sqlite":
+        duration_end = func.datetime(RecordingSegment.started_at, func.printf("+%d seconds", RecordingSegment.duration_sec))
+    else:
+        duration_end = RecordingSegment.started_at + RecordingSegment.duration_sec * literal_column("INTERVAL '1 second'")
+    segment_end = case(
+        (RecordingSegment.ended_at > RecordingSegment.started_at, RecordingSegment.ended_at),
+        (RecordingSegment.finalized_at > RecordingSegment.started_at, RecordingSegment.finalized_at),
+        (RecordingSegment.duration_sec > 0, duration_end),
+        else_=None,
+    )
+    lower = start - timedelta(seconds=1)
+    overlaps_lower = (func.julianday(segment_end) >= func.julianday(lower)
+                      if db.get_bind().dialect.name == "sqlite" else segment_end >= lower)
+    upper = RecordingSegment.started_at <= end if point else RecordingSegment.started_at < end
+    return and_(upper, overlaps_lower)
+
+
+def _point_segments_query(db: Session, camera_id: int, target: ParsedTimestamp):
+    windows = [_segment_overlap_sql(db, target.storage_utc, target.storage_utc, point=True)]
+    if target.compatibility_local is not None:
+        windows.append(_segment_overlap_sql(db, target.compatibility_local, target.compatibility_local, point=True))
+    return _finalized_segments_query(db).filter(RecordingSegment.camera_id == camera_id, or_(*windows))
+
+
+def _covering_segments(db: Session, *, camera_id: int, target: ParsedTimestamp):
     segments = (
-        _finalized_segments_query(db)
-        .filter(RecordingSegment.camera_id == camera_id, RecordingSegment.started_at <= _max_query_ts(target))
-        .order_by(RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
-        .all()
+        _point_segments_query(db, camera_id, target)
+        .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
+        .yield_per(32)
     )
     for segment in segments:
         ok, _effective_target, _local_naive_display = _contains_target(segment, target)
         if ok:
-            return segment
+            yield segment
+
+
+def _segment_covering_timestamp(
+    db: Session, *, camera_id: int, target: ParsedTimestamp, require_available: bool = False,
+) -> RecordingSegment | None:
+    first_error = None
+    for segment in _covering_segments(db, camera_id=camera_id, target=target):
+        if require_available:
+            try:
+                _resolve_segment_path(segment)
+            except HTTPException as exc:
+                if exc.status_code not in {404, 409}:
+                    raise
+                first_error = first_error or exc
+                continue
+        return segment
+    if first_error is not None:
+        raise first_error
     return None
+
+
+def _download_segment(db: Session, *, camera_id: int, target: ParsedTimestamp,
+                      segment_id: int | None, archive_root_id: str | None):
+    if segment_id is not None:
+        segment = _segment_by_identity(db, segment_id=segment_id,
+            archive_root_id=archive_root_id, camera_id=camera_id)
+        if not _contains_target(segment, target)[0]:
+            raise HTTPException(status_code=404, detail="Recording does not cover timestamp")
+        return segment
+    try:
+        return _segment_covering_timestamp(db, camera_id=camera_id, target=target, require_available=True)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(status_code=409, detail="Recording source is unavailable") from exc
+        raise
 
 
 def _segment_root_id(segment: RecordingSegment) -> str:
@@ -312,12 +377,8 @@ def chronology_playback(
 
     ctx = timezone_context(db)
     target = _parse_ts(ts, "timestamp", ctx)
-    segments = (
-        _finalized_segments_query(db)
-        .filter(RecordingSegment.camera_id == camera_id, RecordingSegment.started_at <= _max_query_ts(target))
-        .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
-        .all()
-    )
+    segments = _covering_segments(db, camera_id=camera_id, target=target)
+    unavailable = None
 
     for segment in segments:
         interval = _segment_interval(segment)
@@ -332,6 +393,8 @@ def chronology_playback(
         try:
             file_path = _resolve_segment_path(segment)
         except HTTPException as exc:
+            if exc.status_code not in {404, 409}:
+                raise
             detail = exc.detail if isinstance(exc.detail, dict) else {}
             if detail.get("error") == "recording_archive_root_unavailable":
                 availability_status = "root_unavailable"
@@ -340,7 +403,7 @@ def chronology_playback(
             else:
                 availability_status = "unavailable"
             resolved_root = bool(segment_has_resolved_archive_root(segment) and segment.archive_root_id)
-            return {
+            unavailable = unavailable or {
                 "camera_id": camera_id,
                 "segment_id": segment.id,
                 "archive_root_id": str(segment.archive_root_id) if resolved_root else None,
@@ -352,6 +415,7 @@ def chronology_playback(
                 "availability_status": availability_status,
                 "problem": detail.get("problem") or detail.get("category"),
             }
+            continue
 
         rel_path = segment.relative_path.replace("\\", "/").lstrip("/")
         offset_sec = int((effective_target - start_dt).total_seconds())
@@ -378,7 +442,7 @@ def chronology_playback(
             "mime_type": media_metadata["mime_type"],
         }
 
-    return {
+    return unavailable or {
         "camera_id": camera_id,
         "has_video": False,
         "file_url": None,
@@ -427,23 +491,21 @@ def chronology_ranges(
             }
             continue
 
+        windows = [_segment_overlap_sql(db, range_from, range_to)]
+        if compat_from is not None and compat_to is not None:
+            windows.append(_segment_overlap_sql(db, compat_from, compat_to))
         segments = (
             _finalized_segments_query(db)
             .filter(
                 RecordingSegment.camera_id == camera_id,
-                RecordingSegment.started_at < max(range_to, compat_to or range_to),
+                or_(*windows),
             )
             .order_by(RecordingSegment.started_at.asc(), RecordingSegment.id.asc())
-            .all()
+            .yield_per(128)
         )
 
         clipped = []
         for segment in segments:
-            try:
-                _resolve_segment_path(segment)
-            except HTTPException:
-                continue
-
             clipped_segment = _clip_segment_to_range(
                 segment,
                 range_from=range_from,
@@ -452,6 +514,10 @@ def chronology_ranges(
                 compat_to=compat_to,
             )
             if clipped_segment is None:
+                continue
+            try:
+                _resolve_segment_path(segment)
+            except HTTPException:
                 continue
             clip_start, clip_end, local_naive_display = clipped_segment
             if clip_end > clip_start:
@@ -495,6 +561,8 @@ def chronology_download_current_recording(
     media_token: str | None = Query(default=None),
     db: Session = Depends(get_db),
     request: Request = None,
+    segment_id: int | None = None,
+    archive_root_id: str | None = None,
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if not camera:
@@ -502,7 +570,16 @@ def chronology_download_current_recording(
 
     ctx = timezone_context(db)
     target = _parse_ts(ts, "timestamp", ctx)
-    segment = _segment_covering_timestamp(db, camera_id=camera_id, target=target)
+    if segment_id is None:
+        # Legacy timestamp lookup may inspect candidates on disk. Authenticate
+        # before that lookup; exact segment/root binding is still checked below.
+        validate_media_token(
+            db, token=media_token, scope="chronology-download",
+            resource={"camera_id": int(camera_id), "action": "download"},
+            permission=PERMISSION_VIEW_TIMELINE, request=request, media_area="chronology-download",
+        )
+    segment = _download_segment(db, camera_id=camera_id, target=target,
+        segment_id=segment_id, archive_root_id=archive_root_id)
     if not segment:
         raise HTTPException(status_code=404, detail="Recording is unavailable")
     validate_media_token(
@@ -534,13 +611,16 @@ def issue_chronology_download_token(
     ts: str = Query(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(require_permission("view_timeline")),
+    segment_id: int | None = None,
+    archive_root_id: str | None = None,
 ):
     camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Recording is unavailable")
     ctx = timezone_context(db)
     target = _parse_ts(ts, "timestamp", ctx)
-    segment = _segment_covering_timestamp(db, camera_id=camera_id, target=target)
+    segment = _download_segment(db, camera_id=camera_id, target=target,
+        segment_id=segment_id, archive_root_id=archive_root_id)
     if not segment:
         raise HTTPException(status_code=404, detail="Recording is unavailable")
     try:
@@ -559,6 +639,7 @@ def issue_chronology_download_token(
         {
             "camera_id": camera_id,
             "segment_id": segment.id,
+            "archive_root_id": _segment_root_id(segment),
             "filename": _safe_download_filename(camera, segment, file_path),
         }
     )

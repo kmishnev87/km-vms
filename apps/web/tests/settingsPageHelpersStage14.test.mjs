@@ -499,7 +499,7 @@ assert.deepEqual(updateApplyFactRows(updateStatus, { expected_commit: "bbbbbbbbb
   ["Changes", "Readable update status"],
   ["Status", "Update available"],
   ["Commit check", "Pending"],
-  ["Current step", "Update available"],
+  ["Current step", "-"],
   ["Last progress", "-"],
   ["Elapsed", "-"],
 ]);

@@ -7,6 +7,7 @@ import time
 import uuid
 from pathlib import Path
 from app.core.config import settings
+from app.core.sanitization import redact_text
 from app.db.session import SessionLocal
 from app.models.camera import Camera
 from app.services.hardware import hardware_capabilities_summary
@@ -21,6 +22,10 @@ class StreamManager:
     def __init__(self):
         self.lock = threading.RLock()
         self.streams: dict[StreamKey, StreamInstance] = {}
+        # Separate from orchestration lock: callbacks run under an instance lock
+        # and must never acquire a lock which waits for a different instance.
+        self.capacity_lock = threading.Lock()
+        self.transcode_reservations: dict[StreamKey, StreamInstance] = {}
         self.viewer_registry = ViewerRegistry()
         self.worker_thread: threading.Thread | None = None
         self.worker_stop_event = threading.Event()
@@ -38,7 +43,29 @@ class StreamManager:
         if not instance:
             instance = StreamInstance(camera_id=key[0], stream=key[1])
             self.streams[key] = instance
+            instance.acquire_transcode = lambda: self._reserve_transcode(key, instance)
+            instance.release_transcode = lambda: self._release_transcode(key, instance)
         return instance
+
+    def _reserve_transcode(self, key: StreamKey, owner: StreamInstance) -> bool:
+        with self.capacity_lock:
+            if self.streams.get(key) is not owner:
+                return False
+            reserved = self.transcode_reservations.get(key)
+            if reserved is owner:
+                return True
+            if reserved is not None:
+                return False
+            limit = int(settings.live_max_concurrent_transcodes or 0)
+            if limit > 0 and len(self.transcode_reservations) >= limit:
+                return False
+            self.transcode_reservations[key] = owner
+            return True
+
+    def _release_transcode(self, key: StreamKey, owner: StreamInstance) -> None:
+        with self.capacity_lock:
+            if self.transcode_reservations.get(key) is owner:
+                self.transcode_reservations.pop(key, None)
 
     def _viewer_count_locked(self, camera_id: int, stream: str) -> int:
         return self.viewer_registry.count(camera_id, stream)
@@ -47,15 +74,8 @@ class StreamManager:
         return self.viewer_registry.details(camera_id, stream, time.time())
 
     def _running_transcodes_locked(self, exclude_key: StreamKey | None = None) -> int:
-        count = 0
-        for key, instance in self.streams.items():
-            if exclude_key and key == exclude_key:
-                continue
-            if instance.mode != "copy" and (
-                instance.is_running() or (instance.start_thread is not None and instance.start_thread.is_alive())
-            ):
-                count += 1
-        return count
+        with self.capacity_lock:
+            return sum(key != exclude_key for key in self.transcode_reservations)
 
     def _cleanup_stale_viewers_locked(self, now: float | None = None):
         now = now or time.time()
@@ -70,14 +90,8 @@ class StreamManager:
         with self.lock:
             instance = self._get_stream_locked(camera.id, stream)
             viewers = self._viewer_count_locked(camera.id, stream)
-            transcode_limit = int(settings.live_max_concurrent_transcodes or 0)
-            transcode_allowed = (
-                True
-                if transcode_limit <= 0
-                else self._running_transcodes_locked(exclude_key=self._key(camera.id, stream)) < transcode_limit
-            )
 
-        result = instance.start(camera, transcode_allowed=transcode_allowed)
+        result = instance.start(camera)
         if not result.get("ok"):
             return result
 
@@ -135,22 +149,18 @@ class StreamManager:
                     with self.lock:
                         if self.streams.get(key) is not instance or not self._viewer_count_locked(*key):
                             return
-                        limit = int(settings.live_max_concurrent_transcodes or 0)
-                        allowed = limit <= 0 or self._running_transcodes_locked(exclude_key=key) < limit
-                    source = camera
-                    if instance.retry_count:
-                        # A retry must see corrected URLs/credentials without an
-                        # application restart. Query only on a failed attempt,
-                        # never on the steady-state media/heartbeat path.
-                        with SessionLocal() as db:
-                            current = db.get(Camera, instance.camera_id)
-                            source = _camera_source(current) if current and not current.deleted_at else None
-                        if source is None:
-                            self.stop_stream(*key, reason="camera_not_found")
-                            return
-                    instance.start(source, transcode_allowed=allowed)
+                    # Admission may have read the row just before concurrent
+                    # deletion. Revalidate every launch, including the first one;
+                    # healthy media/heartbeat traffic still performs no DB polling.
+                    with SessionLocal() as db:
+                        current = db.get(Camera, instance.camera_id)
+                        source = _camera_source(current) if current and not current.deleted_at else None
+                    if source is None:
+                        self.stop_stream(*key, reason="camera_not_found")
+                        return
+                    instance.start(source)
                 except Exception as exc:
-                    logger.error("Live Engine background start failed camera_id=%s stream=%s error=%s", *key, mask_rtsp_credentials(str(exc)))
+                    logger.error("Live Engine background start failed camera_id=%s stream=%s error=%s", *key, redact_text(str(exc)))
                     with instance.lock:
                         instance._schedule_retry_locked("live_start_failed")
                 finally:
@@ -212,6 +222,17 @@ class StreamManager:
         for instance in instances:
             instance.stop(reason="stop_all", cleanup_files=True)
         return len(instances)
+
+    def stop_camera(self, camera_id: int, reason: str = "camera_deleted") -> int:
+        """Cancel both roles and viewers after deletion is durably committed."""
+        with self.lock:
+            keys = [key for key in self.streams if key[0] == int(camera_id)]
+            for key in keys:
+                self.streams[key].start_cancelled.set()
+                self.viewer_registry.remove_stream(*key)
+        for key in keys:
+            self.stop_stream(*key, reason=reason)
+        return len(keys)
 
     def cleanup(self):
         ttl = max(int(settings.live_idle_ttl_seconds), 5)

@@ -3,7 +3,7 @@
 import { Children, cloneElement, isValidElement, useEffect, useId, useRef, useState } from "react";
 import AuthenticatedPreviewImage from "../AuthenticatedPreviewImage";
 import { OperationDialog, useModalBodyScrollLock } from "../OperationFeedback";
-import { CAMERA_MANAGEMENT_FIELDS, cameraAssignedProfile, cameraCheckIsCurrent, cameraManagementKey, cameraProfileGroups, cameraProfileHasMetadata, cameraProfilePath, cameraSelectedSource, cameraSourceConflict, cameraStreamKey, cameraStreamRoles } from "../../lib/cameraEditor";
+import { CAMERA_MANAGEMENT_FIELDS, MAX_RETENTION_DAYS, cameraAssignedProfile, cameraCheckIsCurrent, cameraManagementKey, cameraProfileGroups, cameraProfileHasMetadata, cameraProfilePath, cameraSelectedSource, cameraSourceConflict, cameraStreamKey, cameraStreamRoles } from "../../lib/cameraEditor";
 import { useLocaleText } from "../../lib/i18n";
 import CameraDeviceSettings from "./CameraDeviceSettings";
 import useCameraEditor from "./useCameraEditor";
@@ -185,7 +185,7 @@ export default function CameraEditor({ camera = null, onClose, onSaved }) {
           </select>
         </Field>
         {input("segment_minutes", copy.segmentDuration, { type: "number", min: 1, hint: copy.minutesShort })}
-        {input("retention_days", copy.retentionDays, { type: "number", min: 1, hint: copy.daysShort })}
+        {input("retention_days", copy.retentionDays, { type: "number", min: 1, max: MAX_RETENTION_DAYS, hint: copy.daysShort })}
         {input("storage_quota_gb", copy.archiveLimitGb, { type: "number", min: 1 })}
       </div>
     </section>;

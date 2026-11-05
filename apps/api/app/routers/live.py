@@ -97,7 +97,7 @@ class LiveViewerPayload(BaseModel):
 
 
 def _get_camera(db: Session, camera_id: int) -> Camera:
-    camera = db.query(Camera).filter(Camera.id == camera_id).first()
+    camera = db.query(Camera).filter(Camera.id == camera_id, Camera.deleted_at.is_(None)).first()
     if not camera:
         raise HTTPException(status_code=404, detail="Камера не найдена")
     return camera

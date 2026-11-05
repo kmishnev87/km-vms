@@ -7,7 +7,8 @@ import { installModalKeyboard } from "../../lib/modalKeyboard";
 import VideoZoomPanSurface from "../../components/VideoZoomPanSurface";
 import ArchiveExportResult from "../../components/ArchiveExportResult";
 import useArchiveExport from "../../lib/useArchiveExport";
-import { apiFetch, canDeleteRecordings, issueRecordingMediaToken } from "../../lib/api";
+import { apiFetch, canDeleteRecordings, issueRecordingMediaToken, getAuthToken } from "../../lib/api";
+import { useAuthSession } from "../../lib/useAuthSession";
 import {
   buildArchiveExportPayload,
   canExportRecordings,
@@ -523,6 +524,7 @@ function hasActiveRecordingJobs(recorderStatus, selectedCamera) {
 }
 
 export default function RecordingsPage() {
+  const exportSession = useAuthSession();
   const { text } = useI18n();
   const t = useMemo(
     () => Object.fromEntries(Object.entries(TEXT).map(([key, value]) => [key, text(value)])),
@@ -546,6 +548,8 @@ export default function RecordingsPage() {
   const [error, setError] = useState("");
   const [loadedQueryKey, setLoadedQueryKey] = useState("");
   const currentQueryKey = JSON.stringify([selectedCamera, selectedDate, currentPage, pageSize, sortBy, sortDir]);
+  const currentQueryKeyRef = useRef(currentQueryKey);
+  currentQueryKeyRef.current = currentQueryKey;
   const recordingsActionReady = recordingsLoadState === "loaded" && loadedQueryKey === currentQueryKey;
   const [deleteDialog, setDeleteDialog] = useState(null);
   const [operationToast, setOperationToast] = useState(null);
@@ -566,6 +570,10 @@ export default function RecordingsPage() {
   const [exportModal, setExportModal] = useState(null);
   const exportController = useArchiveExport();
   const exportDraftRef = useRef(null);
+  useEffect(() => {
+    exportDraftRef.current = null;
+    setExportModal(null);
+  }, [exportSession]);
   const exportBusy = exportController.busy;
   useModalBodyScrollLock(Boolean(exportModal));
   const [exportLimits, setExportLimits] = useState(null);
@@ -617,7 +625,7 @@ export default function RecordingsPage() {
 
     try {
       const data = await apiFetch(`/recordings${query}`);
-      if (requestId !== requestIdRef.current) return;
+      if (requestId !== requestIdRef.current || requestedQueryKey !== currentQueryKeyRef.current) return;
 
       setItems(data.items || []);
       setRecordingsSummary(data.summary || null);
@@ -627,7 +635,7 @@ export default function RecordingsPage() {
       setLoadedQueryKey(requestedQueryKey);
       setRecordingsLoadState("loaded");
     } catch (err) {
-      if (requestId !== requestIdRef.current) return;
+      if (requestId !== requestIdRef.current || requestedQueryKey !== currentQueryKeyRef.current) return;
       setError(normalizeRecordingError(err.message));
       showRecordingActionError(err);
       setRecordingsLoadState("error");
@@ -678,9 +686,11 @@ export default function RecordingsPage() {
   }, []);
 
   async function refresh() {
+    const refreshQueryKey = currentQueryKey;
     try {
       setError("");
       const [cameraOptions] = await Promise.all([loadCameras(), loadRecorderStatus()]);
+      if (refreshQueryKey !== currentQueryKeyRef.current) return;
       const effectiveCamera = resolveEffectiveRecordingCamera(selectedCamera, cameraOptions);
       const effectivePage = effectiveCamera === selectedCamera ? currentPage : 1;
       if (effectiveCamera !== selectedCamera) {
@@ -689,6 +699,7 @@ export default function RecordingsPage() {
       }
       await loadRecordings(effectiveCamera, selectedDate, effectivePage);
     } catch (err) {
+      if (refreshQueryKey !== currentQueryKeyRef.current) return;
       showRecordingActionError(err);
     }
   }
@@ -894,6 +905,7 @@ export default function RecordingsPage() {
         startTs: exportModal.startTs,
         endTs: exportModal.endTs,
         estimatedSourceBytes: 0,
+        productTimezone,
       },
       exportLimits
     );
@@ -913,8 +925,9 @@ export default function RecordingsPage() {
         title: exportModal.title,
         reason: exportModal.reason,
       });
+    const ownerSession = exportSession;
     const result = await exportController.prepare(payload);
-    if (result) {
+    if (result && getAuthToken() === ownerSession) {
       setOperationToast({
         id: `recordings-clip-${result?.job?.id || Date.now()}`,
         title: t.exportReady,

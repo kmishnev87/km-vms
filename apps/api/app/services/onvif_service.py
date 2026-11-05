@@ -797,7 +797,9 @@ def probe_onvif_device(host, port=80, username=None, password=None, rtsp_host=No
             "stream_uri_status": "ok" if stream_ready else "stream_uri_unavailable",
             "media_service_xaddr_path": urlparse(selected_media_xaddr).path if selected_media_xaddr else None,
         },
-        "profiles": profile_items[:20],
+        # Groups and selected tokens must refer to the same complete catalogue.
+        # Metadata was already fetched above; slicing here only broke later sources.
+        "profiles": profile_items,
         "suggested_main_profile_token": suggested_main,
         "suggested_sub_profile_token": suggested_sub,
         "source_groups": _profile_source_groups(profile_items),

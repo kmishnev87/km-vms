@@ -10,6 +10,7 @@ from typing import Callable
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.camera_limits import retention_days_supported
 from app.models.camera import Camera
 from app.models.recording import ArchiveRoot, RecordingSegment
 from app.models.storage_operation import StorageOperation, StorageWorkSignal
@@ -173,18 +174,23 @@ def claim_retention_signal(db: Session, *, owner_instance_id: str) -> WorkSignal
     )
 
 
-def _segment_due_at(segment_started_at: datetime, retention_days: int, db: Session) -> datetime:
-    ctx = timezone_context(db)
-    storage_local_date = storage_naive_utc_to_aware_utc(segment_started_at).astimezone(ctx.zone).date()
-    compatibility_local_date = segment_started_at.date()
-    due_dates = {
-        storage_local_date + timedelta(days=int(retention_days) + 1),
-        compatibility_local_date + timedelta(days=int(retention_days) + 1),
-    }
-    return min(
-        system_local_naive_to_storage_utc(datetime.combine(value, datetime_time.min), ctx)
-        for value in due_dates
-    )
+def _segment_due_at(segment_started_at: datetime, retention_days: int, db: Session) -> datetime | None:
+    if not retention_days_supported(retention_days):
+        return None
+    try:
+        ctx = timezone_context(db)
+        storage_local_date = storage_naive_utc_to_aware_utc(segment_started_at).astimezone(ctx.zone).date()
+        compatibility_local_date = segment_started_at.date()
+        due_dates = {
+            storage_local_date + timedelta(days=int(retention_days) + 1),
+            compatibility_local_date + timedelta(days=int(retention_days) + 1),
+        }
+        return min(
+            system_local_naive_to_storage_utc(datetime.combine(value, datetime_time.min), ctx)
+            for value in due_dates
+        )
+    except (OverflowError, ValueError):
+        return None
 
 
 def earliest_retention_due_at(db: Session) -> datetime | None:
@@ -210,7 +216,7 @@ def earliest_retention_due_at(db: Session) -> datetime | None:
         for row in rows
         if row.oldest_started_at is not None and int(row.retention_days or 0) > 0
     ]
-    return min(due_values) if due_values else None
+    return min((value for value in due_values if value is not None), default=None)
 
 
 def publish_due_retention_signal(db: Session, *, now: datetime | None = None) -> dict | None:
@@ -367,12 +373,15 @@ def measure_camera_retention(db: Session, snapshot: dict) -> dict:
     age_due_count = 0
     cutoff_storage = None
     cutoff_compat = None
+    invalid_age_rule = retention_days < 0 or (retention_days > 0 and not retention_days_supported(retention_days))
     if retention_days > 0:
-        cutoff_storage, cutoff_compat = retention_cutoff_storage(
-            retention_days,
-            timezone_context(db),
-            now_utc=evaluation_at,
-        )
+        try:
+            cutoff_storage, cutoff_compat = retention_cutoff_storage(
+                retention_days, timezone_context(db), now_utc=evaluation_at,
+            )
+        except ValueError:
+            invalid_age_rule = True
+    if cutoff_storage is not None:
         age_due_count = int(
             _authoritative_camera_query(db, snapshot)
             .filter(
@@ -384,11 +393,12 @@ def measure_camera_retention(db: Session, snapshot: dict) -> dict:
             .count()
         )
     quota_bytes, quota_overage_bytes, quota_state = _quota_measurement(quota_gb, owned_bytes, unknown_size_count)
-    missing_rule_count = int(retention_days <= 0) + int(quota_gb <= 0)
-    violation = bool(age_due_count > 0 or quota_state in {"violating", "unknown"})
-    measurement_confidence = "unknown" if quota_state == "unknown" else "confirmed"
+    missing_rule_count = int(retention_days <= 0 or invalid_age_rule) + int(quota_gb <= 0)
+    violation = bool(age_due_count > 0 or quota_state in {"violating", "unknown"} or invalid_age_rule)
+    measurement_confidence = "unknown" if quota_state == "unknown" or invalid_age_rule else "confirmed"
     return {
         "retention_days": retention_days,
+        "invalid_age_rule": invalid_age_rule,
         "storage_quota_gb": quota_gb,
         "quota_bytes": quota_bytes,
         "owned_finalized_count": owned_count,
@@ -422,6 +432,8 @@ def select_camera_retention_candidates(
     selected: list[RecordingSegment] = []
     expected_identities: dict[int, dict] = {}
     blocker_counts: Counter = Counter()
+    if measurement.get("invalid_age_rule"):
+        blocker_counts["retention_days_invalid"] += 1
     if measurement.get("quota_state") == "unknown":
         blocker_counts["retention_size_unknown"] += int(measurement.get("unknown_size_count") or 1)
     selected_bytes = 0
@@ -2002,7 +2014,7 @@ def retention_runtime_status(db: Session) -> dict:
     # success of an unrelated camera. No filesystem walk or per-camera DB loop.
     context = timezone_context(db)
     evaluation_at = retention_evaluation_now(db)
-    cutoffs: dict[int, tuple[datetime, datetime]] = {}
+    cutoffs: dict[int, tuple[datetime, datetime] | None] = {}
     violating_count = 0
     unknown_count = 0
     total_overage = 0
@@ -2011,13 +2023,20 @@ def retention_runtime_status(db: Session) -> dict:
         days, quota = int(days or 0), int(quota or 0)
         _quota_bytes, overage, quota_state = _quota_measurement(quota, int(owned_bytes), int(unknown_sizes))
         age_due = False
+        invalid_age_rule = days < 0 or (days > 0 and not retention_days_supported(days))
         if days > 0 and oldest is not None:
             if days not in cutoffs:
-                cutoffs[days] = retention_cutoff_storage(days, context, now_utc=evaluation_at)
-            cutoff, compatibility_cutoff = cutoffs[days]
-            age_due = oldest < cutoff or oldest < compatibility_cutoff
+                try:
+                    cutoffs[days] = retention_cutoff_storage(days, context, now_utc=evaluation_at)
+                except ValueError:
+                    cutoffs[days] = None
+            if cutoffs[days] is not None:
+                cutoff, compatibility_cutoff = cutoffs[days]
+                age_due = oldest < cutoff or oldest < compatibility_cutoff
+            else:
+                invalid_age_rule = True
         violation = bool(overage > 0 or age_due)
-        unknown = quota > 0 and int(unknown_sizes) > 0
+        unknown = (quota > 0 and int(unknown_sizes) > 0) or invalid_age_rule
         violating_count += int(violation)
         unknown_count += int(unknown)
         total_overage += overage
@@ -2026,6 +2045,7 @@ def retention_runtime_status(db: Session) -> dict:
                 "camera_id": int(camera_id), "camera_name": str(camera_name),
                 "quota_overage_bytes": overage, "quota_state": quota_state,
                 "age_due": age_due, "unknown_size_count": int(unknown_sizes),
+                "invalid_age_rule": invalid_age_rule,
             })
     measurement_state = "violating" if violating_count else "unknown" if unknown_count else "compliant"
     state = (
@@ -2039,7 +2059,7 @@ def retention_runtime_status(db: Session) -> dict:
     meaningful_rule_count = sum(
         1
         for _id, _name, _deleted_at, _enabled, days, quota, _count, _bytes, _unknown, _oldest in camera_rows
-        if int(days or 0) > 0 or int(quota or 0) > 0
+        if retention_days_supported(int(days or 0)) or int(quota or 0) > 0
     )
     return {
         "enabled": True,

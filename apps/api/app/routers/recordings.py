@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import mimetypes
-import os
 import re
 import logging
 from datetime import datetime
@@ -9,7 +8,7 @@ from pathlib import Path
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session
@@ -20,6 +19,7 @@ from app.models.camera import Camera
 from app.models.recording import RecordingSegment
 from app.models.user import User
 from app.routers.deps import require_permission
+from app.utils.video_stream import stream_video as stream_video_response
 from app.services.media_tokens import create_media_token, media_token_response, validate_media_token
 from app.services.recording_operations import (
     DestructiveScopeConflict,
@@ -808,55 +808,12 @@ def recordings_query_for_filters(
 
 
 def stream_video(request: Request, file_path: Path, media_type_override: str | None = None):
-    file_size = os.path.getsize(file_path)
-    range_header = request.headers.get("range")
-
-    start = 0
-    end = file_size - 1
-
-    if range_header:
-        try:
-            units, range_spec = range_header.split("=", 1)
-            if units.strip().lower() != "bytes":
-                raise ValueError("Only bytes range supported")
-            start_s, end_s = range_spec.split("-", 1)
-            if start_s.strip():
-                start = int(start_s)
-            if end_s.strip():
-                end = int(end_s)
-        except Exception:
-            raise HTTPException(status_code=400, detail="Invalid Range header")
-
-    if start >= file_size or end >= file_size or start > end:
-        raise HTTPException(status_code=416, detail="Range Not Satisfiable")
-
     media_type = media_type_override
     if not media_type:
         media_type, _ = mimetypes.guess_type(str(file_path))
     media_type = media_type or "application/octet-stream"
 
-    def iterfile():
-        with open(file_path, "rb") as f:
-            f.seek(start)
-            remaining = end - start + 1
-            while remaining > 0:
-                chunk_size = min(CHUNK_SIZE, remaining)
-                data = f.read(chunk_size)
-                if not data:
-                    break
-                yield data
-                remaining -= len(data)
-
-    headers = {
-        "Accept-Ranges": "bytes",
-        "Content-Length": str(end - start + 1),
-        "Content-Range": f"bytes {start}-{end}/{file_size}",
-        "Content-Type": media_type,
-        "Cache-Control": "no-store",
-    }
-
-    status_code = 206 if range_header else 200
-    return StreamingResponse(iterfile(), status_code=status_code, headers=headers)
+    return stream_video_response(request, file_path, media_type=media_type)
 
 
 @router.get("/cameras")

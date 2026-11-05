@@ -627,6 +627,16 @@ def _build_retention_domain(
     if camera_count > 0 and policy_count <= 0:
         _append_reason(reasons, "retention_policy_risk")
 
+    # Historical success is not evidence that CURRENT policies are healthy.
+    if state.get("measurement_state") == "violating":
+        if severity in {"ok", "unknown"}:
+            severity = "warning"
+        _append_reason(reasons, "retention_policy_risk")
+    elif state.get("measurement_state") == "unknown":
+        if severity == "ok":
+            severity = "unknown"
+        _append_reason(reasons, "retention_unknown")
+
     return {
         "status": str(last_status or ("running" if running else "unknown")),
         "severity": severity,

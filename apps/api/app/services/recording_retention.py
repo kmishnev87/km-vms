@@ -203,6 +203,9 @@ def _finish(result: dict) -> dict:
         result["status"] = "partial" if deleted else "blocked"
     else:
         result["status"] = "completed"
+    if result["status"] == "completed" and "retention_days_invalid" in result.get("warnings", []):
+        useful = int(result.get("planned_count") or 0) if result.get("dry_run") else deleted
+        result["status"] = "partial" if useful else "blocked"
     result["ok"] = bool(
         result["status"] == "completed"
         and failed == 0
@@ -211,6 +214,17 @@ def _finish(result: dict) -> dict:
         and result["processed_count"] >= int(result.get("requested_count") or 0)
     )
     return result
+
+
+def _include_policy_problems(result: dict, policy_summary: dict | None) -> None:
+    invalid_count = sum(
+        entry.get("status") == "invalid"
+        for entry in ((policy_summary or {}).get("days") or {}).values()
+    )
+    if invalid_count:
+        result["reason_counts"]["retention_days_invalid"] = invalid_count
+        if "retention_days_invalid" not in result["warnings"]:
+            result["warnings"].append("retention_days_invalid")
 
 
 def _item(
@@ -477,9 +491,20 @@ def _policy_candidates(db: Session, *, camera_id: int | None = None) -> tuple[li
         if not camera:
             continue
         retention_days = int(camera.retention_days or 0)
+        storage_cutoff = local_compat_cutoff = None
+        if retention_days < 0:
+            policy_summary["days"][str(camera.id)] = {
+                "retention_days": retention_days, "status": "invalid", "reason": "retention_days_invalid",
+            }
         if retention_days > 0:
-            storage_cutoff, local_compat_cutoff = retention_cutoff_storage(retention_days, ctx)
-        if retention_days > 0 and segment.started_at and (
+            try:
+                storage_cutoff, local_compat_cutoff = retention_cutoff_storage(retention_days, ctx)
+            except ValueError:
+                policy_summary["days"][str(camera.id)] = {
+                    "retention_days": retention_days, "status": "invalid",
+                    "reason": "retention_days_invalid",
+                }
+        if storage_cutoff is not None and segment.started_at and (
             segment.started_at < storage_cutoff or segment.started_at < local_compat_cutoff
         ):
             by_segment.setdefault(segment.id, (segment, set()))[1].add("retention_days")
@@ -548,6 +573,7 @@ def build_retention_plan(
     active_job_ids = _active_job_ids(db)
     candidate_ids = {segment.id for segment, _reason in candidates}
     result["policy"] = policy_summary
+    _include_policy_problems(result, policy_summary)
     result["observability"] = _retention_observability_counts(
         db,
         camera_id=camera_id,
@@ -720,6 +746,7 @@ def execute_segments(
     allowed_integrity_statuses: set[str] | frozenset[str] | None = None,
     allowed_segment_statuses: set[str] | frozenset[str] | None = None,
     allow_missing_files: bool = False,
+    initial_policy_summary: dict | None = None,
 ) -> dict:
     if policy not in {
         EXECUTION_POLICY_AUTOMATIC_BOUNDED,
@@ -731,6 +758,7 @@ def execute_segments(
     operation_id = operation_id or new_operation_id(operation[:32])
     normalized_scope = scope or scope_for_segments(segment_list)
     result = _base_result(operation, dry_run=False, operation_id=operation_id, scope=normalized_scope)
+    _include_policy_problems(result, initial_policy_summary)
     for item in initial_items or []:
         result["requested_count"] += 1
         _add_item(result, dict(item))
@@ -802,6 +830,7 @@ def execute_segments(
                 allowed_integrity_statuses=allowed_integrity_statuses,
                 allowed_segment_statuses=allowed_segment_statuses,
                 allow_missing_files=allow_missing_files,
+                initial_policy_summary=initial_policy_summary,
             )
             managed_lifecycle.finish_result(
                 finished,
@@ -1370,7 +1399,7 @@ def run_retention(
 ) -> dict:
     try:
         with RetentionApplyLock():
-            candidates, _policy_summary = _policy_candidates(db, camera_id=camera_id)
+            candidates, policy_summary = _policy_candidates(db, camera_id=camera_id)
             _audit(
                 db,
                 actor,
@@ -1392,6 +1421,7 @@ def run_retention(
                 max_candidates=max_candidates,
                 max_bytes=max_bytes,
                 policy=EXECUTION_POLICY_MANUAL_BOUNDED,
+                initial_policy_summary=policy_summary,
             )
     except RuntimeError as exc:
         result = _base_result(operation, dry_run=False)

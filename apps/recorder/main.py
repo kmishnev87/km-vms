@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote_plus
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -219,11 +220,21 @@ def redact_text(value: str | None) -> str:
     if value is None:
         return ""
     text_value = str(value)
-    text_value = re.sub(r"(rtsp://[^:\s/@]+):([^@\s]+)@", r"\1:***@", text_value, flags=re.IGNORECASE)
+    # Recorder is a separate build context. Keep this contract in sync with the
+    # API sanitizer; the cross-runtime behavioural test covers the shared cases.
+    text_value = re.sub(r"((?:rtsps?|https?)://)([^@\s/]+)@", r"\1***@", text_value, flags=re.IGNORECASE)
     text_value = re.sub(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", r"\1***", text_value, flags=re.IGNORECASE)
-    text_value = re.sub(r"([?&](?:token|access_token|refresh_token|media_token)=)[^&\s]+", r"\1***", text_value, flags=re.IGNORECASE)
+    secret_keys = {
+        "access_token", "refresh_token", "media_token", "token", "auth", "authorization",
+        "credential", "credentials", "key", "password", "passwd", "secret", "signature",
+    }
+    text_value = re.sub(
+        r"([?&]([^=&\s#]+)=)[^&\s#\"'<>]*",
+        lambda match: match.group(1) + "***" if unquote_plus(match.group(2)).casefold() in secret_keys else match.group(0),
+        text_value, flags=re.IGNORECASE,
+    )
     text_value = re.sub(r"(postgresql(?:\+\w+)?://[^:\s/@]+):([^@\s]+)@", r"\1:***@", text_value, flags=re.IGNORECASE)
-    text_value = re.sub(r"((?:Cookie|Set-Cookie):\s*)[^\r\n;]+", r"\1***", text_value, flags=re.IGNORECASE)
+    text_value = re.sub(r"((?:Cookie|Set-Cookie):\s*)[^\r\n]+", r"\1***", text_value, flags=re.IGNORECASE)
     return text_value
 
 
@@ -794,10 +805,14 @@ def discover_job_segments(job: RecordingJob) -> list[Path]:
     if not dir_path or not dir_path.exists():
         return []
     stat = dir_path.stat()
-    signature = (str(dir_path), stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+    signature = (str(dir_path), job.current_output_path, stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
     now = time.monotonic()
     if signature != job.segment_directory_signature or now - job.segment_directory_checked_at >= SEGMENT_DISCOVERY_REFRESH_SECONDS:
-        prefix = segment_prefix(job.camera_id, job.camera_name)
+        # The writer still owns its original output even after a configuration
+        # refresh renames the camera. Never discover by the mutable display name.
+        prefix = Path(job.current_output_path).name.split("%", 1)[0]
+        if not prefix:
+            return []
         names = set()
         pending = {}
         for path in dir_path.iterdir():

@@ -248,6 +248,8 @@ export const zhCNDictionary = {
     editorRequired: "请输入摄像机名称和地址。端口须为 1 至 65535 的整数。",
     editorPathRequired: "请至少输入一个视频流路径，或通过 ONVIF 读取码流。",
     editorRecordingInvalid: "文件时长、保留天数和存储上限须为正整数。",
+    editorNameTooLong: "摄像机名称不能超过255个字符。",
+    editorRetentionRange: "保留期限必须为1至36500天。",
     editorUnreachable: "摄像机未响应，请检查地址、端口和网络连接。",
     editorRecheck: "连接信息已更改或检查已过期。请重新检查视频后再保存。",
     editorDuplicate: "已有同名摄像机，请使用其他名称。",

@@ -8,10 +8,11 @@ import { CSS_OWNERS, readProductSourceFile } from "./helpers/readProductSources.
 const root = path.resolve(import.meta.dirname, "..");
 const baseline = {
   "40-storage-records-shared.css": "cac43eb452602b35b4b134aad66e3b79ca391e21554982abe83d846f2c390d82",
-  "20-settings-maintenance.css": "595f8108c380d958ad11e27e24cb4a8fa0531f8e9343ccdd43e23fc616cff1de"
+  // Approved maintenance result/header repair advances only this stylesheet baseline.
+  "20-settings-maintenance.css": "7123d700d919e3114ceecc9ebfa5022f821c2f9ff52ae4a74a5437681cc620db"
 };
 for (const [logical, files] of Object.entries(CSS_OWNERS)) {
-  test(`Stage 14 CSS: ${logical} preserves every rule byte and cascade position`, () => {
+  test(`CSS: ${logical} matches its approved baseline and preserves import order`, () => {
     const css = readProductSourceFile(path.join(root, logical), "utf8");
     assert.equal(crypto.createHash("sha256").update(css).digest("hex"), baseline[path.basename(logical)]);
     const globals = fs.readFileSync(path.join(root,"app/globals.css"),"utf8");

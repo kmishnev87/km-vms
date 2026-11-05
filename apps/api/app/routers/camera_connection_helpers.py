@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.sanitization import redact_text
 from app.core.security import decrypt_text
 from app.models.camera import Camera
-from app.schemas.camera import restore_rtsp_management_value
+from app.schemas.camera import restore_rtsp_management_value, safe_rtsp_management_value
 from app.services.onvif_service import rtsp_path_from_uri
 
 
@@ -308,13 +308,6 @@ def get_camera_credentials(
 ):
     camera = None
     camera_id = payload.get("camera_id")
-    username = payload.get("username")
-    password = payload.get("password")
-    host = payload.get("host")
-    port = payload.get("port")
-    rtsp_host = payload.get("rtsp_host")
-    rtsp_port = payload.get("rtsp_port")
-    onvif_path = payload.get("onvif_path")
 
     if camera_id is not None and str(camera_id).strip() != "":
         try:
@@ -335,69 +328,52 @@ def get_camera_credentials(
                 status_code=404,
                 detail={"code": "camera_not_active", "message": "Camera was not found or is no longer active."},
             )
-        if not host:
-            host = camera.host
-        if not port:
-            port = camera.port
-        if not username:
-            username = camera.username
-        if not password:
-            password = decrypt_text(camera.password_encrypted)
-        if not rtsp_host:
-            rtsp_host = camera.rtsp_reachable_host
-        if not rtsp_port:
-            rtsp_port = camera.rtsp_reachable_port
-        if "onvif_path" not in payload:
-            onvif_path = camera.onvif_path
-
+    merged = merge_camera_connection_payload(payload, camera)
     return {
         "camera_id": camera_id,
         "camera": camera,
-        "host": host,
-        "port": port,
-        "rtsp_host": rtsp_host,
-        "rtsp_port": rtsp_port,
-        "username": username,
-        "password": password,
-        "onvif_path": onvif_path,
+        **{field: merged.get(field) for field in (
+            "host", "port", "rtsp_host", "rtsp_port", "username", "password", "onvif_path",
+        )},
     }
 
 
-def resolve_test_connection_payload(db: Session, payload: dict) -> dict:
-    """Resolve a test request to the same final connection truth used by save."""
-    resolved = dict(payload)
-    creds = get_camera_credentials(db, payload)
-    camera = creds.get("camera")
+def merge_camera_connection_payload(payload: dict, camera: Camera | None = None) -> dict:
+    """Missing fields retain stored values; explicit empty/null clears them.
+
+    Only the password has the editor's special empty-means-keep contract.
+    Both probing and saving consume this merge, never truthiness fallbacks.
+    """
+    merged = dict(payload)
     if camera is not None:
         for field in (
-            "protocol",
-            "host",
-            "port",
-            "rtsp_main_url",
-            "rtsp_sub_url",
-            "rtsp_host",
-            "rtsp_port",
-            "rtsp_transport",
-            "onvif_path",
-            "onvif_profile_token",
-            "onvif_sub_profile_token",
-            "onvif_channel_id",
-            "default_live_stream",
-            "default_record_stream",
+            "protocol", "host", "port", "username", "rtsp_main_url", "rtsp_sub_url",
+            "rtsp_host", "rtsp_port", "rtsp_transport", "onvif_path", "onvif_profile_token",
+            "onvif_sub_profile_token", "onvif_channel_id", "default_live_stream", "default_record_stream",
         ):
-            if resolved.get(field) in (None, ""):
-                resolved[field] = getattr(camera, field, None)
-    resolved["host"] = creds.get("host") or resolved.get("host")
-    resolved["port"] = creds.get("port") or resolved.get("port")
-    resolved["rtsp_host"] = creds.get("rtsp_host") or resolved.get("rtsp_host")
-    resolved["rtsp_port"] = creds.get("rtsp_port") or resolved.get("rtsp_port")
-    resolved["username"] = creds.get("username") or resolved.get("username")
-    resolved["password"] = creds.get("password") or resolved.get("password") or ""
+            if field not in merged:
+                merged[field] = getattr(camera, field, None)
+                if field in {"rtsp_host", "rtsp_port"} and not merged[field]:
+                    # Legacy rows can store the reachable endpoint only inside
+                    # their full RTSP URL. This is saved configuration, not a
+                    # live discovery override. Explicit clears still win.
+                    merged[field] = getattr(camera, field.replace("rtsp_", "rtsp_reachable_"), None)
+    if not merged.get("password"):
+        merged["password"] = decrypt_text(camera.password_encrypted) if camera is not None else ""
+    return merged
+
+
+def resolve_camera_connection_payload(payload: dict, camera: Camera | None = None) -> dict:
+    """Canonical final connection for create, update, test and proof checks."""
+    resolved = merge_camera_connection_payload(payload, camera)
     protocol = str(resolved.get("protocol") or "rtsp").lower()
+    resolved["protocol"] = protocol
     if protocol == "onvif":
-        stream_host = resolved.get("rtsp_host") or resolved.get("host")
-        stream_port = resolved.get("rtsp_port") or 554
+        resolved["rtsp_host"] = resolved.get("rtsp_host") or resolved.get("host")
+        resolved["rtsp_port"] = resolved.get("rtsp_port") or 554
+        stream_host, stream_port = resolved["rtsp_host"], resolved["rtsp_port"]
     else:
+        resolved["rtsp_host"] = resolved["rtsp_port"] = None
         stream_host = resolved.get("host")
         stream_port = resolved.get("port") or 554
     for role in ("main", "sub"):
@@ -407,21 +383,34 @@ def resolve_test_connection_payload(db: Session, payload: dict) -> dict:
             stream_port,
             resolved.get("username"),
             resolved.get("password"),
-            resolve_rtsp_management_path(resolved, role, stored=getattr(camera, key, None)),
+            resolve_rtsp_management_path(
+                resolved, role, stored=getattr(camera, key, None), path_submitted=key in payload,
+            ),
         )
     return resolved
 
 
-def resolve_rtsp_management_path(payload: dict, role: str, *, stored: str | None = None) -> str | None:
+def resolve_test_connection_payload(db: Session, payload: dict) -> dict:
+    creds = get_camera_credentials(db, payload)
+    return resolve_camera_connection_payload(payload, creds["camera"])
+
+
+def resolve_rtsp_management_path(
+    payload: dict, role: str, *, stored: str | None = None, path_submitted: bool = True,
+) -> str | None:
     """One server-only path restoration for test and save, including ONVIF secrets."""
-    value = restore_rtsp_management_value(payload.get(f"rtsp_{role}_url"), stored)
+    value = payload.get(f"rtsp_{role}_url")
+    if not path_submitted:
+        # Partial editor saves omit an unchanged public path. Stored raw secrets
+        # are fallback data, not an explicit instruction to override a fresh proof.
+        value = safe_rtsp_management_value(value)
     token = payload.get("onvif_probe_token")
     if store_has_valid_management_proof(token, payload):
         profile_key = "onvif_profile_token" if role == "main" else "onvif_sub_profile_token"
         profile_path = (ONVIF_PROBE_PROOFS[token].get("stream_paths") or {}).get(str(payload.get(profile_key)))
-        if profile_path and saved_stream_path(value) and saved_stream_path(value).split("?", 1)[0] == profile_path.split("?", 1)[0]:
+        if profile_path and value and safe_rtsp_management_value(value) == safe_rtsp_management_value(profile_path):
             value = restore_rtsp_management_value(value, profile_path)
-    return saved_stream_path(value)
+    return saved_stream_path(restore_rtsp_management_value(value, stored))
 
 
 def saved_stream_path(value: str | None) -> str | None:

@@ -49,15 +49,14 @@ function normalizeTile(tile) {
   };
 }
 
-function readSavedTiles() {
-  if (typeof window === "undefined") return [];
+function readSavedTiles(userId) {
+  if (typeof window === "undefined" || userId == null) return [];
   try {
-    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_STORAGE_KEY) || "[]";
+    // Unattributed legacy caches must not be imported into another account.
+    // Current backend layouts remain authoritative and are not rewritten here.
+    const raw = localStorage.getItem(`${STORAGE_KEY}_user_${userId}`) || "[]";
     const parsed = JSON.parse(raw);
     const tiles = Array.isArray(parsed) ? dedupeTiles(parsed.map(normalizeTile)) : [];
-    if (!localStorage.getItem(STORAGE_KEY) && localStorage.getItem(LEGACY_STORAGE_KEY)) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(tiles));
-    }
     return tiles;
   } catch {
     return [];
@@ -68,10 +67,10 @@ function migrationMarkerKey(userId) {
   return `${MIGRATION_MARKER_PREFIX}_${String(userId || "anonymous")}`;
 }
 
-function saveTiles(tiles) {
-  if (typeof window === "undefined") return;
+function saveTiles(tiles, userId) {
+  if (typeof window === "undefined" || userId == null) return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(dedupeTiles(tiles.map(normalizeTile))));
+    localStorage.setItem(`${STORAGE_KEY}_user_${userId}`, JSON.stringify(dedupeTiles(tiles.map(normalizeTile))));
   } catch {}
 }
 

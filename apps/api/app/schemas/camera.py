@@ -2,7 +2,9 @@ import re
 from datetime import datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
+from app.core.camera_limits import MAX_CAMERA_NAME_LENGTH, MAX_RETENTION_DAYS
+from app.core.sanitization import SENSITIVE_QUERY_KEYS, is_sensitive_query_key, redact_text
 
 
 DELETED_CAMERA_MARKER_RE = re.compile(r"__deleted_\d+_\d+$")
@@ -14,16 +16,7 @@ def active_camera_display_value(value: str, deleted_at: datetime | None) -> str:
     return DELETED_CAMERA_MARKER_RE.sub("", str(value or ""))
 
 
-SENSITIVE_RTSP_QUERY_KEYS = {
-    "access_token",
-    "auth",
-    "credential",
-    "key",
-    "password",
-    "secret",
-    "signature",
-    "token",
-}
+SENSITIVE_RTSP_QUERY_KEYS = SENSITIVE_QUERY_KEYS
 
 
 def safe_rtsp_management_value(value: str | None) -> str | None:
@@ -41,7 +34,7 @@ def safe_rtsp_management_value(value: str | None) -> str | None:
             path = authority_tail[authority_tail.find("/") :] if "/" in authority_tail else "/"
         query = urlencode(
             [
-                (key, "redacted" if key.lower() in SENSITIVE_RTSP_QUERY_KEYS else item)
+                (key, "redacted" if is_sensitive_query_key(key) else item)
                 for key, item in parse_qsl(parsed.query, keep_blank_values=True)
             ],
             doseq=True,
@@ -69,13 +62,15 @@ def restore_rtsp_management_value(
         stored_parts = urlsplit(str(stored))
         stored_sensitive: dict[str, list[str]] = {}
         for key, value in parse_qsl(stored_parts.query, keep_blank_values=True):
-            if key.lower() in SENSITIVE_RTSP_QUERY_KEYS:
+            if is_sensitive_query_key(key):
                 stored_sensitive.setdefault(key.lower(), []).append(value)
         restored_query = []
         for key, value in parse_qsl(submitted_parts.query, keep_blank_values=True):
             values = stored_sensitive.get(key.lower()) or []
-            if key.lower() in SENSITIVE_RTSP_QUERY_KEYS and value == "redacted" and values:
-                value = values.pop(0)
+            if is_sensitive_query_key(key) and values:
+                stored_value = values.pop(0)
+                if value == "redacted":
+                    value = stored_value
             restored_query.append((key, value))
         query = urlencode(restored_query, doseq=True)
         path = submitted_parts.path or "/"
@@ -85,7 +80,7 @@ def restore_rtsp_management_value(
 
 
 class CameraBase(BaseModel):
-    name: str = Field(min_length=1, max_length=255)
+    name: str = Field(min_length=1, max_length=MAX_CAMERA_NAME_LENGTH)
     enabled: bool = True
     protocol: str
     host: str
@@ -110,7 +105,7 @@ class CameraBase(BaseModel):
     default_record_stream: str = "main"
 
     segment_minutes: int = Field(default=5, ge=1)
-    retention_days: int = Field(default=30, ge=1)
+    retention_days: int = Field(default=30, ge=1, le=MAX_RETENTION_DAYS)
     storage_quota_gb: int = Field(default=50, ge=1)
     preview_token: str | None = None
     validation_token: str | None = None
@@ -125,7 +120,7 @@ class CameraCreate(CameraBase):
 
 
 class CameraUpdate(BaseModel):
-    name: str | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=MAX_CAMERA_NAME_LENGTH)
     enabled: bool | None = None
     protocol: str | None = None
     host: str | None = None
@@ -150,7 +145,7 @@ class CameraUpdate(BaseModel):
     default_record_stream: str | None = None
 
     segment_minutes: int | None = Field(default=None, ge=1)
-    retention_days: int | None = Field(default=None, ge=1)
+    retention_days: int | None = Field(default=None, ge=1, le=MAX_RETENTION_DAYS)
     storage_quota_gb: int | None = Field(default=None, ge=1)
 
     status: str | None = None
@@ -161,6 +156,14 @@ class CameraUpdate(BaseModel):
     sub_validation_token: str | None = None
     onvif_probe_token: str | None = None
     manual_confirm_unverified: bool = False
+
+    @field_validator("name", "retention_days")
+    @classmethod
+    def reject_explicit_null_policy(cls, value):
+        # Omitted PATCH fields retain values; explicit null is not a policy.
+        if value is None:
+            raise ValueError("Camera name and retention days cannot be null")
+        return value
 
 
 class CameraResponse(BaseModel):
@@ -207,6 +210,11 @@ class CameraResponse(BaseModel):
     @field_serializer("rtsp_main_url", "rtsp_sub_url")
     def serialize_safe_rtsp_value(self, value: str | None) -> str | None:
         return safe_rtsp_management_value(value)
+
+    @field_serializer("last_error")
+    def serialize_safe_error(self, value: str | None) -> str | None:
+        # Old persisted errors must receive the same protection as new failures.
+        return redact_text(value) if value is not None else None
 
     class Config:
         from_attributes = True

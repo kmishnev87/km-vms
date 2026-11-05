@@ -120,7 +120,7 @@ assert.deepEqual(updateApplyStepRows({ steps: [{ name: "preflight", status: "com
 
 assert.deepEqual(updateApplyFactRows(
   { status: "update_available", available_release: { version: "0.7.4", title: "Reliability", summary: "Progress visibility" } },
-  { expected_commit: "a".repeat(40), commit_verified: false, current_step: "rebuilding", last_progress_age_seconds: 185, elapsed_seconds: 3661 },
+  { status: "rebuilding", expected_commit: "a".repeat(40), commit_verified: false, current_step: "rebuilding", last_progress_age_seconds: 185, elapsed_seconds: 3661 },
   t,
 ), [
   ["Current", "-"],

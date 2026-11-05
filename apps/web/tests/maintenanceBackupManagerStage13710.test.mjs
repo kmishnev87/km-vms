@@ -38,7 +38,7 @@ assert.equal(settingsPage.includes("window.confirm(t.maintenanceBackupCreateConf
 assert.equal(settingsPage.includes("window.confirm(maintenanceBackupDeleteConfirm)"), false);
 assert.equal(settingsPage.includes("maintenanceWarningsOpen"), false);
 assert.equal(settingsPage.includes("maintenanceBackupDetailOpen"), true);
-assert.equal(settingsPage.includes("settingsMaintenanceOverall"), true);
+assert.equal(settingsPage.includes('className={`settingsMaintenanceOverall'), false);
 assert.equal(settingsPage.includes("settingsMaintenanceCoreGrid"), true);
 assert.equal(settingsPage.includes("const MAINTENANCE_BACKUP_PAGE_SIZE = 5;"), true);
 assert.equal(settingsPage.includes('className="storageOpsCheckIcon">✓</span>'), true);

@@ -177,13 +177,23 @@ def read_recorder_heartbeat(db: Session) -> dict[str, Any]:
     }
 
 
+def _latest_rows_by_camera(db: Session, query, model, *ordering) -> dict:
+    """Rank in SQL; materialize at most one row per camera, not its history."""
+    ranked = query.with_entities(
+        model.id.label("row_id"),
+        func.row_number().over(partition_by=model.camera_id, order_by=ordering).label("position"),
+    ).order_by(None).subquery()
+    rows = db.query(model).join(ranked, ranked.c.row_id == model.id).filter(ranked.c.position == 1).all()
+    return {int(row.camera_id): row for row in rows}
+
+
 def current_recording_jobs(db: Session, instance_id: str | None = None) -> dict[int, RecordingJob]:
     if instance_id is None:
         heartbeat = read_recorder_heartbeat(db)
         instance_id = str(heartbeat.get("recorder_instance_id") or "") if heartbeat.get("available") else ""
     if not instance_id:
         return {}
-    jobs = (
+    query = (
         db.query(RecordingJob)
         .join(Camera, Camera.id == RecordingJob.camera_id)
         .filter(
@@ -192,13 +202,11 @@ def current_recording_jobs(db: Session, instance_id: str | None = None) -> dict[
             RecordingJob.ownership == "KM VMS",
             Camera.deleted_at.is_(None),
         )
-        .order_by(RecordingJob.started_at.desc(), RecordingJob.updated_at.desc().nullslast(), RecordingJob.id.desc())
-        .all()
     )
-    latest = {}
-    for job in jobs:
-        latest.setdefault(int(job.camera_id), job)
-    return latest
+    return _latest_rows_by_camera(
+        db, query, RecordingJob,
+        RecordingJob.started_at.desc(), RecordingJob.updated_at.desc().nullslast(), RecordingJob.id.desc(),
+    )
 
 
 def summarize_recorder_jobs(db: Session) -> dict[str, Any]:
@@ -248,38 +256,37 @@ def list_camera_recording_states(db: Session) -> list[dict[str, Any]]:
     )
     latest_jobs = current_recording_jobs(db, heartbeat_instance_id)
 
-    writing_segments: dict[int, RecordingSegment] = {}
-    for segment in (
+    writing_query = (
         db.query(RecordingSegment)
+        .join(Camera, Camera.id == RecordingSegment.camera_id)
         .filter(
+            Camera.deleted_at.is_(None),
             RecordingSegment.status == "writing",
             RecordingSegment.source == RECORDER_SOURCE,
             RecordingSegment.started_at.isnot(None),
             RecordingSegment.deleted_at.is_(None),
         )
-        .order_by(RecordingSegment.camera_id.asc(), RecordingSegment.started_at.desc(), RecordingSegment.id.desc())
-        .all()
-    ):
-        writing_segments.setdefault(int(segment.camera_id), segment)
+    )
+    writing_segments = _latest_rows_by_camera(
+        db, writing_query, RecordingSegment, RecordingSegment.started_at.desc(), RecordingSegment.id.desc(),
+    )
 
-    finalized_segments: dict[int, RecordingSegment] = {}
-    for segment in (
+    finalized_query = (
         db.query(RecordingSegment)
+        .join(Camera, Camera.id == RecordingSegment.camera_id)
         .filter(
+            Camera.deleted_at.is_(None),
             RecordingSegment.status.in_(("finalized", "ready")),
             RecordingSegment.source == RECORDER_SOURCE,
             RecordingSegment.started_at.isnot(None),
+            RecordingSegment.deleted_at.is_(None),
         )
-        .order_by(
-            RecordingSegment.camera_id.asc(),
-            RecordingSegment.finalized_at.desc().nullslast(),
-            RecordingSegment.ended_at.desc().nullslast(),
-            RecordingSegment.started_at.desc(),
-            RecordingSegment.id.desc(),
-        )
-        .all()
-    ):
-        finalized_segments.setdefault(int(segment.camera_id), segment)
+    )
+    finalized_segments = _latest_rows_by_camera(
+        db, finalized_query, RecordingSegment,
+        RecordingSegment.finalized_at.desc().nullslast(), RecordingSegment.ended_at.desc().nullslast(),
+        RecordingSegment.started_at.desc(), RecordingSegment.id.desc(),
+    )
 
     rows = []
     for camera in cameras:

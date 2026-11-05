@@ -69,7 +69,7 @@ assert.equal(recordsPage.includes('colSpan="7"'), true);
 assert.equal(chronologyPage.includes("canExportRecordings(currentUser)"), true);
 assert.equal(chronologyPage.includes("openExportModal"), true);
 assert.equal(chronologyPage.includes("selectedCameraIds"), true);
-assert.equal(chronologyPage.includes("startChronologyCurrentRecordingDownload(cameraId, timestamp)"), true);
+assert.equal(chronologyPage.includes("startChronologyCurrentRecordingDownload(cameraId, timestamp, playback, operation)"), true);
 assert.equal(chronologyPage.includes("formatProductTimestampParam(timelineTs || currentTs"), true);
 assert.equal(chronologyPage.includes("quickDownload"), true);
 assert.equal(chronologyPage.includes("exportEvidence"), true);

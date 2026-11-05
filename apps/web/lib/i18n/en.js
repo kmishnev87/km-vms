@@ -248,6 +248,8 @@ export const enDictionary = {
     editorRequired: "Enter a camera name and address. Ports must be whole numbers from 1 to 65535.",
     editorPathRequired: "Enter at least one video stream path or read streams using ONVIF.",
     editorRecordingInvalid: "File duration, retention days and archive limit must be positive whole numbers.",
+    editorNameTooLong: "Camera name must not exceed 255 characters.",
+    editorRetentionRange: "Retention must be between 1 and 36500 days.",
     editorUnreachable: "The camera is not responding. Check its address, ports and network connection.",
     editorRecheck: "Connection details changed or the check expired. Recheck video, then save again.",
     editorDuplicate: "A camera with this name already exists. Choose another name.",

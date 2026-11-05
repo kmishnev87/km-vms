@@ -39,6 +39,7 @@ export default function CameraDeviceSettings({ cameraId, form, profiles, copy, o
   async function request(path, token, extra = {}) {
     return apiFetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
       camera_id: cameraId, host: form.host, port: Number(form.port), username: form.username, password: form.password,
+      onvif_path: form.onvif_path ?? "",
       profile_token: token, ...extra,
     }) });
   }

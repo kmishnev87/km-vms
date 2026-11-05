@@ -926,7 +926,11 @@ def test_postgresql_apply_claim_crosses_foundation_commit_and_cleanup_revalidate
     finding.physical_identity = root.physical_identity
     plan.actor_key = "system:system"
     _prepare.actor_key = plan.actor_key
-    plan.expires_at = datetime.utcnow() + timedelta(milliseconds=600)
+    # Binding must happen while the plan is valid. Advance only cleanup's
+    # explicit as-of clock: a subsecond wall-clock TTL races PostgreSQL's
+    # transaction timestamp and can legitimately block the apply itself.
+    apply_expires_at = datetime.utcnow() + timedelta(minutes=5)
+    plan.expires_at = apply_expires_at
     ctx.db.add_all((root, plan, item, finding, _prepare))
     ctx.db.commit()
     _add_terminal_scan(ctx, label="apply-wins-latest", when=now)
@@ -962,7 +966,9 @@ def test_postgresql_apply_claim_crosses_foundation_commit_and_cleanup_revalidate
     def run_cleanup():
         with ctx.Session() as session:
             try:
-                outcome["cleanup"] = cleanup_old_integrity_generations(session, now=datetime.utcnow())
+                outcome["cleanup"] = cleanup_old_integrity_generations(
+                    session, now=apply_expires_at + timedelta(seconds=1)
+                )
             except BaseException as exc:
                 outcome["cleanup_error"] = exc
 
@@ -971,7 +977,6 @@ def test_postgresql_apply_claim_crosses_foundation_commit_and_cleanup_revalidate
     apply_thread = threading.Thread(target=run_apply)
     apply_thread.start()
     assert claimed_boundary.wait(timeout=5)
-    time.sleep(0.7)
     cleanup_thread = threading.Thread(target=run_cleanup)
     cleanup_thread.start()
     time.sleep(0.1)

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.permissions import ROLE_OWNER
-from app.core.sanitization import redact_text as audit_redact_text
+from app.core.sanitization import is_sensitive_query_key, redact_text as audit_redact_text
 from app.core.security import hash_password
 from app.db.session import get_db
 from app.models.camera import Camera
@@ -98,9 +98,6 @@ DIAGNOSTIC_CONTAINERS = (
 )
 DIAGNOSTIC_MODES = {"normal", "extended"}
 SENSITIVE_KEY_RE = re.compile(r"(password|secret|token|authorization|encryption_key|jwt)", re.IGNORECASE)
-RTSP_CREDENTIALS_RE = re.compile(r"(rtsp://)([^@\s/]+)@", re.IGNORECASE)
-BEARER_RE = re.compile(r"(Bearer\s+)[A-Za-z0-9._~+/=-]+", re.IGNORECASE)
-TOKEN_QUERY_RE = re.compile(r"([?&](?:token|access_token|media_token)=)[^&\s]+", re.IGNORECASE)
 SETUP_USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 SETUP_LOCK = threading.Lock()
 
@@ -920,19 +917,14 @@ def iter_log_files() -> list[Path]:
 
 
 def redact_text(value: str | None) -> str:
-    if not value:
-        return ""
-    text = RTSP_CREDENTIALS_RE.sub(r"\1***@", str(value))
-    text = BEARER_RE.sub(r"\1***", text)
-    text = TOKEN_QUERY_RE.sub(r"\1***", text)
-    return text
+    return audit_redact_text(value)
 
 
 def safe_json(value):
     if isinstance(value, dict):
         result = {}
         for key, item in value.items():
-            if SENSITIVE_KEY_RE.search(str(key)):
+            if SENSITIVE_KEY_RE.search(str(key)) or is_sensitive_query_key(str(key)):
                 result[key] = "***"
             else:
                 result[key] = safe_json(item)

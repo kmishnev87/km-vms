@@ -5,6 +5,7 @@ import {
   maintenanceStatusText,
   normalizeMaintenanceBackendText,
 } from "./settingsPageSharedHelpers.js";
+import { updateApplyOperationView, updateApplySameOperation } from "./settingsUpdateOperation.js";
 
 export const UPDATE_APPLY_RUNNING_STATUSES = ["queued", "starting_helper", "preflight", "acquire_source", "downloading", "extracting", "validating_source", "overlay", "applying", "compose_config", "rebuilding", "restarting", "health_check", "commit_verification", "preparing", "staging", "activating", "reconnecting", "rolling_back"];
 export const UPDATE_APPLY_POLL_INTERVAL_MS = 5000;
@@ -166,7 +167,7 @@ export function updateApplyTrustedCandidateRelease(updateStatus) {
   };
 }
 
-export function updateApplyFactRows(updateStatus, applyStatus, t) {
+export function updateApplyFactRows(updateStatus, applyStatus, t, operator = null) {
   const installedRelease = updateStatus?.installed_release || {};
   const trustedRelease = updateApplyTrustedCandidateRelease(updateStatus);
   const availableRelease = updateStatus?.available_release || trustedRelease;
@@ -183,13 +184,13 @@ export function updateApplyFactRows(updateStatus, applyStatus, t) {
   return [
     [labels.current, installedRelease.version || installed.app_version || updateStatus?.installed?.installed_version || "-"],
     [labels.available, availableRelease.version || latest.version || latest.latest_version || "-"],
-    [labels.releaseTitle || "Release", title],
-    [labels.releaseSummary || "Summary", summary],
-    [labels.status || "Status", maintenanceStatusText(status, t)],
-    [labels.verification, verification],
-    [labels.currentStep || "Current step", updateApplyPhaseText({ status, ...applyStatus }, t)],
-    [labels.lastProgress || "Last progress", formatDurationSeconds(applyStatus?.last_progress_age_seconds)],
-    [labels.elapsed || "Elapsed", formatDurationSeconds(applyStatus?.elapsed_seconds)],
+    [labels.releaseTitle || "Release", operator?.releaseTitle || title],
+    [labels.releaseSummary || "Summary", operator?.releaseSummary || summary],
+    [labels.status || "Status", operator?.headline || maintenanceStatusText(status, t)],
+    [labels.verification, operator?.commitStatus || verification],
+    [labels.currentStep || "Current step", applyStatus?.status && applyStatus.status !== "idle" ? updateApplyPhaseText(applyStatus, t) : "-"],
+    [labels.lastProgress || "Last progress", updateApplyIsRunning(applyStatus?.status) ? formatDurationSeconds(applyStatus?.last_progress_age_seconds) : "-"],
+    [labels.elapsed || "Elapsed", operator?.elapsed || formatDurationSeconds(updateElapsedSeconds(applyStatus))],
   ];
 }
 
@@ -413,6 +414,7 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const context = transportContext && typeof transportContext === "object"
     ? transportContext
     : { applyError: transportContext };
+  applyStatus = updateApplyOperationView(applyStatus, { allowHistory: Boolean(context.operationResult) });
   const effective = updateApplyEffectiveStatus(updateStatus, applyStatus, context);
   const comparison = updateStatus?.comparison || {};
   const status = comparison.status || updateStatus?.status || effective || "unknown";
@@ -424,7 +426,7 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   );
   const lastKnownRunning = updateApplyIsRunning(applyStatus?.status || "");
   const running = lastKnownRunning && normalizedEffective !== "unknown";
-  const stateUnknown = Boolean(context.unresolvedSubmission) || (normalizedEffective === "unknown" && Boolean(context.applyError));
+  const stateUnknown = Boolean(context.unresolvedSubmission) || (normalizedEffective === "unknown" && Boolean(context.applyError || context.operationResult));
   const trustedCandidate = updateStatus?.trusted_apply_candidate || {};
   const freshTrustedCandidateAvailable = Boolean(trustedCandidate.fresh && trustedCandidate.can_apply_from_ui && trustedCandidate.latest);
   const liveCheckFailedWithCandidate = (
@@ -433,27 +435,27 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   ) && freshTrustedCandidateAvailable;
   const canApply = Boolean((updateStatus?.can_apply_from_ui || freshTrustedCandidateAvailable) && !lastKnownRunning && !applyStatus?.is_stale && !stateUnknown && !context.unresolvedSubmission);
   const lastSummary = applyStatus?.last_apply_summary || null;
+  const operationSummary = updateApplySameOperation(applyStatus, lastSummary) ? lastSummary : null;
   const currentVersion = updateApplyReleaseValue(updateStatus, "currentVersion");
   const targetCommit = updateApplyReleaseValue(updateStatus, "targetCommit") || applyStatus?.expected_commit || applyStatus?.source?.commit || "";
   const installedCommit = applyStatus?.installed_commit || updateApplyReleaseValue(updateStatus, "installedCommit");
-  const operationExpectedCommit = applyStatus?.expected_commit || lastSummary?.expected_commit || "";
-  const operationInstalledCommit = applyStatus?.installed_commit || lastSummary?.installed_commit || installedCommit;
+  const operationExpectedCommit = applyStatus?.expected_commit || operationSummary?.expected_commit || "";
+  const operationInstalledCommit = applyStatus?.installed_commit || operationSummary?.installed_commit || "";
   const operationCommitVerified = Boolean(
-    operationExpectedCommit &&
-    operationInstalledCommit &&
-    operationExpectedCommit === operationInstalledCommit &&
-    applyStatus?.commit_verified !== false &&
-    lastSummary?.commit_verified !== false
+    FULL_COMMIT_RE.test(operationExpectedCommit) &&
+    FULL_COMMIT_RE.test(operationInstalledCommit) &&
+    operationExpectedCommit.toLowerCase() === operationInstalledCommit.toLowerCase() &&
+    applyStatus?.commit_verified === true
   );
   const comparisonCommitVerified = Boolean(installedCommit && targetCommit && installedCommit === targetCommit);
-  const commitVerified = effective === "completed"
+  const commitVerified = updateApplyOperationIsCurrent(applyStatus)
     ? operationCommitVerified
-    : Boolean(applyStatus?.commit_verified || lastSummary?.commit_verified || comparisonCommitVerified);
+    : comparisonCommitVerified;
   const metadataStatusValue = updateApplyReleaseValue(updateStatus, "metadataStatus") || applyStatus?.release_identity?.metadata_status;
   const identityComplete = normalizedUpdateApplyState(metadataStatusValue) === "complete";
   const terminalSuccess = effective === "completed" && commitVerified && identityComplete;
   const presentedTerminalSuccess = terminalSuccess && !stateUnknown;
-  const terminalVerificationIncomplete = effective === "completed" && !terminalSuccess;
+  const terminalVerificationIncomplete = normalizedUpdateApplyState(applyStatus?.status) === "completed" && !terminalSuccess;
   const current = status === "current" && !canApply && !running;
   const available = status === "update_available" && canApply;
   const hasAvailableRelease = Boolean(available || liveCheckFailedWithCandidate);
@@ -474,7 +476,7 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     UPDATE_CHECK_BLOCKING_STATES.has(normalizedUpdateStatus) ||
     UPDATE_CHECK_BLOCKING_STATES.has(normalizedLastCheckStatus)
   );
-  const failed = terminalVerificationIncomplete || helperFailure || (!liveCheckFailedWithCandidate && updateCheckFailure);
+  const failed = terminalVerificationIncomplete || helperFailure || (!context.operationResult && !liveCheckFailedWithCandidate && updateCheckFailure);
   const notChecked = updateStatus?.check_state === "not_checked"
     || (updateStatus?.projection_source === "installed_identity" && !updateStatus?.last_check_status && !updateStatus?.last_update_check);
   const checking = Boolean(context.checking || updateStatus?.check_state === "checking");
@@ -485,6 +487,8 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
       ? "running"
       : failed
           ? "blocked"
+          : context.operationResult && presentedTerminalSuccess
+            ? "completed"
           : checking
             ? "checking"
           : available || liveCheckFailedWithCandidate
@@ -523,17 +527,17 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
   const updateResult = presentedTerminalSuccess
     ? (t.updateApplyResults?.completedVerified || headline)
     : t.updateApplyResults?.[headlineKey] || headline;
-  const finishedAt = honestUpdateFinishedAt(updateStatus, lastSummary);
+  const finishedAt = honestUpdateFinishedAt(updateStatus, applyStatus?.status === "completed" ? applyStatus : lastSummary);
   const releaseNotes = localizedReleaseNotes(updateStatus, t, lang);
-  const elapsed = formatDurationSeconds(updateElapsedSeconds(running ? applyStatus : lastSummary || applyStatus));
+  const elapsed = formatDurationSeconds(updateElapsedSeconds(running || updateApplyOperationIsCurrent(applyStatus) ? applyStatus : lastSummary || applyStatus));
   const liveStepsAvailable = Array.isArray(applyStatus?.steps) && applyStatus.steps.length;
-  const historyStepsAvailable = Array.isArray(lastSummary?.steps) && lastSummary.steps.length;
+  const historyStepsAvailable = Array.isArray(operationSummary?.steps) && operationSummary.steps.length;
   const stepsSource = liveStepsAvailable
     ? applyStatus
     : historyStepsAvailable
-      ? lastSummary
+      ? operationSummary
       : null;
-  const terminalTimelineTruth = liveStepsAvailable && [
+  const terminalTimelineTruth = Boolean(stepsSource) && [
     "completed",
     "failed",
     "failed_rolled_back",
@@ -542,12 +546,16 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     "canceled",
   ].includes(normalizedUpdateApplyState(applyStatus?.status));
   const inactiveTimeline = !running && !terminalTimelineTruth;
-  const timeline = updateApplyStepRows(stepsSource || {}, t).map((step) => ({
-    ...step,
-    status: inactiveTimeline ? "idle" : step.status,
-    icon: applyStepIcon(inactiveTimeline ? "idle" : step.status),
-    timeLabel: inactiveTimeline ? "" : (step.time_label || (step.status === "running" ? step.statusLabel : "")),
-  }));
+  const timeline = updateApplyStepRows(stepsSource || {}, t).map((step) => {
+    const stepStatus = inactiveTimeline ? "idle"
+      : terminalVerificationIncomplete && step.name === "commit_verification" ? "failed" : step.status;
+    return {
+      ...step,
+      status: stepStatus,
+      icon: applyStepIcon(stepStatus),
+      timeLabel: inactiveTimeline ? "" : (step.time_label || (stepStatus === "running" ? step.statusLabel : "")),
+    };
+  });
   const detailUnavailable = Boolean((lastSummary?.history_detail_status || applyStatus?.apply_history?.state === "missing") && !timeline.some((step) => step.timeLabel && /:/.test(step.timeLabel)));
   const safeTimeline = timeline.length ? timeline : defaultUpdateApplyTimeline(t);
   return {
@@ -557,6 +565,8 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     summary,
     showHeroSummary: !presentedTerminalSuccess,
     updateResult,
+    resultVerified: presentedTerminalSuccess,
+    operationVersion: boundedContractText(applyStatus?.target_version, 80),
     currentVersion,
     availableVersion,
     publishedAt: publishedAtValue ? formatApplyDate(publishedAtValue, lang) : "",
@@ -584,6 +594,10 @@ export function updateApplyOperatorModel(updateStatus, applyStatus, t, lang = "r
     stateUnknown,
     reconnecting: normalizedEffective === "reconnecting",
   };
+}
+
+function updateApplyOperationIsCurrent(status) {
+  return status?.status && status.status !== "idle";
 }
 
 export function updateApplyRecoveryText(status, applyStatus, t) {

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createSerializedLayoutWriter } from "../../lib/serializedLayoutWriter";
+import { useAuthSession } from "../../lib/useAuthSession";
 import useChronologyClock from "../../lib/useChronologyClock";
 import useChronologySources from "../../lib/useChronologySources";
 import useChronologyPlaybackCoordinator from "../../lib/useChronologyPlaybackCoordinator";
@@ -194,6 +195,7 @@ export default function ChronologyPage() {
   const hydratedRef = useRef(false);
   const backendReadyRef = useRef(false);
   const saveTimerRef = useRef(null);
+  const pendingLayoutSaveRef = useRef(null);
   const lastBackendLayoutPayloadRef = useRef("");
   const calendarTouchedRef = useRef(false);
   const [productTimezone, setProductTimezone] = useState("UTC");
@@ -223,11 +225,9 @@ export default function ChronologyPage() {
   const [sidebarCameraOrder, setSidebarCameraOrder] = useState([]);
   const [lastPersistedSidebarCameraOrder, setLastPersistedSidebarCameraOrder] = useState([]);
   const layoutWriterRef = useRef(null);
-  if (!layoutWriterRef.current) {
-    layoutWriterRef.current = createSerializedLayoutWriter((payload) => apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
-      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
-    }));
-  }
+  const workspaceSession = useAuthSession();
+  const workspaceGenerationRef = useRef(0);
+  const cacheOwnerRef = useRef(null);
   const [operationToast, setOperationToast] = useState(null);
   const cameraLoadErrorRef = useRef("");
   const [dragState, setDragState] = useState(null);
@@ -267,36 +267,51 @@ export default function ChronologyPage() {
     setOperationToast({ id: `chronology-action-error-${Date.now()}`, title: message || TEXT.loadError, tone: "error" });
   }
 
-  async function loadCameras() {
+  function isWorkspaceCurrent(ownerSession, generation) {
+    return generation === workspaceGenerationRef.current && getAuthToken() === ownerSession;
+  }
+
+  async function loadCameras(ownerSession = workspaceSession, generation = workspaceGenerationRef.current) {
+    if (!isWorkspaceCurrent(ownerSession, generation)) return;
     try {
       const data = await apiFetch("/viewer/cameras");
+      if (!isWorkspaceCurrent(ownerSession, generation)) return;
       cameraLoadErrorRef.current = "";
       setCameras(Array.isArray(data) ? data : []);
     } catch (err) {
+      if (!isWorkspaceCurrent(ownerSession, generation)) return;
       if (cameraLoadErrorRef.current !== (err.message || TEXT.loadError)) {
         cameraLoadErrorRef.current = err.message || TEXT.loadError;
         showWorkspaceError(cameraLoadErrorRef.current);
       }
     } finally {
-      setCamerasLoaded(true);
+      if (isWorkspaceCurrent(ownerSession, generation)) setCamerasLoaded(true);
     }
   }
 
-  async function loadExportCameras() {
+  async function loadExportCameras(ownerSession = workspaceSession, generation = workspaceGenerationRef.current) {
+    if (!isWorkspaceCurrent(ownerSession, generation)) return;
     try {
       const data = await apiFetch("/recordings/cameras");
+      if (!isWorkspaceCurrent(ownerSession, generation)) return;
       setExportCameraOptions(Array.isArray(data?.export_items) ? data.export_items : []);
     } catch (_) {
+      if (!isWorkspaceCurrent(ownerSession, generation)) return;
       setExportCameraOptions([]);
     }
   }
 
-  async function loadWorkspaceLayout() {
+  async function loadWorkspaceLayout(ownerSession, generation) {
+    const writer = layoutWriterRef.current;
     try {
+      await writer.flush();
+      if (!isWorkspaceCurrent(ownerSession, generation)) return;
       const [user, layout] = await Promise.all([
         apiFetch("/users/me"),
         apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`),
       ]);
+      if (!isWorkspaceCurrent(ownerSession, generation)) return;
+      cacheOwnerRef.current = user?.id ?? null;
       setCurrentUser(user);
       backendReadyRef.current = true;
       const backendTiles = Array.isArray(layout?.tiles) ? dedupeTiles(layout.tiles.map(normalizeTile)) : [];
@@ -308,35 +323,36 @@ export default function ChronologyPage() {
 
       if (backendTiles.length) {
         setTiles(backendTiles);
-        saveTiles(backendTiles);
+        saveTiles(backendTiles, cacheOwnerRef.current);
         localStorage.setItem(markerKey, "1");
         return;
       }
 
-      const localTiles = readSavedTiles();
+      const localTiles = readSavedTiles(cacheOwnerRef.current);
       const shouldMigrate = localTiles.length && !localStorage.getItem(markerKey);
       if (shouldMigrate) {
         setTiles(localTiles);
-        saveTiles(localTiles);
+        saveTiles(localTiles, cacheOwnerRef.current);
         const payload = backendPayload(localTiles, backendSidebarOrder);
-        await apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        let writeError = null;
+        writer.save(payload, () => {}, (error) => { writeError = error; }, () => getAuthToken() === ownerSession);
+        await writer.flush();
+        if (!isWorkspaceCurrent(ownerSession, generation)) return;
+        if (writeError) throw writeError;
         lastBackendLayoutPayloadRef.current = JSON.stringify(payload);
       } else {
         setTiles([]);
       }
       localStorage.setItem(markerKey, "1");
     } catch (err) {
+      if (!isWorkspaceCurrent(ownerSession, generation)) return;
       backendReadyRef.current = false;
-      setTiles(readSavedTiles());
+      setTiles(readSavedTiles(cacheOwnerRef.current));
       setSidebarCameraOrder([]);
       setLastPersistedSidebarCameraOrder([]);
       showWorkspaceError(err.message || TEXT.loadError);
     } finally {
-      hydratedRef.current = true;
+      if (isWorkspaceCurrent(ownerSession, generation)) hydratedRef.current = true;
     }
   }
 
@@ -359,29 +375,54 @@ export default function ChronologyPage() {
   }, []);
 
   useEffect(() => {
-    loadWorkspaceLayout();
-    loadCameras();
-    loadExportCameras();
+    const ownerSession = workspaceSession;
+    const generation = ++workspaceGenerationRef.current;
+    hydratedRef.current = backendReadyRef.current = false;
+    cacheOwnerRef.current = null;
+    lastBackendLayoutPayloadRef.current = "";
+    setTiles([]); setSidebarCameraOrder([]); setLastPersistedSidebarCameraOrder([]);
+    setCameras([]); setCamerasLoaded(false); setCurrentUser(null); setExportCameraOptions([]);
+    setExportModal(null); setIsPlaying(false); setFullscreenTileId(null);
+    exportDraftRef.current = null;
+    setQuickDownloadBusy(false); setDownloadChooserOpen(false); setDownloadResults([]);
+    const writer = createSerializedLayoutWriter((payload) => apiFetch(`/users/me/workspaces/${WORKSPACE_KEY}/layout`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    }), { scope: WORKSPACE_KEY, ownerSession });
+    layoutWriterRef.current = writer;
+    if (ownerSession) {
+      loadWorkspaceLayout(ownerSession, generation);
+      loadCameras(ownerSession, generation);
+      loadExportCameras(ownerSession, generation);
+    }
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      layoutWriterRef.current.dispose();
+      pendingLayoutSaveRef.current?.();
+      pendingLayoutSaveRef.current = null;
+      workspaceGenerationRef.current += 1;
+      hydratedRef.current = backendReadyRef.current = false;
+      writer.dispose();
       rangesInFlightRef.current?.controller.abort();
       rangesRequestIdRef.current += 1;
     };
-  }, []);
+  }, [workspaceSession]);
 
   useEffect(() => {
     if (!hydratedRef.current) return;
-    layoutWriterRef.current.invalidate();
-    saveTiles(tiles);
+    const ownerSession = workspaceSession;
+    const generation = workspaceGenerationRef.current;
+    if (!isWorkspaceCurrent(ownerSession, generation)) return;
+    const writer = layoutWriterRef.current;
+    writer.invalidate();
+    saveTiles(tiles, cacheOwnerRef.current);
     if (!backendReadyRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-    saveTimerRef.current = setTimeout(() => {
+    const submitLayoutSave = () => {
+        if (pendingLayoutSaveRef.current === submitLayoutSave) pendingLayoutSaveRef.current = null;
+        if (!isWorkspaceCurrent(ownerSession, generation)) return;
         const payload = backendPayload(tiles, sidebarCameraOrder);
         const payloadText = JSON.stringify(payload);
         if (payloadText === lastBackendLayoutPayloadRef.current) return;
-        const ownerSession = getAuthToken();
-        layoutWriterRef.current.save(payload, (saved) => {
+        writer.save(payload, (saved) => {
         const savedOrder = sanitizeSidebarCameraOrder(saved?.sidebarCameraOrder);
         setLastPersistedSidebarCameraOrder(savedOrder);
         setSidebarCameraOrder(savedOrder);
@@ -389,8 +430,10 @@ export default function ChronologyPage() {
         }, (err) => {
         showWorkspaceError(err.message || TEXT.loadError);
         }, () => getAuthToken() === ownerSession);
-    }, 500);
-  }, [tiles, sidebarCameraOrder, lastPersistedSidebarCameraOrder]);
+    };
+    pendingLayoutSaveRef.current = submitLayoutSave;
+    saveTimerRef.current = setTimeout(submitLayoutSave, 500);
+  }, [tiles, sidebarCameraOrder, lastPersistedSidebarCameraOrder, workspaceSession]);
 
 
   const cameraMap = useMemo(() => {
@@ -1077,14 +1120,15 @@ export default function ChronologyPage() {
       setOperationToast({ id: `clip-validation-${Date.now()}`, title: TEXT.exportPickCamera, tone: "warning" });
       return;
     }
-    const validation = validateArchiveExportSelection(exportModal, exportLimits);
+    const validation = validateArchiveExportSelection({ ...exportModal, productTimezone }, exportLimits);
     if (validation) {
       setOperationToast({ id: `clip-validation-${Date.now()}`, title: validation, tone: "warning" });
       return;
     }
     const payload = buildArchiveExportPayload(exportModal);
+    const ownerSession = workspaceSession;
     const result = await exportController.prepare(payload);
-    if (result) {
+    if (result && getAuthToken() === ownerSession) {
       setOperationToast({
         id: `chronology-clip-${result?.job?.id || Date.now()}`,
         title: TEXT.exportReady,
@@ -1108,11 +1152,17 @@ export default function ChronologyPage() {
   }
 
   async function startQuickDownloadForCamera(cameraId, { notify = true } = {}) {
+    const ownerSession = workspaceSession;
+    const generation = workspaceGenerationRef.current;
+    const operation = { isCurrent: () => isWorkspaceCurrent(ownerSession, generation) };
     setDownloadChooserOpen(false);
     try {
       setQuickDownloadBusy(true);
       const timestamp = quickDownloadTimestamp();
-      await startChronologyCurrentRecordingDownload(cameraId, timestamp);
+      const playback = visibleTiles.map((tile) => playbackMapRef.current[tile.id])
+        .find((item) => item?.hasVideo && String(item.cameraId) === String(cameraId));
+      await startChronologyCurrentRecordingDownload(cameraId, timestamp, playback, operation);
+      if (!operation.isCurrent()) return;
       const name = quickDownloadCameraNames[cameraId] || selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
       setDownloadResults((prev) => [...prev, { cameraId, name, status: TEXT.downloadStartedShort }].slice(-12));
       if (notify) {
@@ -1124,12 +1174,13 @@ export default function ChronologyPage() {
         });
       }
     } catch (err) {
+      if (!operation.isCurrent() || err?.name === "AbortError") return;
       const message = normalizeChronologyDownloadError(err.message);
       const name = quickDownloadCameraNames[cameraId] || selectedCameraNames[cameraId] || `${TEXT.camera} ${cameraId}`;
       setDownloadResults((prev) => [...prev, { cameraId, name, status: message }].slice(-12));
       showWorkspaceError(`${name}: ${message}`);
     } finally {
-      setQuickDownloadBusy(false);
+      if (operation.isCurrent()) setQuickDownloadBusy(false);
     }
   }
 
@@ -1973,7 +2024,6 @@ export default function ChronologyPage() {
             })}
           </div>
         </section>
-      </div>
       {exportModal ? (
         <div className="modalBackdrop">
           <div className="modal archiveExportModal" role="dialog" aria-modal="true" aria-label={TEXT.exportTitle} onClick={(event) => event.stopPropagation()}>
@@ -2047,6 +2097,7 @@ export default function ChronologyPage() {
           </div>
         </div>
       ) : null}
+      </div>
     </Layout>
   );
 }

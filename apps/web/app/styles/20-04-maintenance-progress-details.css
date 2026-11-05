@@ -357,6 +357,10 @@
   color: #166534;
 }
 
+.settingsUpdateApplyTimeline li.is-completed::before {
+  background: #86cda3;
+}
+
 .settingsUpdateApplyTimeline li.is-failed {
   color: #991b1b;
 }

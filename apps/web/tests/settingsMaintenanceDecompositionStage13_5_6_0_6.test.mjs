@@ -353,12 +353,12 @@ const expectedActions = [
   {
     "name": "refreshMaintenanceSurface",
     "async": true,
-    "parameters": ""
+    "parameters": "{ silent = false } = {}"
   },
   {
     "name": "loadMaintenanceOverview",
     "async": true,
-    "parameters": ""
+    "parameters": "{ silent = false } = {}"
   },
   {
     "name": "loadMaintenanceBackupPage",

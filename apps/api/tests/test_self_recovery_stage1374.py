@@ -277,6 +277,7 @@ def test_closing_one_of_two_viewers_does_not_cancel_other_viewer(monkeypatch):
 
 def test_close_during_probe_returns_quickly_and_never_spawns_unwanted_ffmpeg(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "storage_previews", str(tmp_path))
+    monkeypatch.setattr(live_module, "SessionLocal", lambda: contextlib.nullcontext(types.SimpleNamespace(get=lambda *args: camera())))
     manager = live_module.StreamManager()
     entered, proceed = threading.Event(), threading.Event()
 
@@ -319,7 +320,8 @@ def test_live_retry_reloads_corrected_camera_configuration(monkeypatch):
     viewer = manager.open_viewer(original, "sub")
     instance = manager.streams[(1374, "sub")]
     instance.start_thread.join(3)
-    db.get.assert_not_called()
+    db.get.assert_called_once_with(Camera, original.id)
+    db.get.reset_mock()
     instance.retry_count = 1
     manager._launch_viewer_start(instance, live_module._camera_source(original))
     instance.start_thread.join(3)
@@ -331,13 +333,14 @@ def test_live_retry_reloads_corrected_camera_configuration(monkeypatch):
 def test_live_retry_does_not_restart_a_deleted_camera(monkeypatch):
     manager = live_module.StreamManager()
     db = Mock()
-    db.get.return_value = None
+    db.get.return_value = camera()
     monkeypatch.setattr(live_module, "SessionLocal", lambda: contextlib.nullcontext(db))
     start = Mock(return_value={"ok": True})
     monkeypatch.setattr(live_module.StreamInstance, "start", start)
     viewer = manager.open_viewer(camera(), "sub")
     instance = manager.streams[(1374, "sub")]
     instance.start_thread.join(3)
+    db.get.return_value = None
     instance.retry_count = 1
     manager._launch_viewer_start(instance, live_module._camera_source(camera()))
     instance.start_thread.join(3)

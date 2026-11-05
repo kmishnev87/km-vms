@@ -87,10 +87,10 @@ const t = {
 
 assert.equal(settingsPage.includes("settingsUpdateApplyHero"), false);
 assert.equal(settingsPage.includes("settingsUpdateApplyCompact"), true);
-assert.equal(settingsPage.includes("settingsMaintenanceOverall"), true);
+assert.equal(settingsPage.includes('className={`settingsMaintenanceOverall'), false);
 assert.equal(settingsPage.includes('id: "maintenance-detail"'), true);
 assert.equal(settingsPage.includes('className="maintenanceDetailFacts"'), true);
-assert.equal(settingsPage.includes("updateApplyFactRows(updateStatus, updateApplyStatus, t)"), true);
+assert.equal(settingsPage.includes("updateApplyFactRows(updateStatus, updateApplyDetailOperation, t, updateApplyDetailOperator)"), true);
 assert.equal(settingsPage.includes("settingsUpdateApplySupport"), false);
 assert.equal(settingsPage.includes("settingsMaintenanceModalHeader"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceBackupManager"), true);
@@ -121,7 +121,7 @@ assert.equal(settingsPage.includes("settingsUpdateApplyVersionRows"), false);
 assert.equal(css.includes(".settingsUpdateApplyVersionRows"), false);
 assert.equal(settingsPage.includes("settingsUpdateApplyHeroPrimaryValue"), false);
 assert.equal(css.includes(".settingsUpdateApplyHeroPrimaryValue"), false);
-assert.match(cssRule(".settingsUpdateApplyCompact"), /grid-template-columns: minmax\(0, 1fr\) auto/);
+assert.match(cssRule(".settingsUpdateApplyCompact"), /grid-template-columns: minmax\(0, 1fr\);/);
 assert.equal(css.includes(".settingsUpdateApplySupport"), false);
 assert.equal(settingsPage.includes("<OperationDialog"), true);
 assert.equal(css.includes("overflow-wrap: anywhere"), true);

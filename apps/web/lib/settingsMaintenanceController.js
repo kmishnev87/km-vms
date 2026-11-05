@@ -4,6 +4,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { apiFetch } from "./api";
 import { acquireModalScrollLock } from "./modalScrollLock";
 import {
+  retainUpdateApplyOperation,
+  updateApplyOperationIsTerminal,
+  updateApplyOperationKey,
+  updateApplyOperationView,
+} from "./settingsUpdateOperation";
+import {
   BACKUP_OPERATION_PENDING_STORAGE_KEY,
   MAINTENANCE_DRY_RUN_ENDPOINTS,
   UPDATE_APPLY_PENDING_STORAGE_KEY,
@@ -129,6 +135,7 @@ export function useSettingsMaintenanceController({
   const [updateApplyClockMs, setUpdateApplyClockMs] = useState(() => Date.now());
   const [updateApplyDialog, setUpdateApplyDialog] = useState(null);
   const [updateApplyPending, setUpdateApplyPending] = useState(null);
+  const [updateApplyDetailStatus, setUpdateApplyDetailStatus] = useState(null);
 
   const updatePollInFlightRef = useRef(false);
   const updateApplyPendingRef = useRef(null);
@@ -145,11 +152,22 @@ export function useSettingsMaintenanceController({
   const maintenanceDialogRef = useRef(null);
   const maintenanceTriggerRef = useRef(null);
   const maintenanceBusyRef = useRef("");
+  const maintenanceOverviewRequestRef = useRef(0);
+  const updateTerminalRefreshRef = useRef("");
 
   const updateApplyHasUnknownLaunch = Boolean(updateApplyPending);
   const updateApplyOperator = updateApplyOperatorModel(updateStatus, updateApplyStatus, t, lang, {
     checking: maintenanceBusy === "update",
     updateError: updateTransportErrors.update,
+    applyError: updateTransportErrors.apply,
+    reconnectTiming: updateApplyReconnectSnapshot,
+    nowMs: updateApplyClockMs,
+    unresolvedSubmission: updateApplyHasUnknownLaunch,
+  });
+  const updateApplyDetailOperation = updateApplyDetailStatus
+    || updateApplyOperationView(updateApplyStatus, { allowHistory: true });
+  const updateApplyDetailOperator = updateApplyOperatorModel(updateStatus, updateApplyDetailOperation, t, lang, {
+    operationResult: true,
     applyError: updateTransportErrors.apply,
     reconnectTiming: updateApplyReconnectSnapshot,
     nowMs: updateApplyClockMs,
@@ -324,6 +342,28 @@ export function useSettingsMaintenanceController({
     }
   }, [maintenanceModalOpen, canManageMaintenance]);
 
+  useEffect(() => () => {
+    maintenanceOverviewRequestRef.current += 1;
+  }, [canManageMaintenance]);
+
+  useEffect(() => {
+    if (maintenanceDetail !== "update") {
+      setUpdateApplyDetailStatus(null);
+    } else if (!updateApplyPending) {
+      setUpdateApplyDetailStatus((current) => retainUpdateApplyOperation(current, updateApplyStatus));
+    }
+  }, [maintenanceDetail, updateApplyStatus, Boolean(updateApplyPending)]);
+
+  useEffect(() => {
+    if (!canManageMaintenance || !updateApplyOperationIsTerminal(updateApplyStatus)) return;
+    const operationKey = updateApplyOperationKey(updateApplyStatus);
+    if (!operationKey) return;
+    const resultKey = `${operationKey}:${updateApplyStatus.status}:${updateApplyStatus.finished_at || ""}`;
+    if (updateTerminalRefreshRef.current === resultKey) return;
+    updateTerminalRefreshRef.current = resultKey;
+    void refreshMaintenanceSurface({ silent: true });
+  }, [canManageMaintenance, updateApplyStatus?.request_id, updateApplyStatus?.status, updateApplyStatus?.finished_at]);
+
   useEffect(() => {
     const active = updateApplyIsRunning(updateApplyStatus?.status || "");
     if (!canManageMaintenance || (!maintenanceModalOpen && !active && !updateApplyPending)) return undefined;
@@ -402,6 +442,13 @@ export function useSettingsMaintenanceController({
     setMaintenanceBackupResult(null);
     setMaintenanceConfirm(null);
     setMaintenanceError("");
+  }
+
+  function closeMaintenanceDetail() {
+    const refreshUpdate = maintenanceDetail === "update";
+    setMaintenanceDetail(null);
+    setUpdateApplyDetailStatus(null);
+    if (refreshUpdate) void refreshMaintenanceSurface({ silent: true });
   }
 
   function safeUpdateTransportError(error, fallback) {
@@ -919,9 +966,9 @@ export function useSettingsMaintenanceController({
     return result.outcome;
   }
 
-  async function refreshMaintenanceSurface() {
+  async function refreshMaintenanceSurface({ silent = false } = {}) {
     const tasks = [
-      loadMaintenanceOverview(),
+      loadMaintenanceOverview({ silent }),
       loadUpdateApplySurface({ silent: true }),
     ];
     if (maintenanceBackupDetailOpen || maintenanceBackupDetailRef.current) {
@@ -933,18 +980,22 @@ export function useSettingsMaintenanceController({
     await Promise.allSettled(tasks);
   }
 
-  async function loadMaintenanceOverview() {
+  async function loadMaintenanceOverview({ silent = false } = {}) {
     if (!canManageMaintenance) return;
-    setMaintenanceLoading(true);
-    setMaintenanceError("");
+    const requestId = ++maintenanceOverviewRequestRef.current;
+    if (!silent) setMaintenanceLoading(true);
     try {
       const overview = await apiFetch("/system/maintenance/overview");
+      if (requestId !== maintenanceOverviewRequestRef.current) return;
       setMaintenanceOverview(overview);
+      setMaintenanceError("");
+      return overview;
     } catch (err) {
+      if (requestId !== maintenanceOverviewRequestRef.current) return;
       setMaintenanceError(humanErrorText(String(err?.message || ""), t.maintenanceLoadError));
       showToast({ variant: "error", title: t.maintenanceOverview, text: humanErrorText(String(err?.message || ""), t.maintenanceLoadError) });
     } finally {
-      setMaintenanceLoading(false);
+      if (requestId === maintenanceOverviewRequestRef.current) setMaintenanceLoading(false);
     }
   }
 
@@ -1322,6 +1373,14 @@ export function useSettingsMaintenanceController({
     setMaintenanceDetail("update");
     setMaintenanceBusy("update-apply");
     setMaintenanceActionResult(null);
+    setUpdateApplyDetailStatus({
+      submission_id: pending.submissionId,
+      expected_commit: dialog.candidate.commit,
+      target_version: dialog.candidate.version,
+      status: "queued",
+      started_at: new Date(submittedAtMs).toISOString(),
+      steps: [],
+    });
     commitUpdateApplyPending(pending);
     try {
       const result = await apiFetch("/system/update/apply", {
@@ -1394,6 +1453,8 @@ export function useSettingsMaintenanceController({
     updateApplyStatus,
     updateApplyDialog,
     updateApplyOperator,
+    updateApplyDetailOperation,
+    updateApplyDetailOperator,
     updateApplyHasUnknownLaunch,
     updateApplyRunning,
     updateApplyAllowed,
@@ -1411,6 +1472,7 @@ export function useSettingsMaintenanceController({
     updateApplyLaunchNotice,
     openMaintenanceModal,
     closeMaintenanceModal,
+    closeMaintenanceDetail,
     closeMaintenanceConfirmation,
     currentRestoreReasonText,
     currentRestoreFailedPhase,

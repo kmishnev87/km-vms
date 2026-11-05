@@ -10,6 +10,8 @@ export const CAMERA_MANAGEMENT_FIELDS = new Set([
   "protocol", "host", "port", "username", "password", "rtsp_host", "rtsp_port", "onvif_path",
 ]);
 export const CAMERA_CHECK_MAX_AGE_MS = 14 * 60 * 1000;
+export const MAX_CAMERA_NAME_LENGTH = 255;
+export const MAX_RETENTION_DAYS = 36500;
 const NUMBER_FIELDS = new Set(["port", "rtsp_port", "segment_minutes", "retention_days", "storage_quota_gb"]);
 const PROOF_FIELDS = ["preview_token", "validation_token", "main_validation_token", "sub_validation_token", "onvif_probe_token", "manual_confirm_unverified"];
 
@@ -224,11 +226,13 @@ export function cameraSourceConflict(draft, data) {
 
 export function cameraEditorProblem(draft, copy, section = "all") {
   if (["all", "connection"].includes(section)) {
+    if (Array.from(draft.name || "").length > MAX_CAMERA_NAME_LENGTH) return copy.editorNameTooLong;
     if (!draft.name.trim() || !draft.host.trim() || !Number.isInteger(Number(draft.port)) || Number(draft.port) < 1 || Number(draft.port) > 65535) return copy.editorRequired;
     if (draft.protocol === "onvif" && (!Number.isInteger(Number(draft.rtsp_port)) || Number(draft.rtsp_port) < 1 || Number(draft.rtsp_port) > 65535)) return copy.editorRequired;
     if (draft.protocol === "rtsp" && !cameraStreamRoles(draft).length) return copy.editorPathRequired;
   }
   if (["all", "recording"].includes(section)) {
+    if (Number(draft.retention_days) > MAX_RETENTION_DAYS) return copy.editorRetentionRange;
     if (["segment_minutes", "retention_days", "storage_quota_gb"].some((key) => !Number.isInteger(Number(draft[key])) || Number(draft[key]) < 1)) return copy.editorRecordingInvalid;
   }
   return "";

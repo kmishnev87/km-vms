@@ -13,7 +13,7 @@ const operationFeedback = readProductSourceFile(resolve(webRoot, "components/Ope
 const css = readProductSourceFile(resolve(webRoot, "app/styles/20-settings-maintenance.css"), "utf8");
 
 assert.equal(settingsPage.includes("settingsUpdateApplyPanel"), true);
-assert.equal(settingsPage.includes("settingsMaintenanceOverall"), true);
+assert.equal(settingsPage.includes('className={`settingsMaintenanceOverall'), false);
 assert.equal(settingsPage.includes("settingsMaintenanceCoreGrid"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceBackupManager"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceSupport"), true);

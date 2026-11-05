@@ -110,6 +110,8 @@ class StreamInstance:
         self.stream = stream
         self.lock = threading.RLock()
         self.proc: subprocess.Popen | None = None
+        self.acquire_transcode = None
+        self.release_transcode = None
         self.stderr_file = None
         self.stderr_path: Path | None = None
         self.stderr_log = BoundedProcessLog()
@@ -449,6 +451,8 @@ class StreamInstance:
         )
         self.proc = None
         self.stderr_file = None
+        if self.release_transcode is not None:
+            self.release_transcode()
         self._set_state_locked("failed", reason, failure_reason=reason)
         self.started_at = None
         self.start_deadline = None
@@ -744,7 +748,7 @@ class StreamInstance:
                 self._schedule_retry_locked(input_failure)
                 return {"ok": False, "error_code": input_failure, **self.snapshot(viewers=0)}
             self.requested_mode = force_mode or "auto"
-            if self.mode != "copy" and not transcode_allowed:
+            if self.mode != "copy" and self.acquire_transcode is None and not transcode_allowed:
                 self.resource_limit = "max_concurrent_transcodes"
                 self._set_state_locked("failed", "resource_limit", failure_reason="resource_limit")
                 self.last_error = "Live transcode resource limit reached"
@@ -783,6 +787,13 @@ class StreamInstance:
                     self.stderr_file = None
                     self._set_state_locked("stopped", "client_stop")
                     return {"ok": False, "error_code": "client_stop"}
+                if self.mode != "copy" and self.acquire_transcode is not None and not self.acquire_transcode():
+                    self.stderr_file.close()
+                    self.stderr_file = None
+                    self.resource_limit = "max_concurrent_transcodes"
+                    self.last_error = "Live transcode resource limit reached"
+                    self._set_state_locked("failed", "resource_limit", failure_reason="resource_limit")
+                    return {"ok": False, "error_code": "resource_limit", **self.snapshot(viewers=0)}
                 self.proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.DEVNULL,
@@ -790,6 +801,8 @@ class StreamInstance:
                     text=True,
                 )
             except Exception as exc:
+                if self.release_transcode is not None:
+                    self.release_transcode()
                 try:
                     self.stderr_file.write(f"Failed to start ffmpeg: {exc}\n")
                     self.stderr_file.flush()
@@ -919,7 +932,9 @@ class StreamInstance:
 
             self.proc = None
             self.stderr_file = None
-            graceful = reason.startswith("idle") or reason in {"stop_all", "client_stop"}
+            if self.release_transcode is not None:
+                self.release_transcode()
+            graceful = reason.startswith("idle") or reason in {"stop_all", "client_stop", "camera_deleted", "camera_not_found"}
             if graceful:
                 self._set_state_locked("stopped", reason, failure_reason=None)
             else:

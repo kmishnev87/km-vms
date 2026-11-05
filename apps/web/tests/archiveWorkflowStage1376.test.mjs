@@ -8,7 +8,8 @@ globalThis.__archiveTestApi = {
   apiFetchBlob: () => { throw new Error('No clip blob allowed'); },
 };
 const source = fs.readFileSync(new URL('../lib/archiveExports.js', import.meta.url), 'utf8')
-  .replace('import { apiFetch, apiFetchBlob } from "./api";', 'const { apiFetch, apiFetchBlob } = globalThis.__archiveTestApi;');
+  .replace('import { apiFetch, apiFetchBlob } from "./api";', 'const { apiFetch, apiFetchBlob } = globalThis.__archiveTestApi;')
+  .replace('from "./timezone"', `from "${new URL('../lib/timezone.js', import.meta.url).href}"`);
 const helper = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
 const done = { id: 'clip-one', status: 'done', output_size_bytes: 5_000_000_000, filename: 'large.mkv' };
 handler = (path) => path === '/archive/exports' ? { id: done.id, status: 'queued' } : path.endsWith('/generate') ? done : { output: { size_bytes: done.output_size_bytes } };

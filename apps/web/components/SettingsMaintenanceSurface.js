@@ -292,6 +292,8 @@ export function SettingsMaintenanceModal({
     updateApplyOperator,
     updateApplyHasUnknownLaunch,
     updateApplyRunning,
+    updateApplyDetailOperation,
+    updateApplyDetailOperator,
     updateApplyAllowed,
     updateApplyPrimaryText,
     updateApplyErrors,
@@ -306,6 +308,7 @@ export function SettingsMaintenanceModal({
     updateApplyLaunchNotice,
     refreshMaintenanceSurface,
     closeMaintenanceModal,
+    closeMaintenanceDetail,
     runUpdateCheck,
     startUpdateApply,
     runMaintenanceDryRun,
@@ -322,9 +325,12 @@ export function SettingsMaintenanceModal({
 
   const { maintenanceDetail, setMaintenanceDetail } = controller;
   const updateDetails = <>
-    <p role="status">{updateApplyOperator.summary}</p>
-    <dl className="maintenanceDetailFacts">{updateApplyFactRows(updateStatus, updateApplyStatus, t).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
-    <div className="settingsUpdateApplyTimeline" aria-label={t.updateApplyProgress}><ol>{updateApplyOperator.timeline.map((step) => <li className={`is-${step.status}`} key={step.name}>
+    <p className={`settingsUpdateApplyResult is-${updateApplyDetailOperator.resultVerified ? "completed" : updateApplyDetailOperator.severity}`} role="status">
+      <strong>{updateApplyDetailOperator.updateResult}{updateApplyDetailOperator.resultVerified && updateApplyDetailOperator.operationVersion ? ` — ${updateApplyDetailOperator.operationVersion}` : ""}</strong>
+      {!updateApplyDetailOperator.resultVerified ? <span>{updateApplyDetailOperator.summary}</span> : null}
+    </p>
+    <dl className="maintenanceDetailFacts">{updateApplyFactRows(updateStatus, updateApplyDetailOperation, t, updateApplyDetailOperator).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+    <div className="settingsUpdateApplyTimeline" aria-label={t.updateApplyProgress}><ol>{updateApplyDetailOperator.timeline.map((step) => <li className={`is-${step.status}`} key={step.name}>
       <span className="settingsUpdateApplyTimelineDot" aria-hidden="true">{step.icon === "alert" ? "!" : step.icon === "check" ? "✓" : "•"}</span><strong>{step.label}</strong><small>{step.timeLabel || "\u00a0"}</small>
     </li>)}</ol></div>
     {updateApplyOperator.releaseSummary ? <p>{updateApplyOperator.releaseSummary}</p> : null}
@@ -360,24 +366,46 @@ export function SettingsMaintenanceModal({
               </div>
             </div>
 
-            {!maintenanceOverview && !updateStatus && !updateApplyStatus ? <div className="settingsMaintenanceContent" role="status">{maintenanceError || t.checking}</div> : null}
+            {!maintenanceOverview && !maintenanceError ? <div className="settingsMaintenanceContent" role="status">{t.checking}</div> : null}
 
-            {maintenanceOverview || updateStatus || updateApplyStatus ? (
+            {maintenanceOverview || maintenanceError ? (
               <div className={`settingsMaintenanceContent${maintenanceBackupDetailOpen ? " is-backup-list" : ""}`}>
                 {!maintenanceBackupDetailOpen ? (
                   <>
-                <section className={`settingsMaintenanceOverall is-${maintenanceOverall.tone}`}>
-                  <span className="settingsMaintenanceOverallIcon" aria-hidden="true">{maintenanceOverall.icon}</span>
-                  <div>
-                    <strong>{maintenanceOverall.title}</strong>
-                    <p>{maintenanceOverall.summary}</p>
-                  </div>
-                </section>
-
                 <section className="settingsUpdateApplyPanel">
                   <div className="settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned">
                     <h3>{t.updateApplyTitle}</h3>
-                    <button type="button" className={`settingsMaintenancePill is-${updateApplyOperator.severity}`} onClick={() => setMaintenanceDetail("update")} title={`${t.open}: ${t.updateApplyTitle}`}>{updateApplyOperator.headline}{updateApplyOperator.availableVersion ? ` ${updateApplyOperator.availableVersion}` : ""}</button>
+                    <div className="settingsMaintenanceHeaderTools">
+                      {updateApplyOperator.severity === "blocked" || updateApplyOperator.stateUnknown || updatePeerCheckUnavailable ? (
+                        <button type="button" className="settingsMaintenancePill is-blocked" onClick={() => setMaintenanceDetail("update")}>{updatePeerCheckUnavailable && updateApplyOperator.severity !== "blocked" ? t.updateApplyHeadlines?.blocked : updateApplyOperator.headline}</button>
+                      ) : null}
+                      {updateApplyRunning || updateApplyOperator.availableVersion ? (
+                        <span className="settingsMaintenanceActivity" role="status">{updateApplyOperator.headline}{updateApplyOperator.availableVersion ? ` ${updateApplyOperator.availableVersion}` : ""}</span>
+                      ) : null}
+                      <div className="settingsUpdateApplyActions">
+                        <button type="button" className="button secondary small appIllustratedAction settingsMaintenanceActionIcon settingsMaintenanceDetailsButton" onClick={() => setMaintenanceDetail("update")} title={`${t.open}: ${t.updateApplyTitle}`} aria-label={`${t.open}: ${t.updateApplyTitle}`}>
+                          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" /><path d="M12 10.5v6M12 7v.5" /></svg>
+                        </button>
+                        <button
+                          type="button"
+                          className="button secondary small appIllustratedAction settingsMaintenanceActionIcon"
+                          onClick={runUpdateCheck}
+                          disabled={Boolean(maintenanceBusy)}
+                          title={maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
+                          aria-label={maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
+                          aria-busy={maintenanceBusy === "update" ? "true" : undefined}
+                        >
+                          <img src="/assets/icons/ui/update-check.svg" alt="" aria-hidden="true" />
+                        </button>
+                        {updateApplyOperator.showApplyButton ? (
+                          <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
+                            {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyHasUnknownLaunch || updateApplyOperator.stateUnknown
+                              ? updateApplyPrimaryText
+                              : t.updateApplyStart}
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
                   </div>
                   <div className="settingsUpdateApplyCompact">
                     <div className="settingsUpdateApplyRelease">
@@ -388,30 +416,10 @@ export function SettingsMaintenanceModal({
                         </div>
                         <div>
                           <dt>{t.maintenanceLastUpdate}</dt>
-                          <dd>{updateApplyOperator.installedAt}</dd>
+                          <dd>{updateApplyOperator.finishedAt}</dd>
                         </div>
                       </dl>
                       <p>{updateApplyOperator.releaseTitle}</p>
-                    </div>
-                    <div className="settingsUpdateApplyActions">
-                      <button
-                        type="button"
-                        className="button secondary small appIllustratedAction settingsMaintenanceActionIcon"
-                        onClick={runUpdateCheck}
-                        disabled={Boolean(maintenanceBusy)}
-                        title={maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
-                        aria-label={maintenanceBusy === "update" ? t.checking : t.updateApplyCheck}
-                        aria-busy={maintenanceBusy === "update" ? "true" : undefined}
-                      >
-                        <img src="/assets/icons/ui/update-check.svg" alt="" aria-hidden="true" />
-                      </button>
-                      {updateApplyOperator.showApplyButton ? (
-                        <button type="button" className="button primary small" onClick={startUpdateApply} disabled={!updateApplyAllowed}>
-                          {maintenanceBusy === "update-apply" || updateApplyRunning || updateApplyHasUnknownLaunch || updateApplyOperator.stateUnknown
-                            ? updateApplyPrimaryText
-                            : t.updateApplyStart}
-                        </button>
-                      ) : null}
                     </div>
                   </div>
 
@@ -419,13 +427,13 @@ export function SettingsMaintenanceModal({
 
                 <div className="settingsMaintenanceCoreGrid">
                   <section className={`settingsMaintenanceCoreCard is-${maintenanceDatabase.tone}`}>
-                    <div className="settingsMaintenanceCardHeading">
+                    <div className="settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned">
                       <h3>{t.maintenanceDatabaseTitle}</h3>
-                      <button type="button" className={`settingsMaintenancePill is-${maintenanceDatabase.tone}`} onClick={() => setMaintenanceDetail("result")} title={`${t.open}: ${t.maintenanceDatabaseTitle}`}>
+                      {maintenanceOverview && maintenanceDatabase.tone !== "ok" && maintenanceDatabase.tone !== "neutral" ? <button type="button" className="settingsMaintenancePill is-blocked" onClick={() => setMaintenanceDetail("result")} title={`${t.open}: ${t.maintenanceDatabaseTitle}`}>
                         {maintenanceDatabase.statusLabel}
-                      </button>
+                      </button> : null}
                     </div>
-                    {maintenanceDatabase.facts.length ? (
+                    {maintenanceOverview && maintenanceDatabase.facts.length ? (
                       <dl className="settingsMaintenanceCoreFacts">
                         {maintenanceDatabase.facts.map(([label, value]) => (
                           <div key={label}>
@@ -435,8 +443,8 @@ export function SettingsMaintenanceModal({
                         ))}
                       </dl>
                     ) : null}
-                    <p>{maintenanceDatabase.summary}</p>
-                    {maintenanceDatabase.tone !== "ok" && maintenanceDatabase.action ? (
+                    <p>{maintenanceOverview ? maintenanceDatabase.summary : t.maintenanceLoadError}</p>
+                    {maintenanceOverview && maintenanceDatabase.tone !== "ok" && maintenanceDatabase.action ? (
                       <small>{maintenanceDatabase.action}</small>
                     ) : null}
                     {maintenanceDatabase.actionableRow?.showCheck ? (
@@ -469,12 +477,39 @@ export function SettingsMaintenanceModal({
                   <div className="settingsMaintenanceBackupHead">
                     <div className="settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned">
                       <h3>{t.maintenanceBackupsTitle}</h3>
-                      <button type="button" className={`settingsMaintenancePill is-${maintenanceBackupOverview.tone}`} onClick={() => setMaintenanceDetail("backup")} title={`${t.open}: ${t.maintenanceBackupsTitle}`}>
-                        {maintenanceBackupPending || maintenanceBackupResult?.recovering ? t.checking : maintenanceBackupOverview.statusText}
-                      </button>
+                      <div className="settingsMaintenanceHeaderTools">
+                        {maintenanceBackupPending || maintenanceBackupResult?.recovering ? (
+                          <span className="settingsMaintenanceActivity" role="status">{t.checking}</span>
+                        ) : maintenanceOverview && maintenanceBackupOverview.tone !== "ok" && maintenanceBackupOverview.tone !== "neutral" ? (
+                          <button type="button" className="settingsMaintenancePill is-blocked" onClick={() => setMaintenanceDetail("backup")} title={`${t.open}: ${t.maintenanceBackupsTitle}`}>{maintenanceBackupOverview.statusText}</button>
+                        ) : null}
+                        <div className="settingsMaintenanceBackupActions">
+                          <button
+                            type="button"
+                            className="button secondary small appIllustratedAction settingsMaintenanceActionIcon"
+                            onClick={createMaintenanceBackup}
+                            disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending)}
+                            title={maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreate}
+                            aria-label={maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreate}
+                            aria-busy={maintenanceBusy === "backup-create" ? "true" : undefined}
+                          >
+                            <img src="/assets/icons/ui/backup-create.svg" alt="" aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className="button secondary small appIllustratedAction settingsMaintenanceActionIcon"
+                            onClick={openMaintenanceBackupDetail}
+                            disabled={Boolean(maintenanceBusy)}
+                            title={t.maintenanceBackupOpenList}
+                            aria-label={t.maintenanceBackupOpenList}
+                          >
+                            <img src="/assets/icons/ui/open.png" alt="" aria-hidden="true" />
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <p className="settingsMaintenanceBackupTotals">
+                  {maintenanceOverview ? <><p className="settingsMaintenanceBackupTotals">
                     {maintenanceBackupOverview.countText} · {maintenanceBackupOverview.totalBytesText}
                   </p>
                   <div className="settingsMaintenanceBackupLatestRow">
@@ -492,30 +527,8 @@ export function SettingsMaintenanceModal({
                         <span>{t.maintenanceBackupNoCopies}</span>
                       )}
                     </div>
-                    <div className="settingsMaintenanceBackupActions">
-                      <button
-                        type="button"
-                        className="button secondary small appIllustratedAction settingsMaintenanceActionIcon"
-                        onClick={createMaintenanceBackup}
-                        disabled={Boolean(maintenanceBusy) || Boolean(maintenanceBackupPending) || Boolean(currentRestorePending)}
-                        title={maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreate}
-                        aria-label={maintenanceBusy === "backup-create" ? t.maintenanceBackupCreating : t.maintenanceBackupCreate}
-                        aria-busy={maintenanceBusy === "backup-create" ? "true" : undefined}
-                      >
-                        <img src="/assets/icons/ui/backup-create.svg" alt="" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="button secondary small appIllustratedAction settingsMaintenanceActionIcon"
-                        onClick={openMaintenanceBackupDetail}
-                        disabled={Boolean(maintenanceBusy)}
-                        title={t.maintenanceBackupOpenList}
-                        aria-label={t.maintenanceBackupOpenList}
-                      >
-                        <img src="/assets/icons/ui/open.png" alt="" aria-hidden="true" />
-                      </button>
-                    </div>
                   </div>
+                  </> : <p>{t.maintenanceLoadError}</p>}
                 </section>
                 </div>
 
@@ -524,26 +537,28 @@ export function SettingsMaintenanceModal({
                     <div className="settingsMaintenanceSupportCopy">
                       <div className="settingsMaintenanceCardHeading settingsMaintenanceCardHeadingAligned">
                         <h3>{t.maintenanceSupportTitle}</h3>
-                        <button type="button" className={`settingsMaintenancePill ${maintenanceWarnings.groups.actionable ? "is-warning" : "is-ok"}`} onClick={() => setMaintenanceDetail("warnings")} title={`${t.open}: ${t.maintenanceSupportTitle}`}>
-                          {maintenanceWarnings.groups.actionable
-                            ? `${t.maintenanceWarningActionable}: ${maintenanceWarnings.groups.actionable}`
-                            : t.maintenanceSupportStatusOk}
-                        </button>
+                        <div className="settingsMaintenanceHeaderTools">
+                          {maintenanceWarnings.groups.actionable ? (
+                            <button type="button" className="settingsMaintenancePill is-blocked" onClick={() => setMaintenanceDetail("warnings")} title={`${t.open}: ${t.maintenanceSupportTitle}`}>
+                              {t.maintenanceWarningActionable}: {maintenanceWarnings.groups.actionable}
+                            </button>
+                          ) : null}
+                          <div className="settingsMaintenanceSupportActions">
+                            <button
+                              type="button"
+                              className="button secondary small appIllustratedAction settingsMaintenanceActionIcon settingsMaintenanceSupportActionButton"
+                              onClick={onOpenDiagnosticChoice}
+                              disabled={Boolean(maintenanceBusy) || securityBusy}
+                              title={t.maintenanceReportDownload}
+                              aria-label={t.maintenanceReportDownload}
+                            >
+                              <img src="/assets/icons/ui/download-report.svg" alt="" aria-hidden="true" />
+                            </button>
+                          </div>
+                        </div>
                       </div>
                       <p>{t.maintenanceSupportText}</p>
                     </div>
-                  </div>
-                  <div className="settingsMaintenanceSupportActions">
-                    <button
-                      type="button"
-                      className="button secondary small appIllustratedAction settingsMaintenanceActionIcon settingsMaintenanceSupportActionButton"
-                      onClick={onOpenDiagnosticChoice}
-                      disabled={Boolean(maintenanceBusy) || securityBusy}
-                      title={t.maintenanceReportDownload}
-                      aria-label={t.maintenanceReportDownload}
-                    >
-                      <img src="/assets/icons/ui/download-report.svg" alt="" aria-hidden="true" />
-                    </button>
                   </div>
                 </section>
                   </>
@@ -709,7 +724,7 @@ export function SettingsMaintenanceModal({
           : maintenanceDetail === "backup" ? <div role="status"><p>{maintenanceBackupPending || maintenanceBackupResult?.recovering ? maintenanceBackupProgressText : maintenanceBackupResultModel?.text || maintenanceBackupOverview.statusText}</p>{maintenanceBackupResultModel ? <strong>{maintenanceBackupResultModel.label}</strong> : null}</div>
           : maintenanceDetail === "warnings" ? <div>{maintenanceWarnings.items.filter((item) => item.classification === "actionable").map((item) => <article key={`${item.code}-${item.title}`}><strong>{item.title}</strong><p>{item.summary}</p><small>{item.action}</small></article>)}</div>
           : actionDetails,
-      } : null} onClose={() => setMaintenanceDetail(null)} />
+      } : null} onClose={closeMaintenanceDetail} />
     </>
   );
 }

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app.routers.cameras as cameras_module
 import app.routers.camera_onvif_routes as onvif_routes_module
 from app.core.endpoint_permissions import ENDPOINT_PERMISSIONS
+from app.core.security import encrypt_text
 from app.models.camera import Camera
 from app.schemas.camera import (
     CameraResponse,
@@ -79,7 +80,7 @@ def camera(**overrides):
         "host": "onvif.example.test",
         "port": 20003,
         "username": "operator",
-        "password_encrypted": None,
+        "password_encrypted": encrypt_text("old-pass"),
         "rtsp_main_url": f"{rtsp_scheme}://" + "operator" + ":" + "old-pass" + "@rtsp.example.test:10003/live",
         "rtsp_sub_url": None,
         "rtsp_host": "rtsp.example.test",
@@ -300,7 +301,6 @@ def test_update_non_connection_change_does_not_require_validation(monkeypatch):
     cam = camera()
     events = []
     monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: events.append(kwargs))
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "old-pass")
 
     payload = cameras_module.CameraUpdate(name="Renamed")
     result = update_camera(cam.id, payload, request=request(), db=FakeDb(cam), current_user=user())
@@ -313,7 +313,6 @@ def test_update_connection_change_can_be_saved_as_manual_unverified(monkeypatch)
     cam = camera()
     events = []
     monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: events.append(kwargs))
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "old-pass")
 
     payload = cameras_module.CameraUpdate(rtsp_host="new-rtsp.example.test", manual_confirm_unverified=True)
     result = update_camera(cam.id, payload, request=request(), db=FakeDb(cam), current_user=user())
@@ -328,7 +327,6 @@ def test_update_onvif_final_payload_validation_token_allows_verified_save(monkey
     cam = camera()
     events = []
     monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: events.append(kwargs))
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "old-pass")
 
     final_payload = {
         "protocol": "onvif",
@@ -369,7 +367,6 @@ def test_update_onvif_final_payload_validation_token_allows_verified_save(monkey
 def test_update_onvif_changed_after_test_requires_new_proof(monkeypatch):
     cam = camera()
     monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: None)
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "old-pass")
 
     final_payload = {
         "protocol": "onvif",
@@ -473,7 +470,6 @@ def test_audit_metadata_redacts_connection_secret_values(monkeypatch):
     cam = camera()
     events = []
     monkeypatch.setattr(cameras_module, "create_event", lambda **kwargs: events.append(kwargs))
-    monkeypatch.setattr(cameras_module, "decrypt_text", lambda value: "old-pass")
 
     payload = cameras_module.CameraUpdate(rtsp_main_url="/changed", manual_confirm_unverified=True)
     update_camera(cam.id, payload, request=request(), db=FakeDb(cam), current_user=user())

@@ -36,6 +36,7 @@ from app.routers.camera_connection_helpers import (
     register_rtsp_test_proof,
     register_validation_proof,
     require_save_gate,
+    resolve_camera_connection_payload,
     resolve_test_connection_payload,
     resolve_rtsp_management_path,
     safe_int,
@@ -71,6 +72,7 @@ from app.schemas.camera import (
 from app.services.audit_log import create_event, request_ip, request_user_agent
 from app.services.archive_root_activation import preserve_manual_camera_disable
 from app.services.camera_previews import purge_expired_test_previews
+from app.services.live_engine import manager as live_manager
 from app.services.storage import build_unique_folder_name, ensure_camera_folder
 from app.services.recording_retention import EXECUTION_POLICY_MANUAL_COMPLETE, execute_segments, preview_segments
 from app.services.retention_automation import advance_retention_signal
@@ -303,35 +305,9 @@ def create_camera(
     if existing:
         raise HTTPException(status_code=400, detail="Камера с таким именем уже существует")
 
-    rtsp_host = payload.rtsp_host or payload.host
-    rtsp_port = payload.rtsp_port or 554
-    if str(payload.protocol or "rtsp").lower() == "rtsp":
-        rtsp_host = payload.host
-        rtsp_port = payload.port
-
-    rtsp_main_url = assemble_rtsp_url(
-        rtsp_host,
-        rtsp_port,
-        payload.username,
-        payload.password,
-        resolve_rtsp_management_path(payload.model_dump(), "main"),
-    )
-    rtsp_sub_url = assemble_rtsp_url(
-        rtsp_host,
-        rtsp_port,
-        payload.username,
-        payload.password,
-        resolve_rtsp_management_path(payload.model_dump(), "sub"),
-    )
-
-    payload_dict = payload.model_dump()
-    final_connection_payload = {
-        **payload_dict,
-        "rtsp_host": rtsp_host if str(payload.protocol or "rtsp").lower() == "onvif" else None,
-        "rtsp_port": rtsp_port if str(payload.protocol or "rtsp").lower() == "onvif" else None,
-        "rtsp_main_url": rtsp_main_url,
-        "rtsp_sub_url": rtsp_sub_url,
-    }
+    final_connection_payload = resolve_camera_connection_payload(payload.model_dump())
+    rtsp_host, rtsp_port = final_connection_payload["rtsp_host"], final_connection_payload["rtsp_port"]
+    rtsp_main_url, rtsp_sub_url = final_connection_payload["rtsp_main_url"], final_connection_payload["rtsp_sub_url"]
     manual_unverified = require_save_gate(final_connection_payload, connection_sensitive_change=True)
     folder_name = build_unique_folder_name(db, payload.name)
     ensure_camera_folder(folder_name)
@@ -806,43 +782,15 @@ def update_camera(
         if existing and existing.id != camera.id:
             raise HTTPException(status_code=400, detail="Камера с таким именем уже существует")
 
-    existing_password = decrypt_text(camera.password_encrypted)
-    password_for_rtsp = data.get("password") if data.get("password") else existing_password
-    username_for_rtsp = data.get("username", camera.username)
-    next_protocol = str(data.get("protocol", camera.protocol or "rtsp")).lower()
-    if next_protocol == "rtsp":
-        data.pop("rtsp_host", None)
-        data.pop("rtsp_port", None)
-        host_for_rtsp = data.get("host", camera.host)
-        port_for_rtsp = data.get("port", camera.port)
-        next_rtsp_host = None
-        next_rtsp_port = None
-    else:
-        next_rtsp_host = data.pop("rtsp_host", None) or camera.rtsp_host or data.get("host", camera.host)
-        next_rtsp_port = data.pop("rtsp_port", None) or camera.rtsp_port or 554
-        host_for_rtsp = next_rtsp_host
-        port_for_rtsp = next_rtsp_port
-
-    submitted_main = data.get("rtsp_main_url", camera.rtsp_main_url)
-    submitted_sub = data.get("rtsp_sub_url", camera.rtsp_sub_url)
-    connection_context = {**vars(camera), **data, "password": password_for_rtsp,
-                          "rtsp_host": next_rtsp_host, "rtsp_port": next_rtsp_port,
-                          "onvif_probe_token": onvif_probe_token,
-                          "rtsp_main_url": submitted_main, "rtsp_sub_url": submitted_sub}
-    data["rtsp_main_url"] = assemble_rtsp_url(
-        host_for_rtsp,
-        port_for_rtsp,
-        username_for_rtsp,
-        password_for_rtsp,
-        resolve_rtsp_management_path(connection_context, "main", stored=camera.rtsp_main_url),
-    )
-    data["rtsp_sub_url"] = assemble_rtsp_url(
-        host_for_rtsp,
-        port_for_rtsp,
-        username_for_rtsp,
-        password_for_rtsp,
-        resolve_rtsp_management_path(connection_context, "sub", stored=camera.rtsp_sub_url),
-    )
+    connection = resolve_camera_connection_payload(raw_payload, camera)
+    password_for_rtsp = connection["password"]
+    next_rtsp_host, next_rtsp_port = connection["rtsp_host"], connection["rtsp_port"]
+    data.pop("rtsp_host", None)
+    data.pop("rtsp_port", None)
+    data["rtsp_main_url"] = connection["rtsp_main_url"]
+    data["rtsp_sub_url"] = connection["rtsp_sub_url"]
+    if "protocol" in data:
+        data["protocol"] = connection["protocol"]
 
     if "password" in data and data["password"]:
         camera.password_encrypted = encrypt_text(data.pop("password"))
@@ -1385,6 +1333,7 @@ def delete_camera(
             camera.retention_policy_version = int(getattr(camera, "retention_policy_version", 1) or 1) + 1
             advance_retention_signal(db, commit=False)
         db.commit()
+        live_manager.stop_camera(camera.id, reason="camera_deleted")
         if outer_lifecycle is not None:
             terminal_recordings = {
                 **recordings,

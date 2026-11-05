@@ -48,11 +48,13 @@ assert.ok(loadSource);
 const state = { items: [{ filename: "old.mkv" }], phase: "loaded", query: "old", errors: [] };
 const pending = [];
 const requestIdRef = { current: 0 };
-const load = new Function("apiFetch", "requestIdRef", "setRecordingsLoadState", "setItems", "setSelectedPaths", "setRecordingsSummary", "setRecordingsPagination", "setProductTimezone", "setError", "setLoadedQueryKey", "showRecordingActionError", "normalizeRecordingError", "productDateFilterParam", `
+const queryKey = camera => JSON.stringify([camera, "", 1, 20, "created_at", "desc"]);
+const currentQueryKeyRef = { current: queryKey("__all__") };
+const load = new Function("apiFetch", "requestIdRef", "currentQueryKeyRef", "setRecordingsLoadState", "setItems", "setSelectedPaths", "setRecordingsSummary", "setRecordingsPagination", "setProductTimezone", "setError", "setLoadedQueryKey", "showRecordingActionError", "normalizeRecordingError", "productDateFilterParam", `
  const selectedDate = "", currentPage = 1, pageSize = 20, sortBy = "created_at", sortDir = "desc", loadedQueryKey = "old";
  ${loadSource}; return loadRecordings;
 `)(
-  () => new Promise((resolve, reject) => pending.push({ resolve, reject })), requestIdRef,
+  () => new Promise((resolve, reject) => pending.push({ resolve, reject })), requestIdRef, currentQueryKeyRef,
   (value) => { state.phase = typeof value === "function" ? value(state.phase) : value; },
   (value) => { state.items = value; }, () => {}, () => {}, () => {}, () => {}, () => {},
   (value) => { state.query = value; }, (error) => state.errors.push(error), (value) => value, (value) => value,
@@ -60,6 +62,7 @@ const load = new Function("apiFetch", "requestIdRef", "setRecordingsLoadState", 
 const firstRequest = load();
 assert.equal(state.phase, "refreshing");
 assert.equal(state.items[0].filename, "old.mkv");
+currentQueryKeyRef.current = queryKey("second-camera");
 const newerRequest = load("second-camera");
 pending[1].resolve({ items: [{ filename: "new.mkv" }] });
 await newerRequest;

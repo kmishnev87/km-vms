@@ -84,13 +84,13 @@ const copy = {
 };
 
 assert.equal(settingsPage.includes("settingsUpdateApplyHero"), false);
-assert.equal(settingsPage.includes("settingsMaintenanceOverall"), true);
+assert.equal(settingsPage.includes('className={`settingsMaintenanceOverall'), false);
 assert.equal(settingsPage.includes("settingsUpdateApplyCompact"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceCoreGrid"), true);
 assert.equal(settingsPage.includes("settingsMaintenanceBackupDetail"), true);
 assert.match(cssRule(".settingsMaintenanceModal"), /width:\s*min\(980px,\s*calc\(100vw - 32px\)\)/);
 assert.match(cssRule(".settingsMaintenanceCoreGrid"), /grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
-assert.match(cssRule(".settingsUpdateApplyCompact"), /grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/);
+assert.match(cssRule(".settingsUpdateApplyCompact"), /grid-template-columns:\s*minmax\(0,\s*1fr\)/);
 assert.equal(settingsPage.includes("settingsMaintenanceSupportStatus"), false);
 assert.equal(settingsPage.includes("maintenanceSupportStatusOk"), true);
 assert.equal(settingsPage.includes("<dt>{t.maintenanceWarningActionable}</dt>"), false);
@@ -118,7 +118,19 @@ assert.match(css, /\.settingsDirtyNote\.is-visible\s*\{[\s\S]*visibility:\s*visi
 assert.match(css, /\.settingsPage\s*\{[\s\S]*--settings-compact-select-width:\s*210px/);
 assert.match(css, /\.settingsRowCompactSelect \.settingsSelect\s*\{[\s\S]*padding:\s*5px 32px 5px 10px;[\s\S]*text-align:\s*left;[\s\S]*text-align-last:\s*left/);
 assert.match(css, /\.settingsRowControlMeta\s*\{[\s\S]*justify-items:\s*center;[\s\S]*width:\s*var\(--settings-compact-select-width\)/);
-assert.match(css, /\.settingsMaintenanceCardHeadingAligned\s*\{[\s\S]*grid-template-columns:\s*180px minmax\(0, 1fr\)/);
+assert.match(cssRule(".settingsMaintenanceCardHeadingAligned"), /grid-template-columns:\s*minmax\(0, 1fr\) auto/);
+assert.doesNotMatch(cssRule(".settingsMaintenanceCardHeadingAligned"), /180px/);
+assert.match(cssRule(".settingsMaintenanceHeaderTools"), /justify-content:\s*flex-end/);
+assert.match(css, /\.settingsUpdateApplyTimeline li\.is-completed::before\s*\{\s*background:\s*#86cda3/);
+assert.match(settingsPage, /<dd>\{updateApplyOperator\.finishedAt\}<\/dd>/);
+assert.doesNotMatch(settingsPage, /className=\{`settingsMaintenancePill is-\$\{/);
+assert.match(settingsPage, /settingsMaintenanceDetailsButton/);
+// Do not turn the not-yet-loaded overview into red database/zero-backup claims.
+// On an actual overview error the independent update surface remains available.
+assert.match(settingsPage, /!maintenanceOverview && !maintenanceError/);
+assert.match(settingsPage, /maintenanceOverview \|\| maintenanceError \? \(/);
+assert.match(settingsPage, /maintenanceOverview && maintenanceDatabase\.tone/);
+assert.match(settingsPage, /maintenanceOverview && maintenanceBackupOverview\.tone/);
 assert.doesNotMatch(css, /\.settingsMaintenanceCoreCard,\s*\.settingsMaintenanceBackupManager\.settingsMaintenanceCoreCard\s*\{[^}]*min-height:\s*205px/);
 
 const providerBlocked = updateApplyOperatorModel(

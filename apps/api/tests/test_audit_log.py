@@ -24,7 +24,7 @@ def test_audit_redaction_masks_sensitive_metadata():
     assert payload["password"] == "***"
     assert payload["access_token"] == "***"
     assert payload["Authorization"] == "***"
-    assert payload["camera"]["rtsp_url"] == "rtsp://admin:***@192.168.1.20/stream1"
+    assert payload["camera"]["rtsp_url"] == "rtsp://***@192.168.1.20/stream1"
     assert payload["camera"]["name"] == "Front gate"
 
 
@@ -37,7 +37,7 @@ def test_audit_text_redaction_masks_tokens_and_rtsp_credentials():
     assert "pass@host" not in redacted
     assert "secret-query" not in redacted
     assert "Bearer ***" in redacted
-    assert "rtsp://user:***@host/live" in redacted
+    assert "rtsp://***@host/live" in redacted
     assert "access_token=***" in redacted
 
 

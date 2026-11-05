@@ -54,6 +54,17 @@ const dual = {
   ],
 };
 const firstLens = m.cameraDraftWithProfiles(form, dual);
+const manySources = { profiles: [], source_groups: [] };
+for (let channel = 1; channel <= 32; channel += 1) {
+  const tokens = [`${channel}-main`, `${channel}-sub`];
+  manySources.profiles.push(...tokens.map((token, index) => ({ token, source_id: `channel:${channel}`, stream_path: `/channel/${channel}/${index}` })));
+  manySources.source_groups.push({ id: `channel:${channel}`, channel, profile_tokens: tokens, main_profile_token: tokens[0], sub_profile_token: tokens[1] });
+}
+const lastSource = m.cameraDraftForSource(form, manySources, "channel:32");
+assert.equal(lastSource.rtsp_main_url, "/channel/32/0");
+assert.equal(lastSource.rtsp_sub_url, "/channel/32/1");
+assert.equal(m.cameraSelectedSource(lastSource, manySources).id, "channel:32");
+assert.equal(m.cameraSourceConflict(lastSource, manySources), false);
 assert.equal(m.cameraSelectedSource(firstLens, dual).id, "channel:1");
 const secondLens = m.cameraDraftForSource(firstLens, dual, "channel:2");
 assert.equal(secondLens.onvif_channel_id, "2");

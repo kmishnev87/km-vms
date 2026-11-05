@@ -168,11 +168,16 @@ def local_day_storage_bounds(value: date, ctx: TimezoneContext) -> tuple[datetim
 
 
 def retention_cutoff_storage(retention_days: int, ctx: TimezoneContext, *, now_utc: datetime | None = None) -> tuple[datetime, datetime]:
-    if retention_days <= 0:
-        raise ValueError("retention_days must be positive")
+    from app.core.camera_limits import retention_days_supported
+
+    if not retention_days_supported(retention_days):
+        raise ValueError("retention_days is outside the supported range")
     now = now_utc or utc_now_storage()
     aware_now = storage_naive_utc_to_aware_utc(now)
     local_now = aware_now.astimezone(ctx.zone)
-    cutoff_date = local_now.date() - timedelta(days=retention_days)
-    cutoff_local = datetime.combine(cutoff_date, time.min)
-    return system_local_naive_to_storage_utc(cutoff_local, ctx), cutoff_local
+    try:
+        cutoff_date = local_now.date() - timedelta(days=retention_days)
+        cutoff_local = datetime.combine(cutoff_date, time.min)
+        return system_local_naive_to_storage_utc(cutoff_local, ctx), cutoff_local
+    except OverflowError as exc:
+        raise ValueError("retention calendar boundary is outside the supported range") from exc

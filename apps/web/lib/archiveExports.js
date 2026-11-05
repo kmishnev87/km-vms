@@ -1,4 +1,5 @@
 import { apiFetch, apiFetchBlob } from "./api";
+import { productCalendarDate, productInstantInputValue } from "./timezone";
 
 export const EXPORT_PERMISSION = "export_recordings";
 
@@ -117,9 +118,16 @@ export function describeArchiveExportLimits(limits = DEFAULT_ARCHIVE_EXPORT_LIMI
   ].join(" ");
 }
 
-export function validateArchiveExportSelection({ startTs, endTs, estimatedSourceBytes = 0 }, limits = DEFAULT_ARCHIVE_EXPORT_LIMITS) {
-  const start = new Date(startTs);
-  const end = new Date(endTs);
+function exportCalendarDate(value, productTimezone) {
+  // The server normalizes explicit instants to the installation's calendar;
+  // naive form values are already calendar coordinates, never browser-local time.
+  const instant = value instanceof Date || /(?:Z|[+-]\d{2}:\d{2})$/i.test(String(value || ""));
+  return productCalendarDate(instant ? productInstantInputValue(value, productTimezone) : value);
+}
+
+export function validateArchiveExportSelection({ startTs, endTs, estimatedSourceBytes = 0, productTimezone = "UTC" }, limits = DEFAULT_ARCHIVE_EXPORT_LIMITS) {
+  const start = exportCalendarDate(startTs, productTimezone);
+  const end = exportCalendarDate(endTs, productTimezone);
   if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) {
     return "Выберите корректные начало и конец диапазона.";
   }
@@ -138,6 +146,11 @@ function throwIfAborted(signal) {
   if (signal?.aborted) throw new DOMException("Waiting stopped", "AbortError");
 }
 
+function assertExportCurrent({ signal, isCurrent } = {}) {
+  throwIfAborted(signal);
+  if (isCurrent && !isCurrent()) throw new DOMException("Session changed", "AbortError");
+}
+
 function waitForExportPoll(signal) {
   return new Promise((resolve, reject) => {
     throwIfAborted(signal);
@@ -147,66 +160,83 @@ function waitForExportPoll(signal) {
   });
 }
 
-export async function runArchiveExportWorkflow(payload, { onStatus, signal, exportId } = {}) {
-  throwIfAborted(signal);
+export async function runArchiveExportWorkflow(payload, { onStatus, signal, exportId, isCurrent } = {}) {
+  const guard = () => assertExportCurrent({ signal, isCurrent });
+  guard();
   onStatus?.(archiveExportStatusMessage("queued"), null, "queued");
+  guard();
   const created = exportId ? await apiFetch(`/archive/exports/${encodeURIComponent(exportId)}`, { signal }) : await apiFetch("/archive/exports", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
     signal,
   });
+  guard();
   onStatus?.(archiveExportStatusMessage(created?.status || "queued"), created, created?.status || "queued");
 
   let generated = created;
   if (generated.status === "queued") {
     onStatus?.(archiveExportStatusMessage("running"), created, "running");
+    guard();
     try {
       generated = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}/generate`, { method: "POST", signal });
+      guard();
     } catch (error) {
-      throwIfAborted(signal);
+      guard();
       // An interrupted response is not proof that server preparation failed.
       // Read its durable job instead of creating another expensive export.
       generated = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}`, { signal });
+      guard();
       if (!["running", "done"].includes(generated?.status)) throw error;
     }
   }
   while (generated?.status === "running") {
+    guard();
     onStatus?.(archiveExportStatusMessage("running"), generated, "running");
+    guard();
     if (generated.can_resume) {
       try {
         generated = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}/generate?resume=true`, { method: "POST", signal });
+        guard();
         continue;
       } catch (error) {
-        throwIfAborted(signal);
+        guard();
         // A second tab may have resumed it first. Re-read durable truth.
         const current = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}`, { signal });
+        guard();
         if (current?.status !== "running" || current.can_resume) throw error;
         generated = current;
       }
     }
     await waitForExportPoll(signal);
+    guard();
     generated = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}`, { signal });
+    guard();
   }
+  guard();
   onStatus?.(archiveExportStatusMessage(generated?.status || "running"), generated, generated?.status || "running");
   if (generated?.status !== "done") {
     throw new Error(generated?.error_message || generated?.error_code || "generation_failed");
   }
 
+  guard();
   const manifest = await apiFetch(`/archive/exports/${encodeURIComponent(created.id)}/manifest`, {
     method: generated.manifest_ready ? "GET" : "POST",
     signal,
   });
+  guard();
   onStatus?.(archiveExportStatusMessage("manifest_ready"), manifest, "manifest_ready");
 
-  throwIfAborted(signal);
+  guard();
   const job = { ...generated, manifest_ready: true, download_ready: true };
   onStatus?.(archiveExportStatusMessage("download_ready"), job, "download_ready");
   return { job, manifest };
 }
 
-export async function startArchiveExportDownload(exportId) {
-  const info = await apiFetch(`/archive/exports/${encodeURIComponent(exportId)}/download-token`, { method: "POST" });
+export async function startArchiveExportDownload(exportId, operation = {}) {
+  assertExportCurrent(operation);
+  const info = await apiFetch(`/archive/exports/${encodeURIComponent(exportId)}/download-token`, { method: "POST", signal: operation.signal });
+  assertExportCurrent(operation);
   if (!info?.media_token) throw new Error("Download is unavailable");
   const anchor = document.createElement("a");
   anchor.href = `/api/archive/exports/${encodeURIComponent(exportId)}/file?media_token=${encodeURIComponent(info.media_token)}`;
@@ -218,22 +248,34 @@ export async function startArchiveExportDownload(exportId) {
   return { filename: info.filename, size_bytes: info.size_bytes };
 }
 
-export async function downloadArchiveManifest(exportId) {
-  return apiFetchBlob(`/archive/exports/${encodeURIComponent(exportId)}/manifest/download`);
+export async function downloadArchiveManifest(exportId, operation = {}) {
+  assertExportCurrent(operation);
+  const result = await apiFetchBlob(`/archive/exports/${encodeURIComponent(exportId)}/manifest/download`, { signal: operation.signal });
+  assertExportCurrent(operation);
+  return result;
 }
 
-export async function issueChronologyDownloadToken(cameraId, timestamp) {
-  return apiFetch(
-    `/chronology/download-token?camera_id=${encodeURIComponent(cameraId)}&ts=${encodeURIComponent(timestamp)}`,
-    { method: "POST" }
+export async function issueChronologyDownloadToken(cameraId, timestamp, playback = null, operation = {}) {
+  assertExportCurrent(operation);
+  const identity = playback?.segmentId && playback?.archiveRootId
+    ? `&segment_id=${encodeURIComponent(playback.segmentId)}&archive_root_id=${encodeURIComponent(playback.archiveRootId)}` : "";
+  const result = await apiFetch(
+    `/chronology/download-token?camera_id=${encodeURIComponent(cameraId)}&ts=${encodeURIComponent(timestamp)}${identity}`,
+    { method: "POST", signal: operation.signal }
   );
+  assertExportCurrent(operation);
+  return result;
 }
 
-export async function startChronologyCurrentRecordingDownload(cameraId, timestamp) {
-  const tokenInfo = await issueChronologyDownloadToken(cameraId, timestamp);
+export async function startChronologyCurrentRecordingDownload(cameraId, timestamp, playback = null, operation = {}) {
+  assertExportCurrent(operation);
+  const tokenInfo = await issueChronologyDownloadToken(cameraId, timestamp, playback, operation);
+  assertExportCurrent(operation);
   const mediaToken = tokenInfo?.media_token || "";
   if (!mediaToken) throw new Error("Recording download token is unavailable");
-  const url = `/api/chronology/download?camera_id=${encodeURIComponent(cameraId)}&ts=${encodeURIComponent(timestamp)}&media_token=${encodeURIComponent(mediaToken)}`;
+  const identity = tokenInfo?.segment_id && tokenInfo?.archive_root_id
+    ? `&segment_id=${encodeURIComponent(tokenInfo.segment_id)}&archive_root_id=${encodeURIComponent(tokenInfo.archive_root_id)}` : "";
+  const url = `/api/chronology/download?camera_id=${encodeURIComponent(cameraId)}&ts=${encodeURIComponent(timestamp)}${identity}&media_token=${encodeURIComponent(mediaToken)}`;
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = tokenInfo?.filename || "km-vms-recording.mkv";

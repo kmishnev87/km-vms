@@ -33,6 +33,9 @@ export default function ArchiveTilePlayer({
   const playbackRateRef = useRef(1);
   const coordinationRef = useRef(coordination);
   const currentSourceRef = useRef({ playbackKey: "", relPath: "", cameraId: "" });
+  const sourceRecoveryRef = useRef(null);
+  const latestPlaybackRef = useRef(playback);
+  latestPlaybackRef.current = playback;
   const prepareSequenceRef = useRef(0);
   const prepareCancelRef = useRef(null);
   const unsupportedDownloadBusyRef = useRef(false);
@@ -365,10 +368,11 @@ export default function ArchiveTilePlayer({
       pendingLoad = null;
     }
 
-    async function loadFreshMedia({ preserveTime = false, playIntent = playIntentRef.current } = {}) {
+    async function loadFreshMedia({ preserveTime = false, playIntent = playIntentRef.current, targetTime: requestedTime } = {}) {
       const sequence = loadSequence + 1;
       loadSequence = sequence;
-      const targetTime = preserveTime ? Number(video.currentTime || 0) : Math.max(0, offsetSec);
+      const targetTime = Number.isFinite(requestedTime) ? Math.max(0, requestedTime)
+        : preserveTime ? Number(video.currentTime || 0) : Math.max(0, Number(latestPlaybackRef.current?.offsetSec || 0));
       pendingLoad = {
         sequence,
         targetTime,
@@ -459,10 +463,29 @@ export default function ArchiveTilePlayer({
 
     video.addEventListener("stalled", handleStalledMedia);
 
+    const recovery = {
+      isLoading: () => Boolean(pendingLoad),
+      ensureMedia({ targetTime, playIntent = false }) {
+        if (cancelled) return;
+        if (pendingLoad) {
+          pendingLoad.targetTime = Math.max(0, Number(targetTime || 0));
+          pendingLoad.playIntent = playIntent;
+          return;
+        }
+        // A new user operation gets a fresh bounded attempt. It does not start
+        // an automatic retry loop or remount a healthy source on every seek.
+        refreshAttempts = 0;
+        finishRefreshCycle();
+        loadFreshMedia({ targetTime, playIntent });
+      },
+    };
+    sourceRecoveryRef.current = recovery;
+
     loadFreshMedia();
 
     return () => {
       cancelled = true;
+      if (sourceRecoveryRef.current === recovery) sourceRecoveryRef.current = null;
       prepareCancelRef.current?.();
       pendingLoad = null;
       loadSequence += 1;
@@ -559,9 +582,10 @@ export default function ArchiveTilePlayer({
       currentSource.cameraId === String(playback?.cameraId || "") &&
       video.currentSrc;
 
-    if (!sameSourceReady) {
+    if (!sameSourceReady || sourceRecoveryRef.current?.isLoading()) {
       setStatus("loading");
       reportTileState("loading", { reason: "operation-waiting-for-source" });
+      sourceRecoveryRef.current?.ensureMedia({ targetTime: Number(playback?.offsetSec || 0), playIntent: false });
       return;
     }
 
